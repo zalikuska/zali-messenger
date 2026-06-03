@@ -1,0 +1,23 @@
+.DS_Store
+
+# Rust
+target/
+
+# Swift Package Manager / Xcode
+.build/
+DerivedData/
+*.xcuserdata/
+
+# Local runtime data
+.env
+*.db
+uploads/
+
+# Generated bundles and local app builds
+*.app/
+macOS/ZaliMessenger/Frameworks/*.a
+dist/
+
+# Logs and temporary files
+*.log
+*.tmp
