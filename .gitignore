@@ -21,3 +21,6 @@ dist/
 # Logs and temporary files
 *.log
 *.tmp
+
+# Archives
+*.zip
