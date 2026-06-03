@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="style.css">
+    <title>ZaliMessenger</title>
+</head>
+<body>
+    <div class="app">
+
+        <!-- TITLE BAR -->
+        <header class="titlebar" id="titlebar">
+            <div class="tb-l">
+                <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false" onclick="document.body.classList.toggle('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = !document.body.classList.contains('mobile-sidebar-open'); this.setAttribute('aria-expanded', document.body.classList.contains('mobile-sidebar-open') ? 'true' : 'false')">☰</button>
+            </div>
+            <div class="tb-c">
+                <span class="tb-brand">ZaliMessenger</span>
+                <span class="tb-sep">/</span>
+                <span class="tb-chat" id="tbChat">Загрузка...</span>
+            </div>
+            <div class="tb-r">
+                <div class="ws-pill" id="wsPill">
+                    <span class="ws-dot" id="wsDot"></span>
+                    <span id="wsLabel">Подключение...</span>
+                </div>
+            </div>
+        </header>
+
+        <button class="mobile-backdrop" id="mobileBackdrop" type="button" aria-label="Закрыть меню" hidden onclick="document.body.classList.remove('mobile-sidebar-open'); this.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')"></button>
+
+        <div class="body">
+
+            <!-- SIDEBAR -->
+            <nav class="sidebar">
+                <div class="sidebar-head">
+                    <div class="brand">ZALI <em>MSG</em></div>
+                    <div class="mode-switch" role="tablist" aria-label="Выбор раздела">
+                        <button class="mode-btn" id="modeDmBtn" type="button" aria-pressed="true">ЛС</button>
+                        <button class="mode-btn" id="modeServersBtn" type="button" aria-pressed="false">Сервера</button>
+                    </div>
+                </div>
+                <div class="search-wrap">
+                    <span class="search-icon" aria-hidden="true"></span>
+                    <input id="searchInput" class="search-input" placeholder="Поиск..." autocomplete="off">
+                </div>
+                <div class="contacts-tools">
+                    <input id="contactInput" class="contact-input" placeholder="Добавить контакт" autocomplete="off">
+                </div>
+                <div class="contacts-suggest-wrap" id="contactSuggestionsWrap" hidden>
+                    <div class="contacts-suggest" id="contactSuggestions" hidden></div>
+                </div>
+                <div class="nav-label">Диалоги</div>
+                <div class="contacts" id="contacts">
+                    <div class="contacts-loading">
+                        <div class="sk sk-contact"></div>
+                        <div class="sk sk-contact"></div>
+                        <div class="sk sk-contact"></div>
+                    </div>
+                </div>
+                <div class="me">
+                    <div class="ava me-ava" id="meAva">Z</div>
+                    <div class="me-info">
+                        <div class="me-name" id="meName">Zalikus</div>
+                        <div class="me-sub" id="meSub"><span class="online-dot"></span> В сети</div>
+                    </div>
+                    <button class="settings-btn" id="settingsBtn" type="button" title="Настройки">⚙</button>
+                </div>
+            </nav>
+
+            <!-- CONTENT -->
+            <div class="main">
+
+                <!-- CHAT VIEW -->
+                <div id="viewChat" class="view active">
+                    <div class="chat-hdr" id="chatHdr">
+                        <div class="chat-hdr-ava" id="chatHdrAva">A</div>
+                        <div class="chat-hdr-info">
+                            <div class="chat-hdr-name" id="chatHdrName">Alice</div>
+                            <div class="chat-hdr-sub" id="chatHdrSub">Личное сообщение</div>
+                        </div>
+                        <div class="chat-hdr-actions">
+                            <button class="server-settings-btn chat-call-btn" id="chatCallBtn" type="button" title="Позвонить" hidden>📞</button>
+                            <button class="server-settings-btn" id="serverSettingsBtn" type="button" title="Настройки сервера" hidden>⚙</button>
+                        </div>
+                        <div class="server-channel-list" id="serverChannelList" hidden></div>
+                    </div>
+
+                    <div class="voice-panel" id="voicePanel" hidden></div>
+
+                    <div class="msgs" id="msgs"></div>
+
+                    <div class="input-area">
+                        <div class="draft-attachments" id="draftAttachments"></div>
+                        <div class="input-bar" id="inputBar">
+                            <button class="attach-btn" id="attachBtn" type="button" title="Прикрепить картинку или GIF">📎</button>
+                            <input id="attachmentInput" type="file" accept="image/*,video/*,.gif,.webp,.png,.jpg,.jpeg,.mp4,.webm" multiple hidden>
+                            <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
+                            <button class="send-btn" id="sendBtn" disabled>
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="17" height="17">
+                                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SETTINGS VIEW (CUSTOMIZATION, LOGS & CRYPTO) -->
+                <div id="viewSettings" class="view">
+                    <div class="logs-bar settings-topbar">
+                        <div class="settings-topcopy">
+                            <span class="settings-kicker">Центр управления</span>
+                            <span class="logs-title">Настройки</span>
+                            <p class="settings-lead">Кастомизация интерфейса, журнал событий и действия аккаунта в одном месте.</p>
+                        </div>
+                        <button class="btn-flat" id="closeSettings">Назад</button>
+                    </div>
+                    <div class="settings-body settings-scroll">
+                        <div class="settings-shell">
+                            <section class="settings-card settings-hero">
+                                <div class="settings-hero-copy">
+                                    <span class="settings-kicker">Быстрый обзор</span>
+                                    <h2>Настройте внешний вид, проверьте журнал и управляйте параметрами без лишних переходов.</h2>
+                                    <p>Меню разделено на понятные блоки, чтобы основные действия были под рукой и не терялись в длинном списке.</p>
+                                </div>
+                                <div class="settings-chips">
+                                    <span class="settings-chip">Styler</span>
+                                    <span class="settings-chip">Logs</span>
+                                    <span class="settings-chip">Crypto</span>
+                                    <span class="settings-chip">Account</span>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Profile</span>
+                                        <h3 class="settings-card-title">Аватар профиля</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="avatarTargetLabel">sync</span>
+                                </div>
+                                <div class="avatar-editor">
+                                    <div class="avatar-editor-preview">
+                                        <div class="ava avatar-preview" id="avatarPreview">Z</div>
+                                    </div>
+                                    <div class="avatar-editor-copy">
+                                        <p class="settings-help">Загрузите картинку для своего профиля — она сохранится на сервере и будет видна всем вашим собеседникам на других устройствах. После обновления аватар автоматически подтянется в списке контактов, шапке чата и профиле.</p>
+                                        <div class="avatar-editor-actions">
+                                            <button class="btn-flat avatar-upload-btn" id="avatarUploadBtn" type="button">Загрузить</button>
+                                            <button class="btn-flat" id="avatarResetBtn" type="button">Сбросить аватар</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <div class="settings-grid">
+                                <div class="settings-column">
+                                    <section class="settings-card">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Styler</span>
+                                                <h3 class="settings-card-title">Цветовая схема</h3>
+                                            </div>
+                                            <span class="settings-card-note">zali_styler</span>
+                                        </div>
+                                        <div class="theme-buttons settings-theme-grid">
+                                            <button class="btn-theme theme-lime" data-theme="lime" type="button">Lime</button>
+                                            <button class="btn-theme theme-cyber" data-theme="cyber" type="button">Cyberpunk</button>
+                                            <button class="btn-theme theme-matrix" data-theme="matrix" type="button">Matrix</button>
+                                            <button class="btn-theme theme-ocean" data-theme="ocean" type="button">Ocean</button>
+                                            <button class="btn-theme theme-mono" data-theme="mono" type="button">Monochrome</button>
+                                        </div>
+                                    </section>
+
+                                    <section class="settings-card">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Styler</span>
+                                                <h3 class="settings-card-title">Закругление сообщений</h3>
+                                            </div>
+                                            <span class="settings-card-note" id="radiusVal">18px</span>
+                                        </div>
+                                        <div class="settings-control-box">
+                                            <input type="range" id="sliderRadius" min="0" max="24" value="18" class="settings-range">
+                                        </div>
+                                    </section>
+
+                                    <section class="settings-card">
+                                            <div class="settings-card-head">
+                                                <div>
+                                                    <span class="settings-kicker">Styler</span>
+                                                    <h3 class="settings-card-title">Интервал сообщений</h3>
+                                                </div>
+                                            <span class="settings-card-note" id="msgGapVal">1px</span>
+                                        </div>
+                                        <div class="settings-control-box">
+                                            <input type="range" id="sliderMsgGap" min="0" max="8" value="1" class="settings-range">
+                                        </div>
+                                    </section>
+
+                                    <section class="settings-card">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Contacts</span>
+                                                <h3 class="settings-card-title">Выпадающий список контактов</h3>
+                                            </div>
+                                            <span class="settings-card-note">Поведение</span>
+                                        </div>
+                                        <div class="settings-stack">
+                                            <div class="settings-control-row">
+                                                <span class="settings-label">Размер</span>
+                                                <input type="range" id="sliderSuggestHeight" min="220" max="520" value="340" class="settings-range">
+                                                <span class="settings-value" id="suggestHeightVal">340px</span>
+                                            </div>
+                                            <div class="settings-control-row">
+                                                <span class="settings-label">Контраст</span>
+                                                <input type="range" id="sliderSuggestContrast" min="40" max="100" value="85" class="settings-range">
+                                                <span class="settings-value" id="suggestContrastVal">85%</span>
+                                            </div>
+                                            <div class="settings-control-row">
+                                                <span class="settings-label">Плотность</span>
+                                                <input type="range" id="sliderSuggestDensity" min="0" max="24" value="12" class="settings-range">
+                                                <span class="settings-value" id="suggestDensityVal">12</span>
+                                            </div>
+                                        </div>
+                                    </section>
+                                </div>
+
+                                <div class="settings-column">
+                                    <section class="settings-card settings-card--logs">
+                                        <div class="settings-card-head settings-card-head--tight">
+                                            <div>
+                                                <span class="settings-kicker">Telemetry</span>
+                                                <h3 class="settings-card-title">Журнал событий</h3>
+                                            </div>
+                                            <button class="btn-flat" id="clearLogs" type="button">Очистить</button>
+                                        </div>
+                                        <div class="log-body settings-log-body" id="logBody"></div>
+                                    </section>
+
+                                    <section class="settings-card">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Security</span>
+                                                <h3 class="settings-card-title">Ключ шифрования</h3>
+                                            </div>
+                                            <span class="settings-card-note">zali_crypto</span>
+                                        </div>
+                                        <div class="settings-stack">
+                                            <input type="text" id="inputCryptoKey" class="settings-input" placeholder="Введите общий E2E-ключ">
+                                            <p class="settings-help">Текущий ключ: <code id="currentCryptoKeyValue" class="crypto-key-value">не задан</code></p>
+                                            <p class="settings-help" id="currentCryptoKeyMeta">Контекст: общий ключ</p>
+                                            <p class="settings-help">Измените секретную фразу для E2E-шифрования. Для чтения переписки собеседники должны использовать одинаковый ключ, и он не должен храниться в коде.</p>
+                                        </div>
+                                    </section>
+
+                                    <section class="settings-card">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Network</span>
+                                                <h3 class="settings-card-title">Сервер и WebRTC</h3>
+                                            </div>
+                                            <span class="settings-card-note">public</span>
+                                        </div>
+                                        <div class="settings-stack">
+                                            <input type="url" id="inputApiBaseUrl" class="settings-input" placeholder="https://msgs.zalikus.org">
+                                            <input type="url" id="inputWsBaseUrl" class="settings-input" placeholder="wss://msgs.zalikus.org/ws">
+                                            <textarea id="inputIceServers" class="settings-textarea settings-textarea--compact" rows="5" placeholder='[{"urls":["stun:stun.l.google.com:19302"]},{"urls":"turns:turn.example.com:5349","username":"user","credential":"pass"}]'></textarea>
+                                            <div class="settings-control-box">
+                                                <div class="settings-stack">
+                                                    <input type="url" id="inputTurnUrl" class="settings-input" placeholder="turns:turn.example.com:5349">
+                                                    <input type="text" id="inputTurnUsername" class="settings-input" placeholder="TURN username">
+                                                    <input type="password" id="inputTurnCredential" class="settings-input" placeholder="TURN credential">
+                                                    <label class="server-toggle settings-toggle">
+                                                        <input id="inputTurnRelayOnly" type="checkbox" checked>
+                                                        <span>
+                                                            <strong>Relay only</strong>
+                                                            <small>Использовать TURN как основной путь для медиа</small>
+                                                        </span>
+                                                    </label>
+                                                    <div class="settings-inline-actions">
+                                                        <button class="btn-flat" id="networkTurnApplyBtn" type="button">Добавить TURN</button>
+                                                        <button class="btn-flat" id="networkTurnFillBtn" type="button">Заполнить пример</button>
+                                                    </div>
+                                                    <p class="settings-help">TURN помогает звонкам работать вне локальной сети. Обычно нужен `turns://` адрес, логин и credential от coturn.</p>
+                                                </div>
+                                            </div>
+                                            <div class="settings-inline-actions">
+                                                <button class="btn-flat" id="networkConfigSaveBtn" type="button">Сохранить сеть</button>
+                                                <button class="btn-flat" id="networkConfigResetBtn" type="button">Сбросить</button>
+                                            </div>
+                                            <p class="settings-help">API и WebSocket лучше указывать публичными `https`/`wss` адресами. Для работы через интернет добавьте TURN-сервер в список ICE.</p>
+                                        </div>
+                                    </section>
+
+                                    <section class="settings-card settings-card--danger">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Account</span>
+                                                <h3 class="settings-card-title">Сеанс</h3>
+                                            </div>
+                                            <span class="settings-card-note">Безопасно</span>
+                                        </div>
+                                        <p class="settings-help">Завершите текущий вход, если хотите переключить аккаунт или выйти из гостевого режима.</p>
+                                        <button class="btn-flat settings-logout" id="settingsLogoutBtn" type="button">Выйти из аккаунта</button>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="mobile-dock" id="mobileDock" aria-label="Мобильная навигация">
+            <button class="mobile-dock-btn" id="mobileChatsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Чаты'; var dm=document.getElementById('modeDmBtn'); if (dm) dm.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')">Чаты</button>
+            <button class="mobile-dock-btn" id="mobileServersBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Сервера'; var svBtn=document.getElementById('modeServersBtn'); if (svBtn) svBtn.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')">Сервера</button>
+            <button class="mobile-dock-btn" id="mobileSettingsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.remove('active'); if (sv) sv.classList.add('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Настройки'; document.body.classList.remove('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')">Настройки</button>
+        </div>
+    </div>
+
+    <div class="server-overlay" id="serverOverlay" hidden>
+        <div class="server-modal" id="serverModal" role="dialog" aria-modal="true" aria-labelledby="serverModalTitle">
+            <div class="server-modal-head">
+                <div class="server-modal-headcopy">
+                    <span class="server-modal-kicker" id="serverModalKicker">Создание сервера</span>
+                    <h2 id="serverModalTitle">Создать сервер</h2>
+                    <p id="serverModalHint">Настройте имя, оформление и права доступа.</p>
+                </div>
+                <button class="server-modal-close" id="serverModalClose" type="button" aria-label="Закрыть">×</button>
+            </div>
+
+            <div class="server-modal-shell">
+                <aside class="server-modal-sidebar">
+                    <div class="server-modal-sidebar-head">
+                        <span class="server-modal-sidebar-kicker">Навигация</span>
+                        <div class="server-modal-sidebar-title" id="serverModalSidebarTitle">Настройки сервера</div>
+                        <div class="server-modal-sidebar-sub" id="serverModalSidebarHint">Выберите раздел слева, чтобы быстро перейти к нужным настройкам.</div>
+                    </div>
+                    <nav class="server-modal-nav" id="serverModalNav" aria-label="Разделы настроек">
+                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="overview">
+                            <span class="server-modal-nav-label">Обзор</span>
+                            <span class="server-modal-nav-desc">Имя, внешний вид и ссылка</span>
+                        </button>
+                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="channels">
+                            <span class="server-modal-nav-label">Каналы</span>
+                            <span class="server-modal-nav-desc">Создание и настройка каналов</span>
+                        </button>
+                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="roles">
+                            <span class="server-modal-nav-label">Роли</span>
+                            <span class="server-modal-nav-desc">Права и оформление ролей</span>
+                        </button>
+                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="members">
+                            <span class="server-modal-nav-label">Участники</span>
+                            <span class="server-modal-nav-desc">Управление участниками сервера</span>
+                        </button>
+                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="discover">
+                            <span class="server-modal-nav-label">Публичные серверы</span>
+                            <span class="server-modal-nav-desc">Поиск и вход в сообщества</span>
+                        </button>
+                    </nav>
+                </aside>
+
+                <div class="server-modal-body">
+                    <div class="server-modal-grid">
+                        <section class="server-modal-section" data-server-modal-panel="overview" id="serverOverviewPanel">
+                            <section class="server-modal-card" id="serverBasicsCard">
+                                <div class="settings-card-head settings-card-head--tight">
+                                    <div>
+                                        <span class="settings-kicker">Basics</span>
+                                        <h3 class="settings-card-title">Параметры сервера</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="serverModalModeNote">create</span>
+                                </div>
+                                <div class="server-form">
+                                    <input id="serverNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название сервера">
+                                    <input id="serverIconInput" class="settings-input" type="text" maxlength="8" placeholder="Иконка, символ или эмодзи">
+                                    <div class="color-picker color-picker--compact color-picker--collapsible is-collapsed" data-color-picker-key="server-basics">
+                                        <div class="color-picker-head">
+                                            <div class="color-picker-summary">
+                                                <span class="color-picker-preview" style="background:#cbff00"></span>
+                                                <div class="color-picker-copy">
+                                                    <div class="color-picker-title">RGB</div>
+                                                    <div class="color-picker-sub">Свернуто по умолчанию</div>
+                                                </div>
+                                            </div>
+                                            <button class="btn-flat color-picker-toggle" id="serverColorToggleBtn" type="button" data-color-picker-toggle="server-basics">Развернуть</button>
+                                        </div>
+                                        <div class="color-picker-body">
+                                            <div class="color-wheel color-wheel--small" id="serverColorWheel" tabindex="0" aria-label="Цвет сервера">
+                                                <div class="color-wheel-thumb"></div>
+                                                <div class="color-wheel-center">RGB</div>
+                                            </div>
+                                            <div class="color-picker-side">
+                                                <input id="serverColorInput" type="hidden" value="#cbff00">
+                                                <input id="serverColorHexInput" class="settings-input color-hex-input" type="text" maxlength="7" value="#cbff00" aria-label="HEX цвет сервера">
+                                                <p class="settings-help color-picker-help">Выберите цвет колесом или введите HEX.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <textarea id="serverDescriptionInput" class="settings-textarea" rows="4" maxlength="180" placeholder="Описание сервера"></textarea>
+                                    <label class="server-toggle">
+                                        <input id="serverPublicInput" type="checkbox" checked>
+                                        <span>
+                                            <strong>Публичный сервер</strong>
+                                            <small>Виден всем пользователям</small>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="server-assets">
+                                    <div class="server-asset-card">
+                                        <div class="server-asset-preview server-avatar-preview" id="serverAvatarPreview">S</div>
+                                        <div class="server-asset-copy">
+                                            <div class="server-asset-title">Аватар сервера</div>
+                                            <div class="server-asset-sub">Круглая иконка в списке серверов</div>
+                                            <div class="server-asset-actions">
+                                                <button class="btn-flat" id="serverAvatarUploadBtn" type="button">Загрузить</button>
+                                                <button class="btn-flat" id="serverAvatarRemoveBtn" type="button">Удалить</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="server-asset-card server-banner-card">
+                                        <div class="server-asset-preview server-banner-preview" id="serverBannerPreview">BAN</div>
+                                        <div class="server-asset-copy">
+                                            <div class="server-asset-title">Баннер сервера</div>
+                                            <div class="server-asset-sub">Широкая шапка для сервера</div>
+                                            <div class="server-asset-actions">
+                                                <button class="btn-flat" id="serverBannerUploadBtn" type="button">Загрузить</button>
+                                                <button class="btn-flat" id="serverBannerRemoveBtn" type="button">Удалить</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="server-link-card">
+                                        <div class="server-asset-title">Ссылка входа</div>
+                                        <div class="server-asset-sub">Сюда можно вставить адрес сервера, по которому будут входить пользователи.</div>
+                                        <div class="server-link-row">
+                                            <input id="serverJoinLinkInput" class="settings-input" type="text" placeholder="Ссылка на сервер">
+                                            <button class="btn-flat" id="serverJoinLinkGenerateBtn" type="button">Сгенерировать</button>
+                                            <button class="btn-flat" id="serverJoinLinkCopyBtn" type="button">Копировать</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        </section>
+
+                        <section class="server-modal-section" data-server-modal-panel="channels" id="serverChannelsPanel" hidden>
+                            <section class="server-modal-card" id="serverChannelsCard">
+                                <div class="settings-card-head settings-card-head--tight">
+                                    <div>
+                                        <span class="settings-kicker">Channels</span>
+                                        <h3 class="settings-card-title">Каналы сервера</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="serverChannelsCount">0</span>
+                                </div>
+                                <div class="server-channel-create is-collapsed" data-server-channel-create>
+                                    <div class="server-channel-create-head">
+                                        <div class="server-channel-create-copy">
+                                            <div class="server-channel-create-title">Новый канал</div>
+                                            <div class="server-channel-create-sub">Нажмите, чтобы открыть форму создания</div>
+                                        </div>
+                                        <button class="btn-flat server-channel-create-btn" id="serverChannelCreateBtn" type="button">Новый канал</button>
+                                    </div>
+                                    <div class="server-channel-create-body" data-server-channel-create-body hidden>
+                                        <input id="serverChannelNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название канала" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+                                        <input id="serverChannelTopicInput" class="settings-input" type="text" maxlength="180" placeholder="Тема или описание канала" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+                                        <div class="server-channel-create-row">
+                                            <select id="serverChannelKindInput" class="settings-input">
+                                                <option value="text" selected>Текстовый канал</option>
+                                                <option value="voice">Голосовой канал</option>
+                                            </select>
+                                            <button class="auth-btn primary" id="serverChannelCreateSubmitBtn" type="button">Создать канал</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="server-channels-list" id="serverChannelsList"></div>
+                            </section>
+                        </section>
+
+                        <section class="server-modal-section" data-server-modal-panel="roles" id="serverRolesPanel" hidden>
+                            <section class="server-modal-card" id="serverRolesCard">
+                                <div class="settings-card-head settings-card-head--tight">
+                                    <div>
+                                        <span class="settings-kicker">Roles</span>
+                                        <h3 class="settings-card-title">Роли сервера</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="serverRolesCount">0</span>
+                                </div>
+                                <div class="server-role-create is-collapsed" data-server-role-create>
+                                    <div class="server-role-create-head">
+                                        <div class="server-role-create-copy">
+                                            <div class="server-role-create-title">Новая роль</div>
+                                            <div class="server-role-create-sub">Нажмите, чтобы открыть форму создания</div>
+                                        </div>
+                                        <button class="btn-flat server-role-create-btn" id="serverRoleCreateBtn" type="button">Новая роль</button>
+                                    </div>
+                                    <div class="server-role-create-body" data-server-role-create-body hidden>
+                                        <input id="serverRoleNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название роли" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+                                        <div class="color-picker color-picker--compact color-picker--collapsible is-collapsed" data-color-picker-key="server-role-create">
+                                            <div class="color-picker-head">
+                                                <div class="color-picker-summary">
+                                                    <span class="color-picker-preview" style="background:#cbff00"></span>
+                                                    <div class="color-picker-copy">
+                                                        <div class="color-picker-title">RGB</div>
+                                                        <div class="color-picker-sub">Свернуто по умолчанию</div>
+                                                    </div>
+                                                </div>
+                                                <button class="btn-flat color-picker-toggle" id="serverRoleColorToggleBtn" type="button" data-color-picker-toggle="server-role-create">Развернуть</button>
+                                            </div>
+                                            <div class="color-picker-body">
+                                                <div class="color-wheel color-wheel--small" id="serverRoleColorWheel" tabindex="0" aria-label="Цвет роли">
+                                                    <div class="color-wheel-thumb"></div>
+                                                    <div class="color-wheel-center">RGB</div>
+                                                </div>
+                                                <div class="color-picker-side">
+                                                    <input id="serverRoleColorInput" type="hidden" value="#cbff00">
+                                                    <input id="serverRoleColorHexInput" class="settings-input color-hex-input" type="text" maxlength="7" value="#cbff00" aria-label="HEX цвет роли">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="server-role-create-perms">
+                                            <div class="server-perm-group">
+                                                <div class="server-perm-group-title">Доступ</div>
+                                                <div class="server-perm-grid server-perm-grid--dense">
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Чтение каналов</strong><small>Видеть список и историю сообщений</small></span>
+                                                        <input id="serverRolePermView" type="checkbox" data-server-role-perm="can_view" checked>
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Отправка сообщений</strong><small>Писать в текстовые каналы</small></span>
+                                                        <input id="serverRolePermSend" type="checkbox" data-server-role-perm="can_send" checked>
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Реакции</strong><small>Ставить реакции на сообщения</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_react" checked>
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Файлы</strong><small>Прикреплять изображения и файлы</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_attach" checked>
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Ссылки и медиа</strong><small>Встраивать превью ссылок</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_embed" checked>
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Голосовые каналы</strong><small>Входить и говорить в voice</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_voice" checked>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <div class="server-perm-group">
+                                                <div class="server-perm-group-title">Управление</div>
+                                                <div class="server-perm-grid server-perm-grid--dense">
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Управление сервером</strong><small>Общие админские действия</small></span>
+                                                        <input id="serverRolePermManage" type="checkbox" data-server-role-perm="can_manage">
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Каналы</strong><small>Создавать и менять каналы</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_manage_channels">
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Роли</strong><small>Создавать и менять роли</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_manage_roles">
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Приглашения</strong><small>Генерировать инвайты</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_invite" checked>
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Закреплять</strong><small>Закреплять важные сообщения</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_pin">
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>@everyone</strong><small>Упоминать всех участников</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_mention">
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Исключать</strong><small>Кикать участников из сервера</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_kick">
+                                                    </label>
+                                                    <label class="server-perm-row server-perm-row--stacked">
+                                                        <span><strong>Бан</strong><small>Блокировать участников</small></span>
+                                                        <input type="checkbox" data-server-role-perm="can_ban">
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="server-role-create-actions">
+                                            <button class="auth-btn primary" id="serverRoleCreateSubmitBtn" type="button">Создать роль</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="server-roles-list" id="serverRolesList"></div>
+                            </section>
+                        </section>
+
+                        <section class="server-modal-section" data-server-modal-panel="members" id="serverMembersPanel" hidden>
+                            <section class="server-modal-card" id="serverMembersCard">
+                                <div class="settings-card-head settings-card-head--tight">
+                                    <div>
+                                        <span class="settings-kicker">Members</span>
+                                        <h3 class="settings-card-title">Участники и роли</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="serverMembersCount">0</span>
+                                </div>
+                                <div class="server-member-add">
+                                    <input id="serverMemberInput" class="settings-input" type="text" maxlength="64" placeholder="Логин участника">
+                                    <select id="serverMemberRole" class="settings-input"></select>
+                                    <button class="btn-flat" id="serverMemberAddBtn" type="button">Добавить</button>
+                                </div>
+                                <div class="server-members-list" id="serverMembersList"></div>
+                            </section>
+                        </section>
+
+                        <section class="server-modal-section" data-server-modal-panel="discover" id="serverDiscoverPanel" hidden>
+                            <section class="server-modal-card server-discover-card" id="serverDiscoverCard">
+                                <div class="settings-card-head settings-card-head--tight">
+                                    <div>
+                                        <span class="settings-kicker">Public</span>
+                                        <h3 class="settings-card-title">Публичные серверы</h3>
+                                    </div>
+                                    <div class="server-discover-head-actions">
+                                        <span class="settings-card-note" id="serverDiscoverCount">0</span>
+                                        <button class="btn-flat" id="serverDiscoverRefreshBtn" type="button">Обновить</button>
+                                    </div>
+                                </div>
+                                <div class="server-discover-toolbar">
+                                    <input id="serverDiscoverQuery" class="settings-input" type="text" placeholder="Поиск публичных серверов">
+                                </div>
+                                <div class="server-discover-list" id="serverDiscoverList"></div>
+                            </section>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <div class="server-modal-error" id="serverModalError"></div>
+            <div class="server-modal-actions">
+                <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
+                <button class="btn-flat server-delete-btn" id="serverDeleteBtn" type="button" hidden>Удалить сервер</button>
+                <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="auth-overlay visible" id="authOverlay">
+        <div class="auth-card">
+            <div class="auth-brand">ZaliMessenger</div>
+            <h1 id="authTitle">Вход в аккаунт</h1>
+            <p id="authHint">Войдите, чтобы синхронизировать сообщения и контакты.</p>
+            <form class="auth-form" id="authForm">
+                <input id="authUsername" class="auth-input" type="text" placeholder="Логин" autocomplete="off" autocapitalize="none" spellcheck="false">
+                <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" autocomplete="off">
+                <div class="auth-actions">
+                    <button id="authLoginBtn" class="auth-btn primary" type="submit">Войти</button>
+                </div>
+                <div class="auth-network">
+                    <div class="auth-network-head">
+                        <div class="auth-network-title">Адрес сервера</div>
+                        <div class="auth-network-note" id="authNetworkNote">Автоматически подставляется из настроек</div>
+                    </div>
+                    <div class="auth-network-row">
+                        <input id="authApiBaseUrl" class="auth-input auth-input--compact" type="url" placeholder="https://msgs.zalikus.org" autocomplete="off">
+                        <button id="authNetworkSaveBtn" class="auth-btn auth-btn--ghost" type="button">Сохранить</button>
+                    </div>
+                    <p class="auth-network-help">Если сервер не найден, укажите публичный `https://` адрес и попробуйте снова.</p>
+                </div>
+                <div class="auth-footer">
+                    <button id="authGuestBtn" class="auth-link" type="button">Продолжить как гость</button>
+                    <button id="authRegisterBtn" class="auth-link" type="button">Создать аккаунт</button>
+                </div>
+                <div class="auth-error" id="authError"></div>
+            </form>
+        </div>
+    </div>
+    <script src="app.js?v=mobile-20260601"></script>
+</body>
+</html>
