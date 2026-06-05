@@ -3,19 +3,27 @@ use base64::Engine;
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
+use std::convert::TryFrom;
 use std::ffi::CString;
-use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tao::event_loop::EventLoopProxy;
-use tokio::sync::{mpsc, watch};
 use tokio::runtime::Runtime;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+use futures_util::{stream, Sink, SinkExt, StreamExt};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{
+        client::IntoClientRequest,
+        http::{HeaderValue, Request},
+        Message,
+    },
+};
 use zali_messenger_core::{zali_bus_dispatch, zali_bus_free_string};
-use futures_util::{Sink, SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::{http::Request, Message}};
 
 fn trace(message: impl AsRef<str>) {
     println!("[ZALI][WIN] {}", message.as_ref());
@@ -30,6 +38,32 @@ fn is_direct_message_key(key: &str) -> bool {
     key.trim_start().starts_with("zali-e2e:v1:dm:")
 }
 
+fn push_candidate_key(keys: &mut Vec<String>, key: impl Into<String>) {
+    let key = key.into();
+    let trimmed = key.trim();
+    if trimmed.is_empty() || keys.iter().any(|existing| existing == trimmed) {
+        return;
+    }
+    keys.push(trimmed.to_string());
+}
+
+fn candidate_message_keys(
+    current_key: &str,
+    _record: &Value,
+    _server_id: Option<&str>,
+    _channel_id: Option<&str>,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    push_candidate_key(&mut keys, current_key);
+    keys
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthRequestPayload {
+    username: String,
+    password: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     EvaluateScript(String),
@@ -42,6 +76,14 @@ struct VoiceConfig {
     auth_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct MessageConfig {
+    ws_url: String,
+    api_base_url: String,
+    auth_token: Option<String>,
+    current_key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PersistedConfig {
     api_base_url: Option<String>,
@@ -51,6 +93,7 @@ struct PersistedConfig {
     session_token: Option<String>,
     #[serde(default)]
     pending_outbox: Vec<Value>,
+    message_cache: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +105,7 @@ pub struct NativeState {
     pub current_key: String,
     pub saved_css: String,
     pub pending_outbox: Vec<Value>,
+    pub message_cache_json: String,
     config_path: PathBuf,
     css_path: PathBuf,
 }
@@ -73,12 +117,15 @@ struct NativeCapabilities {
     session_sync: bool,
     network_config: bool,
     set_key: bool,
+    set_reaction: bool,
+    avatar_fetch: bool,
     save_style: bool,
     download_attachment: bool,
     server_history: bool,
     tenor: bool,
     voice: bool,
     window_drag: bool,
+    message_cache: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -88,12 +135,15 @@ impl Default for NativeCapabilities {
             session_sync: true,
             network_config: true,
             set_key: true,
+            set_reaction: true,
+            avatar_fetch: true,
             save_style: true,
             download_attachment: true,
             server_history: true,
             tenor: true,
             voice: true,
             window_drag: true,
+            message_cache: true,
         }
     }
 }
@@ -120,7 +170,12 @@ impl VoiceBridge {
         bridge
     }
 
-    pub fn configure(&self, ws_base_url: Option<String>, api_base_url: Option<String>, auth_token: Option<String>) {
+    pub fn configure(
+        &self,
+        ws_base_url: Option<String>,
+        api_base_url: Option<String>,
+        auth_token: Option<String>,
+    ) {
         let ws_url = normalize_voice_ws_url(ws_base_url, api_base_url);
         let auth_token = auth_token
             .map(|value| value.trim().to_string())
@@ -130,6 +185,40 @@ impl VoiceBridge {
 
     pub fn send_event(&self, payload: Value) {
         let _ = self.outbound_tx.send(payload);
+    }
+}
+
+pub struct MessageBridge {
+    config_tx: watch::Sender<MessageConfig>,
+}
+
+impl MessageBridge {
+    pub fn new(runtime: Arc<Runtime>, proxy: EventLoopProxy<AppEvent>) -> Arc<Self> {
+        let (config_tx, config_rx) = watch::channel(MessageConfig::default());
+        let bridge = Arc::new(Self { config_tx });
+        runtime.spawn(async move {
+            run_message_transport(config_rx, proxy).await;
+        });
+        bridge
+    }
+
+    pub fn configure(
+        &self,
+        ws_base_url: Option<String>,
+        api_base_url: String,
+        auth_token: Option<String>,
+        current_key: String,
+    ) {
+        let ws_url = normalize_voice_ws_url(ws_base_url, Some(api_base_url.clone()));
+        let auth_token = auth_token
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let _ = self.config_tx.send(MessageConfig {
+            ws_url,
+            api_base_url,
+            auth_token,
+            current_key: current_key.trim().to_string(),
+        });
     }
 }
 
@@ -159,6 +248,11 @@ impl NativeState {
             current_key: persisted.crypto_key.unwrap_or_default().trim().to_string(),
             saved_css,
             pending_outbox: persisted.pending_outbox,
+            message_cache_json: persisted
+                .message_cache
+                .unwrap_or_else(|| r#"{"chats":{},"serverChats":{}}"#.to_string())
+                .trim()
+                .to_string(),
             config_path,
             css_path,
         };
@@ -201,6 +295,7 @@ impl NativeState {
                 .clone()
                 .filter(|value| !value.trim().is_empty()),
             pending_outbox: self.pending_outbox.clone(),
+            message_cache: Some(self.message_cache_json.clone()),
         };
         if let Ok(json) = serde_json::to_string_pretty(&payload) {
             let _ = fs::write(&self.config_path, json);
@@ -220,6 +315,20 @@ impl NativeState {
         trace(format!(
             "persist_pending_outbox count={} user={}",
             self.pending_outbox.len(),
+            self.current_username
+        ));
+        self.persist_config();
+    }
+
+    fn persist_message_cache(&mut self, json: String) {
+        self.message_cache_json = if json.trim().is_empty() {
+            r#"{"chats":{},"serverChats":{}}"#.to_string()
+        } else {
+            json
+        };
+        trace(format!(
+            "persist_message_cache bytes={} user={}",
+            self.message_cache_json.len(),
             self.current_username
         ));
         self.persist_config();
@@ -278,6 +387,14 @@ impl NativeState {
             script.push_str("window.__ZALI_PENDING_OUTBOX = [];\n");
         }
 
+        if let Ok(json) = serde_json::to_string(&self.message_cache_json) {
+            script.push_str(&format!("window.__ZALI_MESSAGE_CACHE = {};\n", json));
+        } else {
+            script.push_str(
+                "window.__ZALI_MESSAGE_CACHE = \"{\\\"chats\\\":{},\\\"serverChats\\\":{}}\";\n",
+            );
+        }
+
         script
     }
 
@@ -319,6 +436,14 @@ fn normalize_voice_ws_url(ws_base_url: Option<String>, api_base_url: Option<Stri
     }
 
     "wss://msgs.zalikus.org/ws".to_string()
+}
+
+fn join_api_url(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim().trim_end_matches('/'),
+        path.trim().trim_start_matches('/')
+    )
 }
 
 fn json_string_literal(value: &str) -> String {
@@ -504,11 +629,16 @@ fn infer_mime_and_kind(url: &str) -> (String, String) {
 }
 
 fn voice_request(ws_url: &str, auth_token: Option<&str>) -> Result<Request<()>, String> {
-    let mut builder = Request::builder().uri(ws_url);
-    if let Some(token) = auth_token.map(|value| value.trim()).filter(|value| !value.is_empty()) {
-        builder = builder.header("Authorization", format!("Bearer {}", token));
+    let mut request = ws_url.into_client_request().map_err(|e| e.to_string())?;
+    if let Some(token) = auth_token
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let auth_value =
+            HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| e.to_string())?;
+        request.headers_mut().insert("Authorization", auth_value);
     }
-    builder.body(()).map_err(|e| e.to_string())
+    Ok(request)
 }
 
 async fn send_voice_payload(
@@ -520,6 +650,74 @@ async fn send_voice_payload(
         .send(Message::Text(text))
         .await
         .map_err(|e| e.to_string())
+}
+
+async fn fetch_users(
+    api_base_url: String,
+    auth_token: Option<String>,
+    current_username: String,
+) -> Vec<String> {
+    let url = format!("{}/api/users", api_base_url.trim_end_matches('/'));
+    let client = http_client();
+    let mut request = client.get(&url);
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    match request.send().await {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<Vec<String>>().await {
+                Ok(users) => users,
+                Err(error) => {
+                    trace(format!("fetch_users decode_error err={}", error));
+                    vec!["Alice".to_string(), "Bob".to_string(), current_username]
+                }
+            }
+        }
+        Ok(response) => {
+            trace(format!(
+                "fetch_users http_fail status={}",
+                response.status()
+            ));
+            vec!["Alice".to_string(), "Bob".to_string(), current_username]
+        }
+        Err(error) => {
+            trace(format!("fetch_users request_error err={}", error));
+            vec!["Alice".to_string(), "Bob".to_string(), current_username]
+        }
+    }
+}
+
+async fn fetch_contacts(api_base_url: String, auth_token: Option<String>) -> Vec<String> {
+    let url = format!("{}/api/contacts", api_base_url.trim_end_matches('/'));
+    let client = http_client();
+    let mut request = client.get(&url);
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    match request.send().await {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<HashMap<String, Vec<String>>>().await {
+                Ok(payload) => payload.get("contacts").cloned().unwrap_or_default(),
+                Err(error) => {
+                    trace(format!("fetch_contacts decode_error err={}", error));
+                    Vec::new()
+                }
+            }
+        }
+        Ok(response) => {
+            trace(format!(
+                "fetch_contacts http_fail status={}",
+                response.status()
+            ));
+            Vec::new()
+        }
+        Err(error) => {
+            trace(format!("fetch_contacts request_error err={}", error));
+            Vec::new()
+        }
+    }
 }
 
 fn dispatch_voice_event(proxy: &EventLoopProxy<AppEvent>, payload: Value) {
@@ -568,8 +766,15 @@ async fn run_voice_transport(
         let request = match voice_request(&current.ws_url, current.auth_token.as_deref()) {
             Ok(request) => request,
             Err(error) => {
-                trace(format!("voice ws request build failed url={} err={}", current.ws_url, error));
-                dispatch_voice_log(&proxy, "ERROR", format!("Voice connection error: {}", error));
+                trace(format!(
+                    "voice ws request build failed url={} err={}",
+                    current.ws_url, error
+                ));
+                dispatch_voice_log(
+                    &proxy,
+                    "ERROR",
+                    format!("Voice connection error: {}", error),
+                );
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
                     changed = config_rx.changed() => {
@@ -592,7 +797,10 @@ async fn run_voice_transport(
         let (ws_stream, _) = match connect_async(request).await {
             Ok(result) => result,
             Err(error) => {
-                trace(format!("voice ws connect failed url={} err={}", current.ws_url, error));
+                trace(format!(
+                    "voice ws connect failed url={} err={}",
+                    current.ws_url, error
+                ));
                 dispatch_voice_log(&proxy, "WARN", format!("Voice reconnecting: {}", error));
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
@@ -683,6 +891,195 @@ async fn run_voice_transport(
     }
 }
 
+async fn handle_message_ws_payload(
+    raw: Value,
+    current: MessageConfig,
+    proxy: EventLoopProxy<AppEvent>,
+) {
+    if raw
+        .get("type")
+        .and_then(Value::as_str)
+        .map(|value| {
+            value.starts_with("voice_")
+                || value == "reaction_updated"
+                || value.ends_with("avatar_updated")
+                || value == "avatar_deleted"
+        })
+        .unwrap_or(false)
+    {
+        if raw.get("type").and_then(Value::as_str) == Some("reaction_updated") {
+            dispatch_ui_event(&proxy, "zali_interface:reaction_updated", raw);
+        }
+        return;
+    }
+
+    let message_id = raw.get("id").and_then(Value::as_str).unwrap_or("").trim();
+    let filename = raw
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if message_id.is_empty() || filename.is_empty() {
+        return;
+    }
+
+    let server_id = raw
+        .get("serverId")
+        .or_else(|| raw.get("server_id"))
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    let channel_id = raw
+        .get("channelId")
+        .or_else(|| raw.get("channel_id"))
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+
+    let keys = candidate_message_keys(
+        &current.current_key,
+        &raw,
+        server_id.as_deref(),
+        channel_id.as_deref(),
+    );
+
+    match process_history_record(
+        current.api_base_url,
+        current.auth_token,
+        keys,
+        raw,
+        "message_ws",
+        server_id,
+        channel_id,
+    )
+    .await
+    {
+        Some(rendered) => {
+            dispatch_ui_event(&proxy, "zali_interface:receive_message", rendered);
+        }
+        None => {
+            dispatch_ui_event(
+                &proxy,
+                "zali_interface:sync_active_conversation",
+                json!({ "force": true }),
+            );
+        }
+    }
+}
+
+async fn run_message_transport(
+    mut config_rx: watch::Receiver<MessageConfig>,
+    proxy: EventLoopProxy<AppEvent>,
+) {
+    let mut reconnect_delay_secs = 1u64;
+
+    loop {
+        let current = config_rx.borrow().clone();
+        if current.ws_url.trim().is_empty()
+            || current.api_base_url.trim().is_empty()
+            || current.auth_token.is_none()
+        {
+            if config_rx.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
+
+        let request = match voice_request(&current.ws_url, current.auth_token.as_deref()) {
+            Ok(request) => request,
+            Err(error) => {
+                trace(format!(
+                    "message ws request build failed url={} err={}",
+                    current.ws_url, error
+                ));
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
+                    changed = config_rx.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                }
+                reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(30);
+                continue;
+            }
+        };
+
+        trace(format!(
+            "message ws connect url={} token={} key_set={}",
+            current.ws_url,
+            current.auth_token.is_some(),
+            !current.current_key.trim().is_empty()
+        ));
+
+        let (_writer, mut reader) = match connect_async(request).await {
+            Ok((stream, response)) => {
+                trace(format!("message ws connected status={}", response.status()));
+                let (_writer, reader) = stream.split();
+                (_writer, reader)
+            }
+            Err(error) => {
+                trace(format!(
+                    "message ws connect failed url={} err={}",
+                    current.ws_url, error
+                ));
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
+                    changed = config_rx.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                }
+                reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(30);
+                continue;
+            }
+        };
+
+        reconnect_delay_secs = 1;
+        loop {
+            tokio::select! {
+                changed = config_rx.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    trace("message ws config changed; reconnecting");
+                    break;
+                }
+                maybe_msg = reader.next() => {
+                    match maybe_msg {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Ok(raw) = serde_json::from_str::<Value>(&text) {
+                                handle_message_ws_payload(raw, current.clone(), proxy.clone()).await;
+                            }
+                        }
+                        Some(Ok(Message::Binary(data))) => {
+                            if let Ok(text) = String::from_utf8(data.to_vec()) {
+                                if let Ok(raw) = serde_json::from_str::<Value>(&text) {
+                                    handle_message_ws_payload(raw, current.clone(), proxy.clone()).await;
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Ping(_))) => {}
+                        Some(Ok(Message::Pong(_))) => {}
+                        Some(Ok(Message::Frame(_))) => {}
+                        Some(Ok(Message::Close(_))) => {
+                            trace("message ws closed by server");
+                            break;
+                        }
+                        Some(Err(error)) => {
+                            trace(format!("message ws receive error={}", error));
+                            break;
+                        }
+                        None => {
+                            trace("message ws stream ended");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn dispatch_core_command(address_command: &str, args: Value) -> Result<Value, String> {
     let command = CString::new(address_command).map_err(|e| e.to_string())?;
     let args_str = CString::new(args.to_string()).map_err(|e| e.to_string())?;
@@ -708,6 +1105,7 @@ fn pack_message(
     text: &str,
     key: &str,
     output_path: &Path,
+    key_version: u8,
     attachments: &[Value],
 ) -> Result<PathBuf, String> {
     let args = json!({
@@ -715,6 +1113,7 @@ fn pack_message(
         "text": text,
         "key": key,
         "output_path": output_path.to_string_lossy().to_string(),
+        "key_version": key_version,
         "attachments": attachments,
     });
 
@@ -739,6 +1138,7 @@ async fn upload_message(
     file_url: PathBuf,
     server_id: Option<String>,
     channel_id: Option<String>,
+    key_version: u8,
 ) -> Result<Option<String>, String> {
     let url = format!("{}/api/upload", api_base_url.trim_end_matches('/'));
     let file_data = tokio::fs::read(&file_url)
@@ -750,6 +1150,7 @@ async fn upload_message(
         .text("sender", sender)
         .text("receiver", receiver)
         .text("client_id", client_id)
+        .text("key_version", key_version.max(1).to_string())
         .part(
             "file",
             multipart::Part::bytes(file_data)
@@ -787,18 +1188,22 @@ async fn upload_message(
     Ok(message_id)
 }
 
-async fn fetch_messages(
+async fn fetch_messages_page(
     api_base_url: String,
     auth_token: Option<String>,
     username: String,
+    limit: i64,
+    offset: i64,
 ) -> Result<Vec<Value>, String> {
     let url = format!(
-        "{}/api/messages/{}",
+        "{}/api/messages/{}?limit={}&offset={}",
         api_base_url.trim_end_matches('/'),
-        username
+        username,
+        limit,
+        offset
     );
     trace(format!(
-        "fetch_messages start user={} url={}",
+        "fetch_messages_page start user={} url={}",
         username, url
     ));
     let client = http_client();
@@ -810,7 +1215,7 @@ async fn fetch_messages(
     let response = request.send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
         trace(format!(
-            "fetch_messages http_fail user={} status={}",
+            "fetch_messages_page http_fail user={} status={}",
             username,
             response.status()
         ));
@@ -822,11 +1227,134 @@ async fn fetch_messages(
         .await
         .map_err(|e| e.to_string())?;
     trace(format!(
-        "fetch_messages success user={} count={}",
+        "fetch_messages_page success user={} count={} offset={}",
         username,
-        messages.len()
+        messages.len(),
+        offset
     ));
     Ok(messages)
+}
+
+async fn fetch_messages(
+    api_base_url: String,
+    auth_token: Option<String>,
+    username: String,
+) -> Result<Vec<Value>, String> {
+    let mut all = Vec::new();
+    let page_size = 200_i64;
+    let mut offset = 0_i64;
+
+    loop {
+        let page = fetch_messages_page(
+            api_base_url.clone(),
+            auth_token.clone(),
+            username.clone(),
+            page_size,
+            offset,
+        )
+        .await?;
+        let count = page.len();
+        all.extend(page);
+        if (count as i64) < page_size {
+            break;
+        }
+        offset += page_size;
+    }
+
+    trace(format!(
+        "fetch_messages success user={} count={}",
+        username,
+        all.len()
+    ));
+    Ok(all)
+}
+
+async fn fetch_server_messages_page(
+    api_base_url: String,
+    auth_token: Option<String>,
+    server_id: String,
+    channel_id: String,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Value>, String> {
+    let url = format!(
+        "{}/api/servers/{}/channels/{}/messages?limit={}&offset={}",
+        api_base_url.trim_end_matches('/'),
+        server_id,
+        channel_id,
+        limit,
+        offset
+    );
+    trace(format!(
+        "fetch_server_messages_page start server={} channel={} url={}",
+        server_id, channel_id, url
+    ));
+    let client = http_client();
+    let mut request = client.get(url);
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        trace(format!(
+            "fetch_server_messages_page http_fail server={} channel={} status={}",
+            server_id,
+            channel_id,
+            response.status()
+        ));
+        return Err(format!("Fetch failed with status {}", response.status()));
+    }
+
+    let messages = response
+        .json::<Vec<Value>>()
+        .await
+        .map_err(|e| e.to_string())?;
+    trace(format!(
+        "fetch_server_messages_page success server={} channel={} count={} offset={}",
+        server_id,
+        channel_id,
+        messages.len(),
+        offset
+    ));
+    Ok(messages)
+}
+
+async fn fetch_server_messages(
+    api_base_url: String,
+    auth_token: Option<String>,
+    server_id: String,
+    channel_id: String,
+) -> Result<Vec<Value>, String> {
+    let mut all = Vec::new();
+    let page_size = 200_i64;
+    let mut offset = 0_i64;
+
+    loop {
+        let page = fetch_server_messages_page(
+            api_base_url.clone(),
+            auth_token.clone(),
+            server_id.clone(),
+            channel_id.clone(),
+            page_size,
+            offset,
+        )
+        .await?;
+        let count = page.len();
+        all.extend(page);
+        if (count as i64) < page_size {
+            break;
+        }
+        offset += page_size;
+    }
+
+    trace(format!(
+        "fetch_server_messages success server={} channel={} count={}",
+        server_id,
+        channel_id,
+        all.len()
+    ));
+    Ok(all)
 }
 
 async fn download_message(
@@ -863,6 +1391,205 @@ async fn download_message(
         .await
         .map_err(|e| e.to_string())?;
     Ok(file_path)
+}
+
+async fn retry_with_backoff<T, F, Fut>(label: &str, attempts: usize, mut op: F) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let max_attempts = attempts.max(1);
+    let mut last_error = String::new();
+    for attempt in 1..=max_attempts {
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                last_error = error.clone();
+                trace(format!("{} retry={} err={}", label, attempt, error));
+                if attempt < max_attempts {
+                    let delay_ms =
+                        250_u64.saturating_mul(1_u64 << (attempt.saturating_sub(1) as u32));
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.min(2_000))).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error)
+}
+
+async fn process_history_record(
+    api_base_url: String,
+    auth_token: Option<String>,
+    keys: Vec<String>,
+    record: Value,
+    context_label: &str,
+    server_id: Option<String>,
+    channel_id: Option<String>,
+) -> Option<Value> {
+    let message_id = record
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if message_id.is_empty() {
+        return None;
+    }
+
+    let file_url = match retry_with_backoff(
+        &format!("{}_download_message id={}", context_label, message_id),
+        3,
+        || {
+            let api_base_url = api_base_url.clone();
+            let auth_token = auth_token.clone();
+            let message_id = message_id.clone();
+            async move { download_message(api_base_url, auth_token, message_id).await }
+        },
+    )
+    .await
+    {
+        Ok(path) => path,
+        Err(error) => {
+            trace(format!(
+                "{} download_error message_id={} err={}",
+                context_label, message_id, error
+            ));
+            return None;
+        }
+    };
+
+    let temp_dir = std::env::temp_dir().join(format!("zali-unpack-{}", Uuid::new_v4()));
+    let _ = tokio::fs::create_dir_all(&temp_dir).await;
+
+    let mut unpacked: Option<Value> = None;
+    let mut last_unpack_error = String::new();
+    for key in keys {
+        let unpack_attempt = retry_with_backoff(
+            &format!("{}_unpack_message id={}", context_label, message_id),
+            3,
+            || {
+                let file_url = file_url.clone();
+                let temp_dir = temp_dir.clone();
+                let key = key.clone();
+                async move {
+                    let archive_path = file_url.to_string_lossy().to_string();
+                    let temp_dir_path = temp_dir.to_string_lossy().to_string();
+                    let response = dispatch_core_command(
+                        "zali_net:unpack_message",
+                        json!({
+                            "archive_path": archive_path,
+                            "temp_dir": temp_dir_path,
+                            "key": key,
+                        }),
+                    )?;
+                    if response.get("success").and_then(Value::as_bool) != Some(true) {
+                        return Err(response
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Failed to unpack message")
+                            .to_string());
+                    }
+                    response
+                        .get("data")
+                        .cloned()
+                        .ok_or_else(|| "Unpack response does not contain data".to_string())
+                        .and_then(|data| {
+                            if let Some(error) = data.get("decryptionError").and_then(Value::as_str)
+                            {
+                                if !error.trim().is_empty() {
+                                    return Err(error.to_string());
+                                }
+                            }
+                            Ok(data)
+                        })
+                }
+            },
+        )
+        .await;
+
+        match unpack_attempt {
+            Ok(value) => {
+                unpacked = Some(value);
+                break;
+            }
+            Err(error) => {
+                last_unpack_error = error;
+            }
+        }
+    }
+
+    let Some(unpacked) = unpacked else {
+        trace(format!(
+            "{} unpack_error message_id={} err={}",
+            context_label, message_id, last_unpack_error
+        ));
+        let _ = tokio::fs::remove_file(&file_url).await;
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        return None;
+    };
+
+    let _ = tokio::fs::remove_file(&file_url).await;
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+
+    let sender = unpacked
+        .get("sender")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| record.get("sender").and_then(Value::as_str).unwrap_or(""));
+    let text = unpacked.get("text").and_then(Value::as_str).unwrap_or("");
+    let attachments = unpacked
+        .get("attachments")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let server_id_value = server_id
+        .clone()
+        .or_else(|| {
+            record
+                .get("serverId")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            record
+                .get("server_id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        });
+    let channel_id_value = channel_id
+        .clone()
+        .or_else(|| {
+            record
+                .get("channelId")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            record
+                .get("channel_id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        });
+
+    let mut output = json!({
+        "id": message_id,
+        "clientId": record.get("clientId").or_else(|| record.get("client_id")).cloned().unwrap_or(Value::Null),
+        "sender": sender,
+        "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
+        "text": text,
+        "attachments": attachments,
+        "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
+        "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
+        "myReaction": record.get("myReaction").or_else(|| record.get("my_reaction")).cloned().unwrap_or(Value::String(String::new())),
+    });
+
+    if let Some(server_id_value) = server_id_value {
+        output["serverId"] = Value::String(server_id_value);
+    }
+    if let Some(channel_id_value) = channel_id_value {
+        output["channelId"] = Value::String(channel_id_value);
+    }
+
+    Some(output)
 }
 
 async fn refresh_direct_history(
@@ -910,80 +1637,41 @@ async fn refresh_direct_history(
         records.len()
     ));
 
-    let mut rendered = Vec::<Value>::new();
-
-    for record in records {
-        let message_id = record
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        if message_id.is_empty() {
-            continue;
+    let total_records = records.len();
+    let rendered = stream::iter(records.into_iter().map(|record| {
+        let api_base_url = api_base_url.clone();
+        let auth_token = auth_token.clone();
+        let keys = candidate_message_keys(&key, &record, None, None);
+        async move {
+            process_history_record(
+                api_base_url,
+                auth_token,
+                keys,
+                record,
+                "refresh_direct_history",
+                None,
+                None,
+            )
+            .await
         }
-
-        let file_url =
-            match download_message(api_base_url.clone(), auth_token.clone(), message_id.clone())
-                .await
-            {
-                Ok(path) => path,
-                Err(error) => {
-                    trace(format!(
-                        "refresh_direct_history download_error user={} message_id={} err={}",
-                        username, message_id, error
-                    ));
-                    continue;
-                }
-            };
-
-        let temp_dir = std::env::temp_dir().join(format!("zali-unpack-{}", Uuid::new_v4()));
-        let _ = tokio::fs::create_dir_all(&temp_dir).await;
-
-        let unpack = dispatch_core_command(
-            "zali_net:unpack_message",
-            json!({
-                "archive_path": file_url.to_string_lossy().to_string(),
-                "temp_dir": temp_dir.to_string_lossy().to_string(),
-                "key": key.clone(),
-            }),
-        );
-
-        let Ok(unpacked) = unpack else {
-            trace(format!(
-                "refresh_direct_history unpack_error user={} message_id={}",
-                username, message_id
-            ));
-            let _ = tokio::fs::remove_file(&file_url).await;
-            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-            continue;
-        };
-
-        let sender = unpacked
-            .get("sender")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| record.get("sender").and_then(Value::as_str).unwrap_or(""));
-        let text = unpacked.get("text").and_then(Value::as_str).unwrap_or("");
-        let attachments = unpacked
-            .get("attachments")
-            .cloned()
-            .unwrap_or_else(|| json!([]));
-
-        rendered.push(json!({
-            "id": message_id,
-            "clientId": record.get("clientId").or_else(|| record.get("client_id")).cloned().unwrap_or(Value::Null),
-            "sender": sender,
-            "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
-            "text": text,
-            "attachments": attachments,
-            "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
-            "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
-            "myReaction": record.get("myReaction").or_else(|| record.get("my_reaction")).cloned().unwrap_or(Value::String(String::new())),
-        }));
-        let _ = tokio::fs::remove_file(&file_url).await;
-        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-    }
+    }))
+    .buffer_unordered(4)
+    .filter_map(|item| async move { item })
+    .collect::<Vec<_>>()
+    .await;
 
     let rendered_count = rendered.len();
+    if rendered_count < total_records {
+        let skipped = total_records.saturating_sub(rendered_count);
+        dispatch_ui_event(
+            &proxy,
+            "zali_interface:add_log_entry",
+            json!({
+                "type": "WARN",
+                "msg": format!("История чата: пропущено сообщений: {}", skipped),
+            }),
+        );
+    }
     let payload = Value::Array(rendered);
     let script = format!("window.loadHistory && window.loadHistory({});", payload);
     let _ = proxy.send_event(AppEvent::EvaluateScript(script));
@@ -1008,13 +1696,6 @@ async fn refresh_server_history(
         ));
         return;
     }
-
-    let url = format!(
-        "{}/api/servers/{}/channels/{}/messages",
-        api_base_url.trim_end_matches('/'),
-        server_id,
-        channel_id
-    );
     trace(format!(
         "refresh_server_history start server={} channel={} api={} token={} key_set={}",
         server_id,
@@ -1024,48 +1705,15 @@ async fn refresh_server_history(
         !key.trim().is_empty()
     ));
 
-    let client = http_client();
-    let mut request = client.get(&url);
-    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
-        request = request.bearer_auth(token);
-    }
-
-    let records = match request.send().await {
-        Ok(response) if response.status().is_success() => match response.json::<Vec<Value>>().await
-        {
-            Ok(messages) => messages,
-            Err(error) => {
-                trace(format!(
-                    "refresh_server_history parse_error server={} channel={} err={}",
-                    server_id, channel_id, error
-                ));
-                let log = format!(
-                    "window.addLog({}, {});",
-                    json_string_literal("ERROR"),
-                    json_string_literal(&format!("Не удалось разобрать историю канала: {}", error))
-                );
-                let _ = proxy.send_event(AppEvent::EvaluateScript(log));
-                return;
-            }
-        },
-        Ok(response) => {
-            trace(format!(
-                "refresh_server_history http_fail server={} channel={} status={}",
-                server_id,
-                channel_id,
-                response.status()
-            ));
-            let log = format!(
-                "window.addLog({}, {});",
-                json_string_literal("ERROR"),
-                json_string_literal(&format!(
-                    "Не удалось загрузить историю канала: {}",
-                    response.status()
-                ))
-            );
-            let _ = proxy.send_event(AppEvent::EvaluateScript(log));
-            return;
-        }
+    let records = match fetch_server_messages(
+        api_base_url.clone(),
+        auth_token.clone(),
+        server_id.clone(),
+        channel_id.clone(),
+    )
+    .await
+    {
+        Ok(records) => records,
         Err(error) => {
             trace(format!(
                 "refresh_server_history fetch_error server={} channel={} err={}",
@@ -1088,86 +1736,43 @@ async fn refresh_server_history(
         records.len()
     ));
 
-    let mut rendered = Vec::<Value>::new();
-
-    for record in records {
-        let message_id = record
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        if message_id.is_empty() {
-            continue;
+    let total_records = records.len();
+    let rendered = stream::iter(records.into_iter().map(|record| {
+        let api_base_url = api_base_url.clone();
+        let auth_token = auth_token.clone();
+        let server_id = server_id.clone();
+        let channel_id = channel_id.clone();
+        let keys = candidate_message_keys(&key, &record, Some(&server_id), Some(&channel_id));
+        async move {
+            process_history_record(
+                api_base_url,
+                auth_token,
+                keys,
+                record,
+                "refresh_server_history",
+                Some(server_id),
+                Some(channel_id),
+            )
+            .await
         }
-
-        let file_url = match download_message(
-            api_base_url.clone(),
-            auth_token.clone(),
-            message_id.clone(),
-        )
-        .await
-        {
-            Ok(path) => path,
-            Err(error) => {
-                trace(format!(
-                    "refresh_server_history download_error server={} channel={} message_id={} err={}",
-                    server_id, channel_id, message_id, error
-                ));
-                continue;
-            }
-        };
-
-        let temp_dir = std::env::temp_dir().join(format!("zali-unpack-{}", Uuid::new_v4()));
-        let _ = tokio::fs::create_dir_all(&temp_dir).await;
-
-        let unpack = dispatch_core_command(
-            "zali_net:unpack_message",
-            json!({
-                "archive_path": file_url.to_string_lossy().to_string(),
-                "temp_dir": temp_dir.to_string_lossy().to_string(),
-                "key": key.clone(),
-            }),
-        );
-
-        let Ok(unpacked) = unpack else {
-            trace(format!(
-                "refresh_server_history unpack_error server={} channel={} message_id={}",
-                server_id, channel_id, message_id
-            ));
-            let _ = tokio::fs::remove_file(&file_url).await;
-            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-            continue;
-        };
-
-        let sender = unpacked
-            .get("sender")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| record.get("sender").and_then(Value::as_str).unwrap_or(""));
-        let text = unpacked.get("text").and_then(Value::as_str).unwrap_or("");
-        let attachments = unpacked
-            .get("attachments")
-            .cloned()
-            .unwrap_or_else(|| json!([]));
-
-        rendered.push(json!({
-            "id": message_id,
-            "clientId": record.get("clientId").or_else(|| record.get("client_id")).cloned().unwrap_or(Value::Null),
-            "sender": sender,
-            "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
-            "text": text,
-            "attachments": attachments,
-            "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
-            "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
-            "myReaction": record.get("myReaction").or_else(|| record.get("my_reaction")).cloned().unwrap_or(Value::String(String::new())),
-            "serverId": record.get("serverId").or_else(|| record.get("server_id")).cloned().unwrap_or_else(|| Value::String(server_id.clone())),
-            "channelId": record.get("channelId").or_else(|| record.get("channel_id")).cloned().unwrap_or_else(|| Value::String(channel_id.clone())),
-        }));
-
-        let _ = tokio::fs::remove_file(&file_url).await;
-        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-    }
+    }))
+    .buffer_unordered(4)
+    .filter_map(|item| async move { item })
+    .collect::<Vec<_>>()
+    .await;
 
     let rendered_count = rendered.len();
+    if rendered_count < total_records {
+        let skipped = total_records.saturating_sub(rendered_count);
+        dispatch_ui_event(
+            &proxy,
+            "zali_interface:add_log_entry",
+            json!({
+                "type": "WARN",
+                "msg": format!("История канала: пропущено сообщений: {}", skipped),
+            }),
+        );
+    }
     dispatch_ui_event(
         &proxy,
         "zali_interface:load_server_history",
@@ -1181,6 +1786,361 @@ async fn refresh_server_history(
         "refresh_server_history dispatch server={} channel={} rendered={}",
         server_id, channel_id, rendered_count
     ));
+}
+
+async fn perform_auth_request(
+    api_base_url: String,
+    mode: String,
+    username: String,
+    password: String,
+    request_id: String,
+    proxy: EventLoopProxy<AppEvent>,
+) {
+    let mode_is_register = mode.trim().eq_ignore_ascii_case("register");
+    let endpoint = if mode_is_register {
+        "/api/auth/register"
+    } else {
+        "/api/auth/login"
+    };
+    let url = join_api_url(&api_base_url, endpoint);
+    let payload = json!({
+        "username": username,
+        "password": password,
+    });
+    let client = http_client();
+
+    let mut response = match client.post(&url).json(&payload).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            trace(format!(
+                "AUTH_REQUEST transport_error url={} err={}",
+                url, error
+            ));
+            dispatch_ui_event(
+                &proxy,
+                "zali_interface:auth_response",
+                json!({
+                    "requestId": request_id,
+                    "ok": false,
+                    "error": "Не удалось связаться с сервером",
+                }),
+            );
+            return;
+        }
+    };
+
+    if mode_is_register && response.status().as_u16() == 409 {
+        trace(format!(
+            "AUTH_REQUEST register_conflict url={} retry=login",
+            url
+        ));
+        let login_url = join_api_url(&api_base_url, "/api/auth/login");
+        response = match client.post(&login_url).json(&payload).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                trace(format!(
+                    "AUTH_REQUEST retry_transport_error url={} err={}",
+                    login_url, error
+                ));
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:auth_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Не удалось связаться с сервером",
+                    }),
+                );
+                return;
+            }
+        };
+    }
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        trace(format!(
+            "AUTH_REQUEST http_fail url={} status={} body={}",
+            url,
+            status,
+            body.chars().take(200).collect::<String>()
+        ));
+        dispatch_ui_event(
+            &proxy,
+            "zali_interface:auth_response",
+            json!({
+                "requestId": request_id,
+                "ok": false,
+                "error": if body.trim().is_empty() {
+                    format!("{} {}", status.as_u16(), status.canonical_reason().unwrap_or("Error"))
+                } else {
+                    body
+                },
+            }),
+        );
+        return;
+    }
+
+    let response_body = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(error) => {
+            trace(format!(
+                "AUTH_REQUEST decode_error url={} err={}",
+                url, error
+            ));
+            dispatch_ui_event(
+                &proxy,
+                "zali_interface:auth_response",
+                json!({
+                    "requestId": request_id,
+                    "ok": false,
+                    "error": "Не удалось войти",
+                }),
+            );
+            return;
+        }
+    };
+
+    let token = response_body
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let username_value = response_body
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        trace(format!("AUTH_REQUEST empty_token url={}", url));
+        dispatch_ui_event(
+            &proxy,
+            "zali_interface:auth_response",
+            json!({
+                "requestId": request_id,
+                "ok": false,
+                "error": "Не удалось войти",
+            }),
+        );
+        return;
+    }
+
+    trace(format!(
+        "AUTH_REQUEST success url={} username={} token_set=true",
+        url, username_value
+    ));
+    dispatch_ui_event(
+        &proxy,
+        "zali_interface:auth_response",
+        json!({
+            "requestId": request_id,
+            "ok": true,
+            "data": {
+                "username": if username_value.is_empty() { Value::String(String::new()) } else { Value::String(username_value) },
+                "token": token,
+            },
+        }),
+    );
+}
+
+async fn perform_contacts_request(
+    api_base_url: String,
+    auth_token: Option<String>,
+    username: String,
+    add: bool,
+) -> Result<Vec<String>, String> {
+    let client = http_client();
+    let url = if add {
+        join_api_url(&api_base_url, "/api/contacts")
+    } else {
+        let mut parsed = reqwest::Url::parse(&join_api_url(&api_base_url, "/api/contacts"))
+            .map_err(|error| error.to_string())?;
+        parsed
+            .path_segments_mut()
+            .map_err(|_| "Invalid contacts URL".to_string())?
+            .push(&username);
+        parsed.to_string()
+    };
+
+    let request = if add {
+        client.post(&url).json(&json!({ "username": username }))
+    } else {
+        client.delete(&url)
+    };
+
+    let mut request = request;
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(if body.trim().is_empty() {
+            format!(
+                "{} {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("Error")
+            )
+        } else {
+            body
+        });
+    }
+
+    let payload = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
+    let contacts = payload
+        .get("contacts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(|value| value.to_string()))
+        .collect::<Vec<String>>();
+    Ok(contacts)
+}
+
+async fn perform_avatar_request(
+    api_base_url: String,
+    auth_token: Option<String>,
+    mode: String,
+    data_url: Option<String>,
+    mime_type: Option<String>,
+    filename: Option<String>,
+) -> Result<(), String> {
+    let client = http_client();
+    let url = join_api_url(&api_base_url, "/api/avatar");
+    let mut request = if mode.eq_ignore_ascii_case("delete") {
+        client.delete(&url)
+    } else {
+        let data_url = data_url.unwrap_or_default();
+        let (bytes, decoded_mime, fallback_ext) =
+            decode_data_url(&data_url).ok_or_else(|| "Invalid avatar data URL".to_string())?;
+        let requested_mime = mime_type.unwrap_or(decoded_mime).trim().to_string();
+        let part = multipart::Part::bytes(bytes)
+            .file_name(sanitize_file_name(
+                filename.as_deref().unwrap_or("avatar.png"),
+                &fallback_ext,
+            ))
+            .mime_str(&requested_mime)
+            .map_err(|error| error.to_string())?;
+        let form = multipart::Form::new().part("file", part);
+        client.post(&url).multipart(form)
+    };
+
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() && response.status().as_u16() != 204 {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(if body.trim().is_empty() {
+            format!(
+                "{} {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("Error")
+            )
+        } else {
+            body
+        });
+    }
+
+    Ok(())
+}
+
+async fn perform_avatar_fetch(
+    api_base_url: String,
+    auth_token: Option<String>,
+    username: String,
+) -> Result<Value, String> {
+    let client = http_client();
+    let url = join_api_url(&api_base_url, &format!("/api/avatar/{}", username));
+    let mut request = client.get(&url);
+
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(if body.trim().is_empty() {
+            format!(
+                "{} {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("Error")
+            )
+        } else {
+            body
+        });
+    }
+
+    let mime_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("image/png")
+        .trim()
+        .to_string();
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    if bytes.is_empty() {
+        return Err("Empty avatar response".to_string());
+    }
+
+    let data_url = format!(
+        "data:{};base64,{}",
+        mime_type,
+        BASE64_STANDARD.encode(bytes)
+    );
+    Ok(json!({
+        "username": username,
+        "mimeType": mime_type,
+        "dataUrl": data_url,
+    }))
+}
+
+async fn perform_reaction_request(
+    api_base_url: String,
+    auth_token: Option<String>,
+    message_id: String,
+    emoji: String,
+) -> Result<Value, String> {
+    let client = http_client();
+    let url = join_api_url(&api_base_url, &format!("/api/message/{}/reaction", message_id));
+    let mut request = client
+        .post(&url)
+        .json(&json!({
+            "emoji": emoji,
+        }));
+
+    if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(if body.trim().is_empty() {
+            format!(
+                "{} {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("Error")
+            )
+        } else {
+            body
+        });
+    }
+
+    response.json::<Value>().await.map_err(|error| error.to_string())
 }
 
 async fn resolve_tenor_url(url: String, request_id: String, proxy: EventLoopProxy<AppEvent>) {
@@ -1285,6 +2245,7 @@ pub fn handle_ipc_message(
     message: String,
     state: Arc<Mutex<NativeState>>,
     voice_bridge: Arc<VoiceBridge>,
+    message_bridge: Arc<MessageBridge>,
     runtime: Arc<Runtime>,
     proxy: EventLoopProxy<AppEvent>,
 ) {
@@ -1342,6 +2303,337 @@ pub fn handle_ipc_message(
                 }
             }
         }
+        "AUTH_REQUEST" => {
+            let mode = payload
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("login")
+                .trim()
+                .to_lowercase();
+            let auth_payload = match serde_json::from_value::<AuthRequestPayload>(payload.clone()) {
+                Ok(value) => value,
+                Err(error) => {
+                    trace(format!("AUTH_REQUEST payload_error err={}", error));
+                    dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:auth_response",
+                        json!({
+                            "requestId": payload.get("requestId").or_else(|| payload.get("request_id")).and_then(Value::as_str).unwrap_or("").trim(),
+                            "ok": false,
+                            "error": "Не удалось связаться с сервером",
+                        }),
+                    );
+                    return;
+                }
+            };
+            let request_id = payload
+                .get("requestId")
+                .or_else(|| payload.get("request_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            if auth_payload.username.trim().is_empty()
+                || auth_payload.password.is_empty()
+                || request_id.is_empty()
+            {
+                trace("AUTH_REQUEST skipped: missing username/password/requestId");
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:auth_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Не удалось связаться с сервером",
+                    }),
+                );
+                return;
+            }
+
+            let api_base_url = {
+                let guard = state.lock().ok();
+                let Some(guard) = guard else {
+                    return;
+                };
+                guard.api_base_url()
+            };
+            let proxy = proxy.clone();
+            runtime.spawn(async move {
+                perform_auth_request(
+                    api_base_url,
+                    mode,
+                    auth_payload.username,
+                    auth_payload.password,
+                    request_id,
+                    proxy,
+                )
+                .await;
+            });
+        }
+        "ADD_CONTACT_REQUEST" | "REMOVE_CONTACT_REQUEST" => {
+            let username = payload
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let request_id = payload
+                .get("requestId")
+                .or_else(|| payload.get("request_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            let (api_base_url, auth_token) = {
+                let guard = state.lock().ok();
+                let Some(guard) = guard else {
+                    return;
+                };
+                (guard.api_base_url(), guard.auth_token.clone())
+            };
+
+            if username.is_empty() || request_id.is_empty() {
+                trace("CONTACT_REQUEST skipped: empty username/requestId");
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:native_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Не удалось выполнить операцию",
+                    }),
+                );
+                return;
+            }
+
+            if auth_token
+                .as_ref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                trace("CONTACT_REQUEST skipped: missing session token");
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:native_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Сначала войдите в аккаунт",
+                    }),
+                );
+                return;
+            }
+
+            let add =
+                payload.get("type").and_then(Value::as_str).unwrap_or("") == "ADD_CONTACT_REQUEST";
+            let proxy = proxy.clone();
+            runtime.spawn(async move {
+                match perform_contacts_request(api_base_url, auth_token, username, add).await {
+                    Ok(contacts) => dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:native_response",
+                        json!({
+                            "requestId": request_id,
+                            "ok": true,
+                            "data": {
+                                "contacts": contacts,
+                            },
+                        }),
+                    ),
+                    Err(error) => dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:native_response",
+                        json!({
+                            "requestId": request_id,
+                            "ok": false,
+                            "error": error,
+                        }),
+                    ),
+                }
+            });
+        }
+        "UPLOAD_AVATAR_REQUEST" | "DELETE_AVATAR_REQUEST" => {
+            let request_id = payload
+                .get("requestId")
+                .or_else(|| payload.get("request_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let (api_base_url, auth_token, current_username) = {
+                let guard = state.lock().ok();
+                let Some(guard) = guard else {
+                    return;
+                };
+                (
+                    guard.api_base_url(),
+                    guard.auth_token.clone(),
+                    guard.current_username.clone(),
+                )
+            };
+
+            if request_id.is_empty() {
+                trace("AVATAR_REQUEST skipped: empty requestId");
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:native_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Не удалось выполнить операцию",
+                    }),
+                );
+                return;
+            }
+
+            if auth_token
+                .as_ref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                trace("AVATAR_REQUEST skipped: missing session token");
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:native_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Сначала войдите в аккаунт",
+                    }),
+                );
+                return;
+            }
+
+            let mode = payload
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let data_url = payload
+                .get("dataUrl")
+                .or_else(|| payload.get("data_url"))
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            let mime_type = payload
+                .get("mimeType")
+                .or_else(|| payload.get("mime_type"))
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            let filename = payload
+                .get("filename")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            let proxy = proxy.clone();
+            runtime.spawn(async move {
+                match perform_avatar_request(
+                    api_base_url,
+                    auth_token,
+                    if mode == "DELETE_AVATAR_REQUEST" {
+                        "delete".to_string()
+                    } else {
+                        "upload".to_string()
+                    },
+                    data_url,
+                    mime_type,
+                    filename,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        dispatch_ui_event(
+                            &proxy,
+                            "zali_interface:native_response",
+                            json!({
+                                "requestId": request_id,
+                                "ok": true,
+                                "data": {
+                                    "username": current_username,
+                                },
+                            }),
+                        );
+                        dispatch_ui_event(
+                            &proxy,
+                            "zali_interface:avatar_updated",
+                            json!({
+                                "username": current_username,
+                                "deleted": mode == "DELETE_AVATAR_REQUEST",
+                            }),
+                        );
+                    }
+                    Err(error) => dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:native_response",
+                        json!({
+                            "requestId": request_id,
+                            "ok": false,
+                            "error": error,
+                        }),
+                    ),
+                }
+            });
+        }
+        "LOAD_AVATAR_REQUEST" => {
+            let request_id = payload
+                .get("requestId")
+                .or_else(|| payload.get("request_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let username = payload
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let (api_base_url, auth_token) = {
+                let guard = state.lock().ok();
+                let Some(guard) = guard else {
+                    return;
+                };
+                (guard.api_base_url(), guard.auth_token.clone())
+            };
+
+            if request_id.is_empty() || username.is_empty() {
+                trace("LOAD_AVATAR_REQUEST skipped: empty requestId/username");
+                dispatch_ui_event(
+                    &proxy,
+                    "zali_interface:native_response",
+                    json!({
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": "Не удалось загрузить аватар",
+                    }),
+                );
+                return;
+            }
+
+            let proxy = proxy.clone();
+            runtime.spawn(async move {
+                match perform_avatar_fetch(api_base_url, auth_token, username.clone()).await {
+                    Ok(payload) => dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:native_response",
+                        json!({
+                            "requestId": request_id,
+                            "ok": true,
+                            "data": payload,
+                        }),
+                    ),
+                    Err(error) => dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:native_response",
+                        json!({
+                            "requestId": request_id,
+                            "ok": false,
+                            "error": error,
+                        }),
+                    ),
+                }
+            });
+        }
         "LOAD_SERVER_HISTORY" => {
             let server_id = payload
                 .get("serverId")
@@ -1367,6 +2659,19 @@ pub fn handle_ipc_message(
             if server_id.is_empty() || channel_id.is_empty() {
                 trace("LOAD_SERVER_HISTORY skipped: empty serverId/channelId");
                 return;
+            }
+
+            if !requested_key.is_empty() {
+                if let Ok(mut guard) = state.lock() {
+                    guard.current_key = requested_key.clone();
+                    guard.persist_config();
+                    message_bridge.configure(
+                        guard.ws_base_url.clone(),
+                        guard.api_base_url(),
+                        guard.auth_token.clone(),
+                        guard.current_key.clone(),
+                    );
+                }
             }
 
             let snapshot = {
@@ -1433,19 +2738,80 @@ pub fn handle_ipc_message(
                         guard.current_username.clone(),
                         guard.current_key.clone(),
                     );
-                    if is_direct_message_key(&guard.current_key) {
-                        let proxy = proxy.clone();
-                        runtime.spawn(async move {
+                    message_bridge.configure(
+                        guard.ws_base_url.clone(),
+                        guard.api_base_url(),
+                        guard.auth_token.clone(),
+                        guard.current_key.clone(),
+                    );
+                    let proxy = proxy.clone();
+                    runtime.spawn(async move {
+                        if is_direct_message_key(&snapshot.3) {
                             refresh_direct_history(
-                                snapshot.0, snapshot.1, snapshot.2, snapshot.3, proxy,
+                                snapshot.0,
+                                snapshot.1,
+                                snapshot.2,
+                                snapshot.3,
+                                proxy.clone(),
                             )
                             .await;
-                        });
-                    } else {
-                        trace("SET_KEY skipped direct refresh for non-DM key");
-                    }
+                        }
+                        dispatch_ui_event(&proxy, "zali_interface:refresh_after_key", Value::Null);
+                    });
                 }
             }
+        }
+        "SET_MESSAGE_REACTION" => {
+            let message_id = payload
+                .get("messageId")
+                .or_else(|| payload.get("message_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let emoji = payload
+                .get("emoji")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            let (api_base_url, auth_token) = {
+                let guard = state.lock().ok();
+                let Some(guard) = guard else {
+                    return;
+                };
+                (guard.api_base_url(), guard.auth_token.clone())
+            };
+
+            if message_id.is_empty() {
+                trace("SET_MESSAGE_REACTION skipped: empty messageId");
+                return;
+            }
+
+            let proxy = proxy.clone();
+            runtime.spawn(async move {
+                match perform_reaction_request(api_base_url, auth_token, message_id.clone(), emoji).await
+                {
+                    Ok(payload) => dispatch_ui_event(
+                        &proxy,
+                        "zali_interface:reaction_updated",
+                        payload,
+                    ),
+                    Err(error) => {
+                        trace(format!(
+                            "SET_MESSAGE_REACTION failed messageId={} err={}",
+                            message_id, error
+                        ));
+                        let log = format!(
+                            "window.addLog({}, {});",
+                            json_string_literal("ERROR"),
+                            json_string_literal("Не удалось сохранить реакцию на сервере")
+                        );
+                        let _ = proxy.send_event(AppEvent::EvaluateScript(log));
+                    }
+                }
+            });
         }
         "SET_SESSION" => {
             if let Ok(mut guard) = state.lock() {
@@ -1476,25 +2842,74 @@ pub fn handle_ipc_message(
                     Some(guard.api_base_url()),
                     guard.auth_token.clone(),
                 );
-                let snapshot = (
+                message_bridge.configure(
+                    guard.ws_base_url.clone(),
+                    guard.api_base_url(),
+                    guard.auth_token.clone(),
+                    guard.current_key.clone(),
+                );
+                let session_snapshot = (
+                    guard.api_base_url(),
+                    guard.auth_token.clone(),
+                    guard.current_username.clone(),
+                );
+                let history_snapshot = (
                     guard.api_base_url(),
                     guard.auth_token.clone(),
                     guard.current_username.clone(),
                     guard.current_key.clone(),
                 );
-                if is_direct_message_key(&guard.current_key) {
-                    let proxy = proxy.clone();
-                    runtime.spawn(async move {
-                        refresh_direct_history(snapshot.0, snapshot.1, snapshot.2, snapshot.3, proxy)
+                let proxy_for_lists = proxy.clone();
+                runtime.spawn(async move {
+                    let users = fetch_users(
+                        session_snapshot.0.clone(),
+                        session_snapshot.1.clone(),
+                        session_snapshot.2.clone(),
+                    )
+                    .await;
+                    dispatch_ui_event(
+                        &proxy_for_lists,
+                        "zali_interface:set_users",
+                        Value::Array(users.into_iter().map(Value::String).collect()),
+                    );
+
+                    let contacts =
+                        fetch_contacts(session_snapshot.0.clone(), session_snapshot.1.clone())
                             .await;
-                    });
-                } else {
-                    trace("SET_SESSION skipped direct refresh for non-DM key");
-                }
+                    dispatch_ui_event(
+                        &proxy_for_lists,
+                        "zali_interface:set_contacts",
+                        Value::Array(contacts.into_iter().map(Value::String).collect()),
+                    );
+                    dispatch_ui_event(
+                        &proxy_for_lists,
+                        "zali_interface:set_loading",
+                        Value::Bool(false),
+                    );
+                    dispatch_ui_event(
+                        &proxy_for_lists,
+                        "zali_interface:set_connection_status",
+                        Value::Bool(true),
+                    );
+                });
+                let proxy = proxy.clone();
+                runtime.spawn(async move {
+                    if is_direct_message_key(&history_snapshot.3) {
+                        refresh_direct_history(
+                            history_snapshot.0,
+                            history_snapshot.1,
+                            history_snapshot.2,
+                            history_snapshot.3,
+                            proxy.clone(),
+                        )
+                        .await;
+                    }
+                    dispatch_ui_event(&proxy, "zali_interface:refresh_after_key", Value::Null);
+                });
             }
         }
         "REFRESH_HISTORY" => {
-            if let Ok(guard) = state.lock() {
+            if let Ok(mut guard) = state.lock() {
                 let requested_key = payload
                     .get("key")
                     .and_then(Value::as_str)
@@ -1506,6 +2921,16 @@ pub fn handle_ipc_message(
                 } else {
                     requested_key
                 };
+                if !key.trim().is_empty() {
+                    guard.current_key = key.clone();
+                    guard.persist_config();
+                    message_bridge.configure(
+                        guard.ws_base_url.clone(),
+                        guard.api_base_url(),
+                        guard.auth_token.clone(),
+                        guard.current_key.clone(),
+                    );
+                }
                 let snapshot = (
                     guard.api_base_url(),
                     guard.auth_token.clone(),
@@ -1515,11 +2940,13 @@ pub fn handle_ipc_message(
                 if is_direct_message_key(&snapshot.3) {
                     let proxy = proxy.clone();
                     runtime.spawn(async move {
-                        refresh_direct_history(snapshot.0, snapshot.1, snapshot.2, snapshot.3, proxy)
-                            .await;
+                        refresh_direct_history(
+                            snapshot.0, snapshot.1, snapshot.2, snapshot.3, proxy,
+                        )
+                        .await;
                     });
                 } else {
-                    trace("REFRESH_HISTORY skipped direct refresh for non-DM key");
+                    dispatch_ui_event(&proxy, "zali_interface:refresh_after_key", Value::Null);
                 }
             }
         }
@@ -1545,6 +2972,12 @@ pub fn handle_ipc_message(
                     Some(guard.api_base_url()),
                     guard.auth_token.clone(),
                 );
+                message_bridge.configure(
+                    guard.ws_base_url.clone(),
+                    guard.api_base_url(),
+                    guard.auth_token.clone(),
+                    guard.current_key.clone(),
+                );
             }
         }
         "SAVE_PENDING_OUTBOX" => {
@@ -1558,15 +2991,24 @@ pub fn handle_ipc_message(
                 guard.persist_pending_outbox(items);
             }
         }
+        "SAVE_MESSAGE_CACHE" => {
+            if let Ok(mut guard) = state.lock() {
+                let cache = payload
+                    .get("cache")
+                    .or_else(|| payload.get("messageCache"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({"chats": {}, "serverChats": {}}));
+                let json = serde_json::to_string(&cache)
+                    .unwrap_or_else(|_| r#"{"chats":{},"serverChats":{}}"#.to_string());
+                guard.persist_message_cache(json);
+            }
+        }
         "VOICE_EVENT" => {
             let event = payload
                 .get("payload")
                 .cloned()
                 .unwrap_or_else(|| payload.clone());
-            let event_type = event
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
             trace(format!(
                 "VOICE_EVENT queued type={} roomId={} roomType={} to={}",
                 event_type,
@@ -1621,6 +3063,13 @@ pub fn handle_ipc_message(
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or(&snapshot.3)
                     .to_string();
+                let key_version = request
+                    .get("keyVersion")
+                    .or_else(|| request.get("key_version"))
+                    .and_then(Value::as_i64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .unwrap_or(2);
                 let client_id = request
                     .get("clientId")
                     .and_then(Value::as_str)
@@ -1695,7 +3144,7 @@ pub fn handle_ipc_message(
                     }
                 }
 
-                let pack_result = pack_message(&sender, &text, &key, &archive_path, &packed_attachments);
+                let pack_result = pack_message(&sender, &text, &key, &archive_path, key_version, &packed_attachments);
                 if let Err(error) = pack_result {
                     trace(format!("SEND_MESSAGE pack_failed clientId={} err={}", client_id, error));
                     dispatch_ui_event(
@@ -1724,6 +3173,7 @@ pub fn handle_ipc_message(
                     archive_path.clone(),
                     server_id,
                     channel_id,
+                    key_version,
                 ).await;
 
                 match upload_result {

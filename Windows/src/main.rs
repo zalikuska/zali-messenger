@@ -60,6 +60,7 @@ fn main() -> wry::Result<()> {
 
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
     let voice_bridge = native::VoiceBridge::new(Arc::clone(&runtime), proxy.clone());
+    let message_bridge = native::MessageBridge::new(Arc::clone(&runtime), proxy.clone());
     {
         let guard = native_state.lock().expect("native state lock");
         voice_bridge.configure(
@@ -67,10 +68,17 @@ fn main() -> wry::Result<()> {
             Some(guard.api_base_url()),
             guard.auth_token.clone(),
         );
+        message_bridge.configure(
+            guard.ws_base_url.clone(),
+            guard.api_base_url(),
+            guard.auth_token.clone(),
+            guard.current_key.clone(),
+        );
     }
     let native_state_for_ipc = Arc::clone(&native_state);
     let runtime_for_ipc = Arc::clone(&runtime);
     let voice_bridge_for_ipc = Arc::clone(&voice_bridge);
+    let message_bridge_for_ipc = Arc::clone(&message_bridge);
     let proxy_for_ipc = proxy.clone();
 
     let webview = WebViewBuilder::new(&window)
@@ -85,6 +93,7 @@ fn main() -> wry::Result<()> {
                 msg,
                 Arc::clone(&native_state_for_ipc),
                 Arc::clone(&voice_bridge_for_ipc),
+                Arc::clone(&message_bridge_for_ipc),
                 Arc::clone(&runtime_for_ipc),
                 proxy_for_ipc.clone(),
             );

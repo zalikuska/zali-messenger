@@ -31,6 +31,7 @@ def main():
             bundled_js += f"// --- MODULE: {name} ---\n"
             bundled_js += f.read()
             bundled_js += "\n\n"
+    bundled_js = bundled_js.rstrip() + "\n"
 
     # 3. Чтение CSS и HTML
     css_path = os.path.join(web_dir, "style.css")
