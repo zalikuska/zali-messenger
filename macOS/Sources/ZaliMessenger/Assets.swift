@@ -3144,7 +3144,7 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 0;
     overflow-y: auto;
     padding: 18px 22px;
-    overflow-anchor: auto;
+    overflow-anchor: none;
 }
 
 .msg-window-spacer {
@@ -3158,6 +3158,7 @@ body[data-nav-mode="servers"] .contacts {
     display: flex;
     gap: 9px;
     align-items: flex-end;
+    position: relative;
     margin: 0 0 calc(var(--msg-gap) * 1px);
 }
 
@@ -3180,12 +3181,27 @@ body[data-nav-mode="servers"] .contacts {
 
 .msg.single,
 .msg.group-start {
-    margin-top: calc((var(--msg-gap) + 1) * 1px);
+    margin-top: 12px;
 }
 
 .msg.group-mid,
 .msg.group-end {
-    margin-top: calc(var(--msg-gap) * 1px);
+    margin-top: 2px;
+}
+
+.msg.group-start::before {
+    content: "";
+    position: absolute;
+    left: 34px;
+    right: 34px;
+    top: -7px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.09) 18%, rgba(255,255,255,.09) 82%, transparent);
+    pointer-events: none;
+}
+
+.msg.out.group-start::before {
+    background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb),.10) 18%, rgba(var(--accent-rgb),.10) 82%, transparent);
 }
 
 .msg-ava {
@@ -3220,6 +3236,54 @@ body[data-nav-mode="servers"] .contacts {
 
 .msg.out .bwrap {
     align-items: flex-end;
+}
+
+.msg-time-anchor {
+    position: relative;
+}
+
+.msg-time {
+    position: absolute;
+    left: calc(100% + 12px);
+    right: auto;
+    top: 50%;
+    bottom: auto;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    width: max-content;
+    min-height: 14px;
+    padding: 0;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    font-variant-numeric: tabular-nums;
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity .16s ease, color .16s ease;
+    pointer-events: none;
+}
+
+.msg.time-visible .msg-time {
+    opacity: .56;
+}
+
+.msg:hover .msg-time,
+.msg:focus-within .msg-time {
+    opacity: .68;
+}
+
+.msg.out .msg-time {
+    left: auto;
+    right: calc(100% + 12px);
+    color: var(--text3);
 }
 
 .call-card {
@@ -5726,10 +5790,19 @@ class ZaliStyler {
 
     _loadStoredKey() {
         try {
+            const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
+            if (scope) {
+                const rawMap = localStorage.getItem('zali_conversation_keys_v1');
+                if (rawMap) {
+                    const storedMap = JSON.parse(rawMap) || {};
+                    const scoped = String(storedMap[scope] || '').trim();
+                    if (scoped) return scoped;
+                }
+            }
             const stored = (localStorage.getItem('zali_crypto_key_v1') || '').trim();
             if (stored) return stored;
         } catch (e) {}
-        return (window.__ZALI_SAVED_KEY || '').trim() || 'ZALI_SECRET_E2E_KEY_2026';
+        return (window.__ZALI_SAVED_KEY || '').trim() || '';
     }
 
     /**
@@ -5838,6 +5911,19 @@ class ZaliStyler {
 
         try {
             window.__ZALI_SAVED_KEY = this.currentKey;
+        } catch (e) {}
+        try {
+            const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
+            if (scope) {
+                const raw = localStorage.getItem('zali_conversation_keys_v1');
+                const stored = raw ? (JSON.parse(raw) || {}) : {};
+                if (this.currentKey) {
+                    stored[scope] = this.currentKey;
+                } else {
+                    delete stored[scope];
+                }
+                localStorage.setItem('zali_conversation_keys_v1', JSON.stringify(stored));
+            }
         } catch (e) {}
 
         const input = document.getElementById('inputCryptoKey');
@@ -5952,6 +6038,8 @@ class ZaliInterface {
         };
         this.tenorCache = new Map();
         this.tenorPending = new Set();
+        this.nativeAuthRequests = new Map();
+        this.nativeRequests = new Map();
         this.avatarCache = new Map();
         this.avatarRequests = new Map();
         this.avatarFetchSeq = new Map();
@@ -5961,6 +6049,7 @@ class ZaliInterface {
         this.colorWheelBindings = new Set();
         this.messageAnimSeen = new Set();
         this.mediaSizeCache = new Map();
+        this.storageWarningSeen = new Set();
         this.reactionOptions = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
         this.voice = {
             supported: !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
@@ -6001,6 +6090,7 @@ class ZaliInterface {
         this.messageSyncTimer = null;
         this.energyMaintenanceBound = false;
         this.conversationSyncAt = new Map();
+        this.conversationRefreshTimers = new Map();
         this.historyLoadSeq = 0;
         this.serverHistoryLoadSeq = new Map();
         this.messageWindow = {
@@ -6033,6 +6123,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', 'load_history', (messages) => this.loadHistory(messages));
         this.bus.registerCommand('zali_interface', 'load_server_history', (payload) => this.loadServerHistory(payload));
         this.bus.registerCommand('zali_interface', 'refresh_after_key', () => this.refreshAfterKey());
+        this.bus.registerCommand('zali_interface', 'sync_active_conversation', (payload) => this.syncConversationFromNative(payload));
         this.bus.registerCommand('zali_interface', 'set_loading', (on) => this.setLoading(on));
         this.bus.registerCommand('zali_interface', 'set_connection_status', (connected) => this.setConnectionStatus(connected));
         this.bus.registerCommand('zali_interface', 'on_send_success', (clientId) => this.onSendSuccess(clientId));
@@ -6040,6 +6131,8 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', 'reaction_updated', (data) => this.onReactionUpdated(data));
         this.bus.registerCommand('zali_interface', 'avatar_updated', (data) => this.handleAvatarUpdated(data));
         this.bus.registerCommand('zali_interface', 'tenor_resolved', (payload) => this.onTenorResolved(payload));
+        this.bus.registerCommand('zali_interface', 'auth_response', (payload) => this.onNativeAuthResponse(payload));
+        this.bus.registerCommand('zali_interface', 'native_response', (payload) => this.onNativeResponse(payload));
         this.bus.registerCommand('zali_interface', 'add_log_entry', (data) => this.addLogEntry(data));
         this.bus.registerCommand('zali_interface', 'voice_event', (payload) => this.handleVoiceEvent(payload));
 
@@ -6068,6 +6161,33 @@ class ZaliInterface {
         catch(e) { return ''; }
     }
 
+    messageTimestampValue(iso) {
+        const ts = Date.parse(iso || '');
+        return Number.isFinite(ts) ? ts : 0;
+    }
+
+    messageHoverTimeLabel(msg) {
+        const iso = msg?.timestamp || '';
+        const time = this.fmtTime(iso);
+        if (!time) return '';
+        const date = this.fmtDate(iso);
+        return date ? `${date}, ${time}` : time;
+    }
+
+    messageInlineTimeLabel(msg) {
+        return this.fmtTime(msg?.timestamp || '');
+    }
+
+    conversationLastMessageAt(peer) {
+        const msgs = Array.isArray(this.S.chats?.[peer]) ? this.S.chats[peer] : [];
+        let lastTs = 0;
+        for (const msg of msgs) {
+            const ts = this.messageTimestampValue(msg?.timestamp);
+            if (ts > lastTs) lastTs = ts;
+        }
+        return lastTs;
+    }
+
     fmtDate(iso) {
         if (!iso) return '';
         try {
@@ -6089,6 +6209,11 @@ class ZaliInterface {
 
     nativeSupports(capability) {
         return !!this.nativeBridge()?.supports?.[capability];
+    }
+
+    isWindowsNativeAuth() {
+        const transport = this.nativeBridge()?.transport;
+        return transport === 'ipc' || transport === 'webview2';
     }
 
     startEnergyAwareMaintenance() {
@@ -6356,6 +6481,37 @@ class ZaliInterface {
         });
     }
 
+    captureMessageScrollAnchor(box) {
+        if (!box) return null;
+        const boxRect = box.getBoundingClientRect?.();
+        if (!boxRect) return null;
+        const nodes = Array.from(box.querySelectorAll('.msg[data-message-id]'));
+        for (const node of nodes) {
+            const messageId = String(node.dataset?.messageId || '').trim();
+            if (!messageId) continue;
+            const rect = node.getBoundingClientRect?.();
+            if (!rect || rect.bottom < boxRect.top) continue;
+            if (rect.top > boxRect.bottom) break;
+            return {
+                messageId,
+                topOffset: rect.top - boxRect.top,
+            };
+        }
+        return null;
+    }
+
+    restoreMessageScrollAnchor(box, anchor) {
+        if (!box || !anchor?.messageId) return false;
+        const nodes = Array.from(box.querySelectorAll('.msg[data-message-id]'));
+        const node = nodes.find(item => String(item.dataset?.messageId || '').trim() === anchor.messageId);
+        if (!node) return false;
+        const boxRect = box.getBoundingClientRect?.();
+        const rect = node.getBoundingClientRect?.();
+        if (!boxRect || !rect) return false;
+        box.scrollTop += (rect.top - boxRect.top) - Number(anchor.topOffset || 0);
+        return true;
+    }
+
     isMessagesNearBottom(box, threshold = 56) {
         if (!box) return true;
         return (box.scrollHeight - (box.scrollTop + box.clientHeight)) <= threshold;
@@ -6408,7 +6564,7 @@ class ZaliInterface {
     loadStoredMessageCache() {
         try {
             const raw = localStorage.getItem(this.messageCacheStorageKey());
-            if (!raw) return { chats: {}, serverChats: {} };
+            if (!raw) return this.loadInjectedMessageCache();
             const parsed = JSON.parse(raw);
             const chats = parsed && typeof parsed === 'object' && parsed.chats && typeof parsed.chats === 'object'
                 ? parsed.chats
@@ -6416,6 +6572,26 @@ class ZaliInterface {
             const serverChats = parsed && typeof parsed === 'object' && parsed.serverChats && typeof parsed.serverChats === 'object'
                 ? parsed.serverChats
                 : {};
+            if (!Object.keys(chats).length && !Object.keys(serverChats).length) {
+                return this.loadInjectedMessageCache();
+            }
+            return {
+                chats: Object.fromEntries(Object.entries(chats).filter(([, msgs]) => Array.isArray(msgs)).map(([peer, msgs]) => [peer, msgs.filter(msg => msg && typeof msg === 'object')])),
+                serverChats: Object.fromEntries(Object.entries(serverChats).filter(([, msgs]) => Array.isArray(msgs)).map(([peer, msgs]) => [peer, msgs.filter(msg => msg && typeof msg === 'object')])),
+            };
+        } catch (e) {
+            return this.loadInjectedMessageCache();
+        }
+    }
+
+    loadInjectedMessageCache() {
+        try {
+            const raw = window.__ZALI_MESSAGE_CACHE;
+            if (!raw) return { chats: {}, serverChats: {} };
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (!parsed || typeof parsed !== 'object') return { chats: {}, serverChats: {} };
+            const chats = parsed.chats && typeof parsed.chats === 'object' ? parsed.chats : {};
+            const serverChats = parsed.serverChats && typeof parsed.serverChats === 'object' ? parsed.serverChats : {};
             return {
                 chats: Object.fromEntries(Object.entries(chats).filter(([, msgs]) => Array.isArray(msgs)).map(([peer, msgs]) => [peer, msgs.filter(msg => msg && typeof msg === 'object')])),
                 serverChats: Object.fromEntries(Object.entries(serverChats).filter(([, msgs]) => Array.isArray(msgs)).map(([peer, msgs]) => [peer, msgs.filter(msg => msg && typeof msg === 'object')])),
@@ -6426,11 +6602,29 @@ class ZaliInterface {
     }
 
     saveStoredMessageCache() {
+        const payload = {
+            chats: this.S.chats,
+            serverChats: this.S.serverChats,
+        };
+        const json = JSON.stringify(payload);
         try {
-            localStorage.setItem(this.messageCacheStorageKey(), JSON.stringify({
-                chats: this.S.chats,
-                serverChats: this.S.serverChats,
-            }));
+            localStorage.setItem(this.messageCacheStorageKey(), json);
+        } catch (e) {
+            this.trace(`saveStoredMessageCache localStorage failed reason=${e?.name || e?.message || e}`);
+            this.warnStorageFallback('message_cache', `Не удалось сохранить кеш сообщений в localStorage: ${e?.name || e?.message || e}`);
+        }
+        this.saveInjectedMessageCache(json);
+        if (this.nativeSupports('saveMessageCache')) {
+            this.postNativeMessage({
+                type: 'SAVE_MESSAGE_CACHE',
+                cache: payload,
+            });
+        }
+    }
+
+    saveInjectedMessageCache(value) {
+        try {
+            window.__ZALI_MESSAGE_CACHE = typeof value === 'string' ? value : JSON.stringify(value || { chats: {}, serverChats: {} });
         } catch (e) {}
     }
 
@@ -6509,71 +6703,139 @@ class ZaliInterface {
 
     loadStoredCryptoKey() {
         try {
+            const scope = String(this.activeConversationScope || window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
+            if (scope) {
+                const scoped = this.getStoredConversationKey(scope);
+                if (scoped) return scoped;
+            }
             const stored = (localStorage.getItem(this.cryptoKeyStorageKey()) || '').trim();
             const injected = (window.__ZALI_SAVED_KEY || '').trim();
-            const fallback = 'ZALI_SECRET_E2E_KEY_2026';
-            const key = stored || injected || fallback;
+            const key = stored || injected || '';
             this.trace(`loadStoredCryptoKey stored=${!!stored} injected=${!!injected} keySet=${!!key}`);
             if (stored) return stored;
             if (injected) return injected;
-            return fallback;
+            return '';
         } catch (e) {
-            this.trace('loadStoredCryptoKey error fallback injected');
-            return (window.__ZALI_SAVED_KEY || '').trim() || 'ZALI_SECRET_E2E_KEY_2026';
+            this.trace('loadStoredCryptoKey error fallback empty');
+            return (window.__ZALI_SAVED_KEY || '').trim() || '';
         }
     }
 
-    sharedCryptoKey() {
-        return 'ZALI_SECRET_E2E_KEY_2026';
+    conversationKeysStorageKey() {
+        return 'zali_conversation_keys_v1';
     }
 
-    _sanitizeKeyPart(value) {
-        return String(value || '').trim().replace(/\s+/g, '_');
-    }
-
-    conversationCryptoKey(peer = null, serverId = null, channelId = null) {
-        const pepper = this.sharedCryptoKey();
-        const isServers = !!(serverId && channelId);
-        if (isServers) {
-            return `zali-e2e:v1:server:${this._sanitizeKeyPart(serverId)}:${this._sanitizeKeyPart(channelId)}:${pepper}`;
+    conversationScopeKey(peer = null, serverId = null, channelId = null) {
+        const sid = String(serverId || '').trim();
+        const cid = String(channelId || '').trim();
+        if (sid && cid) {
+            return `server:${sid}:${cid}`;
         }
-        const me = this._sanitizeKeyPart(this.myName());
-        const other = this._sanitizeKeyPart(peer || this.S.current || '');
-        const pair = [me, other].filter(Boolean).sort().join(':');
-        return `zali-e2e:v1:dm:${pair}:${pepper}`;
+        const me = String(this.myName() || '').trim();
+        const other = String(peer || this.S.current || '').trim();
+        if (!me || !other) return '';
+        return `dm:${[me, other].sort().join(':')}`;
+    }
+
+    loadStoredConversationKeys() {
+        try {
+            const raw = localStorage.getItem(this.conversationKeysStorageKey());
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    getStoredConversationKey(scope) {
+        const key = String(scope || '').trim();
+        if (!key) return '';
+        const stored = this.loadStoredConversationKeys();
+        return String(stored[key] || '').trim();
+    }
+
+    saveStoredConversationKeys(keys) {
+        try {
+            localStorage.setItem(this.conversationKeysStorageKey(), JSON.stringify(keys || {}));
+        } catch (e) {}
+    }
+
+    async resolveConversationCryptoKey({ peer = null, serverId = null, channelId = null, reason = 'auto' } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (!scope) return '';
+        this.activeConversationScope = scope;
+        try {
+            window.__ZALI_ACTIVE_CONVERSATION_SCOPE = scope;
+        } catch (e) {}
+
+        const existing = this.getStoredConversationKey(scope);
+        if (existing) {
+            this.updateCryptoKeyDisplay({
+                key: existing,
+                peer,
+                serverId,
+                channelId,
+            });
+            return existing;
+        }
+
+        this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope}`);
+        try {
+            const res = await this.apiFetch('/api/conversation-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    peer: peer || null,
+                    serverId: serverId || null,
+                    channelId: channelId || null,
+                }),
+            });
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+            const data = await res.json();
+            const key = String(data?.key || '').trim();
+            if (!key) throw new Error('Пустой ключ переписки');
+            const stored = this.loadStoredConversationKeys();
+            stored[scope] = key;
+            this.saveStoredConversationKeys(stored);
+            this.setKey(key);
+            this.updateCryptoKeyDisplay({ key, peer, serverId, channelId });
+            return key;
+        } catch (e) {
+            this.trace(`resolveConversationCryptoKey failed reason=${reason} scope=${scope} err=${e?.message || e}`);
+            return '';
+        }
     }
 
     ensureConversationCryptoKey({ peer = null, serverId = null, channelId = null, reason = 'auto' } = {}) {
-        const derived = this.conversationCryptoKey(peer, serverId, channelId);
-        const current = (this.loadStoredCryptoKey() || '').trim();
-        if (!derived) return '';
-
-        const currentInput = document.getElementById('inputCryptoKey');
-        const mismatch = current !== derived;
-        if (mismatch) {
-            this.trace(`ensureConversationCryptoKey reason=${reason} mismatch=${current ? 'yes' : 'empty'} peer=${String(peer || '').trim()} server=${String(serverId || '').trim()} channel=${String(channelId || '').trim()} length=${derived.length}`);
-            if (this.bus) {
-                this.bus.send('zali_styler:set_key', derived);
-            } else {
-                try {
-                    window.__ZALI_SAVED_KEY = derived;
-                } catch (e) {}
-                if (currentInput) currentInput.value = derived;
-                if (this.nativeSupports('setKey')) {
-                    this.postNativeMessage({ type: 'SET_KEY', key: derived });
-                }
-                try {
-                    localStorage.setItem(this.cryptoKeyStorageKey(), derived);
-                } catch (e) {}
-            }
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (!scope) return '';
+        const stored = this.getStoredConversationKey(scope);
+        if (stored) {
+            this.activeConversationScope = scope;
+            try {
+                window.__ZALI_ACTIVE_CONVERSATION_SCOPE = scope;
+            } catch (e) {}
+            this.updateCryptoKeyDisplay({
+                key: stored,
+                peer,
+                serverId,
+                channelId,
+            });
+            return stored;
         }
+
+        this.trace(`ensureConversationCryptoKey reason=${reason} scope=${scope} missing`);
+        void this.resolveConversationCryptoKey({ peer, serverId, channelId, reason });
         this.updateCryptoKeyDisplay({
-            key: derived,
+            key: '',
             peer,
             serverId,
             channelId,
         });
-        return derived;
+        return '';
     }
 
     updateCryptoKeyDisplay({ key = null, peer = null, serverId = null, channelId = null } = {}) {
@@ -6595,7 +6857,7 @@ class ZaliInterface {
     updateChatHeaderCryptoKey({ peer = null, serverId = null, channelId = null } = {}) {
         const chatHdrSub = document.getElementById('chatHdrSub');
         if (!chatHdrSub) return;
-        const key = this.conversationCryptoKey(peer, serverId, channelId);
+        const key = this.ensureConversationCryptoKey({ peer, serverId, channelId, reason: 'updateChatHeaderCryptoKey' });
         const desc = serverId && channelId
             ? `${String(serverId).trim()} / ${String(channelId).trim()}`
             : peer
@@ -6618,6 +6880,18 @@ class ZaliInterface {
             }
             try {
                 window.__ZALI_SAVED_KEY = value;
+            } catch (e) {}
+            try {
+                const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || this.activeConversationScope || '').trim();
+                if (scope) {
+                    const stored = this.loadStoredConversationKeys();
+                    if (value) {
+                        stored[scope] = value;
+                    } else {
+                        delete stored[scope];
+                    }
+                    this.saveStoredConversationKeys(stored);
+                }
             } catch (e) {}
             if (this.nativeSupports('setKey')) {
                 this.trace(`saveStoredCryptoKey native setKey keySet=${!!value}`);
@@ -6830,7 +7104,10 @@ class ZaliInterface {
         const next = Array.isArray(items) ? items : [];
         try {
             localStorage.setItem(this.pendingOutboxStorageKey(), JSON.stringify(next));
-        } catch (e) {}
+        } catch (e) {
+            this.trace(`savePendingOutbox localStorage failed reason=${e?.name || e?.message || e}`);
+            this.warnStorageFallback('pending_outbox', `Не удалось сохранить очередь отправки в localStorage: ${e?.name || e?.message || e}`);
+        }
         this.trace(`savePendingOutbox count=${next.length}`);
         this.saveInjectedPendingOutbox(next);
         if (this.nativeSupports('sessionSync')) {
@@ -6840,6 +7117,25 @@ class ZaliInterface {
                 items: next,
             });
         }
+    }
+
+    pendingOutboxNextRetryDelay() {
+        const now = Date.now();
+        const currentUser = String(this.myName() || '').trim();
+        const pending = this.loadPendingOutbox()
+            .filter(item => !currentUser || String(item?.sender || '').trim() === currentUser);
+        if (!pending.length) return null;
+        let nextDelay = Infinity;
+        for (const item of pending) {
+            const retryAt = Number(item?.nextRetryAt || 0);
+            if (!retryAt) {
+                nextDelay = 0;
+                break;
+            }
+            const delta = Math.max(0, retryAt - now);
+            if (delta < nextDelay) nextDelay = delta;
+        }
+        return Number.isFinite(nextDelay) ? nextDelay : null;
     }
 
     loadInjectedPendingOutbox() {
@@ -6856,6 +7152,19 @@ class ZaliInterface {
         try {
             window.__ZALI_PENDING_OUTBOX = Array.isArray(items) ? items : [];
         } catch (e) {}
+    }
+
+    warnStorageFallback(scope, message) {
+        const key = String(scope || 'storage').trim();
+        if (!key || this.storageWarningSeen.has(key)) return;
+        this.storageWarningSeen.add(key);
+        if (typeof this.addLogEntry === 'function') {
+            this.addLogEntry({
+                type: 'WARN',
+                msg: message,
+                ts: new Date().toLocaleTimeString(),
+            });
+        }
     }
 
     pendingOutboxConversationKey(item) {
@@ -7055,19 +7364,26 @@ class ZaliInterface {
 
     flushPendingOutbox() {
         if (!this.nativeSupports('sendMessage')) return;
-        const key = this._getKey();
-        if (!key) return;
         if (!this.S.session?.token) return;
         const currentUser = String(this.myName() || '').trim();
         const now = Date.now();
         const pending = this.loadPendingOutbox();
         if (!pending.length) return;
-        this.trace(`flushPendingOutbox currentUser=${currentUser} count=${pending.length} tokenSet=${!!this.S.session?.token} keySet=${!!key}`);
+        this.trace(`flushPendingOutbox currentUser=${currentUser} count=${pending.length} tokenSet=${!!this.S.session?.token}`);
+        let sentAny = false;
 
         for (const item of pending) {
             if (!item || typeof item !== 'object') continue;
             if (currentUser && String(item.sender || '').trim() !== currentUser) continue;
             if (Number(item.nextRetryAt || 0) > now) continue;
+
+            const itemKey = this.pendingOutboxItemKey(item);
+            if (!itemKey) {
+                this.trace(`flushPendingOutbox missing key clientId=${String(item.clientId || '').trim()}`);
+                item.nextRetryAt = now + 5000;
+                this.savePendingOutbox(pending);
+                continue;
+            }
 
             if (this.isPendingMessageAlreadyLoaded(item)) {
                 this.dropPendingOutbox(item.clientId);
@@ -7078,6 +7394,7 @@ class ZaliInterface {
             item.lastAttemptAt = now;
             item.nextRetryAt = now + Math.min(30000, Math.max(1500, 1000 * Math.min(item.attemptCount, 6)));
             this.savePendingOutbox(pending);
+            sentAny = true;
 
             this.postNativeMessage({
                 type: 'SEND_MESSAGE',
@@ -7086,7 +7403,8 @@ class ZaliInterface {
                 serverId: item.serverId || '',
                 channelId: item.channelId || '',
                 sender: item.sender || this.myName(),
-                key,
+                key: itemKey,
+                keyVersion: Number(item.keyVersion || 2),
                 clientId: item.clientId,
                 attachments: this.normalizeAttachments(item.attachments).map(att => ({
                     name: att.name,
@@ -7097,6 +7415,30 @@ class ZaliInterface {
                 })),
             });
             this.trace(`flushPendingOutbox send clientId=${String(item.clientId || '').trim()} receiver=${String(item.receiver || '').trim()} server=${String(item.serverId || '').trim()} channel=${String(item.channelId || '').trim()} attempt=${item.attemptCount}`);
+        }
+
+        const nextDelay = this.pendingOutboxNextRetryDelay();
+        if (nextDelay !== null && this.loadPendingOutbox().some(item => String(item?.sender || '').trim() === currentUser)) {
+            this.scheduleFlushPendingOutbox(Math.max(150, sentAny ? Math.min(3000, nextDelay) : nextDelay));
+        }
+    }
+
+    pendingOutboxItemKey(item) {
+        const stored = String(item?.key || '').trim();
+        if (stored) return stored;
+        const serverId = String(item?.serverId || '').trim();
+        const channelId = String(item?.channelId || '').trim();
+        const receiver = String(item?.receiver || item?.recipient || '').trim();
+        try {
+            if (serverId && channelId) {
+                return this.ensureConversationCryptoKey({ serverId, channelId, reason: 'pendingOutboxItemKey' });
+            }
+            if (receiver) {
+                return this.ensureConversationCryptoKey({ peer: receiver, reason: 'pendingOutboxItemKey' });
+            }
+            return this._getKey();
+        } catch (e) {
+            return '';
         }
     }
 
@@ -7185,6 +7527,21 @@ class ZaliInterface {
         } catch (e) {
             return {};
         }
+    }
+
+    isDefaultableNetworkUrl(value) {
+        const raw = String(value || '').trim().toLowerCase();
+        if (!raw) return true;
+        return (
+            raw.startsWith('http://localhost') ||
+            raw.startsWith('https://localhost') ||
+            raw.startsWith('http://127.0.0.1') ||
+            raw.startsWith('https://127.0.0.1') ||
+            raw.startsWith('http://[::1]') ||
+            raw.startsWith('https://[::1]') ||
+            raw.startsWith('http://89.108.76.89:3000') ||
+            raw.startsWith('https://89.108.76.89:3000')
+        );
     }
 
     trimTrailingSlash(value) {
@@ -7389,8 +7746,13 @@ class ZaliInterface {
 
     loadNetworkConfig() {
         const stored = this.loadStoredNetworkConfig();
-        const apiBaseUrl = this.normalizeApiBaseUrl(stored.apiBaseUrl || '') || this.defaultApiBaseUrl();
-        const wsBaseUrl = this.normalizeWsBaseUrl(stored.wsBaseUrl || '') || this.defaultWsBaseUrl();
+        const storedApiBaseUrl = this.normalizeApiBaseUrl(stored.apiBaseUrl || '');
+        const storedWsBaseUrl = this.normalizeWsBaseUrl(stored.wsBaseUrl || '');
+        const useDefaultApi = this.isDefaultableNetworkUrl(storedApiBaseUrl);
+        const apiBaseUrl = useDefaultApi ? this.defaultApiBaseUrl() : (storedApiBaseUrl || this.defaultApiBaseUrl());
+        const wsBaseUrl = useDefaultApi
+            ? this.defaultWsBaseUrl()
+            : (storedWsBaseUrl || this.defaultWsBaseUrl());
         let iceServers = this.normalizeIceServers(stored.iceServers);
         if (!iceServers.length) {
             iceServers = this.normalizeIceServers(this.defaultIceServers());
@@ -7440,6 +7802,14 @@ class ZaliInterface {
             iceCandidatePoolSize: 4,
             iceTransportPolicy: 'all',
         };
+    }
+
+    apiUrl(path = '') {
+        const base = String(this.getApiBaseUrl() || '').trim().replace(/\/+$/, '');
+        const nextPath = String(path || '').trim();
+        if (!base) return nextPath;
+        if (!nextPath) return base;
+        return `${base}${nextPath.startsWith('/') ? nextPath : `/${nextPath}`}`;
     }
 
     setNetworkConfig(config = {}) {
@@ -10999,6 +11369,17 @@ class ZaliInterface {
 
     async loadServers({ silent = false } = {}) {
         try {
+            if (!this.S.session?.token) {
+                this.S.servers = this.getDefaultServers().map(server => ({ ...server, channels: [
+                    { id: `${server.id}-general`, name: 'general', topic: 'Общий чат', kind: 'text', position: 0 },
+                    { id: `${server.id}-voice`, name: 'voice', topic: 'Голосовой канал', kind: 'voice', position: 1 },
+                ] }));
+                this.ensureServerSelection();
+                this.renderContacts();
+                this.renderServerInterface();
+                this.renderMessages();
+                return;
+            }
             const res = await this.apiFetch('/api/servers');
             if (!res.ok) {
                 this.S.servers = this.getDefaultServers().map(server => ({ ...server, channels: [
@@ -11043,6 +11424,10 @@ class ZaliInterface {
         const cid = String(channelId || '').trim();
         if (!sid || !cid) return;
         this.trace(`loadServerMessages start server=${sid} channel=${cid} nativeHistory=${this.nativeSupports('serverHistory')}`);
+        if (!this.S.session?.token) {
+            this.renderMessages();
+            return;
+        }
         const key = `${sid}:${cid}`;
         if (!Array.isArray(this.S.serverChats[key])) {
             this.S.serverChats[key] = [];
@@ -11070,33 +11455,43 @@ class ZaliInterface {
         }
 
         try {
-            const res = await this.apiFetch(`/api/servers/${encodeURIComponent(sid)}/channels/${encodeURIComponent(cid)}/messages`);
-            if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                this.trace(`loadServerMessages failed server=${sid} channel=${cid} status=${res.status} body=${text.slice(0, 300)}`);
-                if (!silent) {
-                    this.addLogEntry({ type: 'WARN', msg: `Не удалось загрузить сообщения канала ${cid}`, ts: new Date().toLocaleTimeString() });
+            const limit = 200;
+            let offset = 0;
+            let mergedCount = 0;
+            while (true) {
+                const res = await this.apiFetch(`/api/servers/${encodeURIComponent(sid)}/channels/${encodeURIComponent(cid)}/messages?limit=${limit}&offset=${offset}`);
+                if (!res.ok) {
+                    const text = await res.text().catch(() => '');
+                    this.trace(`loadServerMessages failed server=${sid} channel=${cid} status=${res.status} offset=${offset} body=${text.slice(0, 300)}`);
+                    if (!silent) {
+                        this.addLogEntry({ type: 'WARN', msg: `Не удалось загрузить сообщения канала ${cid}`, ts: new Date().toLocaleTimeString() });
+                    }
+                    return;
                 }
-                return;
+                const messages = await res.json();
+                const batch = Array.isArray(messages) ? messages : [];
+                this.trace(`loadServerMessages success server=${sid} channel=${cid} offset=${offset} count=${batch.length}`);
+                const normalized = batch.map(msg => ({
+                    id: msg.id,
+                    sender: msg.sender,
+                    receiver: msg.receiver || cid,
+                    text: msg.text || msg.content || 'Зашифрованное сообщение недоступно без нативного моста.',
+                    attachments: this.normalizeAttachments(msg.attachments),
+                    timestamp: msg.timestamp,
+                    serverId: msg.serverId || msg.server_id || sid,
+                    channelId: msg.channelId || msg.channel_id || cid,
+                    reactions: msg.reactions || [],
+                    myReaction: msg.myReaction || msg.my_reaction || '',
+                }));
+                if (normalized.length > 0) {
+                    this.mergeServerChatMessages(key, normalized);
+                    mergedCount += normalized.length;
+                    this.renderMessages();
+                }
+                if (batch.length < limit) break;
+                offset += limit;
             }
-            const messages = await res.json();
-            this.trace(`loadServerMessages success server=${sid} channel=${cid} count=${Array.isArray(messages) ? messages.length : 0}`);
-            const normalized = Array.isArray(messages) ? messages.map(msg => ({
-                id: msg.id,
-                sender: msg.sender,
-                receiver: msg.receiver || cid,
-                text: msg.filename || '',
-                attachments: [],
-                timestamp: msg.timestamp,
-                serverId: msg.serverId || msg.server_id || sid,
-                channelId: msg.channelId || msg.channel_id || cid,
-                reactions: msg.reactions || [],
-                myReaction: msg.myReaction || msg.my_reaction || '',
-            })) : [];
-            if (normalized.length > 0) {
-                this.mergeServerChatMessages(key, normalized);
-            }
-            this.renderMessages();
+            this.trace(`loadServerMessages merged server=${sid} channel=${cid} count=${mergedCount}`);
         } catch (e) {
             if (!silent) {
                 this.addLogEntry({ type: 'ERROR', msg: `Ошибка загрузки канала ${cid}: ${e?.message || e}`, ts: new Date().toLocaleTimeString() });
@@ -11113,11 +11508,8 @@ class ZaliInterface {
         const queue = messages.filter(msg => msg && typeof msg === 'object');
         this.trace(`loadServerHistory start server=${serverId} channel=${channelId} count=${queue.length}`);
         const key = `${serverId}:${channelId}`;
-        const loadSeq = (this.serverHistoryLoadSeq.get(key) || 0) + 1;
-        this.serverHistoryLoadSeq.set(key, loadSeq);
         const reconciled = [];
         const processBatch = (startIndex = 0) => {
-            if (this.serverHistoryLoadSeq.get(key) !== loadSeq) return;
             const startedAt = performance.now();
             let index = startIndex;
             for (; index < queue.length; index += 1) {
@@ -11129,18 +11521,48 @@ class ZaliInterface {
                     serverId: raw.serverId || raw.server_id || serverId,
                     channelId: raw.channelId || raw.channel_id || channelId,
                 };
+                const normalizedAttachments = this.normalizeAttachments(msg.attachments);
+                const normalizedReactions = this.normalizeReactions(msg.reactions);
+                const msgId = String(msg.id || '').trim();
                 const clientId = String(msg.clientId || msg.client_id || '').trim();
                 if (clientId && this.finalizePendingMessage(clientId, msg.id, { render: false })) {
                     this.dropPendingOutbox(clientId);
                     continue;
                 }
-                reconciled.push(msg);
+                const incomingKey = this.messageRenderKey(msg);
+                const existingIndex = msgId
+                    ? reconciled.findIndex(m => String(m.id || '').trim() === msgId)
+                    : reconciled.findIndex(m => this.messageRenderKey(m) === incomingKey);
+                if (existingIndex >= 0) {
+                    const prev = reconciled[existingIndex];
+                    reconciled[existingIndex] = {
+                        ...prev,
+                        ...msg,
+                        id: msgId || msg.id || prev.id || '',
+                        attachments: normalizedAttachments.length ? normalizedAttachments : this.normalizeAttachments(prev.attachments),
+                        reactions: normalizedReactions.length ? normalizedReactions : this.normalizeReactions(prev.reactions),
+                        myReaction: msg.myReaction || prev.myReaction || '',
+                        text: this.sanitizeDecryptionErrorText(msg.text) || prev.text || '',
+                        status: 'sent',
+                        serverId: msg.serverId || msg.server_id || serverId,
+                        channelId: msg.channelId || msg.channel_id || channelId,
+                    };
+                } else {
+                    reconciled.push({
+                        ...msg,
+                        id: msgId || msg.id || '',
+                        attachments: normalizedAttachments,
+                        reactions: normalizedReactions,
+                        myReaction: msg.myReaction || '',
+                        text: this.sanitizeDecryptionErrorText(msg.text),
+                        status: 'sent',
+                    });
+                }
             }
             if (index < queue.length) {
                 requestAnimationFrame(() => processBatch(index));
                 return;
             }
-            if (this.serverHistoryLoadSeq.get(key) !== loadSeq) return;
             this.mergeServerChatMessages(key, reconciled);
             if (this.currentServerChatKey() === key) {
                 this.renderMessages();
@@ -11151,9 +11573,24 @@ class ZaliInterface {
         processBatch(0);
     }
 
-    refreshAfterKey() {
+    async refreshAfterKey() {
+        if (!this.S.session?.token) {
+            this.scheduleFlushPendingOutbox(300);
+            return;
+        }
+        if (this.S.navMode === 'servers') {
+            this.ensureServerSelection();
+        } else if (!this.S.current) {
+            const storedCurrent = this.loadStoredCurrentContact();
+            if (storedCurrent) {
+                this.S.current = storedCurrent;
+                this.ensureContact(storedCurrent);
+                this.initChat(storedCurrent);
+            }
+        }
+
         if (this.S.navMode === 'servers' && this.S.activeServer && this.S.activeChannel) {
-            this.ensureConversationCryptoKey({
+            const key = await this.resolveConversationCryptoKey({
                 serverId: this.S.activeServer,
                 channelId: this.S.activeChannel,
                 reason: 'refreshAfterKey'
@@ -11164,7 +11601,7 @@ class ZaliInterface {
         }
 
         if (this.S.current) {
-            const key = this.ensureConversationCryptoKey({ peer: this.S.current, reason: 'refreshAfterKey' });
+            const key = await this.resolveConversationCryptoKey({ peer: this.S.current, reason: 'refreshAfterKey' });
             if (this.nativeSupports('sendMessage')) {
                 this.postNativeMessage({ type: 'REFRESH_HISTORY', key });
             }
@@ -11172,8 +11609,9 @@ class ZaliInterface {
         this.scheduleFlushPendingOutbox(300);
     }
 
-    syncActiveConversation({ force = false } = {}) {
-        if (!force && (document.hidden || !this.S.session?.token)) return;
+    async syncActiveConversation({ force = false } = {}) {
+        if (!this.S.session?.token) return;
+        if (!force && document.hidden) return;
         if (this.S.navMode === 'servers') {
             const serverId = this.S.activeServer;
             const channelId = this.S.activeChannel;
@@ -11184,7 +11622,7 @@ class ZaliInterface {
                 if (!force && (now - lastSyncAt) < 30000) return;
                 this.conversationSyncAt.set(syncKey, now);
                 this.trace(`syncActiveConversation server=${serverId} channel=${channelId}`);
-                this.ensureConversationCryptoKey({
+                await this.resolveConversationCryptoKey({
                     serverId,
                     channelId,
                     reason: 'syncActiveConversation',
@@ -11202,10 +11640,69 @@ class ZaliInterface {
         if (!force && (now - lastSyncAt) < 60000) return;
         this.conversationSyncAt.set(syncKey, now);
         this.trace(`syncActiveConversation peer=${peer} force=${force}`);
-        const key = this.ensureConversationCryptoKey({ peer, reason: 'syncActiveConversation' });
+        const key = await this.resolveConversationCryptoKey({ peer, reason: 'syncActiveConversation' });
         if (this.nativeSupports('sendMessage')) {
             this.postNativeMessage({ type: 'REFRESH_HISTORY', key });
         }
+    }
+
+    async syncConversationFromNative(payload = {}) {
+        if (!this.S.session?.token) return;
+        const serverId = String(payload?.serverId || '').trim();
+        const channelId = String(payload?.channelId || '').trim();
+        const peer = String(payload?.peer || '').trim();
+        if (serverId && channelId) {
+            await this.resolveConversationCryptoKey({ serverId, channelId, reason: 'syncConversationFromNative' });
+            this.loadServerMessages(serverId, channelId, { silent: true });
+            return;
+        }
+        if (peer) {
+            const key = await this.resolveConversationCryptoKey({ peer, reason: 'syncConversationFromNative' });
+            if (this.nativeSupports('sendMessage')) {
+                this.postNativeMessage({ type: 'REFRESH_HISTORY', key });
+            }
+            return;
+        }
+        this.syncActiveConversation({ force: !!payload?.force });
+    }
+
+    scheduleConversationRefresh({ peer = null, serverId = null, channelId = null, reason = 'message', delayMs = 250 } = {}) {
+        if (!this.S.session?.token) return;
+        const sid = String(serverId || '').trim();
+        const cid = String(channelId || '').trim();
+        const dmPeer = String(peer || '').trim();
+        const key = sid && cid
+            ? `server:${sid}:${cid}`
+            : dmPeer
+                ? `dm:${dmPeer}`
+                : '';
+        if (!key) return;
+
+        if (this.conversationRefreshTimers.has(key)) {
+            clearTimeout(this.conversationRefreshTimers.get(key));
+        }
+
+        this.conversationRefreshTimers.set(key, setTimeout(() => {
+            this.conversationRefreshTimers.delete(key);
+            if (sid && cid) {
+                this.trace(`scheduleConversationRefresh fire reason=${reason} server=${sid} channel=${cid}`);
+                this.resolveConversationCryptoKey({
+                    serverId: sid,
+                    channelId: cid,
+                    reason: `refresh:${reason}`,
+                });
+                this.loadServerMessages(sid, cid, { silent: true });
+                return;
+            }
+
+            if (!dmPeer) return;
+            this.trace(`scheduleConversationRefresh fire reason=${reason} peer=${dmPeer}`);
+            this.resolveConversationCryptoKey({ peer: dmPeer, reason: `refresh:${reason}` }).then((keyValue) => {
+                if (this.nativeSupports('sendMessage')) {
+                    this.postNativeMessage({ type: 'REFRESH_HISTORY', key: keyValue });
+                }
+            });
+        }, Math.max(100, Number(delayMs) || 250)));
     }
 
     renderServerInterface() {
@@ -11673,6 +12170,29 @@ class ZaliInterface {
 
         const request = (async () => {
             try {
+                if (this.nativeSupports('avatarFetch')) {
+                    try {
+                        const payload = await this.requestNativeAction({
+                            type: 'LOAD_AVATAR_REQUEST',
+                            username: name,
+                        });
+                        if (this.avatarFetchSeq.get(key) !== seq) {
+                            return null;
+                        }
+                        const dataUrl = String(payload?.data?.dataUrl || '').trim();
+                        if (!dataUrl) {
+                            this.saveStoredAvatar(name, null);
+                            this.scheduleAvatarRefresh();
+                            return null;
+                        }
+                        this.saveStoredAvatar(name, dataUrl);
+                        this.scheduleAvatarRefresh();
+                        return dataUrl;
+                    } catch (nativeError) {
+                        this.trace(`ensureAvatarLoaded native failed username=${name} err=${nativeError?.message || nativeError}`);
+                    }
+                }
+
                 const res = await this.apiFetch(`/api/avatar/${encodeURIComponent(name)}`);
                 if (this.avatarFetchSeq.get(key) !== seq) {
                     return null;
@@ -11760,6 +12280,19 @@ class ZaliInterface {
         if (file.size > MAX_AVATAR_BYTES) {
             throw new Error('Аватар слишком большой. Выберите изображение до 2 МБ');
         }
+        if (this.isWindowsNativeAuth()) {
+            const dataUrl = await this.readFileAsDataURL(file);
+            await this.requestNativeAction({
+                type: 'UPLOAD_AVATAR_REQUEST',
+                dataUrl,
+                mimeType: file.type || 'image/png',
+                filename: file.name || 'avatar.png',
+            });
+            const objectUrl = URL.createObjectURL(file);
+            this.saveStoredAvatar(target, objectUrl);
+            this.updateAvatarViews();
+            return;
+        }
         const formData = new FormData();
         formData.append('file', file, file.name || 'avatar.png');
         const res = await this.apiFetch('/api/avatar', {
@@ -11776,6 +12309,14 @@ class ZaliInterface {
 
     async resetProfileAvatar() {
         const target = String(this.myName()).trim();
+        if (this.isWindowsNativeAuth()) {
+            await this.requestNativeAction({
+                type: 'DELETE_AVATAR_REQUEST',
+            });
+            this.saveStoredAvatar(target, null);
+            this.updateAvatarViews();
+            return;
+        }
         const res = await this.apiFetch('/api/avatar', { method: 'DELETE' });
         if (!res.ok && res.status !== 204) {
             throw new Error(await res.text() || 'Не удалось удалить аватар на сервере');
@@ -11795,7 +12336,7 @@ class ZaliInterface {
     async apiFetch(path, options = {}) {
         const method = String(options?.method || 'GET').toUpperCase();
         this.trace(`apiFetch request method=${method} path=${path} auth=${!!this.S.session?.token}`);
-        const res = await fetch(`${this.getApiBaseUrl()}${path}`, {
+        const res = await fetch(this.apiUrl(path), {
             ...options,
             headers: this.apiHeaders(options.headers || {}),
         });
@@ -11826,9 +12367,22 @@ class ZaliInterface {
             this.clearAuthInputs();
             this.S.auth.fieldsCleared = true;
 
-            await this.loadContacts();
-            await this.loadUsers();
-            await this.loadServers({ silent: true });
+            if (this.S.session?.token) {
+                await this.loadContacts();
+                await this.loadUsers();
+                await this.loadServers({ silent: true });
+            } else {
+                this.S.contacts = [];
+                this.S.users = [];
+                this.S.servers = this.getDefaultServers().map(server => ({ ...server, channels: [
+                    { id: `${server.id}-general`, name: 'general', topic: 'Общий чат', kind: 'text', position: 0 },
+                    { id: `${server.id}-voice`, name: 'voice', topic: 'Голосовой канал', kind: 'voice', position: 1 },
+                ] }));
+                this.ensureServerSelection();
+                this.renderContacts();
+                this.renderServerInterface();
+                this.renderMessages();
+            }
             this.updateAuthView();
             this.applyNetworkConfigToInputs();
             this.syncNativeNetworkConfig();
@@ -12041,6 +12595,11 @@ class ZaliInterface {
     async loadContacts() {
         try {
             this.trace(`loadContacts start user=${this.myName()} tokenSet=${!!this.S.session?.token}`);
+            if (!this.S.session?.token) {
+                this.S.contacts = [];
+                this.renderContacts();
+                return;
+            }
             const res = await this.apiFetch('/api/contacts');
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
@@ -12063,6 +12622,10 @@ class ZaliInterface {
     async loadUsers() {
         try {
             this.trace(`loadUsers start user=${this.myName()} tokenSet=${!!this.S.session?.token}`);
+            if (!this.S.session?.token) {
+                this.S.users = [];
+                return;
+            }
             const res = await this.apiFetch('/api/users');
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
@@ -12083,6 +12646,10 @@ class ZaliInterface {
         this.updateAuthView();
 
         try {
+            if (this.isWindowsNativeAuth()) {
+                return await this.executeNativeAuth(mode, username, password, { logAttempt });
+            }
+
             const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
             if (mode === 'register' && logAttempt) {
                 this.addLogEntry({
@@ -12096,7 +12663,7 @@ class ZaliInterface {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 12000);
                 try {
-                    return await fetch(`${this.getApiBaseUrl()}${endpoint}`, {
+                    return await fetch(this.apiUrl(endpoint), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ username, password }),
@@ -12215,6 +12782,106 @@ class ZaliInterface {
         }
     }
 
+    async executeNativeAuth(mode, username, password, { logAttempt = true } = {}) {
+        const requestId = `auth-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const request = {
+            type: 'AUTH_REQUEST',
+            mode,
+            username,
+            password,
+            requestId,
+        };
+
+        if (mode === 'register' && logAttempt) {
+            this.addLogEntry({
+                type: 'INFO',
+                msg: `Попытка регистрации: ${username}`,
+                ts: new Date().toLocaleTimeString()
+            });
+        }
+
+        const payload = await new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                this.nativeAuthRequests.delete(requestId);
+                reject(new Error('Не удалось связаться с сервером'));
+            }, 15000);
+
+            this.nativeAuthRequests.set(requestId, { resolve, reject, timeoutId });
+
+            if (!this.postNativeMessage(request)) {
+                clearTimeout(timeoutId);
+                this.nativeAuthRequests.delete(requestId);
+                reject(new Error('Не удалось связаться с сервером'));
+            }
+        });
+
+        const data = payload?.data || payload;
+        this.applySession({
+            username: data.username || username,
+            token: data.token,
+            guest: false,
+        });
+        this.setAuthMode('login', { clearInputs: true, focus: false });
+        this.clearAuthInputs();
+        this.addLogEntry({
+            type: 'SUCCESS',
+            msg: mode === 'register'
+                ? `Регистрация успешна, вход выполнен как ${this.myName()}`
+                : `Вход выполнен как ${this.myName()}`,
+            ts: new Date().toLocaleTimeString()
+        });
+        return true;
+    }
+
+    async requestNativeAction(payload, timeoutMs = 15000) {
+        const requestId = String(payload?.requestId || `native-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        const request = { ...payload, requestId };
+        return await new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                this.nativeRequests.delete(requestId);
+                reject(new Error('Не удалось связаться с сервером'));
+            }, timeoutMs);
+
+            this.nativeRequests.set(requestId, { resolve, reject, timeoutId });
+
+            if (!this.postNativeMessage(request)) {
+                clearTimeout(timeoutId);
+                this.nativeRequests.delete(requestId);
+                reject(new Error('Не удалось связаться с сервером'));
+            }
+        });
+    }
+
+    onNativeResponse(payload) {
+        if (!payload || typeof payload !== 'object') return;
+        const requestId = String(payload.requestId || '').trim();
+        if (!requestId) return;
+        const pending = this.nativeRequests.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timeoutId);
+        this.nativeRequests.delete(requestId);
+        if (payload.ok) {
+            pending.resolve(payload);
+        } else {
+            pending.reject(new Error(payload.error || 'Операция не удалась'));
+        }
+    }
+
+    onNativeAuthResponse(payload) {
+        if (!payload || typeof payload !== 'object') return;
+        const requestId = String(payload.requestId || '').trim();
+        if (!requestId) return;
+        const pending = this.nativeAuthRequests.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timeoutId);
+        this.nativeAuthRequests.delete(requestId);
+        if (payload.ok) {
+            pending.resolve(payload);
+        } else {
+            pending.reject(new Error(payload.error || 'Не удалось войти'));
+        }
+    }
+
     async submitAuth(mode) {
         if (this.S.auth.loading) {
             return;
@@ -12318,6 +12985,17 @@ class ZaliInterface {
         if (!username) return;
 
         try {
+            if (this.isWindowsNativeAuth()) {
+                const payload = await this.requestNativeAction({
+                    type: 'ADD_CONTACT_REQUEST',
+                    username,
+                });
+                this.setContacts(Array.isArray(payload?.data?.contacts) ? payload.data.contacts : []);
+                if (input) input.value = '';
+                this.hideContactSuggestions();
+                this.addLogEntry({ type: 'SUCCESS', msg: `Контакт добавлен: ${username}`, ts: new Date().toLocaleTimeString() });
+                return;
+            }
             const res = await this.apiFetch('/api/contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -12343,6 +13021,14 @@ class ZaliInterface {
             return;
         }
         try {
+            if (this.isWindowsNativeAuth()) {
+                const payload = await this.requestNativeAction({
+                    type: 'REMOVE_CONTACT_REQUEST',
+                    username,
+                });
+                this.setContacts(Array.isArray(payload?.data?.contacts) ? payload.data.contacts : []);
+                return;
+            }
             const res = await this.apiFetch(`/api/contacts/${encodeURIComponent(username)}`, { method: 'DELETE' });
             if (!res.ok) {
                 const text = await res.text();
@@ -13168,6 +13854,17 @@ class ZaliInterface {
             return;
         }
 
+        if (this.nativeSupports('setReaction')) {
+            const sent = this.postNativeMessage({
+                type: 'SET_MESSAGE_REACTION',
+                messageId: found.msg.id,
+                emoji: next,
+            });
+            if (sent) {
+                return;
+            }
+        }
+
         try {
             const res = await this.apiFetch(`/api/message/${encodeURIComponent(found.msg.id)}/reaction`, {
                 method: 'POST',
@@ -13200,7 +13897,15 @@ class ZaliInterface {
             return;
         }
         const q = this.S.searchQ.toLowerCase();
-        const list = this.S.contacts.filter(u => u !== this.myName() && (!q || u.toLowerCase().includes(q)));
+        const list = this.S.contacts
+            .filter(u => u !== this.myName() && (!q || u.toLowerCase().includes(q)))
+            .map((u, index) => ({
+                name: u,
+                lastMessageAt: this.conversationLastMessageAt(u),
+                index,
+            }))
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .map(item => item.name);
 
         if (list.length === 0) {
             el.innerHTML = `<div style="text-align:center;color:var(--text3);font-size:11px;padding:24px 0">${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</div>`;
@@ -13390,6 +14095,7 @@ class ZaliInterface {
         const previousScrollTop = box.scrollTop;
         const previousScrollHeight = box.scrollHeight;
         const stickToBottom = this.isMessagesNearBottom(box);
+        const scrollAnchor = this.captureMessageScrollAnchor(box);
         const msgs = this.getCurrentMessages();
         const channel = this.currentChannel();
         const server = this.currentServer();
@@ -13447,23 +14153,43 @@ class ZaliInterface {
         if (windowInfo.useWindow && windowInfo.topSpacer > 0) {
             html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`;
         }
-        const GROUP_WINDOW_MS = 10 * 60 * 1000;
+        const GROUP_WINDOW_MS = 5 * 60 * 1000;
         const items = renderedMsgs.map(msg => {
             const ts = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
             const dayKey = ts ? new Date(ts).toDateString() : '';
             return { msg, ts, dayKey, groupPos: 'single' };
         });
 
-        items.forEach((item, idx) => {
-            const prev = items[idx - 1];
-            const next = items[idx + 1];
-            const samePrev = !!(prev && prev.dayKey && prev.dayKey === item.dayKey && prev.msg.sender === item.msg.sender && item.ts && prev.ts && (item.ts - prev.ts) <= GROUP_WINDOW_MS);
-            const sameNext = !!(next && next.dayKey && next.dayKey === item.dayKey && next.msg.sender === item.msg.sender && item.ts && next.ts && (next.ts - item.ts) <= GROUP_WINDOW_MS);
+        let activeGroup = null;
+        items.forEach((item) => {
+            const isGroupable = item.msg?.kind !== 'call' && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
+            const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
+            const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
 
-            if (samePrev && sameNext) item.groupPos = 'mid';
-            else if (!samePrev && sameNext) item.groupPos = 'start';
-            else if (samePrev && !sameNext) item.groupPos = 'end';
-            else item.groupPos = 'single';
+            if (isGroupable && sameSender && sameDay && withinWindow) {
+                item.groupPos = 'end';
+                if (activeGroup.items.length === 1) {
+                    activeGroup.items[0].groupPos = 'start';
+                } else if (activeGroup.items.length > 1) {
+                    activeGroup.items[activeGroup.items.length - 1].groupPos = 'mid';
+                }
+                activeGroup.items.push(item);
+                activeGroup.lastTs = item.ts;
+                return;
+            }
+
+            item.groupPos = 'single';
+            if (isGroupable) {
+                activeGroup = {
+                    sender: String(item.msg.sender || '').trim(),
+                    dayKey: item.dayKey,
+                    lastTs: item.ts,
+                    items: [item],
+                };
+            } else {
+                activeGroup = null;
+            }
         });
 
         let lastDate = null;
@@ -13476,6 +14202,9 @@ class ZaliInterface {
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
             const isSending = isOut && msg.status === 'sending';
             const messageId = String(msg.id || '').trim();
+            const hoverTimeLabel = !isCall ? this.messageHoverTimeLabel(msg) : '';
+            const showInlineTime = !isCall && (item.groupPos === 'single' || item.groupPos === 'end');
+            const inlineTimeLabel = !isCall ? this.messageInlineTimeLabel(msg) : '';
             if (dateStr && dateStr !== lastDate) {
                 html += `<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`;
                 lastDate = dateStr;
@@ -13483,16 +14212,16 @@ class ZaliInterface {
 
             const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
             const showAvatar = !isCall && !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
-            const bubbleClass = isCall ? '' : (gifOnly ? 'media-only' : `bubble ${mediaCard}`);
+            const bubbleClass = isCall ? '' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (!isCall && !isOut && showAvatar) {
                 html += `<div class="msg-ava">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (!isCall && !isOut) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
-                ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}">${this.renderMessageBody(msg)}</div>`}
+                ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
         });
@@ -13528,9 +14257,18 @@ class ZaliInterface {
 
         const preserveScroll = !conversationChanged && !this.pendingMessagesScroll && !stickToBottom;
         if (preserveScroll && previousScrollHeight > 0) {
-            const scrollDelta = box.scrollHeight - previousScrollHeight;
-            const nextScrollTop = Math.max(0, previousScrollTop + scrollDelta);
-            box.scrollTop = nextScrollTop;
+            const restored = this.restoreMessageScrollAnchor(box, scrollAnchor);
+            if (restored && scrollAnchor?.messageId) {
+                requestAnimationFrame(() => {
+                    if (!box.isConnected) return;
+                    this.restoreMessageScrollAnchor(box, scrollAnchor);
+                });
+            }
+            if (!restored) {
+                const scrollDelta = box.scrollHeight - previousScrollHeight;
+                const nextScrollTop = Math.max(0, previousScrollTop + scrollDelta);
+                box.scrollTop = nextScrollTop;
+            }
         }
 
         if (this.pendingMessagesScroll === 'top') {
@@ -13542,6 +14280,11 @@ class ZaliInterface {
             } else {
                 this.pendingMessagesScroll = null;
             }
+        } else if (!conversationChanged && stickToBottom) {
+            requestAnimationFrame(() => {
+                if (!box.isConnected) return;
+                box.scrollTop = box.scrollHeight;
+            });
         }
 
         if (isServers && server) {
@@ -13604,7 +14347,7 @@ class ZaliInterface {
         this.syncMobileChrome();
     }
 
-    sendInputMessage() {
+    async sendInputMessage() {
         const inp = document.getElementById('msgInput');
         const textValue = (inp && inp.value) || '';
         const text = textValue.trim();
@@ -13621,12 +14364,13 @@ class ZaliInterface {
         if (isServers && (!server || !channel)) return;
         if (isServers && this.isVoiceChannel(channel)) return;
         if (!isServers && !this.S.current) return;
-        const cryptoKey = this.ensureConversationCryptoKey({
+        const cryptoKey = await this.resolveConversationCryptoKey({
             peer: isServers ? null : this.S.current,
             serverId: isServers ? server.id : null,
             channelId: isServers ? channel.id : null,
             reason: 'sendInputMessage'
         });
+        const keyVersion = 2;
         this.trace(`sendInputMessage start clientId=${clientId} sender=${this.myName()} receiver=${isServers ? channel.id : this.S.current} server=${isServers ? server.id : 'dm'} channel=${isServers ? channel.id : 'dm'} attachments=${payloadAttachments.length} textBytes=${text.length} keySet=${!!cryptoKey} tokenSet=${!!this.S.session?.token}`);
 
         const outgoingMessage = {
@@ -13640,6 +14384,7 @@ class ZaliInterface {
             clientId,
             serverId: isServers ? server.id : null,
             channelId: isServers ? channel.id : null,
+            keyVersion,
         };
 
         const bridgeAvailable = this.nativeSupports('sendMessage');
@@ -13705,6 +14450,7 @@ class ZaliInterface {
         this.enqueuePendingOutbox({
             ...outgoingMessage,
             key: cryptoKey,
+            keyVersion,
         });
         this.trace(`sendInputMessage queued clientId=${clientId}`);
 
@@ -13716,6 +14462,7 @@ class ZaliInterface {
             channelId: isServers ? channel.id : '',
             sender: this.myName(),
             key: cryptoKey,
+            keyVersion,
             clientId,
             attachments: payloadAttachments.map(att => ({
                 name: att.name,
@@ -13779,6 +14526,13 @@ class ZaliInterface {
                     this.renderMessages();
                     this.renderContacts();
                 }
+                const refreshPeer = sender === this.myName() ? receiver : sender;
+                this.scheduleConversationRefresh({
+                    peer: refreshPeer,
+                    serverId,
+                    channelId,
+                    reason: 'receiveMessageReconciled',
+                });
                 this.addLogEntry({ type: 'SUCCESS', msg: `Сообщение подтверждено сервером: ${sender}`, ts: new Date().toLocaleTimeString() });
                 return;
             }
@@ -13791,30 +14545,54 @@ class ZaliInterface {
             const incomingText = this.sanitizeDecryptionErrorText(text);
             const messageId = String(id || '').trim();
             const attachmentKey = incomingAttachments.map(att => `${att.name}:${att.kind}:${att.size}`).join('|');
-            const isDup = msgs.slice(-6).some(m =>
-                (messageId && String(m.id || '').trim() === messageId) ||
-                (m.sender === sender && m.text === incomingText && this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey)
-            );
-            if (isDup) return;
             const ts = timestamp || new Date().toISOString();
-            msgs.push({
-                id: messageId,
-                sender,
-                receiver,
-                text: incomingText,
-                attachments: incomingAttachments,
-                reactions: incomingReactions,
-                myReaction: myReaction || '',
-                timestamp: ts,
-                serverId,
-                channelId,
-            });
+            const existingIndex = messageId
+                ? msgs.findIndex(m => String(m.id || '').trim() === messageId)
+                : msgs.findIndex(m =>
+                    m.sender === sender &&
+                    m.text === incomingText &&
+                    this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey
+                );
+            if (existingIndex >= 0) {
+                const prev = msgs[existingIndex];
+                msgs[existingIndex] = {
+                    ...prev,
+                    id: messageId || prev.id || '',
+                    sender: sender || prev.sender || '',
+                    receiver: receiver || prev.receiver || '',
+                    text: incomingText || prev.text || '',
+                    attachments: incomingAttachments.length ? incomingAttachments : this.normalizeAttachments(prev.attachments),
+                    reactions: incomingReactions.length ? incomingReactions : this.normalizeReactions(prev.reactions),
+                    myReaction: String(myReaction || prev.myReaction || '').trim(),
+                    timestamp: ts || prev.timestamp || new Date().toISOString(),
+                    serverId: serverId || prev.serverId || '',
+                    channelId: channelId || prev.channelId || '',
+                };
+            } else {
+                msgs.push({
+                    id: messageId,
+                    sender,
+                    receiver,
+                    text: incomingText,
+                    attachments: incomingAttachments,
+                    reactions: incomingReactions,
+                    myReaction: myReaction || '',
+                    timestamp: ts,
+                    serverId,
+                    channelId,
+                });
+            }
             this.saveStoredMessageCache();
             if (this.currentServerChatKey() === key) {
                 this.renderMessages();
             } else {
                 this.renderServerInterface();
             }
+            this.scheduleConversationRefresh({
+                serverId,
+                channelId,
+                reason: 'receiveMessageServer',
+            });
             this.addLogEntry({ type: 'SUCCESS', msg: `Получено в канале ${serverId}/${channelId}: ${sender}`, ts: new Date().toLocaleTimeString() });
             return;
         }
@@ -13828,22 +14606,39 @@ class ZaliInterface {
         const incomingText = this.sanitizeDecryptionErrorText(text);
         const messageId = String(id || '').trim();
         const attachmentKey = incomingAttachments.map(att => `${att.name}:${att.kind}:${att.size}`).join('|');
-        const isDup = msgs.slice(-6).some(m =>
-            (messageId && String(m.id || '').trim() === messageId) ||
-            (m.sender === sender && m.text === incomingText && this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey)
-        );
-        if (isDup) return;
         const ts = timestamp || new Date().toISOString();
-        msgs.push({
-            id: messageId,
-            sender,
-            receiver,
-            text: incomingText,
-            attachments: incomingAttachments,
-            reactions: incomingReactions,
-            myReaction: myReaction || '',
-            timestamp: ts
-        });
+        const existingIndex = messageId
+            ? msgs.findIndex(m => String(m.id || '').trim() === messageId)
+            : msgs.findIndex(m =>
+                m.sender === sender &&
+                m.text === incomingText &&
+                this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey
+            );
+        if (existingIndex >= 0) {
+            const prev = msgs[existingIndex];
+            msgs[existingIndex] = {
+                ...prev,
+                id: messageId || prev.id || '',
+                sender: sender || prev.sender || '',
+                receiver: receiver || prev.receiver || '',
+                text: incomingText || prev.text || '',
+                attachments: incomingAttachments.length ? incomingAttachments : this.normalizeAttachments(prev.attachments),
+                reactions: incomingReactions.length ? incomingReactions : this.normalizeReactions(prev.reactions),
+                myReaction: String(myReaction || prev.myReaction || '').trim(),
+                timestamp: ts || prev.timestamp || new Date().toISOString(),
+            };
+        } else {
+            msgs.push({
+                id: messageId,
+                sender,
+                receiver,
+                text: incomingText,
+                attachments: incomingAttachments,
+                reactions: incomingReactions,
+                myReaction: myReaction || '',
+                timestamp: ts
+            });
+        }
         this.saveStoredMessageCache();
         if (!this.S.current) {
             this.switchChat(peer);
@@ -13854,6 +14649,10 @@ class ZaliInterface {
             this.S.unread[peer] = (this.S.unread[peer] || 0) + 1;
             this.renderContacts();
         }
+        this.scheduleConversationRefresh({
+            peer,
+            reason: 'receiveMessageDm',
+        });
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
 
@@ -13927,16 +14726,20 @@ class ZaliInterface {
         this.loadUsers();
         this.loadServers({ silent: true });
         this.renderContactSuggestions();
+        this.refreshAfterKey();
     }
 
     loadHistory(messages) {
         const queue = Array.isArray(messages) ? messages.filter(msg => msg && typeof msg === 'object') : [];
+        const seq = ++this.historyLoadSeq;
         this.trace(`loadHistory count=${queue.length}`);
         this.addLogEntry({ type: 'INFO', msg: `Загрузка истории чата: ${queue.length} сообщений`, ts: new Date().toLocaleTimeString() });
-        const loadSeq = ++this.historyLoadSeq;
         const touchedPeers = new Set();
         const processBatch = (startIndex = 0) => {
-            if (this.historyLoadSeq !== loadSeq) return;
+            if (seq !== this.historyLoadSeq) {
+                this.trace(`loadHistory stale seq=${seq} current=${this.historyLoadSeq}`);
+                return;
+            }
             const startedAt = performance.now();
             let index = startIndex;
             for (; index < queue.length; index += 1) {
@@ -13968,11 +14771,22 @@ class ZaliInterface {
                     text: this.sanitizeDecryptionErrorText(msg.text),
                 };
                 const incomingKey = this.messageRenderKey(incoming);
-                const isDup = arr.some(m => {
-                    if (msgId && String(m.id || '').trim() === msgId) return true;
-                    return this.messageRenderKey(m) === incomingKey;
-                });
-                if (!isDup) {
+                const existingIndex = msgId
+                    ? arr.findIndex(m => String(m.id || '').trim() === msgId)
+                    : arr.findIndex(m => this.messageRenderKey(m) === incomingKey);
+                if (existingIndex >= 0) {
+                    const prev = arr[existingIndex];
+                    arr[existingIndex] = {
+                        ...prev,
+                        ...msg,
+                        id: msgId || msg.id || prev.id || '',
+                        attachments: normalizedAttachments.length ? normalizedAttachments : this.normalizeAttachments(prev.attachments),
+                        reactions: normalizedReactions.length ? normalizedReactions : this.normalizeReactions(prev.reactions),
+                        myReaction: msg.myReaction || prev.myReaction || '',
+                        text: this.sanitizeDecryptionErrorText(msg.text) || prev.text || '',
+                        status: 'sent'
+                    };
+                } else {
                     arr.push({
                         ...msg,
                         id: msgId || msg.id || '',
@@ -13989,7 +14803,6 @@ class ZaliInterface {
                 requestAnimationFrame(() => processBatch(index));
                 return;
             }
-            if (this.historyLoadSeq !== loadSeq) return;
             touchedPeers.forEach(peer => {
                 const arr = this.S.chats[peer];
                 if (Array.isArray(arr)) {
@@ -14418,7 +15231,7 @@ class ZaliInterface {
                 }
             });
             authApiBaseUrl.addEventListener('blur', () => {
-                this.syncAuthNetworkInput({ force: true });
+                this.syncAuthNetworkInput();
             });
         }
         if (authNetworkSaveBtn) {
@@ -15308,6 +16121,7 @@ window.ZaliInterface = ZaliInterface;
                 networkConfig: true,
                 setKey: true,
                 saveStyle: true,
+                saveMessageCache: true,
                 downloadAttachment: true,
                 serverHistory: true,
                 tenor: true,
@@ -15317,14 +16131,15 @@ window.ZaliInterface = ZaliInterface;
             : transport
                 ? {
                     sendMessage: true,
-                    sessionSync: true,
-                    networkConfig: true,
-                    setKey: true,
-                    saveStyle: true,
-                    downloadAttachment: false,
-                    serverHistory: false,
-                    tenor: false,
-                    voice: false,
+                sessionSync: true,
+                networkConfig: true,
+                setKey: true,
+                saveStyle: true,
+                saveMessageCache: true,
+                downloadAttachment: false,
+                serverHistory: false,
+                tenor: false,
+                voice: false,
                     windowDrag: false,
                 }
                 : {};
@@ -15418,8 +16233,6 @@ window.ZaliInterface = ZaliInterface;
         });
     }
 })();
-
-
 
 </script>
 </body>

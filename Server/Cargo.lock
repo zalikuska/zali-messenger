@@ -2873,6 +2873,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "jsonwebtoken",
+ "rand",
  "serde",
  "serde_json",
  "sqlx",

@@ -3132,7 +3132,7 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 0;
     overflow-y: auto;
     padding: 18px 22px;
-    overflow-anchor: auto;
+    overflow-anchor: none;
 }
 
 .msg-window-spacer {
@@ -3146,6 +3146,7 @@ body[data-nav-mode="servers"] .contacts {
     display: flex;
     gap: 9px;
     align-items: flex-end;
+    position: relative;
     margin: 0 0 calc(var(--msg-gap) * 1px);
 }
 
@@ -3168,12 +3169,27 @@ body[data-nav-mode="servers"] .contacts {
 
 .msg.single,
 .msg.group-start {
-    margin-top: calc((var(--msg-gap) + 1) * 1px);
+    margin-top: 12px;
 }
 
 .msg.group-mid,
 .msg.group-end {
-    margin-top: calc(var(--msg-gap) * 1px);
+    margin-top: 2px;
+}
+
+.msg.group-start::before {
+    content: "";
+    position: absolute;
+    left: 34px;
+    right: 34px;
+    top: -7px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.09) 18%, rgba(255,255,255,.09) 82%, transparent);
+    pointer-events: none;
+}
+
+.msg.out.group-start::before {
+    background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb),.10) 18%, rgba(var(--accent-rgb),.10) 82%, transparent);
 }
 
 .msg-ava {
@@ -3208,6 +3224,54 @@ body[data-nav-mode="servers"] .contacts {
 
 .msg.out .bwrap {
     align-items: flex-end;
+}
+
+.msg-time-anchor {
+    position: relative;
+}
+
+.msg-time {
+    position: absolute;
+    left: calc(100% + 12px);
+    right: auto;
+    top: 50%;
+    bottom: auto;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    width: max-content;
+    min-height: 14px;
+    padding: 0;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    font-variant-numeric: tabular-nums;
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity .16s ease, color .16s ease;
+    pointer-events: none;
+}
+
+.msg.time-visible .msg-time {
+    opacity: .56;
+}
+
+.msg:hover .msg-time,
+.msg:focus-within .msg-time {
+    opacity: .68;
+}
+
+.msg.out .msg-time {
+    left: auto;
+    right: calc(100% + 12px);
+    color: var(--text3);
 }
 
 .call-card {

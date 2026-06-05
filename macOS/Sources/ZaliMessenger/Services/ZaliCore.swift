@@ -3,31 +3,18 @@ import CoreBridge
 
 class ZaliCore {
     static let shared = ZaliCore()
-    static let sharedMessageKey = "ZALI_SECRET_E2E_KEY_2026"
 
-    static func normalizedKeyPart(_ value: String?) -> String {
-        String(value ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\s+", with: "_", options: .regularExpression)
-    }
-
-    static func conversationMessageKey(
+    static func candidateMessageKeys(
+        currentKey: String,
         participantA: String?,
         participantB: String?,
         serverId: String? = nil,
-        channelId: String? = nil
-    ) -> String {
-        let pepper = sharedMessageKey
-        let sid = normalizedKeyPart(serverId)
-        let cid = normalizedKeyPart(channelId)
-        if !sid.isEmpty && !cid.isEmpty {
-            return "zali-e2e:v1:server:\(sid):\(cid):\(pepper)"
-        }
-
-        let a = normalizedKeyPart(participantA)
-        let b = normalizedKeyPart(participantB)
-        let pair = [a, b].filter { !$0.isEmpty }.sorted().joined(separator: ":")
-        return "zali-e2e:v1:dm:\(pair):\(pepper)"
+        channelId: String? = nil,
+        keyVersion: Int? = nil
+    ) -> [String] {
+        let trimmedCurrentKey = currentKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCurrentKey.isEmpty else { return [] }
+        return [trimmedCurrentKey]
     }
 
     struct AttachmentPayload: Codable {
@@ -42,6 +29,7 @@ class ZaliCore {
         let sender: String
         let text: String
         let timestamp: UInt64
+        let keyVersion: Int?
         let attachments: [AttachmentPayload]?
     }
     
@@ -73,6 +61,7 @@ class ZaliCore {
         text: String,
         output: String,
         key: String,
+        keyVersion: Int = 2,
         attachments: [[String: Any]] = []
     ) -> Bool {
         guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -87,6 +76,7 @@ class ZaliCore {
         if !attachments.isEmpty {
             args["attachments"] = attachments
         }
+        args["key_version"] = max(1, keyVersion)
         if let result = dispatch(addressCommand: "zali_net:pack_message", args: args),
            let success = result["success"] as? Bool {
             return success

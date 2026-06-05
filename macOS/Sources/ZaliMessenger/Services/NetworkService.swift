@@ -2,7 +2,6 @@ import Foundation
 
 class NetworkService: NSObject, URLSessionWebSocketDelegate {
     static let shared = NetworkService()
-    static let sharedMessageKey = ZaliCore.sharedMessageKey
     
     private let connectionQueue = DispatchQueue(label: "zali.network.websocket")
     private let configQueue = DispatchQueue(label: "zali.network.config")
@@ -12,6 +11,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private let sessionUsernameStorageKey = "zali_session_username_v1"
     private let sessionTokenStorageKey = "zali_session_token_v1"
     private let pendingOutboxStorageKey = "zali_pending_outbox_v1"
+    private let messageCacheStorageKey = "zali_message_cache_v1"
     
     private var webSocketTask: URLSessionWebSocketTask?
     // Separate session for WebSocket (needs delegate); shared session for HTTP requests
@@ -26,6 +26,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private var reconnectWorkItem: DispatchWorkItem?
     private var receiveLoopTask: Task<Void, Never>?
     private var pendingOutboxJSON: String = "[]"
+    private var messageCacheJSON: String = #"{"chats":{},"serverChats":{}}"#
     
     private func trace(_ message: String) {
         print("[ZALI][NET] \(message)")
@@ -33,6 +34,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     
     // Callback to notify UI when a message is successfully received and unpacked
     var onMessageReceived: ((_ id: String, _ clientId: String?, _ sender: String, _ receiver: String, _ text: String, _ attachments: [[String: Any]], _ serverId: String?, _ channelId: String?) -> Void)?
+    var onMessageDecryptFailed: ((_ id: String, _ sender: String, _ receiver: String, _ serverId: String?, _ channelId: String?) -> Void)?
     var onReactionUpdated: ((_ payload: [String: Any]) -> Void)?
     var onAvatarChanged: ((_ username: String, _ deleted: Bool) -> Void)?
     var onVoiceEvent: ((_ payload: [String: Any]) -> Void)?
@@ -52,6 +54,10 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         pendingOutboxJSON = (UserDefaults.standard.string(forKey: pendingOutboxStorageKey) ?? "[]").trimmingCharacters(in: .whitespacesAndNewlines)
         if pendingOutboxJSON.isEmpty {
             pendingOutboxJSON = "[]"
+        }
+        messageCacheJSON = (UserDefaults.standard.string(forKey: messageCacheStorageKey) ?? #"{"chats":{},"serverChats":{}}"#).trimmingCharacters(in: .whitespacesAndNewlines)
+        if messageCacheJSON.isEmpty {
+            messageCacheJSON = #"{"chats":{},"serverChats":{}}"#
         }
         trace("init user=\(currentUsername) hasToken=\(authToken != nil) keySet=\(!currentKey.isEmpty) pendingBytes=\(pendingOutboxJSON.count)")
     }
@@ -129,6 +135,22 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             self.pendingOutboxJSON = trimmed.isEmpty ? "[]" : trimmed
             UserDefaults.standard.set(self.pendingOutboxJSON, forKey: self.pendingOutboxStorageKey)
             self.trace("pendingOutbox saved bytes=\(self.pendingOutboxJSON.count)")
+        }
+    }
+
+    func currentMessageCacheJSON() -> String {
+        connectionQueue.sync {
+            messageCacheJSON
+        }
+    }
+
+    func saveMessageCacheJSON(_ value: String) {
+        connectionQueue.async { [weak self] in
+            guard let self else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.messageCacheJSON = trimmed.isEmpty ? #"{"chats":{},"serverChats":{}}"# : trimmed
+            UserDefaults.standard.set(self.messageCacheJSON, forKey: self.messageCacheStorageKey)
+            self.trace("messageCache saved bytes=\(self.messageCacheJSON.count)")
         }
     }
     
@@ -333,6 +355,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             let sender: String
             let receiver: String
             let filename: String
+            let keyVersion: Int?
+            let key_version: Int?
             let serverId: String?
             let channelId: String?
             let server_id: String?
@@ -381,8 +405,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         trace("handleWebSocketMessage message id=\(wsMsg.id) sender=\(wsMsg.sender) receiver=\(wsMsg.receiver) server=\(serverId ?? "nil") channel=\(channelId ?? "nil") currentUser=\(currentUsername) clientId=\(wsMsg.clientId ?? wsMsg.client_id ?? "")")
 
         // Server messages are broadcast to all connected clients.
-        // DM messages still only matter for the current user as receiver.
-        if serverId != nil || wsMsg.receiver == currentUsername {
+        // For DMs, accept messages that involve the current account on either side,
+        // so a second session of the same user also receives its own outgoing echoes.
+        if serverId != nil || wsMsg.receiver == currentUsername || wsMsg.sender == currentUsername {
             downloadMessage(messageId: wsMsg.id) { [weak self] fileURL in
                 guard let fileURL = fileURL else { return }
                 self?.trace("download complete messageId=\(wsMsg.id) path=\(fileURL.path)")
@@ -398,17 +423,14 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                         try? FileManager.default.removeItem(atPath: tempDir)
                     }
 
-                    let derivedKey = ZaliCore.conversationMessageKey(
+                    let candidateKeys = ZaliCore.candidateMessageKeys(
+                        currentKey: self?.currentKey ?? "",
                         participantA: wsMsg.sender,
                         participantB: wsMsg.receiver,
                         serverId: serverId,
-                        channelId: channelId
+                        channelId: channelId,
+                        keyVersion: wsMsg.keyVersion ?? wsMsg.key_version
                     )
-                    let candidateKeys = [
-                        self?.currentKey ?? "",
-                        derivedKey,
-                        Self.sharedMessageKey,
-                    ]
                     if let unpacked = ZaliCore.shared.unpackMessage(archivePath: fileURL.path, tempDir: tempDir, keys: candidateKeys) {
                         self?.trace("unpack success messageId=\(wsMsg.id) sender=\(unpacked.sender) textBytes=\(unpacked.text.count) attachments=\((unpacked.attachments ?? []).count)")
                         let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
@@ -434,13 +456,16 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                             .map { String($0.prefix(12)) }
                             .joined(separator: ",")
                         self?.trace("unpack failed messageId=\(wsMsg.id) keysTried=\(keyPreview.isEmpty ? "none" : keyPreview) tempDir=\(tempDir)")
+                        DispatchQueue.main.async {
+                            self?.onMessageDecryptFailed?(wsMsg.id, wsMsg.sender, wsMsg.receiver, serverId, channelId)
+                        }
                     }
                 }
             }
         }
     }
     
-    func uploadMessage(sender: String, receiver: String, clientId: String, fileURL: URL, serverId: String? = nil, channelId: String? = nil, completion: @escaping (Bool, String?) -> Void) {
+    func uploadMessage(sender: String, receiver: String, clientId: String, fileURL: URL, serverId: String? = nil, channelId: String? = nil, keyVersion: Int = 2, completion: @escaping (Bool, String?) -> Void) {
         trace("upload start sender=\(sender) receiver=\(receiver) clientId=\(clientId) server=\(serverId ?? "nil") channel=\(channelId ?? "nil") file=\(fileURL.lastPathComponent)")
         guard let uploadURL = URL(string: "\(serverURL)/api/upload") else {
             completion(false, nil)
@@ -479,6 +504,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             try write("--\(boundary)\r\n")
             try write("Content-Disposition: form-data; name=\"client_id\"\r\n\r\n")
             try write(clientId)
+            try write("\r\n")
+
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"key_version\"\r\n\r\n")
+            try write(String(max(1, keyVersion)))
             try write("\r\n")
 
             try write("--\(boundary)\r\n")
@@ -549,6 +579,67 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         }.resume()
     }
 
+    func setMessageReaction(messageId: String, emoji: String, completion: @escaping (Bool, [String: Any]?) -> Void) {
+        let trimmedMessageId = messageId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmoji = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        trace("setMessageReaction start messageId=\(trimmedMessageId) emoji=\(trimmedEmoji)")
+
+        guard !trimmedMessageId.isEmpty else {
+            completion(false, nil)
+            return
+        }
+
+        guard let baseURL = URL(string: serverURL) else {
+            completion(false, nil)
+            return
+        }
+
+        let requestURL = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("message")
+            .appendingPathComponent(trimmedMessageId)
+            .appendingPathComponent("reaction")
+
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let authToken, !authToken.isEmpty {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        guard let body = try? JSONSerialization.data(withJSONObject: ["emoji": trimmedEmoji], options: []) else {
+            completion(false, nil)
+            return
+        }
+        request.httpBody = body
+
+        httpSession.dataTask(with: request) { data, response, error in
+            if let error = error {
+                self.trace("setMessageReaction failed messageId=\(trimmedMessageId) err=\(error.localizedDescription)")
+                completion(false, nil)
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                self.trace("setMessageReaction missing response messageId=\(trimmedMessageId)")
+                completion(false, nil)
+                return
+            }
+
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                let bodyPreview = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                self.trace("setMessageReaction rejected http=\(httpResponse.statusCode) messageId=\(trimmedMessageId) body=\(bodyPreview.prefix(200))")
+                completion(false, nil)
+                return
+            }
+
+            let payload = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] }
+            self.trace("setMessageReaction success messageId=\(trimmedMessageId) hasPayload=\(payload != nil)")
+            completion(true, payload)
+        }.resume()
+    }
+
     func fetchUsers(completion: @escaping ([String]) -> Void) {
         trace("fetchUsers start user=\(currentUsername)")
         guard let usersURL = URL(string: "\(serverURL)/api/users") else {
@@ -614,6 +705,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         let receiver: String
         let filename: String
         let timestamp: String
+        let keyVersion: Int?
+        let key_version: Int?
         let serverId: String?
         let channelId: String?
         let server_id: String?
@@ -628,9 +721,35 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     }
 
     func fetchMessages(for user: String, completion: @escaping ([RemoteMessageRecord]) -> Void) {
-        trace("fetchMessages start user=\(user)")
-        guard let messagesURL = URL(string: "\(serverURL)/api/messages/\(user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? user)") else {
-            completion([])
+        self.fetchMessagesPage(for: user, limit: 200, offset: 0, accumulated: []) { messages in
+            completion(messages)
+        }
+    }
+
+    func fetchServerMessages(serverId: String, channelId: String, completion: @escaping ([RemoteMessageRecord]) -> Void) {
+        self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: 200, offset: 0, accumulated: []) { messages in
+            completion(messages)
+        }
+    }
+
+    private func fetchMessagesPage(
+        for user: String,
+        limit: Int,
+        offset: Int,
+        accumulated: [RemoteMessageRecord],
+        completion: @escaping ([RemoteMessageRecord]) -> Void
+    ) {
+        trace("fetchMessages page start user=\(user) limit=\(limit) offset=\(offset)")
+        guard var components = URLComponents(string: "\(serverURL)/api/messages/\(user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? user)") else {
+            completion(accumulated)
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
+        guard let messagesURL = components.url else {
+            completion(accumulated)
             return
         }
 
@@ -645,27 +764,47 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                   (200..<300).contains(httpResponse.statusCode),
                   let data = data else {
                 self.trace("fetchMessages fallback user=\(user) http=\((response as? HTTPURLResponse)?.statusCode ?? -1) err=\(error?.localizedDescription ?? "nil")")
-                completion([])
+                completion(accumulated)
                 return
             }
 
             let decoder = JSONDecoder()
             if let messages = try? decoder.decode([RemoteMessageRecord].self, from: data) {
-                self.trace("fetchMessages success user=\(user) count=\(messages.count) ids=\(messages.prefix(10).map { $0.id }.joined(separator: ","))")
-                completion(messages)
+                let merged = accumulated + messages
+                self.trace("fetchMessages page success user=\(user) offset=\(offset) count=\(messages.count) total=\(merged.count)")
+                if messages.count < limit {
+                    completion(merged)
+                } else {
+                    self.fetchMessagesPage(for: user, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
+                }
             } else {
                 self.trace("fetchMessages decode failed user=\(user) bytes=\(data.count)")
-                completion([])
+                completion(accumulated)
             }
         }.resume()
     }
 
-    func fetchServerMessages(serverId: String, channelId: String, completion: @escaping ([RemoteMessageRecord]) -> Void) {
-        trace("fetchServerMessages start server=\(serverId) channel=\(channelId)")
+    private func fetchServerMessagesPage(
+        serverId: String,
+        channelId: String,
+        limit: Int,
+        offset: Int,
+        accumulated: [RemoteMessageRecord],
+        completion: @escaping ([RemoteMessageRecord]) -> Void
+    ) {
+        trace("fetchServerMessages page start server=\(serverId) channel=\(channelId) limit=\(limit) offset=\(offset)")
         let sid = serverId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverId
         let cid = channelId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? channelId
-        guard let messagesURL = URL(string: "\(serverURL)/api/servers/\(sid)/channels/\(cid)/messages") else {
-            completion([])
+        guard var components = URLComponents(string: "\(serverURL)/api/servers/\(sid)/channels/\(cid)/messages") else {
+            completion(accumulated)
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
+        guard let messagesURL = components.url else {
+            completion(accumulated)
             return
         }
 
@@ -680,17 +819,22 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                   (200..<300).contains(httpResponse.statusCode),
                   let data = data else {
                 self.trace("fetchServerMessages fallback server=\(serverId) channel=\(channelId) http=\((response as? HTTPURLResponse)?.statusCode ?? -1) err=\(error?.localizedDescription ?? "nil")")
-                completion([])
+                completion(accumulated)
                 return
             }
 
             let decoder = JSONDecoder()
             if let messages = try? decoder.decode([RemoteMessageRecord].self, from: data) {
-                self.trace("fetchServerMessages success server=\(serverId) channel=\(channelId) count=\(messages.count) ids=\(messages.prefix(10).map { $0.id }.joined(separator: ","))")
-                completion(messages)
+                let merged = accumulated + messages
+                self.trace("fetchServerMessages page success server=\(serverId) channel=\(channelId) offset=\(offset) count=\(messages.count) total=\(merged.count)")
+                if messages.count < limit {
+                    completion(merged)
+                } else {
+                    self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
+                }
             } else {
                 self.trace("fetchServerMessages decode failed server=\(serverId) channel=\(channelId) bytes=\(data.count)")
-                completion([])
+                completion(accumulated)
             }
         }.resume()
     }

@@ -1,9 +1,10 @@
 use crate::bus::ZaliBus;
 use crate::loader::ZaliModule;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
+use std::convert::TryFrom;
 use zali_sdk::ZaliSession;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -22,8 +23,18 @@ pub struct MessageContent {
     pub sender: String,
     pub text: String,
     pub timestamp: u64,
+    #[serde(default = "default_archive_key_version")]
+    pub key_version: u8,
     #[serde(default)]
     pub attachments: Vec<AttachmentContent>,
+}
+
+fn default_archive_key_version() -> u8 {
+    1
+}
+
+fn default_pack_key_version() -> u8 {
+    2
 }
 
 pub struct ZaliNet;
@@ -50,6 +61,13 @@ impl ZaliModule for ZaliNet {
                 let output_path = args["output_path"]
                     .as_str()
                     .ok_or("Missing output_path parameter")?;
+                let key_version = args
+                    .get("key_version")
+                    .or_else(|| args.get("keyVersion"))
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .unwrap_or_else(default_pack_key_version);
                 let mut archive_files = Vec::new();
                 let mut attachment_meta = Vec::new();
 
@@ -92,10 +110,7 @@ impl ZaliModule for ZaliNet {
                             .and_then(|v| v.as_str())
                             .unwrap_or("application/octet-stream");
 
-                        let kind = item
-                            .get("kind")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("file");
+                        let kind = item.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
 
                         let size = item
                             .get("size")
@@ -120,6 +135,7 @@ impl ZaliModule for ZaliNet {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_secs(),
+                    key_version,
                     attachments: attachment_meta,
                 };
 
@@ -174,21 +190,15 @@ impl ZaliModule for ZaliNet {
                 let content: MessageContent =
                     serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
 
-                // Decrypt the text payload if it's encrypted. If decryption fails,
-                // keep the attachment metadata and avoid leaking the internal crypto
-                // error into the message body.
-                let (decrypted_text, decryption_error) =
-                    match crate::crypto::decrypt_message_text(&content.text, key) {
-                        Ok(text) => (text, None::<String>),
-                        Err(error) => (String::new(), Some(error)),
-                    };
+                let decrypted_text = crate::crypto::decrypt_message_text(&content.text, key)?;
 
                 Ok(json!({
                     "sender": content.sender,
                     "text": decrypted_text,
                     "timestamp": content.timestamp,
+                    "keyVersion": content.key_version,
                     "attachments": content.attachments,
-                    "decryptionError": decryption_error,
+                    "decryptionError": null,
                 }))
             }),
         );
@@ -242,6 +252,7 @@ mod tests {
 
         assert_eq!(unpacked["sender"].as_str(), Some("Zalikus"));
         assert_eq!(unpacked["text"].as_str(), Some(text));
+        assert_eq!(unpacked["keyVersion"].as_u64(), Some(2));
     }
 
     #[test]
@@ -266,6 +277,7 @@ mod tests {
                     "text": "Фото",
                     "key": "secret",
                     "output_path": archive_path.to_string_lossy(),
+                    "key_version": 7,
                     "attachments": [
                         {
                             "path": attachment_path.to_string_lossy(),
@@ -296,5 +308,6 @@ mod tests {
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0]["name"].as_str(), Some("photo.png"));
         assert_eq!(attachments[0]["mimeType"].as_str(), Some("image/png"));
+        assert_eq!(unpacked["keyVersion"].as_u64(), Some(7));
     }
 }

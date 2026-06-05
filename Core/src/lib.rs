@@ -110,7 +110,10 @@ pub unsafe extern "C" fn zali_pack_message(
     };
     let bus = &guard.bus;
 
-    let Some(key) = std::env::var("ZALI_E2E_KEY").ok().filter(|v| !v.trim().is_empty()) else {
+    let Some(key) = std::env::var("ZALI_E2E_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    else {
         return false;
     };
 
@@ -150,7 +153,10 @@ pub unsafe extern "C" fn zali_unpack_message(
     };
     let bus = &guard.bus;
 
-    let Some(key) = std::env::var("ZALI_E2E_KEY").ok().filter(|v| !v.trim().is_empty()) else {
+    let Some(key) = std::env::var("ZALI_E2E_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    else {
         return false;
     };
 

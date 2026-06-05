@@ -560,6 +560,8 @@ struct Message {
     receiver: String,
     filename: String,
     timestamp: DateTime<Utc>,
+    #[serde(rename = "keyVersion", skip_serializing_if = "Option::is_none")]
+    key_version: Option<i64>,
     server_id: Option<String>,
     channel_id: Option<String>,
 }
@@ -579,6 +581,8 @@ struct MessageResponse {
     receiver: String,
     filename: String,
     timestamp: DateTime<Utc>,
+    #[serde(rename = "keyVersion", skip_serializing_if = "Option::is_none")]
+    key_version: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     server_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -586,6 +590,24 @@ struct MessageResponse {
     reactions: Vec<ReactionSummary>,
     #[serde(rename = "myReaction")]
     my_reaction: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct ConversationKeyRequest {
+    peer: Option<String>,
+    serverId: Option<String>,
+    channelId: Option<String>,
+    key: Option<String>,
+    keyVersion: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(non_snake_case)]
+struct ConversationKeyResponse {
+    scopeKey: String,
+    key: String,
+    keyVersion: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
@@ -1003,7 +1025,8 @@ async fn main() {
             sender TEXT NOT NULL,
             receiver TEXT NOT NULL,
             filename TEXT NOT NULL,
-            timestamp DATETIME NOT NULL
+            timestamp DATETIME NOT NULL,
+            key_version INTEGER NOT NULL DEFAULT 2
         )",
     )
     .execute(&pool)
@@ -1019,6 +1042,10 @@ async fn main() {
         .await
         .ok();
     sqlx::query("ALTER TABLE messages ADD COLUMN client_id TEXT")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE messages ADD COLUMN key_version INTEGER")
         .execute(&pool)
         .await
         .ok();
@@ -1058,6 +1085,18 @@ async fn main() {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы avatars");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS conversation_keys (
+            scope_key TEXT PRIMARY KEY,
+            key_value TEXT NOT NULL,
+            key_version INTEGER NOT NULL DEFAULT 2,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы conversation_keys");
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS servers (
@@ -1409,6 +1448,7 @@ async fn main() {
             "/api/servers/:server_id/channels/:channel_id/messages",
             get(get_server_messages).post(upload_server_message),
         )
+        .route("/api/conversation-key", post(resolve_conversation_key))
         .route("/api/messages/:user", get(get_messages))
         .route("/api/message/:id/reaction", post(set_message_reaction))
         .route("/api/upload", post(upload_message))
@@ -1489,6 +1529,11 @@ async fn ensure_message_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .execute(pool)
             .await?;
     }
+    if !column_exists(pool, "key_version").await? {
+        sqlx::query("ALTER TABLE messages ADD COLUMN key_version INTEGER")
+            .execute(pool)
+            .await?;
+    }
     sqlx::query("DROP INDEX IF EXISTS idx_messages_client_id")
         .execute(pool)
         .await
@@ -1502,6 +1547,36 @@ async fn ensure_message_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await
         .ok();
     Ok(())
+}
+
+fn conversation_scope_key(
+    auth_user: &str,
+    peer: Option<&str>,
+    server_id: Option<&str>,
+    channel_id: Option<&str>,
+) -> Option<String> {
+    let sid = server_id.unwrap_or("").trim();
+    let cid = channel_id.unwrap_or("").trim();
+    if !sid.is_empty() && !cid.is_empty() {
+        return Some(format!("server:{}:{}", sid, cid));
+    }
+
+    let peer = peer.unwrap_or("").trim();
+    if peer.is_empty() || auth_user.trim().is_empty() {
+        return None;
+    }
+    let mut pair = vec![auth_user.trim().to_string(), peer.to_string()];
+    pair.sort();
+    Some(format!("dm:{}:{}", pair.join(":"), "v2"))
+}
+
+fn random_conversation_key() -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let mut bytes = [0u8; 32];
+    let mut rng = rand::thread_rng();
+    use rand::RngCore as _;
+    rng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 async fn seed_default_servers(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -4397,7 +4472,7 @@ async fn delete_channel(
     };
 
     let messages = match sqlx::query_as::<_, Message>(
-        "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+        "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
          FROM messages
          WHERE server_id = ? AND channel_id = ?",
     )
@@ -5458,7 +5533,7 @@ async fn get_server_messages(
     let offset = page.offset.unwrap_or(0).max(0) as i64;
     let query = if limit > 0 {
         sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
              FROM messages
              WHERE server_id = ? AND channel_id = ?
              ORDER BY timestamp ASC, id ASC
@@ -5470,7 +5545,7 @@ async fn get_server_messages(
         .bind(offset)
     } else {
         sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
              FROM messages
              WHERE server_id = ? AND channel_id = ?
              ORDER BY timestamp ASC, id ASC",
@@ -5516,6 +5591,7 @@ async fn get_server_messages(
                         receiver: msg.receiver,
                         filename: msg.filename,
                         timestamp: msg.timestamp,
+                        key_version: msg.key_version,
                         server_id: msg.server_id,
                         channel_id: msg.channel_id,
                         reactions,
@@ -5554,7 +5630,7 @@ async fn get_messages(
     let offset = page.offset.unwrap_or(0).max(0) as i64;
     let query = if limit > 0 {
         sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
              FROM messages
              WHERE server_id IS NULL AND (receiver = ? OR sender = ?)
              ORDER BY timestamp ASC, id ASC
@@ -5566,7 +5642,7 @@ async fn get_messages(
         .bind(offset)
     } else {
         sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
              FROM messages
              WHERE server_id IS NULL AND (receiver = ? OR sender = ?)
              ORDER BY timestamp ASC, id ASC",
@@ -5612,6 +5688,7 @@ async fn get_messages(
                         receiver: msg.receiver,
                         filename: msg.filename,
                         timestamp: msg.timestamp,
+                        key_version: msg.key_version,
                         server_id: msg.server_id,
                         channel_id: msg.channel_id,
                         reactions,
@@ -5898,7 +5975,7 @@ async fn find_message_by_client_scope(
     }
 
     sqlx::query_as::<_, Message>(
-        "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+        "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
          FROM messages
          WHERE client_id = ?
            AND sender = ?
@@ -5958,6 +6035,7 @@ async fn upload_message_with_context(
     let mut server_id = String::new();
     let mut channel_id = String::new();
     let mut client_id = String::new();
+    let mut key_version: Option<i64> = None;
     let mut file_data: Vec<u8> = Vec::new();
 
     // Parse multipart fields with proper error handling (no unwrap)
@@ -6001,6 +6079,15 @@ async fn upload_message_with_context(
                             return StatusCode::BAD_REQUEST.into_response();
                         }
                     },
+                    "key_version" | "keyVersion" => match field.text().await {
+                        Ok(v) => {
+                            key_version = v.trim().parse::<i64>().ok().filter(|value| *value > 0);
+                        }
+                        Err(e) => {
+                            error!("Ошибка чтения поля key_version: {}", e);
+                            return StatusCode::BAD_REQUEST.into_response();
+                        }
+                    },
                     "file" => match field.bytes().await {
                         Ok(b) => file_data = b.to_vec(),
                         Err(e) => {
@@ -6041,6 +6128,7 @@ async fn upload_message_with_context(
     }
 
     let client_id = client_id.trim().to_string();
+    let key_version = key_version.unwrap_or(2);
     let request_sender = sender.trim().to_string();
     let sender = auth_user.clone();
     if !request_sender.is_empty() && request_sender != sender {
@@ -6197,8 +6285,8 @@ async fn upload_message_with_context(
     }
 
     let insert_result = sqlx::query(
-        "INSERT INTO messages (id, client_id, sender, receiver, filename, timestamp, server_id, channel_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO messages (id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(if client_id.is_empty() { None::<&str> } else { Some(client_id.as_str()) })
@@ -6206,6 +6294,7 @@ async fn upload_message_with_context(
     .bind(&receiver)
     .bind(&filename)
     .bind(timestamp)
+    .bind(key_version)
     .bind(&server_id_opt)
     .bind(&channel_id_opt)
     .execute(&state.db)
@@ -6243,6 +6332,7 @@ async fn upload_message_with_context(
                 receiver: receiver.clone(),
                 filename,
                 timestamp,
+                key_version: Some(key_version),
                 server_id: server_id_opt.clone(),
                 channel_id: channel_id_opt.clone(),
             };
@@ -6311,6 +6401,96 @@ async fn upload_message_with_context(
     }
 }
 
+async fn resolve_conversation_key(
+    AuthenticatedUser(auth_user): AuthenticatedUser,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<ConversationKeyRequest>,
+) -> impl IntoResponse {
+    let peer = payload.peer.as_deref();
+    let server_id = payload.serverId.as_deref();
+    let channel_id = payload.channelId.as_deref();
+
+    let Some(scope_key) = conversation_scope_key(&auth_user, peer, server_id, channel_id) else {
+        return (StatusCode::BAD_REQUEST, "Неверный scope ключа").into_response();
+    };
+
+    if let (Some(sid), Some(cid)) = (server_id, channel_id) {
+        if !can_access_channel(&state.db, sid, cid, &auth_user, "view")
+            .await
+            .unwrap_or(false)
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+
+    let key_version = payload.keyVersion.unwrap_or(2).max(1);
+    let provided_key = payload
+        .key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    match sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT scope_key, key_value, key_version FROM conversation_keys WHERE scope_key = ? LIMIT 1",
+    )
+    .bind(&scope_key)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some((scope_key, key_value, key_version))) => {
+            return Json(ConversationKeyResponse {
+                scopeKey: scope_key,
+                key: key_value,
+                keyVersion: key_version,
+            })
+            .into_response();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            error!("Ошибка чтения conversation key {}: {}", scope_key, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    let key_value = provided_key.unwrap_or_else(random_conversation_key);
+    match sqlx::query(
+        "INSERT OR IGNORE INTO conversation_keys (scope_key, key_value, key_version)
+         VALUES (?, ?, ?)",
+    )
+    .bind(&scope_key)
+    .bind(&key_value)
+    .bind(key_version)
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => {
+            match sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT scope_key, key_value, key_version FROM conversation_keys WHERE scope_key = ? LIMIT 1",
+            )
+            .bind(&scope_key)
+            .fetch_one(&state.db)
+            .await
+            {
+                Ok((scope_key, key_value, key_version)) => Json(ConversationKeyResponse {
+                    scopeKey: scope_key,
+                    key: key_value,
+                    keyVersion: key_version,
+                })
+                .into_response(),
+                Err(e) => {
+                    error!("Ошибка чтения созданного conversation key {}: {}", scope_key, e);
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        Err(e) => {
+            error!("Ошибка сохранения conversation key {}: {}", scope_key, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 async fn download_upload_file(
     AxumPath(filename): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
@@ -6318,7 +6498,7 @@ async fn download_upload_file(
 ) -> impl IntoResponse {
     info!("UPLOAD download start file={} auth={}", filename, auth_user);
     match sqlx::query_as::<_, Message>(
-        "SELECT id, client_id, sender, receiver, filename, timestamp, server_id, channel_id
+        "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
          FROM messages
          WHERE filename = ?
          LIMIT 1",

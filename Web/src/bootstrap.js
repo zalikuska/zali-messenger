@@ -41,6 +41,7 @@
                 networkConfig: true,
                 setKey: true,
                 saveStyle: true,
+                saveMessageCache: true,
                 downloadAttachment: true,
                 serverHistory: true,
                 tenor: true,
@@ -50,14 +51,15 @@
             : transport
                 ? {
                     sendMessage: true,
-                    sessionSync: true,
-                    networkConfig: true,
-                    setKey: true,
-                    saveStyle: true,
-                    downloadAttachment: false,
-                    serverHistory: false,
-                    tenor: false,
-                    voice: false,
+                sessionSync: true,
+                networkConfig: true,
+                setKey: true,
+                saveStyle: true,
+                saveMessageCache: true,
+                downloadAttachment: false,
+                serverHistory: false,
+                tenor: false,
+                voice: false,
                     windowDrag: false,
                 }
                 : {};

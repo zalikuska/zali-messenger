@@ -103,10 +103,19 @@ class ZaliStyler {
 
     _loadStoredKey() {
         try {
+            const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
+            if (scope) {
+                const rawMap = localStorage.getItem('zali_conversation_keys_v1');
+                if (rawMap) {
+                    const storedMap = JSON.parse(rawMap) || {};
+                    const scoped = String(storedMap[scope] || '').trim();
+                    if (scoped) return scoped;
+                }
+            }
             const stored = (localStorage.getItem('zali_crypto_key_v1') || '').trim();
             if (stored) return stored;
         } catch (e) {}
-        return (window.__ZALI_SAVED_KEY || '').trim() || 'ZALI_SECRET_E2E_KEY_2026';
+        return (window.__ZALI_SAVED_KEY || '').trim() || '';
     }
 
     /**
@@ -215,6 +224,19 @@ class ZaliStyler {
 
         try {
             window.__ZALI_SAVED_KEY = this.currentKey;
+        } catch (e) {}
+        try {
+            const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
+            if (scope) {
+                const raw = localStorage.getItem('zali_conversation_keys_v1');
+                const stored = raw ? (JSON.parse(raw) || {}) : {};
+                if (this.currentKey) {
+                    stored[scope] = this.currentKey;
+                } else {
+                    delete stored[scope];
+                }
+                localStorage.setItem('zali_conversation_keys_v1', JSON.stringify(stored));
+            }
         } catch (e) {}
 
         const input = document.getElementById('inputCryptoKey');

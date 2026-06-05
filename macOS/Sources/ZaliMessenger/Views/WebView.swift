@@ -22,7 +22,6 @@ class ZaliNativeWebView: WKWebView {
 }
 
 struct WebView: NSViewRepresentable {
-    private static let sharedMessageKey = ZaliCore.sharedMessageKey
     class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         weak var webView: WKWebView?
         private var directHistoryReloadToken = UUID()
@@ -180,8 +179,9 @@ struct WebView: NSViewRepresentable {
             print("[ZALI][WEBVIEW] reloadHistory start user=\(username) keySet=\(!NetworkService.shared.currentKey.isEmpty)")
             let reloadToken = UUID()
             directHistoryReloadToken = reloadToken
-            NetworkService.shared.fetchMessages(for: username) { [weak self] records in
+            Task { [weak self] in
                 guard let self = self else { return }
+                let records = await self.fetchMessagesAsync(for: username)
                 guard self.directHistoryReloadToken == reloadToken else { return }
                 print("[ZALI][WEBVIEW] reloadHistory fetched user=\(username) count=\(records.count)")
 
@@ -194,88 +194,31 @@ struct WebView: NSViewRepresentable {
                     return
                 }
 
-                var renderedMessages: [[String: Any]] = []
+                let renderedMessages = await self.renderHistoryRecords(
+                    records: records,
+                    serverId: nil,
+                    channelId: nil,
+                    logPrefix: "reloadHistory"
+                )
 
-                func processRecord(at index: Int) {
-                    guard self.directHistoryReloadToken == reloadToken else { return }
-                    guard index < records.count else {
-                        renderedMessages.sort {
-                            let lhs = ($0["timestamp"] as? String) ?? ""
-                            let rhs = ($1["timestamp"] as? String) ?? ""
-                            return lhs < rhs
-                        }
-
-                        let encodedHistory = WebView.javascriptLiteral(renderedMessages)
-                        DispatchQueue.main.async {
-                            guard self.directHistoryReloadToken == reloadToken else { return }
-                            self.webView?.evaluateJavaScript("window.loadHistory && window.loadHistory(\(encodedHistory))")
-                        }
-                        print("[ZALI][WEBVIEW] reloadHistory dispatch user=\(username) rendered=\(renderedMessages.count)")
-                        return
-                    }
-
-                    let record = records[index]
-                    NetworkService.shared.downloadMessage(messageId: record.id) { fileURL in
-                        guard self.directHistoryReloadToken == reloadToken else { return }
-
-                        defer {
-                            processRecord(at: index + 1)
-                        }
-
-                        guard let fileURL = fileURL else { return }
-
-                        autoreleasepool {
-                            let tempDirName = UUID().uuidString
-                            let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent(tempDirName)
-                            try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
-
-                            defer {
-                                try? FileManager.default.removeItem(at: fileURL)
-                                try? FileManager.default.removeItem(atPath: tempDir)
-                            }
-
-                            guard let unpacked = ZaliCore.shared.unpackMessage(
-                                archivePath: fileURL.path,
-                                tempDir: tempDir,
-                                keys: [
-                                    NetworkService.shared.currentKey,
-                                    ZaliCore.conversationMessageKey(participantA: record.sender, participantB: record.receiver),
-                                    WebView.sharedMessageKey
-                                ]
-                            ) else {
-                                print("[ZALI][WEBVIEW] unpack failed messageId=\(record.id) user=\(username) keySet=\(!NetworkService.shared.currentKey.isEmpty) sharedKeySet=\(!WebView.sharedMessageKey.isEmpty)")
-                                return
-                            }
-
-                            let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
-                                let attachmentURL = URL(fileURLWithPath: tempDir).appendingPathComponent(attachment.archivePath)
-                                guard let data = try? Data(contentsOf: attachmentURL) else { return nil }
-
-                                return [
-                                    "name": attachment.name,
-                                    "mimeType": attachment.mimeType,
-                                    "kind": attachment.kind,
-                                    "size": attachment.size,
-                                    "dataUrl": Self.makeDataURL(data: data, mimeType: attachment.mimeType)
-                                ]
-                            }
-
-                            renderedMessages.append([
-                                "id": record.id,
-                                "clientId": record.clientId ?? record.client_id ?? "",
-                                "sender": unpacked.sender,
-                                "receiver": record.receiver,
-                                "text": unpacked.text,
-                                "attachments": renderedAttachments,
-                                "timestamp": record.timestamp,
-                                "reactions": record.reactions ?? [],
-                                "myReaction": record.myReaction ?? ""
-                            ])
-                        }
+                if renderedMessages.count < records.count {
+                    let skipped = records.count - renderedMessages.count
+                    print("[ZALI][WEBVIEW] reloadHistory skipped=\(skipped) user=\(username)")
+                    Task { @MainActor in
+                        guard let webView = self.webView else { return }
+                        _ = try? await webView.evaluateJavaScript(
+                            "window.addLog && window.addLog('WARN', 'История чата: пропущено сообщений: \(skipped)')"
+                        )
                     }
                 }
 
-                processRecord(at: 0)
+                guard self.directHistoryReloadToken == reloadToken else { return }
+                let encodedHistory = WebView.javascriptLiteral(renderedMessages)
+                DispatchQueue.main.async {
+                    guard self.directHistoryReloadToken == reloadToken else { return }
+                    self.webView?.evaluateJavaScript("window.loadHistory && window.loadHistory(\(encodedHistory))")
+                }
+                print("[ZALI][WEBVIEW] reloadHistory dispatch user=\(username) rendered=\(renderedMessages.count)")
             }
         }
 
@@ -289,7 +232,19 @@ struct WebView: NSViewRepresentable {
             (function () {
                 try {
                     const input = document.getElementById('inputCryptoKey');
-                    return String((window.__ZALI_SAVED_KEY || (input && input.value) || '')).trim();
+                    const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
+                    const stored = scope
+                        ? (() => {
+                            try {
+                                const raw = localStorage.getItem('zali_conversation_keys_v1');
+                                const parsed = raw ? JSON.parse(raw) : {};
+                                return String(parsed?.[scope] || '').trim();
+                            } catch (e) {
+                                return '';
+                            }
+                        })()
+                        : '';
+                    return String((stored || window.__ZALI_SAVED_KEY || (input && input.value) || '')).trim();
                 } catch (e) {
                     return '';
                 }
@@ -304,18 +259,231 @@ struct WebView: NSViewRepresentable {
                     return
                 }
 
-                let key = ((result as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)).isEmpty
-                    ? "ZALI_SECRET_E2E_KEY_2026"
-                    : (result as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = (result as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 let currentKey = NetworkService.shared.currentKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 print("[ZALI][WEBVIEW] syncCryptoKey reason=\(reason) keySet=\(!key.isEmpty) currentKeySet=\(!currentKey.isEmpty)")
 
-                if currentKey != key {
+                if !key.isEmpty && currentKey != key {
                     NetworkService.shared.currentKey = key
                     UserDefaults.standard.set(key, forKey: "zali_crypto_key_v1")
                     print("[ZALI][WEBVIEW] syncCryptoKey updated reason=\(reason) length=\(key.count)")
                 }
             }
+        }
+
+        private func refreshActiveConversationHistory(reason: String) {
+            guard let webView = self.webView else { return }
+            let script = """
+            (function () {
+                try {
+                    const iface = window.__ZALI_INTERFACE;
+                    return {
+                        navMode: String(iface?.S?.navMode || ''),
+                        current: String(iface?.S?.current || ''),
+                        activeServer: String(iface?.S?.activeServer || ''),
+                        activeChannel: String(iface?.S?.activeChannel || ''),
+                    };
+                } catch (e) {
+                    return {};
+                }
+            })()
+            """
+
+            webView.evaluateJavaScript(script) { result, error in
+                if let error = error {
+                    print("[ZALI][WEBVIEW] refreshActiveConversation reason=\(reason) evalError=\(error.localizedDescription)")
+                    return
+                }
+
+                guard let dict = result as? [String: Any] else { return }
+                let navMode = String(dict["navMode"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let current = String(dict["current"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let activeServer = String(dict["activeServer"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let activeChannel = String(dict["activeChannel"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if navMode == "servers", !activeServer.isEmpty, !activeChannel.isEmpty {
+                    print("[ZALI][WEBVIEW] refreshActiveConversation server=\(activeServer) channel=\(activeChannel) reason=\(reason)")
+                    self.reloadServerHistory(serverId: activeServer, channelId: activeChannel)
+                    return
+                }
+
+                if !current.isEmpty {
+                    print("[ZALI][WEBVIEW] refreshActiveConversation dm=\(current) reason=\(reason)")
+                    self.reloadHistory(for: current)
+                }
+            }
+        }
+
+        private func fetchMessagesAsync(for username: String) async -> [NetworkService.RemoteMessageRecord] {
+            await withCheckedContinuation { continuation in
+                NetworkService.shared.fetchMessages(for: username) { records in
+                    continuation.resume(returning: records)
+                }
+            }
+        }
+
+        private func fetchServerMessagesAsync(serverId: String, channelId: String) async -> [NetworkService.RemoteMessageRecord] {
+            await withCheckedContinuation { continuation in
+                NetworkService.shared.fetchServerMessages(serverId: serverId, channelId: channelId) { records in
+                    continuation.resume(returning: records)
+                }
+            }
+        }
+
+        private func downloadMessageAsync(messageId: String) async -> URL? {
+            await withCheckedContinuation { continuation in
+                NetworkService.shared.downloadMessage(messageId: messageId) { fileURL in
+                    continuation.resume(returning: fileURL)
+                }
+            }
+        }
+
+        private func retryDelayNanoseconds(attempt: Int) -> UInt64 {
+            let boundedAttempt = max(1, min(attempt, 5))
+            let base: UInt64 = 250_000_000
+            let multiplier = UInt64(1 << (boundedAttempt - 1))
+            return min(base * multiplier, 2_000_000_000)
+        }
+
+        private func unpackHistoryMessage(
+            archivePath: String,
+            tempDir: String,
+            keys: [String]
+        ) -> ZaliCore.MessagePayload? {
+            ZaliCore.shared.unpackMessage(archivePath: archivePath, tempDir: tempDir, keys: keys)
+        }
+
+        private func renderHistoryRecord(
+            record: NetworkService.RemoteMessageRecord,
+            serverId: String?,
+            channelId: String?,
+            logPrefix: String
+        ) async -> [String: Any]? {
+            let messageId = record.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !messageId.isEmpty else { return nil }
+
+            let keys: [String] = {
+                if let serverId, let channelId {
+                    return ZaliCore.candidateMessageKeys(
+                        currentKey: NetworkService.shared.currentKey,
+                        participantA: record.sender,
+                        participantB: record.receiver,
+                        serverId: serverId,
+                        channelId: channelId,
+                        keyVersion: record.keyVersion ?? record.key_version
+                    )
+                }
+                return ZaliCore.candidateMessageKeys(
+                    currentKey: NetworkService.shared.currentKey,
+                    participantA: record.sender,
+                    participantB: record.receiver,
+                    keyVersion: record.keyVersion ?? record.key_version
+                )
+            }()
+
+            for attempt in 1...3 {
+                guard !Task.isCancelled else { return nil }
+
+                guard let fileURL = await self.downloadMessageAsync(messageId: messageId) else {
+                    print("[ZALI][WEBVIEW] \(logPrefix) download retry=\(attempt) messageId=\(messageId)")
+                    if attempt < 3 {
+                        try? await Task.sleep(nanoseconds: self.retryDelayNanoseconds(attempt: attempt))
+                    }
+                    continue
+                }
+
+                let tempDirName = UUID().uuidString
+                let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent(tempDirName)
+                try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+
+                defer {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    try? FileManager.default.removeItem(atPath: tempDir)
+                }
+
+                if let unpacked = self.unpackHistoryMessage(
+                    archivePath: fileURL.path,
+                    tempDir: tempDir,
+                    keys: keys
+                ) {
+                    let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
+                        let attachmentURL = URL(fileURLWithPath: tempDir).appendingPathComponent(attachment.archivePath)
+                        guard let data = try? Data(contentsOf: attachmentURL) else { return nil }
+
+                        return [
+                            "name": attachment.name,
+                            "mimeType": attachment.mimeType,
+                            "kind": attachment.kind,
+                            "size": attachment.size,
+                            "dataUrl": Self.makeDataURL(data: data, mimeType: attachment.mimeType)
+                        ]
+                    }
+
+                    return [
+                        "id": messageId,
+                        "clientId": record.clientId ?? record.client_id ?? "",
+                        "sender": unpacked.sender,
+                        "receiver": record.receiver,
+                        "text": unpacked.text,
+                        "attachments": renderedAttachments,
+                        "timestamp": record.timestamp,
+                        "reactions": record.reactions ?? [],
+                        "myReaction": record.myReaction ?? ""
+                    ]
+                }
+
+                print("[ZALI][WEBVIEW] \(logPrefix) unpack retry=\(attempt) messageId=\(messageId)")
+                if attempt < 3 {
+                    try? await Task.sleep(nanoseconds: self.retryDelayNanoseconds(attempt: attempt))
+                }
+            }
+
+            print("[ZALI][WEBVIEW] \(logPrefix) exhausted retries messageId=\(messageId)")
+            return nil
+        }
+
+        private func renderHistoryRecords(
+            records: [NetworkService.RemoteMessageRecord],
+            serverId: String?,
+            channelId: String?,
+            logPrefix: String
+        ) async -> [[String: Any]] {
+            let maxConcurrent = 4
+            var renderedMessages: [[String: Any]] = []
+
+            for chunkStart in stride(from: 0, to: records.count, by: maxConcurrent) {
+                let chunkEnd = min(chunkStart + maxConcurrent, records.count)
+                let chunk = Array(records[chunkStart..<chunkEnd])
+                let chunkRendered = await withTaskGroup(of: [String: Any]?.self) { group -> [[String: Any]] in
+                    for record in chunk {
+                        group.addTask { [weak self] in
+                            guard let self = self else { return nil }
+                            return await self.renderHistoryRecord(
+                                record: record,
+                                serverId: serverId,
+                                channelId: channelId,
+                                logPrefix: logPrefix
+                            )
+                        }
+                    }
+
+                    var items: [[String: Any]] = []
+                    for await item in group {
+                        if let item = item {
+                            items.append(item)
+                        }
+                    }
+                    return items
+                }
+                renderedMessages.append(contentsOf: chunkRendered)
+            }
+
+            renderedMessages.sort {
+                let lhs = ($0["timestamp"] as? String) ?? ""
+                let rhs = ($1["timestamp"] as? String) ?? ""
+                return lhs < rhs
+            }
+            return renderedMessages
         }
 
         private func isDirectMessageKey(_ key: String) -> Bool {
@@ -326,8 +494,9 @@ struct WebView: NSViewRepresentable {
             print("[ZALI][WEBVIEW] reloadServerHistory start server=\(serverId) channel=\(channelId)")
             let reloadToken = UUID()
             serverHistoryReloadToken = reloadToken
-            NetworkService.shared.fetchServerMessages(serverId: serverId, channelId: channelId) { [weak self] records in
+            Task { [weak self] in
                 guard let self = self else { return }
+                let records = await self.fetchServerMessagesAsync(serverId: serverId, channelId: channelId)
                 guard self.serverHistoryReloadToken == reloadToken else { return }
                 print("[ZALI][WEBVIEW] reloadServerHistory fetched server=\(serverId) channel=\(channelId) count=\(records.count)")
 
@@ -342,94 +511,33 @@ struct WebView: NSViewRepresentable {
                     return
                 }
 
-                var renderedMessages: [[String: Any]] = []
+                let renderedMessages = await self.renderHistoryRecords(
+                    records: records,
+                    serverId: serverId,
+                    channelId: channelId,
+                    logPrefix: "reloadServerHistory"
+                )
 
-                func processRecord(at index: Int) {
-                    guard self.serverHistoryReloadToken == reloadToken else { return }
-                    guard index < records.count else {
-                        renderedMessages.sort {
-                            let lhs = ($0["timestamp"] as? String) ?? ""
-                            let rhs = ($1["timestamp"] as? String) ?? ""
-                            return lhs < rhs
-                        }
-
-                        let encodedHistory = WebView.javascriptLiteral(renderedMessages)
-                        let safeServerId = WebView.javascriptLiteral(serverId)
-                        let safeChannelId = WebView.javascriptLiteral(channelId)
-                        DispatchQueue.main.async {
-                            guard self.serverHistoryReloadToken == reloadToken else { return }
-                            self.webView?.evaluateJavaScript("window.loadServerHistory && window.loadServerHistory(\(safeServerId), \(safeChannelId), \(encodedHistory))")
-                        }
-                        print("[ZALI][WEBVIEW] reloadServerHistory dispatch server=\(serverId) channel=\(channelId) rendered=\(renderedMessages.count)")
-                        return
-                    }
-
-                    let record = records[index]
-                    NetworkService.shared.downloadMessage(messageId: record.id) { fileURL in
-                        guard self.serverHistoryReloadToken == reloadToken else { return }
-
-                        defer {
-                            processRecord(at: index + 1)
-                        }
-
-                        guard let fileURL = fileURL else { return }
-
-                        autoreleasepool {
-                            let tempDirName = UUID().uuidString
-                            let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent(tempDirName)
-                            try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
-                            let serverIdValue = record.serverId ?? record.server_id ?? serverId
-                            let channelIdValue = record.channelId ?? record.channel_id ?? channelId
-
-                            defer {
-                                try? FileManager.default.removeItem(at: fileURL)
-                                try? FileManager.default.removeItem(atPath: tempDir)
-                            }
-
-                            guard let unpacked = ZaliCore.shared.unpackMessage(
-                                archivePath: fileURL.path,
-                                tempDir: tempDir,
-                                keys: [
-                                    NetworkService.shared.currentKey,
-                                    ZaliCore.conversationMessageKey(participantA: record.sender, participantB: record.receiver, serverId: serverIdValue, channelId: channelIdValue),
-                                    WebView.sharedMessageKey
-                                ]
-                            ) else {
-                                print("[ZALI][WEBVIEW] server unpack failed messageId=\(record.id) server=\(serverId) channel=\(channelId) keySet=\(!NetworkService.shared.currentKey.isEmpty) sharedKeySet=\(!WebView.sharedMessageKey.isEmpty)")
-                                return
-                            }
-
-                            let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
-                                let attachmentURL = URL(fileURLWithPath: tempDir).appendingPathComponent(attachment.archivePath)
-                                guard let data = try? Data(contentsOf: attachmentURL) else { return nil }
-
-                                return [
-                                    "name": attachment.name,
-                                    "mimeType": attachment.mimeType,
-                                    "kind": attachment.kind,
-                                    "size": attachment.size,
-                                    "dataUrl": Self.makeDataURL(data: data, mimeType: attachment.mimeType)
-                                ]
-                            }
-
-                            renderedMessages.append([
-                                "id": record.id,
-                                "clientId": record.clientId ?? record.client_id ?? "",
-                                "sender": unpacked.sender,
-                                "receiver": record.receiver,
-                                "text": unpacked.text,
-                                "attachments": renderedAttachments,
-                                "timestamp": record.timestamp,
-                                "reactions": record.reactions ?? [],
-                                "myReaction": record.myReaction ?? "",
-                                "serverId": serverIdValue,
-                                "channelId": channelIdValue
-                            ])
-                        }
+                if renderedMessages.count < records.count {
+                    let skipped = records.count - renderedMessages.count
+                    print("[ZALI][WEBVIEW] reloadServerHistory skipped=\(skipped) server=\(serverId) channel=\(channelId)")
+                    Task { @MainActor in
+                        guard let webView = self.webView else { return }
+                        _ = try? await webView.evaluateJavaScript(
+                            "window.addLog && window.addLog('WARN', 'История канала: пропущено сообщений: \(skipped)')"
+                        )
                     }
                 }
 
-                processRecord(at: 0)
+                guard self.serverHistoryReloadToken == reloadToken else { return }
+                let encodedHistory = WebView.javascriptLiteral(renderedMessages)
+                let safeServerId = WebView.javascriptLiteral(serverId)
+                let safeChannelId = WebView.javascriptLiteral(channelId)
+                DispatchQueue.main.async {
+                    guard self.serverHistoryReloadToken == reloadToken else { return }
+                    self.webView?.evaluateJavaScript("window.loadServerHistory && window.loadServerHistory(\(safeServerId), \(safeChannelId), \(encodedHistory))")
+                }
+                print("[ZALI][WEBVIEW] reloadServerHistory dispatch server=\(serverId) channel=\(channelId) rendered=\(renderedMessages.count)")
             }
         }
 
@@ -463,24 +571,43 @@ struct WebView: NSViewRepresentable {
                         NetworkService.shared.savePendingOutboxJSON("[]")
                     }
                 }
+
+                if type == "SAVE_MESSAGE_CACHE" {
+                    let cache = dict["cache"] ?? dict["messageCache"] ?? [:]
+                    if let data = try? JSONSerialization.data(withJSONObject: cache, options: []),
+                       let json = String(data: data, encoding: .utf8) {
+                        NetworkService.shared.saveMessageCacheJSON(json)
+                    } else {
+                        NetworkService.shared.saveMessageCacheJSON(#"{"chats":{},"serverChats":{}}"#)
+                    }
+                }
                 
                 if type == "SEND_MESSAGE" {
                     let recipient = dict["recipient"] as? String ?? "Alice"
                     let sender = dict["sender"] as? String ?? NetworkService.shared.currentUser
                     let requestedKey = (dict["key"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let keyVersion = (dict["keyVersion"] as? NSNumber)?.intValue
+                        ?? (dict["key_version"] as? NSNumber)?.intValue
+                        ?? (dict["keyVersion"] as? Int)
+                        ?? (dict["key_version"] as? Int)
+                        ?? 2
                     let serverId = dict["serverId"] as? String
                     let channelId = dict["channelId"] as? String
-                    let key = ZaliCore.conversationMessageKey(
-                        participantA: sender,
-                        participantB: recipient,
-                        serverId: serverId,
-                        channelId: channelId
-                    )
+                    let key = requestedKey
+                    guard !key.isEmpty else {
+                        print("[ZALI][WEBVIEW] SEND_MESSAGE missing requested key clientId=\(clientId)")
+                        DispatchQueue.main.async {
+                            self.webView?.evaluateJavaScript("window.addLog('ERROR', 'Core: E2E-ключ не задан')")
+                            let safeClientId = WebView.javascriptLiteral(clientId)
+                            self.webView?.evaluateJavaScript("window.loader?.bus?.send('zali_interface:on_send_error', \(safeClientId))")
+                        }
+                        return
+                    }
                     let tempPath = NSTemporaryDirectory() + UUID().uuidString + ".zali"
                     let attachments = dict["attachments"] as? [[String: Any]] ?? []
                     var packedAttachments: [[String: Any]] = []
                     var tempAttachmentURLs: [URL] = []
-                    print("[ZALI][WEBVIEW] SEND_MESSAGE start clientId=\(clientId) sender=\(sender) recipient=\(recipient) serverId=\(serverId ?? "nil") channelId=\(channelId ?? "nil") attachments=\(attachments.count) textBytes=\(text.count) requestedKeySet=\(!requestedKey.isEmpty) derivedKeySet=\(!key.isEmpty)")
+                    print("[ZALI][WEBVIEW] SEND_MESSAGE start clientId=\(clientId) sender=\(sender) recipient=\(recipient) serverId=\(serverId ?? "nil") channelId=\(channelId ?? "nil") attachments=\(attachments.count) textBytes=\(text.count) requestedKeySet=\(!requestedKey.isEmpty)")
 
                     for attachment in attachments {
                         guard let dataUrl = attachment["dataUrl"] as? String else { continue }
@@ -505,7 +632,7 @@ struct WebView: NSViewRepresentable {
                         ])
                     }
                     
-                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, attachments: packedAttachments) {
+                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments) {
                         DispatchQueue.main.async {
                             self.webView?.evaluateJavaScript("window.addLog('SUCCESS', 'Core: Сообщение успешно упаковано и зашифровано в Rust бэкенде')")
                         }
@@ -513,7 +640,7 @@ struct WebView: NSViewRepresentable {
                         print("[ZALI][WEBVIEW] SEND_MESSAGE packed clientId=\(clientId) tempPath=\(tempPath) packedAttachments=\(packedAttachments.count)")
                         
                         let fileURL = URL(fileURLWithPath: tempPath)
-                        NetworkService.shared.uploadMessage(sender: sender, receiver: recipient, clientId: clientId, fileURL: fileURL, serverId: serverId, channelId: channelId) { [weak self] success, messageId in
+                        NetworkService.shared.uploadMessage(sender: sender, receiver: recipient, clientId: clientId, fileURL: fileURL, serverId: serverId, channelId: channelId, keyVersion: keyVersion) { [weak self] success, messageId in
                             print("[ZALI][WEBVIEW] SEND_MESSAGE upload callback clientId=\(clientId) success=\(success) messageId=\(messageId ?? "nil")")
                             DispatchQueue.main.async {
                                 let safeClientId = WebView.javascriptLiteral(clientId)
@@ -561,7 +688,7 @@ struct WebView: NSViewRepresentable {
                         }
 
                         self.syncCryptoKeyFromWebUI(reason: "setSession") {
-                            self.reloadHistory(for: username)
+                            self.refreshActiveConversationHistory(reason: "setSession")
                         }
                     }
                 }
@@ -594,13 +721,11 @@ struct WebView: NSViewRepresentable {
                     } else {
                         UserDefaults.standard.set(key, forKey: "zali_crypto_key_v1")
                     }
-                    if self.isDirectMessageKey(key) {
-                        DispatchQueue.main.async {
+                    DispatchQueue.main.async {
+                        if self.isDirectMessageKey(key) {
                             self.webView?.evaluateJavaScript("console.log('Swift: E2E ключ обновлён')")
-                            self.reloadHistory(for: NetworkService.shared.currentUser)
                         }
-                    } else {
-                        print("[ZALI][WEBVIEW] SET_KEY skipped direct refresh for non-DM key")
+                        self.refreshActiveConversationHistory(reason: "setKey")
                     }
                 }
 
@@ -610,13 +735,9 @@ struct WebView: NSViewRepresentable {
                         NetworkService.shared.currentKey = key
                         UserDefaults.standard.set(key, forKey: "zali_crypto_key_v1")
                     }
-                    if self.isDirectMessageKey(key.isEmpty ? NetworkService.shared.currentKey : key) {
-                        print("[ZALI][WEBVIEW] REFRESH_HISTORY user=\(NetworkService.shared.currentUser)")
-                        DispatchQueue.main.async {
-                            self.reloadHistory(for: NetworkService.shared.currentUser)
-                        }
-                    } else {
-                        print("[ZALI][WEBVIEW] REFRESH_HISTORY skipped direct refresh for non-DM key")
+                    print("[ZALI][WEBVIEW] REFRESH_HISTORY user=\(NetworkService.shared.currentUser)")
+                    DispatchQueue.main.async {
+                        self.refreshActiveConversationHistory(reason: "refreshHistory")
                     }
                 }
 
@@ -626,6 +747,21 @@ struct WebView: NSViewRepresentable {
                     NetworkService.shared.configure(apiBaseURL: apiBaseURL, wsBaseURL: wsBaseURL)
                     DispatchQueue.main.async {
                         self.webView?.evaluateJavaScript("window.addLog('SUCCESS', 'Swift: Network config applied')")
+                    }
+                }
+
+                if type == "SET_MESSAGE_REACTION" {
+                    let messageId = dict["messageId"] as? String ?? ""
+                    let emoji = dict["emoji"] as? String ?? ""
+                    NetworkService.shared.setMessageReaction(messageId: messageId, emoji: emoji) { success, payload in
+                        DispatchQueue.main.async {
+                            if success, let payload {
+                                let safePayload = WebView.javascriptLiteral(payload)
+                                self.webView?.evaluateJavaScript("window.receiveReactionUpdate && window.receiveReactionUpdate(\(safePayload))")
+                            } else {
+                                self.webView?.evaluateJavaScript("window.addLog('ERROR', 'Не удалось сохранить реакцию на сервере')")
+                            }
+                        }
                     }
                 }
 
@@ -670,7 +806,7 @@ struct WebView: NSViewRepresentable {
                         webView.evaluateJavaScript("window.setContacts && window.setContacts(\(encodedContacts))")
                     }
                 }
-                self.reloadHistory(for: NetworkService.shared.currentUser)
+                self.refreshActiveConversationHistory(reason: "didFinish")
             }
         }
 
@@ -710,8 +846,7 @@ struct WebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "nativeApp")
         let savedKey = (UserDefaults.standard.string(forKey: "zali_crypto_key_v1") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let injectedKey = savedKey.isEmpty ? "ZALI_SECRET_E2E_KEY_2026" : savedKey
-        let bootstrap = "window.__ZALI_SAVED_KEY = \(WebView.javascriptLiteral(injectedKey));"
+        let bootstrap = "window.__ZALI_SAVED_KEY = \(WebView.javascriptLiteral(savedKey));"
         config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let savedSession: [String: Any] = [
             "username": NetworkService.shared.currentUser,
@@ -723,6 +858,10 @@ struct WebView: NSViewRepresentable {
         let pendingOutbox = NetworkService.shared.currentPendingOutboxJSON()
         let pendingBootstrap = "window.__ZALI_PENDING_OUTBOX = \(pendingOutbox.isEmpty ? "[]" : pendingOutbox);"
         config.userContentController.addUserScript(WKUserScript(source: pendingBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let messageCache = NetworkService.shared.currentMessageCacheJSON()
+        let messageCacheObject: Any = (try? JSONSerialization.jsonObject(with: Data(messageCache.utf8), options: [])) ?? ["chats": [:], "serverChats": [:]]
+        let messageCacheBootstrap = "window.__ZALI_MESSAGE_CACHE = \(WebView.javascriptLiteral(messageCacheObject));"
+        config.userContentController.addUserScript(WKUserScript(source: messageCacheBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
         let webView = ZaliNativeWebView(frame: .zero, configuration: config)
         context.coordinator.webView = webView
@@ -750,6 +889,18 @@ struct WebView: NSViewRepresentable {
             
             DispatchQueue.main.async {
                 webView.evaluateJavaScript("if (window.receiveMessage) { window.receiveMessage({ id: \(safeId), clientId: \(safeClientId), sender: \(safeSender), receiver: \(safeReceiver), text: \(safeText), attachments: \(safeAttachments), serverId: \(safeServerId), channelId: \(safeChannelId) }); }")
+            }
+        }
+        NetworkService.shared.onMessageDecryptFailed = { _, sender, receiver, serverId, channelId in
+            let payload: [String: Any] = [
+                "force": true,
+                "peer": sender == NetworkService.shared.currentUser ? receiver : sender,
+                "serverId": serverId ?? "",
+                "channelId": channelId ?? "",
+            ]
+            let safePayload = WebView.javascriptLiteral(payload)
+            DispatchQueue.main.async {
+                webView.evaluateJavaScript("window.loader?.bus?.send('zali_interface:sync_active_conversation', \(safePayload));")
             }
         }
         NetworkService.shared.onReactionUpdated = { payload in
