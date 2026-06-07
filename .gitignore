@@ -1,5 +1,46 @@
-/target
+# Rust build artifacts
+/target/
+**/target/
+/.build/
+**/.build/
+
+# OS/editor noise
 .DS_Store
+.idea/
+.vscode/
+
+# Local env and runtime data
 .env
+*.env.local
 zali_messenger.db
+*.db-shm
+*.db-wal
 uploads/
+server.log
+*.log
+
+# Generated archives and bundles
+*.zip
+*.app
+dist/
+
+# Legacy monorepo trees kept only in the workspace
+/Core/
+/Web/
+/Windows/
+/macOS/
+/ZaliArchiverSDK/
+/ZaliMessenger/
+/ZaliMessenger.app/
+/docs/
+/scripts/
+
+# Legacy root-level build and helper files from the old monorepo layout
+/README.md
+/DEVELOPMENT.md
+/Zali_BrandBook.md
+/build_app.sh
+/build_macos_core.sh
+/build_windows_app.ps1
+/bundle_web.py
+/run_macos_app.sh
