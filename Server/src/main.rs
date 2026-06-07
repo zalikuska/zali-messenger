@@ -1,10 +1,12 @@
 use axum::{
+    body::Body,
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
-        DefaultBodyLimit, Multipart, Path as AxumPath, Query,
+        ConnectInfo, DefaultBodyLimit, Multipart, Path as AxumPath, Query,
     },
-    http::{header, HeaderValue, Method, StatusCode},
-    response::IntoResponse,
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, Uri},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, patch, post, put},
     Json, Router,
 };
@@ -27,7 +29,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{fs, sync::mpsc, task};
+use tokio::{fs, io::AsyncWriteExt, sync::mpsc, task};
+use tokio_util::io::ReaderStream;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, trace, warn};
 use uuid::Uuid;
@@ -74,7 +77,7 @@ impl Config {
 
         let allowed_origins: Vec<String> = std::env::var("ALLOWED_ORIGINS")
             .unwrap_or_else(|_| {
-                "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://127.0.0.1:3000,http://127.0.0.1,zali://localhost,null"
+                "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://127.0.0.1:3000,http://127.0.0.1,zali://localhost"
                     .to_string()
             })
             .split(',')
@@ -128,6 +131,10 @@ impl Config {
 }
 
 const AUTH_COOKIE_NAME: &str = "zali_auth";
+const JWT_ISSUER: &str = "zali-server";
+const JWT_AUDIENCE: &str = "zali-messenger";
+const DUMMY_BCRYPT_HASH: &str = "$2b$12$C6UzMDM.H6dfI/f/IKcEeOe6uT6yQWQfC1k1j6fQJxE1u3N0EdD6W";
+const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
 
 fn sqlite_literal(path: &Path) -> String {
     let escaped = path.to_string_lossy().replace('\'', "''");
@@ -272,6 +279,46 @@ async fn copy_missing_uploads(from_dir: &Path, to_dir: &Path) -> Result<usize, s
     Ok(copied)
 }
 
+async fn security_headers(req: axum::http::Request<axum::body::Body>, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'",
+        ),
+    );
+    response
+}
+
+async fn rewrite_api_v1(mut req: Request<Body>, next: Next) -> Response {
+    if let Some(path_and_query) = req.uri().path_and_query().map(|value| value.as_str().to_string()) {
+        if let Some(rest) = path_and_query.strip_prefix("/api/v1") {
+            if rest.is_empty() || rest.starts_with('/') {
+                let rewritten = format!("/api{rest}");
+                if let Ok(uri) = Uri::builder().path_and_query(rewritten).build() {
+                    *req.uri_mut() = uri;
+                }
+            }
+        }
+    }
+
+    next.run(req).await
+}
+
 async fn migrate_legacy_storage(
     pool: &SqlitePool,
     canonical_db: &Path,
@@ -310,33 +357,137 @@ async fn migrate_legacy_storage(
     .unwrap_or_default();
     info!("Legacy таблицы: {}", legacy_tables.join(", "));
 
-    let migrate_queries = [
+    let legacy_server_cols = legacy_table_columns(&mut conn, "servers").await.unwrap_or_default();
+    let legacy_role_cols = legacy_table_columns(&mut conn, "server_roles").await.unwrap_or_default();
+    let legacy_message_cols = legacy_table_columns(&mut conn, "messages").await.unwrap_or_default();
+    let legacy_device_cols = legacy_table_columns(&mut conn, "account_devices").await.unwrap_or_default();
+    let legacy_expr = |cols: &HashSet<String>, name: &str, fallback: &str| -> String {
+        if cols.contains(name) {
+            name.to_string()
+        } else {
+            fallback.to_string()
+        }
+    };
+    let legacy_coalesce_expr = |cols: &HashSet<String>, name: &str, fallback: &str| -> String {
+        if cols.contains(name) {
+            format!("COALESCE({}, {})", name, fallback)
+        } else {
+            fallback.to_string()
+        }
+    };
+
+    let servers_join_link = legacy_coalesce_expr(
+        &legacy_server_cols,
+        "join_link",
+        "printf('zali://server/%s', id)",
+    );
+    let servers_owner = legacy_coalesce_expr(&legacy_server_cols, "owner", "'system'");
+    let servers_is_public = legacy_coalesce_expr(&legacy_server_cols, "is_public", "1");
+    let servers_avatar_mime = legacy_expr(&legacy_server_cols, "avatar_mime", "NULL");
+    let servers_avatar_data = legacy_expr(&legacy_server_cols, "avatar_data", "NULL");
+    let servers_banner_mime = legacy_expr(&legacy_server_cols, "banner_mime", "NULL");
+    let servers_banner_data = legacy_expr(&legacy_server_cols, "banner_data", "NULL");
+
+    let role_can_view = legacy_coalesce_expr(&legacy_role_cols, "can_view", "1");
+    let role_can_send = legacy_coalesce_expr(&legacy_role_cols, "can_send", "1");
+    let role_can_manage = legacy_coalesce_expr(&legacy_role_cols, "can_manage", "0");
+    let role_position = legacy_coalesce_expr(&legacy_role_cols, "position", "0");
+    let role_updated_at = legacy_coalesce_expr(&legacy_role_cols, "updated_at", "CURRENT_TIMESTAMP");
+    let role_created_at = legacy_coalesce_expr(&legacy_role_cols, "created_at", "CURRENT_TIMESTAMP");
+
+    let message_client_id = legacy_expr(&legacy_message_cols, "client_id", "NULL");
+    let message_server_id = legacy_expr(&legacy_message_cols, "server_id", "NULL");
+    let message_channel_id = legacy_expr(&legacy_message_cols, "channel_id", "NULL");
+    let device_label = legacy_coalesce_expr(&legacy_device_cols, "label", "'Zali device'");
+    let device_public_key = legacy_expr(&legacy_device_cols, "public_key", "''");
+    let device_signing_key = legacy_expr(&legacy_device_cols, "signing_key", "''");
+    let device_key_package = legacy_expr(&legacy_device_cols, "key_package", "'{}'");
+    let device_group_epoch = legacy_coalesce_expr(&legacy_device_cols, "group_epoch", "1");
+    let device_approved = legacy_coalesce_expr(&legacy_device_cols, "approved", "0");
+    let device_revoked = legacy_coalesce_expr(&legacy_device_cols, "revoked", "0");
+    let device_approved_by = legacy_expr(&legacy_device_cols, "approved_by", "NULL");
+    let device_history_days = legacy_coalesce_expr(&legacy_device_cols, "history_days", "30");
+    let device_created_at = legacy_coalesce_expr(&legacy_device_cols, "created_at", "CURRENT_TIMESTAMP");
+    let device_approved_at = legacy_expr(&legacy_device_cols, "approved_at", "NULL");
+    let device_revoked_at = legacy_expr(&legacy_device_cols, "revoked_at", "NULL");
+
+    let mut migrate_queries = vec![
         "INSERT OR IGNORE INTO users (username, password_hash)
-         SELECT username, password_hash FROM legacy.users",
+         SELECT username, password_hash FROM legacy.users"
+            .to_string(),
         "INSERT OR IGNORE INTO contacts (owner, contact, created_at)
-         SELECT owner, contact, created_at FROM legacy.contacts",
+         SELECT owner, contact, created_at FROM legacy.contacts"
+            .to_string(),
         "INSERT OR IGNORE INTO avatars (username, mime_type, data, updated_at)
-         SELECT username, mime_type, data, updated_at FROM legacy.avatars",
-        "INSERT OR IGNORE INTO servers (id, name, description, icon, color, join_link, owner, is_public, created_at, avatar_mime, avatar_data, banner_mime, banner_data)
-         SELECT id, name, description, icon, color, join_link, owner, is_public, created_at, avatar_mime, avatar_data, banner_mime, banner_data FROM legacy.servers",
+         SELECT username, mime_type, data, updated_at FROM legacy.avatars"
+            .to_string(),
+        format!(
+            "INSERT OR IGNORE INTO servers (id, name, description, icon, color, join_link, owner, is_public, created_at, avatar_mime, avatar_data, banner_mime, banner_data)
+             SELECT id, name, description, icon, color, {}, {}, {}, created_at, {}, {}, {}, {} FROM legacy.servers",
+            servers_join_link,
+            servers_owner,
+            servers_is_public,
+            servers_avatar_mime,
+            servers_avatar_data,
+            servers_banner_mime,
+            servers_banner_data
+        ),
         "INSERT OR IGNORE INTO server_members (server_id, username, role, joined_at)
-         SELECT server_id, username, role, joined_at FROM legacy.server_members",
-        "INSERT OR IGNORE INTO server_roles (server_id, role_id, name, color, can_view, can_send, can_manage, position, updated_at, created_at)
-         SELECT server_id, role_id, name, color, can_view, can_send, can_manage, position, updated_at, created_at FROM legacy.server_roles",
+         SELECT server_id, username, role, joined_at FROM legacy.server_members"
+            .to_string(),
+        format!(
+            "INSERT OR IGNORE INTO server_roles (server_id, role_id, name, color, can_view, can_send, can_manage, position, updated_at, created_at)
+             SELECT server_id, role_id, name, color, {}, {}, {}, {}, {}, {} FROM legacy.server_roles",
+            role_can_view,
+            role_can_send,
+            role_can_manage,
+            role_position,
+            role_updated_at,
+            role_created_at
+        ),
         "INSERT OR IGNORE INTO channels (id, server_id, name, topic, kind, position, created_at)
-         SELECT id, server_id, name, topic, kind, position, created_at FROM legacy.channels",
+         SELECT id, server_id, name, topic, kind, position, created_at FROM legacy.channels"
+            .to_string(),
         "INSERT OR IGNORE INTO channel_permissions (channel_id, role, can_view, can_send, can_manage, updated_at)
-         SELECT channel_id, role, can_view, can_send, can_manage, updated_at FROM legacy.channel_permissions",
+         SELECT channel_id, role, can_view, can_send, can_manage, updated_at FROM legacy.channel_permissions"
+            .to_string(),
         "INSERT OR IGNORE INTO server_invites (code, server_id, created_by, max_uses, uses, expires_at, created_at)
-         SELECT code, server_id, created_by, max_uses, uses, expires_at, created_at FROM legacy.server_invites",
+         SELECT code, server_id, created_by, max_uses, uses, expires_at, created_at FROM legacy.server_invites"
+            .to_string(),
         "INSERT OR IGNORE INTO reactions (message_id, reactor, emoji, updated_at)
-         SELECT message_id, reactor, emoji, updated_at FROM legacy.reactions",
-        "INSERT OR IGNORE INTO messages (id, client_id, sender, receiver, filename, timestamp, server_id, channel_id)
-         SELECT id, NULL, sender, receiver, filename, timestamp, server_id, channel_id FROM legacy.messages",
+         SELECT message_id, reactor, emoji, updated_at FROM legacy.reactions"
+            .to_string(),
+        format!(
+            "INSERT OR IGNORE INTO messages (id, client_id, sender, receiver, filename, timestamp, server_id, channel_id)
+             SELECT id, {}, sender, receiver, filename, timestamp, {}, {} FROM legacy.messages",
+            message_client_id,
+            message_server_id,
+            message_channel_id
+        ),
     ];
+    if legacy_tables.iter().any(|table| table == "account_devices") {
+        migrate_queries.push(format!(
+            "INSERT OR IGNORE INTO account_devices
+             (owner, device_id, label, public_key, signing_key, key_package, group_epoch, approved, revoked, approved_by, history_days, created_at, approved_at, revoked_at)
+             SELECT owner, device_id, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+             FROM legacy.account_devices",
+            device_label,
+            device_public_key,
+            device_signing_key,
+            device_key_package,
+            device_group_epoch,
+            device_approved,
+            device_revoked,
+            device_approved_by,
+            device_history_days,
+            device_created_at,
+            device_approved_at,
+            device_revoked_at
+        ));
+    }
 
     for query in migrate_queries {
-        if let Err(e) = sqlx::query(query).execute(&mut *conn).await {
+        if let Err(e) = sqlx::query(&query).execute(&mut *conn).await {
             warn!("Ошибка миграции legacy-данных: {}", e);
         }
     }
@@ -371,6 +522,30 @@ async fn migrate_legacy_storage(
     }
 
     Ok(())
+}
+
+async fn legacy_table_columns(
+    conn: &mut sqlx::pool::PoolConnection<Sqlite>,
+    table: &str,
+) -> Result<HashSet<String>, sqlx::Error> {
+    let sql = match table {
+        "servers" | "server_roles" | "messages" | "account_devices" => {
+            format!("PRAGMA legacy.table_info({})", table)
+        }
+        _ => {
+            return Err(sqlx::Error::Protocol(
+                "Unsupported legacy table name".to_string(),
+            ))
+        }
+    };
+    let rows = sqlx::query(&sql).fetch_all(&mut **conn).await?;
+    let mut columns = HashSet::new();
+    for row in rows {
+        if let Ok(name) = row.try_get::<String, _>("name") {
+            columns.insert(name);
+        }
+    }
+    Ok(columns)
 }
 
 async fn migrate_asset_files(pool: &SqlitePool, data_dir: &Path) -> Result<(), sqlx::Error> {
@@ -480,19 +655,41 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         parts: &mut axum::http::request::Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
+        async fn validate_token(token: &str, state: &Arc<AppState>) -> Result<String, StatusCode> {
+            let validation = jwt_validation();
+            let token_data = decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(&state.config.jwt_secret),
+                &validation,
+            )
+            .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            let claims = token_data.claims;
+            if claims.iss != JWT_ISSUER || claims.aud != JWT_AUDIENCE {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            let token_version =
+                sqlx::query_scalar::<_, i64>("SELECT token_version FROM users WHERE username = ?")
+                    .bind(&claims.sub)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                    .ok_or(StatusCode::UNAUTHORIZED)?;
+            if token_version != claims.token_version {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            Ok(claims.sub)
+        }
+
         // 1. Try Authorization: Bearer <token> header
         if let Some(auth_header) = parts.headers.get("Authorization") {
             if let Ok(auth_str) = auth_header.to_str() {
                 if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                    if let Ok(token_data) = decode::<Claims>(
-                        token,
-                        &DecodingKey::from_secret(&state.config.jwt_secret),
-                        &Validation::new(Algorithm::HS256),
-                    ) {
-                        return Ok(AuthenticatedUser(token_data.claims.sub));
-                    } else {
-                        warn!("Получен невалидный JWT-токен");
-                        return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                    match validate_token(token, state).await {
+                        Ok(username) => return Ok(AuthenticatedUser(username)),
+                        Err(_) => {
+                            warn!("Получен невалидный JWT-токен");
+                            return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                        }
                     }
                 }
             }
@@ -505,15 +702,12 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
                     .split(';')
                     .find_map(|part| part.trim().strip_prefix(&format!("{}=", AUTH_COOKIE_NAME)))
                 {
-                    if let Ok(token_data) = decode::<Claims>(
-                        token,
-                        &DecodingKey::from_secret(&state.config.jwt_secret),
-                        &Validation::new(Algorithm::HS256),
-                    ) {
-                        return Ok(AuthenticatedUser(token_data.claims.sub));
-                    } else {
-                        warn!("Получен невалидный JWT-cookie");
-                        return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                    match validate_token(token, state).await {
+                        Ok(username) => return Ok(AuthenticatedUser(username)),
+                        Err(_) => {
+                            warn!("Получен невалидный JWT-cookie");
+                            return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                        }
                     }
                 }
             }
@@ -524,15 +718,12 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
                 if let Some((key, value)) = pair.split_once('=') {
                     if matches!(key, "token" | "auth" | "access_token") && !value.trim().is_empty()
                     {
-                        if let Ok(token_data) = decode::<Claims>(
-                            value,
-                            &DecodingKey::from_secret(&state.config.jwt_secret),
-                            &Validation::new(Algorithm::HS256),
-                        ) {
-                            return Ok(AuthenticatedUser(token_data.claims.sub));
-                        } else {
-                            warn!("Получен невалидный JWT-token из query");
-                            return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                        match validate_token(value, state).await {
+                            Ok(username) => return Ok(AuthenticatedUser(username)),
+                            Err(_) => {
+                                warn!("Получен невалидный JWT-token из query");
+                                return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                            }
                         }
                     }
                 }
@@ -590,24 +781,6 @@ struct MessageResponse {
     reactions: Vec<ReactionSummary>,
     #[serde(rename = "myReaction")]
     my_reaction: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(non_snake_case)]
-struct ConversationKeyRequest {
-    peer: Option<String>,
-    serverId: Option<String>,
-    channelId: Option<String>,
-    key: Option<String>,
-    keyVersion: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-#[allow(non_snake_case)]
-struct ConversationKeyResponse {
-    scopeKey: String,
-    key: String,
-    keyVersion: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
@@ -753,6 +926,9 @@ struct VoiceRoom {
     room_type: String,
     server_id: Option<String>,
     channel_id: Option<String>,
+    call_state: String,
+    initiator: Option<String>,
+    target: Option<String>,
     participants: HashSet<String>,
 }
 
@@ -762,6 +938,9 @@ impl VoiceRoom {
             room_type,
             server_id,
             channel_id,
+            call_state: "active".to_string(),
+            initiator: None,
+            target: None,
             participants: HashSet::new(),
         }
     }
@@ -806,6 +985,10 @@ struct AvatarRecord {
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
+    iss: String,
+    aud: String,
+    token_version: i64,
+    jti: String,
     exp: usize,
 }
 
@@ -953,6 +1136,14 @@ struct ServerAssetPayload {
 struct MessagePageQuery {
     limit: Option<i64>,
     offset: Option<i64>,
+    since: Option<String>,
+    #[serde(rename = "deviceId")]
+    device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UserSearchQuery {
+    q: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -960,6 +1151,156 @@ struct StoredAssetMeta {
     mime_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow, Clone)]
+struct DeviceRecord {
+    device_id: String,
+    owner: String,
+    label: String,
+    public_key: String,
+    signing_key: String,
+    key_package: String,
+    group_epoch: i64,
+    approved: i64,
+    revoked: i64,
+    approved_by: Option<String>,
+    history_days: i64,
+    created_at: DateTime<Utc>,
+    approved_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(non_snake_case)]
+struct DeviceResponse {
+    deviceId: String,
+    owner: String,
+    label: String,
+    publicKey: String,
+    keyPackage: serde_json::Value,
+    groupEpoch: i64,
+    approved: bool,
+    revoked: bool,
+    approvedBy: Option<String>,
+    historyDays: i64,
+    createdAt: DateTime<Utc>,
+    approvedAt: Option<DateTime<Utc>>,
+    revokedAt: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct RegisterDevicePayload {
+    deviceId: String,
+    label: Option<String>,
+    publicKey: Option<String>,
+    signingKey: Option<String>,
+    keyPackage: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct ApproveDevicePayload {
+    deviceId: String,
+    approvedByDeviceId: String,
+    keyPackage: Option<serde_json::Value>,
+    signature: Option<String>,
+    historyDays: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct VaultEventPayload {
+    deviceId: String,
+    vaultEpoch: Option<i64>,
+    encryptedVaultEvent: String,
+    issuedToDeviceId: Option<String>,
+    signature: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct VaultEventRecord {
+    event_id: String,
+    owner: String,
+    device_id: String,
+    issued_to_device_id: Option<String>,
+    vault_epoch: i64,
+    encrypted_vault_event: String,
+    signature: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(non_snake_case)]
+struct VaultEventResponse {
+    eventId: String,
+    owner: String,
+    deviceId: String,
+    issuedToDeviceId: Option<String>,
+    vaultEpoch: i64,
+    encryptedVaultEvent: String,
+    signature: String,
+    createdAt: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct HistoryTicketPayload {
+    issuedByDeviceId: String,
+    issuedToDeviceId: String,
+    conversationId: String,
+    fromTime: String,
+    toTime: String,
+    expiresAt: String,
+    encryptedExportSecrets: String,
+    signature: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct HistoryTicketRecord {
+    ticket_id: String,
+    owner: String,
+    issued_by_device_id: String,
+    issued_to_device_id: String,
+    conversation_id: String,
+    from_time: DateTime<Utc>,
+    to_time: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    encrypted_export_secrets: String,
+    signature: String,
+    revoked: i64,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(non_snake_case)]
+struct HistoryTicketResponse {
+    ticketId: String,
+    owner: String,
+    issuedByDeviceId: String,
+    issuedToDeviceId: String,
+    conversationId: String,
+    fromTime: DateTime<Utc>,
+    toTime: DateTime<Utc>,
+    expiresAt: DateTime<Utc>,
+    encryptedExportSecrets: String,
+    signature: String,
+    revoked: bool,
+    createdAt: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TransparencyLogRecord {
+    seq: i64,
+    owner: String,
+    event_type: String,
+    group_epoch: i64,
+    actor_device_id: String,
+    target_device_id: Option<String>,
+    event_json: String,
+    signature: String,
+    created_at: DateTime<Utc>,
 }
 
 // ============================================================
@@ -1017,6 +1358,10 @@ async fn main() {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы users");
+    sqlx::query("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await
+        .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -1097,6 +1442,129 @@ async fn main() {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы conversation_keys");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS account_devices (
+            owner TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            public_key TEXT NOT NULL DEFAULT '',
+            signing_key TEXT NOT NULL DEFAULT '',
+            key_package TEXT NOT NULL DEFAULT '{}',
+            group_epoch INTEGER NOT NULL DEFAULT 1,
+            approved INTEGER NOT NULL DEFAULT 0,
+            revoked INTEGER NOT NULL DEFAULT 0,
+            approved_by TEXT,
+            history_days INTEGER NOT NULL DEFAULT 30,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            approved_at DATETIME,
+            revoked_at DATETIME,
+            PRIMARY KEY (owner, device_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы account_devices");
+    sqlx::query("ALTER TABLE account_devices ADD COLUMN history_days INTEGER NOT NULL DEFAULT 30")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE account_devices ADD COLUMN approved_at DATETIME")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE account_devices ADD COLUMN revoked_at DATETIME")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_account_devices_owner_epoch
+         ON account_devices (owner, group_epoch, created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS account_vault_events (
+            event_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            issued_to_device_id TEXT,
+            vault_epoch INTEGER NOT NULL,
+            encrypted_vault_event TEXT NOT NULL,
+            signature TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы account_vault_events");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_account_vault_events_owner_epoch
+         ON account_vault_events (owner, vault_epoch, created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_account_vault_events_target
+         ON account_vault_events (owner, issued_to_device_id, created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS history_tickets (
+            ticket_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            issued_by_device_id TEXT NOT NULL,
+            issued_to_device_id TEXT NOT NULL,
+            conversation_id TEXT NOT NULL,
+            from_time DATETIME NOT NULL,
+            to_time DATETIME NOT NULL,
+            expires_at DATETIME NOT NULL,
+            encrypted_export_secrets TEXT NOT NULL,
+            signature TEXT NOT NULL DEFAULT '',
+            revoked INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы history_tickets");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_history_tickets_owner_device
+         ON history_tickets (owner, issued_to_device_id, expires_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS transparency_log (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            group_epoch INTEGER NOT NULL,
+            actor_device_id TEXT NOT NULL,
+            target_device_id TEXT,
+            event_json TEXT NOT NULL,
+            signature TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы transparency_log");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_transparency_log_owner_seq
+         ON transparency_log (owner, seq)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS servers (
@@ -1351,6 +1819,7 @@ async fn main() {
             axum::http::header::AUTHORIZATION,
             axum::http::header::CONTENT_TYPE,
             axum::http::header::COOKIE,
+            HeaderName::from_static("x-zali-device-id"),
         ])
         .allow_methods([
             Method::GET,
@@ -1382,6 +1851,7 @@ async fn main() {
     let app = Router::new()
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me))
         .route("/api/users", get(get_users))
         .route("/api/avatar/:username", get(get_avatar))
@@ -1449,6 +1919,21 @@ async fn main() {
             get(get_server_messages).post(upload_server_message),
         )
         .route("/api/conversation-key", post(resolve_conversation_key))
+        .route("/api/devices", get(get_devices).post(register_device))
+        .route("/api/devices/approve", post(approve_device))
+        .route(
+            "/api/devices/:device_id",
+            axum::routing::delete(revoke_device),
+        )
+        .route(
+            "/api/vault/events",
+            get(get_vault_events).post(post_vault_event),
+        )
+        .route(
+            "/api/history-tickets",
+            get(get_history_tickets).post(create_history_ticket),
+        )
+        .route("/api/transparency-log", get(get_transparency_log))
         .route("/api/messages/:user", get(get_messages))
         .route("/api/message/:id/reaction", post(set_message_reaction))
         .route("/api/upload", post(upload_message))
@@ -1457,15 +1942,20 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .route("/health", get(health_check))
         .route("/uploads/:filename", get(download_upload_file))
+        .layer(middleware::from_fn(rewrite_api_v1))
         .layer(DefaultBodyLimit::max(max_upload))
         .layer(cors)
+        .layer(middleware::from_fn(security_headers))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let addr: SocketAddr = std::env::var("BIND_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
+        .parse()
+        .expect("Неверный BIND_ADDR");
     info!("🚀 Zali Server запущен на http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
@@ -1547,36 +2037,6 @@ async fn ensure_message_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await
         .ok();
     Ok(())
-}
-
-fn conversation_scope_key(
-    auth_user: &str,
-    peer: Option<&str>,
-    server_id: Option<&str>,
-    channel_id: Option<&str>,
-) -> Option<String> {
-    let sid = server_id.unwrap_or("").trim();
-    let cid = channel_id.unwrap_or("").trim();
-    if !sid.is_empty() && !cid.is_empty() {
-        return Some(format!("server:{}:{}", sid, cid));
-    }
-
-    let peer = peer.unwrap_or("").trim();
-    if peer.is_empty() || auth_user.trim().is_empty() {
-        return None;
-    }
-    let mut pair = vec![auth_user.trim().to_string(), peer.to_string()];
-    pair.sort();
-    Some(format!("dm:{}:{}", pair.join(":"), "v2"))
-}
-
-fn random_conversation_key() -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let mut bytes = [0u8; 32];
-    let mut rng = rand::thread_rng();
-    use rand::RngCore as _;
-    rng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 async fn seed_default_servers(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -2409,6 +2869,21 @@ async fn load_channel_permissions(
         .collect())
 }
 
+async fn channel_belongs_to_server(
+    pool: &SqlitePool,
+    server_id: &str,
+    channel_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let exists = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM channels WHERE id = ? AND server_id = ? LIMIT 1",
+    )
+    .bind(channel_id)
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(exists.is_some())
+}
+
 async fn load_channel_permission_record(
     pool: &SqlitePool,
     channel_id: &str,
@@ -2781,12 +3256,30 @@ async fn can_access_channel(
             _ => false,
         });
     }
-    let (can_view, can_send, can_manage) =
-        load_server_role_permissions(pool, server_id, role_key).await?;
+    let role_record = load_server_role_record(pool, server_id, role_key).await?;
+    let (can_view, can_send, can_manage, can_voice) = role_record
+        .map(|role| {
+            (
+                role.can_view != 0,
+                role.can_send != 0,
+                role.can_manage != 0,
+                role.can_voice != 0,
+            )
+        })
+        .unwrap_or_else(|| {
+            let (can_view, can_send, can_manage) = fallback_role_permissions(role_key);
+            (
+                can_view,
+                can_send,
+                can_manage,
+                role_key == "owner" || role_key == "admin" || role_key == "member",
+            )
+        });
     Ok(match action {
         "view" => can_view,
         "send" => can_send,
         "manage" => can_manage,
+        "voice" => can_view && can_voice,
         _ => false,
     })
 }
@@ -2953,6 +3446,33 @@ async fn me(AuthenticatedUser(username): AuthenticatedUser) -> impl IntoResponse
     Json(serde_json::json!({ "username": username })).into_response()
 }
 
+async fn logout(
+    AuthenticatedUser(auth_user): AuthenticatedUser,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match sqlx::query("UPDATE users SET token_version = token_version + 1 WHERE username = ?")
+        .bind(&auth_user)
+        .execute(&state.db)
+        .await
+    {
+        Ok(_) => {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            let expired_cookie = format!(
+                "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+                AUTH_COOKIE_NAME
+            );
+            if let Ok(value) = HeaderValue::from_str(&expired_cookie) {
+                response.headers_mut().insert(header::SET_COOKIE, value);
+            }
+            response
+        }
+        Err(e) => {
+            error!("Ошибка logout для {}: {}", auth_user, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 async fn hash_password(password: String) -> Result<String, String> {
     task::spawn_blocking(move || bcrypt::hash(password, bcrypt::DEFAULT_COST))
         .await
@@ -3092,10 +3612,42 @@ fn voice_room_payload(room_id: &str, room: &VoiceRoom) -> serde_json::Value {
         "type": "voice_room_state",
         "roomId": room_id,
         "roomType": room.room_type,
+        "status": room.call_state,
+        "initiator": room.initiator,
+        "target": room.target,
         "serverId": room.server_id,
         "channelId": room.channel_id,
         "participants": participants,
     })
+}
+
+async fn send_voice_room_snapshot_to_user(state: &Arc<AppState>, username: &str) {
+    let mut payloads = Vec::new();
+
+    if let Some(room_id) = state.user_voice_rooms.get(username) {
+        if let Some(room) = state.voice_rooms.get(room_id.value()) {
+            payloads.push(voice_room_payload(room_id.value(), room.value()));
+        }
+    }
+
+    if payloads.is_empty() {
+        let username = username.to_string();
+        for room in state.voice_rooms.iter() {
+            let room_id = room.key().clone();
+            let room = room.value();
+            let is_pending_dm = room.room_type == "dm" && room.call_state == "ringing";
+            let participant_match = room.participants.contains(&username);
+            let initiator_match = room.initiator.as_deref() == Some(username.as_str());
+            let target_match = room.target.as_deref() == Some(username.as_str());
+            if is_pending_dm && (participant_match || initiator_match || target_match) {
+                payloads.push(voice_room_payload(&room_id, room));
+            }
+        }
+    }
+
+    for payload in payloads {
+        send_json_to_user(state, username, payload).await;
+    }
 }
 
 async fn broadcast_voice_room_state(state: &Arc<AppState>, room_id: &str) {
@@ -3216,6 +3768,34 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
         return;
     }
 
+    let room_snapshot = state.voice_rooms.get(&room_id).map(|room| {
+        let participants = room.participants.iter().cloned().collect::<Vec<_>>();
+        (
+            room.room_type.clone(),
+            room.call_state.clone(),
+            room.initiator.clone(),
+            room.target.clone(),
+            participants,
+        )
+    });
+    let Some((room_type, call_state, initiator, room_target, participants)) = room_snapshot else {
+        warn!(
+            "[VOICE][ROUTE] reject missing room sender={} roomId={}",
+            sender, room_id
+        );
+        return;
+    };
+    let sender_allowed = participants.iter().any(|participant| participant == sender)
+        || initiator.as_deref() == Some(sender)
+        || room_target.as_deref() == Some(sender);
+    if !sender_allowed {
+        warn!(
+            "[VOICE][ROUTE] reject unauthorized sender={} roomId={} roomType={} state={}",
+            sender, room_id, room_type, call_state
+        );
+        return;
+    }
+
     info!(
         "[VOICE][ROUTE] from={} roomId={} roomType={} to={} signalType={}",
         sender,
@@ -3233,6 +3813,18 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
     {
+        let target_allowed = participants
+            .iter()
+            .any(|participant| participant == &target)
+            || initiator.as_deref() == Some(target.as_str())
+            || room_target.as_deref() == Some(target.as_str());
+        if !target_allowed {
+            warn!(
+                "[VOICE][ROUTE] reject target={} sender={} roomId={} not in room",
+                target, sender, room_id
+            );
+            return;
+        }
         let active_ws = state
             .user_connections
             .get(&target)
@@ -3249,12 +3841,6 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
         send_json_to_user(state, &target, signal).await;
         return;
     }
-
-    let participants = state
-        .voice_rooms
-        .get(&room_id)
-        .map(|room| room.participants.iter().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
 
     for participant in participants {
         if participant == sender {
@@ -3313,7 +3899,7 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
 
             if room_type == "channel" {
                 if let (Some(sid), Some(cid)) = (server_id.as_deref(), channel_id.as_deref()) {
-                    if !can_access_channel(&state.db, sid, cid, sender, "view")
+                    if !can_access_channel(&state.db, sid, cid, sender, "voice")
                         .await
                         .unwrap_or(false)
                     {
@@ -3329,6 +3915,39 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                         .await;
                         return;
                     }
+                }
+            } else if room_type == "dm" {
+                let room = match state.voice_rooms.get(&room_id) {
+                    Some(room) => room,
+                    None => {
+                        send_json_to_user(
+                            state,
+                            sender,
+                            serde_json::json!({
+                                "type": "voice_error",
+                                "roomId": room_id,
+                                "message": "Голосовая комната не найдена"
+                            }),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                let allowed = room.participants.contains(sender)
+                    || room.initiator.as_deref() == Some(sender)
+                    || room.target.as_deref() == Some(sender);
+                if !allowed {
+                    send_json_to_user(
+                        state,
+                        sender,
+                        serde_json::json!({
+                            "type": "voice_error",
+                            "roomId": room_id,
+                            "message": "Нет доступа к голосовой переписке"
+                        }),
+                    )
+                    .await;
+                    return;
                 }
             }
 
@@ -3370,10 +3989,60 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
             if target.is_empty() {
                 return;
             }
+            match contact_exists(&state.db, sender, &target).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    send_json_to_user(
+                        state,
+                        sender,
+                        serde_json::json!({
+                            "type": "voice_error",
+                            "roomId": room_key,
+                            "message": "Получатель должен быть в контактах"
+                        }),
+                    )
+                    .await;
+                    return;
+                }
+                Err(e) => {
+                    error!(
+                        "Ошибка проверки контакта для voice_call_invite sender={} target={}: {}",
+                        sender, target, e
+                    );
+                    send_json_to_user(
+                        state,
+                        sender,
+                        serde_json::json!({
+                            "type": "voice_error",
+                            "roomId": room_key,
+                            "message": "Не удалось проверить контакты"
+                        }),
+                    )
+                    .await;
+                    return;
+                }
+            }
             info!(
                 "[VOICE][INVITE] from={} to={} roomId={}",
                 sender, target, room_key
             );
+            {
+                let mut room = state
+                    .voice_rooms
+                    .entry(room_key.clone())
+                    .or_insert_with(|| VoiceRoom::new("dm".to_string(), None, None));
+                let room = room.value_mut();
+                room.room_type = "dm".to_string();
+                room.server_id = None;
+                room.channel_id = None;
+                room.call_state = "ringing".to_string();
+                room.initiator = Some(sender.to_string());
+                room.target = Some(target.clone());
+                room.participants.clear();
+                room.participants.insert(sender.to_string());
+                room.participants.insert(target.clone());
+            }
+            broadcast_voice_room_state(state, &room_key).await;
             send_json_to_user(
                 state,
                 &target,
@@ -3412,20 +4081,48 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
             if room_id.is_empty() || inviter.is_empty() {
                 return;
             }
+            let room_snapshot = state.voice_rooms.get(&room_id).map(|room| {
+                (
+                    room.room_type.clone(),
+                    room.call_state.clone(),
+                    room.initiator.clone(),
+                    room.target.clone(),
+                )
+            });
+            let Some((room_type, call_state, initiator, target)) = room_snapshot else {
+                warn!(
+                    "[VOICE][ACCEPT] reject missing room sender={} roomId={}",
+                    sender, room_id
+                );
+                return;
+            };
+            if room_type != "dm"
+                || call_state != "ringing"
+                || initiator.as_deref() != Some(inviter.as_str())
+                || target.as_deref() != Some(sender)
+            {
+                warn!(
+                    "[VOICE][ACCEPT] reject unauthorized sender={} roomId={} inviter={} state={} initiator={:?} target={:?}",
+                    sender, room_id, inviter, call_state, initiator, target
+                );
+                return;
+            }
             info!(
                 "[VOICE] '{}' accepted call room={} inviter={}",
                 sender, room_id, inviter
             );
 
             {
-                let mut room = state
-                    .voice_rooms
-                    .entry(room_id.clone())
-                    .or_insert_with(|| VoiceRoom::new("dm".to_string(), None, None));
+                let Some(mut room) = state.voice_rooms.get_mut(&room_id) else {
+                    return;
+                };
                 let room = room.value_mut();
                 room.room_type = "dm".to_string();
                 room.server_id = None;
                 room.channel_id = None;
+                room.call_state = "active".to_string();
+                room.initiator = Some(inviter.clone());
+                room.target = Some(sender.to_string());
                 room.participants.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(inviter.to_string());
@@ -3442,6 +4139,7 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 "[VOICE][ACCEPT] room={} sender={} inviter={} participants=[{},{}]",
                 room_id, sender, inviter, sender, inviter
             );
+            broadcast_voice_room_state(state, &room_id).await;
             let accepted_payload = serde_json::json!({
                 "type": "voice_call_accepted",
                 "roomId": room_id,
@@ -3479,10 +4177,28 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
             if room_id.is_empty() || inviter.is_empty() {
                 return;
             }
+            let allowed = state
+                .voice_rooms
+                .get(&room_id)
+                .map(|room| {
+                    room.room_type == "dm"
+                        && room.call_state == "ringing"
+                        && room.initiator.as_deref() == Some(inviter.as_str())
+                        && room.target.as_deref() == Some(sender)
+                })
+                .unwrap_or(false);
+            if !allowed {
+                warn!(
+                    "[VOICE][REJECT] reject unauthorized sender={} roomId={} inviter={}",
+                    sender, room_id, inviter
+                );
+                return;
+            }
             info!(
                 "[VOICE][REJECT] from={} to={} roomId={}",
                 sender, inviter, room_id
             );
+            state.voice_rooms.remove(&room_id);
             send_json_to_user(
                 state,
                 &inviter,
@@ -3509,10 +4225,28 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
             if room_id.is_empty() || target.is_empty() {
                 return;
             }
+            let allowed = state
+                .voice_rooms
+                .get(&room_id)
+                .map(|room| {
+                    room.room_type == "dm"
+                        && room.call_state == "ringing"
+                        && room.initiator.as_deref() == Some(sender)
+                        && room.target.as_deref() == Some(target.as_str())
+                })
+                .unwrap_or(false);
+            if !allowed {
+                warn!(
+                    "[VOICE][CANCEL] reject unauthorized sender={} roomId={} target={}",
+                    sender, room_id, target
+                );
+                return;
+            }
             info!(
                 "[VOICE][CANCEL] from={} to={} roomId={}",
                 sender, target, room_id
             );
+            state.voice_rooms.remove(&room_id);
             send_json_to_user(
                 state,
                 &target,
@@ -3681,6 +4415,7 @@ async fn broadcast_reaction_event(state: &Arc<AppState>, message: &Message) {
 
 fn issue_auth_response(
     username: String,
+    token_version: i64,
     jwt_secret: &[u8],
 ) -> Result<AuthResponse, jsonwebtoken::errors::Error> {
     let exp = Utc::now()
@@ -3690,15 +4425,28 @@ fn issue_auth_response(
 
     let claims = Claims {
         sub: username.clone(),
+        iss: JWT_ISSUER.to_string(),
+        aud: JWT_AUDIENCE.to_string(),
+        token_version,
+        jti: Uuid::new_v4().to_string(),
         exp,
     };
     let token = encode(
-        &Header::default(),
+        &Header::new(Algorithm::HS256),
         &claims,
         &EncodingKey::from_secret(jwt_secret),
     )?;
 
     Ok(AuthResponse { token, username })
+}
+
+fn jwt_validation() -> Validation {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&[JWT_ISSUER]);
+    validation.set_audience(&[JWT_AUDIENCE]);
+    validation.validate_exp = true;
+    validation.sub = None;
+    validation
 }
 
 fn auth_cookie_value(token: &str, secure: bool) -> Result<HeaderValue, ()> {
@@ -3741,35 +4489,48 @@ async fn register(
             .into_response();
     }
 
-    if payload.username.len() > 64 {
+    let username = payload.username.trim();
+    if username.len() < 3 || username.len() > 32 {
         warn!(
             "Регистрация отклонена: username '{}' слишком длинный ({} символов)",
-            payload.username,
-            payload.username.len()
+            username,
+            username.len()
         );
         return (
             StatusCode::BAD_REQUEST,
-            "Логин слишком длинный (максимум 64 символа)",
+            "Логин должен быть длиной от 3 до 32 символов",
         )
             .into_response();
     }
 
-    if payload.password.len() < 6 {
+    if !is_valid_username(username) {
+        warn!(
+            "Регистрация отклонена: username '{}' не прошёл валидацию",
+            username
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            "Логин может содержать только латинские буквы, цифры, _ и -",
+        )
+            .into_response();
+    }
+
+    if payload.password.len() < 8 {
         warn!(
             "Регистрация отклонена: username '{}' использует слишком короткий пароль ({} символов)",
-            payload.username,
+            username,
             payload.password.len()
         );
         return (
             StatusCode::BAD_REQUEST,
-            "Пароль должен быть не менее 6 символов",
+            "Пароль должен быть не менее 8 символов",
         )
             .into_response();
     }
 
     info!(
         "Хэширование пароля для нового пользователя '{}'",
-        payload.username
+        username
     );
     let hashed = match hash_password(payload.password.clone()).await {
         Ok(h) => h,
@@ -3780,7 +4541,7 @@ async fn register(
     };
 
     match sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
-        .bind(&payload.username)
+        .bind(username)
         .bind(&hashed)
         .execute(&state.db)
         .await
@@ -3788,9 +4549,9 @@ async fn register(
         Ok(_) => {
             info!(
                 "Регистрация успешно завершена для пользователя '{}'",
-                payload.username
+                username
             );
-            match issue_auth_response(payload.username.clone(), &state.config.jwt_secret) {
+            match issue_auth_response(username.to_string(), 0, &state.config.jwt_secret) {
                 Ok(auth) => auth_response_with_cookie_and_secure(
                     StatusCode::CREATED,
                     auth,
@@ -3805,7 +4566,7 @@ async fn register(
         Err(e) => {
             warn!(
                 "Регистрация не удалась для '{}': пользователь уже существует или БД вернула ошибку: {}",
-                payload.username,
+                username,
                 e
             );
             (StatusCode::CONFLICT, "Пользователь уже существует").into_response()
@@ -3815,10 +4576,11 @@ async fn register(
 
 async fn login(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<AuthPayload>,
 ) -> impl IntoResponse {
     // --- Rate limiting ---
-    let rate_key = payload.username.to_lowercase();
+    let rate_key = login_rate_key(remote_addr, &payload.username);
     let window = Duration::from_secs(state.config.rate_limit_window_secs);
     let max_attempts = state.config.rate_limit_max_attempts;
     let now = Instant::now();
@@ -3858,15 +4620,17 @@ async fn login(
         }
     }
 
-    let row = sqlx::query("SELECT username, password_hash FROM users WHERE username = ?")
-        .bind(&payload.username)
-        .fetch_one(&state.db)
-        .await;
+    let row =
+        sqlx::query("SELECT username, password_hash, token_version FROM users WHERE username = ?")
+            .bind(&payload.username)
+            .fetch_optional(&state.db)
+            .await;
 
     match row {
-        Ok(r) => {
+        Ok(Some(r)) => {
             let username: String = r.get("username");
             let hash: String = r.get("password_hash");
+            let token_version: i64 = r.get::<i64, _>("token_version");
 
             let valid = match verify_password(payload.password.clone(), hash).await {
                 Ok(valid) => valid,
@@ -3883,7 +4647,7 @@ async fn login(
             // Clear rate limit on success
             state.login_attempts.remove(&rate_key);
 
-            match issue_auth_response(username.clone(), &state.config.jwt_secret) {
+            match issue_auth_response(username.clone(), token_version, &state.config.jwt_secret) {
                 Ok(auth) => {
                     info!("Успешный вход: {}", username);
                     auth_response_with_cookie_and_secure(
@@ -3898,21 +4662,44 @@ async fn login(
                 }
             }
         }
-        Err(_) => (StatusCode::UNAUTHORIZED, "Неверный логин или пароль").into_response(),
+        Ok(None) => {
+            let _ = verify_password(payload.password.clone(), DUMMY_BCRYPT_HASH.to_string()).await;
+            (StatusCode::UNAUTHORIZED, "Неверный логин или пароль").into_response()
+        }
+        Err(e) => {
+            error!("Ошибка чтения пользователя при логине: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
+}
+
+fn login_rate_key(remote_addr: SocketAddr, username: &str) -> String {
+    let username = username.trim().to_lowercase();
+    format!("{}|{}", username, remote_addr.ip())
 }
 
 async fn get_users(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     _auth: AuthenticatedUser,
+    Query(query): Query<UserSearchQuery>,
 ) -> impl IntoResponse {
-    info!("API get_users start");
-    match sqlx::query_scalar::<_, String>("SELECT username FROM users ORDER BY username")
-        .fetch_all(&state.db)
-        .await
+    let query = query.q.unwrap_or_default().trim().to_lowercase();
+    if query.len() < 3 {
+        info!("API get_users short_query len={}", query.len());
+        return Json(Vec::<String>::new()).into_response();
+    }
+
+    info!("API get_users start query={}", query);
+    let like = format!("%{}%", query);
+    match sqlx::query_scalar::<_, String>(
+        "SELECT username FROM users WHERE lower(username) LIKE ? ORDER BY username LIMIT 50",
+    )
+    .bind(like)
+    .fetch_all(&state.db)
+    .await
     {
         Ok(users) => {
-            info!("API get_users count={}", users.len());
+            info!("API get_users query={} count={}", query, users.len());
             Json(users).into_response()
         }
         Err(e) => {
@@ -3953,8 +4740,16 @@ async fn get_contacts(
 async fn add_contact(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
     Json(payload): Json<ContactPayload>,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &owner, &headers).await.is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            "Контакты может менять только доверенное устройство",
+        )
+            .into_response();
+    }
     let contact = payload.username.trim();
     info!("API add_contact start owner={} contact={}", owner, contact);
     if contact.is_empty() {
@@ -4002,7 +4797,15 @@ async fn delete_contact(
     AxumPath(username): AxumPath<String>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &owner, &headers).await.is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            "Контакты может менять только доверенное устройство",
+        )
+            .into_response();
+    }
     info!(
         "API delete_contact start owner={} contact={}",
         owner, username
@@ -4024,6 +4827,1121 @@ async fn delete_contact(
     get_contacts(axum::extract::State(state), AuthenticatedUser(owner))
         .await
         .into_response()
+}
+
+async fn contact_exists(
+    pool: &SqlitePool,
+    owner: &str,
+    contact: &str,
+) -> Result<bool, sqlx::Error> {
+    let exists = sqlx::query_scalar::<_, String>(
+        "SELECT contact FROM contacts WHERE owner = ? AND contact = ? LIMIT 1",
+    )
+    .bind(owner)
+    .bind(contact)
+    .fetch_optional(pool)
+    .await?;
+    Ok(exists.is_some())
+}
+
+fn trim_limited(value: impl AsRef<str>, max_len: usize) -> String {
+    value
+        .as_ref()
+        .trim()
+        .chars()
+        .take(max_len)
+        .collect::<String>()
+}
+
+fn is_valid_username(value: &str) -> bool {
+    let len = value.chars().count();
+    (3..=32).contains(&len)
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn device_record_to_response(record: DeviceRecord) -> DeviceResponse {
+    let key_package = serde_json::from_str(&record.key_package).unwrap_or_else(|_| {
+        serde_json::json!({
+            "raw": record.key_package
+        })
+    });
+    DeviceResponse {
+        deviceId: record.device_id,
+        owner: record.owner,
+        label: record.label,
+        publicKey: record.public_key,
+        keyPackage: key_package,
+        groupEpoch: record.group_epoch,
+        approved: record.approved != 0,
+        revoked: record.revoked != 0,
+        approvedBy: record.approved_by,
+        historyDays: record.history_days,
+        createdAt: record.created_at,
+        approvedAt: record.approved_at,
+        revokedAt: record.revoked_at,
+    }
+}
+
+async fn next_device_epoch(pool: &SqlitePool, owner: &str) -> Result<i64, sqlx::Error> {
+    let current = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT MAX(group_epoch) FROM account_devices WHERE owner = ?",
+    )
+    .bind(owner)
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(0);
+    Ok(current + 1)
+}
+
+async fn load_device(
+    pool: &SqlitePool,
+    owner: &str,
+    device_id: &str,
+) -> Result<Option<DeviceRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DeviceRecord>(
+        "SELECT device_id, owner, label, public_key, signing_key, key_package, group_epoch,
+                approved, revoked, approved_by, history_days, created_at, approved_at, revoked_at
+         FROM account_devices
+         WHERE owner = ? AND device_id = ?
+         LIMIT 1",
+    )
+    .bind(owner)
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn require_approved_device(
+    pool: &SqlitePool,
+    owner: &str,
+    device_id: &str,
+) -> Result<DeviceRecord, Response> {
+    match load_device(pool, owner, device_id).await {
+        Ok(Some(device)) if device.approved != 0 && device.revoked == 0 => Ok(device),
+        Ok(Some(_)) => Err((StatusCode::FORBIDDEN, "Устройство не подтверждено").into_response()),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "Устройство не найдено").into_response()),
+        Err(e) => {
+            error!("Ошибка чтения устройства {}: {}", device_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+    }
+}
+
+async fn require_trusted_device(
+    pool: &SqlitePool,
+    owner: &str,
+    headers: &HeaderMap,
+) -> Result<DeviceRecord, Response> {
+    let device_id = match header_device_id(headers) {
+        Some(value) => value,
+        None => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response())
+        }
+    };
+    require_approved_device(pool, owner, &device_id).await
+}
+
+async fn append_transparency_log(
+    pool: &SqlitePool,
+    owner: &str,
+    event_type: &str,
+    group_epoch: i64,
+    actor_device_id: &str,
+    target_device_id: Option<&str>,
+    event_json: serde_json::Value,
+    signature: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO transparency_log
+         (owner, event_type, group_epoch, actor_device_id, target_device_id, event_json, signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(owner)
+    .bind(event_type)
+    .bind(group_epoch)
+    .bind(actor_device_id)
+    .bind(target_device_id)
+    .bind(event_json.to_string())
+    .bind(signature.unwrap_or(""))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn get_devices(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+) -> impl IntoResponse {
+    match sqlx::query_as::<_, DeviceRecord>(
+        "SELECT device_id, owner, label, public_key, signing_key, key_package, group_epoch,
+                approved, revoked, approved_by, history_days, created_at, approved_at, revoked_at
+         FROM account_devices
+         WHERE owner = ?
+         ORDER BY revoked ASC, approved DESC, created_at ASC",
+    )
+    .bind(&owner)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(devices) => Json(
+            devices
+                .into_iter()
+                .map(device_record_to_response)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка получения устройств {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn register_device(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    Json(payload): Json<RegisterDevicePayload>,
+) -> impl IntoResponse {
+    let device_id = trim_limited(payload.deviceId, 128);
+    if device_id.len() < 8 || device_id.chars().any(char::is_whitespace) {
+        return (StatusCode::BAD_REQUEST, "Некорректный deviceId").into_response();
+    }
+
+    let label = trim_limited(
+        payload.label.unwrap_or_else(|| "Zali device".to_string()),
+        96,
+    );
+    let public_key = trim_limited(payload.publicKey.unwrap_or_default(), 4096);
+    let signing_key = trim_limited(payload.signingKey.unwrap_or_default(), 4096);
+    let key_package =
+        serde_json::to_string(&payload.keyPackage.unwrap_or_else(|| serde_json::json!({})))
+            .unwrap_or_else(|_| "{}".to_string());
+
+    let mut conn = match state.db.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Ошибка получения соединения для регистрации устройства {}: {}", device_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
+        error!("Ошибка начала блокирующей транзакции для устройства {}: {}", device_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let result: Result<(bool, i64), sqlx::Error> = async {
+        let approved_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
+        )
+        .bind(&owner)
+        .fetch_one(&mut *conn)
+        .await?;
+
+        let first_device = approved_count == 0;
+        let group_epoch = if first_device {
+            1
+        } else {
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT MAX(group_epoch) FROM account_devices WHERE owner = ?",
+            )
+            .bind(&owner)
+            .fetch_one(&mut *conn)
+            .await?
+            .unwrap_or(1)
+        };
+        let approved = if first_device { 1 } else { 0 };
+        let approved_by = if first_device {
+            Some(device_id.clone())
+        } else {
+            None
+        };
+
+        sqlx::query(
+            "INSERT INTO account_devices
+             (owner, device_id, label, public_key, signing_key, key_package, group_epoch, approved, revoked, approved_by, approved_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)
+             ON CONFLICT(owner, device_id) DO UPDATE SET
+                label = excluded.label,
+                public_key = excluded.public_key,
+                signing_key = excluded.signing_key,
+                key_package = excluded.key_package,
+                approved = excluded.approved,
+                revoked = 0,
+                approved_by = COALESCE(excluded.approved_by, approved_by),
+                approved_at = COALESCE(approved_at, excluded.approved_at),
+                revoked_at = NULL,
+                history_days = COALESCE(history_days, 30),
+                group_epoch = excluded.group_epoch",
+        )
+        .bind(&owner)
+        .bind(&device_id)
+        .bind(&label)
+        .bind(&public_key)
+        .bind(&signing_key)
+        .bind(&key_package)
+        .bind(group_epoch)
+        .bind(approved)
+        .bind(approved_by.as_deref())
+        .bind(approved)
+        .execute(&mut *conn)
+        .await?;
+
+        if first_device {
+            sqlx::query(
+                "UPDATE account_devices
+                 SET approved = 1,
+                     revoked = 0,
+                     approved_by = device_id,
+                     approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP),
+                     history_days = COALESCE(history_days, 3650),
+                     group_epoch = 1,
+                     revoked_at = NULL
+                 WHERE owner = ? AND device_id = ?",
+            )
+            .bind(&owner)
+            .bind(&device_id)
+            .execute(&mut *conn)
+            .await?;
+        }
+
+        sqlx::query("COMMIT").execute(&mut *conn).await?;
+        Ok((first_device, group_epoch))
+    }
+    .await;
+
+    let (first_device, group_epoch) = match result {
+        Ok(value) => value,
+        Err(e) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            error!("Ошибка регистрации устройства {}: {}", device_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if first_device {
+        let _ = append_transparency_log(
+            &state.db,
+            &owner,
+            "device_add",
+            group_epoch,
+            &device_id,
+            Some(&device_id),
+            serde_json::json!({
+                "type": "device_add",
+                "account_id": owner,
+                "new_device_id": device_id,
+                "approved_by": device_id,
+                "device_group_epoch": group_epoch,
+                "first_device": true
+            }),
+            None,
+        )
+        .await;
+    }
+
+    match load_device(&state.db, &owner, &device_id).await {
+        Ok(Some(device)) => Json(device_record_to_response(device)).into_response(),
+        Ok(None) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => {
+            error!("Ошибка чтения зарегистрированного устройства: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn approve_device(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
+    Json(payload): Json<ApproveDevicePayload>,
+) -> impl IntoResponse {
+    let target_id = trim_limited(payload.deviceId, 128);
+    let actor_id = trim_limited(payload.approvedByDeviceId, 128);
+    let header_actor_id = match header_device_id(&headers) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response()
+        }
+    };
+    if target_id.is_empty() || actor_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Нужны deviceId и approvedByDeviceId",
+        )
+            .into_response();
+    }
+    if actor_id != header_actor_id {
+        return (
+            StatusCode::FORBIDDEN,
+            "approvedByDeviceId должен совпадать с X-Zali-Device-ID",
+        )
+            .into_response();
+    }
+
+    if require_approved_device(&state.db, &owner, &header_actor_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Подтверждать может только доверенное устройство",
+        )
+            .into_response();
+    }
+
+    let target = match load_device(&state.db, &owner, &target_id).await {
+        Ok(Some(device)) if device.revoked == 0 => device,
+        Ok(Some(_)) => return (StatusCode::FORBIDDEN, "Устройство отозвано").into_response(),
+        Ok(None) => return (StatusCode::NOT_FOUND, "Устройство не найдено").into_response(),
+        Err(e) => {
+            error!("Ошибка чтения устройства {}: {}", target_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let history_days = payload.historyDays.unwrap_or(30).clamp(0, 30);
+    let group_epoch = match next_device_epoch(&state.db, &owner).await {
+        Ok(epoch) => epoch,
+        Err(e) => {
+            error!("Ошибка расчета эпохи устройств {}: {}", owner, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let key_package = payload
+        .keyPackage
+        .map(|value| serde_json::to_string(&value).unwrap_or_else(|_| target.key_package.clone()))
+        .unwrap_or(target.key_package);
+
+    if let Err(e) = sqlx::query(
+        "UPDATE account_devices
+         SET approved = 1,
+             revoked = 0,
+             approved_by = ?,
+             history_days = ?,
+             group_epoch = ?,
+             key_package = ?,
+             approved_at = CURRENT_TIMESTAMP,
+             revoked_at = NULL
+         WHERE owner = ? AND device_id = ?",
+    )
+    .bind(&actor_id)
+    .bind(history_days)
+    .bind(group_epoch)
+    .bind(&key_package)
+    .bind(&owner)
+    .bind(&target_id)
+    .execute(&state.db)
+    .await
+    {
+        error!("Ошибка подтверждения устройства {}: {}", target_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let _ = append_transparency_log(
+        &state.db,
+        &owner,
+        "device_add",
+        group_epoch,
+        &header_actor_id,
+        Some(&target_id),
+        serde_json::json!({
+            "type": "device_add",
+            "account_id": owner,
+            "new_device_id": target_id,
+            "approved_by": header_actor_id,
+            "device_group_epoch": group_epoch,
+            "history_days": history_days
+        }),
+        payload.signature.as_deref(),
+    )
+    .await;
+
+    match load_device(&state.db, &owner, &target_id).await {
+        Ok(Some(device)) => Json(device_record_to_response(device)).into_response(),
+        Ok(None) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => {
+            error!("Ошибка чтения подтвержденного устройства: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn revoke_device(
+    AxumPath(device_id): AxumPath<String>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let device_id = trim_limited(device_id, 128);
+    let actor_id = match header_device_id(&headers) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response()
+        }
+    };
+    if require_approved_device(&state.db, &owner, &actor_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Отзывать может только доверенное устройство",
+        )
+            .into_response();
+    }
+    let active_count = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
+    )
+    .bind(&owner)
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            error!("Ошибка подсчета активных устройств {}: {}", owner, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let target = match load_device(&state.db, &owner, &device_id).await {
+        Ok(Some(device)) => device,
+        Ok(None) => return (StatusCode::NOT_FOUND, "Устройство не найдено").into_response(),
+        Err(e) => {
+            error!("Ошибка чтения устройства {}: {}", device_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if target.approved != 0 && target.revoked == 0 && active_count <= 1 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Нельзя отозвать последнее доверенное устройство",
+        )
+            .into_response();
+    }
+
+    let group_epoch = match next_device_epoch(&state.db, &owner).await {
+        Ok(epoch) => epoch,
+        Err(e) => {
+            error!("Ошибка расчета эпохи устройств {}: {}", owner, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if let Err(e) = sqlx::query(
+        "UPDATE account_devices
+         SET revoked = 1, approved = 0, group_epoch = ?, revoked_at = CURRENT_TIMESTAMP
+         WHERE owner = ? AND device_id = ?",
+    )
+    .bind(group_epoch)
+    .bind(&owner)
+    .bind(&device_id)
+    .execute(&state.db)
+    .await
+    {
+        error!("Ошибка отзыва устройства {}: {}", device_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let _ = append_transparency_log(
+        &state.db,
+        &owner,
+        "device_remove",
+        group_epoch,
+        &actor_id,
+        Some(&device_id),
+        serde_json::json!({
+            "type": "device_remove",
+            "account_id": owner,
+            "actor_device_id": actor_id,
+            "removed_device_id": device_id,
+            "device_group_epoch": group_epoch
+        }),
+        None,
+    )
+    .await;
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[allow(non_snake_case)]
+struct VaultQuery {
+    deviceId: Option<String>,
+}
+
+async fn post_vault_event(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
+    Json(payload): Json<VaultEventPayload>,
+) -> impl IntoResponse {
+    let device_id = trim_limited(payload.deviceId, 128);
+    let header_device = match header_device_id(&headers) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response()
+        }
+    };
+    if device_id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Нужен deviceId").into_response();
+    }
+    if device_id != header_device {
+        return (
+            StatusCode::FORBIDDEN,
+            "deviceId должен совпадать с X-Zali-Device-ID",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &owner, &header_device)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Vault может публиковать только доверенное устройство",
+        )
+            .into_response();
+    }
+    let encrypted = trim_limited(payload.encryptedVaultEvent, 262_144);
+    if encrypted.len() < 16 {
+        return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
+    }
+    let event_id = Uuid::new_v4().to_string();
+    let vault_epoch = payload
+        .vaultEpoch
+        .unwrap_or_else(|| Utc::now().timestamp())
+        .max(1);
+    let target = payload
+        .issuedToDeviceId
+        .map(|value| trim_limited(value, 128))
+        .filter(|value| !value.is_empty());
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO account_vault_events
+         (event_id, owner, device_id, issued_to_device_id, vault_epoch, encrypted_vault_event, signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&event_id)
+    .bind(&owner)
+    .bind(&header_device)
+    .bind(target.as_deref())
+    .bind(vault_epoch)
+    .bind(&encrypted)
+    .bind(payload.signature.as_deref().unwrap_or(""))
+    .execute(&state.db)
+    .await
+    {
+        error!("Ошибка записи vault event {}: {}", event_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(serde_json::json!({
+        "eventId": event_id,
+        "vaultEpoch": vault_epoch
+    }))
+    .into_response()
+}
+
+async fn get_vault_events(
+    Query(query): Query<VaultQuery>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let device_id = match header_device_id(&headers) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response()
+        }
+    };
+    if query
+        .deviceId
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|query_device| query_device != device_id)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "deviceId в запросе должен совпадать с X-Zali-Device-ID",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &owner, &device_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Vault доступен только доверенному устройству",
+        )
+            .into_response();
+    }
+
+    let rows = sqlx::query_as::<_, VaultEventRecord>(
+        "SELECT event_id, owner, device_id, issued_to_device_id, vault_epoch,
+                encrypted_vault_event, signature, created_at
+         FROM account_vault_events
+         WHERE owner = ? AND (issued_to_device_id IS NULL OR issued_to_device_id = ?)
+         ORDER BY vault_epoch ASC, created_at ASC",
+    )
+    .bind(&owner)
+    .bind(&device_id)
+    .fetch_all(&state.db)
+    .await;
+
+    match rows {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|row| VaultEventResponse {
+                    eventId: row.event_id,
+                    owner: row.owner,
+                    deviceId: row.device_id,
+                    issuedToDeviceId: row.issued_to_device_id,
+                    vaultEpoch: row.vault_epoch,
+                    encryptedVaultEvent: row.encrypted_vault_event,
+                    signature: row.signature,
+                    createdAt: row.created_at,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка чтения vault events {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, Response> {
+    DateTime::parse_from_rfc3339(value.trim())
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Дата должна быть RFC3339").into_response())
+}
+
+fn max_datetime(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
+    match (a, b) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HistoryWindow {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct HistoryAccess {
+    base_since: Option<DateTime<Utc>>,
+    ticket_windows: Vec<HistoryWindow>,
+}
+
+async fn resolve_history_access(
+    pool: &SqlitePool,
+    owner: &str,
+    page: &MessagePageQuery,
+    headers: &HeaderMap,
+    conversation_id: Option<&str>,
+) -> Result<HistoryAccess, Response> {
+    let explicit_since = match page
+        .since
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        Some(value) => Some(parse_rfc3339_utc(value)?),
+        None => None,
+    };
+    let header_device_id = headers
+        .get("x-zali-device-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let device_id = header_device_id;
+
+    let Some(device_id) = device_id else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Для истории нужен X-Zali-Device-ID",
+        )
+            .into_response());
+    };
+
+    if let Some(query_device_id) = page
+        .device_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if query_device_id != device_id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "deviceId в запросе должен совпадать с X-Zali-Device-ID",
+            )
+                .into_response());
+        }
+    };
+
+    let device = match load_device(pool, owner, device_id).await {
+        Ok(Some(device)) => device,
+        Ok(None) => {
+            return Err((StatusCode::FORBIDDEN, "Устройство не зарегистрировано").into_response())
+        }
+        Err(e) => {
+            error!(
+                "Ошибка чтения устройства {} для окна истории: {}",
+                device_id, e
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    };
+    if device.approved == 0 || device.revoked != 0 {
+        return Err((StatusCode::FORBIDDEN, "Устройство не подтверждено").into_response());
+    }
+
+    let is_first_device =
+        device.group_epoch <= 1 && device.approved_by.as_deref() == Some(device_id);
+    let device_since = if is_first_device {
+        None
+    } else {
+        device
+            .approved_at
+            .map(|approved_at| approved_at - chrono::Duration::days(device.history_days.max(0)))
+    };
+
+    let ticket_windows = if let Some(conversation_id) = conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        match sqlx::query_as::<_, (DateTime<Utc>, DateTime<Utc>)>(
+            "SELECT from_time, to_time
+             FROM history_tickets
+             WHERE owner = ?
+               AND issued_to_device_id = ?
+               AND conversation_id = ?
+               AND revoked = 0
+               AND expires_at > ?
+             ORDER BY created_at ASC",
+        )
+        .bind(owner)
+        .bind(device_id)
+        .bind(conversation_id)
+        .bind(Utc::now())
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(from, to)| (from <= to).then_some(HistoryWindow { from, to }))
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                error!(
+                    "Ошибка чтения history ticket owner={} device={} conversation={}: {}",
+                    owner, device_id, conversation_id, e
+                );
+                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let base_since = max_datetime(explicit_since, device_since);
+    Ok(HistoryAccess {
+        base_since,
+        ticket_windows,
+    })
+}
+
+fn history_access_matches(timestamp: DateTime<Utc>, access: &HistoryAccess) -> bool {
+    if access.base_since.is_none() {
+        return true;
+    }
+    if access
+        .base_since
+        .is_some_and(|since| timestamp >= since)
+    {
+        return true;
+    }
+    access
+        .ticket_windows
+        .iter()
+        .any(|window| timestamp >= window.from && timestamp <= window.to)
+}
+
+fn push_history_access_predicate(builder: &mut QueryBuilder<'_, Sqlite>, access: &HistoryAccess) {
+    let has_base = access.base_since.is_some();
+    let has_tickets = !access.ticket_windows.is_empty();
+    if !has_base && !has_tickets {
+        return;
+    }
+
+    builder.push(" AND (");
+    let mut needs_or = false;
+    if let Some(base_since) = access.base_since {
+        builder.push("timestamp >= ");
+        builder.push_bind(base_since);
+        needs_or = true;
+    }
+
+    for window in &access.ticket_windows {
+        if needs_or {
+            builder.push(" OR ");
+        }
+        builder.push("(");
+        builder.push("timestamp >= ");
+        builder.push_bind(window.from);
+        builder.push(" AND timestamp <= ");
+        builder.push_bind(window.to);
+        builder.push(")");
+        needs_or = true;
+    }
+
+    builder.push(")");
+}
+
+fn header_device_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-zali-device-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
+fn dm_conversation_scope(a: &str, b: &str) -> String {
+    let mut pair = [a.trim().to_string(), b.trim().to_string()];
+    pair.sort();
+    format!("dm:{}:{}", pair[0], pair[1])
+}
+
+fn server_conversation_scope(server_id: &str, channel_id: &str) -> String {
+    format!("server:{}:{}", server_id.trim(), channel_id.trim())
+}
+
+async fn create_history_ticket(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
+    Json(payload): Json<HistoryTicketPayload>,
+) -> impl IntoResponse {
+    let issued_by = trim_limited(payload.issuedByDeviceId, 128);
+    let issued_to = trim_limited(payload.issuedToDeviceId, 128);
+    let header_device = match header_device_id(&headers) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response()
+        }
+    };
+    if header_device != issued_by {
+        return (
+            StatusCode::FORBIDDEN,
+            "issuedByDeviceId должен совпадать с X-Zali-Device-ID",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &owner, &issued_by)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Ticket может выдать только доверенное устройство",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &owner, &issued_to)
+        .await
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "Получатель ticket не подтвержден").into_response();
+    }
+
+    let from_time = match parse_rfc3339_utc(&payload.fromTime) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let to_time = match parse_rfc3339_utc(&payload.toTime) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let expires_at = match parse_rfc3339_utc(&payload.expiresAt) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if from_time > to_time || expires_at <= Utc::now() {
+        return (StatusCode::BAD_REQUEST, "Некорректное окно History Ticket").into_response();
+    }
+
+    let ticket_id = Uuid::new_v4().to_string();
+    let conversation_id = trim_limited(payload.conversationId, 256);
+    let encrypted = trim_limited(payload.encryptedExportSecrets, 262_144);
+    if conversation_id.is_empty() || encrypted.len() < 16 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Пустой conversationId или encryptedExportSecrets",
+        )
+            .into_response();
+    }
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO history_tickets
+         (ticket_id, owner, issued_by_device_id, issued_to_device_id, conversation_id,
+          from_time, to_time, expires_at, encrypted_export_secrets, signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&ticket_id)
+    .bind(&owner)
+    .bind(&issued_by)
+    .bind(&issued_to)
+    .bind(&conversation_id)
+    .bind(from_time)
+    .bind(to_time)
+    .bind(expires_at)
+    .bind(&encrypted)
+    .bind(payload.signature.as_deref().unwrap_or(""))
+    .execute(&state.db)
+    .await
+    {
+        error!("Ошибка записи history ticket {}: {}", ticket_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(serde_json::json!({
+        "ticketId": ticket_id,
+        "conversationId": conversation_id
+    }))
+    .into_response()
+}
+
+async fn get_history_tickets(
+    Query(query): Query<VaultQuery>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let device_id = match header_device_id(&headers) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Нужен X-Zali-Device-ID доверенного устройства",
+            )
+                .into_response()
+        }
+    };
+    if query
+        .deviceId
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|query_device| query_device != device_id)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "deviceId в запросе должен совпадать с X-Zali-Device-ID",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &owner, &device_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "History tickets доступны только доверенному устройству",
+        )
+            .into_response();
+    }
+
+    let rows = sqlx::query_as::<_, HistoryTicketRecord>(
+        "SELECT ticket_id, owner, issued_by_device_id, issued_to_device_id, conversation_id,
+                from_time, to_time, expires_at, encrypted_export_secrets, signature, revoked, created_at
+         FROM history_tickets
+         WHERE owner = ? AND issued_to_device_id = ?
+         ORDER BY created_at DESC",
+    )
+    .bind(&owner)
+    .bind(&device_id)
+    .fetch_all(&state.db)
+    .await;
+
+    match rows {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|row| HistoryTicketResponse {
+                    ticketId: row.ticket_id,
+                    owner: row.owner,
+                    issuedByDeviceId: row.issued_by_device_id,
+                    issuedToDeviceId: row.issued_to_device_id,
+                    conversationId: row.conversation_id,
+                    fromTime: row.from_time,
+                    toTime: row.to_time,
+                    expiresAt: row.expires_at,
+                    encryptedExportSecrets: row.encrypted_export_secrets,
+                    signature: row.signature,
+                    revoked: row.revoked != 0,
+                    createdAt: row.created_at,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка чтения history tickets {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn get_transparency_log(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+) -> impl IntoResponse {
+    match sqlx::query_as::<_, TransparencyLogRecord>(
+        "SELECT seq, owner, event_type, group_epoch, actor_device_id, target_device_id,
+                event_json, signature, created_at
+         FROM transparency_log
+         WHERE owner = ?
+         ORDER BY seq ASC",
+    )
+    .bind(&owner)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            error!("Ошибка чтения transparency log {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn get_servers(
@@ -4121,6 +6039,26 @@ async fn create_server(
     let name = name.trim();
     if name.is_empty() {
         return (StatusCode::BAD_REQUEST, "Имя сервера не может быть пустым").into_response();
+    }
+
+    const MAX_SERVERS_PER_USER: i64 = 25;
+    let owned_count = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM servers WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            error!("Ошибка подсчета серверов владельца {}: {}", owner, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if owned_count >= MAX_SERVERS_PER_USER {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Превышен лимит серверов на аккаунт",
+        )
+            .into_response();
     }
 
     let server_id = Uuid::new_v4().to_string();
@@ -4974,12 +6912,41 @@ async fn delete_server(
         error!("Ошибка удаления сообщений сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    if let Err(e) = sqlx::query(
+        "DELETE FROM channel_permissions WHERE channel_id IN (SELECT id FROM channels WHERE server_id = ?)",
+    )
+    .bind(&server_id)
+    .execute(&mut *tx)
+    .await
+    {
+        error!(
+            "Ошибка удаления прав каналов сервера {}: {}",
+            server_id, e
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
     if let Err(e) = sqlx::query("DELETE FROM server_members WHERE server_id = ?")
         .bind(&server_id)
         .execute(&mut *tx)
         .await
     {
         error!("Ошибка удаления участников сервера {}: {}", server_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if let Err(e) = sqlx::query("DELETE FROM server_invites WHERE server_id = ?")
+        .bind(&server_id)
+        .execute(&mut *tx)
+        .await
+    {
+        error!("Ошибка удаления инвайтов сервера {}: {}", server_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if let Err(e) = sqlx::query("DELETE FROM server_roles WHERE server_id = ?")
+        .bind(&server_id)
+        .execute(&mut *tx)
+        .await
+    {
+        error!("Ошибка удаления ролей сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     if let Err(e) = sqlx::query("DELETE FROM channels WHERE server_id = ?")
@@ -5366,17 +7333,32 @@ async fn join_server_invite(
         return (StatusCode::BAD_REQUEST, "Код приглашения обязателен").into_response();
     }
 
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            error!(
+                "Ошибка начала транзакции при join_server_invite {}: {}",
+                code, e
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
     let invite = match sqlx::query_as::<_, ServerInviteRecord>(
         "SELECT code, server_id, created_by, max_uses, uses, expires_at, created_at
          FROM server_invites WHERE code = ? LIMIT 1",
     )
     .bind(code)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     {
         Ok(Some(invite)) => invite,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            let _ = tx.rollback().await;
+            return StatusCode::NOT_FOUND.into_response();
+        }
         Err(e) => {
+            let _ = tx.rollback().await;
             error!("Ошибка поиска инвайта {}: {}", code, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
@@ -5384,14 +7366,48 @@ async fn join_server_invite(
 
     if let Some(expires_at) = invite.expires_at {
         if expires_at < Utc::now() {
+            let _ = tx.rollback().await;
             return (StatusCode::GONE, "Срок действия инвайта истёк").into_response();
         }
     }
-    if invite.max_uses > 0 && invite.uses >= invite.max_uses {
+
+    let updated = match sqlx::query(
+        "UPDATE server_invites
+         SET uses = uses + 1
+         WHERE code = ?
+           AND (max_uses = 0 OR uses < max_uses)",
+    )
+    .bind(code)
+    .execute(&mut *tx)
+    .await
+    {
+        Ok(result) => result.rows_affected(),
+        Err(e) => {
+            let _ = tx.rollback().await;
+            error!("Ошибка увеличения использования инвайта {}: {}", code, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if updated == 0 {
+        let _ = tx.rollback().await;
         return (StatusCode::GONE, "Инвайт уже использован").into_response();
     }
 
-    if let Err(e) = ensure_server_member(&state.db, &invite.server_id, &auth_user, "member").await {
+    if let Err(e) = sqlx::query(
+        "INSERT INTO server_members (server_id, username, role, joined_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(server_id, username) DO UPDATE SET
+            role = excluded.role",
+    )
+    .bind(&invite.server_id)
+    .bind(&auth_user)
+    .bind("member")
+    .bind(Utc::now())
+    .execute(&mut *tx)
+    .await
+    {
+        let _ = tx.rollback().await;
         error!(
             "Ошибка добавления пользователя {} по инвайту {}: {}",
             auth_user, code, e
@@ -5399,12 +7415,8 @@ async fn join_server_invite(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Err(e) = sqlx::query("UPDATE server_invites SET uses = uses + 1 WHERE code = ?")
-        .bind(code)
-        .execute(&state.db)
-        .await
-    {
-        error!("Ошибка увеличения использования инвайта {}: {}", code, e);
+    if let Err(e) = tx.commit().await {
+        error!("Ошибка фиксации join_server_invite {}: {}", code, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
@@ -5468,6 +7480,14 @@ async fn get_channel_permissions(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    match channel_belongs_to_server(&state.db, &server_id, &channel_id).await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            error!("Ошибка проверки канала {}/{}: {}", server_id, channel_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
     match load_channel_permissions(&state.db, &channel_id).await {
         Ok(permissions) => Json(serde_json::json!({ "serverId": server_id, "channelId": channel_id, "permissions": permissions })).into_response(),
         Err(e) => {
@@ -5489,6 +7509,14 @@ async fn update_channel_permissions(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    match channel_belongs_to_server(&state.db, &server_id, &channel_id).await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            error!("Ошибка проверки канала {}/{}: {}", server_id, channel_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
     match upsert_channel_permissions(&state.db, &channel_id, &payload.permissions).await {
         Ok(_) => match load_channel_permissions(&state.db, &channel_id).await {
             Ok(permissions) => Json(serde_json::json!({ "serverId": server_id, "channelId": channel_id, "permissions": permissions })).into_response(),
@@ -5509,6 +7537,7 @@ async fn get_server_messages(
     Query(page): Query<MessagePageQuery>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     info!(
         "API get_server_messages start server={} channel={} auth={}",
@@ -5531,29 +7560,37 @@ async fn get_server_messages(
 
     let limit = page.limit.unwrap_or(0).clamp(0, 500) as i64;
     let offset = page.offset.unwrap_or(0).max(0) as i64;
-    let query = if limit > 0 {
-        sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
-             FROM messages
-             WHERE server_id = ? AND channel_id = ?
-             ORDER BY timestamp ASC, id ASC
-             LIMIT ? OFFSET ?",
-        )
-        .bind(&server_id)
-        .bind(&channel_id)
-        .bind(limit)
-        .bind(offset)
-    } else {
-        sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
-             FROM messages
-             WHERE server_id = ? AND channel_id = ?
-             ORDER BY timestamp ASC, id ASC",
-        )
-        .bind(&server_id)
-        .bind(&channel_id)
+    let conversation_scope = Some(server_conversation_scope(&server_id, &channel_id));
+    let history_access = match resolve_history_access(
+        &state.db,
+        &auth_user,
+        &page,
+        &headers,
+        conversation_scope.as_deref(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
     };
-    match query.fetch_all(&state.db).await {
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
+         FROM messages
+         WHERE server_id = ",
+    );
+    builder.push_bind(&server_id);
+    builder.push(" AND channel_id = ");
+    builder.push_bind(&channel_id);
+    push_history_access_predicate(&mut builder, &history_access);
+    builder.push(" ORDER BY timestamp ASC, id ASC");
+    if limit > 0 {
+        builder.push(" LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+    }
+
+    match builder.build_query_as::<Message>().fetch_all(&state.db).await {
         Ok(msgs) => {
             info!(
                 "API get_server_messages rows server={} channel={} auth={} count={}",
@@ -5616,6 +7653,7 @@ async fn get_messages(
     Query(page): Query<MessagePageQuery>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     info!("API get_messages start user={} auth={}", user, auth_user);
     let effective_user = auth_user.clone();
@@ -5628,29 +7666,42 @@ async fn get_messages(
 
     let limit = page.limit.unwrap_or(0).clamp(0, 500) as i64;
     let offset = page.offset.unwrap_or(0).max(0) as i64;
-    let query = if limit > 0 {
-        sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
-             FROM messages
-             WHERE server_id IS NULL AND (receiver = ? OR sender = ?)
-             ORDER BY timestamp ASC, id ASC
-             LIMIT ? OFFSET ?",
-        )
-        .bind(&effective_user)
-        .bind(&effective_user)
-        .bind(limit)
-        .bind(offset)
-    } else {
-        sqlx::query_as::<_, Message>(
-            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
-             FROM messages
-             WHERE server_id IS NULL AND (receiver = ? OR sender = ?)
-             ORDER BY timestamp ASC, id ASC",
-        )
-        .bind(&effective_user)
-        .bind(&effective_user)
+    let conversation_scope = Some(dm_conversation_scope(&effective_user, &user));
+    let history_access = match resolve_history_access(
+        &state.db,
+        &effective_user,
+        &page,
+        &headers,
+        conversation_scope.as_deref(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
     };
-    match query.fetch_all(&state.db).await {
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
+         FROM messages
+         WHERE server_id IS NULL
+           AND ((sender = ",
+    );
+    builder.push_bind(&effective_user);
+    builder.push(" AND receiver = ");
+    builder.push_bind(&user);
+    builder.push(") OR (sender = ");
+    builder.push_bind(&user);
+    builder.push(" AND receiver = ");
+    builder.push_bind(&effective_user);
+    builder.push("))");
+    push_history_access_predicate(&mut builder, &history_access);
+    builder.push(" ORDER BY timestamp ASC, id ASC");
+    if limit > 0 {
+        builder.push(" LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+    }
+    match builder.build_query_as::<Message>().fetch_all(&state.db).await {
         Ok(msgs) => {
             info!(
                 "API get_messages rows user={} count={} db={} uploads={}",
@@ -5709,8 +7760,15 @@ async fn set_message_reaction(
     AxumPath(id): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<ReactionPayload>,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &auth_user, &headers)
+        .await
+        .is_err()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let message = match sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
         .bind(&id)
         .fetch_one(&state.db)
@@ -5848,8 +7906,15 @@ async fn get_avatar(
 async fn upload_avatar(
     AuthenticatedUser(username): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &username, &headers)
+        .await
+        .is_err()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let mut file_data: Vec<u8> = Vec::new();
     let mut mime_type = String::new();
 
@@ -5862,11 +7927,24 @@ async fn upload_avatar(
                         .content_type()
                         .map(|m| m.to_string())
                         .unwrap_or_else(|| "image/png".to_string());
-                    match field.bytes().await {
-                        Ok(bytes) => file_data = bytes.to_vec(),
-                        Err(e) => {
-                            error!("Ошибка чтения файла аватара: {}", e);
-                            return StatusCode::BAD_REQUEST.into_response();
+                    let mut field = field;
+                    loop {
+                        match field.chunk().await {
+                            Ok(Some(chunk)) => {
+                                if file_data.len().saturating_add(chunk.len()) > MAX_AVATAR_BYTES {
+                                    return (
+                                        StatusCode::PAYLOAD_TOO_LARGE,
+                                        "Аватар не должен превышать 2 МБ",
+                                    )
+                                        .into_response();
+                                }
+                                file_data.extend_from_slice(&chunk);
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                error!("Ошибка чтения файла аватара: {}", e);
+                                return StatusCode::BAD_REQUEST.into_response();
+                            }
                         }
                     }
                 }
@@ -5882,8 +7960,21 @@ async fn upload_avatar(
     if file_data.is_empty() {
         return (StatusCode::BAD_REQUEST, "Файл аватара обязателен").into_response();
     }
-    if !mime_type.starts_with("image/") {
+    let sniffed_mime = match sniff_image_mime(&file_data) {
+        Some(mime) => mime,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Поддерживаются только PNG, JPEG, GIF и WEBP",
+            )
+                .into_response();
+        }
+    };
+    if mime_type == "image/svg+xml" || !mime_type.starts_with("image/") {
         return (StatusCode::BAD_REQUEST, "Аватар должен быть изображением").into_response();
+    }
+    if !mime_type.starts_with(sniffed_mime) {
+        mime_type = sniffed_mime.to_string();
     }
     if file_data.len() > 2 * 1024 * 1024 {
         return (
@@ -5943,7 +8034,14 @@ async fn upload_avatar(
 async fn delete_avatar(
     AuthenticatedUser(username): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &username, &headers)
+        .await
+        .is_err()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let _ = clear_asset_file(user_avatar_asset_dir(&state.data_dir, &username), "avatar").await;
 
     match sqlx::query("DELETE FROM avatars WHERE username = ?")
@@ -5960,6 +8058,22 @@ async fn delete_avatar(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
+    if data.len() >= 8 && data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    if data.len() >= 3 && data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if data.len() >= 6 && (data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) {
+        return Some("image/gif");
+    }
+    if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    None
 }
 
 async fn find_message_by_client_scope(
@@ -5996,20 +8110,23 @@ async fn find_message_by_client_scope(
 async fn upload_message(
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> impl IntoResponse {
-    upload_message_with_context(auth_user, state, multipart, None, None).await
+    upload_message_with_context(auth_user, state, headers, multipart, None, None).await
 }
 
 async fn upload_server_message(
     AxumPath((server_id, channel_id)): AxumPath<(String, String)>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> impl IntoResponse {
     upload_message_with_context(
         auth_user,
         state,
+        headers,
         multipart,
         Some(server_id),
         Some(channel_id),
@@ -6020,10 +8137,17 @@ async fn upload_server_message(
 async fn upload_message_with_context(
     auth_user: String,
     state: Arc<AppState>,
+    headers: HeaderMap,
     mut multipart: Multipart,
     server_id_override: Option<String>,
     channel_id_override: Option<String>,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &auth_user, &headers)
+        .await
+        .is_err()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     info!(
         "UPLOAD start auth_user={} server_override={:?} channel_override={:?}",
         auth_user,
@@ -6036,7 +8160,14 @@ async fn upload_message_with_context(
     let mut channel_id = String::new();
     let mut client_id = String::new();
     let mut key_version: Option<i64> = None;
-    let mut file_data: Vec<u8> = Vec::new();
+    let id = Uuid::new_v4().to_string();
+    let filename = format!("{}.zali", id);
+    let path = state.uploads_dir.join(&filename);
+    let temp_path = state.uploads_dir.join(format!("{}.tmp", filename));
+    let timestamp = Utc::now();
+    let mut file_bytes: u64 = 0;
+    let mut file_magic = Vec::with_capacity(8);
+    let mut wrote_file = false;
 
     // Parse multipart fields with proper error handling (no unwrap)
     loop {
@@ -6088,13 +8219,57 @@ async fn upload_message_with_context(
                             return StatusCode::BAD_REQUEST.into_response();
                         }
                     },
-                    "file" => match field.bytes().await {
-                        Ok(b) => file_data = b.to_vec(),
-                        Err(e) => {
-                            error!("Ошибка чтения файла: {}", e);
-                            return StatusCode::BAD_REQUEST.into_response();
+                    "file" => {
+                        let mut field = field;
+                        let mut out = match fs::File::create(&temp_path).await {
+                            Ok(file) => file,
+                            Err(e) => {
+                                error!(
+                                    "Ошибка создания временного файла {}: {}",
+                                    temp_path.display(),
+                                    e
+                                );
+                                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                            }
+                        };
+                        loop {
+                            match field.chunk().await {
+                                Ok(Some(chunk)) => {
+                                    if file_magic.len() < 8 {
+                                        let need = 8 - file_magic.len();
+                                        file_magic
+                                            .extend_from_slice(&chunk[..chunk.len().min(need)]);
+                                    }
+                                    file_bytes = file_bytes.saturating_add(chunk.len() as u64);
+                                    if let Err(e) = out.write_all(&chunk).await {
+                                        error!(
+                                            "Ошибка записи временного файла {}: {}",
+                                            temp_path.display(),
+                                            e
+                                        );
+                                        let _ = fs::remove_file(&temp_path).await;
+                                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                                    }
+                                }
+                                Ok(None) => break,
+                                Err(e) => {
+                                    error!("Ошибка чтения файла: {}", e);
+                                    let _ = fs::remove_file(&temp_path).await;
+                                    return StatusCode::BAD_REQUEST.into_response();
+                                }
+                            }
                         }
-                    },
+                        if let Err(e) = out.flush().await {
+                            error!(
+                                "Ошибка flush временного файла {}: {}",
+                                temp_path.display(),
+                                e
+                            );
+                            let _ = fs::remove_file(&temp_path).await;
+                            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        }
+                        wrote_file = true;
+                    }
                     _ => {} // Ignore unknown fields
                 }
             }
@@ -6113,13 +8288,16 @@ async fn upload_message_with_context(
         channel_id = channel_id_override;
     }
 
-    if sender.is_empty() || receiver.is_empty() || file_data.is_empty() {
+    if sender.is_empty() || receiver.is_empty() || file_bytes == 0 {
         warn!(
             "UPLOAD rejected missing fields sender_empty={} receiver_empty={} file_bytes={}",
             sender.is_empty(),
             receiver.is_empty(),
-            file_data.len()
+            file_bytes
         );
+        if wrote_file {
+            let _ = fs::remove_file(&temp_path).await;
+        }
         return (
             StatusCode::BAD_REQUEST,
             "Поля sender, receiver и file обязательны",
@@ -6193,21 +8371,78 @@ async fn upload_message_with_context(
         }
     }
 
+    if !is_server_message {
+        let receiver_exists = sqlx::query_scalar::<_, String>(
+            "SELECT username FROM users WHERE username = ? LIMIT 1",
+        )
+        .bind(&receiver)
+        .fetch_optional(&state.db)
+        .await;
+        match receiver_exists {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                warn!("UPLOAD rejected unknown receiver sender={} receiver={}", sender, receiver);
+                if wrote_file {
+                    let _ = fs::remove_file(&temp_path).await;
+                }
+                return (StatusCode::NOT_FOUND, "Получатель не найден").into_response();
+            }
+            Err(e) => {
+                error!("Ошибка проверки получателя {}: {}", receiver, e);
+                if wrote_file {
+                    let _ = fs::remove_file(&temp_path).await;
+                }
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+
+        if sender != receiver {
+            let contact_exists = sqlx::query_scalar::<_, String>(
+                "SELECT contact FROM contacts WHERE owner = ? AND contact = ? LIMIT 1",
+            )
+            .bind(&sender)
+            .bind(&receiver)
+            .fetch_optional(&state.db)
+            .await;
+            match contact_exists {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    warn!(
+                        "UPLOAD rejected receiver not in contacts sender={} receiver={}",
+                        sender, receiver
+                    );
+                    if wrote_file {
+                        let _ = fs::remove_file(&temp_path).await;
+                    }
+                    return (StatusCode::FORBIDDEN, "Получатель должен быть в контактах")
+                        .into_response();
+                }
+                Err(e) => {
+                    error!(
+                        "Ошибка проверки контакта sender={} receiver={}: {}",
+                        sender, receiver, e
+                    );
+                    if wrote_file {
+                        let _ = fs::remove_file(&temp_path).await;
+                    }
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+        }
+    }
+
     // Validate .zali magic header
-    if file_data.len() < 8 || &file_data[0..8] != b"ZALIMSSG" {
+    if file_magic.len() < 8 || file_magic.as_slice() != b"ZALIMSSG" {
         warn!("Получен файл с неверной сигнатурой от {}", sender);
+        if wrote_file {
+            let _ = fs::remove_file(&temp_path).await;
+        }
         return (
             StatusCode::BAD_REQUEST,
             "Неверная сигнатура архива (ожидается ZALIMSSG)",
         )
             .into_response();
     }
-
-    let id = Uuid::new_v4().to_string();
-    let filename = format!("{}.zali", id);
-    let path = state.uploads_dir.join(&filename);
-    let temp_path = state.uploads_dir.join(format!("{}.tmp", filename));
-    let timestamp = Utc::now();
 
     info!(
         "UPLOAD storing id={} client_id={} sender={} receiver={} file={} bytes={} server={:?} channel={:?} path={}",
@@ -6216,7 +8451,7 @@ async fn upload_message_with_context(
         sender,
         receiver,
         filename,
-        file_data.len(),
+        file_bytes,
         server_id_opt,
         channel_id_opt,
         path.display()
@@ -6262,15 +8497,6 @@ async fn upload_message_with_context(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
-    }
-
-    if let Err(e) = fs::write(&temp_path, &file_data).await {
-        error!(
-            "Ошибка записи временного файла {}: {}",
-            temp_path.display(),
-            e
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
     if let Err(e) = fs::rename(&temp_path, &path).await {
@@ -6402,99 +8628,22 @@ async fn upload_message_with_context(
 }
 
 async fn resolve_conversation_key(
-    AuthenticatedUser(auth_user): AuthenticatedUser,
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    Json(payload): Json<ConversationKeyRequest>,
+    AuthenticatedUser(_auth_user): AuthenticatedUser,
+    axum::extract::State(_state): axum::extract::State<Arc<AppState>>,
+    Json(_payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let peer = payload.peer.as_deref();
-    let server_id = payload.serverId.as_deref();
-    let channel_id = payload.channelId.as_deref();
-
-    let Some(scope_key) = conversation_scope_key(&auth_user, peer, server_id, channel_id) else {
-        return (StatusCode::BAD_REQUEST, "Неверный scope ключа").into_response();
-    };
-
-    if let (Some(sid), Some(cid)) = (server_id, channel_id) {
-        if !can_access_channel(&state.db, sid, cid, &auth_user, "view")
-            .await
-            .unwrap_or(false)
-        {
-            return StatusCode::FORBIDDEN.into_response();
-        }
-    }
-
-    let key_version = payload.keyVersion.unwrap_or(2).max(1);
-    let provided_key = payload
-        .key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-
-    match sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT scope_key, key_value, key_version FROM conversation_keys WHERE scope_key = ? LIMIT 1",
+    (
+        StatusCode::GONE,
+        "Server-side conversation keys are disabled. Use a local shared encryption key.",
     )
-    .bind(&scope_key)
-    .fetch_optional(&state.db)
-    .await
-    {
-        Ok(Some((scope_key, key_value, key_version))) => {
-            return Json(ConversationKeyResponse {
-                scopeKey: scope_key,
-                key: key_value,
-                keyVersion: key_version,
-            })
-            .into_response();
-        }
-        Ok(None) => {}
-        Err(e) => {
-            error!("Ошибка чтения conversation key {}: {}", scope_key, e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    }
-
-    let key_value = provided_key.unwrap_or_else(random_conversation_key);
-    match sqlx::query(
-        "INSERT OR IGNORE INTO conversation_keys (scope_key, key_value, key_version)
-         VALUES (?, ?, ?)",
-    )
-    .bind(&scope_key)
-    .bind(&key_value)
-    .bind(key_version)
-    .execute(&state.db)
-    .await
-    {
-        Ok(_) => {
-            match sqlx::query_as::<_, (String, String, i64)>(
-                "SELECT scope_key, key_value, key_version FROM conversation_keys WHERE scope_key = ? LIMIT 1",
-            )
-            .bind(&scope_key)
-            .fetch_one(&state.db)
-            .await
-            {
-                Ok((scope_key, key_value, key_version)) => Json(ConversationKeyResponse {
-                    scopeKey: scope_key,
-                    key: key_value,
-                    keyVersion: key_version,
-                })
-                .into_response(),
-                Err(e) => {
-                    error!("Ошибка чтения созданного conversation key {}: {}", scope_key, e);
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
-            }
-        }
-        Err(e) => {
-            error!("Ошибка сохранения conversation key {}: {}", scope_key, e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        .into_response()
 }
 
 async fn download_upload_file(
     AxumPath(filename): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     info!("UPLOAD download start file={} auth={}", filename, auth_user);
     match sqlx::query_as::<_, Message>(
@@ -6519,9 +8668,37 @@ async fn download_upload_file(
                 return StatusCode::FORBIDDEN.into_response();
             }
 
+            let conversation_scope = if let Some(server_id) = message.server_id.as_deref() {
+                let channel_id = message.channel_id.as_deref().unwrap_or("");
+                server_conversation_scope(server_id, channel_id)
+            } else {
+                dm_conversation_scope(&message.sender, &message.receiver)
+            };
+            let page = MessagePageQuery {
+                limit: None,
+                offset: None,
+                since: None,
+                device_id: None,
+            };
+            let history_access = match resolve_history_access(
+                &state.db,
+                &auth_user,
+                &page,
+                &headers,
+                Some(&conversation_scope),
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            if !history_access_matches(message.timestamp, &history_access) {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+
             let path = state.uploads_dir.join(&message.filename);
-            match fs::read(&path).await {
-                Ok(data) => (
+            match fs::File::open(&path).await {
+                Ok(file) => (
                     [
                         (
                             axum::http::header::CONTENT_TYPE,
@@ -6536,7 +8713,7 @@ async fn download_upload_file(
                             .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
                         ),
                     ],
-                    data,
+                    Body::from_stream(ReaderStream::new(file)),
                 )
                     .into_response(),
                 Err(e) => {
@@ -6807,6 +8984,7 @@ async fn download_message(
     AxumPath(id): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     info!("DOWNLOAD start id={} auth={}", id, auth_user);
     match sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
@@ -6835,9 +9013,37 @@ async fn download_message(
                 return StatusCode::FORBIDDEN.into_response();
             }
 
+            let conversation_scope = if let Some(server_id) = m.server_id.as_deref() {
+                let channel_id = m.channel_id.as_deref().unwrap_or("");
+                server_conversation_scope(server_id, channel_id)
+            } else {
+                dm_conversation_scope(&m.sender, &m.receiver)
+            };
+            let page = MessagePageQuery {
+                limit: None,
+                offset: None,
+                since: None,
+                device_id: None,
+            };
+            let history_access = match resolve_history_access(
+                &state.db,
+                &auth_user,
+                &page,
+                &headers,
+                Some(&conversation_scope),
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            if !history_access_matches(m.timestamp, &history_access) {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+
             let path = state.uploads_dir.join(&m.filename);
-            match fs::read(&path).await {
-                Ok(data) => (
+            match fs::File::open(&path).await {
+                Ok(file) => (
                     [
                         (
                             axum::http::header::CONTENT_TYPE,
@@ -6852,7 +9058,7 @@ async fn download_message(
                             .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
                         ),
                     ],
-                    data,
+                    Body::from_stream(ReaderStream::new(file)),
                 )
                     .into_response(),
                 Err(e) => {
@@ -6872,7 +9078,14 @@ async fn delete_message(
     AxumPath(id): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if require_trusted_device(&state.db, &auth_user, &headers)
+        .await
+        .is_err()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     info!("DELETE_MESSAGE start id={} auth={}", id, auth_user);
     match sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
         .bind(&id)
@@ -6956,6 +9169,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, username: St
         state.voice_rooms.len(),
         state.user_connections.len()
     );
+
+    send_voice_room_snapshot_to_user(&state, &username).await;
 
     loop {
         tokio::select! {
