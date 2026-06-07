@@ -1002,6 +1002,8 @@ struct AuthPayload {
 struct AuthResponse {
     token: String,
     username: String,
+    #[serde(rename = "cloudVaultSyncEnabled")]
+    cloud_vault_sync_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1025,6 +1027,19 @@ struct ServerPayload {
     avatar_data_url: Option<String>,
     banner_data_url: Option<String>,
     roles: Option<Vec<ServerRolePayload>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CloudVaultSyncPayload {
+    #[serde(rename = "cloudVaultSyncEnabled")]
+    cloud_vault_sync_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct MeResponse {
+    username: String,
+    #[serde(rename = "cloudVaultSyncEnabled")]
+    cloud_vault_sync_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1137,8 +1152,6 @@ struct MessagePageQuery {
     limit: Option<i64>,
     offset: Option<i64>,
     since: Option<String>,
-    #[serde(rename = "deviceId")]
-    device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1362,6 +1375,12 @@ async fn main() {
         .execute(&pool)
         .await
         .ok();
+    sqlx::query(
+        "ALTER TABLE users ADD COLUMN cloud_vault_sync_enabled INTEGER NOT NULL DEFAULT 1",
+    )
+    .execute(&pool)
+    .await
+    .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -1852,7 +1871,7 @@ async fn main() {
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
-        .route("/api/auth/me", get(me))
+        .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/users", get(get_users))
         .route("/api/avatar/:username", get(get_avatar))
         .route("/api/avatar", post(upload_avatar).delete(delete_avatar))
@@ -1918,7 +1937,6 @@ async fn main() {
             "/api/servers/:server_id/channels/:channel_id/messages",
             get(get_server_messages).post(upload_server_message),
         )
-        .route("/api/conversation-key", post(resolve_conversation_key))
         .route("/api/devices", get(get_devices).post(register_device))
         .route("/api/devices/approve", post(approve_device))
         .route(
@@ -3442,8 +3460,53 @@ async fn can_manage_server(
     Ok(false)
 }
 
-async fn me(AuthenticatedUser(username): AuthenticatedUser) -> impl IntoResponse {
-    Json(serde_json::json!({ "username": username })).into_response()
+async fn me(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(username): AuthenticatedUser,
+) -> impl IntoResponse {
+    match load_cloud_vault_sync_enabled(&state.db, &username).await {
+        Ok(enabled) => Json(MeResponse {
+            username,
+            cloud_vault_sync_enabled: enabled,
+        })
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка чтения настроек аккаунта {}: {}", username, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn update_me(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(username): AuthenticatedUser,
+    Json(payload): Json<CloudVaultSyncPayload>,
+) -> impl IntoResponse {
+    let response_username = username.clone();
+    match sqlx::query(
+        "UPDATE users SET cloud_vault_sync_enabled = ? WHERE username = ?",
+    )
+    .bind(if payload.cloud_vault_sync_enabled { 1 } else { 0 })
+    .bind(&username)
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => match load_cloud_vault_sync_enabled(&state.db, &username).await {
+            Ok(enabled) => Json(MeResponse {
+                username: response_username,
+                cloud_vault_sync_enabled: enabled,
+            })
+            .into_response(),
+            Err(e) => {
+                error!("Ошибка чтения настроек аккаунта {} после обновления: {}", username, e);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
+        Err(e) => {
+            error!("Ошибка обновления cloud_vault_sync_enabled для {}: {}", username, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn logout(
@@ -4416,6 +4479,7 @@ async fn broadcast_reaction_event(state: &Arc<AppState>, message: &Message) {
 fn issue_auth_response(
     username: String,
     token_version: i64,
+    cloud_vault_sync_enabled: bool,
     jwt_secret: &[u8],
 ) -> Result<AuthResponse, jsonwebtoken::errors::Error> {
     let exp = Utc::now()
@@ -4437,7 +4501,24 @@ fn issue_auth_response(
         &EncodingKey::from_secret(jwt_secret),
     )?;
 
-    Ok(AuthResponse { token, username })
+    Ok(AuthResponse {
+        token,
+        username,
+        cloud_vault_sync_enabled,
+    })
+}
+
+async fn load_cloud_vault_sync_enabled(
+    pool: &SqlitePool,
+    username: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(cloud_vault_sync_enabled, 1) FROM users WHERE username = ? LIMIT 1",
+    )
+    .bind(username)
+    .fetch_one(pool)
+    .await
+    .map(|value| value != 0)
 }
 
 fn jwt_validation() -> Validation {
@@ -4551,7 +4632,12 @@ async fn register(
                 "Регистрация успешно завершена для пользователя '{}'",
                 username
             );
-            match issue_auth_response(username.to_string(), 0, &state.config.jwt_secret) {
+            match issue_auth_response(
+                username.to_string(),
+                0,
+                true,
+                &state.config.jwt_secret,
+            ) {
                 Ok(auth) => auth_response_with_cookie_and_secure(
                     StatusCode::CREATED,
                     auth,
@@ -4621,7 +4707,9 @@ async fn login(
     }
 
     let row =
-        sqlx::query("SELECT username, password_hash, token_version FROM users WHERE username = ?")
+        sqlx::query(
+            "SELECT username, password_hash, token_version, cloud_vault_sync_enabled FROM users WHERE username = ?",
+        )
             .bind(&payload.username)
             .fetch_optional(&state.db)
             .await;
@@ -4631,6 +4719,7 @@ async fn login(
             let username: String = r.get("username");
             let hash: String = r.get("password_hash");
             let token_version: i64 = r.get::<i64, _>("token_version");
+            let cloud_vault_sync_enabled: i64 = r.get::<i64, _>("cloud_vault_sync_enabled");
 
             let valid = match verify_password(payload.password.clone(), hash).await {
                 Ok(valid) => valid,
@@ -4647,7 +4736,12 @@ async fn login(
             // Clear rate limit on success
             state.login_attempts.remove(&rate_key);
 
-            match issue_auth_response(username.clone(), token_version, &state.config.jwt_secret) {
+            match issue_auth_response(
+                username.clone(),
+                token_version,
+                cloud_vault_sync_enabled != 0,
+                &state.config.jwt_secret,
+            ) {
                 Ok(auth) => {
                     info!("Успешный вход: {}", username);
                     auth_response_with_cookie_and_secure(
@@ -4740,16 +4834,8 @@ async fn get_contacts(
 async fn add_contact(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
-    headers: HeaderMap,
     Json(payload): Json<ContactPayload>,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &owner, &headers).await.is_err() {
-        return (
-            StatusCode::FORBIDDEN,
-            "Контакты может менять только доверенное устройство",
-        )
-            .into_response();
-    }
     let contact = payload.username.trim();
     info!("API add_contact start owner={} contact={}", owner, contact);
     if contact.is_empty() {
@@ -4797,15 +4883,7 @@ async fn delete_contact(
     AxumPath(username): AxumPath<String>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
-    headers: HeaderMap,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &owner, &headers).await.is_err() {
-        return (
-            StatusCode::FORBIDDEN,
-            "Контакты может менять только доверенное устройство",
-        )
-            .into_response();
-    }
     info!(
         "API delete_contact start owner={} contact={}",
         owner, username
@@ -4927,24 +5005,6 @@ async fn require_approved_device(
             Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
     }
-}
-
-async fn require_trusted_device(
-    pool: &SqlitePool,
-    owner: &str,
-    headers: &HeaderMap,
-) -> Result<DeviceRecord, Response> {
-    let device_id = match header_device_id(headers) {
-        Some(value) => value,
-        None => {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "Нужен X-Zali-Device-ID доверенного устройства",
-            )
-                .into_response())
-        }
-    };
-    require_approved_device(pool, owner, &device_id).await
 }
 
 async fn append_transparency_log(
@@ -5409,16 +5469,6 @@ async fn post_vault_event(
         )
             .into_response();
     }
-    if require_approved_device(&state.db, &owner, &header_device)
-        .await
-        .is_err()
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "Vault может публиковать только доверенное устройство",
-        )
-            .into_response();
-    }
     let encrypted = trim_limited(payload.encryptedVaultEvent, 262_144);
     if encrypted.len() < 16 {
         return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
@@ -5488,17 +5538,6 @@ async fn get_vault_events(
         )
             .into_response();
     }
-    if require_approved_device(&state.db, &owner, &device_id)
-        .await
-        .is_err()
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "Vault доступен только доверенному устройству",
-        )
-            .into_response();
-    }
-
     let rows = sqlx::query_as::<_, VaultEventRecord>(
         "SELECT event_id, owner, device_id, issued_to_device_id, vault_epoch,
                 encrypted_vault_event, signature, created_at
@@ -5540,14 +5579,6 @@ fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, Response> {
         .map_err(|_| (StatusCode::BAD_REQUEST, "Дата должна быть RFC3339").into_response())
 }
 
-fn max_datetime(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
-    match (a, b) {
-        (Some(left), Some(right)) => Some(left.max(right)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct HistoryWindow {
     from: DateTime<Utc>,
@@ -5561,11 +5592,11 @@ struct HistoryAccess {
 }
 
 async fn resolve_history_access(
-    pool: &SqlitePool,
-    owner: &str,
+    _pool: &SqlitePool,
+    _owner: &str,
     page: &MessagePageQuery,
-    headers: &HeaderMap,
-    conversation_id: Option<&str>,
+    _headers: &HeaderMap,
+    _conversation_id: Option<&str>,
 ) -> Result<HistoryAccess, Response> {
     let explicit_since = match page
         .since
@@ -5576,104 +5607,9 @@ async fn resolve_history_access(
         Some(value) => Some(parse_rfc3339_utc(value)?),
         None => None,
     };
-    let header_device_id = headers
-        .get("x-zali-device-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let device_id = header_device_id;
-
-    let Some(device_id) = device_id else {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Для истории нужен X-Zali-Device-ID",
-        )
-            .into_response());
-    };
-
-    if let Some(query_device_id) = page
-        .device_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if query_device_id != device_id {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "deviceId в запросе должен совпадать с X-Zali-Device-ID",
-            )
-                .into_response());
-        }
-    };
-
-    let device = match load_device(pool, owner, device_id).await {
-        Ok(Some(device)) => device,
-        Ok(None) => {
-            return Err((StatusCode::FORBIDDEN, "Устройство не зарегистрировано").into_response())
-        }
-        Err(e) => {
-            error!(
-                "Ошибка чтения устройства {} для окна истории: {}",
-                device_id, e
-            );
-            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-        }
-    };
-    if device.approved == 0 || device.revoked != 0 {
-        return Err((StatusCode::FORBIDDEN, "Устройство не подтверждено").into_response());
-    }
-
-    let is_first_device =
-        device.group_epoch <= 1 && device.approved_by.as_deref() == Some(device_id);
-    let device_since = if is_first_device {
-        None
-    } else {
-        device
-            .approved_at
-            .map(|approved_at| approved_at - chrono::Duration::days(device.history_days.max(0)))
-    };
-
-    let ticket_windows = if let Some(conversation_id) = conversation_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        match sqlx::query_as::<_, (DateTime<Utc>, DateTime<Utc>)>(
-            "SELECT from_time, to_time
-             FROM history_tickets
-             WHERE owner = ?
-               AND issued_to_device_id = ?
-               AND conversation_id = ?
-               AND revoked = 0
-               AND expires_at > ?
-             ORDER BY created_at ASC",
-        )
-        .bind(owner)
-        .bind(device_id)
-        .bind(conversation_id)
-        .bind(Utc::now())
-        .fetch_all(pool)
-        .await
-        {
-            Ok(rows) => rows
-                .into_iter()
-                .filter_map(|(from, to)| (from <= to).then_some(HistoryWindow { from, to }))
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                error!(
-                    "Ошибка чтения history ticket owner={} device={} conversation={}: {}",
-                    owner, device_id, conversation_id, e
-                );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
-    let base_since = max_datetime(explicit_since, device_since);
     Ok(HistoryAccess {
-        base_since,
-        ticket_windows,
+        base_since: explicit_since,
+        ticket_windows: Vec::new(),
     })
 }
 
@@ -5768,23 +5704,6 @@ async fn create_history_ticket(
         )
             .into_response();
     }
-    if require_approved_device(&state.db, &owner, &issued_by)
-        .await
-        .is_err()
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "Ticket может выдать только доверенное устройство",
-        )
-            .into_response();
-    }
-    if require_approved_device(&state.db, &owner, &issued_to)
-        .await
-        .is_err()
-    {
-        return (StatusCode::FORBIDDEN, "Получатель ticket не подтвержден").into_response();
-    }
-
     let from_time = match parse_rfc3339_utc(&payload.fromTime) {
         Ok(value) => value,
         Err(response) => return response,
@@ -5871,17 +5790,6 @@ async fn get_history_tickets(
         )
             .into_response();
     }
-    if require_approved_device(&state.db, &owner, &device_id)
-        .await
-        .is_err()
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "History tickets доступны только доверенному устройству",
-        )
-            .into_response();
-    }
-
     let rows = sqlx::query_as::<_, HistoryTicketRecord>(
         "SELECT ticket_id, owner, issued_by_device_id, issued_to_device_id, conversation_id,
                 from_time, to_time, expires_at, encrypted_export_secrets, signature, revoked, created_at
@@ -7760,15 +7668,8 @@ async fn set_message_reaction(
     AxumPath(id): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    headers: HeaderMap,
     Json(payload): Json<ReactionPayload>,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &auth_user, &headers)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     let message = match sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
         .bind(&id)
         .fetch_one(&state.db)
@@ -7906,15 +7807,8 @@ async fn get_avatar(
 async fn upload_avatar(
     AuthenticatedUser(username): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &username, &headers)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     let mut file_data: Vec<u8> = Vec::new();
     let mut mime_type = String::new();
 
@@ -8034,14 +7928,7 @@ async fn upload_avatar(
 async fn delete_avatar(
     AuthenticatedUser(username): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &username, &headers)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     let _ = clear_asset_file(user_avatar_asset_dir(&state.data_dir, &username), "avatar").await;
 
     match sqlx::query("DELETE FROM avatars WHERE username = ?")
@@ -8110,44 +7997,27 @@ async fn find_message_by_client_scope(
 async fn upload_message(
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    headers: HeaderMap,
     multipart: Multipart,
 ) -> impl IntoResponse {
-    upload_message_with_context(auth_user, state, headers, multipart, None, None).await
+    upload_message_with_context(auth_user, state, multipart, None, None).await
 }
 
 async fn upload_server_message(
     AxumPath((server_id, channel_id)): AxumPath<(String, String)>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    headers: HeaderMap,
     multipart: Multipart,
 ) -> impl IntoResponse {
-    upload_message_with_context(
-        auth_user,
-        state,
-        headers,
-        multipart,
-        Some(server_id),
-        Some(channel_id),
-    )
-    .await
+    upload_message_with_context(auth_user, state, multipart, Some(server_id), Some(channel_id)).await
 }
 
 async fn upload_message_with_context(
     auth_user: String,
     state: Arc<AppState>,
-    headers: HeaderMap,
     mut multipart: Multipart,
     server_id_override: Option<String>,
     channel_id_override: Option<String>,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &auth_user, &headers)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     info!(
         "UPLOAD start auth_user={} server_override={:?} channel_override={:?}",
         auth_user,
@@ -8627,18 +8497,6 @@ async fn upload_message_with_context(
     }
 }
 
-async fn resolve_conversation_key(
-    AuthenticatedUser(_auth_user): AuthenticatedUser,
-    axum::extract::State(_state): axum::extract::State<Arc<AppState>>,
-    Json(_payload): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    (
-        StatusCode::GONE,
-        "Server-side conversation keys are disabled. Use a local shared encryption key.",
-    )
-        .into_response()
-}
-
 async fn download_upload_file(
     AxumPath(filename): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
@@ -8678,7 +8536,6 @@ async fn download_upload_file(
                 limit: None,
                 offset: None,
                 since: None,
-                device_id: None,
             };
             let history_access = match resolve_history_access(
                 &state.db,
@@ -9023,7 +8880,6 @@ async fn download_message(
                 limit: None,
                 offset: None,
                 since: None,
-                device_id: None,
             };
             let history_access = match resolve_history_access(
                 &state.db,
@@ -9078,14 +8934,7 @@ async fn delete_message(
     AxumPath(id): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> impl IntoResponse {
-    if require_trusted_device(&state.db, &auth_user, &headers)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     info!("DELETE_MESSAGE start id={} auth={}", id, auth_user);
     match sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
         .bind(&id)
