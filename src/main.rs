@@ -3483,27 +3483,61 @@ async fn update_me(
     Json(payload): Json<CloudVaultSyncPayload>,
 ) -> impl IntoResponse {
     let response_username = username.clone();
-    match sqlx::query(
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            error!("Ошибка начала транзакции для {}: {}", username, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if let Err(e) = sqlx::query(
         "UPDATE users SET cloud_vault_sync_enabled = ? WHERE username = ?",
     )
     .bind(if payload.cloud_vault_sync_enabled { 1 } else { 0 })
     .bind(&username)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     {
-        Ok(_) => match load_cloud_vault_sync_enabled(&state.db, &username).await {
-            Ok(enabled) => Json(MeResponse {
-                username: response_username,
-                cloud_vault_sync_enabled: enabled,
-            })
-            .into_response(),
-            Err(e) => {
-                error!("Ошибка чтения настроек аккаунта {} после обновления: {}", username, e);
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
-        },
+        error!("Ошибка обновления cloud_vault_sync_enabled для {}: {}", username, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    if !payload.cloud_vault_sync_enabled {
+        if let Err(e) = sqlx::query("DELETE FROM account_vault_events WHERE owner = ?")
+            .bind(&username)
+            .execute(&mut *tx)
+            .await
+        {
+            error!("Ошибка очистки vault events для {}: {}", username, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        if let Err(e) = sqlx::query("DELETE FROM history_tickets WHERE owner = ?")
+            .bind(&username)
+            .execute(&mut *tx)
+            .await
+        {
+            error!("Ошибка очистки history tickets для {}: {}", username, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        error!("Ошибка фиксации update_me для {}: {}", username, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    match load_cloud_vault_sync_enabled(&state.db, &username).await {
+        Ok(enabled) => Json(MeResponse {
+            username: response_username,
+            cloud_vault_sync_enabled: enabled,
+        })
+        .into_response(),
         Err(e) => {
-            error!("Ошибка обновления cloud_vault_sync_enabled для {}: {}", username, e);
+            error!(
+                "Ошибка чтения настроек аккаунта {} после обновления: {}",
+                username, e
+            );
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
