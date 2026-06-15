@@ -115,7 +115,7 @@ impl Config {
         let ws_channel_capacity = std::env::var("WS_CHANNEL_CAPACITY")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(64);
+            .unwrap_or(128);
 
         Self {
             jwt_secret: jwt_secret.into_bytes(),
@@ -636,6 +636,7 @@ struct AppState {
     user_connections: DashMap<String, Vec<WsSender>>,
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
+    ws_tickets: DashMap<String, WsTicketRecord>,
     // Rate limiting: username/IP → timestamps of recent login attempts
     login_attempts: DashMap<String, VecDeque<Instant>>,
     config: Config,
@@ -716,6 +717,13 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         if let Some(query) = parts.uri.query() {
             for pair in query.split('&') {
                 if let Some((key, value)) = pair.split_once('=') {
+                    if key == "ticket" && !value.trim().is_empty() {
+                        if let Some(username) = take_valid_ws_ticket(state, value) {
+                            return Ok(AuthenticatedUser(username));
+                        }
+                        warn!("Получен невалидный ws-ticket");
+                        return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
+                    }
                     if matches!(key, "token" | "auth" | "access_token") && !value.trim().is_empty()
                     {
                         match validate_token(value, state).await {
@@ -1004,6 +1012,17 @@ struct AuthResponse {
     username: String,
     #[serde(rename = "cloudVaultSyncEnabled")]
     cloud_vault_sync_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct WsTicketResponse {
+    ticket: String,
+}
+
+#[derive(Debug, Clone)]
+struct WsTicketRecord {
+    username: String,
+    expires_at: Instant,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1857,9 +1876,23 @@ async fn main() {
         user_connections: DashMap::new(),
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
+        ws_tickets: DashMap::new(),
         login_attempts: DashMap::new(),
         config,
     });
+
+    {
+        let cleanup_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                cleanup_state
+                    .ws_tickets
+                    .retain(|_, record| record.expires_at > Instant::now());
+            }
+        });
+    }
 
     info!(
         "Серверное хранилище активировано: data_dir={}, uploads_dir={}",
@@ -1870,6 +1903,7 @@ async fn main() {
     let app = Router::new()
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/ws-ticket", post(create_ws_ticket))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/users", get(get_users))
@@ -4139,6 +4173,7 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 room.participants.insert(sender.to_string());
                 room.participants.insert(target.clone());
             }
+            join_voice_room(state, sender, &room_key, "dm", None, None).await;
             broadcast_voice_room_state(state, &room_key).await;
             send_json_to_user(
                 state,
@@ -4163,6 +4198,39 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 }),
             )
             .await;
+
+            let timeout_state = Arc::clone(state);
+            let timeout_room_id = room_key.clone();
+            let timeout_inviter = sender.to_string();
+            let timeout_target = target.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let Some((call_state, participants)) = timeout_state.voice_rooms.get(&timeout_room_id).map(|room| {
+                    (
+                        room.call_state.clone(),
+                        room.participants.iter().cloned().collect::<Vec<_>>(),
+                    )
+                }) else {
+                    return;
+                };
+                if call_state != "ringing" {
+                    return;
+                }
+                timeout_state.voice_rooms.remove(&timeout_room_id);
+                for participant in participants {
+                    send_json_to_user(
+                        &timeout_state,
+                        &participant,
+                        serde_json::json!({
+                            "type": "voice_call_missed",
+                            "roomId": timeout_room_id.clone(),
+                            "from": timeout_inviter.clone(),
+                            "target": timeout_target.clone(),
+                        }),
+                    )
+                    .await;
+                }
+            });
         }
         "voice_call_accept" => {
             let inviter = payload["inviter"]
@@ -4209,10 +4277,9 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 sender, room_id, inviter
             );
 
-            {
-                let Some(mut room) = state.voice_rooms.get_mut(&room_id) else {
-                    return;
-                };
+            join_voice_room(state, sender, &room_id, "dm", None, None).await;
+
+            if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
                 let room = room.value_mut();
                 room.room_type = "dm".to_string();
                 room.server_id = None;
@@ -4222,7 +4289,7 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 room.target = Some(sender.to_string());
                 room.participants.clear();
                 room.participants.insert(sender.to_string());
-                room.participants.insert(inviter.to_string());
+                room.participants.insert(inviter.clone());
             }
 
             state
@@ -4542,6 +4609,48 @@ fn issue_auth_response(
     })
 }
 
+async fn issue_ws_ticket(
+    state: &Arc<AppState>,
+    username: &str,
+) -> Result<WsTicketResponse, StatusCode> {
+    let ticket = Uuid::new_v4().to_string();
+    let expires_at = Instant::now()
+        .checked_add(Duration::from_secs(30))
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(30));
+    state.ws_tickets.insert(
+        ticket.clone(),
+        WsTicketRecord {
+            username: username.to_string(),
+            expires_at,
+        },
+    );
+    Ok(WsTicketResponse { ticket })
+}
+
+async fn create_ws_ticket(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(username): AuthenticatedUser,
+) -> impl IntoResponse {
+    match issue_ws_ticket(&state, &username).await {
+        Ok(response) => Json(response).into_response(),
+        Err(status) => status.into_response(),
+    }
+}
+
+fn take_valid_ws_ticket(state: &Arc<AppState>, ticket: &str) -> Option<String> {
+    let ticket = ticket.trim();
+    if ticket.is_empty() {
+        return None;
+    }
+    let entry = state.ws_tickets.remove(ticket)?;
+    let (_, record) = entry;
+    if Instant::now() <= record.expires_at {
+        Some(record.username)
+    } else {
+        None
+    }
+}
+
 async fn load_cloud_vault_sync_enabled(
     pool: &SqlitePool,
     username: &str,
@@ -4727,17 +4836,7 @@ async fn login(
             )
                 .into_response();
         }
-        if attempts.is_empty() {
-            drop(attempts);
-            state.login_attempts.remove(&rate_key);
-            state
-                .login_attempts
-                .entry(rate_key.clone())
-                .or_default()
-                .push_back(now);
-        } else {
-            attempts.push_back(now);
-        }
+        attempts.push_back(now);
     }
 
     let row =
@@ -8370,52 +8469,8 @@ async fn upload_message_with_context(
         !server_id_opt.is_none() || !channel_id_opt.is_none()
     );
 
-    if !client_id.is_empty() {
-        match find_message_by_client_scope(
-            &state,
-            &client_id,
-            &sender,
-            &receiver,
-            server_id_opt.as_deref(),
-            channel_id_opt.as_deref(),
-        )
-        .await
-        {
-            Ok(Some(existing)) => {
-                info!(
-                    "UPLOAD deduplicated by scoped client_id={} existing_message_id={}",
-                    client_id, existing.id
-                );
-                return (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": existing.id, "clientId": client_id })),
-                )
-                    .into_response();
-            }
-            Ok(None) => {}
-            Err(e) => {
-                error!(
-                    "Ошибка проверки client_id={} перед вставкой: {}",
-                    client_id, e
-                );
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        }
-    }
-
-    if let Err(e) = fs::rename(&temp_path, &path).await {
-        error!(
-            "Ошибка атомарного перемещения файла {} -> {}: {}",
-            temp_path.display(),
-            path.display(),
-            e
-        );
-        let _ = fs::remove_file(&temp_path).await;
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
     let insert_result = sqlx::query(
-        "INSERT INTO messages (id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id)
+        "INSERT OR IGNORE INTO messages (id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
@@ -8432,6 +8487,49 @@ async fn upload_message_with_context(
 
     match insert_result {
         Ok(result) => {
+            if result.rows_affected() == 0 {
+                if !client_id.is_empty() {
+                    if let Ok(Some(existing)) = find_message_by_client_scope(
+                        &state,
+                        &client_id,
+                        &sender,
+                        &receiver,
+                        server_id_opt.as_deref(),
+                        channel_id_opt.as_deref(),
+                    )
+                    .await
+                    {
+                        info!(
+                            "UPLOAD deduplicated after insert client_id={} existing_message_id={}",
+                            client_id, existing.id
+                        );
+                        let _ = fs::remove_file(&temp_path).await;
+                        return (
+                            StatusCode::CREATED,
+                            Json(serde_json::json!({ "id": existing.id, "clientId": client_id })),
+                        )
+                            .into_response();
+                    }
+                }
+                let _ = fs::remove_file(&temp_path).await;
+                return StatusCode::CREATED.into_response();
+            }
+
+            if let Err(e) = fs::rename(&temp_path, &path).await {
+                error!(
+                    "Ошибка атомарного перемещения файла {} -> {}: {}",
+                    temp_path.display(),
+                    path.display(),
+                    e
+                );
+                let _ = fs::remove_file(&temp_path).await;
+                let _ = sqlx::query("DELETE FROM messages WHERE id = ?")
+                    .bind(&id)
+                    .execute(&state.db)
+                    .await;
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
             info!(
                 "UPLOAD DB insert result id={} client_id={} rows_affected={}",
                 id,
@@ -8503,28 +8601,6 @@ async fn upload_message_with_context(
         }
         Err(e) => {
             let _ = fs::remove_file(&path).await;
-            if !client_id.is_empty() {
-                if let Ok(Some(existing)) = find_message_by_client_scope(
-                    &state,
-                    &client_id,
-                    &sender,
-                    &receiver,
-                    server_id_opt.as_deref(),
-                    channel_id_opt.as_deref(),
-                )
-                .await
-                {
-                    info!(
-                        "UPLOAD deduplicated after insert race client_id={} existing_message_id={}",
-                        client_id, existing.id
-                    );
-                    return (
-                        StatusCode::CREATED,
-                        Json(serde_json::json!({ "id": existing.id, "clientId": client_id })),
-                    )
-                        .into_response();
-                }
-            }
             error!("Ошибка сохранения сообщения в БД: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -9086,6 +9162,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, username: St
                                             .unwrap_or_default(),
                                     );
                                     handle_voice_event(&state, &username, &value).await;
+                                } else if event_type == "ping" {
+                                    let pong = serde_json::json!({
+                                        "type": "pong",
+                                        "ts": Utc::now().timestamp_millis(),
+                                    });
+                                    if socket.send(WsMessage::Text(pong.to_string())).await.is_err() {
+                                        warn!("WS pong send failed username={}", username);
+                                        break;
+                                    }
                                 } else {
                                     trace!("WS inbound non-voice event username={} type={}", username, event_type);
                                 }
