@@ -8531,6 +8531,25 @@ async fn upload_message_with_context(
                             "UPLOAD deduplicated after insert client_id={} existing_message_id={}",
                             client_id, existing.id
                         );
+                        let dedup_msg = Message {
+                            id: existing.id.clone(),
+                            client_id: existing.client_id.clone().or_else(|| Some(client_id.clone())),
+                            sender: sender.clone(),
+                            receiver: receiver.clone(),
+                            filename: existing.filename.clone(),
+                            timestamp: existing.timestamp,
+                            key_version: Some(key_version),
+                            server_id: server_id_opt.clone(),
+                            channel_id: channel_id_opt.clone(),
+                        };
+                        if dedup_msg.server_id.is_some() {
+                            deliver_server_message(&state, &dedup_msg).await;
+                        } else {
+                            deliver_to_user(&state, &receiver, &dedup_msg).await;
+                            if sender != receiver {
+                                deliver_to_user(&state, &sender, &dedup_msg).await;
+                            }
+                        }
                         let _ = fs::remove_file(&temp_path).await;
                         return (
                             StatusCode::CREATED,
