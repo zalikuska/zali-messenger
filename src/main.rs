@@ -4941,27 +4941,60 @@ async fn get_contacts(
     AuthenticatedUser(owner): AuthenticatedUser,
 ) -> impl IntoResponse {
     info!("API get_contacts start owner={}", owner);
-    match sqlx::query_scalar::<_, String>(
+    let explicit_contacts = match sqlx::query_scalar::<_, String>(
         "SELECT contact FROM contacts WHERE owner = ? ORDER BY contact ASC",
     )
     .bind(&owner)
     .fetch_all(&state.db)
     .await
     {
-        Ok(contacts) => {
-            info!(
-                "API get_contacts owner={} count={} contacts={}",
-                owner,
-                contacts.len(),
-                contacts.join(",")
-            );
-            Json(ContactListResponse { contacts }).into_response()
-        }
+        Ok(contacts) => contacts,
         Err(e) => {
             error!("Ошибка получения контактов для {}: {}", owner, e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let message_contacts = match sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT CASE
+            WHEN sender = ? THEN receiver
+            ELSE sender
+         END AS contact
+         FROM messages
+         WHERE server_id IS NULL
+           AND (sender = ? OR receiver = ?)
+           AND CASE WHEN sender = ? THEN receiver ELSE sender END <> ?",
+    )
+    .bind(&owner)
+    .bind(&owner)
+    .bind(&owner)
+    .bind(&owner)
+    .bind(&owner)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(contacts) => contacts,
+        Err(e) => {
+            error!("Ошибка получения контактов из истории для {}: {}", owner, e);
+            Vec::new()
+        }
+    };
+
+    let mut contacts = explicit_contacts;
+    for contact in message_contacts {
+        if !contacts.iter().any(|existing| existing == &contact) {
+            contacts.push(contact);
         }
     }
+    contacts.sort();
+
+    info!(
+        "API get_contacts owner={} count={} contacts={}",
+        owner,
+        contacts.len(),
+        contacts.join(",")
+    );
+    Json(ContactListResponse { contacts }).into_response()
 }
 
 async fn add_contact(
@@ -8400,36 +8433,31 @@ async fn upload_message_with_context(
         }
 
         if sender != receiver {
-            let contact_exists = sqlx::query_scalar::<_, String>(
-                "SELECT contact FROM contacts WHERE owner = ? AND contact = ? LIMIT 1",
+            if let Err(e) = sqlx::query(
+                "INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)",
             )
             .bind(&sender)
             .bind(&receiver)
-            .fetch_optional(&state.db)
-            .await;
-            match contact_exists {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    warn!(
-                        "UPLOAD rejected receiver not in contacts sender={} receiver={}",
-                        sender, receiver
-                    );
-                    if wrote_file {
-                        let _ = fs::remove_file(&temp_path).await;
-                    }
-                    return (StatusCode::FORBIDDEN, "Получатель должен быть в контактах")
-                        .into_response();
-                }
-                Err(e) => {
-                    error!(
-                        "Ошибка проверки контакта sender={} receiver={}: {}",
-                        sender, receiver, e
-                    );
-                    if wrote_file {
-                        let _ = fs::remove_file(&temp_path).await;
-                    }
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
+            .execute(&state.db)
+            .await
+            {
+                error!(
+                    "Ошибка автодобавления контакта sender={} receiver={}: {}",
+                    sender, receiver, e
+                );
+            }
+            if let Err(e) = sqlx::query(
+                "INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)",
+            )
+            .bind(&receiver)
+            .bind(&sender)
+            .execute(&state.db)
+            .await
+            {
+                error!(
+                    "Ошибка автодобавления обратного контакта sender={} receiver={}: {}",
+                    sender, receiver, e
+                );
             }
         }
     }
