@@ -3651,7 +3651,12 @@ async fn send_payload_to_user(
     for conn in senders {
         match tokio::time::timeout(Duration::from_secs(2), conn.send(payload.clone())).await {
             Ok(Ok(())) => sent += 1,
-            Ok(Err(_)) | Err(_) => failed = true,
+            Ok(Err(_)) | Err(_) => {
+                failed = true;
+                if let Some(mut conns) = state.user_connections.get_mut(username) {
+                    conns.retain(|existing| !existing.same_channel(&conn) && !existing.is_closed());
+                }
+            }
         }
     }
 
@@ -8381,7 +8386,15 @@ async fn upload_message_with_context(
                     .await
                     .unwrap_or(false)
                 {
-                    return StatusCode::FORBIDDEN.into_response();
+                    warn!(
+                        "UPLOAD forbidden sender={} server={} channel={} reason=channel_send_denied",
+                        auth_user, sid, cid
+                    );
+                    return (
+                        StatusCode::FORBIDDEN,
+                        "Нет прав на отправку в этом канале",
+                    )
+                        .into_response();
                 }
             }
             Ok(None) => return (StatusCode::NOT_FOUND, "Сервер не найден").into_response(),
