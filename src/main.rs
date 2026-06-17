@@ -5302,13 +5302,22 @@ async fn register_device(
                 public_key = excluded.public_key,
                 signing_key = excluded.signing_key,
                 key_package = excluded.key_package,
-                approved = excluded.approved,
+                approved = CASE
+                    WHEN account_devices.approved = 1 THEN 1
+                    ELSE excluded.approved
+                END,
                 revoked = 0,
-                approved_by = COALESCE(excluded.approved_by, approved_by),
+                approved_by = COALESCE(account_devices.approved_by, excluded.approved_by),
                 approved_at = COALESCE(approved_at, excluded.approved_at),
                 revoked_at = NULL,
-                history_days = COALESCE(history_days, 30),
-                group_epoch = excluded.group_epoch",
+                history_days = CASE
+                    WHEN account_devices.approved = 1 THEN COALESCE(account_devices.history_days, 30)
+                    ELSE COALESCE(account_devices.history_days, 30)
+                END,
+                group_epoch = CASE
+                    WHEN account_devices.approved = 1 THEN account_devices.group_epoch
+                    ELSE excluded.group_epoch
+                END",
         )
         .bind(&owner)
         .bind(&device_id)
@@ -5616,30 +5625,9 @@ struct VaultQuery {
 async fn post_vault_event(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
-    headers: HeaderMap,
     Json(payload): Json<VaultEventPayload>,
 ) -> impl IntoResponse {
     let device_id = trim_limited(payload.deviceId, 128);
-    let header_device = match header_device_id(&headers) {
-        Some(value) => value,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                "Нужен X-Zali-Device-ID доверенного устройства",
-            )
-                .into_response()
-        }
-    };
-    if device_id.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Нужен deviceId").into_response();
-    }
-    if device_id != header_device {
-        return (
-            StatusCode::FORBIDDEN,
-            "deviceId должен совпадать с X-Zali-Device-ID",
-        )
-            .into_response();
-    }
     let encrypted = trim_limited(payload.encryptedVaultEvent, 262_144);
     if encrypted.len() < 16 {
         return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
@@ -5661,7 +5649,7 @@ async fn post_vault_event(
     )
     .bind(&event_id)
     .bind(&owner)
-    .bind(&header_device)
+    .bind(if device_id.is_empty() { "cloud" } else { &device_id })
     .bind(target.as_deref())
     .bind(vault_epoch)
     .bind(&encrypted)
@@ -5684,40 +5672,23 @@ async fn get_vault_events(
     Query(query): Query<VaultQuery>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
-    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let device_id = match header_device_id(&headers) {
-        Some(value) => value,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                "Нужен X-Zali-Device-ID доверенного устройства",
-            )
-                .into_response()
-        }
-    };
-    if query
+    let target_device = query
         .deviceId
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .is_some_and(|query_device| query_device != device_id)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "deviceId в запросе должен совпадать с X-Zali-Device-ID",
-        )
-            .into_response();
-    }
+        .map(|value| value.to_string());
     let rows = sqlx::query_as::<_, VaultEventRecord>(
         "SELECT event_id, owner, device_id, issued_to_device_id, vault_epoch,
                 encrypted_vault_event, signature, created_at
          FROM account_vault_events
-         WHERE owner = ? AND (issued_to_device_id IS NULL OR issued_to_device_id = ?)
+         WHERE owner = ? AND (? IS NULL OR issued_to_device_id IS NULL OR issued_to_device_id = ?)
          ORDER BY vault_epoch ASC, created_at ASC",
     )
     .bind(&owner)
-    .bind(&device_id)
+    .bind(target_device.as_deref())
+    .bind(target_device.as_deref())
     .fetch_all(&state.db)
     .await;
 
@@ -5853,28 +5824,10 @@ fn server_conversation_scope(server_id: &str, channel_id: &str) -> String {
 async fn create_history_ticket(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
-    headers: HeaderMap,
     Json(payload): Json<HistoryTicketPayload>,
 ) -> impl IntoResponse {
     let issued_by = trim_limited(payload.issuedByDeviceId, 128);
     let issued_to = trim_limited(payload.issuedToDeviceId, 128);
-    let header_device = match header_device_id(&headers) {
-        Some(value) => value,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                "Нужен X-Zali-Device-ID доверенного устройства",
-            )
-                .into_response()
-        }
-    };
-    if header_device != issued_by {
-        return (
-            StatusCode::FORBIDDEN,
-            "issuedByDeviceId должен совпадать с X-Zali-Device-ID",
-        )
-            .into_response();
-    }
     let from_time = match parse_rfc3339_utc(&payload.fromTime) {
         Ok(value) => value,
         Err(response) => return response,
@@ -5936,40 +5889,23 @@ async fn get_history_tickets(
     Query(query): Query<VaultQuery>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
-    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let device_id = match header_device_id(&headers) {
-        Some(value) => value,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                "Нужен X-Zali-Device-ID доверенного устройства",
-            )
-                .into_response()
-        }
-    };
-    if query
+    let device_id = query
         .deviceId
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .is_some_and(|query_device| query_device != device_id)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "deviceId в запросе должен совпадать с X-Zali-Device-ID",
-        )
-            .into_response();
-    }
+        .map(|value| value.to_string());
     let rows = sqlx::query_as::<_, HistoryTicketRecord>(
         "SELECT ticket_id, owner, issued_by_device_id, issued_to_device_id, conversation_id,
                 from_time, to_time, expires_at, encrypted_export_secrets, signature, revoked, created_at
          FROM history_tickets
-         WHERE owner = ? AND issued_to_device_id = ?
+         WHERE owner = ? AND (? IS NULL OR issued_to_device_id = ?)
          ORDER BY created_at DESC",
     )
     .bind(&owner)
-    .bind(&device_id)
+    .bind(device_id.as_deref())
+    .bind(device_id.as_deref())
     .fetch_all(&state.db)
     .await;
 
