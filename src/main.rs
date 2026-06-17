@@ -8357,21 +8357,21 @@ async fn upload_message_with_context(
         );
     }
 
-    let is_server_message = !server_id.trim().is_empty() || !channel_id.trim().is_empty();
-    let server_id_opt = if is_server_message {
+    let mut is_server_message = !server_id.trim().is_empty() || !channel_id.trim().is_empty();
+    let mut server_id_opt = if is_server_message {
         Some(server_id.trim().to_string())
     } else {
         None
     };
-    let channel_id_opt = if is_server_message {
+    let mut channel_id_opt = if is_server_message {
         Some(channel_id.trim().to_string())
     } else {
         None
     };
 
     if is_server_message {
-        let sid = server_id_opt.as_deref().unwrap_or_default();
-        let cid = channel_id_opt.as_deref().unwrap_or_default();
+        let sid = server_id_opt.clone().unwrap_or_default();
+        let cid = channel_id_opt.clone().unwrap_or_default();
         if sid.is_empty() || cid.is_empty() {
             warn!("UPLOAD rejected empty server/channel after override");
             return (
@@ -8380,21 +8380,47 @@ async fn upload_message_with_context(
             )
                 .into_response();
         }
-        match get_server_access_context(&state.db, sid, &auth_user).await {
+        match get_server_access_context(&state.db, &sid, &auth_user).await {
             Ok(Some((_server, _role))) => {
-                if !can_access_channel(&state.db, sid, cid, &auth_user, "send")
+                if !can_access_channel(&state.db, &sid, &cid, &auth_user, "send")
                     .await
                     .unwrap_or(false)
                 {
-                    warn!(
-                        "UPLOAD forbidden sender={} server={} channel={} reason=channel_send_denied",
-                        auth_user, sid, cid
-                    );
-                    return (
-                        StatusCode::FORBIDDEN,
-                        "Нет прав на отправку в этом канале",
+                    let receiver_is_user = sqlx::query_scalar::<_, String>(
+                        "SELECT username FROM users WHERE username = ? LIMIT 1",
                     )
-                        .into_response();
+                    .bind(&receiver)
+                    .fetch_optional(&state.db)
+                    .await;
+                    match receiver_is_user {
+                        Ok(Some(_)) => {
+                            warn!(
+                                "UPLOAD server context denied but receiver looks like DM sender={} receiver={} server={} channel={} reason=dm_fallback",
+                                auth_user, receiver, sid, cid
+                            );
+                            is_server_message = false;
+                            server_id_opt = None;
+                            channel_id_opt = None;
+                        }
+                        Ok(None) => {
+                            warn!(
+                                "UPLOAD forbidden sender={} server={} channel={} reason=channel_send_denied",
+                                auth_user, sid, cid
+                            );
+                            return (
+                                StatusCode::FORBIDDEN,
+                                "Нет прав на отправку в этом канале",
+                            )
+                                .into_response();
+                        }
+                        Err(e) => {
+                            error!(
+                                "Ошибка проверки fallback DM receiver={} server={} channel={}: {}",
+                                receiver, sid, cid, e
+                            );
+                            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        }
+                    }
                 }
             }
             Ok(None) => return (StatusCode::NOT_FOUND, "Сервер не найден").into_response(),
@@ -8406,8 +8432,8 @@ async fn upload_message_with_context(
         let channel_exists = sqlx::query_scalar::<_, String>(
             "SELECT id FROM channels WHERE id = ? AND server_id = ? LIMIT 1",
         )
-        .bind(cid)
-        .bind(sid)
+        .bind(&cid)
+        .bind(&sid)
         .fetch_optional(&state.db)
         .await;
         match channel_exists {
