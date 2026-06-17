@@ -7736,11 +7736,8 @@ async fn get_messages(
 ) -> impl IntoResponse {
     info!("API get_messages start user={} auth={}", user, auth_user);
     let effective_user = auth_user.clone();
-    if user != effective_user {
-        warn!(
-            "Несовпадение username в пути и токене: path={} auth={}. Используем auth_user.",
-            user, effective_user
-        );
+    if user == effective_user {
+        warn!("API get_messages requested self-chat user={}", effective_user);
     }
 
     let limit = page.limit.unwrap_or(0).clamp(0, 500) as i64;
@@ -8429,19 +8426,21 @@ async fn upload_message_with_context(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
-        let channel_exists = sqlx::query_scalar::<_, String>(
-            "SELECT id FROM channels WHERE id = ? AND server_id = ? LIMIT 1",
-        )
-        .bind(&cid)
-        .bind(&sid)
-        .fetch_optional(&state.db)
-        .await;
-        match channel_exists {
-            Ok(Some(_)) => {}
-            Ok(None) => return (StatusCode::NOT_FOUND, "Канал не найден").into_response(),
-            Err(e) => {
-                error!("Ошибка проверки канала {}/{}: {}", sid, cid, e);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        if is_server_message {
+            let channel_exists = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM channels WHERE id = ? AND server_id = ? LIMIT 1",
+            )
+            .bind(&cid)
+            .bind(&sid)
+            .fetch_optional(&state.db)
+            .await;
+            match channel_exists {
+                Ok(Some(_)) => {}
+                Ok(None) => return (StatusCode::NOT_FOUND, "Канал не найден").into_response(),
+                Err(e) => {
+                    error!("Ошибка проверки канала {}/{}: {}", sid, cid, e);
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
             }
         }
     }
