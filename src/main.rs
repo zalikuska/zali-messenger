@@ -35,6 +35,24 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, trace, warn};
 use uuid::Uuid;
 
+#[cfg(windows)]
+fn set_windows_app_user_model_id() {
+    use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+
+    // Stable AppUserModelID so the taskbar groups windows correctly on Windows.
+    let app_id: Vec<u16> = "com.zalikus.zali_messenger"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
+    }
+}
+
+#[cfg(not(windows))]
+fn set_windows_app_user_model_id() {}
+
 // ============================================================
 // CONFIG
 // ============================================================
@@ -91,7 +109,7 @@ impl Config {
 
         let allow_guest_mode = std::env::var("ALLOW_GUEST_MODE")
             .map(|v| v.to_lowercase() == "true")
-            .unwrap_or_else(|_| cfg!(debug_assertions));
+            .unwrap_or(false);
 
         let auth_cookie_secure = std::env::var("AUTH_COOKIE_SECURE")
             .ok()
@@ -305,7 +323,11 @@ async fn security_headers(req: axum::http::Request<axum::body::Body>, next: Next
 }
 
 async fn rewrite_api_v1(mut req: Request<Body>, next: Next) -> Response {
-    if let Some(path_and_query) = req.uri().path_and_query().map(|value| value.as_str().to_string()) {
+    if let Some(path_and_query) = req
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_string())
+    {
         if let Some(rest) = path_and_query.strip_prefix("/api/v1") {
             if rest.is_empty() || rest.starts_with('/') {
                 let rewritten = format!("/api{rest}");
@@ -357,10 +379,18 @@ async fn migrate_legacy_storage(
     .unwrap_or_default();
     info!("Legacy таблицы: {}", legacy_tables.join(", "));
 
-    let legacy_server_cols = legacy_table_columns(&mut conn, "servers").await.unwrap_or_default();
-    let legacy_role_cols = legacy_table_columns(&mut conn, "server_roles").await.unwrap_or_default();
-    let legacy_message_cols = legacy_table_columns(&mut conn, "messages").await.unwrap_or_default();
-    let legacy_device_cols = legacy_table_columns(&mut conn, "account_devices").await.unwrap_or_default();
+    let legacy_server_cols = legacy_table_columns(&mut conn, "servers")
+        .await
+        .unwrap_or_default();
+    let legacy_role_cols = legacy_table_columns(&mut conn, "server_roles")
+        .await
+        .unwrap_or_default();
+    let legacy_message_cols = legacy_table_columns(&mut conn, "messages")
+        .await
+        .unwrap_or_default();
+    let legacy_device_cols = legacy_table_columns(&mut conn, "account_devices")
+        .await
+        .unwrap_or_default();
     let legacy_expr = |cols: &HashSet<String>, name: &str, fallback: &str| -> String {
         if cols.contains(name) {
             name.to_string()
@@ -392,8 +422,10 @@ async fn migrate_legacy_storage(
     let role_can_send = legacy_coalesce_expr(&legacy_role_cols, "can_send", "1");
     let role_can_manage = legacy_coalesce_expr(&legacy_role_cols, "can_manage", "0");
     let role_position = legacy_coalesce_expr(&legacy_role_cols, "position", "0");
-    let role_updated_at = legacy_coalesce_expr(&legacy_role_cols, "updated_at", "CURRENT_TIMESTAMP");
-    let role_created_at = legacy_coalesce_expr(&legacy_role_cols, "created_at", "CURRENT_TIMESTAMP");
+    let role_updated_at =
+        legacy_coalesce_expr(&legacy_role_cols, "updated_at", "CURRENT_TIMESTAMP");
+    let role_created_at =
+        legacy_coalesce_expr(&legacy_role_cols, "created_at", "CURRENT_TIMESTAMP");
 
     let message_client_id = legacy_expr(&legacy_message_cols, "client_id", "NULL");
     let message_server_id = legacy_expr(&legacy_message_cols, "server_id", "NULL");
@@ -407,7 +439,8 @@ async fn migrate_legacy_storage(
     let device_revoked = legacy_coalesce_expr(&legacy_device_cols, "revoked", "0");
     let device_approved_by = legacy_expr(&legacy_device_cols, "approved_by", "NULL");
     let device_history_days = legacy_coalesce_expr(&legacy_device_cols, "history_days", "30");
-    let device_created_at = legacy_coalesce_expr(&legacy_device_cols, "created_at", "CURRENT_TIMESTAMP");
+    let device_created_at =
+        legacy_coalesce_expr(&legacy_device_cols, "created_at", "CURRENT_TIMESTAMP");
     let device_approved_at = legacy_expr(&legacy_device_cols, "approved_at", "NULL");
     let device_revoked_at = legacy_expr(&legacy_device_cols, "revoked_at", "NULL");
 
@@ -1278,6 +1311,41 @@ struct VaultEventResponse {
 
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]
+struct KeyEnvelopePayload {
+    recipient: String,
+    scope: String,
+    recipientDeviceId: String,
+    senderDeviceId: String,
+    encryptedKey: String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct KeyEnvelopeRecord {
+    envelope_id: String,
+    owner: String,
+    scope_key: String,
+    sender: String,
+    sender_device_id: String,
+    recipient_device_id: String,
+    encrypted_key: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(non_snake_case)]
+struct KeyEnvelopeResponse {
+    envelopeId: String,
+    owner: String,
+    scope: String,
+    sender: String,
+    senderDeviceId: String,
+    recipientDeviceId: String,
+    encryptedKey: String,
+    createdAt: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
 struct HistoryTicketPayload {
     issuedByDeviceId: String,
     issuedToDeviceId: String,
@@ -1350,6 +1418,8 @@ async fn main() {
         )
         .init();
 
+    set_windows_app_user_model_id();
+
     let config = Config::from_env();
 
     let data_dir = canonical_data_dir();
@@ -1394,12 +1464,10 @@ async fn main() {
         .execute(&pool)
         .await
         .ok();
-    sqlx::query(
-        "ALTER TABLE users ADD COLUMN cloud_vault_sync_enabled INTEGER NOT NULL DEFAULT 1",
-    )
-    .execute(&pool)
-    .await
-    .ok();
+    sqlx::query("ALTER TABLE users ADD COLUMN cloud_vault_sync_enabled INTEGER NOT NULL DEFAULT 1")
+        .execute(&pool)
+        .await
+        .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -1480,6 +1548,10 @@ async fn main() {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы conversation_keys");
+    sqlx::query("DELETE FROM conversation_keys")
+        .execute(&pool)
+        .await
+        .expect("Ошибка очистки старых conversation_keys");
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS account_devices (
@@ -1548,6 +1620,30 @@ async fn main() {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_account_vault_events_target
          ON account_vault_events (owner, issued_to_device_id, created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS conversation_key_envelopes (
+            envelope_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            sender_device_id TEXT NOT NULL,
+            recipient_device_id TEXT NOT NULL,
+            encrypted_key TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner, scope_key, sender_device_id, recipient_device_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы conversation_key_envelopes");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_conversation_key_envelopes_owner_device
+         ON conversation_key_envelopes (owner, recipient_device_id, created_at)",
     )
     .execute(&pool)
     .await
@@ -1907,6 +2003,7 @@ async fn main() {
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/users", get(get_users))
+        .route("/api/users/:username/devices", get(get_user_public_devices))
         .route("/api/avatar/:username", get(get_avatar))
         .route("/api/avatar", post(upload_avatar).delete(delete_avatar))
         .route("/api/contacts", get(get_contacts).post(add_contact))
@@ -1979,7 +2076,13 @@ async fn main() {
         )
         .route(
             "/api/vault/events",
-            get(get_vault_events).post(post_vault_event),
+            get(get_vault_events)
+                .post(post_vault_event)
+                .delete(delete_vault_events),
+        )
+        .route(
+            "/api/key-envelopes",
+            get(get_key_envelopes).post(post_key_envelope),
         )
         .route(
             "/api/history-tickets",
@@ -2007,10 +2110,13 @@ async fn main() {
     info!("🚀 Zali Server запущен на http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .unwrap();
 }
 
 async fn shutdown_signal() {
@@ -3525,15 +3631,20 @@ async fn update_me(
         }
     };
 
-    if let Err(e) = sqlx::query(
-        "UPDATE users SET cloud_vault_sync_enabled = ? WHERE username = ?",
-    )
-    .bind(if payload.cloud_vault_sync_enabled { 1 } else { 0 })
-    .bind(&username)
-    .execute(&mut *tx)
-    .await
+    if let Err(e) = sqlx::query("UPDATE users SET cloud_vault_sync_enabled = ? WHERE username = ?")
+        .bind(if payload.cloud_vault_sync_enabled {
+            1
+        } else {
+            0
+        })
+        .bind(&username)
+        .execute(&mut *tx)
+        .await
     {
-        error!("Ошибка обновления cloud_vault_sync_enabled для {}: {}", username, e);
+        error!(
+            "Ошибка обновления cloud_vault_sync_enabled для {}: {}",
+            username, e
+        );
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
@@ -4210,12 +4321,14 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
             let timeout_target = target.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(60)).await;
-                let Some((call_state, participants)) = timeout_state.voice_rooms.get(&timeout_room_id).map(|room| {
-                    (
-                        room.call_state.clone(),
-                        room.participants.iter().cloned().collect::<Vec<_>>(),
-                    )
-                }) else {
+                let Some((call_state, participants)) =
+                    timeout_state.voice_rooms.get(&timeout_room_id).map(|room| {
+                        (
+                            room.call_state.clone(),
+                            room.participants.iter().cloned().collect::<Vec<_>>(),
+                        )
+                    })
+                else {
                     return;
                 };
                 if call_state != "ringing" {
@@ -4757,10 +4870,7 @@ async fn register(
             .into_response();
     }
 
-    info!(
-        "Хэширование пароля для нового пользователя '{}'",
-        username
-    );
+    info!("Хэширование пароля для нового пользователя '{}'", username);
     let hashed = match hash_password(payload.password.clone()).await {
         Ok(h) => h,
         Err(e) => {
@@ -4780,12 +4890,7 @@ async fn register(
                 "Регистрация успешно завершена для пользователя '{}'",
                 username
             );
-            match issue_auth_response(
-                username.to_string(),
-                0,
-                true,
-                &state.config.jwt_secret,
-            ) {
+            match issue_auth_response(username.to_string(), 0, true, &state.config.jwt_secret) {
                 Ok(auth) => auth_response_with_cookie_and_secure(
                     StatusCode::CREATED,
                     auth,
@@ -5234,6 +5339,40 @@ async fn get_devices(
     }
 }
 
+async fn get_user_public_devices(
+    AxumPath(username): AxumPath<String>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(_requester): AuthenticatedUser,
+) -> impl IntoResponse {
+    let username = trim_limited(username, 64);
+    if username.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Нужен username").into_response();
+    }
+    match sqlx::query_as::<_, DeviceRecord>(
+        "SELECT device_id, owner, label, public_key, signing_key, key_package, group_epoch,
+                approved, revoked, approved_by, history_days, created_at, approved_at, revoked_at
+         FROM account_devices
+         WHERE owner = ? AND approved = 1 AND revoked = 0
+         ORDER BY created_at ASC",
+    )
+    .bind(&username)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(devices) => Json(
+            devices
+                .into_iter()
+                .map(device_record_to_response)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка получения публичных устройств {}: {}", username, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 async fn register_device(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
@@ -5257,12 +5396,18 @@ async fn register_device(
     let mut conn = match state.db.acquire().await {
         Ok(conn) => conn,
         Err(e) => {
-            error!("Ошибка получения соединения для регистрации устройства {}: {}", device_id, e);
+            error!(
+                "Ошибка получения соединения для регистрации устройства {}: {}",
+                device_id, e
+            );
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
     if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-        error!("Ошибка начала блокирующей транзакции для устройства {}: {}", device_id, e);
+        error!(
+            "Ошибка начала блокирующей транзакции для устройства {}: {}",
+            device_id, e
+        );
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
@@ -5622,6 +5767,12 @@ struct VaultQuery {
     deviceId: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[allow(non_snake_case)]
+struct KeyEnvelopeQuery {
+    deviceId: Option<String>,
+}
+
 async fn post_vault_event(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
@@ -5666,6 +5817,155 @@ async fn post_vault_event(
         "vaultEpoch": vault_epoch
     }))
     .into_response()
+}
+
+async fn delete_vault_events(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+) -> impl IntoResponse {
+    match sqlx::query("DELETE FROM account_vault_events WHERE owner = ?")
+        .bind(&owner)
+        .execute(&state.db)
+        .await
+    {
+        Ok(result) => Json(serde_json::json!({
+            "deleted": result.rows_affected()
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка очистки vault events для {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+fn key_envelope_record_to_response(record: KeyEnvelopeRecord) -> KeyEnvelopeResponse {
+    KeyEnvelopeResponse {
+        envelopeId: record.envelope_id,
+        owner: record.owner,
+        scope: record.scope_key,
+        sender: record.sender,
+        senderDeviceId: record.sender_device_id,
+        recipientDeviceId: record.recipient_device_id,
+        encryptedKey: record.encrypted_key,
+        createdAt: record.created_at,
+    }
+}
+
+async fn post_key_envelope(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(sender): AuthenticatedUser,
+    headers: HeaderMap,
+    Json(payload): Json<KeyEnvelopePayload>,
+) -> impl IntoResponse {
+    let recipient = trim_limited(payload.recipient, 64);
+    let scope = trim_limited(payload.scope, 256);
+    let sender_device_id = trim_limited(payload.senderDeviceId, 128);
+    let recipient_device_id = trim_limited(payload.recipientDeviceId, 128);
+    let encrypted_key = trim_limited(payload.encryptedKey, 262_144);
+    let header_sender_device_id = match header_device_id(&headers) {
+        Some(value) => value,
+        None => return (StatusCode::FORBIDDEN, "Нужен X-Zali-Device-ID").into_response(),
+    };
+    if recipient.is_empty()
+        || scope.is_empty()
+        || sender_device_id.is_empty()
+        || recipient_device_id.is_empty()
+        || encrypted_key.len() < 32
+    {
+        return (StatusCode::BAD_REQUEST, "Некорректный key envelope").into_response();
+    }
+    if sender_device_id != header_sender_device_id {
+        return (
+            StatusCode::FORBIDDEN,
+            "senderDeviceId должен совпадать с X-Zali-Device-ID",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &sender, &sender_device_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Отправлять envelope может только доверенное устройство",
+        )
+            .into_response();
+    }
+    if require_approved_device(&state.db, &recipient, &recipient_device_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Устройство получателя не подтверждено",
+        )
+            .into_response();
+    }
+
+    let envelope_id = Uuid::new_v4().to_string();
+    match sqlx::query(
+        "INSERT INTO conversation_key_envelopes
+         (envelope_id, owner, scope_key, sender, sender_device_id, recipient_device_id, encrypted_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner, scope_key, sender_device_id, recipient_device_id) DO UPDATE SET
+             encrypted_key = excluded.encrypted_key,
+             created_at = CURRENT_TIMESTAMP",
+    )
+    .bind(&envelope_id)
+    .bind(&recipient)
+    .bind(&scope)
+    .bind(&sender)
+    .bind(&sender_device_id)
+    .bind(&recipient_device_id)
+    .bind(&encrypted_key)
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => Json(serde_json::json!({ "envelopeId": envelope_id })).into_response(),
+        Err(e) => {
+            error!("Ошибка записи key envelope {} -> {}: {}", sender, recipient, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn get_key_envelopes(
+    Query(query): Query<KeyEnvelopeQuery>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(owner): AuthenticatedUser,
+) -> impl IntoResponse {
+    let target_device = query
+        .deviceId
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let rows = sqlx::query_as::<_, KeyEnvelopeRecord>(
+        "SELECT envelope_id, owner, scope_key, sender, sender_device_id,
+                recipient_device_id, encrypted_key, created_at
+         FROM conversation_key_envelopes
+         WHERE owner = ? AND (? IS NULL OR recipient_device_id = ?)
+         ORDER BY created_at ASC",
+    )
+    .bind(&owner)
+    .bind(target_device.as_deref())
+    .bind(target_device.as_deref())
+    .fetch_all(&state.db)
+    .await;
+
+    match rows {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(key_envelope_record_to_response)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка чтения key envelopes {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn get_vault_events(
@@ -5759,10 +6059,7 @@ fn history_access_matches(timestamp: DateTime<Utc>, access: &HistoryAccess) -> b
     if access.base_since.is_none() {
         return true;
     }
-    if access
-        .base_since
-        .is_some_and(|since| timestamp >= since)
-    {
+    if access.base_since.is_some_and(|since| timestamp >= since) {
         return true;
     }
     access
@@ -6057,17 +6354,18 @@ async fn create_server(
     }
 
     const MAX_SERVERS_PER_USER: i64 = 25;
-    let owned_count = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM servers WHERE owner = ?")
-        .bind(&owner)
-        .fetch_one(&state.db)
-        .await
-    {
-        Ok(count) => count,
-        Err(e) => {
-            error!("Ошибка подсчета серверов владельца {}: {}", owner, e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let owned_count =
+        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM servers WHERE owner = ?")
+            .bind(&owner)
+            .fetch_one(&state.db)
+            .await
+        {
+            Ok(count) => count,
+            Err(e) => {
+                error!("Ошибка подсчета серверов владельца {}: {}", owner, e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
     if owned_count >= MAX_SERVERS_PER_USER {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -7605,7 +7903,11 @@ async fn get_server_messages(
         builder.push_bind(offset);
     }
 
-    match builder.build_query_as::<Message>().fetch_all(&state.db).await {
+    match builder
+        .build_query_as::<Message>()
+        .fetch_all(&state.db)
+        .await
+    {
         Ok(msgs) => {
             info!(
                 "API get_server_messages rows server={} channel={} auth={} count={}",
@@ -7673,7 +7975,10 @@ async fn get_messages(
     info!("API get_messages start user={} auth={}", user, auth_user);
     let effective_user = auth_user.clone();
     if user == effective_user {
-        warn!("API get_messages requested self-chat user={}", effective_user);
+        warn!(
+            "API get_messages requested self-chat user={}",
+            effective_user
+        );
     }
 
     let limit = page.limit.unwrap_or(0).clamp(0, 500) as i64;
@@ -7713,7 +8018,11 @@ async fn get_messages(
         builder.push(" OFFSET ");
         builder.push_bind(offset);
     }
-    match builder.build_query_as::<Message>().fetch_all(&state.db).await {
+    match builder
+        .build_query_as::<Message>()
+        .fetch_all(&state.db)
+        .await
+    {
         Ok(msgs) => {
             info!(
                 "API get_messages rows user={} count={} db={} uploads={}",
@@ -8112,7 +8421,14 @@ async fn upload_server_message(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     multipart: Multipart,
 ) -> impl IntoResponse {
-    upload_message_with_context(auth_user, state, multipart, Some(server_id), Some(channel_id)).await
+    upload_message_with_context(
+        auth_user,
+        state,
+        multipart,
+        Some(server_id),
+        Some(channel_id),
+    )
+    .await
 }
 
 async fn upload_message_with_context(
@@ -8340,10 +8656,7 @@ async fn upload_message_with_context(
                                 "UPLOAD forbidden sender={} server={} channel={} reason=channel_send_denied",
                                 auth_user, sid, cid
                             );
-                            return (
-                                StatusCode::FORBIDDEN,
-                                "Нет прав на отправку в этом канале",
-                            )
+                            return (StatusCode::FORBIDDEN, "Нет прав на отправку в этом канале")
                                 .into_response();
                         }
                         Err(e) => {
@@ -8391,7 +8704,10 @@ async fn upload_message_with_context(
         match receiver_exists {
             Ok(Some(_)) => {}
             Ok(None) => {
-                warn!("UPLOAD rejected unknown receiver sender={} receiver={}", sender, receiver);
+                warn!(
+                    "UPLOAD rejected unknown receiver sender={} receiver={}",
+                    sender, receiver
+                );
                 if wrote_file {
                     let _ = fs::remove_file(&temp_path).await;
                 }
@@ -8407,26 +8723,24 @@ async fn upload_message_with_context(
         }
 
         if sender != receiver {
-            if let Err(e) = sqlx::query(
-                "INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)",
-            )
-            .bind(&sender)
-            .bind(&receiver)
-            .execute(&state.db)
-            .await
+            if let Err(e) =
+                sqlx::query("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)")
+                    .bind(&sender)
+                    .bind(&receiver)
+                    .execute(&state.db)
+                    .await
             {
                 error!(
                     "Ошибка автодобавления контакта sender={} receiver={}: {}",
                     sender, receiver, e
                 );
             }
-            if let Err(e) = sqlx::query(
-                "INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)",
-            )
-            .bind(&receiver)
-            .bind(&sender)
-            .execute(&state.db)
-            .await
+            if let Err(e) =
+                sqlx::query("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)")
+                    .bind(&receiver)
+                    .bind(&sender)
+                    .execute(&state.db)
+                    .await
             {
                 error!(
                     "Ошибка автодобавления обратного контакта sender={} receiver={}: {}",
@@ -8507,7 +8821,10 @@ async fn upload_message_with_context(
                         );
                         let dedup_msg = Message {
                             id: existing.id.clone(),
-                            client_id: existing.client_id.clone().or_else(|| Some(client_id.clone())),
+                            client_id: existing
+                                .client_id
+                                .clone()
+                                .or_else(|| Some(client_id.clone())),
                             sender: sender.clone(),
                             receiver: receiver.clone(),
                             filename: existing.filename.clone(),
