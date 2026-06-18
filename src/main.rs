@@ -1548,10 +1548,6 @@ async fn main() {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы conversation_keys");
-    sqlx::query("DELETE FROM conversation_keys")
-        .execute(&pool)
-        .await
-        .expect("Ошибка очистки старых conversation_keys");
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS account_devices (
