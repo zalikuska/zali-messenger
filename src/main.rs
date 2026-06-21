@@ -32,7 +32,7 @@ use std::{
 use tokio::{fs, io::AsyncWriteExt, sync::mpsc, task};
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 #[cfg(windows)]
@@ -3560,6 +3560,27 @@ async fn ensure_server_member(
     sqlx::query(
         "INSERT INTO server_members (server_id, username, role, joined_at)
          VALUES (?, ?, ?, ?)
+         ON CONFLICT(server_id, username) DO NOTHING",
+    )
+    .bind(server_id)
+    .bind(username)
+    .bind(role)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn upsert_server_member(
+    pool: &SqlitePool,
+    server_id: &str,
+    username: &str,
+    role: &str,
+) -> Result<(), sqlx::Error> {
+    let role = normalize_server_role(Some(role)).unwrap_or_else(|| "member".to_string());
+    sqlx::query(
+        "INSERT INTO server_members (server_id, username, role, joined_at)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(server_id, username) DO UPDATE SET
             role = excluded.role",
     )
@@ -3993,6 +4014,7 @@ async fn join_voice_room(
         room.channel_id = channel_id.map(|v| v.to_string());
         room.participants.insert(username.to_string());
     }
+    drop(room); // release DashMap shard lock before re-entering voice_rooms via broadcast
 
     state
         .user_voice_rooms
@@ -4141,18 +4163,37 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
             );
 
             if room_type == "channel" {
-                if let (Some(sid), Some(cid)) = (server_id.as_deref(), channel_id.as_deref()) {
-                    if !can_access_channel(&state.db, sid, cid, sender, "voice")
-                        .await
-                        .unwrap_or(false)
-                    {
+                match (server_id.as_deref(), channel_id.as_deref()) {
+                    (Some(sid), Some(cid)) => {
+                        if !can_access_channel(&state.db, sid, cid, sender, "voice")
+                            .await
+                            .unwrap_or(false)
+                        {
+                            send_json_to_user(
+                                state,
+                                sender,
+                                serde_json::json!({
+                                    "type": "voice_error",
+                                    "roomId": room_id,
+                                    "message": "Нет доступа к голосовому каналу"
+                                }),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+                    _ => {
+                        warn!(
+                            "[VOICE][JOIN] reject channel join without server/channel sender={} roomId={}",
+                            sender, room_id
+                        );
                         send_json_to_user(
                             state,
                             sender,
                             serde_json::json!({
                                 "type": "voice_error",
                                 "roomId": room_id,
-                                "message": "Нет доступа к голосовому каналу"
+                                "message": "Необходимо указать server_id и channel_id"
                             }),
                         )
                         .await;
@@ -4477,6 +4518,8 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 sender, inviter, room_id
             );
             state.voice_rooms.remove(&room_id);
+            state.user_voice_rooms.remove(sender);
+            state.user_voice_rooms.remove(inviter.as_str());
             send_json_to_user(
                 state,
                 &inviter,
@@ -4525,6 +4568,8 @@ async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde
                 sender, target, room_id
             );
             state.voice_rooms.remove(&room_id);
+            state.user_voice_rooms.remove(sender);
+            state.user_voice_rooms.remove(target.as_str());
             send_json_to_user(
                 state,
                 &target,
@@ -4810,8 +4855,30 @@ fn auth_response_with_cookie_and_secure(
 
 async fn register(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<AuthPayload>,
 ) -> impl IntoResponse {
+    // --- Rate limiting by IP ---
+    let client_ip = extract_client_ip(remote_addr, &headers);
+    let reg_rate_key = format!("reg:{}", client_ip);
+    let window = Duration::from_secs(state.config.rate_limit_window_secs);
+    let max_attempts = state.config.rate_limit_max_attempts;
+    let now = Instant::now();
+    {
+        let mut attempts = state.login_attempts.entry(reg_rate_key).or_default();
+        attempts.retain(|t| now.duration_since(*t) < window);
+        if attempts.len() >= max_attempts {
+            warn!("Rate limit exceeded при регистрации ip={}", client_ip);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Слишком много попыток регистрации. Повторите позже.",
+            )
+                .into_response();
+        }
+        attempts.push_back(now);
+    }
+
     info!(
         "Попытка регистрации: username='{}', password_len={}",
         payload.username,
@@ -4866,6 +4933,14 @@ async fn register(
             .into_response();
     }
 
+    if payload.password.len() > 72 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Пароль не должен превышать 72 символа"})),
+        )
+            .into_response();
+    }
+
     info!("Хэширование пароля для нового пользователя '{}'", username);
     let hashed = match hash_password(payload.password.clone()).await {
         Ok(h) => h,
@@ -4912,10 +4987,12 @@ async fn register(
 async fn login(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<AuthPayload>,
 ) -> impl IntoResponse {
     // --- Rate limiting ---
-    let rate_key = login_rate_key(remote_addr, &payload.username);
+    let client_ip = extract_client_ip(remote_addr, &headers);
+    let rate_key = login_rate_key(client_ip, &payload.username);
     let window = Duration::from_secs(state.config.rate_limit_window_secs);
     let max_attempts = state.config.rate_limit_max_attempts;
     let now = Instant::now();
@@ -5006,9 +5083,33 @@ async fn login(
     }
 }
 
-fn login_rate_key(remote_addr: SocketAddr, username: &str) -> String {
+fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) -> std::net::IpAddr {
+    let trusted = std::env::var("TRUSTED_PROXY_MODE")
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    if trusted {
+        if let Some(ip) = headers
+            .get("X-Forwarded-For")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        {
+            return ip;
+        }
+        if let Some(ip) = headers
+            .get("X-Real-IP")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        {
+            return ip;
+        }
+    }
+    remote_addr.ip()
+}
+
+fn login_rate_key(ip: std::net::IpAddr, username: &str) -> String {
     let username = username.trim().to_lowercase();
-    format!("{}|{}", username, remote_addr.ip())
+    format!("{}|{}", username, ip)
 }
 
 async fn get_users(
@@ -5561,6 +5662,13 @@ async fn approve_device(
         )
             .into_response();
     }
+    if target_id == actor_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Нельзя подтвердить собственное устройство"})),
+        )
+            .into_response();
+    }
     if actor_id != header_actor_id {
         return (
             StatusCode::FORBIDDEN,
@@ -5684,57 +5792,98 @@ async fn revoke_device(
         )
             .into_response();
     }
-    let active_count = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
-    )
-    .bind(&owner)
-    .fetch_one(&state.db)
-    .await
-    {
-        Ok(count) => count,
-        Err(e) => {
-            error!("Ошибка подсчета активных устройств {}: {}", owner, e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let target = match load_device(&state.db, &owner, &device_id).await {
-        Ok(Some(device)) => device,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Устройство не найдено").into_response(),
-        Err(e) => {
-            error!("Ошибка чтения устройства {}: {}", device_id, e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    if target.approved != 0 && target.revoked == 0 && active_count <= 1 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Нельзя отозвать последнее доверенное устройство",
-        )
-            .into_response();
-    }
 
-    let group_epoch = match next_device_epoch(&state.db, &owner).await {
-        Ok(epoch) => epoch,
+    let mut conn = match state.db.acquire().await {
+        Ok(c) => c,
         Err(e) => {
-            error!("Ошибка расчета эпохи устройств {}: {}", owner, e);
+            error!("Ошибка получения соединения для revoke_device {}: {}", device_id, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    if let Err(e) = sqlx::query(
-        "UPDATE account_devices
-         SET revoked = 1, approved = 0, group_epoch = ?, revoked_at = CURRENT_TIMESTAMP
-         WHERE owner = ? AND device_id = ?",
-    )
-    .bind(group_epoch)
-    .bind(&owner)
-    .bind(&device_id)
-    .execute(&state.db)
-    .await
-    {
-        error!("Ошибка отзыва устройства {}: {}", device_id, e);
+    if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
+        error!("Ошибка начала транзакции revoke_device {}: {}", device_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+
+    let revoke_result: Result<i64, sqlx::Error> = async {
+        let active_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
+        )
+        .bind(&owner)
+        .fetch_one(&mut *conn)
+        .await?;
+
+        let target_approved = sqlx::query_scalar::<_, i64>(
+            "SELECT approved FROM account_devices WHERE owner = ? AND device_id = ? LIMIT 1",
+        )
+        .bind(&owner)
+        .bind(&device_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+
+        let target_approved = match target_approved {
+            Some(v) => v,
+            None => return Err(sqlx::Error::RowNotFound),
+        };
+
+        let target_revoked = sqlx::query_scalar::<_, i64>(
+            "SELECT revoked FROM account_devices WHERE owner = ? AND device_id = ? LIMIT 1",
+        )
+        .bind(&owner)
+        .bind(&device_id)
+        .fetch_one(&mut *conn)
+        .await?;
+
+        if target_approved != 0 && target_revoked == 0 && active_count <= 1 {
+            // Encode the "last device" constraint as a sentinel value
+            return Ok(-1i64);
+        }
+
+        let group_epoch = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MAX(group_epoch) FROM account_devices WHERE owner = ?",
+        )
+        .bind(&owner)
+        .fetch_one(&mut *conn)
+        .await?
+        .unwrap_or(1) + 1;
+
+        sqlx::query(
+            "UPDATE account_devices
+             SET revoked = 1, approved = 0, group_epoch = ?, revoked_at = CURRENT_TIMESTAMP
+             WHERE owner = ? AND device_id = ?",
+        )
+        .bind(group_epoch)
+        .bind(&owner)
+        .bind(&device_id)
+        .execute(&mut *conn)
+        .await?;
+
+        sqlx::query("COMMIT").execute(&mut *conn).await?;
+        Ok(group_epoch)
+    }
+    .await;
+
+    let group_epoch = match revoke_result {
+        Ok(-1) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            return (
+                StatusCode::BAD_REQUEST,
+                "Нельзя отозвать последнее доверенное устройство",
+            )
+                .into_response();
+        }
+        Ok(epoch) => epoch,
+        Err(sqlx::Error::RowNotFound) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            return (StatusCode::NOT_FOUND, "Устройство не найдено").into_response();
+        }
+        Err(e) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            error!("Ошибка отзыва устройства {}: {}", device_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let _ = append_transparency_log(
         &state.db,
@@ -5778,6 +5927,11 @@ async fn post_vault_event(
     let encrypted = trim_limited(payload.encryptedVaultEvent, 262_144);
     if encrypted.len() < 16 {
         return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
+    }
+    if !device_id.is_empty() && device_id != "cloud" {
+        if let Err(_) = require_approved_device(&state.db, &owner, &device_id).await {
+            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Устройство не подтверждено"}))).into_response();
+        }
     }
     let event_id = Uuid::new_v4().to_string();
     let vault_epoch = payload
@@ -6371,6 +6525,17 @@ async fn create_server(
     }
 
     let server_id = Uuid::new_v4().to_string();
+
+    if let Some(ref link) = join_link {
+        let link = link.trim();
+        if link.len() > 128 {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "join_link слишком длинный"}))).into_response();
+        }
+        if link.starts_with("zali://server/") && *link != format!("zali://server/{}", server_id) {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Недопустимый формат join_link"}))).into_response();
+        }
+    }
+
     let server = ServerRecord {
         id: server_id.clone(),
         name: name.to_string(),
@@ -6536,7 +6701,7 @@ async fn create_channel(
     }
 
     if server.is_public == 0 {
-        warn!("Попытка создать канал в приватном сервере {}", server_id);
+        debug!("Создание канала в приватном сервере {}", server_id);
     }
 
     let channel_id = format!("{}-{}", server.id, Uuid::new_v4());
@@ -6760,6 +6925,7 @@ async fn delete_channel(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления реакций канала {}/{}: {}", server_id, channel_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -6769,6 +6935,7 @@ async fn delete_channel(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!(
             "Ошибка удаления сообщений канала {}/{}: {}",
             server_id, channel_id, e
@@ -6780,6 +6947,7 @@ async fn delete_channel(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!(
             "Ошибка удаления прав канала {}/{}: {}",
             server_id, channel_id, e
@@ -6792,6 +6960,7 @@ async fn delete_channel(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления канала {}/{}: {}", server_id, channel_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7010,7 +7179,7 @@ async fn add_server_member(
     if role == "owner" {
         return (StatusCode::BAD_REQUEST, "Нельзя назначить роль владельца").into_response();
     }
-    if let Err(e) = ensure_server_member(&state.db, &server_id, username, &role).await {
+    if let Err(e) = upsert_server_member(&state.db, &server_id, username, &role).await {
         error!(
             "Ошибка добавления участника {} в сервер {}: {}",
             username, server_id, e
@@ -7072,7 +7241,7 @@ async fn update_server_member(
     if role == "owner" {
         return (StatusCode::BAD_REQUEST, "Нельзя назначить роль владельца").into_response();
     }
-    if let Err(e) = ensure_server_member(&state.db, &server_id, target, &role).await {
+    if let Err(e) = upsert_server_member(&state.db, &server_id, target, &role).await {
         error!(
             "Ошибка обновления роли участника {} в сервере {}: {}",
             target, server_id, e
@@ -7187,11 +7356,6 @@ async fn delete_server(
         }
     };
 
-    for filename in &filenames {
-        let path = state.uploads_dir.join(filename);
-        let _ = fs::remove_file(&path).await;
-    }
-
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -7210,6 +7374,7 @@ async fn delete_server(
     .execute(&mut *tx)
     .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления реакций сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7218,6 +7383,7 @@ async fn delete_server(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления сообщений сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7228,6 +7394,7 @@ async fn delete_server(
     .execute(&mut *tx)
     .await
     {
+        let _ = tx.rollback().await;
         error!(
             "Ошибка удаления прав каналов сервера {}: {}",
             server_id, e
@@ -7239,6 +7406,7 @@ async fn delete_server(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления участников сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7247,6 +7415,7 @@ async fn delete_server(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления инвайтов сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7255,6 +7424,7 @@ async fn delete_server(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления ролей сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7263,6 +7433,7 @@ async fn delete_server(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления каналов сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7271,6 +7442,7 @@ async fn delete_server(
         .execute(&mut *tx)
         .await
     {
+        let _ = tx.rollback().await;
         error!("Ошибка удаления сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -7278,6 +7450,12 @@ async fn delete_server(
     if let Err(e) = tx.commit().await {
         error!("Ошибка фиксации удаления сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // Delete files only after DB transaction committed successfully
+    for filename in &filenames {
+        let path = state.uploads_dir.join(filename);
+        let _ = fs::remove_file(&path).await;
     }
 
     StatusCode::NO_CONTENT.into_response()
@@ -7742,7 +7920,7 @@ async fn join_server_link(
         return (StatusCode::BAD_REQUEST, "Ссылка сервера обязательна").into_response();
     }
 
-    let normalized = raw
+    let _normalized = raw
         .strip_prefix("zali://server/")
         .or_else(|| raw.strip_prefix("server/"))
         .unwrap_or(raw)
@@ -7752,10 +7930,9 @@ async fn join_server_link(
     let server = match sqlx::query_as::<_, ServerRecord>(
         "SELECT id, name, description, icon, color, join_link, owner, is_public, created_at
          FROM servers
-         WHERE join_link = ? OR id = ? LIMIT 1",
+         WHERE join_link = ? LIMIT 1",
     )
     .bind(raw)
-    .bind(&normalized)
     .fetch_optional(&state.db)
     .await
     {
@@ -7766,6 +7943,10 @@ async fn join_server_link(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    if server.is_public == 0 {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Сервер приватный"}))).into_response();
+    }
 
     if let Err(e) = ensure_server_member(&state.db, &server.id, &auth_user, "member").await {
         error!(
@@ -7867,7 +8048,7 @@ async fn get_server_messages(
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    let limit = page.limit.unwrap_or(0).clamp(0, 500) as i64;
+    let limit = page.limit.unwrap_or(50).clamp(1, 500) as i64;
     let offset = page.offset.unwrap_or(0).max(0) as i64;
     let conversation_scope = Some(server_conversation_scope(&server_id, &channel_id));
     let history_access = match resolve_history_access(
@@ -7892,12 +8073,10 @@ async fn get_server_messages(
     builder.push_bind(&channel_id);
     push_history_access_predicate(&mut builder, &history_access);
     builder.push(" ORDER BY timestamp ASC, id ASC");
-    if limit > 0 {
-        builder.push(" LIMIT ");
-        builder.push_bind(limit);
-        builder.push(" OFFSET ");
-        builder.push_bind(offset);
-    }
+    builder.push(" LIMIT ");
+    builder.push_bind(limit);
+    builder.push(" OFFSET ");
+    builder.push_bind(offset);
 
     match builder
         .build_query_as::<Message>()
@@ -7977,7 +8156,7 @@ async fn get_messages(
         );
     }
 
-    let limit = page.limit.unwrap_or(0).clamp(0, 500) as i64;
+    let limit = page.limit.unwrap_or(50).clamp(1, 500) as i64;
     let offset = page.offset.unwrap_or(0).max(0) as i64;
     let conversation_scope = Some(dm_conversation_scope(&effective_user, &user));
     let history_access = match resolve_history_access(
@@ -8008,12 +8187,10 @@ async fn get_messages(
     builder.push("))");
     push_history_access_predicate(&mut builder, &history_access);
     builder.push(" ORDER BY timestamp ASC, id ASC");
-    if limit > 0 {
-        builder.push(" LIMIT ");
-        builder.push_bind(limit);
-        builder.push(" OFFSET ");
-        builder.push_bind(offset);
-    }
+    builder.push(" LIMIT ");
+    builder.push_bind(limit);
+    builder.push(" OFFSET ");
+    builder.push_bind(offset);
     match builder
         .build_query_as::<Message>()
         .fetch_all(&state.db)
@@ -9402,28 +9579,43 @@ async fn delete_message(
                 m.sender,
                 m.receiver
             );
-            fs::remove_file(&path).await.ok();
 
-            sqlx::query("DELETE FROM reactions WHERE message_id = ?")
-                .bind(&id)
-                .execute(&state.db)
-                .await
-                .ok();
+            let mut tx = match state.db.begin().await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    error!("Ошибка начала транзакции удаления сообщения {}: {}", id, e);
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
-            match sqlx::query("DELETE FROM messages WHERE id = ?")
+            if let Err(e) = sqlx::query("DELETE FROM reactions WHERE message_id = ?")
                 .bind(&id)
-                .execute(&state.db)
+                .execute(&mut *tx)
                 .await
             {
-                Ok(_) => {
-                    info!("Сообщение удалено: {} (автор: {})", id, auth_user);
-                    StatusCode::NO_CONTENT.into_response()
-                }
-                Err(e) => {
-                    error!("Ошибка удаления сообщения {}: {}", id, e);
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+                let _ = tx.rollback().await;
+                error!("Ошибка удаления реакций сообщения {}: {}", id, e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
+
+            if let Err(e) = sqlx::query("DELETE FROM messages WHERE id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+            {
+                let _ = tx.rollback().await;
+                error!("Ошибка удаления сообщения {}: {}", id, e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
+            if let Err(e) = tx.commit().await {
+                error!("Ошибка фиксации удаления сообщения {}: {}", id, e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
+            fs::remove_file(&path).await.ok();
+            info!("Сообщение удалено: {} (автор: {})", id, auth_user);
+            StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
             warn!("DELETE_MESSAGE not found id={} err={}", id, e);
