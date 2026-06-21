@@ -1204,6 +1204,7 @@ struct MessagePageQuery {
     limit: Option<i64>,
     offset: Option<i64>,
     since: Option<String>,
+    newest_first: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -8130,6 +8131,7 @@ async fn get_server_messages(
 
     let limit = page.limit.unwrap_or(50).clamp(1, 500) as i64;
     let offset = page.offset.unwrap_or(0).max(0) as i64;
+    let newest_first = page.newest_first.unwrap_or(false);
     let conversation_scope = Some(server_conversation_scope(&server_id, &channel_id));
     let history_access = match resolve_history_access(
         &state.db,
@@ -8152,7 +8154,11 @@ async fn get_server_messages(
     builder.push(" AND channel_id = ");
     builder.push_bind(&channel_id);
     push_history_access_predicate(&mut builder, &history_access);
-    builder.push(" ORDER BY timestamp ASC, id ASC");
+    if newest_first {
+        builder.push(" ORDER BY timestamp DESC, id DESC");
+    } else {
+        builder.push(" ORDER BY timestamp ASC, id ASC");
+    }
     builder.push(" LIMIT ");
     builder.push_bind(limit);
     builder.push(" OFFSET ");
@@ -8238,6 +8244,7 @@ async fn get_messages(
 
     let limit = page.limit.unwrap_or(50).clamp(1, 500) as i64;
     let offset = page.offset.unwrap_or(0).max(0) as i64;
+    let newest_first = page.newest_first.unwrap_or(false);
     let conversation_scope = Some(dm_conversation_scope(&effective_user, &user));
     let history_access = match resolve_history_access(
         &state.db,
@@ -8266,7 +8273,11 @@ async fn get_messages(
     builder.push_bind(&effective_user);
     builder.push("))");
     push_history_access_predicate(&mut builder, &history_access);
-    builder.push(" ORDER BY timestamp ASC, id ASC");
+    if newest_first {
+        builder.push(" ORDER BY timestamp DESC, id DESC");
+    } else {
+        builder.push(" ORDER BY timestamp ASC, id ASC");
+    }
     builder.push(" LIMIT ");
     builder.push_bind(limit);
     builder.push(" OFFSET ");
@@ -9237,6 +9248,7 @@ async fn download_upload_file(
                 limit: None,
                 offset: None,
                 since: None,
+                newest_first: None,
             };
             let history_access = match resolve_history_access(
                 &state.db,
@@ -9581,6 +9593,7 @@ async fn download_message(
                 limit: None,
                 offset: None,
                 since: None,
+                newest_first: None,
             };
             let history_access = match resolve_history_access(
                 &state.db,
