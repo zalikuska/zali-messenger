@@ -3779,9 +3779,19 @@ async fn send_payload_to_user(
     let mut sent = 0usize;
     let mut failed = false;
     for conn in senders {
-        match tokio::time::timeout(Duration::from_secs(2), conn.send(payload.clone())).await {
-            Ok(Ok(())) => sent += 1,
-            Ok(Err(_)) | Err(_) => {
+        match conn.try_send(payload.clone()) {
+            Ok(()) => sent += 1,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                failed = true;
+                if let Some(mut conns) = state.user_connections.get_mut(username) {
+                    conns.retain(|existing| {
+                        !existing.same_channel(&conn)
+                            && !existing.is_closed()
+                            && existing.capacity() > 0
+                    });
+                }
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 failed = true;
                 if let Some(mut conns) = state.user_connections.get_mut(username) {
                     conns.retain(|existing| !existing.same_channel(&conn) && !existing.is_closed());
@@ -5087,7 +5097,12 @@ async fn login(
 
 fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) -> std::net::IpAddr {
     let trusted = std::env::var("TRUSTED_PROXY_MODE")
-        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false);
     if trusted {
         if let Some(ip) = headers
@@ -5798,13 +5813,19 @@ async fn revoke_device(
     let mut conn = match state.db.acquire().await {
         Ok(c) => c,
         Err(e) => {
-            error!("Ошибка получения соединения для revoke_device {}: {}", device_id, e);
+            error!(
+                "Ошибка получения соединения для revoke_device {}: {}",
+                device_id, e
+            );
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
     if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-        error!("Ошибка начала транзакции revoke_device {}: {}", device_id, e);
+        error!(
+            "Ошибка начала транзакции revoke_device {}: {}",
+            device_id, e
+        );
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
@@ -5848,7 +5869,8 @@ async fn revoke_device(
         .bind(&owner)
         .fetch_one(&mut *conn)
         .await?
-        .unwrap_or(1) + 1;
+        .unwrap_or(1)
+            + 1;
 
         sqlx::query(
             "UPDATE account_devices
@@ -5932,7 +5954,11 @@ async fn post_vault_event(
     }
     if !device_id.is_empty() && device_id != "cloud" {
         if let Err(_) = require_approved_device(&state.db, &owner, &device_id).await {
-            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Устройство не подтверждено"}))).into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Устройство не подтверждено"})),
+            )
+                .into_response();
         }
     }
     let event_id = Uuid::new_v4().to_string();
@@ -5995,13 +6021,11 @@ async fn delete_key_envelopes(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(user): AuthenticatedUser,
 ) -> impl IntoResponse {
-    match sqlx::query(
-        "DELETE FROM conversation_key_envelopes WHERE owner = ? OR sender = ?",
-    )
-    .bind(&user)
-    .bind(&user)
-    .execute(&state.db)
-    .await
+    match sqlx::query("DELETE FROM conversation_key_envelopes WHERE owner = ? OR sender = ?")
+        .bind(&user)
+        .bind(&user)
+        .execute(&state.db)
+        .await
     {
         Ok(result) => Json(serde_json::json!({
             "deleted": result.rows_affected()
@@ -6066,7 +6090,10 @@ async fn post_key_envelope(
             return (StatusCode::NOT_FOUND, "Устройство отправителя не найдено").into_response();
         }
         Err(e) => {
-            error!("Ошибка чтения устройства отправителя {}: {}", sender_device_id, e);
+            error!(
+                "Ошибка чтения устройства отправителя {}: {}",
+                sender_device_id, e
+            );
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         Ok(Some(_)) => {}
@@ -6080,7 +6107,10 @@ async fn post_key_envelope(
             return (StatusCode::NOT_FOUND, "Устройство получателя не найдено").into_response();
         }
         Err(e) => {
-            error!("Ошибка чтения устройства получателя {}: {}", recipient_device_id, e);
+            error!(
+                "Ошибка чтения устройства получателя {}: {}",
+                recipient_device_id, e
+            );
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         Ok(Some(_)) => {}
@@ -6105,7 +6135,12 @@ async fn post_key_envelope(
     .execute(&state.db)
     .await
     {
-        Ok(_) => Json(serde_json::json!({ "envelopeId": envelope_id })).into_response(),
+        Ok(_) => {
+            let notify_payload =
+                serde_json::json!({ "type": "key_envelope_available" }).to_string();
+            send_payload_to_user(&state, &recipient, notify_payload, "post_key_envelope").await;
+            Json(serde_json::json!({ "envelopeId": envelope_id })).into_response()
+        }
         Err(e) => {
             error!("Ошибка записи key envelope {} -> {}: {}", sender, recipient, e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -6562,10 +6597,18 @@ async fn create_server(
     if let Some(ref link) = join_link {
         let link = link.trim();
         if link.len() > 128 {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "join_link слишком длинный"}))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "join_link слишком длинный"})),
+            )
+                .into_response();
         }
         if link.starts_with("zali://server/") && *link != format!("zali://server/{}", server_id) {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Недопустимый формат join_link"}))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Недопустимый формат join_link"})),
+            )
+                .into_response();
         }
     }
 
@@ -7978,7 +8021,11 @@ async fn join_server_link(
     };
 
     if server.is_public == 0 {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Сервер приватный"}))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Сервер приватный"})),
+        )
+            .into_response();
     }
 
     if let Err(e) = ensure_server_member(&state.db, &server.id, &auth_user, "member").await {
