@@ -6067,15 +6067,19 @@ async fn post_key_envelope(
         )
             .into_response();
     }
-    if require_approved_device(&state.db, &recipient, &recipient_device_id)
-        .await
-        .is_err()
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            "Устройство получателя не подтверждено",
-        )
-            .into_response();
+    // Проверяем только что устройство получателя существует и не отозвано
+    match load_device(&state.db, &recipient, &recipient_device_id).await {
+        Ok(Some(d)) if d.revoked != 0 => {
+            return (StatusCode::FORBIDDEN, "Устройство получателя отозвано").into_response();
+        }
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "Устройство получателя не найдено").into_response();
+        }
+        Err(e) => {
+            error!("Ошибка чтения устройства получателя {}: {}", recipient_device_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Ok(Some(_)) => {}
     }
 
     let envelope_id = Uuid::new_v4().to_string();
