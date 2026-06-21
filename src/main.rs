@@ -2078,7 +2078,9 @@ async fn main() {
         )
         .route(
             "/api/key-envelopes",
-            get(get_key_envelopes).post(post_key_envelope),
+            get(get_key_envelopes)
+                .post(post_key_envelope)
+                .delete(delete_key_envelopes),
         )
         .route(
             "/api/history-tickets",
@@ -5449,7 +5451,7 @@ async fn get_user_public_devices(
         "SELECT device_id, owner, label, public_key, signing_key, key_package, group_epoch,
                 approved, revoked, approved_by, history_days, created_at, approved_at, revoked_at
          FROM account_devices
-         WHERE owner = ? AND approved = 1 AND revoked = 0
+         WHERE owner = ? AND revoked = 0
          ORDER BY created_at ASC",
     )
     .bind(&username)
@@ -5984,6 +5986,29 @@ async fn delete_vault_events(
         .into_response(),
         Err(e) => {
             error!("Ошибка очистки vault events для {}: {}", owner, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn delete_key_envelopes(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> impl IntoResponse {
+    match sqlx::query(
+        "DELETE FROM conversation_key_envelopes WHERE owner = ? OR sender = ?",
+    )
+    .bind(&user)
+    .bind(&user)
+    .execute(&state.db)
+    .await
+    {
+        Ok(result) => Json(serde_json::json!({
+            "deleted": result.rows_affected()
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Ошибка сброса key envelopes для {}: {}", user, e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
