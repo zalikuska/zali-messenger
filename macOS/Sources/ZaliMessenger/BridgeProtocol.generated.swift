@@ -1,0 +1,26 @@
+import Foundation
+
+enum BridgeProtocolMessageType: String, CaseIterable {
+    case addContactRequest = "ADD_CONTACT_REQUEST"
+    case apiRequest = "API_REQUEST"
+    case authRequest = "AUTH_REQUEST"
+    case deleteAvatarRequest = "DELETE_AVATAR_REQUEST"
+    case downloadAttachment = "DOWNLOAD_ATTACHMENT"
+    case loadAvatarRequest = "LOAD_AVATAR_REQUEST"
+    case loadServerHistory = "LOAD_SERVER_HISTORY"
+    case networkConfig = "NETWORK_CONFIG"
+    case refreshHistory = "REFRESH_HISTORY"
+    case removeContactRequest = "REMOVE_CONTACT_REQUEST"
+    case resolveTenor = "RESOLVE_TENOR"
+    case saveMessageCache = "SAVE_MESSAGE_CACHE"
+    case savePendingOutbox = "SAVE_PENDING_OUTBOX"
+    case saveStyle = "SAVE_STYLE"
+    case sendMessage = "SEND_MESSAGE"
+    case setKey = "SET_KEY"
+    case setMessageReaction = "SET_MESSAGE_REACTION"
+    case setSession = "SET_SESSION"
+    case showNotification = "SHOW_NOTIFICATION"
+    case startDrag = "START_DRAG"
+    case uploadAvatarRequest = "UPLOAD_AVATAR_REQUEST"
+    case voiceEvent = "VOICE_EVENT"
+}
