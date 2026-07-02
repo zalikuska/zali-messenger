@@ -1278,7 +1278,11 @@ struct ApproveDevicePayload {
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]
 struct VaultEventPayload {
-    deviceId: String,
+    // Клиент (syncCloudVaultPackage) не шлёт deviceId вовсе — обязательное поле
+    // роняло десериализацию с 422, и ни один vault event никогда не сохранялся.
+    // Отсутствие/null трактуем как "cloud" (анонимная публикация без привязки
+    // к устройству), что уже предусмотрено обработчиком.
+    deviceId: Option<String>,
     vaultEpoch: Option<i64>,
     encryptedVaultEvent: String,
     issuedToDeviceId: Option<String>,
@@ -5948,7 +5952,7 @@ async fn post_vault_event(
     AuthenticatedUser(owner): AuthenticatedUser,
     Json(payload): Json<VaultEventPayload>,
 ) -> impl IntoResponse {
-    let device_id = trim_limited(payload.deviceId, 128);
+    let device_id = trim_limited(payload.deviceId.unwrap_or_default(), 128);
     let encrypted = trim_limited(payload.encryptedVaultEvent, 262_144);
     if encrypted.len() < 16 {
         return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
