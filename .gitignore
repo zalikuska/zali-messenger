@@ -8,6 +8,10 @@
 .DS_Store
 .idea/
 .vscode/
+.obsidian/
+
+# graphify knowledge-graph cache (regenerate with `graphify update .`)
+graphify-out/
 
 # Local env and runtime data
 .env

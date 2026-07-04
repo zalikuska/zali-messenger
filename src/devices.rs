@@ -647,15 +647,14 @@ pub(crate) async fn post_vault_event(
     if encrypted.len() < 16 {
         return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
     }
-    if !device_id.is_empty() && device_id != "cloud" {
-        if let Err(_) = require_approved_device(&state.db, &owner, &device_id).await {
+    if !device_id.is_empty() && device_id != "cloud"
+        && require_approved_device(&state.db, &owner, &device_id).await.is_err() {
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({"error": "Устройство не подтверждено"})),
             )
                 .into_response();
         }
-    }
     let event_id = Uuid::new_v4().to_string();
     let vault_epoch = payload
         .vaultEpoch
