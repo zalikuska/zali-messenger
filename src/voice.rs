@@ -4,7 +4,6 @@
 //! can be found and fixed without wading through unrelated HTTP handlers.
 
 use crate::{can_access_channel, contact_exists, send_json_to_user, AppState};
-use serde_json;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;

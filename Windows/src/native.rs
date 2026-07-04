@@ -163,14 +163,31 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../Web/bridge_protocol.json"
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
+#[cfg(not(target_os = "macos"))]
 fn keyring_entry(name: &str) -> Option<keyring::Entry> {
     keyring::Entry::new("ZaliMessenger", name).ok()
 }
 
+// Windows' keyring backend (Credential Manager) reads/writes the app's own item
+// silently — no per-launch consent prompt. macOS Keychain does show one, and its
+// ACL is tied to the code-signing identity: build_macos_rust_app.sh's ad-hoc
+// signature changes on every rebuild, so after any rebuild the OS treats this as
+// "a different app" and reprompts. These calls run synchronously on the startup
+// path (NativeState::load()), so a prompt here blocks the whole app before the
+// window ever appears — confirmed live (SecurityAgent stuck holding the process
+// with no visible dialog to answer). macOS relies solely on the plaintext
+// native_config.json fallback these already have (see call sites).
+#[cfg(not(target_os = "macos"))]
 fn load_secret_from_keyring(name: &str) -> Option<String> {
     keyring_entry(name)?.get_password().ok()
 }
 
+#[cfg(target_os = "macos")]
+fn load_secret_from_keyring(_name: &str) -> Option<String> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
 fn store_secret_in_keyring(name: &str, value: Option<&str>) -> bool {
     let Some(entry) = keyring_entry(name) else {
         return false;
@@ -182,6 +199,11 @@ fn store_secret_in_keyring(name: &str, value: Option<&str>) -> bool {
         Some(secret) => entry.set_password(&secret).is_ok(),
         None => entry.delete_password().is_ok(),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn store_secret_in_keyring(_name: &str, _value: Option<&str>) -> bool {
+    false
 }
 
 fn is_direct_message_key(key: &str) -> bool {
@@ -372,6 +394,11 @@ pub struct NativeState {
     pub conversation_keys_by_user: HashMap<String, HashMap<String, String>>,
     config_path: PathBuf,
     css_path: PathBuf,
+    /// Raw JSON of the JS-side device identity (ECDH keypair + deviceId) exported by
+    /// the Swift client's WKWebView localStorage, if present for this user. macOS only
+    /// — lets a first Rust-shell launch on the same Mac reuse the already-approved
+    /// device instead of registering a brand-new one with no key envelopes.
+    injected_device_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -526,6 +553,22 @@ impl NativeState {
         let saved_css = fs::read_to_string(&css_path).unwrap_or_default();
         let current_username = persisted.session_username.clone().unwrap_or_default();
         let user_key = user_storage_key(&current_username);
+        // Plain file, not Keychain: both shells run unsandboxed as the same OS user, so
+        // this needs no cross-app consent dialog. Consistent with native_config.json's
+        // own plaintext fallback tier for secrets.
+        #[cfg(target_os = "macos")]
+        let injected_device_identity: Option<String> = if user_key.is_empty() {
+            None
+        } else {
+            let path = root.join(format!("shared_device_identity_{}.json", user_key));
+            fs::read_to_string(&path).ok().and_then(|raw| {
+                // Validate before ever splicing into the WebView init script — a
+                // corrupt/partial export must not break page load entirely.
+                serde_json::from_str::<Value>(&raw).ok().map(|_| raw)
+            })
+        };
+        #[cfg(not(target_os = "macos"))]
+        let injected_device_identity: Option<String> = None;
         let legacy_current_key = load_secret_from_keyring("crypto_key_v2")
             .or_else(|| persisted.crypto_key.clone())
             .unwrap_or_default()
@@ -583,6 +626,7 @@ impl NativeState {
             conversation_keys_by_user: persisted.conversation_keys_by_user,
             config_path,
             css_path,
+            injected_device_identity,
         };
         trace(format!(
             "load user={} has_token={} key_set={} pending_count={} config={}",
@@ -597,11 +641,34 @@ impl NativeState {
     }
 
     fn app_data_dir() -> PathBuf {
-        std::env::var_os("LOCALAPPDATA")
-            .or_else(|| std::env::var_os("APPDATA"))
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("ZaliMessenger")
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var_os("LOCALAPPDATA")
+                .or_else(|| std::env::var_os("APPDATA"))
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("ZaliMessenger")
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // LOCALAPPDATA/APPDATA do not exist on macOS; without this branch the
+            // config landed in temp_dir() and was wiped by the OS between launches.
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join("Library").join("Application Support"))
+                .unwrap_or_else(std::env::temp_dir)
+                .join("ZaliMessenger")
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(|home| PathBuf::from(home).join(".local").join("share"))
+                })
+                .unwrap_or_else(std::env::temp_dir)
+                .join("ZaliMessenger")
+        }
     }
 
     fn load_config(path: &Path) -> Option<PersistedConfig> {
@@ -819,6 +886,12 @@ impl NativeState {
             script.push_str(&format!("window.__ZALI_CONVERSATION_KEYS = {};\n", json));
         }
 
+        if let Some(raw) = &self.injected_device_identity {
+            // JS only consumes this if it has no device identity of its own yet
+            // (loadDeviceIdentity's injected-fallback) — safe to always inject.
+            script.push_str(&format!("window.__ZALI_INJECTED_DEVICE_IDENTITY = {};\n", raw));
+        }
+
         let session = json!({
             "username": self.current_username,
             "token": self.auth_token.clone().unwrap_or_default(),
@@ -911,12 +984,12 @@ fn sanitize_file_name(name: &str, fallback_extension: &str) -> String {
         return format!("attachment.{fallback_extension}");
     }
     let cleaned = trimmed.trim_start_matches('.').to_string();
-    let cleaned = if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+    
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "attachment".to_string()
     } else {
         cleaned
-    };
-    cleaned
+    }
 }
 
 fn decode_data_url(value: &str) -> Option<(Vec<u8>, String, String)> {
@@ -976,12 +1049,12 @@ fn sanitize_download_name(name: &str, fallback_extension: &str) -> String {
         return format!("attachment.{fallback_extension}");
     }
     let cleaned = trimmed.trim_start_matches('.').to_string();
-    let cleaned = if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+    
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "attachment".to_string()
     } else {
         cleaned
-    };
-    cleaned
+    }
 }
 
 fn user_downloads_dir() -> PathBuf {
@@ -1289,7 +1362,15 @@ async fn run_voice_transport(
 
     loop {
         let current = config_rx.borrow().clone();
-        if current.ws_url.trim().is_empty() {
+        let has_token = current
+            .auth_token
+            .as_deref()
+            .map(|token| !token.trim().is_empty())
+            .unwrap_or(false);
+        // Без токена сервер отвечает 401 на любой connect — простаиваем до логина
+        // (иначе цикл реконнекта спамит "Voice reconnecting: 401" до входа),
+        // как это уже делает run_message_transport.
+        if current.ws_url.trim().is_empty() || !has_token {
             tokio::select! {
                 changed = config_rx.changed() => {
                     if changed.is_err() {
@@ -1370,8 +1451,24 @@ async fn run_voice_transport(
             }
         }
 
+        // Same rationale as run_message_transport's ping_interval: without an active
+        // liveness probe, a voice socket that goes silently dark (sleep/wake, NAT/proxy
+        // idle timeout) looks "connected" forever — reader.next() just never resolves —
+        // so an incoming call's signaling never arrives and nothing here would notice or
+        // reconnect. Mirrors the Swift client's scheduleVoiceHeartbeat (25s sendPing).
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
+        ping_interval.tick().await; // first tick fires immediately; consume it
+
         loop {
             tokio::select! {
+                _ = ping_interval.tick() => {
+                    if let Err(error) = writer.send(Message::Ping(Vec::new())).await {
+                        trace(format!("voice ws ping failed err={}", error));
+                        dispatch_voice_log(&proxy, "WARN", format!("Voice ping failed: {}", error));
+                        break;
+                    }
+                    trace("voice ws ping ok");
+                }
                 changed = config_rx.changed() => {
                     if changed.is_err() {
                         return;
@@ -1507,7 +1604,10 @@ async fn handle_message_ws_payload(
     .await
     {
         Some(rendered) => {
-            show_message_notification(&rendered, &current.current_username);
+            // Notification decision (self-sender filter, "is this chat already open"
+            // guard) now lives in JS's receiveMessage() → SHOW_NOTIFICATION bridge
+            // message, matching macOS — Rust has no visibility into which chat is
+            // currently open in the WebView2 UI, so it can't apply that guard itself.
             dispatch_ui_event(&proxy, UiBusEvent::ReceiveMessage, rendered);
         }
         None => {
@@ -1531,6 +1631,13 @@ async fn run_message_transport(
             || current.api_base_url.trim().is_empty()
             || current.auth_token.is_none()
         {
+            // No usable session (e.g. a stale/expired token with no auth_token) — surface
+            // this as disconnected rather than leaving whatever status was last dispatched.
+            // Previously the UI's "Подключено" badge was set to true unconditionally right
+            // after SET_SESSION and never revisited, so it kept showing "connected" even
+            // when this loop could never attempt a socket at all — no signal to the user
+            // that live delivery was actually dead.
+            dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(false));
             if config_rx.changed().await.is_err() {
                 return;
             }
@@ -1544,6 +1651,7 @@ async fn run_message_transport(
                     "message ws request build failed url={} err={}",
                     current.ws_url, error
                 ));
+                dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(false));
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
                     changed = config_rx.changed() => {
@@ -1565,17 +1673,18 @@ async fn run_message_transport(
             current.current_device_id
         ));
 
-        let (_writer, mut reader) = match connect_async(request).await {
+        let (mut writer, mut reader) = match connect_async(request).await {
             Ok((stream, response)) => {
                 trace(format!("message ws connected status={}", response.status()));
-                let (_writer, reader) = stream.split();
-                (_writer, reader)
+                dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(true));
+                stream.split()
             }
             Err(error) => {
                 trace(format!(
                     "message ws connect failed url={} err={}",
                     current.ws_url, error
                 ));
+                dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(false));
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
                     changed = config_rx.changed() => {
@@ -1590,11 +1699,44 @@ async fn run_message_transport(
         };
 
         reconnect_delay_secs = 1;
+        let mut current = current;
+        // Active liveness probe. Without this the writer half of the socket was never
+        // used at all — a connection that goes silently dark (sleep/wake, network
+        // switch, NAT/proxy idle timeout — none of which necessarily produce a TCP
+        // RST) looked "connected" forever: reader.next() just never resolves, so the
+        // reconnect path was never reached. Confirmed live: a session sat with
+        // active_conns=0 server-side for minutes with zero client-side reconnect
+        // attempts logged. Mirrors the Swift client's 25s sendPing heartbeat.
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
+        ping_interval.tick().await; // first tick fires immediately; consume it
         loop {
             tokio::select! {
+                _ = ping_interval.tick() => {
+                    if let Err(error) = writer.send(Message::Ping(Vec::new())).await {
+                        trace(format!("message ws ping failed err={}", error));
+                        break;
+                    }
+                    trace("message ws ping ok");
+                }
                 changed = config_rx.changed() => {
                     if changed.is_err() {
                         return;
+                    }
+                    let next = config_rx.borrow().clone();
+                    // Only ws_url/auth_token/current_device_id shape the actual connect
+                    // request (see message_request()) — reconnecting on every change to
+                    // current_key/conversation_keys was tearing down and re-establishing
+                    // the socket on every single key-sync event during login (cloud vault
+                    // import, envelope sync, republish each fire their own SET_KEY), which
+                    // could churn several times per second and left the client effectively
+                    // disconnected from live message delivery during that window.
+                    let reconnect_needed = next.ws_url != current.ws_url
+                        || next.auth_token != current.auth_token
+                        || next.current_device_id != current.current_device_id;
+                    if !reconnect_needed {
+                        trace("message ws config changed (keys only); refreshing snapshot without reconnect");
+                        current = next;
+                        continue;
                     }
                     trace("message ws config changed; reconnecting");
                     break;
@@ -1640,6 +1782,10 @@ async fn run_message_transport(
                 }
             }
         }
+        // Every break above (config change requiring reconnect, server close, receive
+        // error, stream end) lands here before the outer loop retries — one place to
+        // flip the badge off instead of duplicating it at each break site.
+        dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(false));
     }
 }
 
@@ -3832,11 +3978,13 @@ pub fn handle_ipc_message(
                             trace(format!("SET_SESSION contacts sync skipped err={}", error))
                         }
                     }
-                    dispatch_ui_event(
-                        &proxy_for_lists,
-                        UiBusEvent::SetConnectionStatus,
-                        Value::Bool(true),
-                    );
+                    // SetConnectionStatus is intentionally not dispatched here anymore. It
+                    // used to fire unconditionally true on every SET_SESSION regardless of
+                    // whether the message WebSocket (or even a valid token) existed, so the
+                    // "Подключено" badge stayed green for sessions that could never receive
+                    // anything live (e.g. a stale username with an empty auth_token).
+                    // run_message_transport now owns this signal end-to-end, driven by the
+                    // actual socket state (see its dispatch calls around message ws connect).
                 });
                 let proxy = proxy.clone();
                 runtime.spawn(async move {
@@ -4185,7 +4333,23 @@ pub fn handle_ipc_message(
             let _ = proxy.send_event(AppEvent::StartDrag);
         }
         BridgeProtocolMessageType::ShowNotification => {
-            // Notifications are macOS-only; no-op on Windows.
+            let sender = payload.get("sender").and_then(Value::as_str).unwrap_or("").to_string();
+            let text = payload.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            let attachment_count = payload.get("attachmentCount").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let server_id = payload.get("serverId").and_then(Value::as_str).map(str::to_string);
+            let channel_id = payload.get("channelId").and_then(Value::as_str).map(str::to_string);
+            let current_username = state
+                .lock()
+                .map(|guard| guard.current_username.clone())
+                .unwrap_or_default();
+            let rendered = json!({
+                "sender": sender,
+                "text": text,
+                "attachments": vec![Value::Null; attachment_count],
+                "serverId": server_id,
+                "channelId": channel_id,
+            });
+            show_message_notification(&rendered, &current_username);
         }
     }
 }

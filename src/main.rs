@@ -124,7 +124,7 @@ impl Config {
                 "0" | "false" | "no" | "off" => Some(false),
                 _ => None,
             })
-            .unwrap_or_else(|| !cfg!(debug_assertions));
+            .unwrap_or(!cfg!(debug_assertions));
 
         let rate_limit_window_secs = std::env::var("RATE_LIMIT_WINDOW_SECS")
             .ok()
@@ -2876,7 +2876,7 @@ fn normalize_data_url(value: &str) -> Result<(String, Vec<u8>), &'static str> {
         .copied()
         .unwrap_or("application/octet-stream")
         .to_string();
-    if parts.iter().any(|p| *p == "base64") {
+    if parts.contains(&"base64") {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(payload)
             .map_err(|_| "Не удалось декодировать base64")?;
@@ -3138,11 +3138,10 @@ fn slug_role_id(value: &str) -> String {
     for ch in value.to_lowercase().chars() {
         if ch.is_ascii_alphanumeric() {
             out.push(ch);
-        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
-            if !out.ends_with('-') {
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_')
+            && !out.ends_with('-') {
                 out.push('-');
             }
-        }
     }
     let trimmed = out.trim_matches('-').to_string();
     if trimmed.is_empty() {
@@ -6246,8 +6245,8 @@ async fn get_server_messages(
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    let limit = page.limit.unwrap_or(50).clamp(1, 500) as i64;
-    let offset = page.offset.unwrap_or(0).max(0) as i64;
+    let limit = page.limit.unwrap_or(50).clamp(1, 500);
+    let offset = page.offset.unwrap_or(0).max(0);
     let newest_first = page.newest_first.unwrap_or(false);
     let conversation_scope = Some(server_conversation_scope(&server_id, &channel_id));
     let history_access = match resolve_history_access(
@@ -6359,8 +6358,8 @@ async fn get_messages(
         );
     }
 
-    let limit = page.limit.unwrap_or(50).clamp(1, 500) as i64;
-    let offset = page.offset.unwrap_or(0).max(0) as i64;
+    let limit = page.limit.unwrap_or(50).clamp(1, 500);
+    let offset = page.offset.unwrap_or(0).max(0);
     let newest_first = page.newest_first.unwrap_or(false);
     let conversation_scope = Some(dm_conversation_scope(&effective_user, &user));
     let history_access = match resolve_history_access(
@@ -7163,7 +7162,7 @@ async fn upload_message_with_context(
         request_sender,
         receiver,
         client_id,
-        !server_id_opt.is_none() || !channel_id_opt.is_none()
+        server_id_opt.is_some() || channel_id_opt.is_some()
     );
 
     let insert_result = sqlx::query(
