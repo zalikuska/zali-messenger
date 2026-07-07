@@ -28,6 +28,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     DELETE_AVATAR_REQUEST: 'DELETE_AVATAR_REQUEST',
     LOAD_AVATAR_REQUEST: 'LOAD_AVATAR_REQUEST',
     SHOW_NOTIFICATION: 'SHOW_NOTIFICATION',
+    PERSIST_DEVICE_IDENTITY: 'PERSIST_DEVICE_IDENTITY',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
@@ -435,6 +436,9 @@ class ZaliInterface {
             };
             document.addEventListener('visibilitychange', onVisibilityChange);
             window.addEventListener('focus', onVisibilityChange);
+            // Debounced message-cache saves must land before the page goes away.
+            window.addEventListener('pagehide', () => this.flushPendingMessageCacheSave());
+            window.addEventListener('beforeunload', () => this.flushPendingMessageCacheSave());
         }
 
         this.scheduleAvatarRefreshPolling();
@@ -1124,6 +1128,28 @@ class ZaliInterface {
         } catch (e) {
             return { chats: {}, serverChats: {} };
         }
+    }
+
+    // Debounced wrapper for saveStoredMessageCache(). The full save serializes EVERY
+    // chat (JSON.stringify of the whole store), writes localStorage AND ships the whole
+    // payload over the native bridge — doing that once per received message made bursts
+    // (history merge, reconnect catch-up, busy group chat) quadratic in total work.
+    // Trailing-edge coalesce: bursts collapse into one save ≤400ms after the first call.
+    scheduleSaveStoredMessageCache(delayMs = 400) {
+        if (this._messageCacheSaveTimer) return;
+        this._messageCacheSaveTimer = setTimeout(() => {
+            this._messageCacheSaveTimer = null;
+            this.saveStoredMessageCache();
+        }, Math.max(0, Number(delayMs) || 0));
+    }
+
+    // Flush a pending debounced save immediately (page hide, logout, account switch) so
+    // the last ≤400ms of messages are never lost to a teardown racing the timer.
+    flushPendingMessageCacheSave() {
+        if (!this._messageCacheSaveTimer) return;
+        clearTimeout(this._messageCacheSaveTimer);
+        this._messageCacheSaveTimer = null;
+        this.saveStoredMessageCache();
     }
 
     saveStoredMessageCache() {
@@ -1927,6 +1953,32 @@ class ZaliInterface {
         try {
             localStorage.setItem(this.deviceIdentityStorageKey(), JSON.stringify(identity || {}));
         } catch (e) {}
+        // Mirror the identity to the native shell so it survives a WebView storage wipe
+        // (rebuild / restart / cleared data dir). Without this the Rust/Windows shell had
+        // no persistence beyond localStorage — every wipe minted a fresh device_id, which
+        // orphaned all previously-published key envelopes (they are addressed to a specific
+        // recipient_device_id) and broke key convergence. See persistDeviceIdentityToNative.
+        this.persistDeviceIdentityToNative(identity);
+    }
+
+    // Push the full device identity (incl. privateKeyJwk + e2ee keyPackage) to the native
+    // shell, which writes shared_device_identity_{username}.json and re-injects it on the
+    // next launch via window.__ZALI_INJECTED_DEVICE_IDENTITY. Mirrors what the macOS Swift
+    // client already does; makes the identity stable per (machine, account) on all shells.
+    persistDeviceIdentityToNative(identity) {
+        try {
+            if (!this.hasNativeBridge()) return;
+            const username = String(this.myName() || '').trim();
+            const deviceId = String(identity?.deviceId || '').trim();
+            // No username yet (pre-auth) → we cannot name the per-user file; a later
+            // post-auth save (bootstrapDeviceTrust) will persist it once the user is known.
+            if (!username || !deviceId) return;
+            this.postNativeMessage({
+                type: NativeMessageTypes.PERSIST_DEVICE_IDENTITY,
+                username,
+                identity: JSON.stringify(identity),
+            });
+        } catch (e) {}
     }
 
     loadInjectedDeviceIdentity() {
@@ -2475,6 +2527,10 @@ class ZaliInterface {
         if (!this.S.session?.token) return;
         const identity = await this.timeStage('  ├ ensureDeviceCryptoIdentity', () => this.ensureDeviceCryptoIdentity());
         this.S.deviceTrust.current = identity;
+        // Persist to the native shell now that the user is authenticated: ensureDeviceCryptoIdentity
+        // returns early (no saveDeviceIdentity) when the identity is already complete, so the
+        // in-memory identity might never have been mirrored to the native per-user file yet.
+        this.persistDeviceIdentityToNative(identity);
         try {
             const res = await this.timeStage('  ├ devices.register(POST)', () => this.apiFetch(this.apiRoutes.devices.list, {
                 method: 'POST',
@@ -6403,7 +6459,9 @@ class ZaliInterface {
                         candidateType: this.describeIceCandidate(event.candidate.candidate).type,
                         address: this.describeIceCandidate(event.candidate.candidate).address,
                     });
-                    this.renderVoicePanel();
+                    // ICE candidates arrive in bursts (dozens within a second); a full
+                    // panel re-render per candidate is wasted work — coalesce them.
+                    this.scheduleRenderVoicePanel();
                 } else {
                     this.voiceTrace('ice-candidate-end', {
                         peer: name,
@@ -7429,6 +7487,24 @@ class ZaliInterface {
         if (eventType === 'voice_call_invite') {
             const from = String(payload.from || '').trim();
             const roomId = String(payload.roomId || '').trim();
+            // Busy guard: an invite used to overwrite voice state unconditionally —
+            // an incoming call from a third user mid-call clobbered callTrack /
+            // incomingInvite and flipped the UI to "входящий звонок", killing the
+            // active call's state (the RTCPeerConnections kept running headless).
+            // Auto-reject instead; the server allows the target of a ringing room
+            // to reject it, so the caller gets a normal voice_call_rejected.
+            const activeRoomId = String(this.voice.roomId || '').trim();
+            const busy = activeRoomId && activeRoomId !== roomId && this.isInActiveCall();
+            if (busy) {
+                this.voiceTrace('incoming-invite-busy', { roomId, from, activeRoomId, status: this.voice.status }, 'WARN');
+                this.sendVoiceEvent({
+                    type: 'voice_call_reject',
+                    roomId,
+                    inviter: from,
+                });
+                this.addLogEntry({ type: 'INFO', msg: `Входящий звонок от ${from} отклонён: уже идёт другой звонок`, ts: new Date().toLocaleTimeString() });
+                return;
+            }
             this.voice.incomingInvite = {
                 roomId,
                 from,
@@ -7594,7 +7670,14 @@ class ZaliInterface {
             const roomTarget = String(payload.target || '').trim();
             const participants = Array.isArray(payload.participants) ? payload.participants.map(name => String(name || '').trim()).filter(Boolean) : [];
             const currentRoomId = String(this.voice.roomId || '').trim();
-            if (this.voice.roomType === 'dm' && currentRoomId && roomId && roomId !== currentRoomId) {
+            // Foreign-room guard for ANY active call, not just dm→dm: a user sitting in
+            // a channel voice room is made a participant of a new ringing DM room the
+            // moment someone invites them, so the broadcastVoiceRoomState for that new
+            // room arrives here and used to overwrite roomId/participants/status of the
+            // channel session. Only room states for the room we are actually in may
+            // mutate live call state while a call is in progress.
+            const inActiveCall = this.isInActiveCall();
+            if (currentRoomId && roomId && roomId !== currentRoomId && (this.voice.roomType === 'dm' || inActiveCall)) {
                 this.voiceTrace('room-state-stale', { roomId, currentRoomId }, 'INFO');
                 return;
             }
@@ -7827,6 +7910,16 @@ class ZaliInterface {
                 ` : ''}
             </div>
         `;
+    }
+
+    // Coalesces bursts of voice-panel refreshes (ICE candidate storms, rapid state
+    // flips) into one render per window instead of one innerHTML rebuild per event.
+    scheduleRenderVoicePanel(delayMs = 100) {
+        if (this._voicePanelRenderTimer) return;
+        this._voicePanelRenderTimer = setTimeout(() => {
+            this._voicePanelRenderTimer = null;
+            this.renderVoicePanel();
+        }, Math.max(0, Number(delayMs) || 0));
     }
 
     renderVoicePanel() {
@@ -8440,6 +8533,11 @@ class ZaliInterface {
         this.S.navMode = next;
         if (persist) {
             this.saveStoredNavMode(next);
+        }
+        // Returning to the DM view makes the selected chat visible again — clear the
+        // unread counter it may have accrued while the servers view was covering it.
+        if (next === 'dm' && this.S.current) {
+            this.S.unread[this.S.current] = 0;
         }
         this.updateNavModeButtons();
         if (!refresh) return;
@@ -9248,6 +9346,16 @@ class ZaliInterface {
         this.trace(`applySession username=${username} tokenSet=${!!token} guest=${guest} persist=${persist} syncNative=${syncNative}`);
 
         if (previousUsername !== username || previousToken !== token) {
+            // A deferred cache save scheduled under the OLD account must land now,
+            // while _userSuffix() still resolves to that account — once the session
+            // switches, the debounced timer would write the old user's chats under
+            // the new user's storage key.
+            this.flushPendingMessageCacheSave();
+            // The one-shot cloud-vault fetch guard is per-account: without resetting it,
+            // the next account logged in during this page session would skip its own
+            // on-demand vault fetch and mint a temporary key instead of adopting the
+            // real key from its vault (key divergence on the account-switch flow).
+            this._cloudVaultResolveFetchDone = false;
             this.S.current = null;
             this.S.activeServer = null;
             this.S.activeChannel = null;
@@ -12018,12 +12126,21 @@ class ZaliInterface {
                     serverId,
                     channelId,
                 });
-                if (sender !== this.myName() && this.currentServerChatKey() !== key) {
+                // "Visible" requires both the matching channel AND the servers view being
+                // active — currentServerChatKey() keeps returning the selected channel
+                // even while the user is looking at DMs, which used to swallow the
+                // notification for messages arriving in that channel.
+                const channelVisible = this.isServerChatVisible(key);
+                if (sender !== this.myName() && !channelVisible) {
                     this.postNativeMessage({ type: NativeMessageTypes.SHOW_NOTIFICATION, sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId: serverId || null, channelId: channelId || null });
                 }
             }
-            this.saveStoredMessageCache();
-            if (this.currentServerChatKey() === key) {
+            this.scheduleSaveStoredMessageCache();
+            // Only render the channel's message list when it is actually the visible view.
+            // currentServerChatKey() still returns the selected channel while the user is
+            // in the DM view, so rendering on that alone painted channel messages into the
+            // DM pane (and wasted work). Mirror the notification-visibility check above.
+            if (this.isServerChatVisible(key)) {
                 this.scheduleRenderMessages();
             } else {
                 this.renderServerInterface();
@@ -12080,20 +12197,28 @@ class ZaliInterface {
                 myReaction: myReaction || '',
                 timestamp: ts
             });
-            if (sender !== this.myName() && peer !== this.S.current) {
+            // A DM is only truly visible when its chat is selected AND the DM view is
+            // active — while the user is in the servers view the selected DM peer is
+            // off-screen, and this notification used to be swallowed for it.
+            const dmVisible = this.isDmChatVisible(peer);
+            if (sender !== this.myName() && !dmVisible) {
                 this.postNativeMessage({ type: NativeMessageTypes.SHOW_NOTIFICATION, sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId: null, channelId: null });
             }
         }
-        this.saveStoredMessageCache();
+        this.scheduleSaveStoredMessageCache();
         if (!this.S.current) {
             this.switchChat(peer);
         }
-        if (peer === this.S.current) {
+        if (this.isDmChatVisible(peer)) {
             this.scheduleRenderMessages();
-            } else {
+        } else {
+            // Own echoes (this account sending from another device/session) must not
+            // mark the conversation unread — only messages someone else wrote count.
+            if (sender !== this.myName()) {
                 this.S.unread[peer] = (this.S.unread[peer] || 0) + 1;
-                this.renderContacts();
             }
+            this.renderContacts();
+        }
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
 
@@ -12109,6 +12234,25 @@ class ZaliInterface {
         }
 
         this.scheduleAvatarRefresh();
+    }
+
+    // Single source of truth for "is this conversation currently on screen". The
+    // notification-suppression, render, and unread-clear paths must all agree on this;
+    // spelling it out inline at each site is how they drifted apart before.
+    isServerChatVisible(key) {
+        return this.currentServerChatKey() === key && this.S.navMode === 'servers';
+    }
+
+    isDmChatVisible(peer) {
+        return !!peer && peer === this.S.current && this.S.navMode !== 'servers';
+    }
+
+    // The set of statuses that mean "a call is live and must not be clobbered". Both the
+    // incoming-invite busy-guard and the foreign-room-state guard key off this exact set;
+    // inlining it twice risks one copy going stale and silently re-opening the
+    // active-call-clobber bug.
+    isInActiveCall(status = this.voice?.status) {
+        return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
     }
 
     setUsers(users) {
@@ -12330,10 +12474,86 @@ class ZaliInterface {
                 this._reconnectRefreshTimer = setTimeout(() => {
                     this._reconnectRefreshTimer = null;
                     void this.syncActiveConversation({ force: true });
+                    // Only the ACTIVE conversation was ever caught up above — a message
+                    // sent to any OTHER contact while we were offline had nothing pulling
+                    // it in: no WS push (we were offline when it fired) and no history
+                    // refresh (only the open chat gets one). It sat on the server
+                    // forever, invisible, until the user happened to click that exact
+                    // contact — which also explains "contact doesn't appear when someone
+                    // writes to you first" for a brand-new sender. Confirmed live
+                    // 2026-07-04: a message server-confirmed as delivered to test1 never
+                    // reached test3 across a reconnect because test3's client never had
+                    // that DM open. Catch up every other known contact too, same as the
+                    // active one; loadHistory() is peer-generic (ensureContact + merge
+                    // into S.chats[peer]) so this is safe for any contact, not just the
+                    // open one.
+                    // Throttle the full-sweep catch-ups: each walks every contact and
+                    // every channel of every server with sequential history refreshes.
+                    // On a flaky link that flaps repeatedly, running the whole sweep on
+                    // every reconnect saturates the connection pool ("чат не грузит").
+                    // At most once per window is enough to catch up missed history.
+                    const catchUpNow = Date.now();
+                    if (catchUpNow - (this._lastReconnectCatchUpAt || 0) >= 20000) {
+                        this._lastReconnectCatchUpAt = catchUpNow;
+                        void this.catchUpBackgroundContactsAfterReconnect();
+                        // Same class of bug as the DM catch-up above, for server channels:
+                        // deliver_server_message (src/main.rs) only pushes to currently
+                        // connected viewers via WS — a channel message posted while this
+                        // client was offline, or simply in a channel/server you weren't
+                        // looking at, has nothing pulling it in afterwards. Only the
+                        // actively open channel got a history refresh; every other channel
+                        // in every other server the user belongs to stayed stale until
+                        // manually clicked.
+                        void this.catchUpBackgroundChannelsAfterReconnect();
+                    }
                 }, 500);
             }
         } else {
             this._reconnectCaughtUp = false;
+        }
+    }
+
+    async catchUpBackgroundContactsAfterReconnect() {
+        if (!this.S.session?.token || !this.nativeSupports('sendMessage')) return;
+        // this.S.contacts may still be empty here: bootstrapSession's own loadContacts()
+        // is an independent async call racing against this reconnect timer, and on a
+        // fresh launch/reconnect right after login it hadn't necessarily resolved yet —
+        // an empty list made this whole catch-up silently iterate zero peers. Refresh
+        // it ourselves first so the contact list is authoritative regardless of timing.
+        await this.loadContacts();
+        const activePeer = String(this.S.current || '').trim();
+        const peers = (this.S.contacts || []).filter(peer => peer && peer !== activePeer);
+        for (const peer of peers) {
+            try {
+                const key = await this.resolveConversationCryptoKey({ peer, reason: 'reconnectCatchUp' });
+                this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer });
+            } catch (e) {
+                this.trace(`catchUpBackgroundContactsAfterReconnect failed peer=${peer} error=${e?.message || e}`);
+            }
+        }
+    }
+
+    async catchUpBackgroundChannelsAfterReconnect() {
+        if (!this.S.session?.token) return;
+        // Same staleness-on-launch race as loadContacts() above: refresh the server
+        // list ourselves rather than trusting whatever bootstrapSession's independent
+        // loadServers() call has resolved by now.
+        await this.loadServers({ silent: true });
+        const activeServer = String(this.S.activeServer || '').trim();
+        const activeChannel = String(this.S.activeChannel || '').trim();
+        for (const server of this.S.servers || []) {
+            const sid = String(server?.id || '').trim();
+            if (!sid) continue;
+            for (const channel of server.channels || []) {
+                const cid = String(channel?.id || '').trim();
+                if (!cid || this.isVoiceChannel(channel)) continue;
+                if (sid === activeServer && cid === activeChannel) continue;
+                try {
+                    await this.loadServerMessages(sid, cid, { silent: true });
+                } catch (e) {
+                    this.trace(`catchUpBackgroundChannelsAfterReconnect failed server=${sid} channel=${cid} error=${e?.message || e}`);
+                }
+            }
         }
     }
 
@@ -12434,7 +12654,7 @@ class ZaliInterface {
         }
 
         if (updated) {
-            this.saveStoredMessageCache();
+            this.scheduleSaveStoredMessageCache();
             const currentServerKey = this.currentServerChatKey();
             const currentPeer = String(this.S.current || '').trim();
             const payloadServerKey = String(payload.serverId || payload.server_id || '').trim() && String(payload.channelId || payload.channel_id || '').trim()

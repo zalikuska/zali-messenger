@@ -706,8 +706,16 @@ pub(crate) async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payl
                 sender, inviter, room_id
             );
             state.voice_rooms.remove(&room_id);
-            state.user_voice_rooms.remove(sender);
-            state.user_voice_rooms.remove(inviter.as_str());
+            // Only drop a user->room mapping if it actually points at the room being
+            // rejected. The reject target may be busy in a *different* active call
+            // (voice_call_invite never joins the target, so their mapping still points
+            // at their ongoing room) — an unconditional remove(sender) here would wipe
+            // that active call's mapping, orphaning the room and breaking reconnect
+            // snapshot restore. See the client-side busy-guard in interface.js.
+            state.user_voice_rooms.remove_if(sender, |_, v| v == &room_id);
+            state
+                .user_voice_rooms
+                .remove_if(inviter.as_str(), |_, v| v == &room_id);
             send_json_to_user(
                 state,
                 &inviter,

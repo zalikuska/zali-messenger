@@ -1,0 +1,4 @@
+module CoreBridge {
+    header "CoreBridge.h"
+    export *
+}

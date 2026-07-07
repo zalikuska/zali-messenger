@@ -92,28 +92,32 @@ pub(crate) async fn require_approved_device(
     }
 }
 
+pub(crate) struct TransparencyEvent<'a> {
+    pub(crate) owner: &'a str,
+    pub(crate) event_type: &'a str,
+    pub(crate) group_epoch: i64,
+    pub(crate) actor_device_id: &'a str,
+    pub(crate) target_device_id: Option<&'a str>,
+    pub(crate) event_json: serde_json::Value,
+    pub(crate) signature: Option<&'a str>,
+}
+
 pub(crate) async fn append_transparency_log(
     pool: &SqlitePool,
-    owner: &str,
-    event_type: &str,
-    group_epoch: i64,
-    actor_device_id: &str,
-    target_device_id: Option<&str>,
-    event_json: serde_json::Value,
-    signature: Option<&str>,
+    event: TransparencyEvent<'_>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO transparency_log
          (owner, event_type, group_epoch, actor_device_id, target_device_id, event_json, signature)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(owner)
-    .bind(event_type)
-    .bind(group_epoch)
-    .bind(actor_device_id)
-    .bind(target_device_id)
-    .bind(event_json.to_string())
-    .bind(signature.unwrap_or(""))
+    .bind(event.owner)
+    .bind(event.event_type)
+    .bind(event.group_epoch)
+    .bind(event.actor_device_id)
+    .bind(event.target_device_id)
+    .bind(event.event_json.to_string())
+    .bind(event.signature.unwrap_or(""))
     .execute(pool)
     .await?;
     Ok(())
@@ -321,20 +325,22 @@ pub(crate) async fn register_device(
     if first_device {
         let _ = append_transparency_log(
             &state.db,
-            &owner,
-            "device_add",
-            group_epoch,
-            &device_id,
-            Some(&device_id),
-            serde_json::json!({
-                "type": "device_add",
-                "account_id": owner,
-                "new_device_id": device_id,
-                "approved_by": device_id,
-                "device_group_epoch": group_epoch,
-                "first_device": true
-            }),
-            None,
+            TransparencyEvent {
+                owner: &owner,
+                event_type: "device_add",
+                group_epoch,
+                actor_device_id: &device_id,
+                target_device_id: Some(&device_id),
+                event_json: serde_json::json!({
+                    "type": "device_add",
+                    "account_id": owner,
+                    "new_device_id": device_id,
+                    "approved_by": device_id,
+                    "device_group_epoch": group_epoch,
+                    "first_device": true
+                }),
+                signature: None,
+            },
         )
         .await;
     }
@@ -450,20 +456,22 @@ pub(crate) async fn approve_device(
 
     let _ = append_transparency_log(
         &state.db,
-        &owner,
-        "device_add",
-        group_epoch,
-        &header_actor_id,
-        Some(&target_id),
-        serde_json::json!({
-            "type": "device_add",
-            "account_id": owner,
-            "new_device_id": target_id,
-            "approved_by": header_actor_id,
-            "device_group_epoch": group_epoch,
-            "history_days": history_days
-        }),
-        payload.signature.as_deref(),
+        TransparencyEvent {
+            owner: &owner,
+            event_type: "device_add",
+            group_epoch,
+            actor_device_id: &header_actor_id,
+            target_device_id: Some(&target_id),
+            event_json: serde_json::json!({
+                "type": "device_add",
+                "account_id": owner,
+                "new_device_id": target_id,
+                "approved_by": header_actor_id,
+                "device_group_epoch": group_epoch,
+                "history_days": history_days
+            }),
+            signature: payload.signature.as_deref(),
+        },
     )
     .await;
 
@@ -606,19 +614,21 @@ pub(crate) async fn revoke_device(
 
     let _ = append_transparency_log(
         &state.db,
-        &owner,
-        "device_remove",
-        group_epoch,
-        &actor_id,
-        Some(&device_id),
-        serde_json::json!({
-            "type": "device_remove",
-            "account_id": owner,
-            "actor_device_id": actor_id,
-            "removed_device_id": device_id,
-            "device_group_epoch": group_epoch
-        }),
-        None,
+        TransparencyEvent {
+            owner: &owner,
+            event_type: "device_remove",
+            group_epoch,
+            actor_device_id: &actor_id,
+            target_device_id: Some(&device_id),
+            event_json: serde_json::json!({
+                "type": "device_remove",
+                "account_id": owner,
+                "actor_device_id": actor_id,
+                "removed_device_id": device_id,
+                "device_group_epoch": group_epoch
+            }),
+            signature: None,
+        },
     )
     .await;
 
@@ -882,10 +892,10 @@ pub(crate) async fn get_vault_events(
     }
 }
 
-pub(crate) fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, Response> {
+pub(crate) fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, Box<Response>> {
     DateTime::parse_from_rfc3339(value.trim())
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Дата должна быть RFC3339").into_response())
+        .map_err(|_| Box::new((StatusCode::BAD_REQUEST, "Дата должна быть RFC3339").into_response()))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -913,7 +923,7 @@ pub(crate) async fn resolve_history_access(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        Some(value) => Some(parse_rfc3339_utc(value)?),
+        Some(value) => Some(parse_rfc3339_utc(value).map_err(|response| *response)?),
         None => None,
     };
     Ok(HistoryAccess {
@@ -994,15 +1004,15 @@ pub(crate) async fn create_history_ticket(
     let issued_to = trim_limited(payload.issuedToDeviceId, 128);
     let from_time = match parse_rfc3339_utc(&payload.fromTime) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let to_time = match parse_rfc3339_utc(&payload.toTime) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let expires_at = match parse_rfc3339_utc(&payload.expiresAt) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if from_time > to_time || expires_at <= Utc::now() {
         return (StatusCode::BAD_REQUEST, "Некорректное окно History Ticket").into_response();

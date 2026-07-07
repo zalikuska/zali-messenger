@@ -1,7 +1,6 @@
 import SwiftUI
 import WebKit
 import CoreBridge
-import Security
 
 class ZaliNativeWebView: WKWebView {
     override var acceptsFirstResponder: Bool { true }
@@ -30,44 +29,76 @@ struct WebView: NSViewRepresentable {
         private var reloadHistoryTask: Task<Void, Never>?
         private var reloadServerHistoryTask: Task<Void, Never>?
         private var decryptedMessageCache: [String: [String: Any]] = [:]
+        // All trailing-edge debounced refreshes share one keyed store (see debounce()).
+        // Distinct keys are independent, so e.g. per-peer history reloads
+        // ("reloadHistory:<username>") never cancel each other — a single shared work item
+        // would reload only the last peer of a reconnect catch-up burst.
+        private var debounceWorkItems: [String: DispatchWorkItem] = [:]
 
-        private static let keychainService = "com.zali.messenger"
-        private static let keychainKeyAccount = "zali_crypto_key_v2"
-
-        static func saveKeyToKeychain(_ value: String) {
-            let lookupQuery: [CFString: Any] = [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: keychainService,
-                kSecAttrAccount: keychainKeyAccount,
-            ]
-            if value.isEmpty {
-                SecItemDelete(lookupQuery as CFDictionary)
-                return
-            }
-            let status = SecItemUpdate(
-                lookupQuery as CFDictionary,
-                [kSecValueData: Data(value.utf8)] as CFDictionary
-            )
-            if status == errSecItemNotFound {
-                var addQuery = lookupQuery
-                addQuery[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-                addQuery[kSecValueData] = Data(value.utf8)
-                SecItemAdd(addQuery as CFDictionary, nil)
-            }
+        /// Plain file, not Keychain (see sharedAppSupportDir below for why): a Keychain
+        /// item's ACL is bound to the app's code signature, and build_app.sh's ad-hoc
+        /// signature changes on every rebuild — each rebuild made macOS treat the app as
+        /// "a different app" wanting access to its own previously-stored key, showing a
+        /// consent dialog on every single launch after a rebuild. This key is a single
+        /// legacy value (not per-user, matching the original Keychain account naming).
+        private static var legacyCryptoKeyFilePath: URL? {
+            sharedAppSupportDir?.appendingPathComponent("legacy_crypto_key.txt")
         }
 
-        static func loadKeyFromKeychain() -> String {
-            let query: [CFString: Any] = [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: keychainService,
-                kSecAttrAccount: keychainKeyAccount,
-                kSecReturnData: kCFBooleanTrue!,
-                kSecMatchLimit: kSecMatchLimitOne,
-            ]
-            var result: AnyObject?
-            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-                  let data = result as? Data else { return "" }
-            return String(data: data, encoding: .utf8) ?? ""
+        static func saveLegacyCryptoKey(_ value: String) {
+            guard let path = legacyCryptoKeyFilePath else { return }
+            if value.isEmpty {
+                try? FileManager.default.removeItem(at: path)
+                return
+            }
+            try? value.write(to: path, atomically: true, encoding: .utf8)
+        }
+
+        static func loadLegacyCryptoKey() -> String {
+            guard let path = legacyCryptoKeyFilePath,
+                  let value = try? String(contentsOf: path, encoding: .utf8) else { return "" }
+            return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        /// Deliberately a plain file, not Keychain: this app and the Rust shell
+        /// (`dist/macos-rust`) run unsandboxed under the same OS user, so a shared
+        /// directory needs no cross-app consent dialog. Mirrors native.rs's own
+        /// app_data_dir() so both shells agree on the location.
+        private static var sharedAppSupportDir: URL? = {
+            guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                return nil
+            }
+            let dir = base.appendingPathComponent("ZaliMessenger", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }()
+
+        /// Exports the JS-side device identity (ECDH keypair + deviceId) so a Rust-shell
+        /// launch on this same Mac can adopt the already-approved device instead of
+        /// registering a new, unknown one with no key envelopes waiting for it. Safe to
+        /// call repeatedly — just overwrites the file with the current identity.
+        fileprivate func exportDeviceIdentityToSharedFile() {
+            let username = NetworkService.shared.currentUser.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !username.isEmpty, let dir = WebView.Coordinator.sharedAppSupportDir else { return }
+            let script = """
+            (function () {
+                try {
+                    const iface = window.__ZALI_INTERFACE;
+                    const key = iface && typeof iface.deviceIdentityStorageKey === 'function'
+                        ? iface.deviceIdentityStorageKey() : null;
+                    return key ? localStorage.getItem(key) : null;
+                } catch (e) { return null; }
+            })()
+            """
+            runJavaScript(script) { result, error in
+                guard error == nil, let raw = result as? String, !raw.isEmpty else { return }
+                let path = dir.appendingPathComponent("shared_device_identity_\(username).json")
+                do {
+                    try raw.write(to: path, atomically: true, encoding: .utf8)
+                } catch {
+                    print("[ZALI][WEBVIEW] exportDeviceIdentity write failed err=\(error.localizedDescription)")
+                }
+            }
         }
 
         fileprivate enum BusEvent: String {
@@ -104,7 +135,9 @@ struct WebView: NSViewRepresentable {
         }
 
         private func decodedDataURL(_ value: String) -> (data: Data, mimeType: String, fileExtension: String) {
-            guard value.hasPrefix("data:"),
+            let maxDataURLBytes = 100 * 1024 * 1024 // 100 MB
+            guard value.utf8.count <= maxDataURLBytes,
+                  value.hasPrefix("data:"),
                   let comma = value.firstIndex(of: ",") else {
                 return (Data(), "application/octet-stream", "bin")
             }
@@ -236,6 +269,25 @@ struct WebView: NSViewRepresentable {
 
         fileprivate func refreshAfterKey() {
             callWindowFunction(.refreshAfterKey, arguments: [])
+        }
+
+        /// Coalesces bursts of key_envelope_available notifications (e.g. several pending
+        /// envelopes delivered together) into a single refreshAfterKey() call instead of
+        /// triggering a redundant JS-side history re-decrypt for each one.
+        fileprivate func scheduleRefreshAfterKey() {
+            debounce("refreshAfterKey", delay: 0.5) { [weak self] in self?.refreshAfterKey() }
+        }
+
+        /// Trailing-edge debounce keyed by name. A new call for the same key cancels the
+        /// pending one; different keys are independent. Used for all coalesced refreshes.
+        private func debounce(_ key: String, delay: Double = 0.4, _ body: @escaping () -> Void) {
+            debounceWorkItems[key]?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.debounceWorkItems.removeValue(forKey: key)
+                body()
+            }
+            debounceWorkItems[key] = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
 
         private func sendNativeResponse(_ payload: [String: Any]) {
@@ -533,6 +585,32 @@ struct WebView: NSViewRepresentable {
             }
         }
 
+        /// Coalesces bursts of setKey/refreshHistory bridge messages (e.g. postAuthSetup
+        /// firing cloud-vault import, envelope sync, and key republish back-to-back, each
+        /// emitting its own SET_KEY) into a single reload. Without this, reloadHistoryTask's
+        /// cancel-on-new-task guard was not enough: cancellation races the network request,
+        /// which had often already been dispatched — the burst saturated the connection
+        /// pool and every request timed out ("чат не грузит" symptom).
+        fileprivate func scheduleRefreshActiveConversationHistory(reason: String) {
+            // Note: the cross-shell identity export is NOT piggybacked here. It ran a
+            // runJavaScript round-trip + atomic file write on every setKey/refreshHistory
+            // (which fire constantly), re-writing byte-identical data. The dedicated
+            // PERSIST_DEVICE_IDENTITY IPC and the SET_SESSION handler already export it
+            // exactly when the identity is created/changed.
+            debounce("refreshActiveConversation") { [weak self] in
+                self?.refreshActiveConversationHistory(reason: reason)
+            }
+        }
+
+        /// Same rationale as scheduleRefreshActiveConversationHistory, for REFRESH_HISTORY's
+        /// peer-addressed path which calls reloadHistory(for:) directly and previously bypassed
+        /// any debounce entirely.
+        fileprivate func scheduleReloadHistory(for username: String, reason: String) {
+            // Per-peer key so distinct peers debounce independently — a shared item would
+            // let a reconnect catch-up burst reload only the last peer.
+            debounce("reloadHistory:\(username)") { [weak self] in self?.reloadHistory(for: username) }
+        }
+
         fileprivate func refreshActiveConversationHistory(reason: String) {
             guard self.webView != nil else { return }
             let script = """
@@ -627,22 +705,15 @@ struct WebView: NSViewRepresentable {
             if let cached = decryptedMessageCache[messageId] { return cached }
 
             let keys: [String] = {
-                var candidates: [String] = []
-                if serverId == nil {
-                    let scope = "dm:" + [record.sender, record.receiver].sorted().joined(separator: ":")
-                    if let scopeKey = NetworkService.shared.allConversationKeys[scope]?.trimmingCharacters(in: .whitespacesAndNewlines), !scopeKey.isEmpty {
-                        candidates.append(scopeKey)
-                    }
-                }
-                let base = ZaliCore.candidateMessageKeys(
+                var candidates = ZaliCore.candidateMessageKeys(
                     currentKey: NetworkService.shared.currentKey,
+                    conversationKeys: NetworkService.shared.allConversationKeys,
                     participantA: record.sender,
                     participantB: record.receiver,
                     serverId: serverId,
-                    channelId: channelId,
-                    keyVersion: record.keyVersion ?? record.key_version
+                    channelId: channelId
                 )
-                for k in base where !candidates.contains(k) { candidates.append(k) }
+                // Last-resort fallback: try every other known conversation key too.
                 NetworkService.shared.allConversationKeys.values.forEach { k in
                     let normalized = k.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !normalized.isEmpty, !candidates.contains(normalized) { candidates.append(normalized) }
@@ -664,6 +735,15 @@ struct WebView: NSViewRepresentable {
                             self.addLog(level: "ERROR", text: "Загрузка отклонена сервером (403): \(record.sender)→\(record.receiver) — нет доступа к файлу сообщения")
                         }
                         lastDownloadError = "403"
+                        break
+                    }
+                    if statusCode == 413 {
+                        // Sentinel from downloadMessage's size cap — permanent, not retryable.
+                        print("[ZALI][WEBVIEW] \(logPrefix) download too large messageId=\(messageId)")
+                        DispatchQueue.main.async {
+                            self.addLog(level: "ERROR", text: "Файл сообщения превышает допустимый размер: \(record.sender)→\(record.receiver)")
+                        }
+                        lastDownloadError = "413"
                         break
                     }
                     lastDownloadError = "status=\(statusCode ?? -1)"
@@ -726,9 +806,14 @@ struct WebView: NSViewRepresentable {
 
             print("[ZALI][WEBVIEW] \(logPrefix) render failed messageId=\(messageId) decryptFailed=\(decryptFailed) downloadError=\(lastDownloadError ?? "none")")
             // Return a placeholder so the message is visible rather than silently missing
-            let placeholderText = decryptFailed
-                ? "🔒 Сообщение зашифровано другим ключом"
-                : "⚠️ Не удалось загрузить сообщение"
+            let placeholderText: String
+            if decryptFailed {
+                placeholderText = "🔒 Сообщение зашифровано другим ключом"
+            } else if lastDownloadError == "413" {
+                placeholderText = "📦 Файл сообщения превышает допустимый размер"
+            } else {
+                placeholderText = "⚠️ Не удалось загрузить сообщение"
+            }
             return [
                 "id": messageId,
                 "clientId": record.clientId ?? record.client_id ?? "",
@@ -884,6 +969,9 @@ struct WebView: NSViewRepresentable {
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if let error, status == 0 {
+                                // Genuine transport failure (no HTTP response at all — DNS,
+                                // connection refused, timeout). Top-level "ok": false here
+                                // is correct: onNativeResponse() rejects the JS promise.
                                 self.sendNativeResponse([
                                     "requestId": requestId,
                                     "ok": false,
@@ -891,13 +979,25 @@ struct WebView: NSViewRepresentable {
                                 ])
                                 return
                             }
+                            // Any real HTTP response, even 4xx/5xx, is a successful native
+                            // round-trip — top-level "ok" must stay true so onNativeResponse()
+                            // resolves the JS promise instead of rejecting it. The actual
+                            // HTTP-level outcome goes in data.ok/status, which
+                            // nativeApiResponse() on the JS side already expects (matches
+                            // the Windows/Rust client's perform_api_request). Previously this
+                            // set top-level "ok" from the HTTP status itself, so every
+                            // non-2xx server response (409 "user exists", 400 validation,
+                            // 429 rate limit, ...) was treated as a native failure and
+                            // collapsed into the generic "Операция не удалась" — hiding the
+                            // real reason and breaking executeAuth's 409 recovery logic.
                             self.sendNativeResponse([
                                 "requestId": requestId,
-                                "ok": (status >= 200 && status < 300),
+                                "ok": true,
                                 "data": [
                                     "status": status,
-                                    "body": bodyStr,
-                                    "headers": respHeaders,
+                                    "ok": (status >= 200 && status < 300),
+                                    "body": bodyStr as Any,
+                                    "headers": respHeaders as Any,
                                 ],
                             ])
                         }
@@ -1062,7 +1162,12 @@ struct WebView: NSViewRepresentable {
                         guard let self = self else { return }
                         print("[ZALI][WEBVIEW] SET_SESSION applied username=\(NetworkService.shared.currentUser) tokenSet=\(NetworkService.shared.currentKey.isEmpty ? "false" : "true")")
                         self.setLoading(false)
-                        self.setConnectionStatus(true)
+                        // setConnectionStatus is no longer forced true here — it used to fire
+                        // unconditionally regardless of whether the message WebSocket (or even
+                        // a valid token) existed, so the "Подключено" badge stayed green for
+                        // sessions that could never receive anything live (e.g. a stale
+                        // username with an empty token). onWebSocketConnected/Disconnected now
+                        // own this signal end-to-end, driven by the actual socket state.
 
                         NetworkService.shared.fetchUsers { users in
                             let encodedUsers = WebView.javascriptLiteral(users)
@@ -1082,6 +1187,7 @@ struct WebView: NSViewRepresentable {
                         self.syncCryptoKeyFromWebUI(reason: "setSession") {
                             self.refreshActiveConversationHistory(reason: "setSession")
                         }
+                        self.exportDeviceIdentityToSharedFile()
                     }
                 }
 
@@ -1116,12 +1222,12 @@ struct WebView: NSViewRepresentable {
                     if !key.isEmpty {
                         NetworkService.shared.persistCurrentKey()
                     }
-                    Coordinator.saveKeyToKeychain(key)
+                    Coordinator.saveLegacyCryptoKey(key)
                     DispatchQueue.main.async {
                         if self.isDirectMessageKey(key) {
                             self.consoleLog("Swift: E2E ключ обновлён")
                         }
-                        self.refreshActiveConversationHistory(reason: "setKey")
+                        self.scheduleRefreshActiveConversationHistory(reason: "setKey")
                     }
                 }
 
@@ -1131,16 +1237,18 @@ struct WebView: NSViewRepresentable {
                     if !key.isEmpty {
                         NetworkService.shared.currentKey = key
                         NetworkService.shared.persistCurrentKey()
-                        Coordinator.saveKeyToKeychain(key)
+                        Coordinator.saveLegacyCryptoKey(key)
                     }
                     if !peer.isEmpty {
                         print("[ZALI][WEBVIEW] REFRESH_HISTORY peer=\(peer)")
-                        self.reloadHistory(for: peer)
+                        DispatchQueue.main.async {
+                            self.scheduleReloadHistory(for: peer, reason: "refreshHistory")
+                        }
                         return
                     }
                     print("[ZALI][WEBVIEW] REFRESH_HISTORY user=\(NetworkService.shared.currentUser)")
                     DispatchQueue.main.async {
-                        self.refreshActiveConversationHistory(reason: "refreshHistory")
+                        self.scheduleRefreshActiveConversationHistory(reason: "refreshHistory")
                     }
                 }
 
@@ -1172,7 +1280,7 @@ struct WebView: NSViewRepresentable {
                     let payload = dict["payload"] as? [String: Any] ?? dict["event"] as? [String: Any] ?? dict
                     let voiceType = payload["type"] as? String ?? ""
                     print("[VOICE][BRIDGE][OUT] type=\(voiceType) roomId=\(payload["roomId"] as? String ?? "") roomType=\(payload["roomType"] as? String ?? "") to=\(payload["to"] as? String ?? "") target=\(payload["target"] as? String ?? "")")
-                    NetworkService.shared.sendWebSocketJSON(payload) { success in
+                    NetworkService.shared.sendVoiceEvent(payload) { success in
                         DispatchQueue.main.async {
                             let level = success ? "SUCCESS" : "ERROR"
                             let text = success ? "Голосовое событие отправлено" : "Не удалось отправить голосовое событие"
@@ -1204,6 +1312,17 @@ struct WebView: NSViewRepresentable {
                         channelId: channelId
                     )
                 }
+
+                case .persistDeviceIdentity: do {
+                    // JS signals that the device identity was created/changed. Re-export it to
+                    // the shared per-user file so a Rust-shell (or a rebuild that wipes this
+                    // WebView's localStorage) re-adopts the same device_id instead of minting a
+                    // fresh one — the churn that orphaned key envelopes. Reuses the existing
+                    // localStorage-reading exporter; the JS payload itself is not trusted/needed.
+                    DispatchQueue.main.async {
+                        self.exportDeviceIdentityToSharedFile()
+                    }
+                }
             }
             }
         }
@@ -1211,7 +1330,8 @@ struct WebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("[ZALI][WEBVIEW] didFinish currentUser=\(NetworkService.shared.currentUser) keySet=\(!NetworkService.shared.currentKey.isEmpty)")
             self.setLoading(false)
-            self.setConnectionStatus(true)
+            // Was unconditionally true here too — page load finishing says nothing about
+            // network state. See the SET_SESSION handler's comment for the full story.
             self.syncCryptoKeyFromWebUI(reason: "didFinish") { [weak self] in
                 guard let self = self else { return }
                 NetworkService.shared.fetchUsers { users in
@@ -1310,8 +1430,8 @@ struct WebView: NSViewRepresentable {
         let savedCss = UserDefaults.standard.string(forKey: "custom_css") ?? ""
         let savedCssBootstrap = "window.__ZALI_SAVED_CSS = \(WebView.javascriptLiteral(savedCss));"
         config.userContentController.addUserScript(WKUserScript(source: savedCssBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        let udSavedKey = NetworkService.shared.currentKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let savedKey = udSavedKey.isEmpty ? Coordinator.loadKeyFromKeychain().trimmingCharacters(in: .whitespacesAndNewlines) : udSavedKey
+        let inMemorySavedKey = NetworkService.shared.currentKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let savedKey = inMemorySavedKey.isEmpty ? Coordinator.loadLegacyCryptoKey().trimmingCharacters(in: .whitespacesAndNewlines) : inMemorySavedKey
         let bootstrap = "window.__ZALI_SAVED_KEY = \(WebView.javascriptLiteral(savedKey));"
         config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let conversationKeysForBootstrap = NetworkService.shared.allConversationKeys
@@ -1397,11 +1517,15 @@ struct WebView: NSViewRepresentable {
         }
         NetworkService.shared.onKeyEnvelopeAvailable = {
             DispatchQueue.main.async {
-                coordinator.refreshAfterKey()
+                coordinator.scheduleRefreshAfterKey()
             }
         }
         NetworkService.shared.onWebSocketConnected = {
+            coordinator.setConnectionStatus(true)
             coordinator.refreshActiveConversationHistory(reason: "wsReconnect")
+        }
+        NetworkService.shared.onWebSocketDisconnected = {
+            coordinator.setConnectionStatus(false)
         }
         NetworkService.shared.start()
         
