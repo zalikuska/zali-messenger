@@ -9,6 +9,7 @@ enum BridgeProtocolMessageType: String, CaseIterable {
     case loadAvatarRequest = "LOAD_AVATAR_REQUEST"
     case loadServerHistory = "LOAD_SERVER_HISTORY"
     case networkConfig = "NETWORK_CONFIG"
+    case persistDeviceIdentity = "PERSIST_DEVICE_IDENTITY"
     case refreshHistory = "REFRESH_HISTORY"
     case removeContactRequest = "REMOVE_CONTACT_REQUEST"
     case resolveTenor = "RESOLVE_TENOR"

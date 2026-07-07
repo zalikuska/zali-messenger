@@ -120,6 +120,7 @@
         LOAD_AVATAR_REQUEST: "LOAD_AVATAR_REQUEST",
         LOAD_SERVER_HISTORY: "LOAD_SERVER_HISTORY",
         NETWORK_CONFIG: "NETWORK_CONFIG",
+        PERSIST_DEVICE_IDENTITY: "PERSIST_DEVICE_IDENTITY",
         REFRESH_HISTORY: "REFRESH_HISTORY",
         REMOVE_CONTACT_REQUEST: "REMOVE_CONTACT_REQUEST",
         RESOLVE_TENOR: "RESOLVE_TENOR",
@@ -891,6 +892,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     DELETE_AVATAR_REQUEST: 'DELETE_AVATAR_REQUEST',
     LOAD_AVATAR_REQUEST: 'LOAD_AVATAR_REQUEST',
     SHOW_NOTIFICATION: 'SHOW_NOTIFICATION',
+    PERSIST_DEVICE_IDENTITY: 'PERSIST_DEVICE_IDENTITY',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
@@ -1189,8 +1191,8 @@ class ZaliInterface {
 
     safeCssColor(value) {
         if (!value) return '';
-        const v = String(value).trim();
-        if (/^(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|rgba\([^)]+\)|hsl\([^)]+\)|hsla\([^)]+\)|linear-gradient\([^<>"'`\n]+\)|[a-zA-Z]{2,30})$/.test(v)) return v;
+        const trimmed = String(value).trim();
+        if (/^(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|rgba\([^)]+\)|hsl\([^)]+\)|hsla\([^)]+\)|linear-gradient\([^<>"'`\n]+\)|[a-zA-Z]{2,30})$/.test(trimmed)) return trimmed;
         return '';
     }
 
@@ -1250,11 +1252,11 @@ class ZaliInterface {
     fmtDate(iso) {
         if (!iso) return '';
         try {
-            const d = new Date(iso), now = new Date();
-            const yest = new Date(); yest.setDate(yest.getDate()-1);
-            if (d.toDateString() === now.toDateString())  return 'Сегодня';
-            if (d.toDateString() === yest.toDateString()) return 'Вчера';
-            return d.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
+            const messageDate = new Date(iso), now = new Date();
+            const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+            if (messageDate.toDateString() === now.toDateString())       return 'Сегодня';
+            if (messageDate.toDateString() === yesterday.toDateString()) return 'Вчера';
+            return messageDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
         } catch(e) { return ''; }
     }
 
@@ -1298,6 +1300,9 @@ class ZaliInterface {
             };
             document.addEventListener('visibilitychange', onVisibilityChange);
             window.addEventListener('focus', onVisibilityChange);
+            // Debounced message-cache saves must land before the page goes away.
+            window.addEventListener('pagehide', () => this.flushPendingMessageCacheSave());
+            window.addEventListener('beforeunload', () => this.flushPendingMessageCacheSave());
         }
 
         this.scheduleAvatarRefreshPolling();
@@ -1945,16 +1950,13 @@ class ZaliInterface {
 
     loadStoredMessageCache() {
         try {
+            // Deliberately does NOT fall back to the old unsuffixed 'zali_message_cache_v1'
+            // key: that was a one-time migration for the pre-per-account-storage era, but
+            // left active it means every brand-new account's first load silently adopts
+            // whatever chats a DIFFERENT previous account left behind on this browser —
+            // "ghost" conversations with people this account never talked to. Same reasoning
+            // applies to the crypto key / conversation keys / device identity loaders below.
             let raw = localStorage.getItem(this.messageCacheStorageKey());
-            if (!raw && this._userSuffix()) {
-                raw = localStorage.getItem('zali_message_cache_v1');
-                if (raw) {
-                    try {
-                        localStorage.setItem(this.messageCacheStorageKey(), raw);
-                        localStorage.removeItem('zali_message_cache_v1');
-                    } catch (e) {}
-                }
-            }
             if (!raw) return this.loadInjectedMessageCache();
             const parsed = JSON.parse(raw);
             const chats = parsed && typeof parsed === 'object' && parsed.chats && typeof parsed.chats === 'object'
@@ -1990,6 +1992,28 @@ class ZaliInterface {
         } catch (e) {
             return { chats: {}, serverChats: {} };
         }
+    }
+
+    // Debounced wrapper for saveStoredMessageCache(). The full save serializes EVERY
+    // chat (JSON.stringify of the whole store), writes localStorage AND ships the whole
+    // payload over the native bridge — doing that once per received message made bursts
+    // (history merge, reconnect catch-up, busy group chat) quadratic in total work.
+    // Trailing-edge coalesce: bursts collapse into one save ≤400ms after the first call.
+    scheduleSaveStoredMessageCache(delayMs = 400) {
+        if (this._messageCacheSaveTimer) return;
+        this._messageCacheSaveTimer = setTimeout(() => {
+            this._messageCacheSaveTimer = null;
+            this.saveStoredMessageCache();
+        }, Math.max(0, Number(delayMs) || 0));
+    }
+
+    // Flush a pending debounced save immediately (page hide, logout, account switch) so
+    // the last ≤400ms of messages are never lost to a teardown racing the timer.
+    flushPendingMessageCacheSave() {
+        if (!this._messageCacheSaveTimer) return;
+        clearTimeout(this._messageCacheSaveTimer);
+        this._messageCacheSaveTimer = null;
+        this.saveStoredMessageCache();
     }
 
     saveStoredMessageCache() {
@@ -2149,14 +2173,10 @@ class ZaliInterface {
                 const scoped = this.getStoredConversationKey(scope);
                 if (scoped) return scoped;
             }
+            // No fallback to the legacy unsuffixed 'zali_crypto_key_v2' key — see the
+            // comment in loadStoredMessageCache() for why: it would hand a brand-new
+            // account a previous, unrelated account's leftover E2E key.
             let stored = (sessionStorage.getItem(this.cryptoKeyStorageKey()) || localStorage.getItem(this.cryptoKeyStorageKey()) || '').trim();
-            if (!stored && this._userSuffix()) {
-                const legacy = (sessionStorage.getItem('zali_crypto_key_v2') || localStorage.getItem('zali_crypto_key_v2') || '').trim();
-                if (legacy) {
-                    stored = legacy;
-                    try { sessionStorage.removeItem('zali_crypto_key_v2'); localStorage.removeItem('zali_crypto_key_v2'); } catch (e) {}
-                }
-            }
             this.trace(`loadStoredCryptoKey stored=${!!stored}`);
             if (stored) {
                 try {
@@ -2324,14 +2344,11 @@ class ZaliInterface {
 
     loadStoredConversationKeys() {
         try {
+            // No fallback to the legacy unsuffixed 'zali_conversation_keys_v2' key — see
+            // the comment in loadStoredMessageCache() for why: this one is the most
+            // severe case, since it would hand a brand-new account every per-DM E2E key
+            // a previous, unrelated account on this browser ever had.
             let raw = sessionStorage.getItem(this.conversationKeysStorageKey()) || localStorage.getItem(this.conversationKeysStorageKey());
-            if (!raw && this._userSuffix()) {
-                const legacyRaw = sessionStorage.getItem('zali_conversation_keys_v2') || localStorage.getItem('zali_conversation_keys_v2');
-                if (legacyRaw) {
-                    raw = legacyRaw;
-                    try { sessionStorage.removeItem('zali_conversation_keys_v2'); localStorage.removeItem('zali_conversation_keys_v2'); } catch (e) {}
-                }
-            }
             const injected = window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
                 : {};
@@ -2616,6 +2633,14 @@ class ZaliInterface {
             if (recoveredVaultPassphrase) {
                 this.S.auth.vaultPassphrase = recoveredVaultPassphrase;
                 await this.restoreCloudVaultSnapshot({ reason: `resolveConversationCryptoKey:${reason}` });
+                // restoreCloudVaultSnapshot читает только локальный кэш — на свежем
+                // устройстве он пуст, а фоновый sync из postAuthSetup ещё не успел
+                // сходить в облако. Без этого await ключ генерировался временным,
+                // хотя настоящий уже лежал в cloud vault (гонка на ~1 секунду).
+                if (!this.getStoredConversationKey(scope) && !this._cloudVaultResolveFetchDone) {
+                    this._cloudVaultResolveFetchDone = true;
+                    await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}` });
+                }
             }
             await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}`, triggerRefresh: false });
         }
@@ -2653,11 +2678,14 @@ class ZaliInterface {
         const requiresPeerEnvelope = !!(peer && !serverId && !channelId && String(peer).trim() !== this.myName());
         if (requiresPeerEnvelope) {
             void this.publishConversationKeyToPeer({ peer, scope, key: localKey, reason }).then((published) => {
-                if (published === true || published === 'no_devices') {
+                if (published === true) {
                     if (!this._publishedKeyScopes) this._publishedKeyScopes = new Set();
                     this._publishedKeyScopes.add(scope);
                 } else {
-                    this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} publish_pending=true`);
+                    // 'no_devices' included: the peer has no registered devices yet, so
+                    // nothing was delivered — keep the scope unmarked so the next send
+                    // retries once the peer's device appears.
+                    this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} publish_pending=true result=${published}`);
                 }
             });
         }
@@ -2753,13 +2781,19 @@ class ZaliInterface {
             const raw = localStorage.getItem(this.deviceIdentityStorageKey());
             const parsed = raw ? JSON.parse(raw) : null;
             if (parsed?.deviceId && parsed?.publicKey) return parsed;
-            if (this._userSuffix()) {
-                const legacyRaw = localStorage.getItem('zali_device_identity_v1');
-                const legacy = legacyRaw ? JSON.parse(legacyRaw) : null;
-                if (legacy?.deviceId && legacy?.publicKey) {
-                    try { localStorage.setItem(this.deviceIdentityStorageKey(), legacyRaw); localStorage.removeItem('zali_device_identity_v1'); } catch (e) {}
-                    return legacy;
-                }
+            // Deliberately no fallback to the legacy unsuffixed 'zali_device_identity_v1'
+            // key here — see the comment in loadStoredMessageCache() for why: it would
+            // hand a brand-new account a previous, unrelated account's device identity
+            // (and with it, that account's approved-device status on the server).
+            // This WKWebView's own storage has no identity yet — before generating a
+            // fresh one (which the server would treat as a brand-new, unapproved
+            // device with no key envelopes), check for an identity exported by another
+            // shell on the same machine (see native.rs's injected_device_identity).
+            const injected = this.loadInjectedDeviceIdentity();
+            if (injected?.deviceId && injected?.publicKey) {
+                try { localStorage.setItem(this.deviceIdentityStorageKey(), JSON.stringify(injected)); } catch (e) {}
+                this.trace(`loadDeviceIdentity adopted injected identity deviceId=${injected.deviceId}`);
+                return injected;
             }
         } catch (e) {}
         const identity = {
@@ -2783,6 +2817,43 @@ class ZaliInterface {
         try {
             localStorage.setItem(this.deviceIdentityStorageKey(), JSON.stringify(identity || {}));
         } catch (e) {}
+        // Mirror the identity to the native shell so it survives a WebView storage wipe
+        // (rebuild / restart / cleared data dir). Without this the Rust/Windows shell had
+        // no persistence beyond localStorage — every wipe minted a fresh device_id, which
+        // orphaned all previously-published key envelopes (they are addressed to a specific
+        // recipient_device_id) and broke key convergence. See persistDeviceIdentityToNative.
+        this.persistDeviceIdentityToNative(identity);
+    }
+
+    // Push the full device identity (incl. privateKeyJwk + e2ee keyPackage) to the native
+    // shell, which writes shared_device_identity_{username}.json and re-injects it on the
+    // next launch via window.__ZALI_INJECTED_DEVICE_IDENTITY. Mirrors what the macOS Swift
+    // client already does; makes the identity stable per (machine, account) on all shells.
+    persistDeviceIdentityToNative(identity) {
+        try {
+            if (!this.hasNativeBridge()) return;
+            const username = String(this.myName() || '').trim();
+            const deviceId = String(identity?.deviceId || '').trim();
+            // No username yet (pre-auth) → we cannot name the per-user file; a later
+            // post-auth save (bootstrapDeviceTrust) will persist it once the user is known.
+            if (!username || !deviceId) return;
+            this.postNativeMessage({
+                type: NativeMessageTypes.PERSIST_DEVICE_IDENTITY,
+                username,
+                identity: JSON.stringify(identity),
+            });
+        } catch (e) {}
+    }
+
+    loadInjectedDeviceIdentity() {
+        try {
+            const raw = window.__ZALI_INJECTED_DEVICE_IDENTITY;
+            if (!raw) return null;
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            return (parsed && typeof parsed === 'object') ? parsed : null;
+        } catch (e) {
+            return null;
+        }
     }
 
     currentDeviceId() {
@@ -2989,7 +3060,24 @@ class ZaliInterface {
     }
 
     buildVaultPlainPayload(targetDeviceId = '') {
-        const scopedKeys = this.loadStoredConversationKeys();
+        const stored = this.loadStoredConversationKeys();
+        const me = String(this.myName() || '').trim();
+        const isCloudBroadcast = !String(targetDeviceId || '').trim();
+        const scopedKeys = {};
+        for (const [scope, value] of Object.entries(stored)) {
+            const key = String(value || '').trim();
+            if (!key) continue;
+            if (isCloudBroadcast) {
+                // В общий (неадресный) cloud-пакет не включаем DM-ключи, которыми
+                // владеет собеседник: их канонично доставляют конверты владельца.
+                // Иначе временный ключ, сгенерированный до прихода конверта, разошёлся
+                // бы по устройствам и мог затереть настоящий (старые клиенты мержат
+                // vault поверх локальных ключей без сохранения кандидатов).
+                const owner = this.dmScopeOwner(scope);
+                if (owner && me && owner !== me) continue;
+            }
+            scopedKeys[scope] = key;
+        }
         return {
             version: 2,
             keyEpoch: 2,
@@ -3015,10 +3103,23 @@ class ZaliInterface {
         if (accountId && accountId !== this.myName()) {
             throw new Error(`Vault предназначен для аккаунта ${accountId}`);
         }
-        const nextKeys = {
-            ...this.loadStoredConversationKeys(),
-            ...(payload.conversationKeys && typeof payload.conversationKeys === 'object' ? payload.conversationKeys : {}),
-        };
+        const nextKeys = this.loadStoredConversationKeys();
+        const incomingKeys = payload.conversationKeys && typeof payload.conversationKeys === 'object'
+            ? payload.conversationKeys
+            : {};
+        for (const [scope, value] of Object.entries(incomingKeys)) {
+            const current = String(nextKeys[scope] || '').trim();
+            const next = String(value || '').trim();
+            if (!next) continue;
+            if (current && current !== next) {
+                // Облачный ключ замещает локальный, но локальный сохраняется как
+                // кандидат расшифровки: если в облако попал не тот ключ (например,
+                // временный с нового устройства), история, зашифрованная прежним,
+                // не должна стать нечитаемой.
+                this.addAltConversationKey(nextKeys, scope, current);
+            }
+            nextKeys[scope] = next;
+        }
         this.saveStoredConversationKeys(nextKeys);
         const displayKey = String(Object.values(nextKeys)[0] || '').trim();
         this.updateCryptoKeyDisplay({ key: displayKey });
@@ -3054,6 +3155,7 @@ class ZaliInterface {
 
             let imported = false;
             let sawCompatibleServerEvents = false;
+            let undecryptableServerEvents = false;
             try {
                 const res = await this.apiFetch(this.apiRoutes.vault.events);
                 if (res.ok) {
@@ -3062,15 +3164,25 @@ class ZaliInterface {
                         const latest = events[events.length - 1];
                         const encrypted = String(latest?.encryptedVaultEvent || '').trim();
                         if (encrypted) {
+                            let payload = null;
                             try {
-                                const payload = await this.decryptVaultPackage(encrypted, code);
-                                this.applyVaultPlainPayload(payload);
-                                await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
-                                sawCompatibleServerEvents = true;
-                                imported = true;
-                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length}`);
+                                payload = await this.decryptVaultPackage(encrypted, code);
                             } catch (e) {
-                                this.trace(`syncCloudVaultPackage import failed reason=${reason} error=${e?.message || e}`);
+                                undecryptableServerEvents = true;
+                                this.trace(`syncCloudVaultPackage decrypt failed reason=${reason} error=${e?.message || e}`);
+                            }
+                            if (payload) {
+                                try {
+                                    this.applyVaultPlainPayload(payload);
+                                    await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
+                                    sawCompatibleServerEvents = true;
+                                    imported = true;
+                                    this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length}`);
+                                } catch (e) {
+                                    // Расшифровалось, но пакет старой схемы — публикация ниже
+                                    // выступает как upgrade до v2, это допустимо.
+                                    this.trace(`syncCloudVaultPackage import failed reason=${reason} error=${e?.message || e}`);
+                                }
                             }
                         }
                     }
@@ -3086,6 +3198,16 @@ class ZaliInterface {
 
             if (sawCompatibleServerEvents) {
                 return imported;
+            }
+
+            if (undecryptableServerEvents) {
+                // На сервере есть vault-события, которые не открылись этой passphrase.
+                // Публиковать поверх них нельзя: локальные ключи здесь могут быть
+                // свежесгенерированными временными, и новое «последнее» событие
+                // затенило бы настоящие ключи для всех последующих устройств.
+                this.trace(`syncCloudVaultPackage publish skipped reason=${reason} undecryptable_server_events=true`);
+                this.addLogEntry({ type: 'WARN', msg: 'Cloud vault: события на сервере не расшифровались текущей passphrase, публикация ключей пропущена', ts: new Date().toLocaleTimeString() });
+                return false;
             }
 
             const payload = this.buildVaultPlainPayload('');
@@ -3187,7 +3309,10 @@ class ZaliInterface {
         for (const [scope, key] of entries) {
             const peer = this.peerFromConversationScope(scope);
             if (!peer) continue;
-            if (await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}` })) {
+            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}` });
+            // 'no_devices' is truthy but means nothing was delivered — the peer has
+            // no registered devices yet, so the envelope must be retried later.
+            if (result === true) {
                 published += 1;
             }
         }
@@ -3266,6 +3391,10 @@ class ZaliInterface {
         if (!this.S.session?.token) return;
         const identity = await this.timeStage('  ├ ensureDeviceCryptoIdentity', () => this.ensureDeviceCryptoIdentity());
         this.S.deviceTrust.current = identity;
+        // Persist to the native shell now that the user is authenticated: ensureDeviceCryptoIdentity
+        // returns early (no saveDeviceIdentity) when the identity is already complete, so the
+        // in-memory identity might never have been mirrored to the native per-user file yet.
+        this.persistDeviceIdentityToNative(identity);
         try {
             const res = await this.timeStage('  ├ devices.register(POST)', () => this.apiFetch(this.apiRoutes.devices.list, {
                 method: 'POST',
@@ -4170,6 +4299,23 @@ class ZaliInterface {
         }) || null;
     }
 
+    cachePendingOutboxAttachments(clientId, attachments) {
+        const key = String(clientId || '').trim();
+        if (!key) return;
+        // localStorage persists outbox attachments without dataUrl (quota), so the
+        // payload needed for a retry lives only in this in-session cache.
+        const withData = this.normalizeAttachments(attachments).filter(att => att.dataUrl);
+        if (!withData.length) return;
+        if (!this._outboxAttachmentCache) this._outboxAttachmentCache = new Map();
+        this._outboxAttachmentCache.set(key, withData);
+    }
+
+    getPendingOutboxAttachments(clientId) {
+        const key = String(clientId || '').trim();
+        if (!key || !this._outboxAttachmentCache) return [];
+        return this._outboxAttachmentCache.get(key) || [];
+    }
+
     enqueuePendingOutbox(message) {
         if (!message || typeof message !== 'object') return;
         const pending = this.loadPendingOutbox();
@@ -4220,6 +4366,7 @@ class ZaliInterface {
         if (!pendingId) return;
         this.trace(`dropPendingOutbox clientId=${pendingId}`);
         this.clearSendWatchdog(pendingId);
+        if (this._outboxAttachmentCache) this._outboxAttachmentCache.delete(pendingId);
         const pending = this.loadPendingOutbox().filter(item => String(item.clientId || '').trim() !== pendingId);
         this.savePendingOutbox(pending);
     }
@@ -4359,6 +4506,7 @@ class ZaliInterface {
             const key = serverId && channelId
                 ? this.ensureConversationCryptoKey({ serverId, channelId, reason: 'recoverOrphanSendingMessages' })
                 : this.ensureConversationCryptoKey({ peer: receiver, reason: 'recoverOrphanSendingMessages' });
+            this.cachePendingOutboxAttachments(msg?.clientId, msg?.attachments);
             this.enqueuePendingOutbox({
                 ...msg,
                 receiver,
@@ -4395,6 +4543,7 @@ class ZaliInterface {
     }
 
     isPendingMessageAlreadyLoaded(item) {
+        const clientId = String(item.clientId || '').trim();
         const attachmentsKey = this.normalizeAttachments(item.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|');
         const text = String(item.text || '');
         const sender = String(item.sender || '');
@@ -4402,33 +4551,30 @@ class ZaliInterface {
         const serverId = String(item.serverId || '').trim();
         const channelId = String(item.channelId || '').trim();
 
-        if (serverId && channelId) {
-            const key = `${serverId}:${channelId}`;
-            const msgs = this.S.serverChats[key] || [];
-            return msgs.some(msg => {
-                if (String(msg.status || '').trim() !== 'sent') return false;
-                if (msg.error) return false;
-                if (String(msg.clientId || msg.client_id || '').trim() === String(item.clientId || '').trim()) return false;
-                const msgAttachments = this.normalizeAttachments(msg.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|');
-                return String(msg.sender || '') === sender &&
-                    String(msg.receiver || '') === receiver &&
-                    String(msg.text || '') === text &&
-                    msgAttachments === attachmentsKey;
-            });
-        }
-
-        const peer = sender === this.myName() ? receiver : sender;
-        const msgs = this.S.chats[peer] || [];
-        return msgs.some(msg => {
+        const matchesDelivered = (msg) => {
             if (String(msg.status || '').trim() !== 'sent') return false;
             if (msg.error) return false;
-            if (String(msg.id || '').trim() === String(item.clientId || '').trim()) return false;
+            if (clientId) {
+                // Only the same clientId echoed back by the server proves delivery.
+                // Content equality is not proof: two distinct messages with identical
+                // text/attachments would wrongly drop the second one from the outbox,
+                // leaving its bubble stuck in "sending" forever.
+                return String(msg.clientId || msg.client_id || '').trim() === clientId;
+            }
             const msgAttachments = this.normalizeAttachments(msg.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|');
             return String(msg.sender || '') === sender &&
                 String(msg.receiver || '') === receiver &&
                 String(msg.text || '') === text &&
                 msgAttachments === attachmentsKey;
-        });
+        };
+
+        if (serverId && channelId) {
+            const msgs = this.S.serverChats[`${serverId}:${channelId}`] || [];
+            return msgs.some(matchesDelivered);
+        }
+
+        const peer = sender === this.myName() ? receiver : sender;
+        return (this.S.chats[peer] || []).some(matchesDelivered);
     }
 
     flushPendingOutbox() {
@@ -4452,7 +4598,15 @@ class ZaliInterface {
             if (!item || typeof item !== 'object') continue;
             if (currentUser && String(item.sender || '').trim() !== currentUser) continue;
             if (Number(item.nextRetryAt || 0) > now) continue;
-            if (item.inFlight) continue;
+            if (item.inFlight) {
+                // A native send result can get lost (bridge reloaded mid-send, response
+                // dropped). Without this, the item stays inFlight forever and the message
+                // is only retried after a WS reconnect kick or app restart.
+                const stalledMs = now - Number(item.lastAttemptAt || 0);
+                if (!Number.isFinite(stalledMs) || stalledMs < 45000) continue;
+                this.trace(`flushPendingOutbox stalled inFlight cleared clientId=${String(item.clientId || '').trim()} stalledMs=${Math.round(stalledMs)}`);
+                item.inFlight = false;
+            }
             if (inFlightCount >= MAX_CONCURRENT_SENDS) {
                 this.trace(`flushPendingOutbox throttled inFlight=${inFlightCount} cap=${MAX_CONCURRENT_SENDS}`);
                 this.scheduleFlushPendingOutbox(800);
@@ -4479,6 +4633,23 @@ class ZaliInterface {
                 continue;
             }
 
+            const declaredAttachments = this.normalizeAttachments(item.attachments);
+            let outAttachments = declaredAttachments.filter(att => att.dataUrl);
+            if (declaredAttachments.length && !outAttachments.length) {
+                outAttachments = this.getPendingOutboxAttachments(item.clientId).filter(att => att.dataUrl);
+            }
+            if (declaredAttachments.length && !outAttachments.length) {
+                // The attachment bytes are gone (dataUrl is not persisted across
+                // restarts). Sending now would deliver the message without its files —
+                // or completely empty for attachment-only messages. Fail it visibly
+                // instead of silently delivering wrong content.
+                this.trace(`flushPendingOutbox attachments lost clientId=${String(item.clientId || '').trim()} declared=${declaredAttachments.length}`);
+                this.markMessageStatus(item.clientId, 'error');
+                this.dropPendingOutbox(item.clientId);
+                this.addLogEntry({ type: 'ERROR', msg: 'Вложения сообщения утеряны после перезапуска, отправка отменена. Прикрепите файлы заново.', ts: new Date().toLocaleTimeString() });
+                continue;
+            }
+
             item.attemptCount = Number(item.attemptCount || 0) + 1;
             item.lastAttemptAt = now;
             item.nextRetryAt = now + Math.min(30000, Math.max(1500, 1000 * Math.min(item.attemptCount, 6)));
@@ -4497,7 +4668,7 @@ class ZaliInterface {
                 key: itemKey,
                 keyVersion: Number(item.keyVersion || 2),
                 clientId: item.clientId,
-                attachments: this.normalizeAttachments(item.attachments).filter(att => att.dataUrl).map(att => ({
+                attachments: outAttachments.map(att => ({
                     name: att.name,
                     mimeType: att.mimeType,
                     kind: att.kind,
@@ -7152,7 +7323,9 @@ class ZaliInterface {
                         candidateType: this.describeIceCandidate(event.candidate.candidate).type,
                         address: this.describeIceCandidate(event.candidate.candidate).address,
                     });
-                    this.renderVoicePanel();
+                    // ICE candidates arrive in bursts (dozens within a second); a full
+                    // panel re-render per candidate is wasted work — coalesce them.
+                    this.scheduleRenderVoicePanel();
                 } else {
                     this.voiceTrace('ice-candidate-end', {
                         peer: name,
@@ -8178,6 +8351,24 @@ class ZaliInterface {
         if (eventType === 'voice_call_invite') {
             const from = String(payload.from || '').trim();
             const roomId = String(payload.roomId || '').trim();
+            // Busy guard: an invite used to overwrite voice state unconditionally —
+            // an incoming call from a third user mid-call clobbered callTrack /
+            // incomingInvite and flipped the UI to "входящий звонок", killing the
+            // active call's state (the RTCPeerConnections kept running headless).
+            // Auto-reject instead; the server allows the target of a ringing room
+            // to reject it, so the caller gets a normal voice_call_rejected.
+            const activeRoomId = String(this.voice.roomId || '').trim();
+            const busy = activeRoomId && activeRoomId !== roomId && this.isInActiveCall();
+            if (busy) {
+                this.voiceTrace('incoming-invite-busy', { roomId, from, activeRoomId, status: this.voice.status }, 'WARN');
+                this.sendVoiceEvent({
+                    type: 'voice_call_reject',
+                    roomId,
+                    inviter: from,
+                });
+                this.addLogEntry({ type: 'INFO', msg: `Входящий звонок от ${from} отклонён: уже идёт другой звонок`, ts: new Date().toLocaleTimeString() });
+                return;
+            }
             this.voice.incomingInvite = {
                 roomId,
                 from,
@@ -8343,7 +8534,14 @@ class ZaliInterface {
             const roomTarget = String(payload.target || '').trim();
             const participants = Array.isArray(payload.participants) ? payload.participants.map(name => String(name || '').trim()).filter(Boolean) : [];
             const currentRoomId = String(this.voice.roomId || '').trim();
-            if (this.voice.roomType === 'dm' && currentRoomId && roomId && roomId !== currentRoomId) {
+            // Foreign-room guard for ANY active call, not just dm→dm: a user sitting in
+            // a channel voice room is made a participant of a new ringing DM room the
+            // moment someone invites them, so the broadcastVoiceRoomState for that new
+            // room arrives here and used to overwrite roomId/participants/status of the
+            // channel session. Only room states for the room we are actually in may
+            // mutate live call state while a call is in progress.
+            const inActiveCall = this.isInActiveCall();
+            if (currentRoomId && roomId && roomId !== currentRoomId && (this.voice.roomType === 'dm' || inActiveCall)) {
                 this.voiceTrace('room-state-stale', { roomId, currentRoomId }, 'INFO');
                 return;
             }
@@ -8576,6 +8774,16 @@ class ZaliInterface {
                 ` : ''}
             </div>
         `;
+    }
+
+    // Coalesces bursts of voice-panel refreshes (ICE candidate storms, rapid state
+    // flips) into one render per window instead of one innerHTML rebuild per event.
+    scheduleRenderVoicePanel(delayMs = 100) {
+        if (this._voicePanelRenderTimer) return;
+        this._voicePanelRenderTimer = setTimeout(() => {
+            this._voicePanelRenderTimer = null;
+            this.renderVoicePanel();
+        }, Math.max(0, Number(delayMs) || 0));
     }
 
     renderVoicePanel() {
@@ -9190,6 +9398,11 @@ class ZaliInterface {
         if (persist) {
             this.saveStoredNavMode(next);
         }
+        // Returning to the DM view makes the selected chat visible again — clear the
+        // unread counter it may have accrued while the servers view was covering it.
+        if (next === 'dm' && this.S.current) {
+            this.S.unread[this.S.current] = 0;
+        }
         this.updateNavModeButtons();
         if (!refresh) return;
         this.resetMessageWindow();
@@ -9712,19 +9925,29 @@ class ZaliInterface {
         return this.nativeApiResponse(payload);
     }
 
-    async _acquireApiSlot() {
+    async _acquireApiSlot(interactive = false) {
         const MAX = 5;
         if (!this._apiWaiters) this._apiWaiters = [];
+        if (!this._apiWaitersHigh) this._apiWaitersHigh = [];
         if ((this._apiInFlight || 0) < MAX) {
             this._apiInFlight = (this._apiInFlight || 0) + 1;
             return;
         }
-        await new Promise(resolve => this._apiWaiters.push(resolve));
+        // Interactive (user-clicked) requests jump ahead of queued background
+        // maintenance calls (contacts/users/servers refresh, key republish, cloud
+        // vault backup — all fired in bursts from postAuthSetup) instead of waiting
+        // behind however many of those already queued first. Without this, clicking
+        // "add contact" during that startup burst could sit queued long enough to
+        // look like the click did nothing, when it was really just stuck in line.
+        const queue = interactive ? this._apiWaitersHigh : this._apiWaiters;
+        await new Promise(resolve => queue.push(resolve));
         // The slot was handed to us by _releaseApiSlot (count already reserved).
     }
 
     _releaseApiSlot() {
-        const next = (this._apiWaiters && this._apiWaiters.length) ? this._apiWaiters.shift() : null;
+        const next = (this._apiWaitersHigh && this._apiWaitersHigh.length)
+            ? this._apiWaitersHigh.shift()
+            : (this._apiWaiters && this._apiWaiters.length) ? this._apiWaiters.shift() : null;
         if (next) {
             next(); // hand the in-flight slot straight to the next waiter
         } else {
@@ -9737,7 +9960,7 @@ class ZaliInterface {
     // vault tickets, key republish) would exhaust it and make the NEXT request stall
     // for the full 12s timeout. Capping in-flight requests keeps the pool healthy.
     async apiFetch(path, options = {}) {
-        await this._acquireApiSlot();
+        await this._acquireApiSlot(!!options.interactive);
         try {
             return await this._apiFetchImpl(path, options);
         } finally {
@@ -9752,6 +9975,7 @@ class ZaliInterface {
             includeDeviceId = false,
             allowSessionInvalidation = false,
             timeoutMs = 0,
+            interactive = false,
             headers: optionHeaders,
             ...fetchOptions
         } = options || {};
@@ -9986,6 +10210,16 @@ class ZaliInterface {
         this.trace(`applySession username=${username} tokenSet=${!!token} guest=${guest} persist=${persist} syncNative=${syncNative}`);
 
         if (previousUsername !== username || previousToken !== token) {
+            // A deferred cache save scheduled under the OLD account must land now,
+            // while _userSuffix() still resolves to that account — once the session
+            // switches, the debounced timer would write the old user's chats under
+            // the new user's storage key.
+            this.flushPendingMessageCacheSave();
+            // The one-shot cloud-vault fetch guard is per-account: without resetting it,
+            // the next account logged in during this page session would skip its own
+            // on-demand vault fetch and mint a temporary key instead of adopting the
+            // real key from its vault (key divergence on the account-switch flow).
+            this._cloudVaultResolveFetchDone = false;
             this.S.current = null;
             this.S.activeServer = null;
             this.S.activeChannel = null;
@@ -10017,8 +10251,8 @@ class ZaliInterface {
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))
-                .filter(u => u !== username);
-            this.S.contacts.forEach(u => this.initChat(u));
+                .filter(contact => contact !== username);
+            this.S.contacts.forEach(contact => this.initChat(contact));
             this.lastNativeConversationKeySignature = '';
             this.syncNativeConversationKeys(this.loadStoredConversationKeys());
         }
@@ -10128,12 +10362,12 @@ class ZaliInterface {
     getContactSuggestions(query = '') {
         const q = String(query || '').trim().toLowerCase();
         const me = this.myName();
-        const existing = new Set((this.S.contacts || []).map(u => String(u).toLowerCase()));
+        const existing = new Set((this.S.contacts || []).map(contact => String(contact).toLowerCase()));
         return (this.S.users || [])
             .filter(Boolean)
-            .filter(u => u !== me)
-            .filter(u => !existing.has(String(u).toLowerCase()))
-            .filter(u => !q || String(u).toLowerCase().includes(q))
+            .filter(contact => contact !== me)
+            .filter(contact => !existing.has(String(contact).toLowerCase()))
+            .filter(contact => !q || String(contact).toLowerCase().includes(q))
             .slice(0, 8);
     }
 
@@ -10401,6 +10635,7 @@ class ZaliInterface {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password }),
                     timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
+                    interactive: true,
                 });
             };
 
@@ -10820,6 +11055,7 @@ class ZaliInterface {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username }),
+                    interactive: true,
                 });
             };
 
@@ -10881,7 +11117,7 @@ class ZaliInterface {
                 this.setContacts(Array.isArray(payload?.data?.contacts) ? payload.data.contacts : []);
                 return;
             }
-            const res = await this.apiFetch(this.apiRoutes.contacts.byUsername(username), { method: 'DELETE' });
+            const res = await this.apiFetch(this.apiRoutes.contacts.byUsername(username), { method: 'DELETE', interactive: true });
             if (!res.ok) {
                 const text = await res.text();
                 throw new Error(text || 'Не удалось удалить контакт');
@@ -11623,13 +11859,13 @@ class ZaliInterface {
         const q = String(this.S.searchQ || '').toLowerCase();
         const me = this.myName();
         return (this.S.contacts || [])
-            .filter(u => u !== me && (!q || String(u || '').toLowerCase().includes(q)))
-            .map((u, index) => ({
-                name: u,
-                lastMessageAt: this.conversationLastMessageAt(u),
-                unread: Number(this.S.unread?.[u] || 0),
-                lastKey: this.messageRenderKey((this.S.chats?.[u] || []).slice(-1)[0] || {}),
-                active: u === this.S.current ? 1 : 0,
+            .filter(contact => contact !== me && (!q || String(contact || '').toLowerCase().includes(q)))
+            .map((contact, index) => ({
+                name: contact,
+                lastMessageAt: this.conversationLastMessageAt(contact),
+                unread: Number(this.S.unread?.[contact] || 0),
+                lastKey: this.messageRenderKey((this.S.chats?.[contact] || []).slice(-1)[0] || {}),
+                active: contact === this.S.current ? 1 : 0,
                 index,
             }))
             .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
@@ -11822,10 +12058,10 @@ class ZaliInterface {
         }
         const q = this.S.searchQ.toLowerCase();
         const list = this.S.contacts
-            .filter(u => u !== this.myName() && (!q || u.toLowerCase().includes(q)))
-            .map((u, index) => ({
-                name: u,
-                lastMessageAt: this.conversationLastMessageAt(u),
+            .filter(contact => contact !== this.myName() && (!q || contact.toLowerCase().includes(q)))
+            .map((contact, index) => ({
+                name: contact,
+                lastMessageAt: this.conversationLastMessageAt(contact),
                 index,
             }))
             .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
@@ -11836,25 +12072,25 @@ class ZaliInterface {
             return;
         }
 
-        el.innerHTML = list.map(u => {
-            this.initChat(u);
-            const msgs = this.S.chats[u];
+        el.innerHTML = list.map(contact => {
+            this.initChat(contact);
+            const msgs = this.S.chats[contact];
             const last = msgs[msgs.length-1];
             let preview = '<span style="color:var(--text3);font-style:italic;font-size:10px">Начните диалог...</span>';
             if (last) {
                 const who = last.sender === this.myName() ? 'Вы: ' : '';
                 preview = who + this.esc(this.messageSummary(last));
             }
-            const cnt = this.S.unread[u] || 0;
+            const cnt = this.S.unread[contact] || 0;
             const badge = cnt > 0 ? `<div class="badge">${cnt > 99 ? '99+' : cnt}</div>` : '';
-            const active = u === this.S.current ? 'active' : '';
-            return `<div class="contact ${active}" data-name="${this.esc(u)}">
-                <div class="ava">${this.renderAvatarHTML(u, 'avatar-img', u)}</div>
+            const active = contact === this.S.current ? 'active' : '';
+            return `<div class="contact ${active}" data-name="${this.esc(contact)}">
+                <div class="ava">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
-                    <div class="contact-name">${this.esc(u)}</div>
+                    <div class="contact-name">${this.esc(contact)}</div>
                     <div class="contact-prev">${preview}</div>
                 </div>
-                <button class="contact-remove" type="button" data-remove-contact="${this.esc(u)}" title="Удалить контакт">×</button>
+                <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 ${badge}
             </div>`;
         }).join('');
@@ -12532,10 +12768,15 @@ class ZaliInterface {
                     key: cryptoKey,
                     reason: 'sendInputMessage',
                 }).then(published => {
-                    if (published === false) {
+                    if (published !== true) {
+                        // false = transport/server failure, 'no_devices' = peer has no
+                        // registered devices yet. Either way the envelope was not
+                        // delivered, so allow a retry on the next send.
                         this._publishedKeyScopes.delete(scope);
-                        this.trace(`sendInputMessage keyPublishFailed peer=${this.S.current} scope=${scope}`);
-                        this.addLogEntry({ type: 'WARN', msg: 'E2E-ключ не доставлен собеседнику, повтор при следующей отправке', ts: new Date().toLocaleTimeString() });
+                        this.trace(`sendInputMessage keyPublishPending peer=${this.S.current} scope=${scope} result=${published}`);
+                        if (published === false) {
+                            this.addLogEntry({ type: 'WARN', msg: 'E2E-ключ не доставлен собеседнику, повтор при следующей отправке', ts: new Date().toLocaleTimeString() });
+                        }
                     }
                 });
             }
@@ -12605,6 +12846,7 @@ class ZaliInterface {
         this.updateSendButtonState();
         inp && inp.focus();
 
+        this.cachePendingOutboxAttachments(clientId, payloadAttachments);
         this.enqueuePendingOutbox({
             ...outgoingMessage,
             key: cryptoKey,
@@ -12723,6 +12965,7 @@ class ZaliInterface {
                 msgs[existingIndex] = {
                     ...prev,
                     id: messageId || prev.id || '',
+                    clientId: clientId || prev.clientId || '',
                     sender: sender || prev.sender || '',
                     receiver: receiver || prev.receiver || '',
                     text: incomingText || prev.text || '',
@@ -12736,6 +12979,7 @@ class ZaliInterface {
             } else {
                 msgs.push({
                     id: messageId,
+                    clientId,
                     sender,
                     receiver,
                     text: incomingText,
@@ -12746,12 +12990,21 @@ class ZaliInterface {
                     serverId,
                     channelId,
                 });
-                if (sender !== this.myName() && this.currentServerChatKey() !== key) {
+                // "Visible" requires both the matching channel AND the servers view being
+                // active — currentServerChatKey() keeps returning the selected channel
+                // even while the user is looking at DMs, which used to swallow the
+                // notification for messages arriving in that channel.
+                const channelVisible = this.isServerChatVisible(key);
+                if (sender !== this.myName() && !channelVisible) {
                     this.postNativeMessage({ type: NativeMessageTypes.SHOW_NOTIFICATION, sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId: serverId || null, channelId: channelId || null });
                 }
             }
-            this.saveStoredMessageCache();
-            if (this.currentServerChatKey() === key) {
+            this.scheduleSaveStoredMessageCache();
+            // Only render the channel's message list when it is actually the visible view.
+            // currentServerChatKey() still returns the selected channel while the user is
+            // in the DM view, so rendering on that alone painted channel messages into the
+            // DM pane (and wasted work). Mirror the notification-visibility check above.
+            if (this.isServerChatVisible(key)) {
                 this.scheduleRenderMessages();
             } else {
                 this.renderServerInterface();
@@ -12787,6 +13040,7 @@ class ZaliInterface {
             msgs[existingIndex] = {
                 ...prev,
                 id: messageId || prev.id || '',
+                clientId: clientId || prev.clientId || '',
                 sender: sender || prev.sender || '',
                 receiver: receiver || prev.receiver || '',
                 text: incomingText || prev.text || '',
@@ -12798,6 +13052,7 @@ class ZaliInterface {
         } else {
             msgs.push({
                 id: messageId,
+                clientId,
                 sender,
                 receiver,
                 text: incomingText,
@@ -12806,20 +13061,28 @@ class ZaliInterface {
                 myReaction: myReaction || '',
                 timestamp: ts
             });
-            if (sender !== this.myName() && peer !== this.S.current) {
+            // A DM is only truly visible when its chat is selected AND the DM view is
+            // active — while the user is in the servers view the selected DM peer is
+            // off-screen, and this notification used to be swallowed for it.
+            const dmVisible = this.isDmChatVisible(peer);
+            if (sender !== this.myName() && !dmVisible) {
                 this.postNativeMessage({ type: NativeMessageTypes.SHOW_NOTIFICATION, sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId: null, channelId: null });
             }
         }
-        this.saveStoredMessageCache();
+        this.scheduleSaveStoredMessageCache();
         if (!this.S.current) {
             this.switchChat(peer);
         }
-        if (peer === this.S.current) {
+        if (this.isDmChatVisible(peer)) {
             this.scheduleRenderMessages();
-            } else {
+        } else {
+            // Own echoes (this account sending from another device/session) must not
+            // mark the conversation unread — only messages someone else wrote count.
+            if (sender !== this.myName()) {
                 this.S.unread[peer] = (this.S.unread[peer] || 0) + 1;
-                this.renderContacts();
             }
+            this.renderContacts();
+        }
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
 
@@ -12837,10 +13100,29 @@ class ZaliInterface {
         this.scheduleAvatarRefresh();
     }
 
+    // Single source of truth for "is this conversation currently on screen". The
+    // notification-suppression, render, and unread-clear paths must all agree on this;
+    // spelling it out inline at each site is how they drifted apart before.
+    isServerChatVisible(key) {
+        return this.currentServerChatKey() === key && this.S.navMode === 'servers';
+    }
+
+    isDmChatVisible(peer) {
+        return !!peer && peer === this.S.current && this.S.navMode !== 'servers';
+    }
+
+    // The set of statuses that mean "a call is live and must not be clobbered". Both the
+    // incoming-invite busy-guard and the foreign-room-state guard key off this exact set;
+    // inlining it twice risks one copy going stale and silently re-opening the
+    // active-call-clobber bug.
+    isInActiveCall(status = this.voice?.status) {
+        return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
+    }
+
     setUsers(users) {
         this.S.users = Array.isArray(users) ? users : [];
-        this.S.users.forEach(u => this.initChat(u));
-        const others = this.S.users.filter(u => u !== this.myName());
+        this.S.users.forEach(contact => this.initChat(contact));
+        const others = this.S.users.filter(contact => contact !== this.myName());
         if (this.S.navMode !== 'servers' && !this.S.current && this.S.contacts.length > 0) this.switchChat(this.S.contacts[0]);
         this.trace(`setUsers count=${this.S.users.length} others=${others.join(',')}`);
         this.addLogEntry({ type: 'INFO', msg: `Загружен список пользователей: ${others.join(', ')}`, ts: new Date().toLocaleTimeString() });
@@ -12852,9 +13134,9 @@ class ZaliInterface {
         const remoteContacts = Array.isArray(contacts) ? contacts.filter(Boolean) : [];
         const localContacts = this.localConversationContacts();
         this.S.contacts = Array.from(new Set([...remoteContacts, ...localContacts]))
-            .filter(u => u !== me);
+            .filter(contact => contact !== me);
         this.saveStoredContacts(this.S.contacts);
-        this.S.contacts.forEach(u => this.initChat(u));
+        this.S.contacts.forEach(contact => this.initChat(contact));
         this.trace(`setContacts count=${this.S.contacts.length} me=${me} contacts=${this.S.contacts.join(',')}`);
         if (this.S.navMode !== 'servers') {
             const storedCurrent = this.loadStoredCurrentContact();
@@ -13056,10 +13338,86 @@ class ZaliInterface {
                 this._reconnectRefreshTimer = setTimeout(() => {
                     this._reconnectRefreshTimer = null;
                     void this.syncActiveConversation({ force: true });
+                    // Only the ACTIVE conversation was ever caught up above — a message
+                    // sent to any OTHER contact while we were offline had nothing pulling
+                    // it in: no WS push (we were offline when it fired) and no history
+                    // refresh (only the open chat gets one). It sat on the server
+                    // forever, invisible, until the user happened to click that exact
+                    // contact — which also explains "contact doesn't appear when someone
+                    // writes to you first" for a brand-new sender. Confirmed live
+                    // 2026-07-04: a message server-confirmed as delivered to test1 never
+                    // reached test3 across a reconnect because test3's client never had
+                    // that DM open. Catch up every other known contact too, same as the
+                    // active one; loadHistory() is peer-generic (ensureContact + merge
+                    // into S.chats[peer]) so this is safe for any contact, not just the
+                    // open one.
+                    // Throttle the full-sweep catch-ups: each walks every contact and
+                    // every channel of every server with sequential history refreshes.
+                    // On a flaky link that flaps repeatedly, running the whole sweep on
+                    // every reconnect saturates the connection pool ("чат не грузит").
+                    // At most once per window is enough to catch up missed history.
+                    const catchUpNow = Date.now();
+                    if (catchUpNow - (this._lastReconnectCatchUpAt || 0) >= 20000) {
+                        this._lastReconnectCatchUpAt = catchUpNow;
+                        void this.catchUpBackgroundContactsAfterReconnect();
+                        // Same class of bug as the DM catch-up above, for server channels:
+                        // deliver_server_message (src/main.rs) only pushes to currently
+                        // connected viewers via WS — a channel message posted while this
+                        // client was offline, or simply in a channel/server you weren't
+                        // looking at, has nothing pulling it in afterwards. Only the
+                        // actively open channel got a history refresh; every other channel
+                        // in every other server the user belongs to stayed stale until
+                        // manually clicked.
+                        void this.catchUpBackgroundChannelsAfterReconnect();
+                    }
                 }, 500);
             }
         } else {
             this._reconnectCaughtUp = false;
+        }
+    }
+
+    async catchUpBackgroundContactsAfterReconnect() {
+        if (!this.S.session?.token || !this.nativeSupports('sendMessage')) return;
+        // this.S.contacts may still be empty here: bootstrapSession's own loadContacts()
+        // is an independent async call racing against this reconnect timer, and on a
+        // fresh launch/reconnect right after login it hadn't necessarily resolved yet —
+        // an empty list made this whole catch-up silently iterate zero peers. Refresh
+        // it ourselves first so the contact list is authoritative regardless of timing.
+        await this.loadContacts();
+        const activePeer = String(this.S.current || '').trim();
+        const peers = (this.S.contacts || []).filter(peer => peer && peer !== activePeer);
+        for (const peer of peers) {
+            try {
+                const key = await this.resolveConversationCryptoKey({ peer, reason: 'reconnectCatchUp' });
+                this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer });
+            } catch (e) {
+                this.trace(`catchUpBackgroundContactsAfterReconnect failed peer=${peer} error=${e?.message || e}`);
+            }
+        }
+    }
+
+    async catchUpBackgroundChannelsAfterReconnect() {
+        if (!this.S.session?.token) return;
+        // Same staleness-on-launch race as loadContacts() above: refresh the server
+        // list ourselves rather than trusting whatever bootstrapSession's independent
+        // loadServers() call has resolved by now.
+        await this.loadServers({ silent: true });
+        const activeServer = String(this.S.activeServer || '').trim();
+        const activeChannel = String(this.S.activeChannel || '').trim();
+        for (const server of this.S.servers || []) {
+            const sid = String(server?.id || '').trim();
+            if (!sid) continue;
+            for (const channel of server.channels || []) {
+                const cid = String(channel?.id || '').trim();
+                if (!cid || this.isVoiceChannel(channel)) continue;
+                if (sid === activeServer && cid === activeChannel) continue;
+                try {
+                    await this.loadServerMessages(sid, cid, { silent: true });
+                } catch (e) {
+                    this.trace(`catchUpBackgroundChannelsAfterReconnect failed server=${sid} channel=${cid} error=${e?.message || e}`);
+                }
+            }
         }
     }
 
@@ -13160,7 +13518,7 @@ class ZaliInterface {
         }
 
         if (updated) {
-            this.saveStoredMessageCache();
+            this.scheduleSaveStoredMessageCache();
             const currentServerKey = this.currentServerChatKey();
             const currentPeer = String(this.S.current || '').trim();
             const payloadServerKey = String(payload.serverId || payload.server_id || '').trim() && String(payload.channelId || payload.channel_id || '').trim()

@@ -22,6 +22,7 @@
     "UPLOAD_AVATAR_REQUEST": { "fields": ["dataUrl", "mimeType", "filename", "requestId"] },
     "DELETE_AVATAR_REQUEST": { "fields": ["requestId"] },
     "LOAD_AVATAR_REQUEST": { "fields": ["username", "requestId"] },
-    "SHOW_NOTIFICATION": { "fields": ["sender", "text", "attachmentCount", "serverId", "channelId"] }
+    "SHOW_NOTIFICATION": { "fields": ["sender", "text", "attachmentCount", "serverId", "channelId"] },
+    "PERSIST_DEVICE_IDENTITY": { "fields": ["username", "identity"] }
   }
 }
