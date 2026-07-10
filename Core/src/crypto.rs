@@ -311,4 +311,71 @@ mod tests {
 
         assert_eq!(decrypted["text"].as_str(), Some(text));
     }
+
+    #[test]
+    fn decrypt_with_wrong_key_fails_authentication() {
+        let encrypted = encrypt_message_text("top secret", "right-key").unwrap();
+        let result = decrypt_message_text(&encrypted, "wrong-key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_tampered_ciphertext() {
+        let encrypted = encrypt_message_text("do not tamper", "a-key").unwrap();
+        // Flip a character deep in the base64 ciphertext segment (after the
+        // third ':') so the AES-GCM tag no longer matches.
+        let last_colon = encrypted.rfind(':').unwrap();
+        let mut bytes = encrypted.into_bytes();
+        let flip_at = last_colon + 5;
+        bytes[flip_at] = if bytes[flip_at] == b'A' { b'B' } else { b'A' };
+        let tampered = String::from_utf8(bytes).unwrap();
+
+        let result = decrypt_message_text(&tampered, "a-key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_rejects_empty_key() {
+        let result = encrypt_message_text("hello", "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_passes_through_plaintext_with_no_known_prefix() {
+        // Messages with no recognized ZALIENC prefix are treated as
+        // already-plaintext (e.g. legacy unencrypted content) rather than
+        // rejected — decrypt_message_text must not corrupt or reject them.
+        let result = decrypt_message_text("just a plain string", "any-key").unwrap();
+        assert_eq!(result, "just a plain string");
+    }
+
+    #[test]
+    fn decrypt_rejects_malformed_v3_payload() {
+        let result = decrypt_message_text("ZALIENCv3:not-enough-parts", "key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_v3_payload_with_low_iteration_count() {
+        let result = decrypt_message_text("ZALIENCv3:100:c2FsdA==:bm9uY2U=:Y2lwaGVy", "key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn legacy_xor_payloads_are_rejected_when_compat_flag_is_unset() {
+        // ZALI_ENABLE_LEGACY_XOR is not set in the test environment, so this
+        // must fail closed rather than silently decrypt via the weak XOR path.
+        let result = decrypt_message_text("ZALIENC:c29tZWJhc2U2NA==:deadbeef", "key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn different_keys_produce_different_ciphertext_for_same_text() {
+        let a = encrypt_message_text("same text", "key-a").unwrap();
+        let b = encrypt_message_text("same text", "key-b").unwrap();
+        assert_ne!(a, b);
+        // And each only decrypts under its own key.
+        assert!(decrypt_message_text(&a, "key-b").is_err());
+        assert!(decrypt_message_text(&b, "key-a").is_err());
+    }
 }

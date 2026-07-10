@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "zali-server",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "zali_server"],
+      "port": 3000
+    }
+  ]
+}

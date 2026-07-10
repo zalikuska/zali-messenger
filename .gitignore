@@ -32,3 +32,4 @@ dist/
 macOS/ZaliMessenger/Frameworks/*.a
 DerivedData/
 *.xcuserdata/
+zali-windows-source/

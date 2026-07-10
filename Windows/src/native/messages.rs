@@ -14,9 +14,9 @@ use futures_util::{stream, StreamExt};
 use zali_messenger_core::{zali_bus_dispatch, zali_bus_free_string};
 
 use crate::native::{
-    AppEvent, cache_decrypted_message, cached_decrypted_message, candidate_message_keys,
-    dispatch_ui_event, http_client, json_string_literal, retry_with_backoff,
-    sanitize_file_name, trace, UiBusEvent, UploadError,
+    cache_decrypted_message, cached_decrypted_message, candidate_message_keys, dispatch_ui_event,
+    http_client, json_string_literal, new_request_id, retry_with_backoff, sanitize_file_name,
+    trace, ApiSession, AppEvent, UiBusEvent, UploadError,
 };
 
 pub(crate) fn dispatch_core_command(address_command: &str, args: Value) -> Result<Value, String> {
@@ -68,18 +68,36 @@ pub(crate) fn pack_message(
     }
 }
 
+/// Metadata for a packed .zali archive being uploaded via /api/upload.
+pub(crate) struct OutgoingMessage {
+    pub sender: String,
+    pub receiver: String,
+    pub client_id: String,
+    pub archive_path: PathBuf,
+    pub server_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub key_version: u8,
+}
+
 pub(crate) async fn upload_message(
-    api_base_url: String,
-    auth_token: Option<String>,
-    device_id: String,
-    sender: String,
-    receiver: String,
-    client_id: String,
-    file_url: PathBuf,
-    server_id: Option<String>,
-    channel_id: Option<String>,
-    key_version: u8,
+    session: ApiSession,
+    message: OutgoingMessage,
 ) -> Result<Option<String>, UploadError> {
+    let ApiSession {
+        api_base_url,
+        auth_token,
+        device_id,
+    } = session;
+    let OutgoingMessage {
+        sender,
+        receiver,
+        client_id,
+        archive_path: file_url,
+        server_id,
+        channel_id,
+        key_version,
+    } = message;
+    let client_id_for_trace = client_id.clone();
     let url = format!("{}/api/upload", api_base_url.trim_end_matches('/'));
     let file = tokio::fs::File::open(&file_url)
         .await
@@ -109,7 +127,11 @@ pub(crate) async fn upload_message(
         }
     }
 
-    let mut request = client.post(url).multipart(form);
+    let http_request_id = new_request_id();
+    let mut request = client
+        .post(url)
+        .header("X-Request-ID", &http_request_id)
+        .multipart(form);
     if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
         request = request.bearer_auth(token);
     }
@@ -117,10 +139,30 @@ pub(crate) async fn upload_message(
         request = request.header("X-Zali-Device-ID", device_id);
     }
 
-    let response = request.send().await.map_err(UploadError::from_reqwest)?;
+    trace(format!(
+        "upload_message start http_request_id={} client_id={}",
+        http_request_id, client_id_for_trace
+    ));
+
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            trace(format!(
+                "upload_message transport_error http_request_id={} client_id={} err={}",
+                http_request_id, client_id_for_trace, error
+            ));
+            return Err(UploadError::from_reqwest(error));
+        }
+    };
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
+        trace(format!(
+            "upload_message http_fail http_request_id={} client_id={} status={}",
+            http_request_id,
+            client_id_for_trace,
+            status.as_u16()
+        ));
         return Err(UploadError::http(status.as_u16(), body));
     }
 
@@ -131,6 +173,11 @@ pub(crate) async fn upload_message(
             .map(|s| s.to_string()),
         Err(_) => None,
     };
+
+    trace(format!(
+        "upload_message done http_request_id={} client_id={} message_id={:?}",
+        http_request_id, client_id_for_trace, message_id
+    ));
 
     Ok(message_id)
 }
@@ -253,8 +300,14 @@ pub(crate) async fn fetch_server_messages_page(
     ))
     .map_err(|e| e.to_string())?;
     {
-        let mut segments = url.path_segments_mut().map_err(|_| "cannot-be-base".to_string())?;
-        segments.push(&server_id).push("channels").push(&channel_id).push("messages");
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "cannot-be-base".to_string())?;
+        segments
+            .push(&server_id)
+            .push("channels")
+            .push(&channel_id)
+            .push("messages");
     }
     url.set_query(Some(&format!("limit={}&offset={}", limit, offset)));
     let url = url.to_string();
@@ -357,7 +410,8 @@ pub(crate) async fn download_message(
         .push(&message_id);
     let url = url.to_string();
     let client = http_client();
-    let mut request = client.get(url);
+    let http_request_id = new_request_id();
+    let mut request = client.get(url).header("X-Request-ID", &http_request_id);
     if let Some(token) = auth_token.clone().filter(|value| !value.trim().is_empty()) {
         request = request.bearer_auth(token);
     }
@@ -365,10 +419,25 @@ pub(crate) async fn download_message(
         request = request.header("X-Zali-Device-ID", device_id);
     }
 
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    trace(format!(
+        "download_message start http_request_id={} id={}",
+        http_request_id, message_id
+    ));
+
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            trace(format!(
+                "download_message transport_error http_request_id={} id={} err={}",
+                http_request_id, message_id, error
+            ));
+            return Err(error.to_string());
+        }
+    };
     if !response.status().is_success() {
         trace(format!(
-            "download_message http_fail id={} status={}",
+            "download_message http_fail http_request_id={} id={} status={}",
+            http_request_id,
             message_id,
             response.status()
         ));
@@ -378,7 +447,10 @@ pub(crate) async fn download_message(
     let temp_dir = std::env::temp_dir().join("zali-messenger");
     let _ = tokio::fs::create_dir_all(&temp_dir).await;
     let safe_message_id = sanitize_file_name(&message_id, "zali");
-    let file_path = temp_dir.join(format!("{}.zali", safe_message_id));
+    // Unique per download (mirrors macOS's `{id}-{UUID}.zali`): a live WS push racing a
+    // history-reload/catch-up refresh of the same message id used to clobber a shared
+    // fixed-name file mid-write, producing a spurious decrypt failure for a fine message.
+    let file_path = temp_dir.join(format!("{}-{}.zali", safe_message_id, Uuid::new_v4()));
     let mut output = tokio::fs::File::create(&file_path)
         .await
         .map_err(|e| e.to_string())?;
@@ -395,6 +467,10 @@ pub(crate) async fn download_message(
             .await
             .map_err(|e| e.to_string())?;
     }
+    trace(format!(
+        "download_message done http_request_id={} id={} bytes={}",
+        http_request_id, message_id, total_written
+    ));
     Ok(file_path)
 }
 
@@ -464,9 +540,7 @@ pub(crate) fn build_history_output(
 }
 
 pub(crate) async fn process_history_record(
-    api_base_url: String,
-    auth_token: Option<String>,
-    device_id: String,
+    session: ApiSession,
     keys: Vec<String>,
     record: Value,
     context_label: &str,
@@ -498,11 +572,17 @@ pub(crate) async fn process_history_record(
         &format!("{}_download_message id={}", context_label, message_id),
         3,
         || {
-            let api_base_url = api_base_url.clone();
-            let auth_token = auth_token.clone();
-            let device_id = device_id.clone();
+            let session = session.clone();
             let message_id = message_id.clone();
-            async move { download_message(api_base_url, auth_token, device_id, message_id).await }
+            async move {
+                download_message(
+                    session.api_base_url,
+                    session.auth_token,
+                    session.device_id,
+                    message_id,
+                )
+                .await
+            }
         },
     )
     .await
@@ -702,23 +782,17 @@ pub(crate) async fn refresh_direct_history(
     ));
 
     let total_records = records.len();
+    let session = ApiSession {
+        api_base_url,
+        auth_token,
+        device_id,
+    };
     let rendered = stream::iter(records.into_iter().map(|record| {
-        let api_base_url = api_base_url.clone();
-        let auth_token = auth_token.clone();
-        let device_id = device_id.clone();
+        let session = session.clone();
         let keys = candidate_message_keys(&key, &HashMap::new(), "", &record, None, None);
         async move {
-            process_history_record(
-                api_base_url,
-                auth_token,
-                device_id.clone(),
-                keys,
-                record,
-                "refresh_direct_history",
-                None,
-                None,
-            )
-            .await
+            process_history_record(session, keys, record, "refresh_direct_history", None, None)
+                .await
         }
     }))
     .buffer_unordered(4)
@@ -805,10 +879,13 @@ pub(crate) async fn refresh_server_history(
     ));
 
     let total_records = records.len();
+    let session = ApiSession {
+        api_base_url,
+        auth_token,
+        device_id,
+    };
     let rendered = stream::iter(records.into_iter().map(|record| {
-        let api_base_url = api_base_url.clone();
-        let auth_token = auth_token.clone();
-        let device_id = device_id.clone();
+        let session = session.clone();
         let server_id = server_id.clone();
         let channel_id = channel_id.clone();
         let keys = candidate_message_keys(
@@ -821,9 +898,7 @@ pub(crate) async fn refresh_server_history(
         );
         async move {
             process_history_record(
-                api_base_url,
-                auth_token,
-                device_id.clone(),
+                session,
                 keys,
                 record,
                 "refresh_server_history",
@@ -863,4 +938,107 @@ pub(crate) async fn refresh_server_history(
         "refresh_server_history dispatch server={} channel={} rendered={}",
         server_id, channel_id, rendered_count
     ));
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn download_message_streams_body_to_a_file() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/download/msg-123"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(b"encrypted-archive-bytes".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let path = download_message(
+            server.uri(),
+            Some("token".to_string()),
+            "device-1".to_string(),
+            "msg-123".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let content = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(content, b"encrypted-archive-bytes");
+        tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn download_message_errs_on_http_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/download/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result =
+            download_message(server.uri(), None, String::new(), "missing".to_string()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn download_message_sends_a_request_id_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/download/msg-1"))
+            .and(wiremock::matchers::header_exists("X-Request-ID"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"x".to_vec()))
+            .mount(&server)
+            .await;
+
+        let path = download_message(server.uri(), None, String::new(), "msg-1".to_string())
+            .await
+            .unwrap();
+        tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn upload_message_sends_a_request_id_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/upload"))
+            .and(wiremock::matchers::header_exists("X-Request-ID"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": "msg-9" })),
+            )
+            .mount(&server)
+            .await;
+
+        let archive_path =
+            std::env::temp_dir().join(format!("zali-win-upload-test-{}.zali", std::process::id()));
+        tokio::fs::write(&archive_path, b"ZALIMSSGfake-archive-bytes")
+            .await
+            .unwrap();
+
+        let result = upload_message(
+            ApiSession {
+                api_base_url: server.uri(),
+                auth_token: None,
+                device_id: String::new(),
+            },
+            OutgoingMessage {
+                sender: "alice".to_string(),
+                receiver: "bob".to_string(),
+                client_id: "client-1".to_string(),
+                archive_path: archive_path.clone(),
+                server_id: None,
+                channel_id: None,
+                key_version: 2,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, Some("msg-9".to_string()));
+        tokio::fs::remove_file(&archive_path).await.ok();
+    }
 }

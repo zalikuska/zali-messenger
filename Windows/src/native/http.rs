@@ -5,10 +5,14 @@ use serde_json::{json, Value};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::native::trace;
 
-use crate::native::{
-    trace,
-};
+/// A fresh correlation ID for one outgoing HTTP request. Sent as
+/// `X-Request-ID` and logged locally so a `trace()` line here can be matched
+/// against the same ID in the server's access log by grep.
+pub(crate) fn new_request_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
 
 pub(crate) fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -122,7 +126,11 @@ pub(crate) fn auth_http_client() -> &'static reqwest::Client {
     })
 }
 
-pub(crate) async fn retry_with_backoff<T, F, Fut>(label: &str, attempts: usize, mut op: F) -> Result<T, String>
+pub(crate) async fn retry_with_backoff<T, F, Fut>(
+    label: &str,
+    attempts: usize,
+    mut op: F,
+) -> Result<T, String>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, String>>,
@@ -150,3 +158,94 @@ where
 // Merge the immutable decrypted payload ({sender, text, attachments}) with the
 // volatile fields of the freshly fetched server record (reactions, timestamps, ids)
 // into the shape window.loadHistory()/receiveMessage() expects.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn retry_with_backoff_returns_first_success_without_retrying() {
+        let calls = AtomicUsize::new(0);
+        let result: Result<&str, String> = retry_with_backoff("test", 3, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Ok("done") }
+        })
+        .await;
+        assert_eq!(result, Ok("done"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_with_backoff_retries_until_success() {
+        let calls = AtomicUsize::new(0);
+        let result: Result<&str, String> = retry_with_backoff("test", 3, || {
+            let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            async move {
+                if attempt < 3 {
+                    Err(format!("fail-{}", attempt))
+                } else {
+                    Ok("recovered")
+                }
+            }
+        })
+        .await;
+        assert_eq!(result, Ok("recovered"));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_with_backoff_exhausts_attempts_and_returns_last_error() {
+        let calls = AtomicUsize::new(0);
+        let result: Result<&str, String> = retry_with_backoff("test", 3, || {
+            let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            async move { Err(format!("fail-{}", attempt)) }
+        })
+        .await;
+        assert_eq!(result, Err("fail-3".to_string()));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_with_backoff_treats_zero_attempts_as_one() {
+        let calls = AtomicUsize::new(0);
+        let _: Result<&str, String> = retry_with_backoff("test", 0, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Err("nope".to_string()) }
+        })
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn upload_error_http_formats_message_with_and_without_body() {
+        let with_body = UploadError::http(404, "  not found  ".to_string());
+        assert_eq!(
+            with_body.message,
+            "Upload failed with status 404: not found"
+        );
+        assert_eq!(with_body.status_code, Some(404));
+        assert_eq!(with_body.response_body, "not found");
+        assert!(!with_body.timeout);
+
+        let without_body = UploadError::http(500, "".to_string());
+        assert_eq!(without_body.message, "Upload failed with status 500");
+    }
+
+    #[test]
+    fn upload_error_permanent_defaults_to_status_400() {
+        let error = UploadError::permanent("bad request");
+        assert_eq!(error.status_code, Some(400));
+        assert_eq!(error.message, "bad request");
+    }
+
+    #[test]
+    fn upload_error_to_ui_payload_has_expected_shape() {
+        let error = UploadError::http(413, "too large".to_string());
+        let payload = error.to_ui_payload("client-123");
+        assert_eq!(payload["clientId"], "client-123");
+        assert_eq!(payload["statusCode"], 413);
+        assert_eq!(payload["responseBody"], "too large");
+        assert_eq!(payload["timeout"], false);
+    }
+}

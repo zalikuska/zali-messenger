@@ -316,7 +316,11 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
     }
 }
 
-pub(crate) async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payload: &serde_json::Value) {
+pub(crate) async fn handle_voice_event(
+    state: &Arc<AppState>,
+    sender: &str,
+    payload: &serde_json::Value,
+) {
     let event_type = payload["type"].as_str().unwrap_or_default();
     info!(
         "[VOICE][EVENT] user={} type={} roomId={} roomType={} target={} inviter={} from={}",
@@ -712,7 +716,9 @@ pub(crate) async fn handle_voice_event(state: &Arc<AppState>, sender: &str, payl
             // at their ongoing room) — an unconditional remove(sender) here would wipe
             // that active call's mapping, orphaning the room and breaking reconnect
             // snapshot restore. See the client-side busy-guard in interface.js.
-            state.user_voice_rooms.remove_if(sender, |_, v| v == &room_id);
+            state
+                .user_voice_rooms
+                .remove_if(sender, |_, v| v == &room_id);
             state
                 .user_voice_rooms
                 .remove_if(inviter.as_str(), |_, v| v == &room_id);

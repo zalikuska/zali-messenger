@@ -1,21 +1,15 @@
 //! User directory and contact list endpoints.
 
+use crate::{AppState, AuthenticatedUser, ContactListResponse, ContactPayload, UserSearchQuery};
 use axum::{
-    extract::{
-        Path as AxumPath, Query,
-    },
+    extract::{Path as AxumPath, Query},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
-use sqlx::{
-    sqlite::SqlitePool,
-};
+use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
 use tracing::{error, info};
-use crate::{
-    AppState, AuthenticatedUser, ContactListResponse, ContactPayload, UserSearchQuery,
-};
 
 pub(crate) async fn get_users(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,

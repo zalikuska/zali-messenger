@@ -85,7 +85,9 @@ fn install_media_capture_policy(webview: &wry::WebView) {
         if utf8.is_null() {
             return String::new();
         }
-        std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        std::ffi::CStr::from_ptr(utf8)
+            .to_string_lossy()
+            .into_owned()
     }
 
     extern "C" fn request_media_capture_permission(
@@ -130,14 +132,13 @@ fn install_media_capture_policy(webview: &wry::WebView) {
             return;
         }
         let imp: objc::runtime::Imp = std::mem::transmute(
-            request_media_capture_permission
-                as extern "C" fn(&Object, Sel, Id, Id, Id, isize, Id),
+            request_media_capture_permission as extern "C" fn(&Object, Sel, Id, Id, Id, isize, Id),
         );
         let added = objc::runtime::class_addMethod(
             class,
             sel!(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:),
             imp,
-            b"v@:@@@q@?\0".as_ptr() as *const c_char,
+            c"v@:@@@q@?".as_ptr(),
         );
         if added == NO {
             // Метод уже есть — старый macOS, где wry сам добавляет грант. Тоже ок.
@@ -217,15 +218,7 @@ fn main() -> wry::Result<()> {
             Some(guard.api_base_url()),
             guard.auth_token.clone(),
         );
-        message_bridge.configure(
-            guard.ws_base_url.clone(),
-            guard.api_base_url(),
-            guard.auth_token.clone(),
-            guard.current_key.clone(),
-            guard.conversation_keys.clone(),
-            guard.current_username.clone(),
-            guard.current_device_id.clone(),
-        );
+        message_bridge.configure(&guard);
     }
     let native_state_for_ipc = Arc::clone(&native_state);
     let runtime_for_ipc = Arc::clone(&runtime);
@@ -235,6 +228,12 @@ fn main() -> wry::Result<()> {
 
     let webview = WebViewBuilder::new(&window)
         .with_initialization_script(&init_script)
+        // Lets F12 / right-click → Inspect open WebView2 DevTools so JS-side
+        // trace()/console logs (e.g. publishConversationKeyToPeer failures) are
+        // visible without shipping a separate debug build. Local desktop app,
+        // no remote attack surface added — same tradeoff as isInspectable on
+        // WKWebView on the macOS client.
+        .with_devtools(true)
         .with_custom_protocol("zali".into(), move |request| {
             let path = request.uri().path().trim_start_matches('/');
             response_for_asset(path)

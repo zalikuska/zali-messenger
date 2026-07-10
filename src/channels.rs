@@ -1,29 +1,19 @@
 //! Channel CRUD, channel permission records, and channel access checks.
 
-use axum::{
-    extract::Path as AxumPath,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
+use crate::{
+    can_manage_server, fallback_role_permissions, get_server_access_context,
+    get_server_accessibility, get_server_member_role, load_server_role_permissions_map,
+    load_server_role_record, normalize_server_role, AppState, AuthenticatedUser, ChannelPayload,
+    ChannelPermissionInput, ChannelPermissionRecord, ChannelPermissionResponse,
+    ChannelPermissionsPayload, ChannelRecord, ChannelResponse, ChannelUpdatePayload, Message,
 };
+use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse, Json};
 use chrono::Utc;
-use sqlx::{
-    sqlite::SqlitePool,
-};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use sqlx::sqlite::SqlitePool;
+use std::{collections::HashMap, sync::Arc};
 use tokio::fs;
 use tracing::{debug, error};
 use uuid::Uuid;
-use crate::{
-    AppState, AuthenticatedUser, can_manage_server, ChannelPayload, ChannelPermissionInput,
-    ChannelPermissionRecord, ChannelPermissionResponse, ChannelPermissionsPayload,
-    ChannelRecord, ChannelResponse, ChannelUpdatePayload, fallback_role_permissions,
-    get_server_access_context, get_server_accessibility, get_server_member_role,
-    load_server_role_permissions_map, load_server_role_record, Message, normalize_server_role,
-};
 
 pub(crate) async fn load_channels_for_server(
     pool: &SqlitePool,

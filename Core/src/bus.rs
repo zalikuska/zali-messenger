@@ -38,3 +38,44 @@ impl Default for ZaliBus {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_to_unknown_command_returns_error() {
+        let bus = ZaliBus::new();
+        let result = bus.send("nonexistent:command", Value::Null);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("nonexistent:command"));
+    }
+
+    #[test]
+    fn registered_command_is_dispatched_with_its_args() {
+        let mut bus = ZaliBus::new();
+        bus.register_command(
+            "echo",
+            "reverse",
+            Box::new(|args| {
+                let text = args["text"].as_str().unwrap_or_default();
+                Ok(Value::String(text.chars().rev().collect()))
+            }),
+        );
+
+        let result = bus
+            .send("echo:reverse", serde_json::json!({ "text": "abc" }))
+            .unwrap();
+        assert_eq!(result.as_str(), Some("cba"));
+    }
+
+    #[test]
+    fn registering_same_address_command_replaces_the_previous_handler() {
+        let mut bus = ZaliBus::new();
+        bus.register_command("x", "y", Box::new(|_| Ok(Value::String("first".into()))));
+        bus.register_command("x", "y", Box::new(|_| Ok(Value::String("second".into()))));
+
+        let result = bus.send("x:y", Value::Null).unwrap();
+        assert_eq!(result.as_str(), Some("second"));
+    }
+}

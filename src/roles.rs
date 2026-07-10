@@ -1,25 +1,15 @@
 //! Custom server role records, role permission maps, and role endpoints.
 
-use axum::{
-    extract::Path as AxumPath,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
+use crate::{
+    can_manage_server, ensure_default_server_roles, AppState, AuthenticatedUser, ServerRolePayload,
+    ServerRoleRecord, ServerRoleResponse,
 };
+use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse, Json};
 use chrono::Utc;
-use sqlx::{
-    sqlite::SqlitePool,
-};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use sqlx::sqlite::SqlitePool;
+use std::{collections::HashMap, sync::Arc};
 use tracing::error;
 use uuid::Uuid;
-use crate::{
-    AppState, AuthenticatedUser, can_manage_server, ensure_default_server_roles,
-    ServerRolePayload, ServerRoleRecord, ServerRoleResponse,
-};
 
 pub(crate) async fn load_server_role_permissions_map(
     pool: &SqlitePool,
@@ -135,10 +125,9 @@ pub(crate) fn slug_role_id(value: &str) -> String {
     for ch in value.to_lowercase().chars() {
         if ch.is_ascii_alphanumeric() {
             out.push(ch);
-        } else if (ch.is_whitespace() || ch == '-' || ch == '_')
-            && !out.ends_with('-') {
-                out.push('-');
-            }
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_') && !out.ends_with('-') {
+            out.push('-');
+        }
     }
     let trimmed = out.trim_matches('-').to_string();
     if trimmed.is_empty() {

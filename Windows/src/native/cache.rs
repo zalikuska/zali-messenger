@@ -5,8 +5,6 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-
-
 pub(crate) fn in_flight_send_client_ids() -> &'static Mutex<HashSet<String>> {
     static IDS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     IDS.get_or_init(|| Mutex::new(HashSet::new()))
@@ -123,5 +121,159 @@ pub(crate) fn candidate_message_keys(
     if keys.is_empty() {
         push_candidate_key(&mut keys, current_key);
     }
+    // Last-resort fallback: try every other known conversation key too. Mirrors the macOS
+    // client (WebView.swift renderHistoryRecord) — a message whose scope→key mapping is
+    // stale or missing may still decrypt under a key filed under a different scope, so the
+    // scoped candidate above is tried first but not treated as the only option.
+    for key in conversation_keys.values() {
+        push_candidate_key(&mut keys, key.clone());
+    }
     keys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dm_conversation_scope_is_order_independent() {
+        assert_eq!(
+            dm_conversation_scope("alice", "bob"),
+            dm_conversation_scope("bob", "alice")
+        );
+        assert_eq!(
+            dm_conversation_scope("alice", "bob"),
+            Some("dm:alice:bob".to_string())
+        );
+    }
+
+    #[test]
+    fn dm_conversation_scope_rejects_empty_participant() {
+        assert_eq!(dm_conversation_scope("", "bob"), None);
+        assert_eq!(dm_conversation_scope("alice", "  "), None);
+    }
+
+    #[test]
+    fn server_conversation_scope_formats_and_rejects_empty() {
+        assert_eq!(
+            server_conversation_scope("srv1", "chan1"),
+            Some("server:srv1:chan1".to_string())
+        );
+        assert_eq!(server_conversation_scope("", "chan1"), None);
+    }
+
+    #[test]
+    fn push_candidate_key_dedups_and_trims_and_skips_empty() {
+        let mut keys = Vec::new();
+        push_candidate_key(&mut keys, " key-a ");
+        push_candidate_key(&mut keys, "key-a");
+        push_candidate_key(&mut keys, "   ");
+        push_candidate_key(&mut keys, "key-b");
+        assert_eq!(keys, vec!["key-a".to_string(), "key-b".to_string()]);
+    }
+
+    #[test]
+    fn candidate_message_keys_prefers_dm_scoped_key_over_current_key() {
+        let mut conversation_keys = HashMap::new();
+        conversation_keys.insert("dm:alice:bob".to_string(), "scoped-key".to_string());
+        let record = serde_json::json!({ "sender": "bob", "receiver": "alice" });
+
+        let keys = candidate_message_keys(
+            "current-key",
+            &conversation_keys,
+            "alice",
+            &record,
+            None,
+            None,
+        );
+        assert_eq!(keys[0], "scoped-key");
+    }
+
+    #[test]
+    fn candidate_message_keys_falls_back_to_current_key_when_no_scope_match() {
+        let conversation_keys = HashMap::new();
+        let record = serde_json::json!({ "sender": "bob", "receiver": "alice" });
+
+        let keys = candidate_message_keys(
+            "current-key",
+            &conversation_keys,
+            "alice",
+            &record,
+            None,
+            None,
+        );
+        assert_eq!(keys, vec!["current-key".to_string()]);
+    }
+
+    #[test]
+    fn candidate_message_keys_uses_server_channel_scope_when_provided() {
+        let mut conversation_keys = HashMap::new();
+        conversation_keys.insert("server:srv1:chan1".to_string(), "channel-key".to_string());
+        let record = serde_json::json!({});
+
+        let keys = candidate_message_keys(
+            "current-key",
+            &conversation_keys,
+            "alice",
+            &record,
+            Some("srv1"),
+            Some("chan1"),
+        );
+        assert_eq!(keys[0], "channel-key");
+    }
+
+    #[test]
+    fn candidate_message_keys_includes_other_scopes_as_last_resort() {
+        let mut conversation_keys = HashMap::new();
+        conversation_keys.insert("dm:alice:bob".to_string(), "matched-key".to_string());
+        conversation_keys.insert("dm:alice:carol".to_string(), "other-key".to_string());
+        let record = serde_json::json!({ "sender": "bob", "receiver": "alice" });
+
+        let keys = candidate_message_keys(
+            "current-key",
+            &conversation_keys,
+            "alice",
+            &record,
+            None,
+            None,
+        );
+        assert_eq!(keys[0], "matched-key");
+        assert!(keys.contains(&"other-key".to_string()));
+        // No duplicates even though matched-key would otherwise reappear via the
+        // "every other known conversation key" fallback loop.
+        assert_eq!(keys.iter().filter(|k| *k == "matched-key").count(), 1);
+    }
+
+    #[test]
+    fn decrypted_message_cache_round_trips_and_skips_oversized_entries() {
+        let big = Value::String("x".repeat(DECRYPTED_CACHE_MAX_ENTRY_BYTES + 1));
+        cache_decrypted_message("oversized-id", &big);
+        assert!(cached_decrypted_message("oversized-id").is_none());
+
+        let small = serde_json::json!({ "sender": "alice", "text": "hi" });
+        cache_decrypted_message("small-id", &small);
+        assert_eq!(cached_decrypted_message("small-id"), Some(small));
+    }
+
+    #[test]
+    fn cache_decrypted_message_ignores_empty_id() {
+        cache_decrypted_message("   ", &Value::String("x".to_string()));
+        assert!(cached_decrypted_message("   ").is_none());
+    }
+
+    #[test]
+    fn in_flight_send_client_id_clear_is_idempotent() {
+        in_flight_send_client_ids()
+            .lock()
+            .unwrap()
+            .insert("client-1".to_string());
+        clear_in_flight_send_client_id("client-1");
+        assert!(!in_flight_send_client_ids()
+            .lock()
+            .unwrap()
+            .contains("client-1"));
+        // Clearing again (or clearing something never inserted) must not panic.
+        clear_in_flight_send_client_id("client-1");
+        clear_in_flight_send_client_id("never-inserted");
+    }
 }

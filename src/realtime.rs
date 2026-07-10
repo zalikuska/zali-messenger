@@ -1,20 +1,17 @@
 //! WebSocket connection lifecycle and JSON broadcast/send helpers.
 
+use crate::{
+    handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user, AppState,
+    AuthenticatedUser,
+};
 use axum::{
     extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
 };
 use chrono::{DateTime, Utc};
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
-use crate::{
-    AppState, AuthenticatedUser, handle_voice_event, leave_voice_room,
-    send_voice_room_snapshot_to_user,
-};
 
 pub(crate) async fn broadcast_json(state: &Arc<AppState>, payload: String) {
     let viewers: Vec<String> = state
@@ -50,14 +47,18 @@ pub(crate) async fn send_payload_to_user(
         match conn.try_send(payload.clone()) {
             Ok(()) => sent += 1,
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                // Buffer is momentarily full (bursty/slow consumer). Drop just this
+                // payload and KEEP the connection registered. Previously we removed
+                // the sender here, but the socket task holds its own `tx` clone (used
+                // for cleanup on disconnect), so the socket stayed open — the client
+                // believed it was connected yet silently stopped receiving anything
+                // until a manual reconnect. Genuinely dead sockets are still reaped by
+                // the is_closed() sweep below and on the next delivery.
                 failed = true;
-                if let Some(mut conns) = state.user_connections.get_mut(username) {
-                    conns.retain(|existing| {
-                        !existing.same_channel(&conn)
-                            && !existing.is_closed()
-                            && existing.capacity() > 0
-                    });
-                }
+                warn!(
+                    "WS send buffer full label={} username={} payload dropped, connection kept",
+                    label, username
+                );
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 failed = true;
@@ -96,7 +97,11 @@ pub(crate) async fn broadcast_avatar_event(
     broadcast_json(state, payload.to_string()).await;
 }
 
-pub(crate) async fn send_json_to_user(state: &Arc<AppState>, username: &str, payload: serde_json::Value) {
+pub(crate) async fn send_json_to_user(
+    state: &Arc<AppState>,
+    username: &str,
+    payload: serde_json::Value,
+) {
     let json = payload.to_string();
     let event_type = payload["type"].as_str().unwrap_or_default().to_string();
     if let Some(mut conns) = state.user_connections.get_mut(username) {
@@ -125,7 +130,6 @@ pub(crate) async fn send_json_to_user(state: &Arc<AppState>, username: &str, pay
         );
     }
 }
-
 
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,

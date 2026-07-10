@@ -10,7 +10,6 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
-
 mod api;
 pub(crate) use api::*;
 mod cache;
@@ -65,6 +64,7 @@ enum UiBusEvent {
     OnSendSuccess,
     OnSendError,
     AvatarUpdated,
+    SyncActiveConversation,
 }
 
 impl UiBusEvent {
@@ -86,6 +86,7 @@ impl UiBusEvent {
             UiBusEvent::OnSendSuccess => "on_send_success",
             UiBusEvent::OnSendError => "on_send_error",
             UiBusEvent::AvatarUpdated => "avatar_updated",
+            UiBusEvent::SyncActiveConversation => "sync_active_conversation",
         }
     }
 }
@@ -265,28 +266,24 @@ impl MessageBridge {
         bridge
     }
 
-    pub fn configure(
-        &self,
-        ws_base_url: Option<String>,
-        api_base_url: String,
-        auth_token: Option<String>,
-        current_key: String,
-        conversation_keys: HashMap<String, String>,
-        current_username: String,
-        current_device_id: String,
-    ) {
-        let ws_url = normalize_voice_ws_url(ws_base_url, Some(api_base_url.clone()));
-        let auth_token = auth_token
+    /// Пересобирает конфиг транспорта из актуального состояния приложения.
+    /// Все поля берутся напрямую из `NativeState`, поэтому вызывающему коду
+    /// не нужно вручную клонировать каждое из них.
+    pub fn configure(&self, state: &NativeState) {
+        let ws_url = normalize_voice_ws_url(state.ws_base_url.clone(), Some(state.api_base_url()));
+        let auth_token = state
+            .auth_token
+            .clone()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
         let next = MessageConfig {
             ws_url,
-            api_base_url,
+            api_base_url: state.api_base_url(),
             auth_token,
-            current_key: current_key.trim().to_string(),
-            conversation_keys,
-            current_username: current_username.trim().to_string(),
-            current_device_id: current_device_id.trim().to_string(),
+            current_key: state.current_key.trim().to_string(),
+            conversation_keys: state.conversation_keys.clone(),
+            current_username: state.current_username.trim().to_string(),
+            current_device_id: state.current_device_id.trim().to_string(),
         };
         let unchanged = {
             let current = self.config_tx.borrow();
@@ -418,7 +415,11 @@ impl NativeState {
             // LOCALAPPDATA/APPDATA do not exist on macOS; without this branch the
             // config landed in temp_dir() and was wiped by the OS between launches.
             std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join("Library").join("Application Support"))
+                .map(|home| {
+                    PathBuf::from(home)
+                        .join("Library")
+                        .join("Application Support")
+                })
                 .unwrap_or_else(std::env::temp_dir)
                 .join("ZaliMessenger")
         }
@@ -537,9 +538,7 @@ impl NativeState {
         let payload = PersistedConfig {
             api_base_url: self.api_base_url.clone(),
             ws_base_url: self.ws_base_url.clone(),
-            crypto_key: if keyring_key_ok {
-                None
-            } else if self.current_key.trim().is_empty() {
+            crypto_key: if keyring_key_ok || self.current_key.trim().is_empty() {
                 None
             } else {
                 Some(self.current_key.clone())
@@ -621,7 +620,10 @@ impl NativeState {
         let parsed = match serde_json::from_str::<Value>(identity_json) {
             Ok(value) => value,
             Err(error) => {
-                trace(format!("persist_shared_device_identity invalid json err={}", error));
+                trace(format!(
+                    "persist_shared_device_identity invalid json err={}",
+                    error
+                ));
                 return;
             }
         };
@@ -694,7 +696,10 @@ impl NativeState {
         if let Some(raw) = &self.injected_device_identity {
             // JS only consumes this if it has no device identity of its own yet
             // (loadDeviceIdentity's injected-fallback) — safe to always inject.
-            script.push_str(&format!("window.__ZALI_INJECTED_DEVICE_IDENTITY = {};\n", raw));
+            script.push_str(&format!(
+                "window.__ZALI_INJECTED_DEVICE_IDENTITY = {};\n",
+                raw
+            ));
         }
 
         let session = json!({
@@ -951,9 +956,11 @@ pub fn handle_ipc_message(
             let proxy = proxy.clone();
             runtime.spawn(async move {
                 match perform_api_request(
-                    api_base_url,
-                    auth_token,
-                    device_id,
+                    ApiSession {
+                        api_base_url,
+                        auth_token,
+                        device_id,
+                    },
                     method,
                     path,
                     headers,
@@ -1292,15 +1299,7 @@ pub fn handle_ipc_message(
                     guard.current_key = requested_key.clone();
                     guard.update_scoped_maps_for_current_user();
                     guard.persist_config();
-                    message_bridge.configure(
-                        guard.ws_base_url.clone(),
-                        guard.api_base_url(),
-                        guard.auth_token.clone(),
-                        guard.current_key.clone(),
-                        guard.conversation_keys.clone(),
-                        guard.current_username.clone(),
-                        guard.current_device_id.clone(),
-                    );
+                    message_bridge.configure(&guard);
                 }
             }
 
@@ -1397,15 +1396,7 @@ pub fn handle_ipc_message(
                         guard.current_key.len(),
                         guard.conversation_keys.len()
                     ));
-                    message_bridge.configure(
-                        guard.ws_base_url.clone(),
-                        guard.api_base_url(),
-                        guard.auth_token.clone(),
-                        guard.current_key.clone(),
-                        guard.conversation_keys.clone(),
-                        guard.current_username.clone(),
-                        guard.current_device_id.clone(),
-                    );
+                    message_bridge.configure(&guard);
                     let proxy = proxy.clone();
                     runtime.spawn(async move {
                         dispatch_ui_event(&proxy, UiBusEvent::RefreshAfterKey, Value::Null);
@@ -1519,15 +1510,7 @@ pub fn handle_ipc_message(
                     Some(guard.api_base_url()),
                     guard.auth_token.clone(),
                 );
-                message_bridge.configure(
-                    guard.ws_base_url.clone(),
-                    guard.api_base_url(),
-                    guard.auth_token.clone(),
-                    guard.current_key.clone(),
-                    guard.conversation_keys.clone(),
-                    guard.current_username.clone(),
-                    guard.current_device_id.clone(),
-                );
+                message_bridge.configure(&guard);
                 let session_snapshot = (
                     guard.api_base_url(),
                     guard.auth_token.clone(),
@@ -1596,15 +1579,7 @@ pub fn handle_ipc_message(
                     guard.current_key = key.clone();
                     guard.update_scoped_maps_for_current_user();
                     guard.persist_config();
-                    message_bridge.configure(
-                        guard.ws_base_url.clone(),
-                        guard.api_base_url(),
-                        guard.auth_token.clone(),
-                        guard.current_key.clone(),
-                        guard.conversation_keys.clone(),
-                        guard.current_username.clone(),
-                        guard.current_device_id.clone(),
-                    );
+                    message_bridge.configure(&guard);
                 }
                 if requested_peer.is_empty() {
                     trace("REFRESH_HISTORY skipped: missing peer");
@@ -1664,15 +1639,7 @@ pub fn handle_ipc_message(
                     Some(guard.api_base_url()),
                     guard.auth_token.clone(),
                 );
-                message_bridge.configure(
-                    guard.ws_base_url.clone(),
-                    guard.api_base_url(),
-                    guard.auth_token.clone(),
-                    guard.current_key.clone(),
-                    guard.conversation_keys.clone(),
-                    guard.current_username.clone(),
-                    guard.current_device_id.clone(),
-                );
+                message_bridge.configure(&guard);
             }
         }
         BridgeProtocolMessageType::SavePendingOutbox => {
@@ -1881,16 +1848,20 @@ pub fn handle_ipc_message(
                 }
 
                 let upload_result = upload_message(
-                    snapshot.0,
-                    snapshot.1,
-                    snapshot.4,
-                    sender.clone(),
-                    receiver,
-                    client_id.clone(),
-                    archive_path.clone(),
-                    server_id,
-                    channel_id,
-                    key_version,
+                    ApiSession {
+                        api_base_url: snapshot.0,
+                        auth_token: snapshot.1,
+                        device_id: snapshot.4,
+                    },
+                    OutgoingMessage {
+                        sender: sender.clone(),
+                        receiver,
+                        client_id: client_id.clone(),
+                        archive_path: archive_path.clone(),
+                        server_id,
+                        channel_id,
+                        key_version,
+                    },
                 ).await;
 
                 match upload_result {
@@ -1928,11 +1899,28 @@ pub fn handle_ipc_message(
             let _ = proxy.send_event(AppEvent::StartDrag);
         }
         BridgeProtocolMessageType::ShowNotification => {
-            let sender = payload.get("sender").and_then(Value::as_str).unwrap_or("").to_string();
-            let text = payload.get("text").and_then(Value::as_str).unwrap_or("").to_string();
-            let attachment_count = payload.get("attachmentCount").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let server_id = payload.get("serverId").and_then(Value::as_str).map(str::to_string);
-            let channel_id = payload.get("channelId").and_then(Value::as_str).map(str::to_string);
+            let sender = payload
+                .get("sender")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let text = payload
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let attachment_count = payload
+                .get("attachmentCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let server_id = payload
+                .get("serverId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let channel_id = payload
+                .get("channelId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let current_username = state
                 .lock()
                 .map(|guard| guard.current_username.clone())

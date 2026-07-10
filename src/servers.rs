@@ -1,32 +1,21 @@
 //! Server (guild) CRUD, membership management, invites, and join links.
 
-use axum::{
-    extract::Path as AxumPath,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
+use crate::{
+    channel_allows_action, create_server_role_record, ensure_default_server_roles,
+    load_channels_for_server, load_server_role_permissions, load_server_role_record,
+    load_visible_channels_for_server, set_server_asset, AppState, AuthenticatedUser,
+    ChannelPermissionMap, ChannelRecord, ChannelResponse, InvitePayload, JoinInvitePayload,
+    JoinServerLinkPayload, ServerInviteRecord, ServerInviteResponse, ServerListResponse,
+    ServerMemberPayload, ServerMemberRecord, ServerMemberResponse, ServerPayload, ServerRecord,
+    ServerResponse, ServerSettingsPayload,
 };
+use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse, Json};
 use chrono::Utc;
-use sqlx::{
-    sqlite::SqlitePool,
-    QueryBuilder, Row, Sqlite,
-};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use sqlx::{sqlite::SqlitePool, QueryBuilder, Row, Sqlite};
+use std::{collections::HashMap, sync::Arc};
 use tokio::fs;
 use tracing::error;
 use uuid::Uuid;
-use crate::{
-    AppState, AuthenticatedUser, channel_allows_action, ChannelPermissionMap, ChannelRecord,
-    ChannelResponse, create_server_role_record, ensure_default_server_roles, InvitePayload,
-    JoinInvitePayload, JoinServerLinkPayload, load_channels_for_server,
-    load_server_role_permissions, load_server_role_record, load_visible_channels_for_server,
-    ServerInviteRecord, ServerInviteResponse, ServerListResponse, ServerMemberPayload,
-    ServerMemberRecord, ServerMemberResponse, ServerPayload, ServerRecord, ServerResponse,
-    ServerSettingsPayload, set_server_asset,
-};
 
 pub(crate) async fn get_server_accessibility(
     pool: &SqlitePool,
@@ -372,7 +361,10 @@ pub(crate) async fn get_server_member_role(
     .await
 }
 
-pub(crate) async fn get_server_member_count(pool: &SqlitePool, server_id: &str) -> Result<i64, sqlx::Error> {
+pub(crate) async fn get_server_member_count(
+    pool: &SqlitePool,
+    server_id: &str,
+) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar("SELECT COUNT(*) FROM server_members WHERE server_id = ?")
         .bind(server_id)
         .fetch_one(pool)

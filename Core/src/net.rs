@@ -310,4 +310,162 @@ mod tests {
         assert_eq!(attachments[0]["mimeType"].as_str(), Some("image/png"));
         assert_eq!(unpacked["keyVersion"].as_u64(), Some(7));
     }
+
+    fn test_loader() -> ZaliLoader {
+        let mut loader = ZaliLoader::new();
+        loader.register_module(ZaliCrypto).unwrap();
+        loader.register_module(ZaliNet).unwrap();
+        loader
+    }
+
+    #[test]
+    fn pack_message_requires_a_non_empty_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("message.zali");
+        let loader = test_loader();
+
+        let result = loader.bus.send(
+            "zali_net:pack_message",
+            json!({
+                "sender": "Zalikus",
+                "text": "hi",
+                "key": "",
+                "output_path": archive_path.to_string_lossy()
+            }),
+        );
+        assert!(result.is_err());
+        assert!(!archive_path.exists());
+    }
+
+    #[test]
+    fn pack_message_requires_sender_text_and_output_path() {
+        let loader = test_loader();
+        assert!(loader
+            .bus
+            .send(
+                "zali_net:pack_message",
+                json!({ "text": "hi", "key": "k", "output_path": "/tmp/whatever.zali" })
+            )
+            .is_err());
+        assert!(loader
+            .bus
+            .send(
+                "zali_net:pack_message",
+                json!({ "sender": "s", "key": "k", "output_path": "/tmp/whatever.zali" })
+            )
+            .is_err());
+        assert!(loader
+            .bus
+            .send(
+                "zali_net:pack_message",
+                json!({ "sender": "s", "text": "hi", "key": "k" })
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn unpack_message_with_wrong_key_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("message.zali");
+        let unpack_dir = temp.path().join("unpacked");
+        let loader = test_loader();
+
+        loader
+            .bus
+            .send(
+                "zali_net:pack_message",
+                json!({
+                    "sender": "Zalikus",
+                    "text": "hello",
+                    "key": "right-key",
+                    "output_path": archive_path.to_string_lossy()
+                }),
+            )
+            .unwrap();
+
+        let result = loader.bus.send(
+            "zali_net:unpack_message",
+            json!({
+                "archive_path": archive_path.to_string_lossy(),
+                "temp_dir": unpack_dir.to_string_lossy(),
+                "key": "wrong-key"
+            }),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pack_message_skips_attachments_whose_source_file_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("message.zali");
+        let unpack_dir = temp.path().join("unpacked");
+        let loader = test_loader();
+
+        loader
+            .bus
+            .send(
+                "zali_net:pack_message",
+                json!({
+                    "sender": "Zalikus",
+                    "text": "no real attachment",
+                    "key": "secret",
+                    "output_path": archive_path.to_string_lossy(),
+                    "attachments": [
+                        {
+                            "path": temp.path().join("does-not-exist.bin").to_string_lossy(),
+                            "name": "ghost.bin"
+                        }
+                    ]
+                }),
+            )
+            .unwrap();
+
+        let unpacked = loader
+            .bus
+            .send(
+                "zali_net:unpack_message",
+                json!({
+                    "archive_path": archive_path.to_string_lossy(),
+                    "temp_dir": unpack_dir.to_string_lossy(),
+                    "key": "secret"
+                }),
+            )
+            .unwrap();
+
+        assert!(unpacked["attachments"].as_array().unwrap().is_empty());
+        assert_eq!(unpacked["text"].as_str(), Some("no real attachment"));
+    }
+
+    #[test]
+    fn unpack_message_fails_when_archive_has_no_message_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("not-a-message.zali");
+        let unpack_dir = temp.path().join("unpacked");
+        let stray_file = temp.path().join("stray.txt");
+        fs::write(&stray_file, b"irrelevant content").unwrap();
+
+        // Pack a .zali archive directly via the SDK (bypassing zali_net:pack_message)
+        // so it never contains a message.json — simulates a corrupt/foreign archive.
+        let session = ZaliSession::new(Some("secret"), Some(b"ZALIMSSG"));
+        session
+            .create_archive(
+                vec![(
+                    stray_file.to_string_lossy().into_owned(),
+                    "stray.txt".to_string(),
+                )],
+                archive_path.to_string_lossy().as_ref(),
+            )
+            .unwrap();
+
+        let loader = test_loader();
+        let result = loader.bus.send(
+            "zali_net:unpack_message",
+            json!({
+                "archive_path": archive_path.to_string_lossy(),
+                "temp_dir": unpack_dir.to_string_lossy(),
+                "key": "secret"
+            }),
+        );
+        assert!(result.is_err());
+    }
 }

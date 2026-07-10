@@ -1,6 +1,10 @@
 //! Authentication: JWT issuing/validation, the AuthenticatedUser extractor,
 //! register/login/logout, /me endpoints, WS tickets, and login rate limiting.
 
+use crate::{
+    is_valid_username, AppState, AuthPayload, AuthResponse, Claims, CloudVaultSyncPayload,
+    MeResponse, WsTicketRecord, WsTicketResponse,
+};
 use axum::{
     extract::ConnectInfo,
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -9,9 +13,7 @@ use axum::{
 };
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use sqlx::{
-    sqlite::SqlitePool, Row,
-};
+use sqlx::{sqlite::SqlitePool, Row};
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -20,15 +22,12 @@ use std::{
 use tokio::task;
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use crate::{
-    AppState, AuthPayload, AuthResponse, Claims, CloudVaultSyncPayload, is_valid_username,
-    MeResponse, WsTicketRecord, WsTicketResponse,
-};
 
 pub(crate) const AUTH_COOKIE_NAME: &str = "zali_auth";
 pub(crate) const JWT_ISSUER: &str = "zali-server";
 pub(crate) const JWT_AUDIENCE: &str = "zali-messenger";
-pub(crate) const DUMMY_BCRYPT_HASH: &str = "$2b$12$C6UzMDM.H6dfI/f/IKcEeOe6uT6yQWQfC1k1j6fQJxE1u3N0EdD6W";
+pub(crate) const DUMMY_BCRYPT_HASH: &str =
+    "$2b$12$C6UzMDM.H6dfI/f/IKcEeOe6uT6yQWQfC1k1j6fQJxE1u3N0EdD6W";
 // ============================================================
 // AUTH EXTRACTOR
 // ============================================================
