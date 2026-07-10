@@ -472,14 +472,22 @@ body[data-ui-v2="on"] .mode-switch {
 }
 
 .search-wrap {
-    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin: 0 12px 10px;
     padding: 10px 12px 0;
 }
 
+.search-box {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
 .search-icon {
     position: absolute;
-    left: 28px;
+    left: 14px;
     top: 50%;
     width: 18px;
     height: 18px;
@@ -494,7 +502,7 @@ body[data-ui-v2="on"] .mode-switch {
 .search-input {
     width: 100%;
     height: 38px;
-    padding: 0 14px 0 48px;
+    padding: 0 14px 0 42px;
     border: 1px solid var(--border);
     border-radius: 10px;
     outline: none;
@@ -515,14 +523,6 @@ body[data-ui-v2="on"] .mode-switch {
     font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
-}
-
-.contacts-tools {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 12px 10px;
-    padding: 0 12px 10px;
 }
 
 .contact-status {
@@ -577,6 +577,13 @@ body[data-ui-v2="on"] .mode-switch {
 
 .contact-add-btn.is-empty {
     box-shadow: inset 0 1px 0 rgba(255,255,255,.2);
+}
+
+.contact-add-btn.is-active {
+    background: rgba(255,255,255,.06);
+    border-color: var(--lime);
+    color: var(--lime);
+    box-shadow: 0 0 0 2px var(--lime-dim);
 }
 
 .contacts-suggest-wrap {
@@ -674,34 +681,6 @@ body[data-ui-v2="on"] .mode-switch {
     line-height: 1;
 }
 
-.contact-input {
-    flex: 1;
-    min-width: 0;
-    height: 38px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    outline: none;
-    background: rgba(255,255,255,.03);
-    color: var(--text);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
-    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
-}
-
-.contact-input:focus {
-    border-color: var(--lime);
-    box-shadow: 0 0 0 2px var(--lime-dim);
-}
-
-.contact-input:disabled {
-    opacity: .55;
-    cursor: not-allowed;
-}
-
-.contact-input:hover {
-    background: rgba(255,255,255,.05);
-}
-
 .contacts {
     min-height: 0;
     flex: 1;
@@ -711,7 +690,6 @@ body[data-ui-v2="on"] .mode-switch {
 }
 
 body[data-nav-mode="servers"] .search-wrap,
-body[data-nav-mode="servers"] .contacts-tools,
 body[data-nav-mode="servers"] .contacts-suggest-wrap {
     display: none;
 }
@@ -5498,7 +5476,6 @@ body[data-nav-mode="servers"] .contacts {
 
     .sidebar-head,
     .search-wrap,
-    .contacts-tools,
     .nav-label,
     .contact-info,
     .me > div,
@@ -5685,18 +5662,10 @@ body[data-nav-mode="servers"] .contacts {
         width: 100%;
     }
 
-    .search-wrap,
-    .contacts-tools {
+    .search-wrap {
         width: calc(100% - 24px);
         align-self: stretch;
         display: flex;
-    }
-
-    .contacts-tools {
-        padding: 0 12px 10px;
-    }
-
-    .search-wrap {
         padding-top: 10px;
     }
 
@@ -5705,7 +5674,6 @@ body[data-nav-mode="servers"] .contacts {
         line-height: 1;
     }
 
-    .search-wrap,
     .nav-label {
         display: block;
     }
@@ -6023,11 +5991,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     </div>
                 </div>
                 <div class="search-wrap">
-                    <span class="search-icon" aria-hidden="true"></span>
-                    <input id="searchInput" class="search-input" placeholder="Поиск..." autocomplete="off">
-                </div>
-                <div class="contacts-tools">
-                    <input id="contactInput" class="contact-input" placeholder="Добавить контакт" autocomplete="off">
+                    <div class="search-box">
+                        <span class="search-icon" aria-hidden="true"></span>
+                        <input id="searchInput" class="search-input" placeholder="Поиск..." autocomplete="off">
+                    </div>
                     <button class="contact-add-btn" id="contactAddBtn" type="button" title="Добавить контакт">+</button>
                 </div>
                 <div class="contact-status" id="contactStatus" aria-live="polite"></div>
@@ -6870,6 +6837,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             return {
                 users: [],
                 contacts: [],
+                contactAddMode: false,
             };
         },
     };
@@ -17079,35 +17047,62 @@ class ZaliInterface {
 
     updateContactControls() {
         const enabled = !!this.S.session?.token;
-        const contactInput = document.getElementById('contactInput');
         const contactAddBtn = document.getElementById('contactAddBtn');
-        if (contactInput) {
-            contactInput.disabled = !enabled;
-            contactInput.placeholder = enabled
-                ? 'Добавить контакт'
-                : 'Войдите, чтобы добавить контакт';
-        }
         if (contactAddBtn) {
             contactAddBtn.disabled = !enabled;
         }
         if (!enabled) {
-            this.hideContactSuggestions();
+            this.exitContactAddMode({ restoreSearch: false });
             this.setContactStatus('');
         }
         this.updateContactAddButtonState();
     }
 
+    enterContactAddMode() {
+        if (!this.S.session?.token) return;
+        this.S.contactAddMode = true;
+        this._searchQBeforeContactAdd = this.S.searchQ || '';
+        const input = document.getElementById('searchInput');
+        if (input) {
+            input.value = '';
+            input.placeholder = 'Логин контакта';
+            input.focus();
+        }
+        this.setContactStatus('');
+        this.updateContactAddButtonState();
+        void this.loadUsers('').then(() => this.renderContactSuggestions(true));
+    }
+
+    exitContactAddMode({ restoreSearch = true } = {}) {
+        if (!this.S.contactAddMode) return;
+        this.S.contactAddMode = false;
+        const input = document.getElementById('searchInput');
+        const restoredQuery = restoreSearch ? (this._searchQBeforeContactAdd || '') : '';
+        if (input) {
+            input.value = restoredQuery;
+            input.placeholder = 'Поиск...';
+        }
+        this.S.searchQ = restoredQuery;
+        this._searchQBeforeContactAdd = '';
+        this.hideContactSuggestions();
+        this.setContactStatus('');
+        this.updateContactAddButtonState();
+        this.renderContacts();
+    }
+
     updateContactAddButtonState() {
         const contactAddBtn = document.getElementById('contactAddBtn');
-        const contactInput = document.getElementById('contactInput');
+        const input = document.getElementById('searchInput');
         if (!contactAddBtn) return;
         const enabled = !!this.S.session?.token;
-        const hasText = !!String(contactInput?.value || '').trim();
+        const addMode = !!this.S.contactAddMode;
+        const hasText = addMode && !!String(input?.value || '').trim();
         contactAddBtn.disabled = !enabled;
-        contactAddBtn.classList.toggle('is-empty', !hasText);
-        contactAddBtn.title = enabled
-            ? (hasText ? 'Добавить контакт' : 'Введите логин контакта')
-            : 'Войдите, чтобы добавить контакт';
+        contactAddBtn.classList.toggle('is-empty', addMode && !hasText);
+        contactAddBtn.classList.toggle('is-active', addMode);
+        contactAddBtn.title = !enabled
+            ? 'Войдите, чтобы добавить контакт'
+            : (!addMode ? 'Добавить контакт' : (hasText ? 'Добавить контакт' : 'Введите логин контакта'));
     }
 
     setContactStatus(message = '', tone = '') {
@@ -17161,10 +17156,10 @@ class ZaliInterface {
     renderContactSuggestions(force = false) {
         const outer = document.getElementById('contactSuggestionsWrap');
         const wrap = document.getElementById('contactSuggestions');
-        const input = document.getElementById('contactInput');
+        const input = document.getElementById('searchInput');
         if (!outer || !wrap || !input) return;
 
-        if (!this.S.session?.token) {
+        if (!this.S.session?.token || !this.S.contactAddMode) {
             this.hideContactSuggestions();
             return;
         }
@@ -17182,7 +17177,7 @@ class ZaliInterface {
             return;
         }
 
-        if (trimmedQuery.length < 3 && list.length === 0) {
+        if (trimmedQuery.length > 0 && trimmedQuery.length < 3 && list.length === 0) {
             outer.hidden = false;
             wrap.hidden = false;
             wrap.innerHTML = `
@@ -17299,7 +17294,7 @@ class ZaliInterface {
                 return;
             }
             const search = String(query || '').trim();
-            if (search.length < 3) {
+            if (search.length > 0 && search.length < 3) {
                 this.renderContactSuggestions();
                 return;
             }
@@ -17753,7 +17748,7 @@ class ZaliInterface {
             return;
         }
 
-        const input = document.getElementById('contactInput');
+        const input = document.getElementById('searchInput');
         const rawUsername = (usernameOverride ?? input?.value ?? '').trim();
         if (!rawUsername) {
             const msg = 'Введите логин контакта';
@@ -20536,43 +20531,14 @@ class ZaliInterface {
         });
         window.addEventListener('blur', () => this.hideReactionMenu());
 
-        const contactInput = document.getElementById('contactInput');
-        if (contactInput) {
-            contactInput.addEventListener('input', () => {
-                const query = contactInput.value || '';
-                this.updateContactAddButtonState();
-                this.setContactStatus('');
-                void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
-            });
-            contactInput.addEventListener('focus', () => {
-                const query = contactInput.value || '';
-                this.setContactStatus('');
-                if (String(query).trim().length >= 3) {
-                    void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
-                } else {
-                    this.renderContactSuggestions(true);
-                }
-            });
-            contactInput.addEventListener('blur', () => {
-                setTimeout(() => this.hideContactSuggestions(), 120);
-            });
-            contactInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    this.hideContactSuggestions();
-                    contactInput.blur();
-                    return;
-                }
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    this.addContactFromInput();
-                }
-            });
-        }
-
         const contactAddBtn = document.getElementById('contactAddBtn');
         if (contactAddBtn) {
             contactAddBtn.addEventListener('click', () => {
+                if (!this.S.session?.token) return;
+                if (!this.S.contactAddMode) {
+                    this.enterContactAddMode();
+                    return;
+                }
                 this.addContactFromInput();
             });
         }
@@ -20654,12 +20620,49 @@ class ZaliInterface {
             });
         }
 
-        // 3. Search filter input
+        // 3. Search filter input (doubles as the contact-add input while contactAddMode is on)
         const searchInput = document.getElementById('searchInput');
         if (searchInput) {
             searchInput.addEventListener('input', (e) => {
+                if (this.S.contactAddMode) {
+                    const query = searchInput.value || '';
+                    this.updateContactAddButtonState();
+                    this.setContactStatus('');
+                    void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
+                    return;
+                }
                 this.S.searchQ = e.target.value;
                 this.renderContacts();
+            });
+            searchInput.addEventListener('focus', () => {
+                if (!this.S.contactAddMode) return;
+                const query = searchInput.value || '';
+                this.setContactStatus('');
+                void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
+            });
+            searchInput.addEventListener('blur', () => {
+                if (!this.S.contactAddMode) return;
+                setTimeout(() => {
+                    if (!this.S.contactAddMode) return;
+                    if (!String(searchInput.value || '').trim()) {
+                        this.exitContactAddMode();
+                    } else {
+                        this.hideContactSuggestions();
+                    }
+                }, 120);
+            });
+            searchInput.addEventListener('keydown', (e) => {
+                if (!this.S.contactAddMode) return;
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.exitContactAddMode();
+                    searchInput.blur();
+                    return;
+                }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.addContactFromInput();
+                }
             });
         }
 
