@@ -9,6 +9,7 @@
             return {
                 users: [],
                 contacts: [],
+                contactAddMode: false,
             };
         },
     };

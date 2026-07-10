@@ -6,6 +6,12 @@
       "runtimeExecutable": "cargo",
       "runtimeArgs": ["run", "-p", "zali_server"],
       "port": 3000
+    },
+    {
+      "name": "web-static",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "Web"],
+      "port": 8090
     }
   ]
 }
