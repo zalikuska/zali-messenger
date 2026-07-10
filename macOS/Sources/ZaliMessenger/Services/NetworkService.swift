@@ -414,6 +414,15 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             guard let self else { return }
             guard generation == self.connectionGeneration else { return }
 
+            // Report the drop on EVERY reconnect path — not just clean didCloseWith.
+            // Ping-failure and receive-failure land here too; without this the badge
+            // stays green on silent drops (wifi switch / sleep / NAT idle) and, worse,
+            // the JS reconnect catch-up sweep is gated on a false→true transition
+            // (interface.js), so background messages to non-open chats never get pulled.
+            DispatchQueue.main.async {
+                self.onWebSocketDisconnected?()
+            }
+
             self.heartbeatWorkItem?.cancel()
             self.heartbeatWorkItem = nil
             self.reconnectWorkItem?.cancel()
@@ -820,7 +829,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         // For DMs, accept messages that involve the current account on either side,
         // so a second session of the same user also receives its own outgoing echoes.
         if serverId != nil || wsMsg.receiver == currentUsername || wsMsg.sender == currentUsername {
-            downloadMessage(messageId: wsMsg.id) { [weak self] fileURL, statusCode in
+            downloadMessageWithRetry(messageId: wsMsg.id) { [weak self] fileURL, statusCode in
                 guard let fileURL = fileURL else {
                     if statusCode == 403 {
                         self?.trace("download forbidden messageId=\(wsMsg.id)")
@@ -1266,8 +1275,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                     if let data = string.data(using: .utf8) { try handle.write(contentsOf: data) }
                 }
                 try write("--\(boundary)\r\n")
-                try write(#"Content-Disposition: form-data; name="file"; filename="\#(filename ?? "avatar.png")"\r\n"#)
-                try write(#"Content-Type: \#(mimeType ?? "image/png")\r\n\r\n"#)
+                try write(#"Content-Disposition: form-data; name="file"; filename="\#(filename ?? "avatar.png")"\#r\#n"#)
+                try write(#"Content-Type: \#(mimeType ?? "image/png")\#r\#n\#r\#n"#)
                 try handle.write(contentsOf: data)
                 try write("\r\n--\(boundary)--\r\n")
             } catch {
@@ -1375,15 +1384,38 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         }
 
-        // Streaming size guard: aborts as soon as Content-Length (or accumulated bytes)
-        // exceeds the cap, instead of buffering the full oversized body first — mirrors
-        // Windows' perform_avatar_fetch content_length()/streamed-byte check.
+        // Same stale-HTTP/2-connection resilience as performApiRequest (see attemptApiRequest):
+        // the shared apiSession's connection pool can hand back a half-open socket that just
+        // stalls for the full 12s timeout — routinely hit during the post-login request burst.
+        // First attempt uses the shared session with a SHORT timeout; on any transport error we
+        // retry once on a fresh ephemeral connection. Kept separate from attemptApiRequest
+        // because that path stringifies the body, which would corrupt the binary image bytes.
+        attemptAvatarFetch(request, username: username, attempt: 1)  { success, payload, error in
+            completion(success, payload, error)
+        }
+    }
+
+    private func attemptAvatarFetch(_ request: URLRequest, username: String, attempt: Int, completion: @escaping (Bool, [String: Any]?, String?) -> Void) {
         let maxAvatarBytes = 2 * 1024 * 1024
-        let streamGuard = SizeCappedDataTaskDelegate(maxBytes: maxAvatarBytes) { data, response, error in
+        let maxAttempts = 2
+        var attemptRequest = request
+        attemptRequest.timeoutInterval = attempt == 1 ? 3.0 : 8.0
+
+        let session: URLSession
+        if attempt == 1 {
+            session = apiSession
+        } else {
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 8.0
+            config.waitsForConnectivity = false
+            session = URLSession(configuration: config)
+        }
+
+        session.dataTask(with: attemptRequest) { data, response, error in
             if let error {
-                if (error as NSError).domain == SizeCappedDataTaskDelegate.tooLargeErrorDomain {
-                    self.trace("LOAD_AVATAR_REQUEST too_large username=\(username) (streamed abort)")
-                    completion(false, nil, "Аватар слишком большой")
+                if attempt < maxAttempts {
+                    self.trace("LOAD_AVATAR_REQUEST attempt=\(attempt) failed err=\(error.localizedDescription); retrying on fresh connection")
+                    self.attemptAvatarFetch(request, username: username, attempt: attempt + 1, completion: completion)
                     return
                 }
                 self.trace("LOAD_AVATAR_REQUEST transport_error username=\(username) err=\(error)")
@@ -1407,11 +1439,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 "mimeType": mimeType,
                 "dataUrl": dataUrl,
             ], nil)
-        }
-        let session = URLSession(configuration: .default, delegate: streamGuard, delegateQueue: nil)
-        let task = session.dataTask(with: request)
-        streamGuard.retainedSession = session
-        task.resume()
+        }.resume()
     }
 
     func fetchUsers(completion: @escaping ([String]) -> Void) {
@@ -1575,15 +1603,18 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         let count: Int
     }
 
-    func fetchMessages(for user: String, completion: @escaping ([RemoteMessageRecord]) -> Void) {
-        self.fetchMessagesPage(for: user, limit: 200, offset: 0, accumulated: []) { messages in
-            completion(messages)
+    // completion carries `ok`: true only when the whole history was fetched cleanly.
+    // false means a page failed (auth/HTTP/decode) — callers must NOT treat the
+    // (possibly empty) list as authoritative, or a transient error wipes the view.
+    func fetchMessages(for user: String, completion: @escaping ([RemoteMessageRecord], Bool) -> Void) {
+        self.fetchMessagesPage(for: user, limit: 200, offset: 0, accumulated: []) { messages, ok in
+            completion(messages, ok)
         }
     }
 
-    func fetchServerMessages(serverId: String, channelId: String, completion: @escaping ([RemoteMessageRecord]) -> Void) {
-        self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: 200, offset: 0, accumulated: []) { messages in
-            completion(messages)
+    func fetchServerMessages(serverId: String, channelId: String, completion: @escaping ([RemoteMessageRecord], Bool) -> Void) {
+        self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: 200, offset: 0, accumulated: []) { messages, ok in
+            completion(messages, ok)
         }
     }
 
@@ -1592,11 +1623,14 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         limit: Int,
         offset: Int,
         accumulated: [RemoteMessageRecord],
-        completion: @escaping ([RemoteMessageRecord]) -> Void
+        completion: @escaping ([RemoteMessageRecord], Bool) -> Void
     ) {
         trace("fetchMessages page start user=\(user) limit=\(limit) offset=\(offset)")
-        guard var components = URLComponents(string: apiURL("messages/\(user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? user)")) else {
-            completion(accumulated)
+        // Encode `/` too (.urlPathAllowed leaves it intact): a username is a single
+        // path segment, so a stray slash must not be able to inject extra segments.
+        let encodedUser = user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? user
+        guard var components = URLComponents(string: apiURL("messages/\(encodedUser)")) else {
+            completion(accumulated, false)
             return
         }
         components.queryItems = [
@@ -1604,7 +1638,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             URLQueryItem(name: "offset", value: String(offset))
         ]
         guard let messagesURL = components.url else {
-            completion(accumulated)
+            completion(accumulated, false)
             return
         }
 
@@ -1617,7 +1651,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                   (200..<300).contains(httpResponse.statusCode),
                   let data = data else {
                 self.trace("fetchMessages fallback user=\(user) http=\((response as? HTTPURLResponse)?.statusCode ?? -1) err=\(error?.localizedDescription ?? "nil")")
-                completion(accumulated)
+                completion(accumulated, false)
                 return
             }
 
@@ -1626,13 +1660,13 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 let merged = accumulated + messages
                 self.trace("fetchMessages page success user=\(user) offset=\(offset) count=\(messages.count) total=\(merged.count)")
                 if messages.count < limit {
-                    completion(merged)
+                    completion(merged, true)
                 } else {
                     self.fetchMessagesPage(for: user, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
                 }
             } else {
                 self.trace("fetchMessages decode failed user=\(user) bytes=\(data.count)")
-                completion(accumulated)
+                completion(accumulated, false)
             }
         }.resume()
     }
@@ -1643,13 +1677,13 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         limit: Int,
         offset: Int,
         accumulated: [RemoteMessageRecord],
-        completion: @escaping ([RemoteMessageRecord]) -> Void
+        completion: @escaping ([RemoteMessageRecord], Bool) -> Void
     ) {
         trace("fetchServerMessages page start server=\(serverId) channel=\(channelId) limit=\(limit) offset=\(offset)")
         let sid = serverId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverId
         let cid = channelId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? channelId
         guard var components = URLComponents(string: apiURL("servers/\(sid)/channels/\(cid)/messages")) else {
-            completion(accumulated)
+            completion(accumulated, false)
             return
         }
         components.queryItems = [
@@ -1657,7 +1691,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             URLQueryItem(name: "offset", value: String(offset))
         ]
         guard let messagesURL = components.url else {
-            completion(accumulated)
+            completion(accumulated, false)
             return
         }
 
@@ -1670,7 +1704,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                   (200..<300).contains(httpResponse.statusCode),
                   let data = data else {
                 self.trace("fetchServerMessages fallback server=\(serverId) channel=\(channelId) http=\((response as? HTTPURLResponse)?.statusCode ?? -1) err=\(error?.localizedDescription ?? "nil")")
-                completion(accumulated)
+                completion(accumulated, false)
                 return
             }
 
@@ -1679,17 +1713,36 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 let merged = accumulated + messages
                 self.trace("fetchServerMessages page success server=\(serverId) channel=\(channelId) offset=\(offset) count=\(messages.count) total=\(merged.count)")
                 if messages.count < limit {
-                    completion(merged)
+                    completion(merged, true)
                 } else {
                     self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
                 }
             } else {
                 self.trace("fetchServerMessages decode failed server=\(serverId) channel=\(channelId) bytes=\(data.count)")
-                completion(accumulated)
+                completion(accumulated, false)
             }
         }.resume()
     }
     
+    /// Retries transient download failures (mirrors Windows' retry_with_backoff(3),
+    /// 250ms/500ms/... capped at 2s). 403 (forbidden) and 413 (too-large sentinel) are
+    /// permanent conditions — retrying them would just waste 3 round-trips, so only the
+    /// live WS-push path (which previously dropped the message on any single failure)
+    /// gets this; history replay already has its own attempt loop in WebView.swift.
+    func downloadMessageWithRetry(messageId: String, attempt: Int = 1, completion: @escaping (URL?, Int?) -> Void) {
+        downloadMessage(messageId: messageId) { [weak self] fileURL, statusCode in
+            if fileURL != nil || statusCode == 403 || statusCode == 413 || attempt >= 3 {
+                completion(fileURL, statusCode)
+                return
+            }
+            let delayMs = min(250 * (1 << (attempt - 1)), 2000)
+            self?.trace("downloadMessage retry id=\(messageId) nextAttempt=\(attempt + 1) delayMs=\(delayMs)")
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
+                self?.downloadMessageWithRetry(messageId: messageId, attempt: attempt + 1, completion: completion)
+            }
+        }
+    }
+
     func downloadMessage(messageId: String, completion: @escaping (URL?, Int?) -> Void) {
         trace("downloadMessage start id=\(messageId)")
         guard let downloadURL = URL(string: apiURL("download/\(messageId)")) else {
@@ -1711,7 +1764,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
 	            }
 	            
 	            let maxMessageFileBytes = 512 * 1024 * 1024
-	            let tempFileURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(messageId).zali")
+	            // Unique per download: two concurrent downloads of the SAME message id
+	            // (e.g. a history reload racing a WS-triggered fetch) previously shared
+	            // "\(messageId).zali" and clobbered/deleted each other's file mid-use.
+	            // Callers are responsible for deleting the returned URL when done.
+	            let tempFileURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(messageId)-\(UUID().uuidString).zali")
 	            do {
 	                try? FileManager.default.removeItem(at: tempFileURL)
 	                try FileManager.default.moveItem(at: sourceURL, to: tempFileURL)
@@ -1754,9 +1811,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             self.heartbeatWorkItem?.cancel()
             self.heartbeatWorkItem = nil
             self.webSocketTask = nil
-            DispatchQueue.main.async {
-                self.onWebSocketDisconnected?()
-            }
+            // onWebSocketDisconnected is fired centrally inside scheduleReconnect now.
             self.scheduleReconnect(reason: "didCloseWith", generation: self.connectionGeneration)
         }
     }

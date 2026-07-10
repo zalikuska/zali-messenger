@@ -5,7 +5,7 @@
 //! handlers.
 
 use crate::{
-    trim_limited, send_payload_to_user, AppState, ApproveDevicePayload, AuthenticatedUser,
+    send_payload_to_user, trim_limited, AppState, ApproveDevicePayload, AuthenticatedUser,
     DeviceRecord, DeviceResponse, HistoryTicketPayload, HistoryTicketRecord, HistoryTicketResponse,
     KeyEnvelopePayload, KeyEnvelopeRecord, KeyEnvelopeResponse, MessagePageQuery,
     RegisterDevicePayload, TransparencyLogRecord, VaultEventPayload, VaultEventRecord,
@@ -657,14 +657,18 @@ pub(crate) async fn post_vault_event(
     if encrypted.len() < 16 {
         return (StatusCode::BAD_REQUEST, "Пустой encryptedVaultEvent").into_response();
     }
-    if !device_id.is_empty() && device_id != "cloud"
-        && require_approved_device(&state.db, &owner, &device_id).await.is_err() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Устройство не подтверждено"})),
-            )
-                .into_response();
-        }
+    if !device_id.is_empty()
+        && device_id != "cloud"
+        && require_approved_device(&state.db, &owner, &device_id)
+            .await
+            .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Устройство не подтверждено"})),
+        )
+            .into_response();
+    }
     let event_id = Uuid::new_v4().to_string();
     let vault_epoch = payload
         .vaultEpoch
@@ -768,9 +772,17 @@ pub(crate) async fn post_key_envelope(
     // (owner, scope, sender) into one row that gets replaced on republish,
     // same placeholder pattern as post_vault_event's "cloud".
     let sender_device_id = trim_limited(payload.senderDeviceId.unwrap_or_default(), 128);
-    let sender_device_id = if sender_device_id.is_empty() { "any".to_string() } else { sender_device_id };
+    let sender_device_id = if sender_device_id.is_empty() {
+        "any".to_string()
+    } else {
+        sender_device_id
+    };
     let recipient_device_id = trim_limited(payload.recipientDeviceId.unwrap_or_default(), 128);
-    let recipient_device_id = if recipient_device_id.is_empty() { "any".to_string() } else { recipient_device_id };
+    let recipient_device_id = if recipient_device_id.is_empty() {
+        "any".to_string()
+    } else {
+        recipient_device_id
+    };
     if recipient.is_empty() || scope.is_empty() || encrypted_key.len() < 32 {
         return (StatusCode::BAD_REQUEST, "Некорректный key envelope").into_response();
     }
@@ -895,7 +907,9 @@ pub(crate) async fn get_vault_events(
 pub(crate) fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, Box<Response>> {
     DateTime::parse_from_rfc3339(value.trim())
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|_| Box::new((StatusCode::BAD_REQUEST, "Дата должна быть RFC3339").into_response()))
+        .map_err(|_| {
+            Box::new((StatusCode::BAD_REQUEST, "Дата должна быть RFC3339").into_response())
+        })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -945,7 +959,10 @@ pub(crate) fn history_access_matches(timestamp: DateTime<Utc>, access: &HistoryA
         .any(|window| timestamp >= window.from && timestamp <= window.to)
 }
 
-pub(crate) fn push_history_access_predicate(builder: &mut QueryBuilder<'_, Sqlite>, access: &HistoryAccess) {
+pub(crate) fn push_history_access_predicate(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    access: &HistoryAccess,
+) {
     let has_base = access.base_since.is_some();
     let has_tickets = !access.ticket_windows.is_empty();
     if !has_base && !has_tickets {

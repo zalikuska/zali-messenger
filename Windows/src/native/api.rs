@@ -11,9 +11,9 @@ use tao::event_loop::EventLoopProxy;
 use futures_util::StreamExt;
 
 use crate::native::{
-    api_http_client, AppEvent, auth_http_client, decode_data_url, dispatch_ui_event,
-    extract_meta_content, http_client, infer_mime_and_kind, join_api_url, MAX_AVATAR_BYTES,
-    sanitize_file_name, trace, UiBusEvent,
+    api_http_client, auth_http_client, decode_data_url, dispatch_ui_event, extract_meta_content,
+    http_client, infer_mime_and_kind, join_api_url, new_request_id, sanitize_file_name, trace,
+    AppEvent, UiBusEvent, MAX_AVATAR_BYTES,
 };
 
 pub(crate) async fn fetch_users(
@@ -90,6 +90,267 @@ pub(crate) async fn fetch_contacts(
     }
 }
 
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn fetch_users_returns_parsed_list_on_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(vec!["alice", "bob"]))
+            .mount(&server)
+            .await;
+
+        let users = fetch_users(server.uri(), Some("token".to_string()), "me".to_string()).await;
+        assert_eq!(users, vec!["alice".to_string(), "bob".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn fetch_users_falls_back_on_http_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let users = fetch_users(server.uri(), None, "me".to_string()).await;
+        assert_eq!(
+            users,
+            vec!["Alice".to_string(), "Bob".to_string(), "me".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_users_falls_back_on_malformed_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let users = fetch_users(server.uri(), None, "me".to_string()).await;
+        assert_eq!(
+            users,
+            vec!["Alice".to_string(), "Bob".to_string(), "me".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_contacts_returns_contacts_on_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/contacts"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "contacts": ["carol", "dave"] })),
+            )
+            .mount(&server)
+            .await;
+
+        let contacts = fetch_contacts(server.uri(), Some("token".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(contacts, vec!["carol".to_string(), "dave".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn fetch_contacts_errs_on_http_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/contacts"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let result = fetch_contacts(server.uri(), None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn perform_api_request_rejects_bad_paths_without_hitting_the_network() {
+        // These are validated before any request is sent, so an unreachable
+        // base URL proves the rejection happens locally.
+        let unreachable = "http://127.0.0.1:1".to_string();
+        let base = ApiSession {
+            api_base_url: unreachable.clone(),
+            auth_token: None,
+            device_id: String::new(),
+        };
+
+        let traversal = perform_api_request(
+            base.clone(),
+            "GET".to_string(),
+            "/api/../secret".to_string(),
+            Value::Null,
+            String::new(),
+            false,
+        )
+        .await;
+        assert!(traversal.is_err());
+
+        let wrong_prefix = perform_api_request(
+            base,
+            "GET".to_string(),
+            "/not-api/x".to_string(),
+            Value::Null,
+            String::new(),
+            false,
+        )
+        .await;
+        assert!(wrong_prefix.is_err());
+    }
+
+    #[tokio::test]
+    async fn perform_api_request_returns_status_and_body_on_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/ping"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("pong"))
+            .mount(&server)
+            .await;
+
+        let result = perform_api_request(
+            ApiSession {
+                api_base_url: server.uri(),
+                auth_token: None,
+                device_id: String::new(),
+            },
+            "GET".to_string(),
+            "/api/ping".to_string(),
+            Value::Null,
+            String::new(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["status"], 200);
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["body"], "pong");
+    }
+
+    #[tokio::test]
+    async fn perform_api_request_generates_a_request_id_when_caller_supplies_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/ping"))
+            .and(wiremock::matchers::header_exists("X-Request-ID"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let result = perform_api_request(
+            ApiSession {
+                api_base_url: server.uri(),
+                auth_token: None,
+                device_id: String::new(),
+            },
+            "GET".to_string(),
+            "/api/ping".to_string(),
+            Value::Null,
+            String::new(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Every request must carry a request id, even when nobody asked for one —
+        // it's the ID that gets echoed back in the response and shown in trace().
+        assert!(!result["httpRequestId"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn perform_api_request_forwards_caller_supplied_request_id_verbatim() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/ping"))
+            .and(wiremock::matchers::header(
+                "X-Request-ID",
+                "caller-chosen-id",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let result = perform_api_request(
+            ApiSession {
+                api_base_url: server.uri(),
+                auth_token: None,
+                device_id: String::new(),
+            },
+            "GET".to_string(),
+            "/api/ping".to_string(),
+            serde_json::json!({ "X-Request-ID": "caller-chosen-id" }),
+            String::new(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // The wiremock header() matcher above already proves the server received
+        // it verbatim; this proves perform_api_request also reports the same ID
+        // back to the caller rather than silently minting a different one.
+        assert_eq!(result["httpRequestId"], "caller-chosen-id");
+    }
+
+    #[tokio::test]
+    async fn perform_api_request_never_duplicates_the_authorization_header() {
+        // Regression test: apiFetch (Web/src/interface.js) puts Authorization into
+        // the same `headers` JSON blob that also gets forwarded generically here.
+        // perform_api_request must not send it twice (once via bearer_auth, once
+        // via the generic forward loop) — a real HTTP server (nginx in front of
+        // production) rejected such requests outright with a bare 400, breaking
+        // every authenticated call.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/ping"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        perform_api_request(
+            ApiSession {
+                api_base_url: server.uri(),
+                auth_token: Some("real-token".to_string()),
+                device_id: String::new(),
+            },
+            "GET".to_string(),
+            "/api/ping".to_string(),
+            // Mirrors what apiHeaders() actually sends: Authorization already
+            // present in the JSON blob alongside the request-id.
+            serde_json::json!({
+                "Authorization": "Bearer stale-token-from-js",
+                "X-Request-ID": "dup-header-check",
+            }),
+            String::new(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        let auth_values: Vec<_> = received[0]
+            .headers
+            .get_all("authorization")
+            .iter()
+            .collect();
+        assert_eq!(
+            auth_values.len(),
+            1,
+            "expected exactly one Authorization header, got {:?}",
+            auth_values
+        );
+        assert_eq!(auth_values[0], "Bearer real-token");
+    }
+}
+
 pub(crate) async fn perform_auth_request(
     api_base_url: String,
     mode: String,
@@ -110,13 +371,25 @@ pub(crate) async fn perform_auth_request(
         "password": password,
     });
     let client = auth_http_client();
+    let http_request_id = new_request_id();
 
-    let mut response = match client.post(&url).json(&payload).send().await {
+    trace(format!(
+        "AUTH_REQUEST start http_request_id={} url={} mode={}",
+        http_request_id, url, mode
+    ));
+
+    let mut response = match client
+        .post(&url)
+        .header("X-Request-ID", &http_request_id)
+        .json(&payload)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             trace(format!(
-                "AUTH_REQUEST transport_error url={} err={}",
-                url, error
+                "AUTH_REQUEST transport_error http_request_id={} url={} err={}",
+                http_request_id, url, error
             ));
             dispatch_ui_event(
                 &proxy,
@@ -133,16 +406,22 @@ pub(crate) async fn perform_auth_request(
 
     if mode_is_register && response.status().as_u16() == 409 {
         trace(format!(
-            "AUTH_REQUEST register_conflict url={} retry=login",
-            url
+            "AUTH_REQUEST register_conflict http_request_id={} url={} retry=login",
+            http_request_id, url
         ));
         let login_url = join_api_url(&api_base_url, "/api/auth/login");
-        response = match client.post(&login_url).json(&payload).send().await {
+        response = match client
+            .post(&login_url)
+            .header("X-Request-ID", &http_request_id)
+            .json(&payload)
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 trace(format!(
-                    "AUTH_REQUEST retry_transport_error url={} err={}",
-                    login_url, error
+                    "AUTH_REQUEST retry_transport_error http_request_id={} url={} err={}",
+                    http_request_id, login_url, error
                 ));
                 dispatch_ui_event(
                     &proxy,
@@ -162,7 +441,8 @@ pub(crate) async fn perform_auth_request(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         trace(format!(
-            "AUTH_REQUEST http_fail url={} status={} body={}",
+            "AUTH_REQUEST http_fail http_request_id={} url={} status={} body={}",
+            http_request_id,
             url,
             status,
             body.chars().take(200).collect::<String>()
@@ -187,8 +467,8 @@ pub(crate) async fn perform_auth_request(
         Ok(value) => value,
         Err(error) => {
             trace(format!(
-                "AUTH_REQUEST decode_error url={} err={}",
-                url, error
+                "AUTH_REQUEST decode_error http_request_id={} url={} err={}",
+                http_request_id, url, error
             ));
             dispatch_ui_event(
                 &proxy,
@@ -251,18 +531,31 @@ pub(crate) async fn perform_auth_request(
     );
 }
 
+/// Auth/routing context shared by every authenticated API call:
+/// base URL, bearer token and the sending device's identity.
+#[derive(Clone)]
+pub(crate) struct ApiSession {
+    pub api_base_url: String,
+    pub auth_token: Option<String>,
+    pub device_id: String,
+}
+
 pub(crate) async fn perform_api_request(
-    api_base_url: String,
-    auth_token: Option<String>,
-    device_id: String,
+    session: ApiSession,
     method: String,
     path: String,
     headers: Value,
     body: String,
     include_device_id: bool,
 ) -> Result<Value, String> {
+    let ApiSession {
+        api_base_url,
+        auth_token,
+        device_id,
+    } = session;
     let method = reqwest::Method::from_bytes(method.trim().as_bytes())
         .map_err(|_| "Некорректный HTTP method".to_string())?;
+    let method_display = method.as_str().to_string();
     let path = path.trim();
     if path.is_empty() || !path.starts_with("/api/") {
         return Err("Некорректный API path".to_string());
@@ -285,21 +578,71 @@ pub(crate) async fn perform_api_request(
     if include_device_id && !device_id.trim().is_empty() {
         request = request.header("X-Zali-Device-ID", device_id);
     }
-    if let Some(content_type) = headers
-        .get("Content-Type")
-        .or_else(|| headers.get("content-type"))
+    // Forward every header the caller set, not just Content-Type — this is what
+    // lets the request-id apiFetch (Web/src/interface.js) generates for
+    // correlation actually reach the server instead of being silently dropped.
+    // Skip names already set explicitly above: apiHeaders() on the JS side puts
+    // Authorization/X-Zali-Device-ID into this same object, and forwarding them
+    // again here produced a request with the header set twice — which nginx
+    // rejected outright with a generic 400 before it ever reached the app,
+    // breaking every single authenticated API call.
+    if let Some(header_map) = headers.as_object() {
+        for (name, value) in header_map {
+            if name.eq_ignore_ascii_case("authorization")
+                || name.eq_ignore_ascii_case("x-zali-device-id")
+            {
+                continue;
+            }
+            if let Some(value_str) = value.as_str().map(str::trim).filter(|v| !v.is_empty()) {
+                if let (Ok(header_name), Ok(header_value)) = (
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(value_str),
+                ) {
+                    request = request.header(header_name, header_value);
+                }
+            }
+        }
+    }
+    let caller_supplied_request_id = headers
+        .get("X-Request-ID")
+        .or_else(|| headers.get("x-request-id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+        .map(str::to_string);
+    let http_request_id = caller_supplied_request_id
+        .clone()
+        .unwrap_or_else(new_request_id);
+    if caller_supplied_request_id.is_none() {
+        request = request.header("X-Request-ID", &http_request_id);
     }
     if !body.is_empty() {
         request = request.body(body);
     }
 
-    let response = request.send().await.map_err(|error| error.to_string())?;
+    trace(format!(
+        "perform_api_request start http_request_id={} method={} path={}",
+        http_request_id, method_display, path
+    ));
+
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            trace(format!(
+                "perform_api_request transport_error http_request_id={} method={} path={} err={}",
+                http_request_id, method_display, path, error
+            ));
+            return Err(error.to_string());
+        }
+    };
     let status = response.status();
+    trace(format!(
+        "perform_api_request done http_request_id={} method={} path={} status={}",
+        http_request_id,
+        method_display,
+        path,
+        status.as_u16()
+    ));
     let mut response_headers = serde_json::Map::new();
     for (name, value) in response.headers().iter() {
         if let Ok(text) = value.to_str() {
@@ -312,6 +655,7 @@ pub(crate) async fn perform_api_request(
         "ok": status.is_success(),
         "headers": response_headers,
         "body": body,
+        "httpRequestId": http_request_id,
     }))
 }
 
@@ -548,7 +892,11 @@ pub(crate) async fn perform_reaction_request(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) async fn resolve_tenor_url(url: String, request_id: String, proxy: EventLoopProxy<AppEvent>) {
+pub(crate) async fn resolve_tenor_url(
+    url: String,
+    request_id: String,
+    proxy: EventLoopProxy<AppEvent>,
+) {
     let source_url = url.trim().to_string();
     if source_url.is_empty() {
         return;

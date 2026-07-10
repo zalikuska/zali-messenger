@@ -1,7 +1,7 @@
 use std::fs;
 use zali_sdk::ZaliSession;
 
-fn main() -> Result<(), Box<dyn std::error_code>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Имитируем получение файлов в мессенджере
     fs::write("photo.jpg", "image_data_here").unwrap();
     fs::write("document.pdf", "pdf_data_here").unwrap();
@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error_code>> {
     println!("--- Messenger Integration Example ---");
 
     // 2. Создаем сессию с паролем пользователя
-    let sdk = ZaliSession::new(Some("my_secret_chat_password"));
+    let sdk = ZaliSession::new(Some("my_secret_chat_password"), None);
 
     // 3. Упаковываем файлы для отправки
     let files = vec![
@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error_code>> {
     println!("✅ Вложения упакованы и зашифрованы в chat_attachment.zali");
 
     // 4. На стороне получателя: смотрим список файлов
-    let contents = sdk.list_contents("chat_attachment.zali")?;
+    let (_magic, contents) = sdk.inspect_archive("chat_attachment.zali")?;
     println!("📂 Содержимое архива:");
     for (name, size) in contents {
         println!(" - {} ({} байт)", name, size);

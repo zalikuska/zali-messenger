@@ -188,7 +188,6 @@ pub(crate) struct ChannelResponse {
     pub(crate) position: i64,
 }
 
-
 #[derive(Debug, Serialize)]
 pub(crate) struct ServerResponse {
     pub(crate) id: String,

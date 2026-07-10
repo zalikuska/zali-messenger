@@ -42,6 +42,9 @@ pub enum ZaliError {
     Crypto(String),
 }
 
+/// Инвентарь архива: обнаруженный магический маркер и список файлов `(имя, размер)`.
+pub type ArchiveInventory = ([u8; 8], Vec<(String, u64)>);
+
 /// Основная структура сессии ZaliArchiver для мессенджера.
 pub struct ZaliSession {
     password: Option<String>,
@@ -79,10 +82,7 @@ impl ZaliSession {
     }
 
     /// Возвращает список файлов и обнаруженный магический маркер архива.
-    pub fn inspect_archive(
-        &self,
-        archive_path: &str,
-    ) -> Result<([u8; 8], Vec<(String, u64)>), ZaliError> {
+    pub fn inspect_archive(&self, archive_path: &str) -> Result<ArchiveInventory, ZaliError> {
         let mut in_file = File::open(archive_path)?;
         let mut found_mag = [0u8; 8];
         in_file.read_exact(&mut found_mag)?;
@@ -178,11 +178,7 @@ impl ZaliSession {
             out.write_all(&arc_name.as_bytes()[..n_len as usize])?;
             out.write_u64::<LittleEndian>(size)?;
 
-            let num_chunks = if size == 0 {
-                0
-            } else {
-                (size + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64
-            };
+            let num_chunks = size.div_ceil(CHUNK_SIZE as u64);
             out.write_u64::<LittleEndian>(if is_enc { size + num_chunks * 16 } else { size })?;
 
             let mut rem = size;
@@ -272,8 +268,7 @@ impl ZaliSession {
 
             total_extracted = total_extracted.saturating_add(o_size);
             if total_extracted > MAX_TOTAL_EXTRACTED_BYTES {
-                return Err(ZaliError::Io(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(ZaliError::Io(io::Error::other(
                     "Archive extraction limit exceeded",
                 )));
             }
@@ -287,11 +282,7 @@ impl ZaliSession {
                     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "File too large"))?;
                 in_file.seek(SeekFrom::Current(offset))?;
                 if is_enc {
-                    let num = if o_size == 0 {
-                        0
-                    } else {
-                        (o_size + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64
-                    };
+                    let num = o_size.div_ceil(CHUNK_SIZE as u64);
                     let num = u32::try_from(num)
                         .map_err(|_| ZaliError::Crypto("Chunk index overflow".to_string()))?;
                     chunk_idx = chunk_idx

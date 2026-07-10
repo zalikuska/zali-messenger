@@ -6,9 +6,10 @@ use base64::Engine;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-
-
-pub(crate) fn normalize_voice_ws_url(ws_base_url: Option<String>, api_base_url: Option<String>) -> String {
+pub(crate) fn normalize_voice_ws_url(
+    ws_base_url: Option<String>,
+    api_base_url: Option<String>,
+) -> String {
     if let Some(raw) = ws_base_url {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
@@ -57,7 +58,7 @@ pub(crate) fn sanitize_file_name(name: &str, fallback_extension: &str) -> String
         return format!("attachment.{fallback_extension}");
     }
     let cleaned = trimmed.trim_start_matches('.').to_string();
-    
+
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "attachment".to_string()
     } else {
@@ -122,7 +123,7 @@ pub(crate) fn sanitize_download_name(name: &str, fallback_extension: &str) -> St
         return format!("attachment.{fallback_extension}");
     }
     let cleaned = trimmed.trim_start_matches('.').to_string();
-    
+
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "attachment".to_string()
     } else {
@@ -236,4 +237,182 @@ pub(crate) fn infer_mime_and_kind(url: &str) -> (String, String) {
         return ("image/jpeg".to_string(), "image".to_string());
     }
     ("application/octet-stream".to_string(), "file".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_voice_ws_url_prefers_explicit_ws_base_url() {
+        assert_eq!(
+            normalize_voice_ws_url(Some(" wss://example.com/ws/ ".to_string()), None),
+            "wss://example.com/ws"
+        );
+    }
+
+    #[test]
+    fn normalize_voice_ws_url_derives_from_https_api_base() {
+        assert_eq!(
+            normalize_voice_ws_url(None, Some("https://msgs.zalikus.org/".to_string())),
+            "wss://msgs.zalikus.org/ws"
+        );
+    }
+
+    #[test]
+    fn normalize_voice_ws_url_derives_from_http_api_base() {
+        assert_eq!(
+            normalize_voice_ws_url(None, Some("http://localhost:3000".to_string())),
+            "ws://localhost:3000/ws"
+        );
+    }
+
+    #[test]
+    fn normalize_voice_ws_url_falls_back_to_default_when_both_empty() {
+        assert_eq!(
+            normalize_voice_ws_url(Some("   ".to_string()), None),
+            "wss://msgs.zalikus.org/ws"
+        );
+        assert_eq!(
+            normalize_voice_ws_url(None, None),
+            "wss://msgs.zalikus.org/ws"
+        );
+    }
+
+    #[test]
+    fn join_api_url_normalizes_slashes() {
+        assert_eq!(
+            join_api_url("https://api.example.com/", "/api/messages"),
+            "https://api.example.com/api/messages"
+        );
+        assert_eq!(
+            join_api_url("https://api.example.com", "api/messages"),
+            "https://api.example.com/api/messages"
+        );
+    }
+
+    #[test]
+    fn sanitize_file_name_replaces_forbidden_characters() {
+        assert_eq!(
+            sanitize_file_name("weird/name:with*bad|chars?.txt", "bin"),
+            "weird_name_with_bad_chars_.txt"
+        );
+    }
+
+    #[test]
+    fn sanitize_file_name_falls_back_when_empty_or_dot_only() {
+        assert_eq!(sanitize_file_name("", "png"), "attachment.png");
+        assert_eq!(sanitize_file_name("   ", "png"), "attachment.png");
+        assert_eq!(sanitize_file_name(".", "png"), "attachment");
+        assert_eq!(sanitize_file_name("..", "png"), "attachment");
+    }
+
+    #[test]
+    fn sanitize_file_name_strips_leading_dots_but_keeps_rest() {
+        assert_eq!(sanitize_file_name("...hidden.txt", "bin"), "hidden.txt");
+    }
+
+    #[test]
+    fn decode_data_url_decodes_base64_payload() {
+        let encoded = BASE64_STANDARD.encode(b"hello world");
+        let data_url = format!("data:image/png;base64,{}", encoded);
+        let (bytes, mime, ext) = decode_data_url(&data_url).unwrap();
+        assert_eq!(bytes, b"hello world");
+        assert_eq!(mime, "image/png");
+        assert_eq!(ext, "png");
+    }
+
+    #[test]
+    fn decode_data_url_preserves_raw_non_base64_payload() {
+        let (bytes, mime, ext) = decode_data_url("data:text/plain,hello").unwrap();
+        assert_eq!(bytes, b"hello");
+        assert_eq!(mime, "text/plain");
+        assert_eq!(ext, "bin");
+    }
+
+    #[test]
+    fn decode_data_url_rejects_non_data_scheme() {
+        assert!(decode_data_url("https://example.com/image.png").is_none());
+    }
+
+    #[test]
+    fn decode_data_url_rejects_missing_comma() {
+        assert!(decode_data_url("data:image/png;base64").is_none());
+    }
+
+    #[test]
+    fn decode_data_url_rejects_invalid_base64() {
+        assert!(decode_data_url("data:image/png;base64,not-valid-base64!!!").is_none());
+    }
+
+    #[test]
+    fn decode_data_url_enforces_100mb_hard_cap() {
+        // One byte over the cap must be rejected outright, before any parsing —
+        // this is the guard against unbounded-memory attacks documented in CLAUDE.md.
+        let oversized = "a".repeat(100 * 1024 * 1024 + 1);
+        assert!(decode_data_url(&oversized).is_none());
+    }
+
+    #[test]
+    fn unique_download_path_avoids_collisions() {
+        let dir = std::env::temp_dir().join(format!(
+            "zali-win-test-unique-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let first = unique_download_path(&dir, "photo.png");
+        assert_eq!(first, dir.join("photo.png"));
+        fs::write(&first, b"x").unwrap();
+
+        let second = unique_download_path(&dir, "photo.png");
+        assert_eq!(second, dir.join("photo (2).png"));
+        fs::write(&second, b"x").unwrap();
+
+        let third = unique_download_path(&dir, "photo.png");
+        assert_eq!(third, dir.join("photo (3).png"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_meta_content_reads_double_and_single_quoted_values() {
+        let html = r#"<meta property="og:title" content="Hello World">"#;
+        assert_eq!(
+            extract_meta_content(html, "og:title"),
+            Some("Hello World".to_string())
+        );
+
+        let html_single = r#"<meta property='og:title' content='Single Quoted'>"#;
+        assert_eq!(
+            extract_meta_content(html_single, "og:title"),
+            Some("Single Quoted".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_meta_content_returns_none_when_marker_absent() {
+        let html = r#"<meta property="og:description" content="whatever">"#;
+        assert_eq!(extract_meta_content(html, "og:title"), None);
+    }
+
+    #[test]
+    fn infer_mime_and_kind_covers_known_and_unknown_extensions() {
+        assert_eq!(
+            infer_mime_and_kind("https://x/a.MP4"),
+            ("video/mp4".to_string(), "video".to_string())
+        );
+        assert_eq!(
+            infer_mime_and_kind("https://x/a.jpeg"),
+            ("image/jpeg".to_string(), "image".to_string())
+        );
+        assert_eq!(
+            infer_mime_and_kind("https://x/a.unknown"),
+            ("application/octet-stream".to_string(), "file".to_string())
+        );
+    }
 }

@@ -18,8 +18,8 @@ use tokio_tungstenite::{
 };
 
 use crate::native::{
-    AppEvent, candidate_message_keys, dispatch_ui_event, MessageConfig, process_history_record,
-    trace, UiBusEvent, VoiceConfig,
+    candidate_message_keys, dispatch_ui_event, process_history_record, trace, ApiSession, AppEvent,
+    MessageConfig, UiBusEvent, VoiceConfig,
 };
 
 pub(crate) fn websocket_request(
@@ -117,7 +117,17 @@ pub(crate) fn show_message_notification(rendered: &Value, current_username: &str
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
-    let has_channel = rendered.get("serverId").is_some() || rendered.get("channelId").is_some();
+    // serde serializes an Option::None serverId/channelId to `Value::Null` with the key
+    // still present, so `.is_some()` on the key is always true — check for a non-null,
+    // non-empty string value instead, matching macOS's `serverId==nil && channelId==nil`.
+    let has_channel = rendered
+        .get("serverId")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        || rendered
+            .get("channelId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
     let title = if has_channel {
         format!("{} в канале", sender)
     } else {
@@ -331,10 +341,31 @@ pub(crate) async fn handle_message_ws_payload(
         })
         .unwrap_or(false)
     {
-        if raw.get("type").and_then(Value::as_str) == Some("key_envelope_available") {
+        let event_type = raw.get("type").and_then(Value::as_str).unwrap_or("");
+        if event_type == "key_envelope_available" {
             dispatch_ui_event(&proxy, UiBusEvent::RefreshAfterKey, serde_json::Value::Null);
-        } else if raw.get("type").and_then(Value::as_str) == Some("reaction_updated") {
+        } else if event_type == "reaction_updated" {
             dispatch_ui_event(&proxy, UiBusEvent::ReactionUpdated, raw);
+        } else if event_type == "avatar_updated" || event_type == "avatar_deleted" {
+            // Mirrors macOS onAvatarChanged (NetworkService.swift) -> avatarUpdated/avatarDeleted
+            // (WebView.swift): both funnel into the same web bus event with a `deleted` flag,
+            // so a contact's avatar change/removal reflects live instead of only on next reload.
+            let username = raw
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !username.is_empty() {
+                let deleted = raw
+                    .get("deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(event_type == "avatar_deleted");
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::AvatarUpdated,
+                    json!({ "username": username, "deleted": deleted }),
+                );
+            }
         }
         return;
     }
@@ -374,10 +405,26 @@ pub(crate) async fn handle_message_ws_payload(
         channel_id.as_deref(),
     );
 
+    // Captured before the move into process_history_record below — needed for the
+    // decrypt-failure self-heal branch (sync_active_conversation).
+    let sync_peer = {
+        let sender = raw.get("sender").and_then(Value::as_str).unwrap_or("");
+        let receiver = raw.get("receiver").and_then(Value::as_str).unwrap_or("");
+        if sender.trim() == current.current_username.trim() {
+            receiver.to_string()
+        } else {
+            sender.to_string()
+        }
+    };
+    let sync_server_id = server_id.clone();
+    let sync_channel_id = channel_id.clone();
+
     match process_history_record(
-        current.api_base_url,
-        current.auth_token,
-        current.current_device_id,
+        ApiSession {
+            api_base_url: current.api_base_url,
+            auth_token: current.auth_token,
+            device_id: current.current_device_id,
+        },
         keys,
         raw,
         "message_ws",
@@ -398,6 +445,22 @@ pub(crate) async fn handle_message_ws_payload(
                 "{} skipped render for message_id={} reason=unpack_or_decrypt_failed",
                 "message_ws", message_id
             ));
+            // Mirrors macOS onMessageDecryptFailed -> sync_active_conversation: a message
+            // that arrived before its key envelope should trigger a targeted re-resolve for
+            // that specific peer instead of waiting for a generic key_envelope_available frame
+            // that may never come for this exact conversation.
+            if !sync_peer.trim().is_empty() {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::SyncActiveConversation,
+                    json!({
+                        "force": true,
+                        "peer": sync_peer,
+                        "serverId": sync_server_id.unwrap_or_default(),
+                        "channelId": sync_channel_id.unwrap_or_default(),
+                    }),
+                );
+            }
         }
     }
 }
@@ -569,5 +632,26 @@ pub(crate) async fn run_message_transport(
         // error, stream end) lands here before the outer loop retries — one place to
         // flip the badge off instead of duplicating it at each break site.
         dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(false));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_body_prefers_message_text_truncated_to_180_chars() {
+        assert_eq!(notification_body("hello there", 0), "hello there");
+
+        let long_text = "x".repeat(250);
+        let body = notification_body(&long_text, 0);
+        assert_eq!(body.chars().count(), 180);
+    }
+
+    #[test]
+    fn notification_body_falls_back_to_attachment_summary_when_text_is_empty() {
+        assert_eq!(notification_body("", 0), "Новое сообщение");
+        assert_eq!(notification_body("   ", 1), "Вложение");
+        assert_eq!(notification_body("", 3), "Вложения: 3");
     }
 }

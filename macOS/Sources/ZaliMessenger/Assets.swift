@@ -7962,6 +7962,11 @@ class ZaliInterface {
         return transport === 'ipc' || transport === 'webview2';
     }
 
+    hasNativeAvatarBridge() {
+        const transport = this.nativeBridge()?.transport;
+        return transport === 'ipc' || transport === 'webview2' || transport === 'webkit';
+    }
+
     startEnergyAwareMaintenance() {
         if (!this.energyMaintenanceBound) {
             this.energyMaintenanceBound = true;
@@ -8062,6 +8067,18 @@ class ZaliInterface {
         try {
             console.log(`[ZALI][WEB] ${message}`);
         } catch (e) {}
+    }
+
+    // Per-call correlation ID for apiFetch — logged locally and sent as the
+    // X-Request-ID header, which the server echoes back and tags every one of
+    // its own log lines for that request with. `grep request_id=<id>` across
+    // both the browser console and the server log then shows one request's
+    // entire lifecycle end to end, instead of guessing which server-side log
+    // line matches which client-side action.
+    newRequestId() {
+        return (window.crypto && window.crypto.randomUUID)
+            ? window.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     }
 
     nowMs() {
@@ -11020,6 +11037,12 @@ class ZaliInterface {
             attemptCount: Number(message.attemptCount || 0),
             lastAttemptAt: Number(message.lastAttemptAt || 0),
             nextRetryAt: Number(message.nextRetryAt || 0),
+            // Persist the encryption key (and its version) the optimistic message was
+            // queued with. Previously this field was silently dropped, so every retry
+            // re-derived the *current* conversation key via pendingOutboxItemKey — after
+            // a key rotation a retry could ship under a different key than its bubble.
+            key: message.key ? String(message.key) : '',
+            keyVersion: Number(message.keyVersion || 2),
             inFlight: !!message.inFlight,
         });
         this.savePendingOutbox(pending);
@@ -11284,6 +11307,11 @@ class ZaliInterface {
                 if (!Number.isFinite(stalledMs) || stalledMs < 45000) continue;
                 this.trace(`flushPendingOutbox stalled inFlight cleared clientId=${String(item.clientId || '').trim()} stalledMs=${Math.round(stalledMs)}`);
                 item.inFlight = false;
+                // Reclaim the concurrency slot this stalled item was holding. Without
+                // this, when MAX_CONCURRENT_SENDS items are all stalled at once,
+                // inFlightCount never drops below the cap, so the throttle check below
+                // always breaks the loop — the queue deadlocks and nothing is retried.
+                inFlightCount = Math.max(0, inFlightCount - 1);
             }
             if (inFlightCount >= MAX_CONCURRENT_SENDS) {
                 this.trace(`flushPendingOutbox throttled inFlight=${inFlightCount} cap=${MAX_CONCURRENT_SENDS}`);
@@ -16267,12 +16295,17 @@ class ZaliInterface {
             this.avatarRefreshScheduled = false;
             this.renderSidebarProfile();
             this.renderContacts();
+            // The chat header avatar (own avatar in the empty/DM state, peer avatar in a
+            // DM) is rendered by renderServerToolbar; without refreshing it here it keeps
+            // the fallback letter it drew before the avatar finished loading async.
+            this.renderServerToolbar();
         });
     }
 
     updateAvatarViews() {
         this.renderSidebarProfile();
         this.renderContacts();
+        this.renderServerToolbar();
         this.scheduleRenderMessages();
     }
 
@@ -16501,17 +16534,77 @@ class ZaliInterface {
         });
     }
 
-    async setProfileAvatar(file) {
-        if (!file) return;
+    // Re-encode an avatar to a SMALL JPEG before upload, iterating dimension/quality
+    // down until the encoded bytes fit a tight budget (~14 KB). Avatars render as tiny
+    // circles, so this costs no visible quality — and it is the difference between the
+    // avatar loading or not over a low-MTU / lossy path (e.g. a VPN with MTU 1280):
+    // there the server's response stalls once it exceeds roughly the TCP initial window
+    // (~12–30 KB with MSS 1240), so a 31 KB avatar never finishes downloading while a
+    // ~10 KB one arrives in the first round-trip. Best-effort: returns the original file
+    // if the canvas pipeline is unavailable.
+    async downscaleAvatarFile(file, targetBytes = 14 * 1024) {
+        try {
+            if (typeof document === 'undefined' || typeof document.createElement !== 'function') return file;
+            const dataUrl = await this.readFileAsDataURL(file);
+            const img = await new Promise((resolve, reject) => {
+                const im = new Image();
+                im.onload = () => resolve(im);
+                im.onerror = () => reject(new Error('decode failed'));
+                im.src = dataUrl;
+            });
+            const w = img.naturalWidth || img.width;
+            const h = img.naturalHeight || img.height;
+            if (!w || !h) return file;
+            const baseName = String(file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
+            const encode = async (dim, q) => {
+                const scale = Math.min(1, dim / Math.max(w, h));
+                const cw = Math.max(1, Math.round(w * scale));
+                const ch = Math.max(1, Math.round(h * scale));
+                const canvas = document.createElement('canvas');
+                canvas.width = cw;
+                canvas.height = ch;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return null;
+                ctx.drawImage(img, 0, 0, cw, ch);
+                return await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', q));
+            };
+            // Progressively smaller/lower-quality until under budget. Ordered largest→smallest
+            // so we keep the best quality that still fits.
+            const attempts = [[256, 0.8], [224, 0.72], [192, 0.66], [160, 0.62], [128, 0.6], [96, 0.55]];
+            let best = null;
+            for (const [dim, q] of attempts) {
+                const blob = await encode(dim, q);
+                if (!blob || blob.size === 0) continue;
+                best = blob;
+                if (blob.size <= targetBytes) break;
+            }
+            if (!best || best.size >= file.size) {
+                // Couldn't beat the original (already tiny, or encode unavailable).
+                if (best && best.size < file.size) {
+                    return new File([best], `${baseName}.jpg`, { type: 'image/jpeg' });
+                }
+                return file;
+            }
+            this.trace(`downscaleAvatar ${file.size}B -> ${best.size}B`);
+            return new File([best], `${baseName}.jpg`, { type: 'image/jpeg' });
+        } catch (e) {
+            this.trace(`downscaleAvatar failed, using original: ${e?.message || e}`);
+            return file;
+        }
+    }
+
+    async setProfileAvatar(inputFile) {
+        if (!inputFile) return;
         const target = String(this.myName()).trim();
-        if (!file.type || !file.type.startsWith('image/')) {
+        if (!inputFile.type || !inputFile.type.startsWith('image/')) {
             throw new Error('Нужен файл изображения');
         }
         const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
-        if (file.size > MAX_AVATAR_BYTES) {
+        if (inputFile.size > MAX_AVATAR_BYTES) {
             throw new Error('Аватар слишком большой. Выберите изображение до 2 МБ');
         }
-        if (this.isWindowsNativeAuth()) {
+        const file = await this.downscaleAvatarFile(inputFile);
+        if (this.hasNativeAvatarBridge()) {
             const dataUrl = await this.readFileAsDataURL(file);
             await this.requestNativeAction({
                 type: NativeMessageTypes.UPLOAD_AVATAR_REQUEST,
@@ -16540,7 +16633,7 @@ class ZaliInterface {
 
     async resetProfileAvatar() {
         const target = String(this.myName()).trim();
-        if (this.isWindowsNativeAuth()) {
+        if (this.hasNativeAvatarBridge()) {
             await this.requestNativeAction({
                 type: NativeMessageTypes.DELETE_AVATAR_REQUEST,
             });
@@ -16648,7 +16741,8 @@ class ZaliInterface {
 
     async _apiFetchImpl(path, options = {}) {
         const method = String(options?.method || 'GET').toUpperCase();
-        this.trace(`apiFetch request method=${method} path=${path} auth=${!!this.S.session?.token}`);
+        const requestId = this.newRequestId();
+        this.trace(`apiFetch request method=${method} path=${path} request_id=${requestId} auth=${!!this.S.session?.token}`);
         const {
             includeDeviceId = false,
             allowSessionInvalidation = false,
@@ -16657,7 +16751,10 @@ class ZaliInterface {
             headers: optionHeaders,
             ...fetchOptions
         } = options || {};
-        const headers = this.apiHeaders(optionHeaders || {}, { includeDeviceId: !!includeDeviceId });
+        const headers = this.apiHeaders(
+            { 'X-Request-ID': requestId, ...(optionHeaders || {}) },
+            { includeDeviceId: !!includeDeviceId },
+        );
         if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
             headers['Content-Type'] = 'application/json';
         }
@@ -16669,7 +16766,7 @@ class ZaliInterface {
                 includeDeviceId,
                 timeoutMs: timeoutMs || API_REQUEST_TIMEOUT_MS,
             });
-            this.trace(`apiFetch native response method=${method} path=${path} status=${res.status} ok=${res.ok}`);
+            this.trace(`apiFetch native response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         }
@@ -16695,9 +16792,12 @@ class ZaliInterface {
                 ...fetchOptions,
                 headers,
             });
-            this.trace(`apiFetch response method=${method} path=${path} status=${res.status} ok=${res.ok}`);
+            this.trace(`apiFetch response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
+        } catch (error) {
+            this.trace(`apiFetch transport_error method=${method} path=${path} request_id=${requestId} err=${error?.message || error}`);
+            throw error;
         } finally {
             if (timeoutId) clearTimeout(timeoutId);
             if (originalSignal && abortForwarder) {
@@ -19425,16 +19525,32 @@ class ZaliInterface {
             keyVersion,
         };
 
-        if (!cryptoKey) {
-            this.trace(`sendInputMessage missingKey clientId=${clientId}`);
-            this.addLogEntry({ type: 'ERROR', msg: 'Для отправки сообщения нужен E2E-ключ', ts: new Date().toLocaleTimeString() });
-            return;
-        }
         if (!this.S.session?.token) {
             this.trace(`sendInputMessage missingToken clientId=${clientId}`);
             this.addLogEntry({ type: 'ERROR', msg: 'Для отправки сообщения нужно войти в аккаунт', ts: new Date().toLocaleTimeString() });
             return;
         }
+
+        // Recover the E2E key from the cloud vault BEFORE giving up. A fresh device
+        // (or one whose in-memory key was cleared) can still have a recoverable vault
+        // snapshot. This used to live after an early `if (!cryptoKey) return`, which
+        // made it dead code — sends failed with "нужен E2E-ключ" even when recovery
+        // would have succeeded.
+        if (!cryptoKey) {
+            const recoveredVaultPassphrase = await this.loadVaultUnlockSecret(this.S.session?.token);
+            if (recoveredVaultPassphrase) {
+                this.S.auth.vaultPassphrase = recoveredVaultPassphrase;
+                await this.restoreCloudVaultSnapshot({ reason: 'sendInputMessage' });
+                await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: 'sendInputMessage' });
+            }
+        }
+        const effectiveCryptoKey = cryptoKey || this.loadStoredCryptoKey();
+        if (!effectiveCryptoKey) {
+            this.trace(`sendInputMessage missingKey clientId=${clientId}`);
+            this.addLogEntry({ type: 'ERROR', msg: 'Для отправки сообщения нужен E2E-ключ', ts: new Date().toLocaleTimeString() });
+            return;
+        }
+
         if (!isServers && String(this.S.current || '').trim() !== this.myName()) {
             const scope = this.conversationScopeKey(this.S.current);
             if (!this._publishedKeyScopes) this._publishedKeyScopes = new Set();
@@ -19443,7 +19559,7 @@ class ZaliInterface {
                 void this.publishConversationKeyToPeer({
                     peer: this.S.current,
                     scope,
-                    key: cryptoKey,
+                    key: effectiveCryptoKey,
                     reason: 'sendInputMessage',
                 }).then(published => {
                     if (published !== true) {
@@ -19486,21 +19602,6 @@ class ZaliInterface {
             return;
         }
 
-        if (!cryptoKey) {
-            const recoveredVaultPassphrase = await this.loadVaultUnlockSecret(this.S.session?.token);
-            if (recoveredVaultPassphrase) {
-                this.S.auth.vaultPassphrase = recoveredVaultPassphrase;
-                await this.restoreCloudVaultSnapshot({ reason: 'sendInputMessage' });
-                await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: 'sendInputMessage' });
-            }
-        }
-        const effectiveCryptoKey = cryptoKey || this.loadStoredCryptoKey();
-        if (!effectiveCryptoKey) {
-            this.trace(`sendInputMessage missingKey clientId=${clientId}`);
-            this.addLogEntry({ type: 'ERROR', msg: 'Для отправки сообщения нужен E2E-ключ', ts: new Date().toLocaleTimeString() });
-            return;
-        }
-
         if (isServers) {
             if (!this.S.serverChats[conversationKey]) this.S.serverChats[conversationKey] = [];
             this.S.serverChats[conversationKey].push(outgoingMessage);
@@ -19527,14 +19628,14 @@ class ZaliInterface {
         this.cachePendingOutboxAttachments(clientId, payloadAttachments);
         this.enqueuePendingOutbox({
             ...outgoingMessage,
-            key: cryptoKey,
+            key: effectiveCryptoKey,
             keyVersion,
             attemptCount: 1,
             lastAttemptAt: Date.now(),
             nextRetryAt: Date.now() + 20000,
             inFlight: true,
         });
-        this.scheduleSendWatchdog(outgoingMessage, cryptoKey);
+        this.scheduleSendWatchdog(outgoingMessage, effectiveCryptoKey);
         this.trace(`sendInputMessage queued clientId=${clientId}`);
 
         const sentToNative = this.postNativeMessage({
@@ -19833,7 +19934,11 @@ class ZaliInterface {
                 this.saveStoredCurrentContact(null);
                 const set = (id, v) => { const e = document.getElementById(id); if(e) e.textContent = v; };
                 set('tbChat', 'Нет контактов');
-                set('chatHdrAva', 'Z');
+                // Render the user's own avatar here (same as renderServerToolbar's empty
+                // state) rather than hard-coding the fallback letter — otherwise this
+                // clobbers the just-loaded avatar image and it flashes then disappears.
+                const avaEl = document.getElementById('chatHdrAva');
+                if (avaEl) avaEl.innerHTML = this.renderAvatarHTML(this.myName(), 'avatar-img', this.myName());
                 set('chatHdrName', 'Добавьте контакт');
             }
             if (this.S.current) {
@@ -20234,6 +20339,9 @@ class ZaliInterface {
     }
 
     addLogEntry({ type, msg, ts }) {
+        // Mirror to console so the native console-hook persists the full in-app
+        // journal to zali-debug.log on disk (readable without the UI).
+        try { console.log(`[ZALI][JOURNAL] ${type}: ${msg}`); } catch (e) {}
         const body = document.getElementById('logBody');
         if (body) {
             const div = document.createElement('div');
@@ -20736,13 +20844,17 @@ class ZaliInterface {
 
             const onChange = async () => {
                 const file = input.files && input.files[0];
-                cleanup();
-                if (!file) return;
+                if (!file) {
+                    cleanup();
+                    return;
+                }
                 try {
                     await this.setProfileAvatar(file, this.myName());
                     this.addLogEntry({ type: 'SUCCESS', msg: `Аватар обновлён: ${this.myName()}`, ts: new Date().toLocaleTimeString() });
                 } catch (err) {
                     this.addLogEntry({ type: 'ERROR', msg: err?.message || 'Не удалось обновить аватар', ts: new Date().toLocaleTimeString() });
+                } finally {
+                    cleanup();
                 }
             };
 
@@ -21051,14 +21163,18 @@ class ZaliInterface {
             document.body.appendChild(input);
             input.addEventListener('change', async () => {
                 const file = input.files && input.files[0];
-                input.remove();
-                if (!file) return;
+                if (!file) {
+                    input.remove();
+                    return;
+                }
                 try {
                     await this.uploadServerAsset(kind, file);
                     this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
                 } catch (e) {
                     this.setServerModalState({ error: e?.message || 'Не удалось обновить медиа сервера' });
                     this.renderServerModal();
+                } finally {
+                    input.remove();
                 }
             }, { once: true });
             input.click();

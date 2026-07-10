@@ -3,6 +3,14 @@ name = "zali_server"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "zali_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zali_server"
+path = "src/main.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -23,3 +31,8 @@ rand = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+tokio-tungstenite = "0.23"
+futures-util = "0.3"

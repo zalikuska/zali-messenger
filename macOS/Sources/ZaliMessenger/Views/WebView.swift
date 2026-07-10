@@ -23,6 +23,26 @@ class ZaliNativeWebView: WKWebView {
 
 struct WebView: NSViewRepresentable {
     class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
+        // In-flight SEND_MESSAGE clientId guard, mirroring Windows' in_flight_send_client_ids
+        // (native.rs). Without it a rapid double-trigger (double Enter, a retry racing the
+        // first attempt) could pack+upload the same message twice.
+        private static let sendGuardQueue = DispatchQueue(label: "com.zali.messenger.sendGuard")
+        private static var inFlightSendClientIds = Set<String>()
+
+        private static func tryClaimSendClientId(_ id: String) -> Bool {
+            guard !id.isEmpty else { return true }
+            return sendGuardQueue.sync {
+                guard !inFlightSendClientIds.contains(id) else { return false }
+                inFlightSendClientIds.insert(id)
+                return true
+            }
+        }
+
+        private static func releaseSendClientId(_ id: String) {
+            guard !id.isEmpty else { return }
+            sendGuardQueue.sync { _ = inFlightSendClientIds.remove(id) }
+        }
+
         weak var webView: WKWebView?
         private var directHistoryReloadToken = UUID()
         private var serverHistoryReloadToken = UUID()
@@ -60,6 +80,24 @@ struct WebView: NSViewRepresentable {
             return value.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        /// Loads the shared device identity for `username` so it can be injected at
+        /// document-start (mirror of `exportDeviceIdentityToSharedFile`, and of the Rust
+        /// shell's read at native.rs). Without this, a WebView localStorage wipe (rebuild
+        /// or cleared data) mints a fresh device_id even though a valid identity sits on
+        /// disk — orphaning every key envelope addressed to the old recipient_device_id.
+        /// Returns the raw JSON only if it parses; a corrupt export must never break page load.
+        static func loadSharedDeviceIdentity(for username: String) -> String? {
+            let user = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !user.isEmpty, let dir = sharedAppSupportDir else { return nil }
+            let path = dir.appendingPathComponent("shared_device_identity_\(user).json")
+            guard let raw = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  let data = trimmed.data(using: .utf8),
+                  (try? JSONSerialization.jsonObject(with: data)) != nil else { return nil }
+            return trimmed
+        }
+
         /// Deliberately a plain file, not Keychain: this app and the Rust shell
         /// (`dist/macos-rust`) run unsandboxed under the same OS user, so a shared
         /// directory needs no cross-app consent dialog. Mirrors native.rs's own
@@ -72,6 +110,26 @@ struct WebView: NSViewRepresentable {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }()
+
+        /// Appends a line to zali-debug.log under the shared app-support dir. Fed by the
+        /// injected console hook (all JS console.* output) so the full in-app journal is
+        /// tail-able from disk. Serialized on a dedicated queue; best-effort, never throws.
+        private static let debugLogQueue = DispatchQueue(label: "com.zali.messenger.debuglog")
+        static func appendDebugLog(_ line: String) {
+            guard let dir = sharedAppSupportDir else { return }
+            let url = dir.appendingPathComponent("zali-debug.log")
+            let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] \(line)\n"
+            debugLogQueue.async {
+                guard let data = stamped.data(using: .utf8) else { return }
+                if let handle = try? FileHandle(forWritingTo: url) {
+                    defer { try? handle.close() }
+                    _ = try? handle.seekToEnd()
+                    try? handle.write(contentsOf: data)
+                } else {
+                    try? data.write(to: url, options: .atomic)
+                }
+            }
+        }
 
         /// Exports the JS-side device identity (ECDH keypair + deviceId) so a Rust-shell
         /// launch on this same Mac can adopt the already-approved device instead of
@@ -499,9 +557,20 @@ struct WebView: NSViewRepresentable {
             reloadHistoryTask?.cancel()
             reloadHistoryTask = Task { [weak self] in
                 guard let self = self else { return }
-                let records = await self.fetchMessagesAsync(for: username)
+                let (records, ok) = await self.fetchMessagesAsync(for: username)
                 guard self.directHistoryReloadToken == reloadToken else { return }
-                print("[ZALI][WEBVIEW] reloadHistory fetched user=\(username) count=\(records.count)")
+                print("[ZALI][WEBVIEW] reloadHistory fetched user=\(username) count=\(records.count) ok=\(ok)")
+
+                guard ok else {
+                    // Fetch failed (auth/HTTP/decode). Do NOT overwrite the view with an
+                    // empty history — that made a transient error look like "no messages".
+                    print("[ZALI][WEBVIEW] reloadHistory fetch failed user=\(username) — keeping existing view")
+                    DispatchQueue.main.async {
+                        guard self.directHistoryReloadToken == reloadToken else { return }
+                        self.addLog(level: "ERROR", text: "Не удалось загрузить историю переписки с \(username). Показаны ранее загруженные сообщения.")
+                    }
+                    return
+                }
 
                 guard !records.isEmpty else {
                     DispatchQueue.main.async {
@@ -654,18 +723,18 @@ struct WebView: NSViewRepresentable {
             }
         }
 
-        private func fetchMessagesAsync(for username: String) async -> [NetworkService.RemoteMessageRecord] {
+        private func fetchMessagesAsync(for username: String) async -> ([NetworkService.RemoteMessageRecord], Bool) {
             await withCheckedContinuation { continuation in
-                NetworkService.shared.fetchMessages(for: username) { records in
-                    continuation.resume(returning: records)
+                NetworkService.shared.fetchMessages(for: username) { records, ok in
+                    continuation.resume(returning: (records, ok))
                 }
             }
         }
 
-        private func fetchServerMessagesAsync(serverId: String, channelId: String) async -> [NetworkService.RemoteMessageRecord] {
+        private func fetchServerMessagesAsync(serverId: String, channelId: String) async -> ([NetworkService.RemoteMessageRecord], Bool) {
             await withCheckedContinuation { continuation in
-                NetworkService.shared.fetchServerMessages(serverId: serverId, channelId: channelId) { records in
-                    continuation.resume(returning: records)
+                NetworkService.shared.fetchServerMessages(serverId: serverId, channelId: channelId) { records, ok in
+                    continuation.resume(returning: (records, ok))
                 }
             }
         }
@@ -753,6 +822,10 @@ struct WebView: NSViewRepresentable {
                     }
                     continue
                 }
+
+                // downloadMessage now hands back a uniquely-named temp file that nothing
+                // else reclaims — delete it once this iteration is done with it.
+                defer { try? FileManager.default.removeItem(at: fileURL) }
 
                 let tempDirName = UUID().uuidString
                 let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent(tempDirName)
@@ -871,9 +944,20 @@ struct WebView: NSViewRepresentable {
             reloadServerHistoryTask?.cancel()
             reloadServerHistoryTask = Task { [weak self] in
                 guard let self = self else { return }
-                let records = await self.fetchServerMessagesAsync(serverId: serverId, channelId: channelId)
+                let (records, ok) = await self.fetchServerMessagesAsync(serverId: serverId, channelId: channelId)
                 guard self.serverHistoryReloadToken == reloadToken else { return }
-                print("[ZALI][WEBVIEW] reloadServerHistory fetched server=\(serverId) channel=\(channelId) count=\(records.count)")
+                print("[ZALI][WEBVIEW] reloadServerHistory fetched server=\(serverId) channel=\(channelId) count=\(records.count) ok=\(ok)")
+
+                guard ok else {
+                    // Fetch failed — keep whatever is already shown instead of blanking
+                    // the channel, which is what an empty "[]" push would do here.
+                    print("[ZALI][WEBVIEW] reloadServerHistory fetch failed server=\(serverId) channel=\(channelId) — keeping existing view")
+                    DispatchQueue.main.async {
+                        guard self.serverHistoryReloadToken == reloadToken else { return }
+                        self.addLog(level: "ERROR", text: "Не удалось загрузить историю канала. Показаны ранее загруженные сообщения.")
+                    }
+                    return
+                }
 
                 guard !records.isEmpty else {
                     DispatchQueue.main.async {
@@ -903,6 +987,12 @@ struct WebView: NSViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame else { return }
+            if message.name == "zaliLog" {
+                if let line = message.body as? String {
+                    Coordinator.appendDebugLog(line)
+                }
+                return
+            }
             if let dict = message.body as? [String: Any] {
                 let type = dict["type"] as? String ?? ""
                 let text = dict["text"] as? String ?? ""
@@ -1058,6 +1148,10 @@ struct WebView: NSViewRepresentable {
                 }
                 
                 case .sendMessage: do {
+                    guard Coordinator.tryClaimSendClientId(clientId) else {
+                        print("[ZALI][WEBVIEW] SEND_MESSAGE duplicate_in_flight clientId=\(clientId)")
+                        return
+                    }
                     let recipient = dict["recipient"] as? String ?? "Alice"
                     let sender = dict["sender"] as? String ?? NetworkService.shared.currentUser
                     let requestedKey = (dict["key"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1071,6 +1165,7 @@ struct WebView: NSViewRepresentable {
                     let key = requestedKey
                     guard !key.isEmpty else {
                         print("[ZALI][WEBVIEW] SEND_MESSAGE missing requested key clientId=\(clientId)")
+                        Coordinator.releaseSendClientId(clientId)
                         DispatchQueue.main.async {
                             self.addLog(level: "ERROR", text: "Core: E2E-ключ не задан")
                             self.sendBusEvent(.onSendError, payload: WebView.javascriptLiteral([
@@ -1120,6 +1215,7 @@ struct WebView: NSViewRepresentable {
                         let fileURL = URL(fileURLWithPath: tempPath)
                         NetworkService.shared.uploadMessage(sender: sender, receiver: recipient, clientId: clientId, fileURL: fileURL, serverId: serverId, channelId: channelId, keyVersion: keyVersion) { [weak self] success, messageId, statusCode, responseBody in
                             print("[ZALI][WEBVIEW] SEND_MESSAGE upload callback clientId=\(clientId) success=\(success) messageId=\(messageId ?? "nil") status=\(statusCode.map(String.init) ?? "nil") body=\((responseBody ?? "").prefix(200))")
+                            Coordinator.releaseSendClientId(clientId)
                             DispatchQueue.main.async {
                                 let safeClientId = WebView.javascriptLiteral(clientId)
                                 let safeMessageId = WebView.javascriptLiteral(messageId ?? "")
@@ -1142,6 +1238,7 @@ struct WebView: NSViewRepresentable {
                         }
                     } else {
                         tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+                        Coordinator.releaseSendClientId(clientId)
                         DispatchQueue.main.async {
                             self.addLog(level: "ERROR", text: "Core: Ошибка при упаковке сообщения в Rust бэкенде")
                             self.sendBusEvent(.onSendError, payload: WebView.javascriptLiteral([
@@ -1408,6 +1505,28 @@ struct WebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "nativeApp")
+        // Debug log capture: mirror every JS console.* call to a file on disk
+        // (~/Library/Application Support/ZaliMessenger/zali-debug.log) so the whole
+        // in-app journal is readable without copy-pasting from the UI.
+        config.userContentController.add(context.coordinator, name: "zaliLog")
+        let consoleHook = """
+        (function(){
+          if (window.__zaliConsoleHooked) return; window.__zaliConsoleHooked = true;
+          var post = function(lvl, args){
+            try {
+              var parts = Array.prototype.map.call(args, function(a){
+                try { return (typeof a === 'string') ? a : JSON.stringify(a); } catch(e){ return String(a); }
+              });
+              window.webkit.messageHandlers.zaliLog.postMessage(lvl + ' ' + parts.join(' '));
+            } catch(e){}
+          };
+          ['log','info','warn','error'].forEach(function(k){
+            var orig = console[k] ? console[k].bind(console) : function(){};
+            console[k] = function(){ post(k.toUpperCase(), arguments); orig.apply(console, arguments); };
+          });
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(source: consoleHook, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let bridgeProtocolBootstrap = WebView.loadBridgeProtocolBootstrap()
         config.userContentController.addUserScript(WKUserScript(source: bridgeProtocolBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let nativeCapabilities: [String: Any] = [
@@ -1437,6 +1556,15 @@ struct WebView: NSViewRepresentable {
         let conversationKeysForBootstrap = NetworkService.shared.allConversationKeys
         let convKeysBootstrap = "window.__ZALI_CONVERSATION_KEYS = \(WebView.javascriptLiteral(conversationKeysForBootstrap));"
         config.userContentController.addUserScript(WKUserScript(source: convKeysBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+
+        // Re-adopt the on-disk device identity so a WebView localStorage wipe doesn't mint a
+        // fresh device_id and orphan the key envelopes addressed to the old one. Raw JSON is
+        // already validated by loadSharedDeviceIdentity; JS only consumes it when it has no
+        // identity of its own (loadDeviceIdentity's injected-fallback). Mirrors native.rs.
+        if let identityRaw = Coordinator.loadSharedDeviceIdentity(for: NetworkService.shared.currentUser) {
+            let identityBootstrap = "window.__ZALI_INJECTED_DEVICE_IDENTITY = \(identityRaw);"
+            config.userContentController.addUserScript(WKUserScript(source: identityBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         let savedSession: [String: Any] = [
             "username": NetworkService.shared.currentUser,
             "token": UserDefaults.standard.string(forKey: "zali_session_token_v1") ?? "",

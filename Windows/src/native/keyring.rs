@@ -1,9 +1,6 @@
 //! OS keyring access (non-macOS only; macOS uses the shared-file identity,
 //! see project notes on Keychain consent prompts).
 
-
-
-
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn keyring_entry(name: &str) -> Option<keyring::Entry> {
     keyring::Entry::new("ZaliMessenger", name).ok()

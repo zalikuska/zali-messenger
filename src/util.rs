@@ -53,7 +53,6 @@ pub(crate) fn is_valid_username(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
-
 pub(crate) fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
     if data.len() >= 8 && data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         return Some("image/png");

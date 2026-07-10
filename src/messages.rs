@@ -1,19 +1,23 @@
 //! Message upload/download/delete, reactions, history pagination, and
 //! fan-out delivery to DM/server recipients.
 
+use crate::{
+    can_access_channel, can_manage_by_role, dm_conversation_scope, fallback_role_permissions,
+    get_server_access_context, get_server_accessibility, get_server_member_role,
+    history_access_matches, load_channel_permissions, push_history_access_predicate,
+    resolve_history_access, role_permissions_for_view, send_payload_to_user,
+    server_conversation_scope, AppState, AuthenticatedUser, Message, MessagePageQuery,
+    MessageResponse, ReactionPayload, ReactionSummary, ServerRecord,
+};
 use axum::{
     body::Body,
-    extract::{
-        Multipart, Path as AxumPath, Query,
-    },
+    extract::{Multipart, Path as AxumPath, Query},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
 use chrono::Utc;
-use sqlx::{
-    QueryBuilder, Row, Sqlite,
-};
+use sqlx::{QueryBuilder, Row, Sqlite};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -22,14 +26,6 @@ use tokio::{fs, io::AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use crate::{
-    AppState, AuthenticatedUser, can_access_channel, can_manage_by_role, dm_conversation_scope,
-    fallback_role_permissions, get_server_access_context, get_server_accessibility,
-    get_server_member_role, history_access_matches, load_channel_permissions, Message,
-    MessagePageQuery, MessageResponse, push_history_access_predicate, ReactionPayload,
-    ReactionSummary, resolve_history_access, role_permissions_for_view, send_payload_to_user,
-    server_conversation_scope, ServerRecord,
-};
 
 pub(crate) async fn load_reaction_states(
     state: &Arc<AppState>,
@@ -744,6 +740,9 @@ pub(crate) async fn upload_message_with_context(
         let cid = channel_id_opt.clone().unwrap_or_default();
         if sid.is_empty() || cid.is_empty() {
             warn!("UPLOAD rejected empty server/channel after override");
+            if wrote_file {
+                let _ = fs::remove_file(&temp_path).await;
+            }
             return (
                 StatusCode::BAD_REQUEST,
                 "Для серверного сообщения нужны server_id и channel_id",
@@ -777,6 +776,9 @@ pub(crate) async fn upload_message_with_context(
                                 "UPLOAD forbidden sender={} server={} channel={} reason=channel_send_denied",
                                 auth_user, sid, cid
                             );
+                            if wrote_file {
+                                let _ = fs::remove_file(&temp_path).await;
+                            }
                             return (StatusCode::FORBIDDEN, "Нет прав на отправку в этом канале")
                                 .into_response();
                         }
@@ -785,14 +787,25 @@ pub(crate) async fn upload_message_with_context(
                                 "Ошибка проверки fallback DM receiver={} server={} channel={}: {}",
                                 receiver, sid, cid, e
                             );
+                            if wrote_file {
+                                let _ = fs::remove_file(&temp_path).await;
+                            }
                             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                         }
                     }
                 }
             }
-            Ok(None) => return (StatusCode::NOT_FOUND, "Сервер не найден").into_response(),
+            Ok(None) => {
+                if wrote_file {
+                    let _ = fs::remove_file(&temp_path).await;
+                }
+                return (StatusCode::NOT_FOUND, "Сервер не найден").into_response();
+            }
             Err(e) => {
                 error!("Ошибка проверки сервера {}: {}", sid, e);
+                if wrote_file {
+                    let _ = fs::remove_file(&temp_path).await;
+                }
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
@@ -806,9 +819,17 @@ pub(crate) async fn upload_message_with_context(
             .await;
             match channel_exists {
                 Ok(Some(_)) => {}
-                Ok(None) => return (StatusCode::NOT_FOUND, "Канал не найден").into_response(),
+                Ok(None) => {
+                    if wrote_file {
+                        let _ = fs::remove_file(&temp_path).await;
+                    }
+                    return (StatusCode::NOT_FOUND, "Канал не найден").into_response();
+                }
                 Err(e) => {
                     error!("Ошибка проверки канала {}/{}: {}", sid, cid, e);
+                    if wrote_file {
+                        let _ = fs::remove_file(&temp_path).await;
+                    }
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
@@ -906,6 +927,24 @@ pub(crate) async fn upload_message_with_context(
         server_id_opt.is_some() || channel_id_opt.is_some()
     );
 
+    // Move the archive into its final path BEFORE inserting the row. If the row were
+    // inserted first, a crash — or a concurrent history/download read — in the window
+    // before the rename would see a message whose file is still at temp_path: history
+    // lists it, but download 404s. File-first means the row is never visible without its
+    // backing file (a crash instead leaves only a harmless orphan file, not an orphan row).
+    if wrote_file {
+        if let Err(e) = fs::rename(&temp_path, &path).await {
+            error!(
+                "Ошибка атомарного перемещения файла {} -> {}: {}",
+                temp_path.display(),
+                path.display(),
+                e
+            );
+            let _ = fs::remove_file(&temp_path).await;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
     let insert_result = sqlx::query(
         "INSERT OR IGNORE INTO messages (id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -962,7 +1001,9 @@ pub(crate) async fn upload_message_with_context(
                                 deliver_to_user(&state, &sender, &dedup_msg).await;
                             }
                         }
-                        let _ = fs::remove_file(&temp_path).await;
+                        // Our just-renamed file is a duplicate of the existing message's
+                        // own file (different id) — drop it, not temp_path (already moved).
+                        let _ = fs::remove_file(&path).await;
                         return (
                             StatusCode::CREATED,
                             Json(serde_json::json!({ "id": existing.id, "clientId": client_id })),
@@ -970,23 +1011,9 @@ pub(crate) async fn upload_message_with_context(
                             .into_response();
                     }
                 }
-                let _ = fs::remove_file(&temp_path).await;
+                // Duplicate insert ignored (row already existed) — drop our renamed file.
+                let _ = fs::remove_file(&path).await;
                 return StatusCode::CREATED.into_response();
-            }
-
-            if let Err(e) = fs::rename(&temp_path, &path).await {
-                error!(
-                    "Ошибка атомарного перемещения файла {} -> {}: {}",
-                    temp_path.display(),
-                    path.display(),
-                    e
-                );
-                let _ = fs::remove_file(&temp_path).await;
-                let _ = sqlx::query("DELETE FROM messages WHERE id = ?")
-                    .bind(&id)
-                    .execute(&state.db)
-                    .await;
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
             info!(

@@ -1,29 +1,25 @@
 //! File-backed binary assets: user avatars and server avatars/banners,
 //! including their HTTP handlers and on-disk read/write helpers.
 
+use crate::{
+    broadcast_avatar_event, can_manage_server, get_server_access_context, hex_encode,
+    normalize_data_url, sniff_image_mime, AppState, AuthenticatedUser, AvatarRecord,
+    ServerAssetPayload, StoredAssetMeta,
+};
 use axum::{
-    extract::{
-        Multipart, Path as AxumPath,
-    },
+    extract::{Multipart, Path as AxumPath},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use chrono::{DateTime, Utc};
-use sqlx::{
-    sqlite::SqlitePool, Row,
-};
+use sqlx::{sqlite::SqlitePool, Row};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::fs;
 use tracing::error;
-use crate::{
-    AppState, AuthenticatedUser, AvatarRecord, broadcast_avatar_event, can_manage_server,
-    get_server_access_context, hex_encode, normalize_data_url, ServerAssetPayload,
-    sniff_image_mime, StoredAssetMeta,
-};
 
 pub(crate) const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
 

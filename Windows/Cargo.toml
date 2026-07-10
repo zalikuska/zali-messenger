@@ -10,7 +10,7 @@ base64 = "0.22"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
-wry = "0.35"
+wry = { version = "0.35", features = ["devtools"] }
 tao = { version = "0.24", default-features = false, features = ["rwh_05"] }
 zali_messenger_core = { path = "../Core" }
 uuid = { version = "1.0", features = ["v4"] }
@@ -30,6 +30,9 @@ block = "0.1"
 
 [build-dependencies]
 serde_json = "1.0"
+
+[dev-dependencies]
+wiremock = "0.6"
 
 # objc 0.2 macros expand `feature = "cargo-clippy"` checks; declare the value so
 # rustc's unexpected_cfgs lint stays useful for our own cfgs without 7 warnings

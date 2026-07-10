@@ -1,20 +1,18 @@
 //! SQLite bootstrap: data-dir resolution, legacy storage migration, schema
 //! column upgrades, and default server/role seeding.
 
-use chrono::{DateTime, Utc};
-use sqlx::{
-    sqlite::SqlitePool, Row, Sqlite,
+use crate::{
+    asset_file_paths, asset_root_dir, read_asset_file, server_asset_dir, user_avatar_asset_dir,
+    write_asset_file, AvatarRecord,
 };
+use chrono::{DateTime, Utc};
+use sqlx::{sqlite::SqlitePool, Row, Sqlite};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
 };
 use tokio::fs;
 use tracing::{info, warn};
-use crate::{
-    asset_file_paths, asset_root_dir, AvatarRecord, read_asset_file, server_asset_dir,
-    user_avatar_asset_dir, write_asset_file,
-};
 
 pub(crate) fn sqlite_literal(path: &Path) -> String {
     let escaped = path.to_string_lossy().replace('\'', "''");
@@ -34,7 +32,10 @@ pub(crate) fn legacy_data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-pub(crate) async fn copy_missing_uploads(from_dir: &Path, to_dir: &Path) -> Result<usize, std::io::Error> {
+pub(crate) async fn copy_missing_uploads(
+    from_dir: &Path,
+    to_dir: &Path,
+) -> Result<usize, std::io::Error> {
     let mut copied = 0usize;
     if !from_dir.exists() {
         return Ok(0);
@@ -300,7 +301,10 @@ pub(crate) async fn legacy_table_columns(
     Ok(columns)
 }
 
-pub(crate) async fn migrate_asset_files(pool: &SqlitePool, data_dir: &Path) -> Result<(), sqlx::Error> {
+pub(crate) async fn migrate_asset_files(
+    pool: &SqlitePool,
+    data_dir: &Path,
+) -> Result<(), sqlx::Error> {
     let assets_dir = asset_root_dir(data_dir);
     fs::create_dir_all(assets_dir.join("avatars"))
         .await
