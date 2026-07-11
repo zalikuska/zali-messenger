@@ -518,8 +518,10 @@ pub(crate) async fn handle_voice_event(
                 room.participants.insert(sender.to_string());
                 room.participants.insert(target.clone());
             }
+            // join_voice_room() already broadcasts the current room state (call_state
+            // is already "ringing" above, before this call) — a second identical
+            // broadcast here just doubled every invite's room-state traffic.
             join_voice_room(state, sender, &room_key, "dm", None, None).await;
-            broadcast_voice_room_state(state, &room_key).await;
             send_json_to_user(
                 state,
                 &target,

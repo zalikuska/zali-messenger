@@ -18,35 +18,12 @@ pub(crate) async fn get_users(
 ) -> impl IntoResponse {
     let query = query.q.unwrap_or_default().trim().to_lowercase();
 
-    // Empty query: hand back a small default sample instead of the full table,
-    // so "add contact" can show something before the user types anything.
-    if query.is_empty() {
-        return match sqlx::query_scalar::<_, String>(
-            "SELECT username FROM users ORDER BY username LIMIT 5",
-        )
-        .fetch_all(&state.db)
-        .await
-        {
-            Ok(users) => {
-                info!("API get_users default_sample count={}", users.len());
-                Json(users).into_response()
-            }
-            Err(e) => {
-                error!("Ошибка получения списка пользователей: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
-        };
-    }
-
-    if query.len() < 3 {
-        info!("API get_users short_query len={}", query.len());
-        return Json(Vec::<String>::new()).into_response();
-    }
-
+    // Always hand back at most 5 candidates — a capped "most likely" list
+    // rather than a full-table dump, regardless of how little the caller typed.
     info!("API get_users start query={}", query);
     let like = format!("%{}%", query);
     match sqlx::query_scalar::<_, String>(
-        "SELECT username FROM users WHERE lower(username) LIKE ? ORDER BY username LIMIT 50",
+        "SELECT username FROM users WHERE lower(username) LIKE ? ORDER BY username LIMIT 5",
     )
     .bind(like)
     .fetch_all(&state.db)

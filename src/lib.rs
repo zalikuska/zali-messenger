@@ -113,7 +113,11 @@ impl Config {
 
         let allowed_origins: Vec<String> = std::env::var("ALLOWED_ORIGINS")
             .unwrap_or_else(|_| {
-                "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://127.0.0.1:3000,http://127.0.0.1,zali://localhost"
+                // localhost:8090/8092 match .claude/launch.json's "web-static"/"web-static-mobile"
+                // dev previews of Web/index.html — without them, testing the browser client
+                // against a local `cargo run` server fails CORS silently (fetch() rejects with a
+                // generic "Failed to fetch", no hint that the origin is the problem).
+                "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://localhost:8090,http://localhost:8092,http://127.0.0.1:3000,http://127.0.0.1,http://127.0.0.1:8090,http://127.0.0.1:8092,zali://localhost"
                     .to_string()
             })
             .split(',')
@@ -847,6 +851,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             axum::http::header::CONTENT_TYPE,
             axum::http::header::COOKIE,
             HeaderName::from_static("x-zali-device-id"),
+            // Web client's apiFetch() stamps every request with this for log
+            // correlation (see loadStoredMessageCache-adjacent apiHeaders() in
+            // interface.js). Missing here made the browser's CORS preflight silently
+            // refuse to send the actual request for ANY api call from a browser
+            // context (fetch() rejects with a generic "Failed to fetch", no server
+            // log entry at all) — native shells were unaffected since they bypass
+            // fetch() via the native HTTP bridge.
+            HeaderName::from_static("x-request-id"),
         ])
         .allow_methods([
             Method::GET,
