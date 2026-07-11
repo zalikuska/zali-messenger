@@ -12,6 +12,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8090", "--directory", "Web"],
       "port": 8090
+    },
+    {
+      "name": "web-static-mobile",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8092", "--directory", "Web"],
+      "port": 8092
     }
   ]
 }

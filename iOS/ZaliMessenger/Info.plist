@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleDisplayName</key>
+    <string>Zali Messenger</string>
+    <key>CFBundleName</key>
+    <string>ZaliMessenger</string>
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key>
+        <string></string>
+    </dict>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Камера нужна для видеозвонков и отправки медиа в Zali Messenger.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Микрофон нужен для голосовых и видеозвонков в Zali Messenger.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Доступ к фото нужен для отправки изображений и установки аватара.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Нужен доступ к сети для подключения к серверу Zali Messenger.</string>
+</dict>
+</plist>

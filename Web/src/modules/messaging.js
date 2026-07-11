@@ -10,6 +10,8 @@
                 chats: {},
                 current: null,
                 unread: {},
+                channelUnread: {},
+                mutedChats: {},
                 wsOn: false,
                 loading: true,
                 searchQ: '',

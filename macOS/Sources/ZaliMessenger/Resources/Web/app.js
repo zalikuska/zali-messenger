@@ -212,6 +212,8 @@
                 chats: {},
                 current: null,
                 unread: {},
+                channelUnread: {},
+                mutedChats: {},
                 wsOn: false,
                 loading: true,
                 searchQ: '',
@@ -610,7 +612,6 @@ class ZaliStyler {
 
         // Register commands on the bus
         this.bus.registerCommand('zali_styler', 'set_theme',         (themeName) => this.setTheme(themeName));
-        this.bus.registerCommand('zali_styler', 'set_border_radius', (radius)    => this.setBorderRadius(radius));
         this.bus.registerCommand('zali_styler', 'set_variable',      (name, val) => this.setVariable(name, val));
         this.bus.registerCommand('zali_styler', 'get_themes',        ()          => Object.keys(this.themes));
         this.bus.registerCommand('zali_styler', 'save_style',        ()          => this.saveStyleToNative());
@@ -634,22 +635,32 @@ class ZaliStyler {
         }
     }
 
+    _cryptoKeyStorageKey() {
+        return window.__ZALI_INTERFACE?.cryptoKeyStorageKey?.() || 'zali_crypto_key_v2';
+    }
+
+    _conversationKeysStorageKey() {
+        return window.__ZALI_INTERFACE?.conversationKeysStorageKey?.() || 'zali_conversation_keys_v2';
+    }
+
     _loadStoredKey() {
         try {
             const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
             if (scope) {
-                const rawMap = sessionStorage.getItem('zali_conversation_keys_v2') || localStorage.getItem('zali_conversation_keys_v2');
+                const convKey = this._conversationKeysStorageKey();
+                const rawMap = sessionStorage.getItem(convKey) || localStorage.getItem(convKey);
                 if (rawMap) {
                     const storedMap = JSON.parse(rawMap) || {};
                     const scoped = String(storedMap[scope] || '').trim();
                     if (scoped) return scoped;
                 }
             }
-            const stored = (sessionStorage.getItem('zali_crypto_key_v2') || localStorage.getItem('zali_crypto_key_v2') || '').trim();
+            const keyName = this._cryptoKeyStorageKey();
+            const stored = (sessionStorage.getItem(keyName) || localStorage.getItem(keyName) || '').trim();
             if (stored) {
                 try {
-                    sessionStorage.setItem('zali_crypto_key_v2', stored);
-                    localStorage.removeItem('zali_crypto_key_v2');
+                    sessionStorage.setItem(keyName, stored);
+                    localStorage.removeItem(keyName);
                 } catch (e) {}
             }
             if (stored) return stored;
@@ -758,15 +769,6 @@ class ZaliStyler {
         return true;
     }
 
-    setBorderRadius(radius) {
-        const radStr = String(radius).endsWith('px') ? radius : `${radius}px`;
-        this.currentRadius = parseInt(radius, 10);
-        this.setVariable('--r-msg', radStr, { persist: false });
-        this.currentVars['--r-msg'] = radStr;
-        console.log(`[zali_styler] Закругление углов сообщений: ${radStr}`);
-        this.saveStyleToNative();
-    }
-
     setVariable(name, val, options = {}) {
         document.documentElement.style.setProperty(name, val);
         this.currentVars[name] = val;
@@ -788,12 +790,13 @@ class ZaliStyler {
     setKey(key) {
         this.currentKey = (key || '').trim();
         try {
+            const keyName = this._cryptoKeyStorageKey();
             if (this.currentKey) {
-                sessionStorage.setItem('zali_crypto_key_v2', this.currentKey);
-                localStorage.removeItem('zali_crypto_key_v2');
+                sessionStorage.setItem(keyName, this.currentKey);
+                localStorage.removeItem(keyName);
             } else {
-                sessionStorage.removeItem('zali_crypto_key_v2');
-                localStorage.removeItem('zali_crypto_key_v2');
+                sessionStorage.removeItem(keyName);
+                localStorage.removeItem(keyName);
             }
         } catch (e) {}
 
@@ -803,15 +806,16 @@ class ZaliStyler {
         try {
             const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
             if (scope) {
-                const raw = sessionStorage.getItem('zali_conversation_keys_v2') || localStorage.getItem('zali_conversation_keys_v2');
+                const convKey = this._conversationKeysStorageKey();
+                const raw = sessionStorage.getItem(convKey) || localStorage.getItem(convKey);
                 const stored = raw ? (JSON.parse(raw) || {}) : {};
                 if (this.currentKey) {
                     stored[scope] = this.currentKey;
                 } else {
                     delete stored[scope];
                 }
-                sessionStorage.setItem('zali_conversation_keys_v2', JSON.stringify(stored));
-                localStorage.removeItem('zali_conversation_keys_v2');
+                sessionStorage.setItem(convKey, JSON.stringify(stored));
+                localStorage.removeItem(convKey);
             }
         } catch (e) {}
 
@@ -1136,6 +1140,15 @@ class ZaliInterface {
         const cachedMessages = this.loadStoredMessageCache();
         this.S.chats = cachedMessages.chats || {};
         this.S.serverChats = cachedMessages.serverChats || {};
+        this.S.mutedChats = this.loadStoredMutedChats();
+        // Per-peer/per-channel "have we already synced this at least once this
+        // session" markers. A history merge (catch-up sweep, active-conversation
+        // refresh, etc.) only fires a notification for a NEWLY inserted message once
+        // the peer/channel has been primed once already — otherwise the very first
+        // history load (login, opening a new chat) would replay the entire backlog
+        // as a flood of notifications instead of being silently primed as baseline.
+        this._historyPrimedPeers = new Set();
+        this._historyPrimedChannels = new Set();
         this.uiV2Enabled = this.loadUiV2Enabled();
         this.uiV2Segments = this.loadUiV2Segments();
         this.experimentalDesign = this.loadExperimentalDesign();
@@ -1934,6 +1947,10 @@ class ZaliInterface {
         return `zali_server_chats_v1${this._userSuffix()}`;
     }
 
+    mutedChatsStorageKey() {
+        return `zali_muted_chats_v1${this._userSuffix()}`;
+    }
+
     messageCacheStorageKey() {
         return `zali_message_cache_v1${this._userSuffix()}`;
     }
@@ -2231,7 +2248,7 @@ class ZaliInterface {
     }
 
     vaultCloudSyncEnabledStorageKey() {
-        return 'zali_vault_cloud_sync_enabled_v1';
+        return `zali_vault_cloud_sync_enabled_v1${this._userSuffix()}`;
     }
 
     loadVaultCloudSyncEnabled() {
@@ -4814,6 +4831,25 @@ class ZaliInterface {
     saveStoredServerChats() {
         // Server history now comes from the backend; keep this as a no-op
         // so local optimistic state doesn't get duplicated after restart.
+    }
+
+    loadStoredMutedChats() {
+        try {
+            const raw = localStorage.getItem(this.mutedChatsStorageKey());
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    saveStoredMutedChats() {
+        try {
+            localStorage.setItem(this.mutedChatsStorageKey(), JSON.stringify(this.S.mutedChats || {}));
+        } catch (e) {
+            // ignore storage failures
+        }
     }
 
     loadStoredNetworkConfig() {
@@ -8701,7 +8737,16 @@ class ZaliInterface {
             ? this.voice.participants.map(name => String(name || '').trim().toLowerCase()).filter(Boolean)
             : [];
         const participantMatch = me && participants.includes(me);
-        const connectedDmRoom = this.voice.roomType === 'dm' && !!String(this.voice.roomId || '').trim() && (this.voice.status === 'connected' || participantMatch);
+        // The server lists both sides as room "participants" the moment an invite is
+        // created (voice.rs voice_call_invite handler), well before anyone accepts —
+        // it models "who belongs to this ringing room", not "who is actually on the
+        // call". Treating participantMatch alone as "active call" made the callee's
+        // panel render as an already-connected call (only Завершить/mute, no
+        // Принять/Отклонить) the instant the invite arrived, so the call could never
+        // actually be accepted and the server's 60s ringing timeout later marked it
+        // missed. Ringing/calling states must render as pending, not active.
+        const pendingDmCall = this.voice.status === 'incoming' || this.voice.status === 'calling';
+        const connectedDmRoom = this.voice.roomType === 'dm' && !!String(this.voice.roomId || '').trim() && !pendingDmCall && (this.voice.status === 'connected' || participantMatch);
         const activeRoom = isVoice ? !!this.voice.roomId && participantMatch : connectedDmRoom;
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
@@ -8865,7 +8910,13 @@ class ZaliInterface {
             return { normalized, identity };
         };
 
-        const upsert = (msg) => {
+        // Snapshot which identities were already known BEFORE this merge, so any
+        // incoming message that lands under a brand new identity can be told apart
+        // from a status/metadata update to something we already had.
+        const existingIdentities = new Set(existing.map(msg => makeIdentity(msg).identity));
+        const newlyInserted = [];
+
+        const upsert = (msg, { fromIncoming = false } = {}) => {
             const { normalized, identity } = makeIdentity(msg);
             const prev = mergedByKey.get(identity);
             const next = prev
@@ -8884,16 +8935,41 @@ class ZaliInterface {
                 };
             mergedByKey.set(identity, next);
             if (!prev) merged.push(identity);
+            if (fromIncoming && !existingIdentities.has(identity)) {
+                newlyInserted.push(next);
+            }
         };
 
-        existing.forEach(upsert);
-        (Array.isArray(incomingMessages) ? incomingMessages : []).forEach(upsert);
+        existing.forEach(msg => upsert(msg));
+        (Array.isArray(incomingMessages) ? incomingMessages : []).forEach(msg => upsert(msg, { fromIncoming: true }));
 
         const next = merged
             .map(identity => mergedByKey.get(identity))
             .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
         this.S.serverChats[key] = next;
         this.saveStoredServerChats();
+
+        // First time this channel is ever merged in this session (initial history
+        // load / first open), just prime the baseline silently — otherwise opening a
+        // channel with months of history would replay it all as notifications. Only
+        // merges AFTER that baseline (reconnect catch-up, background refreshes)
+        // notify for genuinely new messages, same rule as loadHistory() for DMs.
+        const alreadyPrimed = this._historyPrimedChannels.has(key);
+        if (!alreadyPrimed) {
+            this._historyPrimedChannels.add(key);
+        } else if (newlyInserted.length && !this.isServerChatVisible(key)) {
+            newlyInserted.forEach(msg => {
+                this.notifyBackgroundMessage({
+                    sender: msg.sender,
+                    text: msg.text,
+                    attachmentCount: this.normalizeAttachments(msg.attachments).length,
+                    serverId: msg.serverId,
+                    channelId: msg.channelId,
+                });
+            });
+            this.renderServerInterface();
+            this.renderContacts();
+        }
         return next;
     }
 
@@ -9354,10 +9430,21 @@ class ZaliInterface {
             const active = ch.id === this.S.activeChannel ? 'active' : '';
             const kind = String(ch.kind || 'text').trim().toLowerCase();
             const title = kind === 'voice' ? 'Голосовой канал' : 'Текстовый канал';
-            return `<button class="server-channel ${active}" type="button" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${this.esc(kind)}" title="${this.esc(title)}">
+            const chKey = `${server.id}:${ch.id}`;
+            const cnt = kind === 'voice' ? 0 : Number(this.S.channelUnread?.[chKey] || 0);
+            const badge = cnt > 0 ? `<span class="badge">${cnt > 99 ? '99+' : cnt}</span>` : '';
+            const muted = kind !== 'voice' && this.isChannelMuted(server.id, ch.id);
+            const muteToggle = kind === 'voice' ? '' : `<button class="channel-mute-toggle${muted ? ' muted' : ''}" type="button" data-toggle-mute-channel="${this.esc(server.id)}:${this.esc(ch.id)}" title="${muted ? 'Включить уведомления' : 'Отключить уведомления'}" aria-label="${muted ? 'Включить уведомления' : 'Отключить уведомления'}">${muted ? '🔕' : '🔔'}</button>`;
+            // A <div> (not <button>) — it hosts a nested mute-toggle <button>, and
+            // <button> cannot contain another <button> (the HTML parser would
+            // implicitly close the outer one). Click delegation on data-channel-id
+            // above already doesn't care about the tag, so this is a drop-in swap.
+            return `<div class="server-channel ${active}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${this.esc(kind)}" title="${this.esc(title)}">
                     <span class="server-channel-hash ${kind}">${this.channelKindIcon(kind, 'server-channel-list-icon')}</span>
                     <span class="server-channel-name">${this.esc(ch.name)}</span>
-                </button>`;
+                    ${muteToggle}
+                    ${badge}
+                </div>`;
         }).join('');
 
             const activeChannel = channelList.querySelector('.server-channel.active');
@@ -9383,6 +9470,11 @@ class ZaliInterface {
             }
         }
         this.S.activeChannel = next;
+        // Selecting the channel makes it visible again — clear whatever unread
+        // counter it accrued while it wasn't the active one, mirroring switchChat's
+        // S.unread[peer] = 0 for DMs.
+        this.S.channelUnread = this.S.channelUnread || {};
+        this.S.channelUnread[`${server.id}:${next}`] = 0;
         if (persist) this.saveStoredActiveChannel(next);
         this.saveStoredNavMode('servers');
         this.renderServerToolbar();
@@ -9431,6 +9523,12 @@ class ZaliInterface {
         // unread counter it may have accrued while the servers view was covering it.
         if (next === 'dm' && this.S.current) {
             this.S.unread[this.S.current] = 0;
+        }
+        // Mirror for the servers view: the already-selected channel becomes visible
+        // again, so clear whatever it accrued while the DM view was covering it.
+        if (next === 'servers' && this.S.activeServer && this.S.activeChannel) {
+            this.S.channelUnread = this.S.channelUnread || {};
+            this.S.channelUnread[`${this.S.activeServer}:${this.S.activeChannel}`] = 0;
         }
         this.updateNavModeButtons();
         if (!refresh) return;
@@ -9914,6 +10012,185 @@ class ZaliInterface {
             this.trace(`downscaleAvatar failed, using original: ${e?.message || e}`);
             return file;
         }
+    }
+
+    // Interactive pan/zoom crop before upload. Without this, a fixed center-square
+    // crop can slice straight through whatever the source photo happens to frame at
+    // its edges (e.g. a vignette/fisheye shot), producing a circle avatar that reads
+    // as "cropped into a strange shape" instead of a clean headshot. Resolves to a
+    // square JPEG File, or null if the user cancels.
+    openAvatarCropper(file) {
+        return new Promise((resolve) => {
+            const overlay = document.getElementById('avatarCropOverlay');
+            const stage = document.getElementById('avatarCropStage');
+            const img = document.getElementById('avatarCropImg');
+            const circleGuide = document.getElementById('avatarCropCircleGuide');
+            const zoomInput = document.getElementById('avatarCropZoom');
+            const saveBtn = document.getElementById('avatarCropSaveBtn');
+            const cancelBtn = document.getElementById('avatarCropCancelBtn');
+            const closeBtn = document.getElementById('avatarCropCloseBtn');
+            if (!overlay || !stage || !img || !circleGuide || !zoomInput || !saveBtn || !cancelBtn || !closeBtn) {
+                resolve(null);
+                return;
+            }
+
+            const objectUrl = URL.createObjectURL(file);
+            // left/top position the image relative to the SQUARE stage, but coverage
+            // is only required over the circle guide inset within it — the ring
+            // between circle and stage edge is deliberately allowed to show
+            // (dimmed) whatever part of the photo falls outside the crop.
+            const state = { scale: 1, minScale: 1, maxScale: 1, left: 0, top: 0, naturalW: 0, naturalH: 0 };
+            const listeners = [];
+            const on = (el, type, handler, opts) => {
+                el.addEventListener(type, handler, opts);
+                listeners.push(() => el.removeEventListener(type, handler, opts));
+            };
+
+            let settled = false;
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                listeners.forEach(off => off());
+                overlay.classList.remove('visible');
+                setTimeout(() => { overlay.hidden = true; }, 180);
+                URL.revokeObjectURL(objectUrl);
+                img.removeAttribute('src');
+                resolve(result);
+            };
+
+            const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+            const circleBounds = () => {
+                const stageSize = stage.clientWidth;
+                const circleSize = circleGuide.clientWidth || stageSize;
+                const margin = (stageSize - circleSize) / 2;
+                return { stageSize, circleSize, margin };
+            };
+
+            const applyTransform = () => {
+                img.style.width = `${state.naturalW * state.scale}px`;
+                img.style.height = `${state.naturalH * state.scale}px`;
+                img.style.left = `${state.left}px`;
+                img.style.top = `${state.top}px`;
+            };
+
+            const clampPosition = () => {
+                const { circleSize, margin } = circleBounds();
+                const displayedW = state.naturalW * state.scale;
+                const displayedH = state.naturalH * state.scale;
+                state.left = clamp(state.left, margin + circleSize - displayedW, margin);
+                state.top = clamp(state.top, margin + circleSize - displayedH, margin);
+            };
+
+            const setScale = (nextScale, focalStageX, focalStageY) => {
+                const { stageSize } = circleBounds();
+                const fx = focalStageX ?? stageSize / 2;
+                const fy = focalStageY ?? stageSize / 2;
+                const prevScale = state.scale;
+                // Keep the point under the focal coordinate stable while zooming.
+                const naturalFocalX = (fx - state.left) / prevScale;
+                const naturalFocalY = (fy - state.top) / prevScale;
+                state.scale = clamp(nextScale, state.minScale, state.maxScale);
+                state.left = fx - naturalFocalX * state.scale;
+                state.top = fy - naturalFocalY * state.scale;
+                clampPosition();
+                applyTransform();
+            };
+
+            img.onload = () => {
+                // Unhide first — stage/circleGuide report clientWidth 0 while
+                // display:none, which would collapse every size computed below.
+                overlay.hidden = false;
+
+                state.naturalW = img.naturalWidth || 1;
+                state.naturalH = img.naturalHeight || 1;
+                const { stageSize, circleSize } = circleBounds();
+                state.minScale = circleSize / Math.min(state.naturalW, state.naturalH);
+                state.maxScale = state.minScale * 3;
+                state.scale = state.minScale;
+                state.left = (stageSize - state.naturalW * state.scale) / 2;
+                state.top = (stageSize - state.naturalH * state.scale) / 2;
+                applyTransform();
+                zoomInput.min = '0';
+                zoomInput.max = '1000';
+                zoomInput.value = '0';
+
+                requestAnimationFrame(() => overlay.classList.add('visible'));
+            };
+            img.onerror = () => finish(null);
+            img.src = objectUrl;
+
+            on(zoomInput, 'input', () => {
+                const t = Number(zoomInput.value) / 1000;
+                setScale(state.minScale + t * (state.maxScale - state.minScale));
+            });
+
+            let dragging = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            let dragStartLeft = 0;
+            let dragStartTop = 0;
+
+            on(stage, 'pointerdown', (e) => {
+                dragging = true;
+                stage.classList.add('dragging');
+                stage.setPointerCapture?.(e.pointerId);
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                dragStartLeft = state.left;
+                dragStartTop = state.top;
+            });
+            on(stage, 'pointermove', (e) => {
+                if (!dragging) return;
+                state.left = dragStartLeft + (e.clientX - dragStartX);
+                state.top = dragStartTop + (e.clientY - dragStartY);
+                clampPosition();
+                applyTransform();
+            });
+            const stopDrag = (e) => {
+                dragging = false;
+                stage.classList.remove('dragging');
+                if (e && stage.releasePointerCapture) {
+                    try { stage.releasePointerCapture(e.pointerId); } catch (err) { /* noop */ }
+                }
+            };
+            on(stage, 'pointerup', stopDrag);
+            on(stage, 'pointercancel', stopDrag);
+            on(stage, 'wheel', (e) => {
+                e.preventDefault();
+                const rect = stage.getBoundingClientRect();
+                const focalX = e.clientX - rect.left;
+                const focalY = e.clientY - rect.top;
+                const factor = Math.exp(-e.deltaY * 0.0015);
+                setScale(state.scale * factor, focalX, focalY);
+                const t = (state.scale - state.minScale) / (state.maxScale - state.minScale || 1);
+                zoomInput.value = String(Math.round(clamp(t, 0, 1) * 1000));
+            }, { passive: false });
+
+            on(cancelBtn, 'click', () => finish(null));
+            on(closeBtn, 'click', () => finish(null));
+            on(document, 'keydown', (e) => {
+                if (e.key === 'Escape') finish(null);
+            });
+            on(saveBtn, 'click', () => {
+                const { circleSize, margin } = circleBounds();
+                const OUTPUT_SIZE = 512;
+                const sx = (margin - state.left) / state.scale;
+                const sy = (margin - state.top) / state.scale;
+                const sSize = circleSize / state.scale;
+                const canvas = document.createElement('canvas');
+                canvas.width = OUTPUT_SIZE;
+                canvas.height = OUTPUT_SIZE;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) { finish(file); return; }
+                ctx.drawImage(img, sx, sy, sSize, sSize, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+                canvas.toBlob((blob) => {
+                    if (!blob) { finish(file); return; }
+                    const baseName = String(file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
+                    finish(new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' }));
+                }, 'image/jpeg', 0.92);
+            });
+        });
     }
 
     async setProfileAvatar(inputFile) {
@@ -10520,7 +10797,6 @@ class ZaliInterface {
         }
 
         const query = input.value || '';
-        const trimmedQuery = String(query).trim();
         const list = this.getContactSuggestions(query);
         const hasFocus = document.activeElement === input;
         const shouldShow = force || hasFocus || query.trim().length > 0;
@@ -10529,17 +10805,6 @@ class ZaliInterface {
             outer.hidden = true;
             wrap.hidden = true;
             wrap.innerHTML = '';
-            return;
-        }
-
-        if (trimmedQuery.length > 0 && trimmedQuery.length < 3 && list.length === 0) {
-            outer.hidden = false;
-            wrap.hidden = false;
-            wrap.innerHTML = `
-                <div class="contact-suggest-empty">
-                    Введите минимум 3 символа, чтобы увидеть пользователей
-                </div>
-            `;
             return;
         }
 
@@ -10649,10 +10914,6 @@ class ZaliInterface {
                 return;
             }
             const search = String(query || '').trim();
-            if (search.length > 0 && search.length < 3) {
-                this.renderContactSuggestions();
-                return;
-            }
             const res = await this.apiFetch(this.apiRoutes.users.search(search));
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
@@ -12212,14 +12473,18 @@ class ZaliInterface {
             const cnt = this.S.unread[contact] || 0;
             const badge = cnt > 0 ? `<div class="badge">${cnt > 99 ? '99+' : cnt}</div>` : '';
             const active = contact === this.S.current ? 'active' : '';
+            const muted = this.isPeerMuted(contact);
             return `<div class="contact ${active}" data-name="${this.esc(contact)}">
                 <div class="ava">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}</div>
                     <div class="contact-prev">${preview}</div>
                 </div>
-                <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
-                ${badge}
+                <div class="contact-actions">
+                    ${badge}
+                    <button class="contact-mute-toggle${muted ? ' muted' : ''}" type="button" data-toggle-mute-peer="${this.esc(contact)}" title="${muted ? 'Включить уведомления' : 'Отключить уведомления'}" aria-label="${muted ? 'Включить уведомления' : 'Отключить уведомления'}">${muted ? '🔕' : '🔔'}</button>
+                    <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
+                </div>
             </div>`;
         }).join('');
     }
@@ -12462,8 +12727,16 @@ class ZaliInterface {
                     <div class="empty-sub">Попробуйте другой запрос</div>
                 </div>` : list.map(server => {
                     const active = server.id === this.S.activeServer ? 'active' : '';
-                    const badge = Number(server.unread || 0) > 0
-                        ? `<div class="badge server-badge">${Number(server.unread) > 99 ? '99+' : Number(server.unread)}</div>`
+                    // server.unread is never populated by the backend — the real
+                    // per-channel counts live in S.channelUnread, so sum those up
+                    // for the aggregate badge instead of reading a field that's
+                    // always undefined.
+                    const serverUnreadCount = (server.channels || []).reduce(
+                        (sum, ch) => sum + Number(this.S.channelUnread?.[`${server.id}:${ch.id}`] || 0),
+                        0
+                    );
+                    const badge = serverUnreadCount > 0
+                        ? `<div class="badge server-badge">${serverUnreadCount > 99 ? '99+' : serverUnreadCount}</div>`
                         : '';
                     const preview = server.description || server.hint || 'Сервер';
                     return `
@@ -13124,8 +13397,8 @@ class ZaliInterface {
                 // even while the user is looking at DMs, which used to swallow the
                 // notification for messages arriving in that channel.
                 const channelVisible = this.isServerChatVisible(key);
-                if (sender !== this.myName() && !channelVisible) {
-                    this.postNativeMessage({ type: NativeMessageTypes.SHOW_NOTIFICATION, sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId: serverId || null, channelId: channelId || null });
+                if (!channelVisible) {
+                    this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId });
                 }
             }
             this.scheduleSaveStoredMessageCache();
@@ -13137,6 +13410,7 @@ class ZaliInterface {
                 this.scheduleRenderMessages();
             } else {
                 this.renderServerInterface();
+                this.renderContacts();
             }
             this.scheduleConversationRefresh({
                 serverId,
@@ -13194,8 +13468,8 @@ class ZaliInterface {
             // active — while the user is in the servers view the selected DM peer is
             // off-screen, and this notification used to be swallowed for it.
             const dmVisible = this.isDmChatVisible(peer);
-            if (sender !== this.myName() && !dmVisible) {
-                this.postNativeMessage({ type: NativeMessageTypes.SHOW_NOTIFICATION, sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId: null, channelId: null });
+            if (!dmVisible) {
+                this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, peer });
             }
         }
         this.scheduleSaveStoredMessageCache();
@@ -13205,11 +13479,8 @@ class ZaliInterface {
         if (this.isDmChatVisible(peer)) {
             this.scheduleRenderMessages();
         } else {
-            // Own echoes (this account sending from another device/session) must not
-            // mark the conversation unread — only messages someone else wrote count.
-            if (sender !== this.myName()) {
-                this.S.unread[peer] = (this.S.unread[peer] || 0) + 1;
-            }
+            // Unread/notification bookkeeping (own-echo filtering included) already
+            // happened above via notifyBackgroundMessage; just refresh the sidebar.
             this.renderContacts();
         }
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
@@ -13238,6 +13509,76 @@ class ZaliInterface {
 
     isDmChatVisible(peer) {
         return !!peer && peer === this.S.current && this.S.navMode !== 'servers';
+    }
+
+    isPeerMuted(peer) {
+        return !!(this.S.mutedChats || {})[String(peer || '').trim()];
+    }
+
+    isChannelMuted(serverId, channelId) {
+        const sid = String(serverId || '').trim();
+        const cid = String(channelId || '').trim();
+        if (!sid || !cid) return false;
+        return !!(this.S.mutedChats || {})[`${sid}:${cid}`];
+    }
+
+    toggleMutePeer(peer) {
+        const key = String(peer || '').trim();
+        if (!key) return;
+        this.S.mutedChats = this.S.mutedChats || {};
+        if (this.S.mutedChats[key]) {
+            delete this.S.mutedChats[key];
+        } else {
+            this.S.mutedChats[key] = true;
+        }
+        this.saveStoredMutedChats();
+        this.renderContacts();
+    }
+
+    toggleMuteChannel(serverId, channelId) {
+        const sid = String(serverId || '').trim();
+        const cid = String(channelId || '').trim();
+        if (!sid || !cid) return;
+        const key = `${sid}:${cid}`;
+        this.S.mutedChats = this.S.mutedChats || {};
+        if (this.S.mutedChats[key]) {
+            delete this.S.mutedChats[key];
+        } else {
+            this.S.mutedChats[key] = true;
+        }
+        this.saveStoredMutedChats();
+        this.renderServerInterface();
+        this.renderContacts();
+    }
+
+    // Single choke point for "a message arrived in a chat the user isn't currently
+    // looking at". Both the live WS push path AND the reconnect / background
+    // history-catch-up paths (loadHistory, mergeServerChatMessages) route through
+    // here — those catch-up paths used to update S.chats/S.serverChats silently with
+    // no notification and no unread badge, which was the root cause of notifications
+    // being rare and arriving with a huge delay: most messages land via catch-up
+    // after a WS drop, not via the live push that used to be the only notify trigger.
+    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null }) {
+        const from = String(sender || '').trim();
+        if (!from || from === this.myName()) return;
+        const isChannel = !!(serverId && channelId);
+        const muteKey = isChannel ? `${serverId}:${channelId}` : String(peer || '').trim();
+        if (!muteKey) return;
+        if (isChannel) {
+            this.S.channelUnread = this.S.channelUnread || {};
+            this.S.channelUnread[muteKey] = (this.S.channelUnread[muteKey] || 0) + 1;
+        } else {
+            this.S.unread[muteKey] = (this.S.unread[muteKey] || 0) + 1;
+        }
+        if ((this.S.mutedChats || {})[muteKey]) return;
+        this.postNativeMessage({
+            type: NativeMessageTypes.SHOW_NOTIFICATION,
+            sender: from,
+            text,
+            attachmentCount,
+            serverId: serverId || null,
+            channelId: channelId || null,
+        });
     }
 
     // The set of statuses that mean "a call is live and must not be clobbered". Both the
@@ -13324,6 +13665,12 @@ class ZaliInterface {
         this.trace(`loadHistory count=${queue.length}`);
         this.addLogEntry({ type: 'INFO', msg: `Загрузка истории чата: ${queue.length} сообщений`, ts: new Date().toLocaleTimeString() });
         const touchedPeers = new Set();
+        // Snapshot taken once for the whole call (not re-checked per message): a
+        // peer's first-ever loadHistory batch can span many messages across several
+        // requestAnimationFrame slices, and re-checking _historyPrimedPeers per
+        // message would treat everything after the first message of a brand new
+        // peer as "already primed" and notify for the rest of that same initial load.
+        const peersPrimedBeforeThisCall = new Set(this._historyPrimedPeers);
         const processBatch = (startIndex = 0) => {
             if (seq !== this.historyLoadSeq) {
                 this.trace(`loadHistory stale seq=${seq} current=${this.historyLoadSeq}`);
@@ -13340,6 +13687,8 @@ class ZaliInterface {
                     : (msg.sender === this.myName() ? msg.receiver : msg.sender);
                 if (!peer) continue;
                 touchedPeers.add(peer);
+                const peerAlreadyPrimed = peersPrimedBeforeThisCall.has(peer);
+                this._historyPrimedPeers.add(peer);
                 this.ensureContact(peer);
                 this.initChat(peer);
                 const arr = this.S.chats[peer];
@@ -13385,6 +13734,20 @@ class ZaliInterface {
                         text: this.sanitizeDecryptionErrorText(msg.text),
                         status: 'sent'
                     });
+                    // Catch-up sweeps (reconnect, background contact refresh) land here
+                    // too, not just the live WS push — this is the root fix for
+                    // notifications that used to silently vanish whenever a message
+                    // arrived while the socket was down. Skip the peer's very first
+                    // sync this session (peerAlreadyPrimed=false) so opening a chat
+                    // with existing history doesn't replay it as a notification flood.
+                    if (peerAlreadyPrimed && msg.kind !== 'call' && !this.isDmChatVisible(peer)) {
+                        this.notifyBackgroundMessage({
+                            sender: msg.sender,
+                            text: this.sanitizeDecryptionErrorText(msg.text),
+                            attachmentCount: normalizedAttachments.length,
+                            peer,
+                        });
+                    }
                 }
                 this.markMessageSeen(msg);
             }
@@ -13769,6 +14132,13 @@ class ZaliInterface {
                     e.stopPropagation();
                     return;
                 }
+                const muteBtn = e.target.closest('.contact-mute-toggle');
+                if (muteBtn) {
+                    const username = muteBtn.getAttribute('data-toggle-mute-peer');
+                    if (username) this.toggleMutePeer(username);
+                    e.stopPropagation();
+                    return;
+                }
                 const row = e.target.closest('.contact');
                 if (row && row.dataset.name) this.switchChat(row.dataset.name);
             });
@@ -13777,6 +14147,14 @@ class ZaliInterface {
         const serverChannelList = document.getElementById('serverChannelList');
         if (serverChannelList) {
             serverChannelList.addEventListener('click', (e) => {
+                const channelMuteBtn = e.target.closest('.channel-mute-toggle');
+                if (channelMuteBtn) {
+                    const raw = channelMuteBtn.getAttribute('data-toggle-mute-channel') || '';
+                    const [sid, cid] = raw.split(':');
+                    if (sid && cid) this.toggleMuteChannel(sid, cid);
+                    e.stopPropagation();
+                    return;
+                }
                 const channelBtn = e.target.closest('.server-channel[data-channel-id]');
                 if (!channelBtn) return;
                 const channelId = channelBtn.getAttribute('data-channel-id');
@@ -14207,7 +14585,12 @@ class ZaliInterface {
                     return;
                 }
                 try {
-                    await this.setProfileAvatar(file, this.myName());
+                    const cropped = await this.openAvatarCropper(file);
+                    if (!cropped) {
+                        cleanup();
+                        return;
+                    }
+                    await this.setProfileAvatar(cropped, this.myName());
                     this.addLogEntry({ type: 'SUCCESS', msg: `Аватар обновлён: ${this.myName()}`, ts: new Date().toLocaleTimeString() });
                 } catch (err) {
                     this.addLogEntry({ type: 'ERROR', msg: err?.message || 'Не удалось обновить аватар', ts: new Date().toLocaleTimeString() });
@@ -14912,32 +15295,6 @@ class ZaliInterface {
             });
         }
 
-        const sliderRadius = document.getElementById('sliderRadius');
-        if (sliderRadius) {
-            sliderRadius.addEventListener('input', (e) => {
-                const radius = e.target.value;
-                const radiusValText = document.getElementById('radiusVal');
-                if (radiusValText) radiusValText.textContent = `${radius}px`;
-                this.bus.send('zali_styler:set_border_radius', radius);
-            });
-        }
-
-        const sliderMsgGap = document.getElementById('sliderMsgGap');
-        if (sliderMsgGap) {
-            const currentMsgGap = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--msg-gap'), 10);
-            if (!Number.isNaN(currentMsgGap)) {
-                sliderMsgGap.value = String(currentMsgGap);
-                const out = document.getElementById('msgGapVal');
-                if (out) out.textContent = `${currentMsgGap}px`;
-            }
-            sliderMsgGap.addEventListener('input', (e) => {
-                const gap = e.target.value;
-                const out = document.getElementById('msgGapVal');
-                if (out) out.textContent = `${gap}px`;
-                this.bus.send('zali_styler:set_variable', '--msg-gap', gap);
-            });
-        }
-
         const sliderSuggestHeight = document.getElementById('sliderSuggestHeight');
         if (sliderSuggestHeight) {
             sliderSuggestHeight.addEventListener('input', (e) => {
@@ -15055,6 +15412,11 @@ window.ZaliInterface = ZaliInterface;
         const macBridge = window.webkit?.messageHandlers?.nativeApp || null;
         const wryBridge = window.ipc?.postMessage ? window.ipc : null;
         const webView2Bridge = window.chrome?.webview?.postMessage ? window.chrome.webview : null;
+        // Android's WebView.addJavascriptInterface() only exposes plain methods on a
+        // named window object (not a .postMessage(obj) pattern that accepts arbitrary
+        // JS objects like WKWebView's message handlers) — the native side only ever
+        // sees strings, so payloads are always JSON-stringified first, same as wry/webview2.
+        const androidBridge = window.ZaliAndroidBridge?.postMessage ? window.ZaliAndroidBridge : null;
 
         const transport = macBridge
             ? {
@@ -15082,7 +15444,16 @@ window.ZaliInterface = ZaliInterface;
                             return true;
                         },
                     }
-                    : null;
+                    : androidBridge
+                        ? {
+                            kind: 'android',
+                            postMessage(payload) {
+                                const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                                androidBridge.postMessage(data);
+                                return true;
+                            },
+                        }
+                        : null;
 
         const defaultCaps = macBridge
             ? {

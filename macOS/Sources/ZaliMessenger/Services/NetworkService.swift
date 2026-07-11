@@ -885,15 +885,14 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
 	                        }
 
                         DispatchQueue.main.async {
-                            if unpacked.sender != self?.currentUsername {
-                                NativeNotificationService.shared.showMessageNotification(
-                                    sender: unpacked.sender,
-                                    text: unpacked.text,
-                                    attachmentCount: renderedAttachments.count,
-                                    serverId: serverId,
-                                    channelId: channelId
-                                )
-                            }
+                            // Notification decision (self-sender filter, "is this chat already
+                            // open" guard, mute state) lives in JS's receiveMessage() ->
+                            // SHOW_NOTIFICATION bridge message, matching Windows (see
+                            // transport.rs handle_message_ws_payload) — native has no visibility
+                            // into which chat is open in the WebView, so it can't apply that
+                            // guard itself. Calling showMessageNotification directly here (as
+                            // this used to) fired unconditionally for every incoming message
+                            // regardless of visibility, duplicating/short-circuiting the JS gate.
                             self?.onMessageReceived?(wsMsg.id, wsMsg.clientId ?? wsMsg.client_id, unpacked.sender, wsMsg.receiver, unpacked.text, renderedAttachments, serverId, channelId)
                         }
                     } else {
