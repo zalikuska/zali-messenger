@@ -117,8 +117,17 @@ impl Config {
                 // dev previews of Web/index.html — without them, testing the browser client
                 // against a local `cargo run` server fails CORS silently (fetch() rejects with a
                 // generic "Failed to fetch", no hint that the origin is the problem).
-                "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://localhost:8090,http://localhost:8092,http://127.0.0.1:3000,http://127.0.0.1,http://127.0.0.1:8090,http://127.0.0.1:8092,zali://localhost"
-                    .to_string()
+                // Gated on debug_assertions (same pattern as the JWT dev-default above) so a
+                // release binary — what actually runs in production — never falls back to
+                // accepting these dev-only ports even if ALLOWED_ORIGINS is left unset there.
+                let base = "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://127.0.0.1:3000,http://127.0.0.1,zali://localhost";
+                if cfg!(debug_assertions) {
+                    format!(
+                        "{base},http://localhost:8090,http://localhost:8092,http://127.0.0.1:8090,http://127.0.0.1:8092"
+                    )
+                } else {
+                    base.to_string()
+                }
             })
             .split(',')
             .map(|s| s.trim().to_string())

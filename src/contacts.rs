@@ -18,14 +18,39 @@ pub(crate) async fn get_users(
 ) -> impl IntoResponse {
     let query = query.q.unwrap_or_default().trim().to_lowercase();
 
-    // Always hand back at most 5 candidates — a capped "most likely" list
-    // rather than a full-table dump, regardless of how little the caller typed.
+    // Empty query (e.g. on focus, before the user types anything): a cheap
+    // no-WHERE sample instead of a leading-wildcard LIKE scan on every focus event.
+    if query.is_empty() {
+        return match sqlx::query_scalar::<_, String>(
+            "SELECT username FROM users ORDER BY username LIMIT 5",
+        )
+        .fetch_all(&state.db)
+        .await
+        {
+            Ok(users) => {
+                info!("API get_users default_sample count={}", users.len());
+                Json(users).into_response()
+            }
+            Err(e) => {
+                error!("Ошибка получения списка пользователей: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
+    }
+
+    // Cap at 5 "most likely" candidates, but rank an exact match first so it
+    // can never be pushed out of the window by alphabetically-earlier substring
+    // matches (previously a plain `ORDER BY username LIMIT 5` could hide the
+    // exact username the caller is looking for, or worse, leave exactly one
+    // unrelated suggestion that the add-contact UI would silently accept).
     info!("API get_users start query={}", query);
     let like = format!("%{}%", query);
     match sqlx::query_scalar::<_, String>(
-        "SELECT username FROM users WHERE lower(username) LIKE ? ORDER BY username LIMIT 5",
+        "SELECT username FROM users WHERE lower(username) LIKE ? \
+         ORDER BY (lower(username) = ?) DESC, username LIMIT 5",
     )
     .bind(like)
+    .bind(&query)
     .fetch_all(&state.db)
     .await
     {
