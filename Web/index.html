@@ -2,6 +2,12 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0B0D12">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="stylesheet" href="style.css">
     <title>ZaliMessenger</title>
 </head>
@@ -332,10 +338,35 @@
         </div>
 
         <div class="mobile-dock" id="mobileDock" aria-label="Мобильная навигация">
-            <button class="mobile-dock-btn" id="mobileChatsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Чаты'; var dm=document.getElementById('modeDmBtn'); if (dm) dm.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')">Чаты</button>
-            <button class="mobile-dock-btn" id="mobileServersBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Сервера'; var svBtn=document.getElementById('modeServersBtn'); if (svBtn) svBtn.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')">Сервера</button>
-            <button class="mobile-dock-btn" id="mobileHubBtn" type="button">Хаб</button>
-            <button class="mobile-dock-btn" id="mobileSettingsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.remove('active'); if (sv) sv.classList.add('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Настройки'; document.body.classList.remove('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')">Настройки</button>
+            <button class="mobile-dock-btn" id="mobileChatsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Чаты'; var dm=document.getElementById('modeDmBtn'); if (dm) dm.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></span><span class="mobile-dock-label">Чаты</span></button>
+            <button class="mobile-dock-btn" id="mobileServersBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Сервера'; var svBtn=document.getElementById('modeServersBtn'); if (svBtn) svBtn.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg></span><span class="mobile-dock-label">Сервера</span></button>
+            <button class="mobile-dock-btn" id="mobileHubBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/></svg></span><span class="mobile-dock-label">Хаб</span></button>
+            <button class="mobile-dock-btn" id="mobileSettingsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.remove('active'); if (sv) sv.classList.add('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Настройки'; document.body.classList.remove('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="mobile-dock-label">Настройки</span></button>
+        </div>
+    </div>
+
+    <div class="avatar-crop-overlay" id="avatarCropOverlay" hidden>
+        <div class="avatar-crop-modal" role="dialog" aria-modal="true" aria-labelledby="avatarCropTitle">
+            <div class="avatar-crop-head">
+                <h2 id="avatarCropTitle">Обрезка аватара</h2>
+                <button class="avatar-crop-close" id="avatarCropCloseBtn" type="button" aria-label="Отмена">×</button>
+            </div>
+            <div class="avatar-crop-stage-wrap">
+                <div class="avatar-crop-stage" id="avatarCropStage">
+                    <img class="avatar-crop-img" id="avatarCropImg" alt="Предпросмотр аватара" draggable="false">
+                    <div class="avatar-crop-circle-guide" id="avatarCropCircleGuide" aria-hidden="true"></div>
+                </div>
+            </div>
+            <div class="avatar-crop-zoom-row">
+                <span class="avatar-crop-zoom-icon" aria-hidden="true">−</span>
+                <input type="range" class="avatar-crop-zoom" id="avatarCropZoom" min="0" max="1000" step="1" value="0" aria-label="Масштаб">
+                <span class="avatar-crop-zoom-icon avatar-crop-zoom-icon--big" aria-hidden="true">+</span>
+            </div>
+            <p class="avatar-crop-hint">Перетащите фото, чтобы выбрать область, и настройте масштаб ползунком.</p>
+            <div class="avatar-crop-actions">
+                <button class="btn-flat" id="avatarCropCancelBtn" type="button">Отмена</button>
+                <button class="auth-btn primary" id="avatarCropSaveBtn" type="button">Сохранить</button>
+            </div>
         </div>
     </div>
 

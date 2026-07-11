@@ -6,6 +6,11 @@
         const macBridge = window.webkit?.messageHandlers?.nativeApp || null;
         const wryBridge = window.ipc?.postMessage ? window.ipc : null;
         const webView2Bridge = window.chrome?.webview?.postMessage ? window.chrome.webview : null;
+        // Android's WebView.addJavascriptInterface() only exposes plain methods on a
+        // named window object (not a .postMessage(obj) pattern that accepts arbitrary
+        // JS objects like WKWebView's message handlers) — the native side only ever
+        // sees strings, so payloads are always JSON-stringified first, same as wry/webview2.
+        const androidBridge = window.ZaliAndroidBridge?.postMessage ? window.ZaliAndroidBridge : null;
 
         const transport = macBridge
             ? {
@@ -33,7 +38,16 @@
                             return true;
                         },
                     }
-                    : null;
+                    : androidBridge
+                        ? {
+                            kind: 'android',
+                            postMessage(payload) {
+                                const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                                androidBridge.postMessage(data);
+                                return true;
+                            },
+                        }
+                        : null;
 
         const defaultCaps = macBridge
             ? {

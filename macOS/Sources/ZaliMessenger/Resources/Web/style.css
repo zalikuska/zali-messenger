@@ -211,48 +211,97 @@ button {
     -webkit-backdrop-filter: blur(2px);
 }
 
+/* Mobile bottom bar — Liquid Glass (App Store style). Mobile-only; desktop never renders it. */
 .mobile-dock {
     position: fixed;
     left: 50%;
-    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     z-index: 22;
     display: none;
-    align-items: center;
-    gap: 8px;
-    width: min(100vw - 20px, 440px);
-    padding: 7px;
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    background: rgba(8,10,14,.92);
-    box-shadow: 0 18px 42px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03);
+    align-items: stretch;
+    gap: 4px;
+    width: min(100vw - 24px, 460px);
+    padding: 6px;
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 30px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)),
+        rgba(14,16,20,.55);
+    box-shadow:
+        0 20px 48px rgba(0,0,0,.42),
+        0 2px 8px rgba(0,0,0,.28),
+        inset 0 1px 0 rgba(255,255,255,.22),
+        inset 0 -1px 0 rgba(0,0,0,.25);
     transform: translateX(-50%);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
 }
 
 .mobile-dock-btn {
+    position: relative;
     flex: 1 1 0;
     min-width: 0;
-    min-height: 42px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: rgba(255,255,255,.03);
+    min-height: 48px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: 22px;
+    background: transparent;
     color: var(--text2);
-    font-size: 12px;
-    font-weight: 900;
-    letter-spacing: .05em;
-    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .01em;
+    text-transform: none;
     cursor: pointer;
-    transition: transform .18s ease, border-color .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .22s cubic-bezier(.2,1.1,.3,1), background .24s ease, color .22s ease, box-shadow .24s ease;
 }
 
-.mobile-dock-btn:hover,
+.mobile-dock-ico {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mobile-dock-btn svg {
+    width: 23px;
+    height: 23px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform .22s cubic-bezier(.2,1.2,.24,1), stroke-width .22s ease;
+}
+
+.mobile-dock-label {
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.mobile-dock-btn:active {
+    transform: scale(.94);
+}
+
 .mobile-dock-btn.active {
-    border-color: rgba(var(--accent-rgb), .22);
-    color: var(--text);
-    background: rgba(var(--accent-rgb), .12);
-    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .1);
+    color: #05210b;
+    background:
+        radial-gradient(circle at 30% 18%, rgba(255,255,255,.4), transparent 42%),
+        linear-gradient(180deg, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), .82));
+    box-shadow:
+        0 8px 20px rgba(var(--accent-rgb), .34),
+        inset 0 1px 0 rgba(255,255,255,.4);
+}
+
+.mobile-dock-btn.active svg {
+    stroke-width: 2.25;
 }
 
 body[data-ui-v2="off"] #mobileHubBtn {
@@ -790,6 +839,14 @@ body[data-nav-mode="servers"] .contacts {
         0 0 0 6px rgba(var(--accent-rgb), .08);
 }
 
+.contact-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    align-self: center;
+    justify-self: end;
+}
+
 .contact-remove {
     width: 24px;
     height: 24px;
@@ -808,6 +865,35 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--red);
     background: rgba(255,255,255,.06);
     box-shadow: 0 0 0 2px rgba(255,77,109,.08);
+}
+
+.contact-mute-toggle,
+.channel-mute-toggle {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text3);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    opacity: .55;
+    transition: opacity .18s ease, color .18s ease, background .18s ease;
+}
+
+.contact-mute-toggle:hover,
+.channel-mute-toggle:hover {
+    opacity: 1;
+    background: rgba(255,255,255,.06);
+}
+
+.contact-mute-toggle.muted,
+.channel-mute-toggle.muted {
+    color: var(--text2);
+    opacity: 1;
 }
 
 .contact-name {
@@ -2209,6 +2295,161 @@ body[data-nav-mode="servers"] .contacts {
     gap: 12px;
 }
 
+.avatar-crop-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(4, 6, 10, .78);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    opacity: 0;
+    transition: opacity .18s ease;
+}
+
+.avatar-crop-overlay[hidden] {
+    display: none;
+}
+
+.avatar-crop-overlay.visible {
+    opacity: 1;
+}
+
+.avatar-crop-modal {
+    width: min(360px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 24px;
+    background: linear-gradient(180deg, rgba(22,24,28,.98), rgba(10,12,16,.98));
+    box-shadow: 0 30px 90px rgba(0,0,0,.52), 0 0 0 1px rgba(var(--accent-rgb),.06);
+    transform: translateY(8px) scale(.98);
+    transition: transform .18s ease;
+}
+
+.avatar-crop-overlay.visible .avatar-crop-modal {
+    transform: translateY(0) scale(1);
+}
+
+.avatar-crop-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.avatar-crop-head h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.avatar-crop-close {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 50%;
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    font-size: 16px;
+    cursor: pointer;
+    transition: background .18s ease, color .18s ease;
+}
+
+.avatar-crop-close:hover {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+}
+
+.avatar-crop-stage-wrap {
+    display: grid;
+    place-items: center;
+}
+
+.avatar-crop-stage {
+    position: relative;
+    width: 300px;
+    height: 300px;
+    border-radius: 20px;
+    overflow: hidden;
+    background: #000;
+    cursor: grab;
+    touch-action: none;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+    user-select: none;
+}
+
+.avatar-crop-stage.dragging {
+    cursor: grabbing;
+}
+
+/* The circle "hole" is drawn with a spread box-shadow rather than clipping the
+   stage itself, so the square ring around it still shows the rest of the photo
+   (dimmed) — the part that won't end up in the avatar. */
+.avatar-crop-circle-guide {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 220px;
+    height: 220px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.4);
+    box-shadow: 0 0 0 2000px rgba(4,6,10,.62);
+    pointer-events: none;
+}
+
+.avatar-crop-img {
+    position: absolute;
+    left: 0;
+    top: 0;
+    max-width: none;
+    pointer-events: none;
+}
+
+.avatar-crop-zoom-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.avatar-crop-zoom {
+    flex: 1;
+    accent-color: var(--lime);
+}
+
+.avatar-crop-zoom-icon {
+    color: var(--text3);
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.avatar-crop-zoom-icon--big {
+    font-size: 17px;
+}
+
+.avatar-crop-hint {
+    margin: 0;
+    color: var(--text3);
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.avatar-crop-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
 .avatar-editor-actions {
     display: flex;
     gap: 10px;
@@ -2620,7 +2861,7 @@ body[data-nav-mode="servers"] .contacts {
     position: absolute;
     inset: 12px;
     pointer-events: none;
-    border-radius: 18px;
+    border-radius: 12px;
     border: 1px solid rgba(var(--accent-rgb), .08);
     background:
         radial-gradient(circle at 14% 8%, rgba(var(--accent-rgb), .10), transparent 22%),
@@ -4082,7 +4323,7 @@ body[data-nav-mode="servers"] .contacts {
     overflow-wrap: anywhere;
     padding: 10px 13px;
     border: 1px solid var(--border);
-    border-radius: 18px;
+    border-radius: var(--r-msg);
     background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
     color: var(--text);
     line-height: 1.45;
@@ -4299,7 +4540,7 @@ body[data-nav-mode="servers"] .contacts {
     display: block;
     width: 100%;
     border: 0;
-    border-radius: 12px;
+    border-radius: calc(var(--r-msg) - 6px);
     background: rgba(0,0,0,.18);
 }
 
@@ -4353,7 +4594,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .discord-media-shell {
     overflow: hidden;
-    border-radius: 12px;
+    border-radius: calc(var(--r-msg) - 6px);
     background: #000;
     border: 1px solid rgba(255,255,255,.04);
     box-shadow: 0 1px 0 rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.02);
@@ -4433,7 +4674,7 @@ body[data-nav-mode="servers"] .contacts {
     gap: 8px;
     padding: 10px 12px;
     border: 1px solid transparent;
-    border-radius: 18px;
+    border-radius: var(--r-msg);
     background:
         linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04)) padding-box,
         linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.05)) border-box;
@@ -4590,10 +4831,10 @@ body[data-nav-mode="servers"] .contacts {
     height: 54px;
     padding: 8px 8px;
     border: 1px solid rgba(255,255,255,.055);
-    border-radius: 13px;
+    border-radius: 12px;
     background:
         linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.012)),
-        rgba(8,10,13,.38);
+        rgba(8,10,13,.9);
     box-shadow:
         inset 0 1px 0 rgba(255,255,255,.035);
 }
@@ -5719,6 +5960,87 @@ body[data-nav-mode="servers"] .contacts {
     .server-channel-list {
         padding-bottom: 22px;
     }
+
+    /* ── Touch ergonomics ─────────────────────────────────────── */
+    /* Remove the 300ms tap delay + the grey/blue tap flash, and the
+       iOS long-press text callout on interactive controls. */
+    button, a, [role="button"], .contact, .server-item, .server-channel,
+    .mobile-dock-btn, .hub-segment-btn, .settings-input, .search-input {
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+    }
+    button, a, [role="button"], .mobile-dock-btn, .hub-segment-btn {
+        -webkit-touch-callout: none;
+    }
+
+    /* Momentum scrolling; keep overscroll from bouncing the whole page. */
+    .contacts, .msgs, .settings-body, .sidebar, .server-channel-list,
+    .server-modal-content, .color-picker-body {
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
+    /* Never let the page scroll sideways on a phone. */
+    html, body {
+        overflow-x: hidden;
+    }
+    img, video {
+        max-width: 100%;
+    }
+
+    /* iOS zooms the layout when a focused field renders below 16px.
+       Force 16px on every text field so focusing an input never zooms. */
+    input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+    textarea, select {
+        font-size: 16px;
+    }
+
+    /* Comfortable touch targets (~44px, per Apple HIG / Material). */
+    .contact-remove {
+        width: 36px;
+        height: 36px;
+    }
+    .settings-input, .search-input {
+        min-height: 44px;
+    }
+
+    /* Stack the two-column modals so nothing squeezes off-screen. */
+    .server-modal-shell {
+        grid-template-columns: 1fr;
+    }
+    .color-picker {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ── Small phones ─────────────────────────────────────────────── */
+@media (max-width: 400px) {
+    .mobile-dock {
+        gap: 2px;
+        padding: 5px;
+    }
+    .mobile-dock-btn {
+        min-height: 44px;
+        padding: 5px 2px;
+        border-radius: 18px;
+    }
+    .mobile-dock-btn svg {
+        width: 21px;
+        height: 21px;
+    }
+    .mobile-dock-label {
+        font-size: 9px;
+        letter-spacing: 0;
+    }
+    .body {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+    #viewChat,
+    #viewSettings {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
 }
 
 /* ─── Flat Theme — original look, gradients & glows removed ─── */
@@ -5824,7 +6146,7 @@ body[data-experimental-design="on"] .msg.out.group-start::before {
 
 /* Input bar */
 body[data-experimental-design="on"] .input-bar {
-    background: rgba(8, 10, 13, 0.38);
+    background: rgba(8, 10, 13, 0.9);
     box-shadow: none;
 }
 

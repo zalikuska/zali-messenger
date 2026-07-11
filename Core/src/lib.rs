@@ -1,3 +1,5 @@
+#[cfg(feature = "android")]
+pub mod android_jni;
 pub mod bus;
 pub mod crypto;
 pub mod loader;
@@ -6,7 +8,7 @@ pub mod net;
 use loader::ZaliLoader;
 use std::sync::{OnceLock, RwLock};
 
-fn get_loader() -> &'static RwLock<ZaliLoader> {
+pub(crate) fn get_loader() -> &'static RwLock<ZaliLoader> {
     static LOADER: OnceLock<RwLock<ZaliLoader>> = OnceLock::new();
     LOADER.get_or_init(|| {
         let mut loader = ZaliLoader::new();
@@ -182,7 +184,7 @@ pub unsafe extern "C" fn zali_unpack_message(
             }
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    sender_bytes.as_ptr() as *const i8,
+                    sender_bytes.as_ptr() as *const std::os::raw::c_char,
                     out_sender,
                     sender_bytes.len(),
                 );
@@ -194,7 +196,7 @@ pub unsafe extern "C" fn zali_unpack_message(
             }
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    text_bytes.as_ptr() as *const i8,
+                    text_bytes.as_ptr() as *const std::os::raw::c_char,
                     out_text,
                     text_bytes.len(),
                 );

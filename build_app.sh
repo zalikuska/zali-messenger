@@ -103,6 +103,27 @@ EOF
 
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+# 6. Подпись бандла. Обязательно ПОСЛЕ записи Info.plist — подпись, наложенная
+# на голый бинарник линкером во время `swift build` (ad-hoc), не привязана к
+# Info.plist ("Info.plist=not bound" в `codesign -dv`), и именно поэтому
+# UNUserNotificationCenter.requestAuthorization падал с "UNErrorDomain error 1"
+# на macOS 26: без стабильной, привязанной к Info.plist подписи система не
+# может однозначно идентифицировать приложение для выдачи разрешения на
+# уведомления. Подписываем локальным self-signed сертификатом "ZaliMessenger
+# Local" (создаётся один раз через Keychain Access / security import, не
+# требует платного Apple Developer аккаунта) — если сертификата ещё нет на
+# этой машине, откатываемся на ad-hoc и предупреждаем, что push-уведомления не
+# заработают, а не роняем сборку.
+SIGN_IDENTITY="ZaliMessenger Local"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+    echo "🔏 Подпись бандла ($SIGN_IDENTITY)..."
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+else
+    echo "⚠️  Сертификат '$SIGN_IDENTITY' не найден в Keychain — подписываем ad-hoc."
+    echo "   Push-уведомления не будут работать (UNErrorDomain error 1). См. CLAUDE.md."
+    codesign --force --deep --sign - "$APP_BUNDLE"
+fi
+
 echo "✅ Готово! Приложение создано: $APP_BUNDLE"
 echo "👉 Теперь вы можете запустить его командой: open $APP_BUNDLE"
 echo "Или просто найдите его в папке проекта через Finder и кликните дважды."

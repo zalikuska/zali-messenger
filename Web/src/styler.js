@@ -149,7 +149,6 @@ class ZaliStyler {
 
         // Register commands on the bus
         this.bus.registerCommand('zali_styler', 'set_theme',         (themeName) => this.setTheme(themeName));
-        this.bus.registerCommand('zali_styler', 'set_border_radius', (radius)    => this.setBorderRadius(radius));
         this.bus.registerCommand('zali_styler', 'set_variable',      (name, val) => this.setVariable(name, val));
         this.bus.registerCommand('zali_styler', 'get_themes',        ()          => Object.keys(this.themes));
         this.bus.registerCommand('zali_styler', 'save_style',        ()          => this.saveStyleToNative());
@@ -173,22 +172,32 @@ class ZaliStyler {
         }
     }
 
+    _cryptoKeyStorageKey() {
+        return window.__ZALI_INTERFACE?.cryptoKeyStorageKey?.() || 'zali_crypto_key_v2';
+    }
+
+    _conversationKeysStorageKey() {
+        return window.__ZALI_INTERFACE?.conversationKeysStorageKey?.() || 'zali_conversation_keys_v2';
+    }
+
     _loadStoredKey() {
         try {
             const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
             if (scope) {
-                const rawMap = sessionStorage.getItem('zali_conversation_keys_v2') || localStorage.getItem('zali_conversation_keys_v2');
+                const convKey = this._conversationKeysStorageKey();
+                const rawMap = sessionStorage.getItem(convKey) || localStorage.getItem(convKey);
                 if (rawMap) {
                     const storedMap = JSON.parse(rawMap) || {};
                     const scoped = String(storedMap[scope] || '').trim();
                     if (scoped) return scoped;
                 }
             }
-            const stored = (sessionStorage.getItem('zali_crypto_key_v2') || localStorage.getItem('zali_crypto_key_v2') || '').trim();
+            const keyName = this._cryptoKeyStorageKey();
+            const stored = (sessionStorage.getItem(keyName) || localStorage.getItem(keyName) || '').trim();
             if (stored) {
                 try {
-                    sessionStorage.setItem('zali_crypto_key_v2', stored);
-                    localStorage.removeItem('zali_crypto_key_v2');
+                    sessionStorage.setItem(keyName, stored);
+                    localStorage.removeItem(keyName);
                 } catch (e) {}
             }
             if (stored) return stored;
@@ -297,15 +306,6 @@ class ZaliStyler {
         return true;
     }
 
-    setBorderRadius(radius) {
-        const radStr = String(radius).endsWith('px') ? radius : `${radius}px`;
-        this.currentRadius = parseInt(radius, 10);
-        this.setVariable('--r-msg', radStr, { persist: false });
-        this.currentVars['--r-msg'] = radStr;
-        console.log(`[zali_styler] Закругление углов сообщений: ${radStr}`);
-        this.saveStyleToNative();
-    }
-
     setVariable(name, val, options = {}) {
         document.documentElement.style.setProperty(name, val);
         this.currentVars[name] = val;
@@ -327,12 +327,13 @@ class ZaliStyler {
     setKey(key) {
         this.currentKey = (key || '').trim();
         try {
+            const keyName = this._cryptoKeyStorageKey();
             if (this.currentKey) {
-                sessionStorage.setItem('zali_crypto_key_v2', this.currentKey);
-                localStorage.removeItem('zali_crypto_key_v2');
+                sessionStorage.setItem(keyName, this.currentKey);
+                localStorage.removeItem(keyName);
             } else {
-                sessionStorage.removeItem('zali_crypto_key_v2');
-                localStorage.removeItem('zali_crypto_key_v2');
+                sessionStorage.removeItem(keyName);
+                localStorage.removeItem(keyName);
             }
         } catch (e) {}
 
@@ -342,15 +343,16 @@ class ZaliStyler {
         try {
             const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
             if (scope) {
-                const raw = sessionStorage.getItem('zali_conversation_keys_v2') || localStorage.getItem('zali_conversation_keys_v2');
+                const convKey = this._conversationKeysStorageKey();
+                const raw = sessionStorage.getItem(convKey) || localStorage.getItem(convKey);
                 const stored = raw ? (JSON.parse(raw) || {}) : {};
                 if (this.currentKey) {
                     stored[scope] = this.currentKey;
                 } else {
                     delete stored[scope];
                 }
-                sessionStorage.setItem('zali_conversation_keys_v2', JSON.stringify(stored));
-                localStorage.removeItem('zali_conversation_keys_v2');
+                sessionStorage.setItem(convKey, JSON.stringify(stored));
+                localStorage.removeItem(convKey);
             }
         } catch (e) {}
 
