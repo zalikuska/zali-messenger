@@ -82,6 +82,7 @@
             direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
             reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
             download: (id) => apiRoute(`/download/${encodeURIComponent(id)}`),
+            upload: apiRoute('/upload'),
         },
         servers: {
             list: apiRoute('/servers'),
@@ -305,6 +306,78 @@
                 },
                 traceLines: [],
             };
+        },
+    };
+})();
+
+
+// --- MODULE: wasm_bridge.js ---
+// @ts-check
+// Lazily loads the WASM build of core/ (see scripts/build_web_wasm.sh) and exposes
+// pack/unpack helpers for the .zali archive format to the rest of interface.js.
+// Only relevant when running as a plain browser tab with no native shell — the
+// macOS/Windows clients pack/unpack archives natively and never touch this module.
+// Dynamic import() here resolves relative to the document URL, so web/wasm-pkg/
+// must be served alongside web/index.html.
+(function() {
+    'use strict';
+
+    let readyPromise = null;
+
+    function load() {
+        if (!readyPromise) {
+            readyPromise = import('./wasm-pkg/zali_core.js')
+                .then(async (mod) => {
+                    await mod.default();
+                    return mod;
+                })
+                .catch((error) => {
+                    readyPromise = null;
+                    throw error;
+                });
+        }
+        return readyPromise;
+    }
+
+    window.ZaliWasm = {
+        async isAvailable() {
+            try {
+                await load();
+                return true;
+            } catch (e) {
+                return false;
+            }
+        },
+
+        /**
+         * @param {string} sender
+         * @param {string} text
+         * @param {string} key
+         * @param {number} keyVersion
+         * @param {Array<{name:string, archivePath:string, mimeType:string, kind:string, bytes:Uint8Array}>} [attachments]
+         * @returns {Promise<Uint8Array>}
+         */
+        async packMessage(sender, text, key, keyVersion, attachments) {
+            const mod = await load();
+            const jsAttachments = (attachments || []).map(a => ({
+                name: a.name,
+                archivePath: a.archivePath,
+                mimeType: a.mimeType,
+                kind: a.kind,
+                bytes: a.bytes instanceof Uint8Array ? a.bytes : new Uint8Array(a.bytes),
+            }));
+            return mod.pack_message_wasm(sender, text, key, keyVersion || 0, jsAttachments);
+        },
+
+        /**
+         * @param {Uint8Array} archiveBytes
+         * @param {string} key
+         * @returns {Promise<{sender:string, text:string, timestamp:number, keyVersion:number, attachments:Array<{name:string,archivePath:string,mimeType:string,kind:string,bytes:Uint8Array}>}>}
+         */
+        async unpackMessage(archiveBytes, key) {
+            const mod = await load();
+            const bytes = archiveBytes instanceof Uint8Array ? archiveBytes : new Uint8Array(archiveBytes);
+            return mod.unpack_message_wasm(bytes, key);
         },
     };
 })();
@@ -7178,6 +7251,11 @@ class ZaliInterface {
                 }, 25000);
                 this.voiceTrace('socket-open', { generation, url: url.toString() }, 'SUCCESS');
                 this.addLogEntry({ type: 'SUCCESS', msg: 'Browser voice socket connected', ts: new Date().toLocaleTimeString() });
+                // This socket doubles as the pure-browser client's only realtime connection
+                // (messages + voice signaling both ride it — see onmessage below), so its
+                // lifecycle IS the connection-status badge in that mode, same as native
+                // shells driving it via SET_CONNECTION_STATUS over their own transport.
+                this.setConnectionStatus(true);
             };
 
             socket.onmessage = (event) => {
@@ -7190,6 +7268,12 @@ class ZaliInterface {
                 }
                 if (payload && typeof payload === 'object' && String(payload.type || '').startsWith('voice_')) {
                     this.handleVoiceEvent(payload);
+                } else if (payload && typeof payload === 'object' && !payload.type && payload.id && payload.sender && payload.receiver) {
+                    // No `type` field = a raw `Message` row pushed by deliver_to_user/
+                    // deliver_server_message (server/src/realtime.rs), not a voice/avatar
+                    // event. Only reachable in pure-browser mode — native shells receive
+                    // and decrypt these themselves over their own transport.
+                    void this.handleIncomingBrowserMessage(payload);
                 }
             };
 
@@ -7202,6 +7286,7 @@ class ZaliInterface {
                     this.voiceSocketPingTimer = null;
                 }
                 this.voiceTrace('socket-close', { generation, url: url.toString() }, 'WARN');
+                this.setConnectionStatus(false);
                 if (!this.nativeSupports('voice')) {
                     const baseDelay = this.voiceSocketReconnectDelayMs || 1000;
                     const jitter = Math.floor(Math.random() * 500);
@@ -9079,6 +9164,16 @@ class ZaliInterface {
             return;
         }
 
+        // No native shell to decrypt channel history for us — each row here is just
+        // server-known metadata (id/sender/receiver/filename/timestamp), same as a DM
+        // history row. Route it through the same WASM download+unpack path used for
+        // live-received messages instead of showing "encrypted, needs native bridge".
+        if (!(await this.wasmAvailable())) {
+            if (!silent) {
+                this.addLogEntry({ type: 'WARN', msg: 'WASM недоступен: сообщения канала не будут расшифрованы', ts: new Date().toLocaleTimeString() });
+            }
+            return;
+        }
         try {
             const limit = 200;
             let offset = 0;
@@ -9096,23 +9191,10 @@ class ZaliInterface {
                 const messages = await res.json();
                 const batch = Array.isArray(messages) ? messages : [];
                 this.trace(`loadServerMessages success server=${sid} channel=${cid} offset=${offset} count=${batch.length}`);
-                const normalized = batch.map(msg => ({
-                    id: msg.id,
-                    sender: msg.sender,
-                    receiver: msg.receiver || cid,
-                    text: msg.text || msg.content || 'Зашифрованное сообщение недоступно без нативного моста.',
-                    attachments: this.normalizeAttachments(msg.attachments),
-                    timestamp: msg.timestamp,
-                    serverId: msg.serverId || msg.server_id || sid,
-                    channelId: msg.channelId || msg.channel_id || cid,
-                    reactions: msg.reactions || [],
-                    myReaction: msg.myReaction || msg.my_reaction || '',
-                }));
-                if (normalized.length > 0) {
-                    this.mergeServerChatMessages(key, normalized);
-                    mergedCount += normalized.length;
-                    this.scheduleRenderMessages();
+                for (const msg of batch) {
+                    await this.handleIncomingBrowserMessage(msg);
                 }
+                mergedCount += batch.length;
                 if (batch.length < limit) break;
                 offset += limit;
             }
@@ -9251,6 +9333,8 @@ class ZaliInterface {
             const key = await this.resolveConversationCryptoKey({ peer: this.S.current, reason: 'refreshAfterKey' });
             if (this.nativeSupports('sendMessage')) {
                 this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer: this.S.current });
+            } else {
+                void this.loadBrowserDmHistory(this.S.current, key);
             }
         }
         this.scheduleFlushPendingOutbox(300);
@@ -9290,6 +9374,8 @@ class ZaliInterface {
         const key = await this.resolveConversationCryptoKey({ peer, reason: 'syncActiveConversation' });
         if (this.nativeSupports('sendMessage')) {
             this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer });
+        } else {
+            void this.loadBrowserDmHistory(peer, key);
         }
     }
 
@@ -13221,7 +13307,31 @@ class ZaliInterface {
             this.clearDraftAttachments();
             this.updateSendButtonState();
             inp && inp.focus();
-            this.addLogEntry({ type: 'WARN', msg: 'Native bridge не обнаружен. Сообщение сохранено только в локальном интерфейсе.', ts: new Date().toLocaleTimeString() });
+
+            // No native shell (macOS/Windows) around this WebView — we're running as a
+            // plain browser tab. Pack the .zali archive ourselves via the WASM build of
+            // core/ (see web/src/modules/wasm_bridge.js) and upload it straight to the
+            // server over fetch, instead of just stranding the message locally.
+            const sent = await this.browserSendMessage({
+                text,
+                key: effectiveCryptoKey,
+                keyVersion,
+                sender: this.myName(),
+                receiver: isServers ? channel.id : this.S.current,
+                serverId: isServers ? server.id : '',
+                channelId: isServers ? channel.id : '',
+                clientId,
+                attachments: payloadAttachments,
+            }).catch(error => {
+                this.trace(`sendInputMessage browserSendMessage error clientId=${clientId} error=${error?.message || error}`);
+                return false;
+            });
+            if (sent) {
+                this.trace(`sendInputMessage browserSendMessage ok clientId=${clientId}`);
+                this.addLogEntry({ type: 'SUCCESS', msg: 'Отправлено из браузера (WASM)', ts: new Date().toLocaleTimeString() });
+            } else {
+                this.addLogEntry({ type: 'WARN', msg: 'Не удалось отправить сообщение из браузера. Сообщение сохранено только в локальном интерфейсе.', ts: new Date().toLocaleTimeString() });
+            }
             return;
         }
 
@@ -13287,6 +13397,147 @@ class ZaliInterface {
             });
             this.addLogEntry({ type: 'WARN', msg: 'Native bridge не принял сообщение, оставлено в очереди повтора', ts: new Date().toLocaleTimeString() });
             this.scheduleFlushPendingOutbox(1000);
+        }
+    }
+
+    // --- Browser-only (no native shell) send/receive path, backed by the WASM build
+    // of core/ (web/src/modules/wasm_bridge.js packs/unpacks the .zali archive format
+    // entirely in-browser — same wire format as the native macOS/Windows clients use).
+
+    async wasmAvailable() {
+        return !!(window.ZaliWasm && await window.ZaliWasm.isAvailable());
+    }
+
+    async dataUrlToBytes(dataUrl) {
+        const res = await fetch(dataUrl);
+        const buf = await res.arrayBuffer();
+        return new Uint8Array(buf);
+    }
+
+    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments }) {
+        if (!key || !receiver) return false;
+        if (!(await this.wasmAvailable())) return false;
+
+        const wasmAttachments = [];
+        for (const att of (attachments || [])) {
+            if (!att?.dataUrl) continue;
+            try {
+                const bytes = await this.dataUrlToBytes(att.dataUrl);
+                wasmAttachments.push({
+                    name: att.name || 'attachment',
+                    archivePath: `attachments/${att.name || 'attachment'}`,
+                    mimeType: att.mimeType || 'application/octet-stream',
+                    kind: att.kind || 'file',
+                    bytes,
+                });
+            } catch (e) {
+                this.trace(`browserSendMessage attachment decode failed name=${att?.name} error=${e?.message || e}`);
+            }
+        }
+
+        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments);
+        if (!archiveBytes || !archiveBytes.length) return false;
+
+        const formData = new FormData();
+        formData.append('sender', sender || '');
+        formData.append('receiver', receiver);
+        if (serverId) formData.append('server_id', serverId);
+        if (channelId) formData.append('channel_id', channelId);
+        if (clientId) formData.append('client_id', clientId);
+        formData.append('key_version', String(keyVersion || ''));
+        formData.append('file', new Blob([archiveBytes], { type: 'application/octet-stream' }), 'message.zali');
+
+        const res = await this.apiFetch(this.apiRoutes.messages.upload, {
+            method: 'POST',
+            body: formData,
+        });
+        return res.ok;
+    }
+
+    // Handles a raw `Message` row pushed over the WS connection (no `type` field —
+    // see server/src/realtime.rs deliver_to_user/deliver_server_message). Downloads
+    // the .zali archive and decrypts it in-browser via WASM, then feeds the result
+    // into the same receiveMessage() path the native shells use.
+    async handleIncomingBrowserMessage(payload) {
+        const id = String(payload?.id || '').trim();
+        const sender = String(payload?.sender || '').trim();
+        const receiver = String(payload?.receiver || '').trim();
+        if (!id || !sender || !receiver) return;
+        if (!(await this.wasmAvailable())) return;
+
+        const serverId = payload?.server_id || null;
+        const channelId = payload?.channel_id || null;
+        const peer = sender === this.myName() ? receiver : sender;
+
+        let key = this.ensureConversationCryptoKey({
+            peer: serverId ? null : peer,
+            serverId,
+            channelId,
+            reason: 'handleIncomingBrowserMessage',
+        });
+        for (let attempt = 0; !key && attempt < 5; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 400));
+            key = await this.resolveConversationCryptoKey({
+                peer: serverId ? null : peer,
+                serverId,
+                channelId,
+                reason: 'handleIncomingBrowserMessage',
+            });
+        }
+        if (!key) {
+            this.trace(`handleIncomingBrowserMessage missingKey id=${id} peer=${peer}`);
+            return;
+        }
+
+        try {
+            const res = await this.apiFetch(this.apiRoutes.messages.download(id));
+            if (!res.ok) return;
+            const archiveBytes = new Uint8Array(await res.arrayBuffer());
+            const unpacked = await window.ZaliWasm.unpackMessage(archiveBytes, key);
+            const attachments = (unpacked.attachments || []).map(att => ({
+                name: att.name,
+                mimeType: att.mimeType,
+                kind: att.kind,
+                size: att.bytes?.length || 0,
+                dataUrl: att.bytes?.length
+                    ? URL.createObjectURL(new Blob([att.bytes], { type: att.mimeType || 'application/octet-stream' }))
+                    : '',
+                archivePath: att.archivePath,
+            }));
+            this.bus.send('zali_interface:receive_message', {
+                id,
+                clientId: payload?.client_id || '',
+                sender: unpacked.sender || sender,
+                receiver,
+                text: unpacked.text,
+                timestamp: unpacked.timestamp ? unpacked.timestamp * 1000 : payload?.timestamp,
+                attachments,
+                reactions: payload?.reactions || [],
+                myReaction: payload?.myReaction || payload?.my_reaction || '',
+                serverId,
+                channelId,
+            });
+        } catch (e) {
+            this.trace(`handleIncomingBrowserMessage failed id=${id} error=${e?.message || e}`);
+        }
+    }
+
+    // Fallback for loading DM history from a plain browser tab (no native shell to do
+    // it via REFRESH_HISTORY). Downloads + decrypts each message metadata row returned
+    // by GET /api/messages/:user and feeds it through receiveMessage(), same as above.
+    async loadBrowserDmHistory(peer, key) {
+        if (!peer || !key) return;
+        if (!(await this.wasmAvailable())) return;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.messages.direct(peer));
+            if (!res.ok) return;
+            const rows = await res.json();
+            if (!Array.isArray(rows)) return;
+            for (const row of rows) {
+                await this.handleIncomingBrowserMessage(row);
+            }
+        } catch (e) {
+            this.trace(`loadBrowserDmHistory failed peer=${peer} error=${e?.message || e}`);
         }
     }
 
@@ -15502,6 +15753,15 @@ window.ZaliInterface = ZaliInterface;
     }
 
     window.__ZALI_NATIVE = createNativeBridge();
+
+    // Register the app-shell service worker only in standalone browser/PWA mode — native
+    // shells (macOS/Windows) load this HTML via loadHTMLString/a data string with no real
+    // origin, where SW registration would be meaningless at best. See web/service-worker.js.
+    if (!window.__ZALI_NATIVE?.available && 'serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+        });
+    }
 
     // Create the minimal JS-side loader (only interface + styler)
     const loader = new ZaliLoader();

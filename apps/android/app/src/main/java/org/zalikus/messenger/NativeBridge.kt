@@ -1,10 +1,19 @@
 package org.zalikus.messenger
 
+import android.Manifest
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.webkit.WebViewFeature
 import okhttp3.Call
 import okhttp3.Callback
@@ -127,10 +136,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             sessionSync: false,
             saveStyle: false,
             saveMessageCache: false,
-            downloadAttachment: false,
+            downloadAttachment: true,
             serverHistory: false,
-            avatarFetch: false,
-            tenor: false,
+            avatarFetch: true,
+            tenor: true,
             voice: false,
             windowDrag: false
           };
@@ -188,6 +197,18 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 }
             }
             "SEND_MESSAGE" -> handleSendMessage(dict)
+            "UPLOAD_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = false)
+            "DELETE_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = true)
+            "LOAD_AVATAR_REQUEST" -> handleLoadAvatarRequest(dict)
+            "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
+            "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
+            "SHOW_NOTIFICATION" -> showMessageNotification(
+                sender = dict.optString("sender", "").trim(),
+                text = dict.optString("text", ""),
+                attachmentCount = dict.optInt("attachmentCount", 0),
+                serverId = dict.optString("serverId", "").ifEmpty { null },
+                channelId = dict.optString("channelId", "").ifEmpty { null },
+            )
         }
     }
 
@@ -507,6 +528,303 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         })
     }
 
+    // MARK: - Attachment download (DOWNLOAD_ATTACHMENT)
+    //
+    // Ported from macOS's `.downloadAttachment` IPC case + `saveAttachment`
+    // (`NSSavePanel`), mirroring the iOS shell's `saveAttachment`
+    // (`UIActivityViewController`). Android has no save panel either — writes to
+    // the app's cache dir and launches the system share sheet via a FileProvider
+    // `content://` Uri (a raw `file://` Uri throws `FileUriExposedException` on
+    // targetSdk 24+); "Save to Downloads"/"Save to Drive" etc. are share-sheet
+    // targets the OS already provides.
+
+    private fun saveAttachment(dataUrl: String, filename: String) {
+        val (bytes, _, fileExtension) = decodeDataUrl(dataUrl)
+        if (bytes.isEmpty()) return
+        val safeName = safeFileName(filename, fileExtension)
+
+        val attachmentsDir = File(context.cacheDir, "attachments").apply { mkdirs() }
+        val file = File(attachmentsDir, "${UUID.randomUUID()}_$safeName")
+        try {
+            file.writeBytes(bytes)
+        } catch (e: Exception) {
+            return
+        }
+
+        val uri = try {
+            androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        } catch (e: Exception) {
+            return
+        }
+
+        val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = android.content.Intent.createChooser(shareIntent, null).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        mainHandler.post {
+            try {
+                context.startActivity(chooser)
+            } catch (e: Exception) {
+                // No activity available to handle the share sheet — drop silently.
+            }
+        }
+    }
+
+    // MARK: - Avatar (UPLOAD/DELETE/LOAD_AVATAR_REQUEST)
+    //
+    // Ported from macOS's `.uploadAvatarRequest`/`.deleteAvatarRequest`/`.loadAvatarRequest`
+    // IPC cases + `NetworkService.performAvatarRequest`/`performAvatarFetch`, mirroring
+    // the iOS shell's `handleAvatarUploadRequest`/`handleLoadAvatarRequest`.
+
+    private fun handleAvatarUploadRequest(dict: JSONObject, delete: Boolean) {
+        val requestId = dict.optString("requestId", UUID.randomUUID().toString())
+        val requestBuilder = Request.Builder().url("$apiBaseUrl/api/avatar")
+        if (wsAuthToken.isNotEmpty()) requestBuilder.header("Authorization", "Bearer $wsAuthToken")
+        if (wsDeviceId.isNotEmpty()) requestBuilder.header("X-Zali-Device-ID", wsDeviceId)
+
+        if (delete) {
+            requestBuilder.delete()
+            httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось выполнить операцию")
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    response.use {
+                        if (!it.isSuccessful) {
+                            val bodyPreview = try { it.body?.string() ?: "" } catch (e: IOException) { "" }
+                            sendNativeResponse(requestId, ok = false, error = bodyPreview.ifEmpty { "Не удалось выполнить операцию" })
+                            return
+                        }
+                        sendNativeResponse(requestId, ok = true, data = JSONObject().put("username", currentUsername()))
+                    }
+                }
+            })
+            return
+        }
+
+        val dataUrl = dict.optString("dataUrl", "")
+        val mimeType = dict.optString("mimeType", "image/png")
+        val filename = dict.optString("filename", "avatar.png")
+        val base64 = dataUrl.substringAfterLast(",", "")
+        val imageBytes = try { android.util.Base64.decode(base64, android.util.Base64.DEFAULT) } catch (e: Exception) { null }
+        if (imageBytes == null || imageBytes.isEmpty()) {
+            sendNativeResponse(requestId, ok = false, error = "Invalid avatar data URL")
+            return
+        }
+
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", filename, imageBytes.toRequestBody(mimeType.toMediaTypeOrNull()))
+            .build()
+        requestBuilder.post(body)
+
+        httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось выполнить операцию")
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        val bodyPreview = try { it.body?.string() ?: "" } catch (e: IOException) { "" }
+                        sendNativeResponse(requestId, ok = false, error = bodyPreview.ifEmpty { "Не удалось выполнить операцию" })
+                        return
+                    }
+                    sendNativeResponse(requestId, ok = true, data = JSONObject().put("username", currentUsername()))
+                }
+            }
+        })
+    }
+
+    private fun handleLoadAvatarRequest(dict: JSONObject) {
+        val requestId = dict.optString("requestId", UUID.randomUUID().toString())
+        val username = dict.optString("username", "").trim()
+        if (username.isEmpty()) {
+            sendNativeResponse(requestId, ok = false, error = "Не удалось загрузить аватар")
+            return
+        }
+        val encoded = java.net.URLEncoder.encode(username, "UTF-8")
+        val maxAvatarBytes = 2 * 1024 * 1024
+        val requestBuilder = Request.Builder().url("$apiBaseUrl/api/avatar/$encoded")
+        if (wsAuthToken.isNotEmpty()) requestBuilder.header("Authorization", "Bearer $wsAuthToken")
+
+        httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                // No avatar set is a normal, non-error outcome (mirrors macOS's 404-as-empty).
+                sendNativeResponse(requestId, ok = true, data = JSONObject().put("dataUrl", ""))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        sendNativeResponse(requestId, ok = true, data = JSONObject().put("dataUrl", ""))
+                        return
+                    }
+                    val bytes = try { it.body?.bytes() } catch (e: IOException) { null }
+                    if (bytes == null || bytes.size > maxAvatarBytes) {
+                        sendNativeResponse(requestId, ok = false, error = "Аватар слишком большой")
+                        return
+                    }
+                    val mimeType = it.header("Content-Type")?.trim().takeUnless { m -> m.isNullOrEmpty() } ?: "image/png"
+                    val dataUrl = "data:$mimeType;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                    sendNativeResponse(requestId, ok = true, data = JSONObject().put("dataUrl", dataUrl))
+                }
+            }
+        })
+    }
+
+    /** The bridge doesn't track a `SET_SESSION`-supplied username (unlike macOS), so
+     * the avatar response falls back to the last-persisted device-identity username. */
+    private fun currentUsername(): String = prefs.getString(LAST_USERNAME_KEY, "") ?: ""
+
+    // MARK: - Tenor GIF preview resolution (RESOLVE_TENOR)
+    //
+    // Ported from macOS's `.resolveTenor` IPC case + `resolveTenor`/`extractTenorMediaURL`,
+    // mirroring the iOS shell's `resolveTenor`/`extractTenorMediaURL`. Fire-and-forget:
+    // result comes back via the `tenor_resolved` bus event, not `native_response`.
+
+    private val tenorHttpClient = OkHttpClient.Builder().build()
+
+    private fun resolveTenor(url: String, requestId: String) {
+        val pageUrl = try { java.net.URL(url) } catch (e: Exception) { null }
+        val host = pageUrl?.host
+        if (pageUrl == null || pageUrl.protocol != "https" || host == null ||
+            !(host == "tenor.com" || host.endsWith(".tenor.com"))) {
+            emitTenorResolution(requestId, url, null, null, null)
+            return
+        }
+
+        val request = Request.Builder().url(url)
+            .header("Accept", "text/html,application/xhtml+xml")
+            .header("User-Agent", "Mozilla/5.0")
+            .build()
+
+        tenorHttpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                emitTenorResolution(requestId, url, null, null, null)
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    val html = try { it.body?.string() ?: "" } catch (e: IOException) { "" }
+                    if (html.isEmpty()) {
+                        emitTenorResolution(requestId, url, null, null, null)
+                        return
+                    }
+                    val resolved = extractTenorMediaUrl(html)
+                    emitTenorResolution(requestId, url, resolved?.first, resolved?.second, resolved?.third)
+                }
+            }
+        })
+    }
+
+    private fun extractTenorMediaUrl(html: String): Triple<String, String, String>? {
+        val patterns = listOf(
+            Regex("""property=["']og:video["'][^>]*content=["']([^"']+)["']""", RegexOption.IGNORE_CASE),
+            Regex("""property=["']og:image["'][^>]*content=["']([^"']+)["']""", RegexOption.IGNORE_CASE),
+            Regex("""name=["']twitter:image["'][^>]*content=["']([^"']+)["']""", RegexOption.IGNORE_CASE),
+            Regex("""name=["']twitter:player:stream["'][^>]*content=["']([^"']+)["']""", RegexOption.IGNORE_CASE),
+        )
+        for (pattern in patterns) {
+            val raw = pattern.find(html)?.groupValues?.get(1)?.trim()
+            if (!raw.isNullOrEmpty()) {
+                val mimeType = inferTenorMimeType(raw)
+                val kind = if (mimeType.startsWith("video/")) "video" else "image"
+                return Triple(raw, mimeType, kind)
+            }
+        }
+        return null
+    }
+
+    private fun inferTenorMimeType(url: String): String {
+        val lower = url.lowercase()
+        return when {
+            lower.contains(".mp4") -> "video/mp4"
+            lower.contains(".webm") -> "video/webm"
+            lower.contains(".gif") -> "image/gif"
+            lower.contains(".webp") -> "image/webp"
+            else -> "image/png"
+        }
+    }
+
+    // MARK: - Local notifications (SHOW_NOTIFICATION)
+    //
+    // Ported from macOS's `.showNotification` IPC case + `NativeNotificationService`,
+    // mirroring the iOS shell's `showMessageNotification`/`deliverMessageNotification`.
+    // Local notifications only, no FCM. `Web/src/interface.js`'s
+    // `notifyBackgroundMessage()` fires this unconditionally (no capability gate), so
+    // this always attempts delivery and just no-ops if permission isn't granted.
+
+    private var notificationChannelReady = false
+
+    private fun ensureNotificationChannel() {
+        if (notificationChannelReady) return
+        notificationChannelReady = true
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            "zali-message", "Сообщения", NotificationManager.IMPORTANCE_HIGH
+        ).apply { description = "Новые сообщения Zali Messenger" }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun hasNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasNotificationPermission()) return
+        val activity = context as? Activity ?: return
+        ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE_NOTIFICATIONS)
+    }
+
+    private fun showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?) {
+        if (!hasNotificationPermission()) {
+            requestNotificationPermissionIfNeeded()
+            return
+        }
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        ensureNotificationChannel()
+
+        val titleSender = sender.ifEmpty { "Zali Messenger" }
+        val trimmedText = text.trim()
+        val body = when {
+            trimmedText.isNotEmpty() -> trimmedText.take(180)
+            attachmentCount == 1 -> "Вложение"
+            attachmentCount > 1 -> "Вложения: $attachmentCount"
+            else -> "Новое сообщение"
+        }
+        val title = if (serverId == null && channelId == null) titleSender else "$titleSender в канале"
+
+        val notification = NotificationCompat.Builder(context, "zali-message")
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setGroup(serverId ?: "dm")
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify(java.util.UUID.randomUUID().hashCode(), notification)
+        } catch (e: SecurityException) {
+            // Permission revoked between the check above and here — drop silently.
+        }
+    }
+
+    private fun emitTenorResolution(requestId: String, sourceUrl: String, mediaUrl: String?, mimeType: String?, kind: String?) {
+        val payload = JSONObject().apply {
+            put("requestId", requestId)
+            put("sourceUrl", sourceUrl)
+            if (mediaUrl != null) put("mediaUrl", mediaUrl)
+            if (mimeType != null) put("mimeType", mimeType)
+            if (kind != null) put("kind", kind)
+        }
+        val js = "window.loader && window.loader.bus.send('zali_interface:tenor_resolved', $payload);"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
     /** Delivers a bus event (send success/error) into the JS bus — same envelope
      * macOS/iOS use (`zali_interface:on_send_success/on_send_error`). */
     private fun sendBusEvent(event: String, payload: JSONObject) {
@@ -692,6 +1010,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     companion object {
         private const val LAST_USERNAME_KEY = "last_username"
+        private const val REQUEST_CODE_NOTIFICATIONS = 4201
         /** Feature-checked at the call site before using [androidx.webkit.WebViewCompat.addDocumentStartJavaScript]. */
         val documentStartScriptSupported: Boolean
             get() = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)

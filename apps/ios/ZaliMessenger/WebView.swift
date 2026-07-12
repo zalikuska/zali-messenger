@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import UserNotifications
 
 /// Owns the single shared `WKWebView` that renders the whole app. Held as an
 /// `ObservableObject` so the native Liquid Glass bar can drive it without SwiftUI
@@ -14,7 +15,7 @@ import WebKit
 /// exactly like the macOS Swift client's `NetworkService.performApiRequest` and the
 /// Windows Rust client's `perform_api_request`.
 @MainActor
-final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKScriptMessageHandler, URLSessionWebSocketDelegate {
+final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, URLSessionWebSocketDelegate, UNUserNotificationCenterDelegate {
     // `nonisolated(unsafe)`: `deinit` can't hop to the main actor (there's no async
     // deinit), so cleanup there needs unisolated access to these two. Safe in
     // practice — deinit only runs once nothing else references this instance, so
@@ -114,10 +115,10 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKSc
             sessionSync: false,
             saveStyle: false,
             saveMessageCache: false,
-            downloadAttachment: false,
+            downloadAttachment: true,
             serverHistory: false,
-            avatarFetch: false,
-            tenor: false,
+            avatarFetch: true,
+            tenor: true,
             voice: false,
             windowDrag: false
           };
@@ -159,6 +160,27 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKSc
         // `add(_:name:)` retains its handler strongly; a weak proxy avoids a
         // permanent retain cycle (webView → userContentController → self → webView).
         config.userContentController.add(WeakScriptMessageHandler(self), name: "nativeApp")
+        UNUserNotificationCenter.current().delegate = self
+        wv.uiDelegate = self
+    }
+
+    /// Grants camera/mic to voice calls (`getUserMedia`/`RTCPeerConnection` — both
+    /// pure browser WebRTC APIs, no native bridge involved; `voice.js` feature-detects
+    /// them directly). Without this delegate, WKWebView silently denies every capture
+    /// request from iOS 14.5+ on. The shared UI loads via `loadFileURL` (`file://`),
+    /// so `origin.host` is empty — scope the grant to the main frame only, mirroring
+    /// macOS's `requestMediaCapturePermissionFor` (which instead allowlists
+    /// localhost/127.0.0.1, since macOS serves over local HTTP rather than file://).
+    func webView(_ webView: WKWebView,
+                 requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        guard frame.isMainFrame, origin.host.isEmpty else {
+            decisionHandler(.deny)
+            return
+        }
+        decisionHandler(.grant)
     }
 
     deinit {
@@ -200,9 +222,345 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKSc
             }
         case "SEND_MESSAGE":
             handleSendMessage(dict)
+        case "UPLOAD_AVATAR_REQUEST":
+            handleAvatarUploadRequest(dict, delete: false)
+        case "DELETE_AVATAR_REQUEST":
+            handleAvatarUploadRequest(dict, delete: true)
+        case "LOAD_AVATAR_REQUEST":
+            handleLoadAvatarRequest(dict)
+        case "RESOLVE_TENOR":
+            let url = dict["url"] as? String ?? ""
+            let requestId = dict["requestId"] as? String ?? UUID().uuidString
+            resolveTenor(url: url, requestId: requestId)
+        case "SHOW_NOTIFICATION":
+            let sender = (dict["sender"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = dict["text"] as? String ?? ""
+            let attachmentCount = (dict["attachmentCount"] as? NSNumber)?.intValue ?? 0
+            let serverId = dict["serverId"] as? String
+            let channelId = dict["channelId"] as? String
+            showMessageNotification(sender: sender, text: text, attachmentCount: attachmentCount, serverId: serverId, channelId: channelId)
+        case "DOWNLOAD_ATTACHMENT":
+            let dataUrl = dict["dataUrl"] as? String ?? ""
+            let filename = dict["filename"] as? String ?? "attachment"
+            saveAttachment(dataUrl: dataUrl, filename: filename)
         default:
             break
         }
+    }
+
+    // MARK: - Attachment download (DOWNLOAD_ATTACHMENT)
+    //
+    // Ported from macOS's `.downloadAttachment` IPC case + `saveAttachment`
+    // (`NSSavePanel`). iOS has no save panel — writes to a temp file and presents
+    // a `UIActivityViewController` share sheet, whose "Save to Files" action is the
+    // iOS equivalent of macOS's save dialog.
+
+    private func saveAttachment(dataUrl: String, filename: String) {
+        let decoded = decodedDataURL(dataUrl)
+        guard !decoded.data.isEmpty else { return }
+        let safeName = safeFileName(filename, fallbackExtension: decoded.fileExtension)
+        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(UUID().uuidString)_\(safeName)")
+        do {
+            try decoded.data.write(to: fileURL, options: [.atomic])
+        } catch {
+            return
+        }
+
+        guard let rootViewController = Self.keyWindowRootViewController() else { return }
+        let activityVC = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+        activityVC.completionWithItemsHandler = { _, _, _, _ in
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = rootViewController.view
+            popover.sourceRect = CGRect(x: rootViewController.view.bounds.midX, y: rootViewController.view.bounds.maxY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+        rootViewController.present(activityVC, animated: true, completion: nil)
+    }
+
+    private static func keyWindowRootViewController() -> UIViewController? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }?
+            .rootViewController
+    }
+
+    // MARK: - Local notifications (SHOW_NOTIFICATION)
+    //
+    // Ported from macOS's `.showNotification` IPC case + `NativeNotificationService`
+    // (`apps/macos/Sources/ZaliMessenger/Services/NativeNotificationService.swift`).
+    // Local notifications only — no APNs, matches how `interface.js`'s
+    // `notifyBackgroundMessage()` drives this: it fires on every muted-aware new
+    // message regardless of platform, so authorization is requested lazily on first
+    // use rather than eagerly at launch.
+
+    private struct PendingNotification {
+        let sender: String
+        let text: String
+        let attachmentCount: Int
+        let serverId: String?
+        let channelId: String?
+    }
+
+    private var notificationAuthorizationKnown = false
+    private var notificationAuthorizationGranted = false
+    private var isRequestingNotificationAuthorization = false
+    private var pendingNotifications: [PendingNotification] = []
+
+    private func showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?) {
+        if !notificationAuthorizationKnown {
+            pendingNotifications.append(PendingNotification(sender: sender, text: text, attachmentCount: attachmentCount, serverId: serverId, channelId: channelId))
+            requestNotificationAuthorizationIfNeeded()
+            return
+        }
+        guard notificationAuthorizationGranted else { return }
+        deliverMessageNotification(sender: sender, text: text, attachmentCount: attachmentCount, serverId: serverId, channelId: channelId)
+    }
+
+    private func requestNotificationAuthorizationIfNeeded() {
+        guard !isRequestingNotificationAuthorization else { return }
+        isRequestingNotificationAuthorization = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isRequestingNotificationAuthorization = false
+                self.notificationAuthorizationKnown = true
+                self.notificationAuthorizationGranted = granted
+                let queue = self.pendingNotifications
+                self.pendingNotifications.removeAll()
+                guard granted else { return }
+                for notification in queue {
+                    self.deliverMessageNotification(sender: notification.sender, text: notification.text, attachmentCount: notification.attachmentCount, serverId: notification.serverId, channelId: notification.channelId)
+                }
+            }
+        }
+    }
+
+    private func deliverMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?) {
+        let titleSender = sender.isEmpty ? "Zali Messenger" : sender
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body: String
+        if !trimmedText.isEmpty {
+            body = String(trimmedText.prefix(180))
+        } else if attachmentCount > 0 {
+            body = attachmentCount == 1 ? "Вложение" : "Вложения: \(attachmentCount)"
+        } else {
+            body = "Новое сообщение"
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = serverId == nil && channelId == nil ? titleSender : "\(titleSender) в канале"
+        content.body = body
+        content.sound = .default
+        content.threadIdentifier = serverId ?? "dm"
+        content.categoryIdentifier = "zali-message"
+        content.interruptionLevel = .timeSensitive
+        content.relevanceScore = 1.0
+
+        let request = UNNotificationRequest(identifier: "zali-message-\(UUID().uuidString)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    /// Show the banner + play sound even while the app is in the foreground —
+    /// without this, `UNUserNotificationCenter` silently swallows notifications
+    /// delivered while the app is active.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .badge])
+    }
+
+    // MARK: - Tenor GIF preview resolution (RESOLVE_TENOR)
+    //
+    // Ported from macOS's `.resolveTenor` IPC case + `resolveTenor`/`extractTenorMediaURL`.
+    // Fire-and-forget: result comes back via the `tenor_resolved` bus event, not
+    // `native_response` (matches macOS/interface.js's `onTenorResolved`).
+
+    private func resolveTenor(url: String, requestId: String) {
+        guard let pageURL = URL(string: url), pageURL.scheme == "https",
+              let host = pageURL.host, host == "tenor.com" || host.hasSuffix(".tenor.com") else {
+            emitTenorResolution(requestId: requestId, sourceUrl: url, mediaUrl: nil, mimeType: nil, kind: nil)
+            return
+        }
+
+        var request = URLRequest(url: pageURL)
+        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            Task { @MainActor in
+                guard let self, error == nil, let data, !data.isEmpty else {
+                    self?.emitTenorResolution(requestId: requestId, sourceUrl: url, mediaUrl: nil, mimeType: nil, kind: nil)
+                    return
+                }
+                let html = String(decoding: data, as: UTF8.self)
+                let resolved = self.extractTenorMediaURL(from: html)
+                self.emitTenorResolution(requestId: requestId, sourceUrl: url, mediaUrl: resolved.mediaUrl, mimeType: resolved.mimeType, kind: resolved.kind)
+            }
+        }.resume()
+    }
+
+    private func extractTenorMediaURL(from html: String) -> (mediaUrl: String?, mimeType: String?, kind: String?) {
+        let patterns = [
+            #"property=["']og:video["'][^>]*content=["']([^"']+)["']"#,
+            #"property=["']og:image["'][^>]*content=["']([^"']+)["']"#,
+            #"name=["']twitter:image["'][^>]*content=["']([^"']+)["']"#,
+            #"name=["']twitter:player:stream["'][^>]*content=["']([^"']+)["']"#
+        ]
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                let raw = String(html[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !raw.isEmpty else { continue }
+                let mimeType = inferTenorMimeType(from: raw)
+                return (raw, mimeType, inferTenorKind(from: mimeType))
+            }
+        }
+        return (nil, nil, nil)
+    }
+
+    private func inferTenorMimeType(from url: String) -> String {
+        let lower = url.lowercased()
+        if lower.contains(".mp4") { return "video/mp4" }
+        if lower.contains(".webm") { return "video/webm" }
+        if lower.contains(".gif") { return "image/gif" }
+        if lower.contains(".webp") { return "image/webp" }
+        return "image/png"
+    }
+
+    private func inferTenorKind(from mimeType: String) -> String {
+        mimeType.hasPrefix("video/") ? "video" : "image"
+    }
+
+    private func emitTenorResolution(requestId: String, sourceUrl: String, mediaUrl: String?, mimeType: String?, kind: String?) {
+        var payload: [String: Any] = ["requestId": requestId, "sourceUrl": sourceUrl]
+        if let mediaUrl { payload["mediaUrl"] = mediaUrl }
+        if let mimeType { payload["mimeType"] = mimeType }
+        if let kind { payload["kind"] = kind }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.loader && window.loader.bus.send('zali_interface:tenor_resolved', \(json));", completionHandler: nil)
+    }
+
+    // MARK: - Avatar (UPLOAD/DELETE/LOAD_AVATAR_REQUEST)
+    //
+    // Ported from macOS's `.uploadAvatarRequest`/`.deleteAvatarRequest`/`.loadAvatarRequest`
+    // IPC cases + `NetworkService.performAvatarRequest`/`performAvatarFetch`. Multipart
+    // upload reuses the same boundary-writing approach as `uploadMessage` above.
+
+    private func handleAvatarUploadRequest(_ dict: [String: Any], delete: Bool) {
+        let requestId = dict["requestId"] as? String ?? dict["request_id"] as? String ?? UUID().uuidString
+        guard !requestId.isEmpty, let avatarURL = URL(string: apiBaseURL + "/api/avatar") else {
+            sendNativeResponse(["requestId": requestId, "ok": false, "error": "Не удалось выполнить операцию"])
+            return
+        }
+
+        var request = URLRequest(url: avatarURL)
+        request.httpMethod = delete ? "DELETE" : "POST"
+        if !wsAuthToken.isEmpty { request.setValue("Bearer \(wsAuthToken)", forHTTPHeaderField: "Authorization") }
+        if !wsDeviceId.isEmpty { request.setValue(wsDeviceId, forHTTPHeaderField: "X-Zali-Device-ID") }
+
+        if delete {
+            apiSession.dataTask(with: request) { [weak self] data, response, error in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard error == nil, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        let bodyPreview = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                        self.sendNativeResponse(["requestId": requestId, "ok": false, "error": bodyPreview.isEmpty ? "Не удалось выполнить операцию" : bodyPreview])
+                        return
+                    }
+                    self.sendNativeResponse(["requestId": requestId, "ok": true, "data": ["username": self.currentUsername]])
+                }
+            }.resume()
+            return
+        }
+
+        let dataUrl = dict["dataUrl"] as? String ?? ""
+        let mimeType = dict["mimeType"] as? String ?? "image/png"
+        let filename = dict["filename"] as? String ?? "avatar.png"
+        guard let imageData = Data(base64Encoded: dataUrl.components(separatedBy: ",").last ?? ""), !imageData.isEmpty else {
+            sendNativeResponse(["requestId": requestId, "ok": false, "error": "Invalid avatar data URL"])
+            return
+        }
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        let bodyURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("avatar-\(UUID().uuidString).multipart")
+        guard FileManager.default.createFile(atPath: bodyURL.path, contents: nil) else {
+            sendNativeResponse(["requestId": requestId, "ok": false, "error": "Не удалось выполнить операцию"])
+            return
+        }
+
+        do {
+            let handle = try FileHandle(forWritingTo: bodyURL)
+            defer { try? handle.close() }
+            func write(_ string: String) throws {
+                guard let data = string.data(using: .utf8) else { return }
+                try handle.write(contentsOf: data)
+            }
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
+            try write("Content-Type: \(mimeType)\r\n\r\n")
+            try handle.write(contentsOf: imageData)
+            try write("\r\n--\(boundary)--\r\n")
+        } catch {
+            try? FileManager.default.removeItem(at: bodyURL)
+            sendNativeResponse(["requestId": requestId, "ok": false, "error": "Не удалось выполнить операцию"])
+            return
+        }
+
+        apiSession.uploadTask(with: request, fromFile: bodyURL) { [weak self] data, response, error in
+            Task { @MainActor in
+                guard let self else { return }
+                try? FileManager.default.removeItem(at: bodyURL)
+                guard error == nil, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    let bodyPreview = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    self.sendNativeResponse(["requestId": requestId, "ok": false, "error": bodyPreview.isEmpty ? "Не удалось выполнить операцию" : bodyPreview])
+                    return
+                }
+                self.sendNativeResponse(["requestId": requestId, "ok": true, "data": ["username": self.currentUsername]])
+            }
+        }.resume()
+    }
+
+    private func handleLoadAvatarRequest(_ dict: [String: Any]) {
+        let requestId = dict["requestId"] as? String ?? dict["request_id"] as? String ?? UUID().uuidString
+        let username = (dict["username"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty, !requestId.isEmpty,
+              let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: apiBaseURL + "/api/avatar/" + encoded) else {
+            sendNativeResponse(["requestId": requestId, "ok": false, "error": "Не удалось загрузить аватар"])
+            return
+        }
+
+        var request = URLRequest(url: url)
+        if !wsAuthToken.isEmpty { request.setValue("Bearer \(wsAuthToken)", forHTTPHeaderField: "Authorization") }
+
+        let maxAvatarBytes = 2 * 1024 * 1024
+        apiSession.dataTask(with: request) { [weak self] data, response, error in
+            Task { @MainActor in
+                guard let self else { return }
+                guard error == nil, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let data else {
+                    // No avatar set is a normal, non-error outcome (macOS treats 404 as empty).
+                    self.sendNativeResponse(["requestId": requestId, "ok": true, "data": ["dataUrl": ""]])
+                    return
+                }
+                guard data.count <= maxAvatarBytes else {
+                    self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Аватар слишком большой"])
+                    return
+                }
+                let mimeType = http.value(forHTTPHeaderField: "Content-Type")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "image/png"
+                let dataUrl = "data:\(mimeType);base64,\(data.base64EncodedString())"
+                self.sendNativeResponse(["requestId": requestId, "ok": true, "data": ["dataUrl": dataUrl]])
+            }
+        }.resume()
+    }
+
+    /// The bridge doesn't track a `SET_SESSION`-supplied username (unlike macOS), so
+    /// the avatar response falls back to the last-persisted device-identity username.
+    private var currentUsername: String {
+        UserDefaults.standard.string(forKey: WebViewStore.lastUsernameKey) ?? ""
     }
 
     private static let lastUsernameKey = "zali_last_username"
