@@ -47,6 +47,7 @@
             direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
             reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
             download: (id) => apiRoute(`/download/${encodeURIComponent(id)}`),
+            upload: apiRoute('/upload'),
         },
         servers: {
             list: apiRoute('/servers'),

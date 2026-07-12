@@ -71,6 +71,7 @@ def main():
         os.path.join(src_dir, "modules", "messaging.js"),
         os.path.join(src_dir, "modules", "servers.js"),
         os.path.join(src_dir, "modules", "voice.js"),
+        os.path.join(src_dir, "modules", "wasm_bridge.js"),
         os.path.join(src_dir, "bus.js"),
         os.path.join(src_dir, "loader.js"),
         os.path.join(src_dir, "styler.js"),

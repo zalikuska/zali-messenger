@@ -97,6 +97,15 @@
 
     window.__ZALI_NATIVE = createNativeBridge();
 
+    // Register the app-shell service worker only in standalone browser/PWA mode — native
+    // shells (macOS/Windows) load this HTML via loadHTMLString/a data string with no real
+    // origin, where SW registration would be meaningless at best. See web/service-worker.js.
+    if (!window.__ZALI_NATIVE?.available && 'serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+        });
+    }
+
     // Create the minimal JS-side loader (only interface + styler)
     const loader = new ZaliLoader();
 

@@ -120,14 +120,30 @@ dir); `WebViewStore.loadBundledUI()` loads `Web/index.html` via a file URL.
 
 - Signing team + a real bundle id must be set in Xcode before device deploy.
 - `getUserMedia`/WebRTC in `WKWebView` needs the camera/mic permission prompt; the
-  usage strings are in `Info.plist`. Grant is scoped by `WKUIDelegate`
-  `requestMediaCapturePermissionFor` if you tighten origins (mirror the macOS shell).
-- `API_REQUEST`, `NETWORK_CONFIG`, `SET_KEY`, `SEND_MESSAGE`, and
-  `PERSIST_DEVICE_IDENTITY` native *messages* are all handled (the WS transport
-  below is separate — it isn't a `postNativeMessage` type, it's driven internally).
-  Messaging (send, receive, decrypt) is feature-complete. Push notifications,
-  background voice (`VOICE_EVENT`), and avatar upload are **not** in this
-  scaffold yet — port from the macOS Swift client
+  usage strings are in `Info.plist`. `WebViewStore` now implements `WKUIDelegate`'s
+  `requestMediaCapturePermissionFor`, granting the main frame's `file://` origin
+  (mirrors macOS's equivalent, which allowlists localhost/127.0.0.1 instead since
+  macOS serves over local HTTP rather than `file://`) — this was the actual missing
+  piece for voice calls, not `VOICE_EVENT`: `voice.js` feature-detects
+  `RTCPeerConnection`/`getUserMedia` directly (pure browser APIs) and
+  `sendVoiceEvent` already falls back to a JS-managed signaling `WebSocket`
+  (`this.voice.socket`) whenever `nativeSupports('voice')` is false, which it is
+  here — `VOICE_EVENT` is only macOS/Windows's *alternate* transport for the same
+  signaling, not a hard requirement.
+- `API_REQUEST`, `NETWORK_CONFIG`, `SET_KEY`, `SEND_MESSAGE`,
+  `PERSIST_DEVICE_IDENTITY`, `UPLOAD_AVATAR_REQUEST`, `DELETE_AVATAR_REQUEST`,
+  `LOAD_AVATAR_REQUEST`, `RESOLVE_TENOR`, `SHOW_NOTIFICATION`, and
+  `DOWNLOAD_ATTACHMENT` native *messages* are all handled (the WS transport below
+  is separate — it isn't a `postNativeMessage` type, it's driven internally).
+  Messaging (send, receive, decrypt), avatar upload/fetch/delete, Tenor GIF
+  preview resolution, local message notifications (foreground + background, via
+  `UNUserNotificationCenter`, lazy-authorized on first use), and attachment
+  saving (via `UIActivityViewController`, the iOS equivalent of macOS's save
+  panel) are feature-complete. Voice calls work via the browser-mode WebRTC
+  fallback (see below) — `VOICE_EVENT` itself (macOS/Windows's *alternate*
+  signaling transport) is **not** in this scaffold, but is not required for
+  calls to function. Real push notifications (FCM/APNs, delivery while the app
+  process is fully killed) are **not** in this scaffold — port from the macOS Swift client
   (`apps/macos/Sources/ZaliMessenger/Views/WebView.swift`, `Services/NetworkService.swift`)
   when wiring the native transport further. Keep the "no Keychain" rule (plain
   file under Application Support) — see project CLAUDE.md.

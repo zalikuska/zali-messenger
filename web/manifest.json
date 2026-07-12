@@ -1,0 +1,14 @@
+{
+  "name": "ZaliMessenger",
+  "short_name": "ZaliMsg",
+  "description": "End-to-end encrypted messenger",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B0D12",
+  "theme_color": "#0B0D12",
+  "orientation": "any",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

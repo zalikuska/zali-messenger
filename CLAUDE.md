@@ -70,6 +70,11 @@ cargo run --manifest-path apps/windows/Cargo.toml
 # Web assets — must run before macOS/Windows builds see JS changes
 python3 scripts/bundle_web.py
 
+# Standalone browser/PWA client (mobile + desktop, no native shell) — run before bundle_web.py
+# so web/wasm-pkg/ is present when web/app.js is regenerated. Serve web/ with any static
+# file server (or the zali-server itself) — index.html loads wasm-pkg/zali_core.js next to it.
+scripts/build_web_wasm.sh
+
 # macOS (Swift, основная версия) — core must be built first
 cd core && cargo build --release && cd ..
 swift build --package-path apps/macos   # SwiftPM check
@@ -152,6 +157,59 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 - `flushPendingOutbox` drops messages after 50 failed attempts (`MAX_OUTBOX_ATTEMPTS`)
 - `renderMessageText` link hrefs unescape `&amp;` → `&` before passing to `this.esc()`
 - Vault envelopes require `v === 1` and `iterations >= 100000` before decryption
+
+### Standalone browser/PWA client (mobile + desktop, no native shell)
+Started 2026-07-12: `web/index.html` + `web/app.js` can now run as a plain browser tab with zero
+native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachments) send/receive.
+- `hasNativeBridge()` gates almost every native-only code path in `interface.js`; the `!hasNativeBridge()`
+  branches for sending, DM history load, and real-time receive used to just no-op/warn — they now
+  have real browser implementations (`browserSendMessage`, `loadBrowserDmHistory`,
+  `handleIncomingBrowserMessage` in `interface.js`, wired into `sendInputMessage`,
+  `syncActiveConversation`/`refreshAfterKey`, and the existing `connectBrowserVoiceSocket()` WS's
+  `onmessage`, respectively)
+- The `.zali` archive format (message pack/unpack) needs a filesystem-free implementation for the
+  browser. `sdk/Rust/src/lib.rs` gained `create_archive_bytes`/`extract_all_bytes` (in-memory,
+  byte-for-byte wire-compatible with the path-based `create_archive`/`extract_all` — see the
+  `bytes_archive_created_*` interop tests in `sdk/Rust/tests/archive.rs`); `core/src/net.rs` gained
+  `pack_message_bytes`/`unpack_message_bytes` on top of those; `core/src/lib.rs` exposes them as
+  `pack_message_wasm`/`unpack_message_wasm` via `wasm-bindgen` (feature `wasm`)
+- `web/src/modules/wasm_bridge.js` lazily `import()`s `web/wasm-pkg/zali_core.js` (built by
+  `scripts/build_web_wasm.sh`, must run before `bundle_web.py`) and exposes `window.ZaliWasm`
+- **wasm32 gotchas hit and fixed**: `std::time::SystemTime::now()` panics on `wasm32-unknown-unknown`
+  ("time not implemented on this platform") — use `js_sys::Date::now()` there instead (see
+  `now_unix_secs()` in `core/src/net.rs`). `rand`'s `OsRng`/`thread_rng()` need `getrandom`'s `"js"`
+  feature explicitly enabled via a `[target.'cfg(target_arch = "wasm32")'.dependencies]` override in
+  `core/Cargo.toml` (Cargo won't infer it from the `wasm` feature alone). Both surfaced in-browser as
+  an opaque `RuntimeError: unreachable` — `console_error_panic_hook` (wired in behind the `wasm`
+  feature) turns that into a real Rust panic message in the browser console; keep it when debugging
+  new wasm-bindgen exports
+- Real-time delivery already had a permanent per-browser-tab WebSocket (`connectBrowserVoiceSocket`,
+  auth via `/api/auth/ws-ticket` since the browser can't set a custom `Authorization` header on the
+  WS handshake) — it only handled `voice_*` events before; a `Message` row pushed by
+  `deliver_to_user`/`deliver_server_message` (server/src/realtime.rs) has **no `type` field** at all,
+  which is how the new branch tells it apart from voice/avatar events on the same socket. That same
+  socket's `onopen`/`onclose` now also drive `setConnectionStatus()` — it used to only ever fire from
+  native `SET_CONNECTION_STATUS` events, so the "Подключено"/"Переподключение..." badge was
+  permanently stuck on the latter in pure-browser mode even once messaging worked
+- Servers/channels messaging is ported too: `loadServerMessages`'s browser-fallback branch used to
+  show literal placeholder text (`msg.text || msg.content || 'Зашифрованное сообщение недоступно...'`)
+  because the server can only return metadata for E2E-encrypted messages, never plaintext — it now
+  routes each history row through `handleIncomingBrowserMessage` (same WASM download+unpack path used
+  for live receive), which already branched on `serverId`/`channelId` from day one. Sending in a
+  channel from the browser was already covered by `browserSendMessage` (it always forwarded
+  `serverId`/`channelId`) — only the history-load side was still stubbed
+- Voice **signaling** already worked in pure-browser mode before any of this (`sendVoiceEvent` falls
+  back to the same WS when there's no native voice bridge) and `getUserMedia`/`RTCPeerConnection` are
+  called unconditionally (never gated behind `nativeSupports('voice')`) — so calls should work
+  end-to-end in two real browser tabs, but this wasn't verified live in this session (needs two
+  audio-capable peers, not just console-driven state pokes)
+- Added minimal PWA scaffolding for installability: `web/manifest.json`, `web/icon.svg`,
+  `web/service-worker.js` (app-shell cache-first for static files, always network for `/api`, `/ws`,
+  `/uploads`), registered from `bootstrap.js` only when `!window.__ZALI_NATIVE?.available` — meaningless
+  under native shells that load this HTML via `loadHTMLString`/an inline string, not a real origin
+- macOS/Windows/iOS/Android native clients are unaffected by all of the above — this is purely
+  additive (a new, filesystem-free code path used only when no native bridge is present), not a
+  duplicate of their FFI-based archive handling that needed porting.
 
 ## Приоритеты при исправлении багов
 

@@ -209,24 +209,106 @@ pub unsafe extern "C" fn zali_unpack_message(
 }
 
 // --- WASM Bridge for Web ---
+//
+// Browser client has no filesystem, so it needs the .zali archive format
+// available purely in memory. These wrap net::pack_message_bytes /
+// net::unpack_message_bytes (which produce/consume the exact same wire
+// format as the native path-based API — see core/src/net.rs) for JS.
 
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "wasm")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmAttachmentIn {
+    name: String,
+    archive_path: String,
+    mime_type: String,
+    kind: String,
+    bytes: Vec<u8>,
+}
+
+#[cfg(feature = "wasm")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmAttachmentOut {
+    name: String,
+    archive_path: String,
+    mime_type: String,
+    kind: String,
+    bytes: Vec<u8>,
+}
+
+#[cfg(feature = "wasm")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmUnpacked {
+    sender: String,
+    text: String,
+    timestamp: u64,
+    key_version: u8,
+    attachments: Vec<WasmAttachmentOut>,
+}
+
+/// Packs a message (+ optional attachments) into `.zali` archive bytes.
+/// `attachments` is a JS array of `{name, archivePath, mimeType, kind, bytes: Uint8Array}`,
+/// or `undefined`/`null` for none.
+#[cfg(feature = "wasm")]
 #[wasm_bindgen]
-pub fn pack_message_wasm(sender: &str, text: &str) -> Vec<u8> {
-    let key = std::env::var("ZALI_E2E_KEY").unwrap_or_default();
-    if key.trim().is_empty() {
-        return Vec::new();
-    }
-    let payload = serde_json::json!({
-        "sender": sender,
-        "text": text
-    })
-    .to_string();
-    match crate::crypto::encrypt_message_text(&payload, &key) {
-        Ok(encrypted) => encrypted.into_bytes(),
-        Err(_) => Vec::new(),
-    }
+pub fn pack_message_wasm(
+    sender: &str,
+    text: &str,
+    key: &str,
+    key_version: u8,
+    attachments: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+    let atts: Vec<WasmAttachmentIn> = if attachments.is_undefined() || attachments.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(attachments)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?
+    };
+    let in_memory = atts
+        .into_iter()
+        .map(|a| net::InMemoryAttachment {
+            name: a.name,
+            archive_path: a.archive_path,
+            mime_type: a.mime_type,
+            kind: a.kind,
+            bytes: a.bytes,
+        })
+        .collect();
+    net::pack_message_bytes(sender, text, key, key_version, in_memory)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Decodes `.zali` archive bytes into `{sender, text, timestamp, keyVersion, attachments}`,
+/// where each attachment carries its raw bytes as a `Uint8Array`.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+pub fn unpack_message_wasm(archive: &[u8], key: &str) -> Result<JsValue, JsValue> {
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+    let unpacked = net::unpack_message_bytes(archive, key).map_err(|e| JsValue::from_str(&e))?;
+    let out = WasmUnpacked {
+        sender: unpacked.sender,
+        text: unpacked.text,
+        timestamp: unpacked.timestamp,
+        key_version: unpacked.key_version,
+        attachments: unpacked
+            .attachments
+            .into_iter()
+            .map(|a| WasmAttachmentOut {
+                name: a.name,
+                archive_path: a.archive_path,
+                mime_type: a.mime_type,
+                kind: a.kind,
+                bytes: a.bytes,
+            })
+            .collect(),
+    };
+    serde_wasm_bindgen::to_value(&out).map_err(|e| JsValue::from_str(&e.to_string()))
 }

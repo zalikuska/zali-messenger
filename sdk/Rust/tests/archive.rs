@@ -313,3 +313,91 @@ fn nonexistent_source_file_is_silently_skipped_not_archived() {
         .unwrap();
     assert!(!extract_dir.join("ghost.txt").exists());
 }
+
+// --- In-memory (bytes) archive API, added for the browser/WASM client ---
+// These prove create_archive_bytes/extract_all_bytes are wire-compatible
+// with the filesystem-based create_archive/extract_all — same format, same
+// key, interchangeable in either direction.
+
+#[test]
+fn bytes_roundtrip_with_password() {
+    let sdk = ZaliSession::new(Some("hunter2"), Some(b"ZALIMSSG"));
+    let files = vec![
+        ("message.json".to_string(), b"{\"text\":\"hi\"}".to_vec()),
+        ("attachments/photo.png".to_string(), vec![7u8; 3000]),
+    ];
+    let archive = sdk.create_archive_bytes(files.clone()).unwrap();
+    let extracted = sdk.extract_all_bytes(&archive).unwrap();
+    assert_eq!(extracted, files);
+}
+
+#[test]
+fn bytes_roundtrip_without_password() {
+    let sdk = ZaliSession::new(None, None);
+    let files = vec![("note.txt".to_string(), b"hello".to_vec())];
+    let archive = sdk.create_archive_bytes(files.clone()).unwrap();
+    let extracted = sdk.extract_all_bytes(&archive).unwrap();
+    assert_eq!(extracted, files);
+}
+
+#[test]
+fn bytes_archive_wrong_password_fails() {
+    let sdk = ZaliSession::new(Some("right"), None);
+    let archive = sdk
+        .create_archive_bytes(vec![("a.txt".to_string(), b"data".to_vec())])
+        .unwrap();
+    let wrong = ZaliSession::new(Some("wrong"), None);
+    assert!(matches!(
+        wrong.extract_all_bytes(&archive),
+        Err(ZaliError::AuthFailed)
+    ));
+}
+
+#[test]
+fn bytes_archive_created_by_path_api_extracts_via_bytes_api() {
+    let dir = scratch_dir();
+    let src = write_file(&dir, "note.txt", b"cross-api interop");
+    let archive_path = dir.join("out.zali");
+
+    let sdk = ZaliSession::new(Some("shared-key"), Some(b"ZALIMSSG"));
+    sdk.create_archive(
+        vec![(src, "note.txt".to_string())],
+        archive_path.to_string_lossy().as_ref(),
+    )
+    .unwrap();
+
+    let archive_bytes = fs::read(&archive_path).unwrap();
+    let extracted = sdk.extract_all_bytes(&archive_bytes).unwrap();
+    assert_eq!(extracted, vec![("note.txt".to_string(), b"cross-api interop".to_vec())]);
+}
+
+#[test]
+fn bytes_archive_created_via_bytes_api_extracts_via_path_api() {
+    let dir = scratch_dir();
+    let extract_dir = dir.join("extracted");
+
+    let sdk = ZaliSession::new(Some("shared-key"), Some(b"ZALIMSSG"));
+    let archive_bytes = sdk
+        .create_archive_bytes(vec![("note.txt".to_string(), b"cross-api interop 2".to_vec())])
+        .unwrap();
+    let archive_path = dir.join("out.zali");
+    fs::write(&archive_path, &archive_bytes).unwrap();
+
+    sdk.extract_all(archive_path.to_string_lossy().as_ref(), extract_dir.to_string_lossy().as_ref())
+        .unwrap();
+    let content = fs::read(extract_dir.join("note.txt")).unwrap();
+    assert_eq!(content, b"cross-api interop 2");
+}
+
+#[test]
+fn bytes_multi_chunk_file_roundtrips_exactly() {
+    let sdk = ZaliSession::new(Some("secret"), None);
+    let big = (0..(2 * 1024 * 1024 + 12345))
+        .map(|i| (i % 251) as u8)
+        .collect::<Vec<u8>>();
+    let archive = sdk
+        .create_archive_bytes(vec![("big.bin".to_string(), big.clone())])
+        .unwrap();
+    let extracted = sdk.extract_all_bytes(&archive).unwrap();
+    assert_eq!(extracted, vec![("big.bin".to_string(), big)]);
+}

@@ -133,9 +133,28 @@ build, so the WebView always loads the current bundle from `assets/web/index.htm
 
 - WebRTC in `WebView` works from Android 8+; `onPermissionRequest` grants camera/mic.
   For real deployments, request the runtime `CAMERA`/`RECORD_AUDIO` permissions and
-  scope the grant to the bundled origin.
+  scope the grant to the bundled origin. This grant is the Android equivalent of
+  iOS's `WKUIDelegate.requestMediaCapturePermissionFor` fix — `voice.js`
+  feature-detects `RTCPeerConnection`/`getUserMedia` directly and
+  `sendVoiceEvent` falls back to a JS-managed signaling `WebSocket` whenever
+  `nativeSupports('voice')` is false (true here), so `VOICE_EVENT` is only
+  macOS/Windows's alternate transport for the same signaling, not a hard
+  requirement for calls to work.
 - The Gradle wrapper (`gradlew`, `gradle/wrapper/…`) is not committed here — run
   `gradle wrapper` once, or open the project in Android Studio which provisions it.
+- Avatar upload/fetch/delete (`UPLOAD_AVATAR_REQUEST`/`DELETE_AVATAR_REQUEST`/
+  `LOAD_AVATAR_REQUEST`) are handled via OkHttp multipart, mirroring the iOS
+  shell's `handleAvatarUploadRequest`/`handleLoadAvatarRequest`.
+- Tenor GIF preview resolution (`RESOLVE_TENOR`) is handled via OkHttp,
+  mirroring the iOS shell's `resolveTenor`/`extractTenorMediaUrl`.
+- Local message notifications (`SHOW_NOTIFICATION`) are handled via
+  `NotificationCompat`/`NotificationManagerCompat`, requesting the runtime
+  `POST_NOTIFICATIONS` permission (API 33+) lazily on first use — mirrors the
+  iOS shell's `showMessageNotification`. Not FCM/push — local only, same as iOS.
+- Attachment saving (`DOWNLOAD_ATTACHMENT`) writes to the app cache dir and
+  launches the system share sheet via a `FileProvider` `content://` Uri (see
+  `res/xml/file_paths.xml` and the `<provider>` entry in `AndroidManifest.xml`)
+  — mirrors the iOS shell's `UIActivityViewController` flow.
 - Push notifications (FCM), background voice service, and secure key storage
   (Android Keystore / EncryptedSharedPreferences) are **not** in this scaffold —
   port the transport/keys logic from the Windows Rust client or macOS Swift client.

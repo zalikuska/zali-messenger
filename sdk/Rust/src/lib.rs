@@ -81,6 +81,181 @@ impl ZaliSession {
         self.unpack_internal(archive_path, output_dir, None, |_, _| {})
     }
 
+    /// Упаковывает файлы, уже находящиеся в памяти, в зашифрованный архив и возвращает его байты.
+    /// Формат идентичен `create_archive` (тот же magic/версия/чанки/nonce-схема) — используется
+    /// в средах без файловой системы (WASM в браузере).
+    pub fn create_archive_bytes(
+        &self,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> Result<Vec<u8>, ZaliError> {
+        let mut out = Vec::new();
+        out.write_all(&self.magic)?;
+        out.write_u8(PROTOCOL_VERSION)?;
+
+        let write_str = |buf: &mut Vec<u8>, s: &str| -> io::Result<()> {
+            let len = s.len().min(255) as u8;
+            buf.write_u8(len)?;
+            buf.write_all(&s.as_bytes()[..len as usize])
+        };
+        write_str(&mut out, "ZALI")?;
+        write_str(&mut out, "messenger")?;
+
+        let is_enc = self.password.is_some();
+        out.write_u8(if is_enc { 1 } else { 0 })?;
+
+        let file_count = u32::try_from(files.len())
+            .map_err(|_| ZaliError::Crypto("Too many files to archive".to_string()))?;
+        out.write_u32::<LittleEndian>(file_count)?;
+
+        let mut key = [0u8; 32];
+        let mut base_nonce = [0u8; 12];
+        if let Some(pwd) = &self.password {
+            let mut salt = [0u8; 16];
+            rand::thread_rng().fill_bytes(&mut salt);
+            out.write_all(&salt)?;
+            rand::thread_rng().fill_bytes(&mut base_nonce);
+            out.write_all(&base_nonce)?;
+            pbkdf2_hmac::<Sha256>(pwd.as_bytes(), &salt, PBKDF2_ITERS, &mut key);
+        }
+
+        let mut chunk_idx: u32 = 1;
+
+        for (arc_name, content) in &files {
+            let size = content.len() as u64;
+
+            let n_len = arc_name.len().min(65535) as u16;
+            out.write_u16::<LittleEndian>(n_len)?;
+            out.write_all(&arc_name.as_bytes()[..n_len as usize])?;
+            out.write_u64::<LittleEndian>(size)?;
+
+            let num_chunks = size.div_ceil(CHUNK_SIZE as u64);
+            out.write_u64::<LittleEndian>(if is_enc { size + num_chunks * 16 } else { size })?;
+
+            for chunk in content.chunks(CHUNK_SIZE) {
+                if is_enc {
+                    let mut n_b = base_nonce;
+                    let counter = u32::from_le_bytes(n_b[8..12].try_into().unwrap_or([0u8; 4]));
+                    n_b[8..12].copy_from_slice(&counter.wrapping_add(chunk_idx).to_le_bytes());
+                    chunk_idx = chunk_idx
+                        .checked_add(1)
+                        .ok_or_else(|| ZaliError::Crypto("Chunk index overflow".to_string()))?;
+                    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+                    let cipher_text = cipher
+                        .encrypt(Nonce::from_slice(&n_b), chunk)
+                        .map_err(|e| ZaliError::Crypto(e.to_string()))?;
+                    out.write_all(&cipher_text)?;
+                } else {
+                    out.write_all(chunk)?;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Распаковывает архив из байтов в памяти и возвращает список `(имя, содержимое)`.
+    /// Используется в средах без файловой системы (WASM в браузере) — не пишет на диск.
+    pub fn extract_all_bytes(&self, archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, ZaliError> {
+        let mut cur = std::io::Cursor::new(archive);
+
+        let mut found_mag = [0u8; 8];
+        cur.read_exact(&mut found_mag)?;
+        if found_mag != self.magic {
+            return Err(ZaliError::FormatMismatch);
+        }
+        let version = cur.read_u8()?;
+        if version != PROTOCOL_VERSION {
+            return Err(ZaliError::VersionMismatch);
+        }
+
+        let read_str = |c: &mut std::io::Cursor<&[u8]>| -> io::Result<String> {
+            let len = c.read_u8()? as usize;
+            let mut b = vec![0u8; len];
+            c.read_exact(&mut b)?;
+            Ok(String::from_utf8_lossy(&b).into_owned())
+        };
+        read_str(&mut cur)?;
+        read_str(&mut cur)?; // skip id, dom
+        let flags = cur.read_u8()?;
+        let count = cur.read_u32::<LittleEndian>()?;
+
+        const MAX_ARCHIVE_FILES: u32 = 10_000;
+        const MAX_TOTAL_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+        if count > MAX_ARCHIVE_FILES {
+            return Err(ZaliError::FormatMismatch);
+        }
+
+        let is_enc = flags & 1 != 0;
+        let mut key = [0u8; 32];
+        let mut base_nonce = [0u8; 12];
+        if is_enc {
+            let pwd = self.password.as_ref().ok_or(ZaliError::AuthFailed)?;
+            let mut salt = [0u8; 16];
+            cur.read_exact(&mut salt)?;
+            cur.read_exact(&mut base_nonce)?;
+            pbkdf2_hmac::<Sha256>(pwd.as_bytes(), &salt, PBKDF2_ITERS, &mut key);
+        }
+
+        let mut chunk_idx: u32 = 1;
+        let mut total_extracted: u64 = 0;
+        let mut results = Vec::new();
+
+        for _ in 0..count {
+            let n_len = cur.read_u16::<LittleEndian>()? as usize;
+            let mut n_b = vec![0u8; n_len];
+            cur.read_exact(&mut n_b)?;
+            let name = String::from_utf8_lossy(&n_b).into_owned();
+            let o_size = cur.read_u64::<LittleEndian>()?;
+            let e_size = cur.read_u64::<LittleEndian>()?;
+
+            total_extracted = total_extracted.saturating_add(o_size);
+            if total_extracted > MAX_TOTAL_EXTRACTED_BYTES {
+                return Err(ZaliError::Io(io::Error::other(
+                    "Archive extraction limit exceeded",
+                )));
+            }
+
+            let name_path = Path::new(&name);
+            if name_path.is_absolute()
+                || name_path.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+            {
+                return Err(ZaliError::PathTraversal);
+            }
+
+            let mut encoded = vec![0u8; e_size as usize];
+            cur.read_exact(&mut encoded)?;
+
+            let content = if is_enc {
+                let mut plain = Vec::with_capacity(o_size as usize);
+                for enc_chunk in encoded.chunks(CHUNK_SIZE + 16) {
+                    let mut n_b = base_nonce;
+                    let counter = u32::from_le_bytes(n_b[8..12].try_into().unwrap_or([0u8; 4]));
+                    n_b[8..12].copy_from_slice(&counter.wrapping_add(chunk_idx).to_le_bytes());
+                    chunk_idx = chunk_idx
+                        .checked_add(1)
+                        .ok_or_else(|| ZaliError::Crypto("Chunk index overflow".to_string()))?;
+                    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+                    let decrypted = cipher
+                        .decrypt(Nonce::from_slice(&n_b), enc_chunk)
+                        .map_err(|_| ZaliError::AuthFailed)?;
+                    plain.extend_from_slice(&decrypted);
+                }
+                plain
+            } else {
+                encoded
+            };
+
+            results.push((name, content));
+        }
+        Ok(results)
+    }
+
     /// Возвращает список файлов и обнаруженный магический маркер архива.
     pub fn inspect_archive(&self, archive_path: &str) -> Result<ArchiveInventory, ZaliError> {
         let mut in_file = File::open(archive_path)?;

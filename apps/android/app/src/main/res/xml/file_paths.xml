@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes the app's private cache dir via FileProvider for DOWNLOAD_ATTACHMENT's
+     share-sheet flow (NativeBridge.kt's saveAttachment) — content:// URIs only,
+     never a raw file:// Uri (FileUriExposedException on targetSdk 24+). -->
+<paths>
+    <cache-path name="attachments" path="attachments/" />
+</paths>

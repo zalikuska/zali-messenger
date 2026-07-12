@@ -18,6 +18,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8092", "--directory", "web"],
       "port": 8092
+    },
+    {
+      "name": "web-static-prod-origin",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "3000", "--directory", "web"],
+      "port": 3000
     }
   ]
 }
