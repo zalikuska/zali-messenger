@@ -2,12 +2,12 @@
 
 Современный кроссплатформенный мессенджер, использующий формат **Zali** (`.zali`) для передачи сообщений и файлов.
 
-- **Core/**: Единое ядро на Rust для всех платформ (FFI, WASM).
-- **Server/**: Backend на Rust (Axum, SQLite, WebSocket).
-- **Web/**: Веб-клиент для браузера и WKWebView.
-- **Windows/**: Приложение на Rust (WRY/TAO) с Core ядром.
-- **macOS/**: SwiftUI приложение, использующее Core через Rust-FFI мост.
-- **ZaliArchiverSDK/**: Низкоуровневый SDK.
+- **core/**: Единое ядро на Rust для всех платформ (FFI, WASM).
+- **server/**: Backend на Rust (Axum, SQLite, WebSocket).
+- **web/**: Веб-клиент для браузера и WKWebView.
+- **apps/windows/**: Приложение на Rust (WRY/TAO) с core ядром.
+- **apps/macos/**: SwiftUI приложение, использующее core через Rust-FFI мост.
+- **sdk/**: Низкоуровневый Archiver SDK (Rust + Swift).
 
 ## Архитектура
 Теперь проект использует единое ядро на **Rust**, что гарантирует:
@@ -17,38 +17,37 @@
 
 ### 1. Сервер
 ```bash
-cd Server
-cargo run
+cargo run --manifest-path server/Cargo.toml
 ```
 Сервер будет доступен по адресу `http://localhost:3000`.
 
 ### 2. Windows Клиент
 ```bash
-powershell -ExecutionPolicy Bypass -File .\build_windows_app.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_app.ps1
 # или для разработки без упаковки:
-cargo run --manifest-path Windows/Cargo.toml
+cargo run --manifest-path apps/windows/Cargo.toml
 ```
-Windows-сборка использует встроенные `Web/`-ресурсы и подхватывает сохранённые стили/настройки через локальное состояние приложения.
-Подробный список требований и шагов сборки есть в [docs/windows-build.md](/Users/zalikus/Codex/zali-messenger/docs/windows-build.md).
+Windows-сборка использует встроенные `web/`-ресурсы и подхватывает сохранённые стили/настройки через локальное состояние приложения.
+Подробный список требований и шагов сборки есть в [docs/windows-build.md](docs/windows-build.md).
 
 ### 3. Веб Клиент
-Просто откройте `Web/index.html` в браузере.
+Просто откройте `web/index.html` в браузере.
 
 ### 4. macOS Клиент
 ```bash
-./build_app.sh
+./scripts/build_app.sh
 open ZaliMessenger.app
 ```
 
 Для быстрой проверки SwiftPM-сборки:
 ```bash
-cd Core
+cd core
 cargo build --release
 cd ..
-swift build --package-path macOS
+swift build --package-path apps/macos
 ```
 
-Подробные команды разработки собраны в `DEVELOPMENT.md`.
+Подробные команды разработки собраны в `docs/DEVELOPMENT.md`.
 
 ## Передача сообщений
 Каждое сообщение упаковывается в архив `.zali` с магическим заголовком `ZALIMSSG` с помощью Zali SDK. Это обеспечивает:

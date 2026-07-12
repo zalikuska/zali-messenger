@@ -2,7 +2,7 @@
 //
 // Что делает НЕ мокая ничего из проверяемого пути:
 //   - Поднимает настоящий zali_server (тот же бинарник, что в продакшене) на чистой БД.
-//   - Раздаёт настоящий Web/index.html + app.js (тот же бандл, что видит пользователь)
+//   - Раздаёт настоящий web/index.html + app.js (тот же бандл, что видит пользователь)
 //     двум независимым Chromium-профилям (разные origin => разные сессии/localStorage,
 //     как на двух разных устройствах).
 //   - Каждому профилю Chromium даёт РЕАЛЬНОЕ fake-аудиоустройство
@@ -32,7 +32,7 @@ const path = require('path');
 const fs = require('fs');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const WEB_DIR = path.join(REPO_ROOT, 'Web');
+const WEB_DIR = path.join(REPO_ROOT, 'web');
 const SERVER_PORT = 3900;
 const CALLER_WEB_PORT = 8193;
 const CALLEE_WEB_PORT = 8194;
@@ -98,7 +98,7 @@ function startServer() {
         ALLOW_GUEST_MODE: 'false',
         RUST_LOG: 'zali_server=warn',
     };
-    const proc = spawn('cargo', ['run', '-p', 'zali_server'], {
+    const proc = spawn('cargo', ['run', '--manifest-path', 'server/Cargo.toml', '-p', 'zali_server'], {
         cwd: REPO_ROOT,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -111,7 +111,7 @@ function startServer() {
 }
 
 function startStaticServer(port) {
-    // Node's http module used directly (no extra deps) to serve Web/ as static files.
+    // Node's http module used directly (no extra deps) to serve web/ as static files.
     const mime = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
     const server = http.createServer((req, res) => {
         let reqPath = decodeURIComponent(req.url.split('?')[0]);
@@ -241,7 +241,7 @@ async function main() {
     }
     record('server-boot', true, `listening on ${API_BASE}`);
 
-    console.log('Starting static Web/ servers for both clients...');
+    console.log('Starting static web/ servers for both clients...');
     const callerStatic = await startStaticServer(CALLER_WEB_PORT);
     const calleeStatic = await startStaticServer(CALLEE_WEB_PORT);
     record('static-servers-boot', true, `ports ${CALLER_WEB_PORT}/${CALLEE_WEB_PORT}`);

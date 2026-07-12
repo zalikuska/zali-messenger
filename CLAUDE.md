@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Этот репозиторий содержит **несколько параллельных реализаций одной и той же логики**. Почти любой фикс в одном месте требуется и в других. **Перед завершением любой правки уточни (у пользователя и/или проверкой), не нужно ли продублировать её в:**
 
-- **Web UI** (`Web/src/interface.js`) — канонический источник. После правки **всегда** запусти `python3 bundle_web.py`, иначе изменения не попадут в macOS (`Assets.swift`) и Windows embedded-ассеты.
-- **macOS Swift-клиент** (`macOS/Sources/ZaliMessenger/`, основной) ↔ **Windows/Rust-шелл** (`Windows/src/native.rs` + `Windows/src/native/`) — реализуют один и тот же нативный слой (IPC-бридж, ключи, реконнект WS, HTTP-запросы, голосовой транспорт) **параллельно**. Фикс сетевого/крипто/бридж-поведения в одном почти всегда нужен и в другом — но с адаптацией под платформу (напр. macOS Keychain/файлы vs Windows `keyring`), не 1:1.
-- **Сервер**: локальный `src/` в этом монорепо ↔ серверный репозиторий (`zali-server`, ветка `zali-server`). Правки хендлеров нужно пушить в серверный репо и деплоить (см. «Deploy process»).
-- **Archiver SDK**: `ZaliArchiverSDK/Rust/` (сервер+Windows) ↔ `ZaliArchiverSDK/Swift/` (macOS) — зеркальные реализации формата `.zali`. Изменение формата/крипто нужно в обоих.
+- **Web UI** (`web/src/interface.js`) — канонический источник. После правки **всегда** запусти `python3 scripts/bundle_web.py`, иначе изменения не попадут в macOS (`Assets.swift`) и Windows embedded-ассеты.
+- **macOS Swift-клиент** (`apps/macos/Sources/ZaliMessenger/`, основной) ↔ **Windows/Rust-шелл** (`apps/windows/src/native.rs` + `apps/windows/src/native/`) — реализуют один и тот же нативный слой (IPC-бридж, ключи, реконнект WS, HTTP-запросы, голосовой транспорт) **параллельно**. Фикс сетевого/крипто/бридж-поведения в одном почти всегда нужен и в другом — но с адаптацией под платформу (напр. macOS Keychain/файлы vs Windows `keyring`), не 1:1.
+- **Сервер**: локальный `server/src/` в этом монорепо ↔ серверный репозиторий (`zali-server`, ветка `zali-server`). Правки хендлеров нужно пушить в серверный репо и деплоить (см. «Deploy process»).
+- **Archiver SDK**: `sdk/Rust/` (сервер+Windows) ↔ `sdk/Swift/` (macOS) — зеркальные реализации формата `.zali`. Изменение формата/крипто нужно в обоих.
 
 Правило: **никогда не считай правку завершённой, пока не спросил себя «в каких ещё из этих версий это тоже нужно?» и не сообщил об этом пользователю.**
 
@@ -38,7 +38,7 @@ Rules:
 ### Deploy process
 
 ```bash
-# 1. Push src/main.rs changes from local monorepo to server repo
+# 1. Push server/src/main.rs changes from local monorepo to server repo
 git push serverrepo codex/ui-v2-hub-segments:zali-server
 
 # 2. On VPS: pull, build, restart
@@ -56,48 +56,49 @@ ssh zms "sleep 3 && pidof zali_server && tail -5 /root/zali-server.log"
 ## Build Commands
 
 ```bash
-# Server (run from repo root, package name is zali_server with underscore)
-cargo check -p zali_server
-cargo run                         # starts on http://localhost:3000
+# Server (package name is zali_server with underscore)
+cargo check --manifest-path server/Cargo.toml -p zali_server
+cargo run --manifest-path server/Cargo.toml   # starts on http://localhost:3000
 
-# ZaliArchiverSDK Rust
-cargo check --manifest-path ZaliArchiverSDK/Rust/Cargo.toml
+# Archiver SDK (Rust)
+cargo check --manifest-path sdk/Rust/Cargo.toml
 
 # Windows client
-cargo check --manifest-path Windows/Cargo.toml
-cargo run --manifest-path Windows/Cargo.toml
+cargo check --manifest-path apps/windows/Cargo.toml
+cargo run --manifest-path apps/windows/Cargo.toml
 
 # Web assets — must run before macOS/Windows builds see JS changes
-python3 bundle_web.py
+python3 scripts/bundle_web.py
 
-# macOS (Swift, основная версия) — Core must be built first
-cd Core && cargo build --release && cd ..
-swift build --package-path macOS   # SwiftPM check
-./build_app.sh                     # produces ZaliMessenger.app
+# macOS (Swift, основная версия) — core must be built first
+cd core && cargo build --release && cd ..
+swift build --package-path apps/macos   # SwiftPM check
+./scripts/build_app.sh                  # produces ZaliMessenger.app
 
 # Full macOS app (convenience script)
-./run_macos_app.sh
+./scripts/run_macos_app.sh
 
 # macOS (Rust-шелл, экспериментальный) — тот же код, что Windows-клиент
-./build_macos_rust_app.sh          # produces dist/macos-rust/ZaliMessengerRust.app
+./scripts/build_macos_rust_app.sh       # produces dist/macos-rust/ZaliMessengerRust.app
 ```
 
 Running tests:
 ```bash
-cd Core && cargo test              # Core Rust unit tests
+cd core && cargo test              # Core Rust unit tests
+cd server && cargo test            # server integration tests (top-level tests/)
 ```
 
 ## Project Structure
 
 | Path | Role |
 |---|---|
-| `src/` | Axum server, split into modules: `main.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, plus older `devices.rs`, `voice.rs`. Модули реэкспортируются в корень крейта (`pub(crate) use x::*;` в main.rs), поэтому `use crate::{...}` работает отовсюду |
-| `Web/src/interface.js` | Entire web UI (~13000 lines): runs in both browser and native WebView |
-| `macOS/` | SwiftUI app (Swift Package Manager); wraps WKWebView. **Основной macOS-клиент** |
-| `Windows/src/native.rs` + `Windows/src/native/` | Rust desktop shell (WRY/TAO). `native.rs` держит NativeState/bridges и центральный `handle_ipc_message`; подмодули `native/{http,cache,keyring,util,transport,api,messages}.rs` — HTTP-клиенты, кэш расшифровки, keyring, санитайзеры, WS-транспорты, API-запросы, конвейер сообщений. Кроссплатформенный: собирается для Windows (`build_windows_app.ps1`, основной путь) и как **экспериментальный** macOS-шелл (`build_macos_rust_app.sh`, см. ниже) |
-| `Core/` | Rust core library compiled to static `.a` for macOS FFI |
-| `ZaliArchiverSDK/Rust/` | Archive format SDK; used by server and Windows client |
-| `ZaliArchiverSDK/Swift/` | Swift mirror of the SDK; used by macOS client |
+| `server/src/` | Axum server, split into modules: `main.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, plus older `devices.rs`, `voice.rs`. Модули реэкспортируются в корень крейта (`pub(crate) use x::*;` в main.rs), поэтому `use crate::{...}` работает отовсюду |
+| `web/src/interface.js` | Entire web UI (~13000 lines): runs in both browser and native WebView |
+| `apps/macos/` | SwiftUI app (Swift Package Manager); wraps WKWebView. **Основной macOS-клиент** |
+| `apps/windows/src/native.rs` + `apps/windows/src/native/` | Rust desktop shell (WRY/TAO). `native.rs` держит NativeState/bridges и центральный `handle_ipc_message`; подмодули `native/{http,cache,keyring,util,transport,api,messages}.rs` — HTTP-клиенты, кэш расшифровки, keyring, санитайзеры, WS-транспорты, API-запросы, конвейер сообщений. Кроссплатформенный: собирается для Windows (`scripts/build_windows_app.ps1`, основной путь) и как **экспериментальный** macOS-шелл (`scripts/build_macos_rust_app.sh`, см. ниже) |
+| `core/` | Rust core library compiled to static `.a` for macOS FFI |
+| `sdk/Rust/` | Archive format SDK; used by server and Windows client |
+| `sdk/Swift/` | Swift mirror of the SDK; used by macOS client |
 
 ## Architecture
 
@@ -112,7 +113,7 @@ Magic header `ZALIMSSG` (8 bytes) + 1-byte protocol version, followed by AES-256
 ### E2E key exchange
 Conversation-scoped keys are exchanged via ECDH + AES-GCM envelopes. `resolveConversationCryptoKey` in `interface.js` deduplicates concurrent requests via `_resolveKeyInFlight` Map. After decrypting a key envelope, verify `payload.sender` matches the expected peer from the conversation scope.
 
-### Server (`src/`)
+### Server (`server/src/`)
 Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/router, handlers live in per-domain modules (see Project Structure). Key invariants established by recent security fixes:
 - `ensure_server_member` uses `ON CONFLICT DO NOTHING` — never demotes existing roles; use `upsert_server_member` for explicit role updates
 - `revoke_device` wraps the active-count check + UPDATE in a `BEGIN IMMEDIATE` transaction
@@ -121,31 +122,31 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 - `approve_device` rejects self-approval (`target_id == actor_id`)
 - File deletions in `delete_server` happen **after** transaction commit
 
-### macOS client (`macOS/`)
+### macOS client (`apps/macos/`)
 - IPC: `WKScriptMessageHandler.userContentController` in `WebView.swift`; all handlers guard `message.frameInfo.isMainFrame`
 - Crypto key is stored in a **plain file** (`Coordinator.saveLegacyCryptoKey` / `loadLegacyCryptoKey`, `~/Library/Application Support/ZaliMessenger/legacy_crypto_key.txt`), not Keychain and never UserDefaults. Keychain was removed 2026-07-03: `build_app.sh` never code-signs with a stable identity, so its ad-hoc signature changes on every rebuild — the Keychain ACL then treats each rebuild as "a different app," reprompting for consent on every launch. Do not reintroduce Keychain here (see project memory `feedback_no_keychain`)
 - Camera/mic permission (`requestMediaCapturePermissionFor`) is granted only for `localhost`/`127.0.0.1` origins from the main frame
 - Tenor URL resolution validates HTTPS + `tenor.com` host before fetching
 - `javaScriptCanOpenWindowsAutomatically` is `false`
 
-### macOS Rust shell (тот же крейт `Windows/`) — экспериментальный, не основной
-После пробной миграции (2026-07) решено вернуться к Swift-версии как основной: голосовые звонки и уведомления в Rust-шелле не были подтверждены реальным использованием, а ценность отдельного нативного стека не перевесила риск. Код и сборка сохранены рабочими на случай, если понадобится вернуться. Крейт `zali_messenger_win` собирается и на macOS (WRY использует WKWebView). Сборка/запуск: `./build_macos_rust_app.sh` / `./run_macos_rust_app.sh`. Платформенные ветки:
+### macOS Rust shell (тот же крейт `apps/windows/`) — экспериментальный, не основной
+После пробной миграции (2026-07) решено вернуться к Swift-версии как основной: голосовые звонки и уведомления в Rust-шелле не были подтверждены реальным использованием, а ценность отдельного нативного стека не перевесила риск. Код и сборка сохранены рабочими на случай, если понадобится вернуться. Крейт `zali_messenger_win` собирается и на macOS (WRY использует WKWebView). Сборка/запуск: `./scripts/build_macos_rust_app.sh` / `./scripts/run_macos_rust_app.sh`. Платформенные ветки:
 - `NativeState::app_data_dir()`: Windows → `%LOCALAPPDATA%\ZaliMessenger`, macOS → `~/Library/Application Support/ZaliMessenger` (без этой ветки конфиг падал в temp и стирался ОС)
 - `spawn_swift_keychain_migration()` (macOS only): фоновый одноразовый импорт ключа Swift-клиента из Keychain (`com.zali.messenger` / `zali_crypto_key_v2`). **Никогда не читать чужие Keychain-записи на стартовом пути** — модальный диалог доступа блокирует поток до ответа пользователя (приложение зависало до появления окна)
 - Меню-бар через `muda` (macOS only) — без него в WKWebView не работают Cmd+C/V/Q
 - `install_media_capture_policy()` в `main.rs` (macOS only): добавляет `requestMediaCapturePermissionForOrigin:` в UIDelegate wry через objc runtime — Grant только main frame + origin `zali://`/localhost, зеркало инварианта Swift-клиента. Диагностика окружения при старте уходит в trace-лог строкой `DIAG_ENV;...` (подтверждено: `zali://` — secure context, WebCrypto/WebRTC/getUserMedia доступны)
 - Уведомления работают только из .app-бандла (mac-notification-sys). Голосовой звонок end-to-end реальным звонком пока не проверялся — все слои (getUserMedia grant, RTCPeerConnection, нативный WS-транспорт сигналинга) на месте
-- Swift-версия (`macOS/`, `./build_app.sh`) — основная; оба .app могут сосуществовать (разные bundle id: `com.zali.messenger` и `com.zali.messenger.rust`), если понадобится вернуться к Rust-шеллу
+- Swift-версия (`apps/macos/`, `./scripts/build_app.sh`) — основная; оба .app могут сосуществовать (разные bundle id: `com.zali.messenger` и `com.zali.messenger.rust`), если понадобится вернуться к Rust-шеллу
 - Кросс-проверка Windows-таргета с macOS (`cargo check --target x86_64-pc-windows-msvc`) может падать на C-коде `ring` (нет заголовков Windows SDK) — это ограничение тулчейна, не регрессия; Windows собирается на Windows
 
-### Windows client (`Windows/src/native.rs`)
+### Windows client (`apps/windows/src/native.rs`)
 - `handle_ipc_message` is the central native bridge entry point
 - URL path segments for dynamic values use `reqwest::Url::path_segments_mut().push()` — never `format!()` interpolation
 - `perform_api_request` blocks `..`, `%2F`, `%5C` in paths
 - Avatar and message file downloads use streaming byte counters (100 MB and 512 MB caps respectively)
 - `decode_data_url` has a 100 MB hard cap before any parsing
 
-### Web UI (`Web/src/interface.js`)
+### Web UI (`web/src/interface.js`)
 - `randomBase64` throws if `window.crypto.getRandomValues` is unavailable — no Math.random fallback
 - CSS color values from server data pass through `safeCssColor()` before being set in style attributes
 - `flushPendingOutbox` drops messages after 50 failed attempts (`MAX_OUTBOX_ATTEMPTS`)
@@ -163,28 +164,28 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 Для сборки Windows-клиента нужны только эти пути (без `target/`):
 
 ```
-Windows/          — Rust-клиент (WRY/TAO)
-Core/             — Rust core library (зависимость Windows)
-ZaliArchiverSDK/Rust/  — архивный SDK (зависимость Core)
-Web/src/          — JS-модули и CSS/HTML
-Web/bridge_protocol.json
-Web/style.css
-Web/index.html
-bundle_web.py     — бандлер веб-ассетов
-build_windows_app.ps1  — PowerShell-скрипт сборки
+apps/windows/     — Rust-клиент (WRY/TAO)
+core/             — Rust core library (зависимость apps/windows)
+sdk/Rust/         — архивный SDK (зависимость core)
+web/src/          — JS-модули и CSS/HTML
+web/bridge_protocol.json
+web/style.css
+web/index.html
+scripts/bundle_web.py         — бандлер веб-ассетов
+scripts/build_windows_app.ps1 — PowerShell-скрипт сборки
 ```
 
-Сервер (`src/main.rs`), `macOS/`, `ZaliArchiverSDK/Swift/` — **не нужны**.
+Сервер (`server/src/main.rs`), `apps/macos/`, `sdk/Swift/` — **не нужны**.
 
 ### Создать zip для передачи
 
 ```bash
 zip -r zali-windows-source.zip \
-  Windows/src Windows/Cargo.toml Windows/Cargo.lock Windows/build.rs \
-  Core/src Core/Cargo.toml Core/Cargo.lock \
-  ZaliArchiverSDK/Rust/src ZaliArchiverSDK/Rust/Cargo.toml ZaliArchiverSDK/Rust/Cargo.lock \
-  Web/src Web/bridge_protocol.json Web/style.css Web/index.html \
-  bundle_web.py build_windows_app.ps1
+  apps/windows/src apps/windows/Cargo.toml apps/windows/Cargo.lock apps/windows/build.rs \
+  core/src core/Cargo.toml core/Cargo.lock \
+  sdk/Rust/src sdk/Rust/Cargo.toml sdk/Rust/Cargo.lock \
+  web/src web/bridge_protocol.json web/style.css web/index.html \
+  scripts/bundle_web.py scripts/build_windows_app.ps1
 ```
 
 ### Сборка на Windows-машине
@@ -198,25 +199,25 @@ zip -r zali-windows-source.zip \
 ```powershell
 # 1. Распаковать архив, перейти в корень
 # 2. Собрать (PowerShell):
-.\build_windows_app.ps1
+.\scripts\build_windows_app.ps1
 
 # Результат: dist\windows\ZaliMessenger.exe
 # Запустить сразу:
-.\build_windows_app.ps1 -Run
+.\scripts\build_windows_app.ps1 -Run
 ```
 
-`build_windows_app.ps1` автоматически запускает `bundle_web.py` перед `cargo build --release`.
+`scripts/build_windows_app.ps1` автоматически запускает `scripts/bundle_web.py` перед `cargo build --release`.
 
 Конфигурация сервера передаётся через env-переменные до бандлинга:
 ```powershell
 $env:ZALI_API_BASE_URL = "https://msgs.zalikus.org"
 $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
-.\build_windows_app.ps1
+.\scripts\build_windows_app.ps1
 ```
 
 ## Git Safety — уроки реального инцидента с потерей кода
 
-**Инцидент:** `git checkout -f <branch>` + `git pull --ff-only` между двумя ветками с *разным набором отслеживаемых путей* удалили с диска реально нужные файлы — `Core/src/*.rs`, `ZaliArchiverSDK/Rust/src/lib.rs`, `ZaliArchiverSDK/Swift/`, `macOS/Sources/ZaliMessenger/{NetworkService,ZaliArc,ZaliCore,ContentView}.swift`, `Package.swift`, `Web/src/{bus,loader,styler,bootstrap}.js`, `Web/index.html`, `Web/style.css`, `bundle_web.py`, `run_macos_app.sh` и другие build-скрипты. Причина: `Core/`, `Web/`, `Windows/`, `macOS/`, `ZaliArchiverSDK/` в этом репо на разных ветках то отслеживались git, то были в `.gitignore` как "legacy, хранится только в рабочей копии" — то есть их реальный, актуальный код существовал **только на диске**, никогда не коммитился. `git checkout -f` без раздумий подменяет такие файлы версией из целевой ветки; `pull --ff-only` после этого удаляет всё, что в новом дереве не отслеживается вовсе.
+**Инцидент** (пути ниже — в структуре **до** реорганизации 2026-07-12; см. новые пути в разделе «Project Structure»): `git checkout -f <branch>` + `git pull --ff-only` между двумя ветками с *разным набором отслеживаемых путей* удалили с диска реально нужные файлы — `Core/src/*.rs`, `ZaliArchiverSDK/Rust/src/lib.rs`, `ZaliArchiverSDK/Swift/`, `macOS/Sources/ZaliMessenger/{NetworkService,ZaliArc,ZaliCore,ContentView}.swift`, `Package.swift`, `Web/src/{bus,loader,styler,bootstrap}.js`, `Web/index.html`, `Web/style.css`, `bundle_web.py`, `run_macos_app.sh` и другие build-скрипты. Причина: `Core/`, `Web/`, `Windows/`, `macOS/`, `ZaliArchiverSDK/` в этом репо на разных ветках то отслеживались git, то были в `.gitignore` как "legacy, хранится только в рабочей копии" — то есть их реальный, актуальный код существовал **только на диске**, никогда не коммитился. `git checkout -f` без раздумий подменяет такие файлы версией из целевой ветки; `pull --ff-only` после этого удаляет всё, что в новом дереве не отслеживается вовсе.
 
 ### Что делать до git checkout -f / reset --hard / pull --ff-only между ветками
 
@@ -232,9 +233,9 @@ $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
 ### Где искать material для восстановления, если файлы всё же пропали
 
 1. **`.claude/worktrees/agent-*/`** — если есть параллельные воркчтри фоновых агентов, они могли быть на другом коммите и не затронуты катастрофой. Проверить `git worktree list` и сравнить содержимое.
-2. **Zip-архивы дистрибуции** (см. раздел "Windows Build Distribution" выше) — `zali-windows-source.zip` и подобные экспорты кода в корне репо или `~/Downloads` — это снапшоты реального рабочего дерева на конкретную дату. Проверять `unzip -l`, дату модификации и **сверять SHA1** (`shasum`) прежде чем считать находку новой информацией — может быть побайтовая копия уже виденного. Помнить: windows-source zip **не включает** `macOS/`, `src/main.rs`, `ZaliArchiverSDK/Swift/` (см. список путей выше) — для macOS-файлов нужен архив вида `*-full-code.zip`/`*-all-code.zip`/`*-full-current-code.zip`.
+2. **Zip-архивы дистрибуции** (см. раздел "Windows Build Distribution" выше) — `zali-windows-source.zip` и подобные экспорты кода в корне репо или `~/Downloads` — это снапшоты реального рабочего дерева на конкретную дату. Проверять `unzip -l`, дату модификации и **сверять SHA1** (`shasum`) прежде чем считать находку новой информацией — может быть побайтовая копия уже виденного. Помнить: windows-source zip **не включает** `macOS/`, `src/main.rs`, `ZaliArchiverSDK/Swift/` (старые имена — эти zip-архивы датированы до реорганизации 2026-07-12) — для macOS-файлов нужен архив вида `*-full-code.zip`/`*-all-code.zip`/`*-full-current-code.zip`.
 3. **Перебор git-объектов** (`git fsck --unreachable`) может найти висячие blob'ы от старых коммитов/сбросов — но для больших репозиториев поштучный `git cat-file -p` на каждый хэш непрактично медленный; использовать один процесс `git cat-file --batch` с потоковым чтением через небольшой Python-скрипт.
-4. **Кросс-сверка с другим клиентом**: Windows (`Windows/src/native.rs`) и macOS реализуют одну и ту же логику параллельно (IPC-бридж, ключи шифрования, реконнект WS, голосовой транспорт). Если один клиент пострадал, а другой цел и **реально свежий** (проверить по `git log`/датам файлов, а не предполагать), можно восстановить логику по образцу через `graphify query`/явное сравнение построчно — но не копировать бездумно: платформенные различия (например, macOS Keychain vs Windows `keyring` crate) означают, что порт требует адаптации, а не 1:1 копирования.
+4. **Кросс-сверка с другим клиентом**: Windows (`apps/windows/src/native.rs`) и macOS реализуют одну и ту же логику параллельно (IPC-бридж, ключи шифрования, реконнект WS, голосовой транспорт). Если один клиент пострадал, а другой цел и **реально свежий** (проверить по `git log`/датам файлов, а не предполагать), можно восстановить логику по образцу через `graphify query`/явное сравнение построчно — но не копировать бездумно: платформенные различия (например, macOS Keychain vs Windows `keyring` crate) означают, что порт требует адаптации, а не 1:1 копирования.
 
 ### Как проверять восстановленный/реконструированный код — не гадать, а компилировать
 
@@ -246,7 +247,7 @@ $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
 ## Key Development Notes
 
 - The server Cargo package is named `zali_server` (underscore), not `zali-server`. Use `cargo check -p zali_server`.
-- `Web/src/interface.js` is the canonical source; `bundle_web.py` copies it into macOS and Windows embedded assets. Always edit the source, then bundle.
-- If SwiftPM reports a stale module cache after moving the project, remove `macOS/.build` and rebuild.
-- Runtime artifacts to keep out of version control: `zali_messenger.db`, `uploads/`, `target/`, `macOS/.build/`, `dist/`.
-- Server env config: copy `Server/.env.example` to `.env`; set a real `JWT_SECRET` for any non-local deployment.
+- `web/src/interface.js` is the canonical source; `bundle_web.py` copies it into macOS and Windows embedded assets. Always edit the source, then bundle.
+- If SwiftPM reports a stale module cache after moving the project, remove `apps/macos/.build` and rebuild.
+- Runtime artifacts to keep out of version control: `zali_messenger.db`, `uploads/`, `target/`, `apps/macos/.build/`, `dist/`.
+- Server env config: copy `.env.example` (repo root) to `.env`; set a real `JWT_SECRET` for any non-local deployment.

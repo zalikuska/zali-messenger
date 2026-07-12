@@ -4,19 +4,19 @@
     {
       "name": "zali-server",
       "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "-p", "zali_server"],
+      "runtimeArgs": ["run", "--manifest-path", "server/Cargo.toml", "-p", "zali_server"],
       "port": 3000
     },
     {
       "name": "web-static",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "Web"],
+      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "web"],
       "port": 8090
     },
     {
       "name": "web-static-mobile",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8092", "--directory", "Web"],
+      "runtimeArgs": ["-m", "http.server", "8092", "--directory", "web"],
       "port": 8092
     }
   ]

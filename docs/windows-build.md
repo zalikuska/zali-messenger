@@ -1,6 +1,6 @@
 # Windows Build Guide
 
-This project can be built on Windows with the native Rust shell in `Windows/`.
+This project can be built on Windows with the native Rust shell in `apps/windows/`.
 
 ## Requirements
 
@@ -17,13 +17,13 @@ This project can be built on Windows with the native Rust shell in `Windows/`.
 From the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_windows_app.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_app.ps1
 ```
 
 To build and launch immediately:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_windows_app.ps1 -Run
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_app.ps1 -Run
 ```
 
 The packaged binary is copied to:
@@ -37,7 +37,7 @@ dist/windows/ZaliMessenger.exe
 For a faster local loop without packaging:
 
 ```powershell
-cargo run --manifest-path Windows\Cargo.toml
+cargo run --manifest-path apps\windows\Cargo.toml
 ```
 
 ## Before Testing Voice
