@@ -5,7 +5,7 @@ use crate::{
     can_access_channel, can_manage_by_role, dm_conversation_scope, fallback_role_permissions,
     get_server_access_context, get_server_accessibility, get_server_member_role,
     history_access_matches, load_channel_permissions, push_history_access_predicate,
-    resolve_history_access, role_permissions_for_view, send_payload_to_user,
+    resolve_history_access, role_permissions_for_view, send_payload_to_user, send_web_push,
     server_conversation_scope, AppState, AuthenticatedUser, Message, MessagePageQuery,
     MessageResponse, ReactionPayload, ReactionSummary, ServerRecord,
 };
@@ -1231,6 +1231,18 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
             "WS deliver_to_user skipped username={} message_id={} reason=no_connections",
             username, msg.id
         );
+        // No live WS connection got this — the recipient's tab/PWA is fully closed,
+        // so this is exactly the case Web Push exists for. Never push to the sender's
+        // own echo (msg.sender == username here means we're delivering to the sender).
+        if msg.sender != username {
+            send_web_push(
+                state,
+                username,
+                "ZaliMessenger",
+                &format!("Новое сообщение от {}", msg.sender),
+            )
+            .await;
+        }
     }
 }
 

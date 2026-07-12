@@ -592,6 +592,7 @@ body[data-ui-v2="on"] .mode-switch {
     color: #050505;
     font-size: 20px;
     font-weight: 900;
+    line-height: 1;
     cursor: pointer;
     box-shadow: 0 8px 18px rgba(var(--accent-rgb),.14), inset 0 1px 0 rgba(255,255,255,.2);
     transition: transform .18s ease, box-shadow .18s ease, filter .18s ease, opacity .18s ease;
@@ -867,33 +868,21 @@ body[data-nav-mode="servers"] .contacts {
     box-shadow: 0 0 0 2px rgba(255,77,109,.08);
 }
 
-.contact-mute-toggle,
-.channel-mute-toggle {
+.contact-mute-indicator,
+.channel-mute-indicator {
     display: grid;
     place-items: center;
     width: 22px;
     height: 22px;
     flex: 0 0 auto;
-    border-radius: 50%;
-    background: transparent;
     color: var(--text3);
-    cursor: pointer;
-    font-size: 12px;
-    line-height: 1;
-    opacity: .55;
-    transition: opacity .18s ease, color .18s ease, background .18s ease;
+    pointer-events: none;
 }
 
-.contact-mute-toggle:hover,
-.channel-mute-toggle:hover {
-    opacity: 1;
-    background: rgba(255,255,255,.06);
-}
-
-.contact-mute-toggle.muted,
-.channel-mute-toggle.muted {
-    color: var(--text2);
-    opacity: 1;
+.contact-mute-indicator .ui-icon,
+.channel-mute-indicator .ui-icon {
+    width: 14px;
+    height: 14px;
 }
 
 .contact-name {
@@ -997,6 +986,7 @@ body[data-nav-mode="servers"] .contacts {
     display: grid;
     place-items: center;
     border-radius: 50%;
+    overflow: hidden;
     color: #fff;
     font-size: 18px;
     font-weight: 900;
@@ -4422,25 +4412,27 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .reaction-emoji {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 15px;
     height: 15px;
     font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
     font-size: 13px;
-    line-height: 15px;
+    line-height: 1;
     text-align: center;
-    transform: translateY(-.5px);
 }
 
 .reaction-count {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-width: 7px;
     color: rgba(255,255,255,.94);
     font-size: 11px;
     font-weight: 900;
-    line-height: 15px;
+    line-height: 1;
     text-align: center;
-    transform: translateY(.25px);
 }
 
 .reaction-btn {
@@ -4461,14 +4453,15 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .reaction-btn-emoji {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 20px;
     height: 20px;
     font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
     font-size: 18px;
-    line-height: 20px;
+    line-height: 1;
     text-align: center;
-    transform: translate(-1px, -1px);
 }
 
 .reaction-btn:hover,
@@ -6208,6 +6201,19 @@ body[data-experimental-design="on"] .auth-btn.primary {
 body[data-experimental-design="on"] .btn-flat {
     background: rgba(255, 255, 255, 0.05);
 }
+/* Danger buttons must stay filled red in flat mode too — the blanket
+   .btn-flat background override above would otherwise wipe out their
+   red tint and leave only the red border. */
+body[data-experimental-design="on"] .settings-logout {
+    background: rgb(255, 77, 109);
+    border-color: rgb(255, 77, 109);
+    color: #fff;
+}
+body[data-experimental-design="on"] .settings-logout:hover {
+    border-color: rgb(255, 77, 109);
+    color: #fff;
+    filter: brightness(1.1);
+}
 body[data-experimental-design="on"] .file-chip {
     background: rgba(255, 255, 255, 0.06);
     box-shadow: none;
@@ -6238,4 +6244,56 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb {
 }
 body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
+}
+
+/* Installed as a home-screen app (iOS/Android standalone PWA): the OS status bar
+   overlaps the top of the viewport instead of pushing it down, so pad it ourselves. */
+@media (display-mode: standalone) {
+    .titlebar {
+        padding-top: env(safe-area-inset-top, 0px);
+    }
+}
+
+/* One-time "Add to Home Screen" hint for iOS Safari (no beforeinstallprompt API there). */
+.a2hs-banner {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    z-index: 60;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: rgba(20, 22, 28, 0.96);
+    border: 1px solid var(--border);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+.a2hs-banner.visible {
+    display: flex;
+}
+.a2hs-banner-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text2);
+}
+.a2hs-banner-text b {
+    color: var(--text);
+}
+.a2hs-banner-close {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text2);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
 }

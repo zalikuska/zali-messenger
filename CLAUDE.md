@@ -32,7 +32,7 @@ Rules:
 - URL: `https://msgs.zalikus.org`
 - SSH access: `ssh zms`
 - Server repo: https://github.com/zalikuska/zali-messenger-server (branch `zali-server`)
-- Server binary runs at: `/opt/zali-server/target/release/zali_server`
+- Server binary runs at: `/opt/zali-server/server/target/release/zali_server` (moved from `/opt/zali-server/target/release/zali_server` by the 2026-07-12 reorg — that root `Cargo.toml` no longer exists, so the build output now lands under `server/target/`, not `target/`)
 - Env vars: `/etc/zali/zali-server.env` (symlinked to `/opt/zali-server/.env`)
 
 ### Deploy process
@@ -43,15 +43,25 @@ git push serverrepo codex/ui-v2-hub-segments:zali-server
 
 # 2. On VPS: pull, build, restart
 ssh zms "cd /opt/zali-server && git pull --ff-only origin zali-server"
-ssh zms "cd /opt/zali-server && cargo build --release -p zali_server 2>&1 | tail -3"
+ssh zms "cd /opt/zali-server && cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -3"
 ssh zms "pkill -f zali_server; sleep 1"
-ssh zms "cd /opt/zali-server && set -a && source /etc/zali/zali-server.env && set +a && nohup ./target/release/zali_server >>/root/zali-server.log 2>&1 </dev/null &"
+ssh zms "cd /opt/zali-server && set -a && source /etc/zali/zali-server.env && set +a && nohup ./server/target/release/zali_server >>/root/zali-server.log 2>&1 </dev/null &"
 
 # 3. Verify
 ssh zms "sleep 3 && pidof zali_server && tail -5 /root/zali-server.log"
 ```
 
 > Note: `set -a && source /etc/zali/zali-server.env && set +a` required — `nohup` doesn't inherit `source`d vars otherwise.
+
+> Note: since the Web Push feature landed (2026-07-12), the first build after pulling it will compile
+> OpenSSL from source (`openssl` crate's `vendored` feature, pulled in transitively for `web-push`'s
+> encryption backend) — noticeably slower one-time build, needs a C compiler (already required for
+> `sqlx-sqlite`, so nothing new to install) but no `libssl-dev`. To actually enable push, add
+> `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` to `/etc/zali/zali-server.env` — generate with
+> `cargo run --manifest-path server/Cargo.toml --example gen_vapid_keys` on the VPS (or copy from local
+> dev, VAPID keys aren't tied to any account/domain). Leaving them unset just disables push silently.
+
+> Note: after the 2026-07-12 repo reorg there is no root `Cargo.toml` on the VPS checkout — always pass `--manifest-path server/Cargo.toml` to `cargo build`, and restart from `server/target/release/zali_server`, not `target/release/zali_server`. On 2026-07-12 a deploy silently kept running a week-old binary at the old `target/release/zali_server` path (still present from a prior build) while the freshly built binary sat unused at `server/target/release/zali_server` — `pkill`+`nohup` "succeeded" with no errors and the new code never went live. If in doubt, verify with `ssh zms "readlink -f /proc/\$(pidof zali_server)/exe"` after restart. Consider deleting the stale `/opt/zali-server/target/` directory on the VPS once confirmed unused (ask before doing this — it's a production server path).
 
 ## Build Commands
 
@@ -210,6 +220,27 @@ native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachme
 - macOS/Windows/iOS/Android native clients are unaffected by all of the above — this is purely
   additive (a new, filesystem-free code path used only when no native bridge is present), not a
   duplicate of their FFI-based archive handling that needed porting.
+- **Web Push (VAPID)** for real background delivery when the tab/PWA is fully closed (2026-07-12,
+  same session as the iOS-parity mobile-web pass). Server: `server/src/push.rs`
+  (`/api/push/vapid-public-key`, `/api/push/subscribe`, `/api/push/unsubscribe`, `send_web_push()`),
+  wired into `deliver_to_user` in `messages.rs` — only fires when `send_payload_to_user` found **zero**
+  live WS connections, so a foreground tab never gets a duplicate push. `push_subscriptions` table
+  added to `init_db()` in `lib.rs`. Disabled by default: unset `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`
+  (see `.env.example`) makes the pubkey route 404 so the client never subscribes, and `send_web_push`
+  no-ops. Generate a keypair with `cargo run --manifest-path server/Cargo.toml --example gen_vapid_keys`
+  (no OpenSSL CLI/Firebase/Apple account needed — pure Web Push + VAPID, works in Chrome/Firefox always,
+  Safari/iOS only once the PWA is added to the home screen on iOS 16.4+). Client:
+  `interface.js` `subscribeWebPush()` (called from `applySession` on login, gated
+  `!hasNativeBridge()`), `service-worker.js` `push`/`notificationclick` handlers. **Deploy note:** the
+  `web-push` crate's only encryption backend depends on `ece`, which needs OpenSSL — `server/Cargo.toml`
+  pins `openssl = { features = ["vendored"] }` so the VPS build compiles OpenSSL from source instead of
+  requiring `libssl-dev` preinstalled (slower first build, zero new system deps). Verified live
+  end-to-end against Google's real FCM endpoint in this session: subscribe → DM from a second user with
+  the receiver's WS closed → server built+signed+encrypted+POSTed the push → got a real 404 back (fake
+  test endpoint) → correctly pruned the stale subscription row. A **real** granted-permission delivery
+  (actual OS notification popping) was not observed live — the sandboxed dev browser's
+  `Notification.requestPermission()` always resolves `"denied"` with no way to grant it
+  programmatically; that's a tooling limitation of this environment, not exercised code.
 
 ## Приоритеты при исправлении багов
 

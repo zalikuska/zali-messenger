@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="icon.svg">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="style.css">
     <title>ZaliMessenger</title>
 </head>
@@ -394,7 +394,7 @@
                     <nav class="server-modal-nav" id="serverModalNav" aria-label="Разделы настроек">
                         <button class="server-modal-nav-btn" type="button" data-server-modal-section="overview">
                             <span class="server-modal-nav-label">Обзор</span>
-                            <span class="server-modal-nav-desc">Имя, внешний вид и ссылка</span>
+                            <span class="server-modal-nav-desc">Имя, внешний вид и код</span>
                         </button>
                         <button class="server-modal-nav-btn" type="button" data-server-modal-section="channels">
                             <span class="server-modal-nav-label">Каналы</span>
@@ -485,10 +485,10 @@
                                         </div>
                                     </div>
                                     <div class="server-link-card">
-                                        <div class="server-asset-title">Ссылка входа</div>
-                                        <div class="server-asset-sub">Сюда можно вставить адрес сервера, по которому будут входить пользователи.</div>
+                                        <div class="server-asset-title">Код входа</div>
+                                        <div class="server-asset-sub">Сюда можно вставить код сервера, по которому будут входить пользователи.</div>
                                         <div class="server-link-row">
-                                            <input id="serverJoinLinkInput" class="settings-input" type="text" placeholder="Ссылка на сервер">
+                                            <input id="serverJoinLinkInput" class="settings-input" type="text" placeholder="Код сервера">
                                             <button class="btn-flat" id="serverJoinLinkGenerateBtn" type="button">Сгенерировать</button>
                                             <button class="btn-flat" id="serverJoinLinkCopyBtn" type="button">Копировать</button>
                                         </div>
@@ -728,6 +728,11 @@
             </form>
         </div>
     </div>
+    <div class="a2hs-banner" id="a2hsBanner">
+        <div class="a2hs-banner-text" id="a2hsBannerText"></div>
+        <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
+    </div>
+
     <script src="app.js?v=20260607-rev17"></script>
 </body>
 </html>
