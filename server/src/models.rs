@@ -46,8 +46,8 @@ pub(crate) struct MessageResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) channel_id: Option<String>,
     pub(crate) reactions: Vec<ReactionSummary>,
-    #[serde(rename = "myReaction")]
-    pub(crate) my_reaction: Option<String>,
+    #[serde(rename = "myReactions")]
+    pub(crate) my_reactions: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]

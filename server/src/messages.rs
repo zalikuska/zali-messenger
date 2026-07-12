@@ -31,8 +31,8 @@ pub(crate) async fn load_reaction_states(
     state: &Arc<AppState>,
     message_ids: &[String],
     viewer: &str,
-) -> Result<HashMap<String, (Vec<ReactionSummary>, Option<String>)>, sqlx::Error> {
-    let mut states: HashMap<String, (HashMap<String, i64>, Option<String>)> = HashMap::new();
+) -> Result<HashMap<String, (Vec<ReactionSummary>, Vec<String>)>, sqlx::Error> {
+    let mut states: HashMap<String, (HashMap<String, i64>, Vec<String>)> = HashMap::new();
     if message_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -53,22 +53,22 @@ pub(crate) async fn load_reaction_states(
         let reactor: String = row.get("reactor");
         let entry = states
             .entry(message_id)
-            .or_insert_with(|| (HashMap::new(), None));
+            .or_insert_with(|| (HashMap::new(), Vec::new()));
         *entry.0.entry(emoji.clone()).or_insert(0) += 1;
         if reactor == viewer {
-            entry.1 = Some(emoji);
+            entry.1.push(emoji);
         }
     }
 
     Ok(states
         .into_iter()
-        .map(|(message_id, (counts, my_reaction))| {
+        .map(|(message_id, (counts, my_reactions))| {
             let mut reactions: Vec<ReactionSummary> = counts
                 .into_iter()
                 .map(|(emoji, count)| ReactionSummary { emoji, count })
                 .collect();
             reactions.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.emoji.cmp(&b.emoji)));
-            (message_id, (reactions, my_reaction))
+            (message_id, (reactions, my_reactions))
         })
         .collect())
 }
@@ -77,7 +77,7 @@ pub(crate) async fn load_reaction_state(
     state: &Arc<AppState>,
     message_id: &str,
     viewer: &str,
-) -> Result<(Vec<ReactionSummary>, Option<String>), sqlx::Error> {
+) -> Result<(Vec<ReactionSummary>, Vec<String>), sqlx::Error> {
     let map = load_reaction_states(state, &[message_id.to_string()], viewer).await?;
     Ok(map.get(message_id).cloned().unwrap_or_default())
 }
@@ -86,20 +86,20 @@ pub(crate) async fn load_reaction_state_for_viewers(
     state: &Arc<AppState>,
     message_id: &str,
     viewers: &[String],
-) -> Result<(Vec<ReactionSummary>, HashMap<String, String>), sqlx::Error> {
+) -> Result<(Vec<ReactionSummary>, HashMap<String, Vec<String>>), sqlx::Error> {
     let viewer_set: HashSet<&str> = viewers.iter().map(|viewer| viewer.as_str()).collect();
     let rows = sqlx::query("SELECT emoji, reactor FROM reactions WHERE message_id = ?")
         .bind(message_id)
         .fetch_all(&state.db)
         .await?;
     let mut counts: HashMap<String, i64> = HashMap::new();
-    let mut my_reactions: HashMap<String, String> = HashMap::new();
+    let mut my_reactions: HashMap<String, Vec<String>> = HashMap::new();
     for row in rows {
         let emoji: String = row.get("emoji");
         let reactor: String = row.get("reactor");
         *counts.entry(emoji.clone()).or_insert(0) += 1;
         if viewer_set.contains(reactor.as_str()) {
-            my_reactions.insert(reactor, emoji);
+            my_reactions.entry(reactor).or_default().push(emoji);
         }
     }
 
@@ -167,7 +167,7 @@ pub(crate) async fn broadcast_reaction_event(state: &Arc<AppState>, message: &Me
             "serverId": message.server_id,
             "channelId": message.channel_id,
             "reactions": reactions,
-            "myReaction": my_reactions.get(&viewer).cloned()
+            "myReactions": my_reactions.get(&viewer).cloned().unwrap_or_default()
         });
         send_payload_to_user(state, &viewer, payload.to_string(), "reaction_updated").await;
     }
@@ -267,7 +267,7 @@ pub(crate) async fn get_server_messages(
             let response: Vec<MessageResponse> = available_msgs
                 .into_iter()
                 .map(|msg| {
-                    let (reactions, my_reaction) =
+                    let (reactions, my_reactions) =
                         reaction_states.get(&msg.id).cloned().unwrap_or_default();
                     MessageResponse {
                         id: msg.id,
@@ -280,7 +280,7 @@ pub(crate) async fn get_server_messages(
                         server_id: msg.server_id,
                         channel_id: msg.channel_id,
                         reactions,
-                        my_reaction,
+                        my_reactions,
                     }
                 })
                 .collect();
@@ -385,7 +385,7 @@ pub(crate) async fn get_messages(
             let response: Vec<MessageResponse> = available_msgs
                 .into_iter()
                 .map(|msg| {
-                    let (reactions, my_reaction) =
+                    let (reactions, my_reactions) =
                         reaction_states.get(&msg.id).cloned().unwrap_or_default();
                     MessageResponse {
                         id: msg.id,
@@ -398,7 +398,7 @@ pub(crate) async fn get_messages(
                         server_id: msg.server_id,
                         channel_id: msg.channel_id,
                         reactions,
-                        my_reaction,
+                        my_reactions,
                     }
                 })
                 .collect();
@@ -438,30 +438,49 @@ pub(crate) async fn set_message_reaction(
     }
 
     let emoji = payload.emoji.trim().to_string();
-    let result = if emoji.is_empty() {
-        sqlx::query("DELETE FROM reactions WHERE message_id = ? AND reactor = ?")
+    if emoji.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Пустая реакция").into_response();
+    }
+    if emoji.chars().count() > 8 {
+        return (StatusCode::BAD_REQUEST, "Слишком длинная реакция").into_response();
+    }
+
+    // Toggles this specific emoji for the reactor, independent of any other
+    // emoji they've already reacted with — a user can stack several different
+    // reactions on the same message (Discord-style), rather than being limited
+    // to one at a time.
+    let already_set = sqlx::query(
+        "SELECT 1 FROM reactions WHERE message_id = ? AND reactor = ? AND emoji = ?",
+    )
+    .bind(&id)
+    .bind(&auth_user)
+    .bind(&emoji)
+    .fetch_optional(&state.db)
+    .await;
+
+    let result = match already_set {
+        Ok(Some(_)) => {
+            sqlx::query("DELETE FROM reactions WHERE message_id = ? AND reactor = ? AND emoji = ?")
+                .bind(&id)
+                .bind(&auth_user)
+                .bind(&emoji)
+                .execute(&state.db)
+                .await
+        }
+        Ok(None) => {
+            sqlx::query(
+                "INSERT INTO reactions (message_id, reactor, emoji, updated_at)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(message_id, reactor, emoji) DO NOTHING",
+            )
             .bind(&id)
             .bind(&auth_user)
+            .bind(&emoji)
+            .bind(Utc::now())
             .execute(&state.db)
             .await
-    } else {
-        if emoji.chars().count() > 8 {
-            return (StatusCode::BAD_REQUEST, "Слишком длинная реакция").into_response();
         }
-
-        sqlx::query(
-            "INSERT INTO reactions (message_id, reactor, emoji, updated_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(message_id, reactor) DO UPDATE SET
-                emoji = excluded.emoji,
-                updated_at = excluded.updated_at",
-        )
-        .bind(&id)
-        .bind(&auth_user)
-        .bind(&emoji)
-        .bind(Utc::now())
-        .execute(&state.db)
-        .await
+        Err(e) => Err(e),
     };
 
     if let Err(e) = result {
@@ -475,7 +494,7 @@ pub(crate) async fn set_message_reaction(
     broadcast_reaction_event(&state, &message).await;
 
     match load_reaction_state(&state, &id, &auth_user).await {
-        Ok((reactions, my_reaction)) => Json(serde_json::json!({
+        Ok((reactions, my_reactions)) => Json(serde_json::json!({
             "type": "reaction_updated",
             "messageId": id,
             "sender": message.sender,
@@ -483,7 +502,7 @@ pub(crate) async fn set_message_reaction(
             "serverId": message.server_id,
             "channelId": message.channel_id,
             "reactions": reactions,
-            "myReaction": my_reaction
+            "myReactions": my_reactions
         }))
         .into_response(),
         Err(e) => {

@@ -11,6 +11,7 @@ use dashmap::DashMap;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
+use sqlx::Row;
 use std::{
     collections::VecDeque,
     net::SocketAddr,
@@ -726,12 +727,63 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
             reactor TEXT NOT NULL,
             emoji TEXT NOT NULL,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (message_id, reactor)
+            PRIMARY KEY (message_id, reactor, emoji)
         )",
     )
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы reactions");
+
+    // A user used to be limited to one reaction per message: the original PK was
+    // (message_id, reactor), so setting a second emoji replaced the first instead
+    // of adding alongside it. Widening the PK above only takes effect on a brand
+    // new table — an existing on-disk db still has the old constraint, so detect
+    // it via PRAGMA table_info and rebuild the table in place if needed.
+    let reactions_columns = sqlx::query("PRAGMA table_info(reactions)")
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+    let emoji_already_in_pk = reactions_columns.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "emoji" && row.get::<i64, _>("pk") > 0
+    });
+    if !reactions_columns.is_empty() && !emoji_already_in_pk {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("Не удалось начать транзакцию миграции reactions");
+        sqlx::query(
+            "CREATE TABLE reactions_v2 (
+                message_id TEXT NOT NULL,
+                reactor TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (message_id, reactor, emoji)
+            )",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("Ошибка создания таблицы reactions_v2");
+        sqlx::query(
+            "INSERT OR IGNORE INTO reactions_v2 (message_id, reactor, emoji, updated_at)
+             SELECT message_id, reactor, emoji, updated_at FROM reactions",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("Ошибка копирования данных reactions -> reactions_v2");
+        sqlx::query("DROP TABLE reactions")
+            .execute(&mut *tx)
+            .await
+            .expect("Ошибка удаления старой таблицы reactions");
+        sqlx::query("ALTER TABLE reactions_v2 RENAME TO reactions")
+            .execute(&mut *tx)
+            .await
+            .expect("Ошибка переименования reactions_v2 -> reactions");
+        tx.commit()
+            .await
+            .expect("Ошибка коммита миграции reactions");
+        info!("Миграция reactions: PK расширен до (message_id, reactor, emoji)");
+    }
 
     // Create indexes for fast queries
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages (receiver)")
