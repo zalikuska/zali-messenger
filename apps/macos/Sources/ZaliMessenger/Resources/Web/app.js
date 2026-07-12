@@ -1293,6 +1293,8 @@ class ZaliInterface {
             speaker: `<svg ${attrs} fill="none"><path d="M4 9.4v5.2h3.1l4.4 3.35V6.05L7.1 9.4H4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M15.2 8.25a5 5 0 0 1 0 7.5M17.85 5.6a8.75 8.75 0 0 1 0 12.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
             hash: `<svg ${attrs} fill="none"><path d="M9.3 4.5 7.8 19.5M16.2 4.5l-1.5 15M4.75 9h14.5M4.25 15h14.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
             close: `<svg ${attrs} fill="none"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`,
+            bell: `<svg ${attrs} fill="none"><path d="M12 3.5a4.2 4.2 0 0 0-4.2 4.2v2.3c0 .78-.28 1.53-.79 2.12l-1.2 1.4c-.7.82-.12 2.08.96 2.08h10.46c1.08 0 1.66-1.26.96-2.08l-1.2-1.4a3.2 3.2 0 0 1-.79-2.12V7.7A4.2 4.2 0 0 0 12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.9 18.5a2.1 2.1 0 0 0 4.2 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+            'bell-off': `<svg ${attrs} fill="none"><path d="M12 3.5a4.2 4.2 0 0 0-4.2 4.2v2.3c0 .78-.28 1.53-.79 2.12l-1.2 1.4c-.7.82-.12 2.08.96 2.08h10.46c1.08 0 1.66-1.26.96-2.08l-1.2-1.4a3.2 3.2 0 0 1-.79-2.12V7.7A4.2 4.2 0 0 0 12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.9 18.5a2.1 2.1 0 0 0 4.2 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M4.5 4.5l15 15" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>`,
         };
         return icons[name] || '';
     }
@@ -1357,6 +1359,78 @@ class ZaliInterface {
 
     nativeSupports(capability) {
         return !!this.nativeBridge()?.supports?.[capability];
+    }
+
+    isStandalonePwa() {
+        return window.matchMedia?.('(display-mode: standalone)')?.matches
+            || window.navigator?.standalone === true;
+    }
+
+    isIosSafariBrowserTab() {
+        if (this.hasNativeBridge() || this.isStandalonePwa()) return false;
+        const ua = window.navigator?.userAgent || '';
+        const isIos = /iphone|ipad|ipod/i.test(ua)
+            || (ua.includes('Macintosh') && navigator.maxTouchPoints > 1);
+        const isSafari = /safari/i.test(ua) && !/crios|fxios|edgios|opios/i.test(ua);
+        return isIos && isSafari;
+    }
+
+    urlBase64ToUint8Array(base64) {
+        const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+        const base64Safe = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const raw = atob(base64Safe);
+        const output = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+        return output;
+    }
+
+    async subscribeWebPush() {
+        if (this.hasNativeBridge()) return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        if (!this.S.session?.token) return;
+        try {
+            const keyRes = await fetch(this.apiUrl('/api/push/vapid-public-key'));
+            if (!keyRes.ok) return;
+            const { publicKey } = await keyRes.json();
+            if (!publicKey) return;
+
+            if (Notification.permission === 'default') {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') return;
+            }
+            if (Notification.permission !== 'granted') return;
+
+            const registration = await navigator.serviceWorker.ready;
+            let subscription = await registration.pushManager.getSubscription();
+            if (!subscription) {
+                subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: this.urlBase64ToUint8Array(publicKey),
+                });
+            }
+            await this.apiFetch('/api/push/subscribe', {
+                method: 'POST',
+                body: JSON.stringify(subscription.toJSON()),
+            });
+            this.trace('subscribeWebPush ok');
+        } catch (e) {
+            this.trace(`subscribeWebPush failed: ${e?.message || e}`);
+        }
+    }
+
+    initA2hsBanner() {
+        if (!this.isIosSafariBrowserTab()) return;
+        if (localStorage.getItem('zali_a2hs_dismissed') === '1') return;
+        const banner = document.getElementById('a2hsBanner');
+        const text = document.getElementById('a2hsBannerText');
+        const closeBtn = document.getElementById('a2hsBannerClose');
+        if (!banner || !text || !closeBtn) return;
+        text.innerHTML = 'Установите <b>ZaliMessenger</b> на экран «Домой»: нажмите <b>Поделиться</b>&nbsp;↑ внизу экрана, затем «На экран «Домой»».';
+        banner.classList.add('visible');
+        closeBtn.addEventListener('click', () => {
+            banner.classList.remove('visible');
+            localStorage.setItem('zali_a2hs_dismissed', '1');
+        });
     }
 
     setKey(key) {
@@ -5872,7 +5946,7 @@ class ZaliInterface {
             const actionLabel = alreadyJoined ? 'Открыть' : 'Войти';
             return `<div class="server-discover-row">
                 <button class="server-item server-discover-item" type="button" data-public-server-id="${this.esc(server.id)}" title="${this.esc(server.name)}">
-                    <span class="server-avatar" style="background:${this.safeCssColor(server.color) || 'linear-gradient(180deg, #cbff00, #8c8c8c)'}">${this.esc(server.icon || server.name?.[0] || 'S')}</span>
+                    ${this.renderServerAvatarHTML(server)}
                     <div class="server-meta">
                         <div class="server-name">${this.esc(server.name)}</div>
                         <div class="server-prev">${this.esc(server.description || 'Публичный сервер')}${channelCount ? ` · ${channelCount} каналов` : ''}${memberCount ? ` · ${memberCount} участников` : ''}</div>
@@ -5989,7 +6063,7 @@ class ZaliInterface {
         if (title) title.textContent = isEdit ? 'Настройки сервера' : isDiscover ? 'Публичные серверы' : 'Создать сервер';
         if (hint) hint.textContent = isEdit
             ? (activeSection === 'overview'
-                ? 'Переименуйте сервер, измените оформление и ссылку входа.'
+                ? 'Переименуйте сервер, измените оформление и код входа.'
                 : activeSection === 'channels'
                     ? 'Управляйте каналами сервера.'
                 : activeSection === 'roles'
@@ -6641,7 +6715,8 @@ class ZaliInterface {
     async uploadServerAsset(kind, file) {
         const serverId = this.S.serverModal.serverId || this.S.activeServer;
         if (!serverId || !file || this.S.serverModal.mode !== 'edit') return;
-        const dataUrl = await this.readFileAsDataURL(file);
+        const downscaled = await this.downscaleServerAssetFile(file, kind);
+        const dataUrl = await this.readFileAsDataURL(downscaled);
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -6740,6 +6815,45 @@ class ZaliInterface {
         } catch (e) {
             this.addLogEntry({ type: 'ERROR', msg: e?.message || 'Не удалось войти по ссылке', ts: new Date().toLocaleTimeString() });
         }
+    }
+
+    openJoinCodeModal() {
+        const existing = document.getElementById('joinCodeModalOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'joinCodeModalOverlay';
+        overlay.className = 'modal-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);';
+        overlay.innerHTML = `
+            <div class="join-code-modal" style="background:var(--panel-bg,#1c1c1e);color:var(--text-color,#fff);border-radius:12px;padding:20px;min-width:280px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,0.4);">
+                <div style="font-weight:600;margin-bottom:10px;">Войти по коду</div>
+                <input type="text" id="joinCodeModalInput" placeholder="Код или ссылка сервера" autocomplete="off" spellcheck="false"
+                    style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:inherit;font-size:14px;margin-bottom:14px;">
+                <div style="display:flex;justify-content:flex-end;gap:8px;">
+                    <button type="button" id="joinCodeModalCancel" class="btn-flat">Отмена</button>
+                    <button type="button" id="joinCodeModalSubmit" class="btn-flat">Войти</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const input = document.getElementById('joinCodeModalInput');
+        const close = () => overlay.remove();
+        const submit = () => {
+            const link = this.extractInviteCode(input.value);
+            close();
+            if (link) this.joinServerByLink(link);
+        };
+
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        document.getElementById('joinCodeModalCancel').addEventListener('click', close);
+        document.getElementById('joinCodeModalSubmit').addEventListener('click', submit);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submit();
+            if (e.key === 'Escape') close();
+        });
+        input.focus();
     }
 
     extractInviteCode(value) {
@@ -7031,17 +7145,7 @@ class ZaliInterface {
     }
 
     currentConversationMode() {
-        const renderedKey = String(this.lastRenderedConversationKey || '').trim();
-        const serverKey = this.currentServerChatKey();
-        const dmKey = String(this.S.current || '').trim();
-
-        if (this.S.navMode === 'servers' && renderedKey && serverKey && renderedKey === serverKey) {
-            return 'servers';
-        }
-        if (dmKey) {
-            return 'dm';
-        }
-        if (this.S.navMode === 'servers' && serverKey) {
+        if (this.S.navMode === 'servers' && this.currentServerChatKey()) {
             return 'servers';
         }
         return 'dm';
@@ -7268,6 +7372,11 @@ class ZaliInterface {
                 }
                 if (payload && typeof payload === 'object' && String(payload.type || '').startsWith('voice_')) {
                     this.handleVoiceEvent(payload);
+                } else if (payload && typeof payload === 'object' && payload.type === 'reaction_updated') {
+                    // Native shells receive this over their own bridge (see the
+                    // `zali_interface:reaction_updated` bus command); the browser has no
+                    // such bridge, so this WS is the only path for it here.
+                    this.onReactionUpdated(payload);
                 } else if (payload && typeof payload === 'object' && !payload.type && payload.id && payload.sender && payload.receiver) {
                     // No `type` field = a raw `Message` row pushed by deliver_to_user/
                     // deliver_server_message (server/src/realtime.rs), not a voice/avatar
@@ -9010,13 +9119,13 @@ class ZaliInterface {
                     ...normalized,
                     attachments: this.normalizeAttachments(normalized.attachments ?? prev.attachments),
                     reactions: this.normalizeReactions(normalized.reactions ?? prev.reactions),
-                    myReaction: String(normalized.myReaction ?? prev.myReaction ?? '').trim(),
+                    myReactions: this.normalizeMyReactions(normalized.myReactions ?? prev.myReactions),
                 }
                 : {
                     ...normalized,
                     attachments: this.normalizeAttachments(normalized.attachments),
                     reactions: this.normalizeReactions(normalized.reactions),
-                    myReaction: String(normalized.myReaction || '').trim(),
+                    myReactions: this.normalizeMyReactions(normalized.myReactions),
                 };
             mergedByKey.set(identity, next);
             if (!prev) merged.push(identity);
@@ -9248,7 +9357,7 @@ class ZaliInterface {
                         id: msgId || msg.id || prev.id || '',
                         attachments: normalizedAttachments.length ? normalizedAttachments : this.normalizeAttachments(prev.attachments),
                         reactions: normalizedReactions.length ? normalizedReactions : this.normalizeReactions(prev.reactions),
-                        myReaction: msg.myReaction || prev.myReaction || '',
+                        myReactions: this.normalizeMyReactions(msg.myReactions?.length ? msg.myReactions : prev.myReactions),
                         text: this.sanitizeDecryptionErrorText(msg.text) || prev.text || '',
                         status: 'sent',
                         serverId: msg.serverId || msg.server_id || serverId,
@@ -9260,7 +9369,7 @@ class ZaliInterface {
                         id: msgId || msg.id || '',
                         attachments: normalizedAttachments,
                         reactions: normalizedReactions,
-                        myReaction: msg.myReaction || '',
+                        myReactions: this.normalizeMyReactions(msg.myReactions),
                         text: this.sanitizeDecryptionErrorText(msg.text),
                         status: 'sent',
                     });
@@ -9470,7 +9579,10 @@ class ZaliInterface {
         }
         if (!isServers) {
             if (channelList) channelList.innerHTML = '';
-            if (chatHdrAva) chatHdrAva.innerHTML = this.renderAvatarHTML(this.S.current || this.myName(), 'avatar-img', this.S.current || this.myName());
+            if (chatHdrAva) {
+                chatHdrAva.style.background = '';
+                chatHdrAva.innerHTML = this.renderAvatarHTML(this.S.current || this.myName(), 'avatar-img', this.S.current || this.myName());
+            }
             if (chatHdrName) chatHdrName.textContent = this.S.current || 'Выберите чат';
             if (tbChat) tbChat.textContent = this.S.current || (this.S.contacts.length ? 'Выберите чат' : 'Нет контактов');
             if (chatHdrSub) {
@@ -9488,7 +9600,10 @@ class ZaliInterface {
             return;
         }
 
-        if (chatHdrAva) chatHdrAva.innerHTML = this.esc(server.icon || server.name?.[0] || 'S');
+        if (chatHdrAva) {
+            chatHdrAva.style.background = this.serverAvatarBackground(server);
+            chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
+        }
         if (chatHdrName) {
             const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} участников` : '';
             const channelTitle = channel
@@ -9520,12 +9635,8 @@ class ZaliInterface {
             const cnt = kind === 'voice' ? 0 : Number(this.S.channelUnread?.[chKey] || 0);
             const badge = cnt > 0 ? `<span class="badge">${cnt > 99 ? '99+' : cnt}</span>` : '';
             const muted = kind !== 'voice' && this.isChannelMuted(server.id, ch.id);
-            const muteToggle = kind === 'voice' ? '' : `<button class="channel-mute-toggle${muted ? ' muted' : ''}" type="button" data-toggle-mute-channel="${this.esc(server.id)}:${this.esc(ch.id)}" title="${muted ? 'Включить уведомления' : 'Отключить уведомления'}" aria-label="${muted ? 'Включить уведомления' : 'Отключить уведомления'}">${muted ? '🔕' : '🔔'}</button>`;
-            // A <div> (not <button>) — it hosts a nested mute-toggle <button>, and
-            // <button> cannot contain another <button> (the HTML parser would
-            // implicitly close the outer one). Click delegation on data-channel-id
-            // above already doesn't care about the tag, so this is a drop-in swap.
-            return `<div class="server-channel ${active}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${this.esc(kind)}" title="${this.esc(title)}">
+            const muteToggle = muted ? `<span class="channel-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : '';
+            return `<div class="server-channel ${active}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${this.esc(kind)}" title="${this.esc(title)}">
                     <span class="server-channel-hash ${kind}">${this.channelKindIcon(kind, 'server-channel-list-icon')}</span>
                     <span class="server-channel-name">${this.esc(ch.name)}</span>
                     ${muteToggle}
@@ -9568,13 +9679,10 @@ class ZaliInterface {
         this.scheduleRenderMessages();
         this.updateSendButtonState();
         if (this.isVoiceChannel(channel)) {
-            const roomId = this.voiceRoomKeyForChannel(server.id, next);
-            const alreadyJoined = this.voice.roomId === roomId && this.voice.participants.includes(this.myName());
-            if (!alreadyJoined) {
-                this.joinVoiceChannel({ serverId: server.id, channelId: next });
-            } else {
-                this.renderVoicePanel();
-            }
+            // Selecting a voice channel only opens its panel (with a "Присоединиться"
+            // button) — it must NOT auto-connect the call. Auto-joining on click also
+            // left the panel stuck rendering the connected-call state after switching
+            // to any other channel, since nothing ever re-rendered it away from there.
             this.renderVoicePanel();
             return;
         }
@@ -9582,6 +9690,7 @@ class ZaliInterface {
         this.loadServerMessages(server.id, next, { silent: true });
         this.closeMobileSidebar();
         this.syncMobileChrome();
+        this.renderVoicePanel();
     }
 
     setNavMode(mode, { persist = true, refresh = true } = {}) {
@@ -9746,6 +9855,43 @@ class ZaliInterface {
             return this.esc(server?.icon || server?.name?.[0] || 'S');
         }
         return this.esc((server?.name || 'BAN').slice(0, 3).toUpperCase());
+    }
+
+    serverAvatarBackground(server) {
+        return this.safeCssColor(server?.color) || 'linear-gradient(180deg, #cbff00, #8c8c8c)';
+    }
+
+    // Shared by the server rail, the public-servers modal, and the chat header —
+    // those used to fall back to the icon/color forever and never rendered the
+    // uploaded server avatar image; only the settings-modal preview did.
+    serverAvatarInnerHTML(server) {
+        const id = String(server?.id || '').trim();
+        const fallback = () => this.esc(server?.icon || server?.name?.[0] || 'S');
+        if (!id) return fallback();
+        const key = this.serverAssetCacheKey(id, 'avatar');
+        if (!this.serverAssetCache.has(key)) {
+            this.loadServerAsset(id, 'avatar').then(() => this.scheduleServerAssetRefresh());
+            return fallback();
+        }
+        const cached = this.serverAssetCache.get(key);
+        return cached
+            ? `<img class="avatar-img" src="${this.esc(cached)}" alt="${this.esc(server?.name || '')}">`
+            : fallback();
+    }
+
+    renderServerAvatarHTML(server, extraClass = '') {
+        const classes = `server-avatar${extraClass ? ` ${extraClass}` : ''}`;
+        return `<span class="${classes}" style="background:${this.serverAvatarBackground(server)}">${this.serverAvatarInnerHTML(server)}</span>`;
+    }
+
+    scheduleServerAssetRefresh() {
+        if (this.serverAssetRefreshScheduled) return;
+        this.serverAssetRefreshScheduled = true;
+        requestAnimationFrame(() => {
+            this.serverAssetRefreshScheduled = false;
+            this.renderServers();
+            this.renderServerToolbar();
+        });
     }
 
     resetServerAssetPreview() {
@@ -10041,15 +10187,11 @@ class ZaliInterface {
         });
     }
 
-    // Re-encode an avatar to a SMALL JPEG before upload, iterating dimension/quality
-    // down until the encoded bytes fit a tight budget (~14 KB). Avatars render as tiny
-    // circles, so this costs no visible quality — and it is the difference between the
-    // avatar loading or not over a low-MTU / lossy path (e.g. a VPN with MTU 1280):
-    // there the server's response stalls once it exceeds roughly the TCP initial window
-    // (~12–30 KB with MSS 1240), so a 31 KB avatar never finishes downloading while a
-    // ~10 KB one arrives in the first round-trip. Best-effort: returns the original file
-    // if the canvas pipeline is unavailable.
-    async downscaleAvatarFile(file, targetBytes = 14 * 1024) {
+    // Shared re-encode-to-JPEG core: iterates dimension/quality attempts down until the
+    // encoded bytes fit targetBytes, keeping the largest/best-quality result that fits.
+    // Best-effort: returns the original file if the canvas pipeline is unavailable or
+    // nothing beats the original size.
+    async downscaleImageFile(file, { targetBytes, attempts, baseNameFallback = 'image', traceLabel = 'downscaleImage' }) {
         try {
             if (typeof document === 'undefined' || typeof document.createElement !== 'function') return file;
             const dataUrl = await this.readFileAsDataURL(file);
@@ -10062,7 +10204,7 @@ class ZaliInterface {
             const w = img.naturalWidth || img.width;
             const h = img.naturalHeight || img.height;
             if (!w || !h) return file;
-            const baseName = String(file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
+            const baseName = String(file.name || baseNameFallback).replace(/\.[^.]+$/, '') || baseNameFallback;
             const encode = async (dim, q) => {
                 const scale = Math.min(1, dim / Math.max(w, h));
                 const cw = Math.max(1, Math.round(w * scale));
@@ -10077,7 +10219,6 @@ class ZaliInterface {
             };
             // Progressively smaller/lower-quality until under budget. Ordered largest→smallest
             // so we keep the best quality that still fits.
-            const attempts = [[256, 0.8], [224, 0.72], [192, 0.66], [160, 0.62], [128, 0.6], [96, 0.55]];
             let best = null;
             for (const [dim, q] of attempts) {
                 const blob = await encode(dim, q);
@@ -10092,12 +10233,41 @@ class ZaliInterface {
                 }
                 return file;
             }
-            this.trace(`downscaleAvatar ${file.size}B -> ${best.size}B`);
+            this.trace(`${traceLabel} ${file.size}B -> ${best.size}B`);
             return new File([best], `${baseName}.jpg`, { type: 'image/jpeg' });
         } catch (e) {
-            this.trace(`downscaleAvatar failed, using original: ${e?.message || e}`);
+            this.trace(`${traceLabel} failed, using original: ${e?.message || e}`);
             return file;
         }
+    }
+
+    // Re-encode an avatar to a SMALL JPEG before upload, iterating dimension/quality
+    // down until the encoded bytes fit a tight budget (~14 KB). Avatars render as tiny
+    // circles, so this costs no visible quality — and it is the difference between the
+    // avatar loading or not over a low-MTU / lossy path (e.g. a VPN with MTU 1280):
+    // there the server's response stalls once it exceeds roughly the TCP initial window
+    // (~12–30 KB with MSS 1240), so a 31 KB avatar never finishes downloading while a
+    // ~10 KB one arrives in the first round-trip.
+    async downscaleAvatarFile(file, targetBytes = 14 * 1024) {
+        const attempts = [[256, 0.8], [224, 0.72], [192, 0.66], [160, 0.62], [128, 0.6], [96, 0.55]];
+        return this.downscaleImageFile(file, { targetBytes, attempts, baseNameFallback: 'avatar', traceLabel: 'downscaleAvatar' });
+    }
+
+    // Same idea as downscaleAvatarFile but tuned for a wide server banner/cover image
+    // instead of a tiny round avatar: much larger max dimension and byte budget, since a
+    // banner needs to stay legible at full width. Server avatar/banner uploads used to
+    // skip downscaling entirely and PUT the raw picked file (often several MB straight
+    // off a camera) as a base64 JSON body through the generic API-request path, which
+    // carries a fixed ~8-12s timeout meant for ordinary JSON calls — large enough images
+    // (or a slow/VPN-throttled link) blew that budget and surfaced as a raw transport
+    // error ("error sending request for url ...") instead of a real upload failure.
+    async downscaleServerAssetFile(file, kind) {
+        if (kind === 'avatar') {
+            const attempts = [[512, 0.82], [384, 0.75], [256, 0.7], [192, 0.65]];
+            return this.downscaleImageFile(file, { targetBytes: 60 * 1024, attempts, baseNameFallback: 'server-avatar', traceLabel: 'downscaleServerAvatar' });
+        }
+        const attempts = [[1600, 0.82], [1280, 0.78], [1024, 0.72], [768, 0.66], [512, 0.6]];
+        return this.downscaleImageFile(file, { targetBytes: 300 * 1024, attempts, baseNameFallback: 'server-banner', traceLabel: 'downscaleServerBanner' });
     }
 
     // Interactive pan/zoom crop before upload. Without this, a fixed center-square
@@ -10748,6 +10918,9 @@ class ZaliInterface {
         }
         if (connectVoiceSocket && !this.nativeSupports('voice')) {
             this.connectBrowserVoiceSocket();
+        }
+        if (token && !this.hasNativeBridge()) {
+            this.subscribeWebPush();
         }
         if (!this.sessionBootstrapInProgress) {
             this.rehydratePendingOutbox();
@@ -11980,21 +12153,27 @@ class ZaliInterface {
             ensurePlaying();
         });
 
-        const images = root.querySelectorAll?.('img.media-gif-like:not([data-gif-like="1"])') || [];
+        // Covers every message-attachment image (not just gif-like ones): the shell's
+        // box-shaping aspect-ratio is set from mediaSizeCache at render time, but on
+        // first render nothing is cached yet, so it falls back to a hardcoded 16:9 box.
+        // If the real photo isn't 16:9, its actual (height:auto) box disagrees with that
+        // fallback and the shell's `overflow:hidden` crops it. Once the image decodes we
+        // know its true size — cache it AND correct the already-rendered shell in place
+        // so the crop clears immediately instead of waiting for an unrelated re-render.
+        const images = root.querySelectorAll?.('img.media-img:not([data-size-bound="1"])') || [];
         images.forEach(img => {
             if (!(img instanceof HTMLImageElement)) return;
-            if (img.dataset.gifBound === '1') return;
-            img.dataset.gifBound = '1';
+            img.dataset.sizeBound = '1';
             const shell = img.closest('.discord-media-shell');
             const src = img.currentSrc || img.src || img.getAttribute('src') || '';
-            const cacheSize = (width, height) => {
-                if (!src || !width || !height) return;
-                this.mediaSizeCache.set(src, { width, height });
-            };
             const syncFromImage = () => {
                 const width = Number(img.naturalWidth || 0);
                 const height = Number(img.naturalHeight || 0);
-                cacheSize(width, height);
+                if (!src || !width || !height) return;
+                this.mediaSizeCache.set(src, { width, height });
+                if (shell && !img.classList.contains('media-gif-like')) {
+                    shell.style.aspectRatio = `${width} / ${height}`;
+                }
             };
             if (img.complete) {
                 syncFromImage();
@@ -12227,6 +12406,13 @@ class ZaliInterface {
             .sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
     }
 
+    // A user can react to a message with several distinct emoji at once
+    // (Discord-style) — myReactions is a set, not a single slot.
+    normalizeMyReactions(value) {
+        const list = Array.isArray(value) ? value : (value ? [value] : []);
+        return Array.from(new Set(list.map(v => String(v || '').trim()).filter(Boolean)));
+    }
+
     findMessageById(messageId) {
         const id = String(messageId || '').trim();
         if (!id) return null;
@@ -12250,12 +12436,12 @@ class ZaliInterface {
         if (!messageId) return '';
 
         const reactions = this.normalizeReactions(msg.reactions);
-        const myReaction = String(msg.myReaction || '').trim();
+        const myReactions = this.normalizeMyReactions(msg.myReactions);
         return reactions.length
             ? `<div class="reaction-row">
                 ${reactions.map(reaction => {
-                    const mine = myReaction && myReaction === reaction.emoji ? ' mine' : '';
-                    return `<span class="reaction-chip${mine}" title="${this.esc(reaction.emoji)}">
+                    const mine = myReactions.includes(reaction.emoji) ? ' mine' : '';
+                    return `<span class="reaction-chip${mine}" title="${this.esc(reaction.emoji)}" data-message-id="${this.esc(messageId)}" data-message-reaction="${this.esc(reaction.emoji)}">
                         <span class="reaction-emoji">${this.esc(reaction.emoji)}</span>
                         <span class="reaction-count">${reaction.count}</span>
                     </span>`;
@@ -12358,7 +12544,7 @@ class ZaliInterface {
             String(msg.text || '').length,
             reactions,
             attachments,
-            String(msg.myReaction || ''),
+            this.normalizeMyReactions(msg.myReactions).slice().sort().join(','),
         ].join(':');
     }
 
@@ -12446,20 +12632,21 @@ class ZaliInterface {
     applyLocalReaction(found, emoji) {
         if (!found || !found.msg) return;
         const message = found.msg;
-        const current = String(message.myReaction || '').trim();
-        const next = current === emoji ? '' : emoji;
+        const mine = new Set(this.normalizeMyReactions(message.myReactions));
+        const wasMine = mine.has(emoji);
         const map = new Map(this.normalizeReactions(message.reactions).map(item => [item.emoji, item.count]));
 
-        if (current && map.has(current)) {
-            const nextCount = (map.get(current) || 0) - 1;
-            if (nextCount > 0) map.set(current, nextCount);
-            else map.delete(current);
-        }
-        if (next) {
-            map.set(next, (map.get(next) || 0) + 1);
+        if (wasMine) {
+            mine.delete(emoji);
+            const nextCount = (map.get(emoji) || 0) - 1;
+            if (nextCount > 0) map.set(emoji, nextCount);
+            else map.delete(emoji);
+        } else {
+            mine.add(emoji);
+            map.set(emoji, (map.get(emoji) || 0) + 1);
         }
 
-        message.myReaction = next;
+        message.myReactions = Array.from(mine);
         message.reactions = Array.from(map.entries())
             .map(([reactionEmoji, count]) => ({ emoji: reactionEmoji, count }))
             .sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
@@ -12472,6 +12659,9 @@ class ZaliInterface {
         }
     }
 
+    // Toggles a single emoji for the current user on a message — it stacks
+    // alongside any other emoji they've already reacted with, rather than
+    // replacing them (Discord-style, not a single reaction slot per user).
     async addReaction(messageId, emoji) {
         const id = String(messageId || '').trim();
         const reaction = String(emoji || '').trim();
@@ -12479,9 +12669,6 @@ class ZaliInterface {
 
         const found = this.findMessageById(id);
         if (!found) return;
-
-        const current = String(found.msg.myReaction || '').trim();
-        const next = current === reaction ? '' : reaction;
 
         const hasRealServerId = !!found.msg.id && (!found.msg.clientId || String(found.msg.id) !== String(found.msg.clientId));
         if (!hasRealServerId) {
@@ -12493,7 +12680,7 @@ class ZaliInterface {
             const sent = this.postNativeMessage({
                 type: NativeMessageTypes.SET_MESSAGE_REACTION,
                 messageId: found.msg.id,
-                emoji: next,
+                emoji: reaction,
             });
             if (sent) {
                 return;
@@ -12506,7 +12693,7 @@ class ZaliInterface {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ emoji: next }),
+                body: JSON.stringify({ emoji: reaction }),
             });
 
             if (!res.ok) {
@@ -12568,7 +12755,7 @@ class ZaliInterface {
                 </div>
                 <div class="contact-actions">
                     ${badge}
-                    <button class="contact-mute-toggle${muted ? ' muted' : ''}" type="button" data-toggle-mute-peer="${this.esc(contact)}" title="${muted ? 'Включить уведомления' : 'Отключить уведомления'}" aria-label="${muted ? 'Включить уведомления' : 'Отключить уведомления'}">${muted ? '🔕' : '🔔'}</button>
+                    ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
@@ -12788,11 +12975,11 @@ class ZaliInterface {
             </button>
         `;
         const joinTile = `
-            <button class="server-item server-join" type="button" id="joinServerBtn" title="Войти по ссылке" aria-label="Войти по ссылке">
+            <button class="server-item server-join" type="button" id="joinServerBtn" title="Войти по коду" aria-label="Войти по коду">
                 <span class="server-avatar server-create-plus">↗</span>
                 <div class="server-meta">
-                    <div class="server-name">Войти по ссылке</div>
-                    <div class="server-prev">Введите адрес сервера</div>
+                    <div class="server-name">Войти по коду</div>
+                    <div class="server-prev">Введите код или ссылку сервера</div>
                 </div>
             </button>
         `;
@@ -12827,7 +13014,7 @@ class ZaliInterface {
                     const preview = server.description || server.hint || 'Сервер';
                     return `
                         <button class="server-item ${active}" type="button" data-server-id="${this.esc(server.id)}" title="${this.esc(server.name)}" aria-label="${this.esc(server.name)}">
-                            <span class="server-avatar" style="background:${this.safeCssColor(server.color) || 'linear-gradient(180deg, #cbff00, #8c8c8c)'}">${this.esc(server.icon || server.name?.[0] || 'S')}</span>
+                            ${this.renderServerAvatarHTML(server)}
                             <div class="server-meta">
                                 <div class="server-name">${this.esc(server.name)}</div>
                                 <div class="server-prev">${this.esc(preview)}</div>
@@ -12968,7 +13155,10 @@ class ZaliInterface {
                 const chatHdrAva = document.getElementById('chatHdrAva');
                 const chatHdrName = document.getElementById('chatHdrName');
                 const chatHdrSub = document.getElementById('chatHdrSub');
-                if (chatHdrAva) chatHdrAva.innerHTML = this.esc(server.icon || server.name?.[0] || 'S');
+                if (chatHdrAva) {
+                    chatHdrAva.style.background = this.serverAvatarBackground(server);
+                    chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
+                }
                 if (chatHdrName) chatHdrName.innerHTML = `<span class="chat-hdr-title">${this.channelKindIcon('voice', 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span></span><span class="chat-hdr-count">${this.esc(`Голосовой канал`)}</span>`;
                 if (chatHdrSub) chatHdrSub.textContent = `${server.name}${channel.topic ? ` · ${channel.topic}` : ''}`;
                 this.updateChatHeaderCryptoKey({
@@ -13134,7 +13324,10 @@ class ZaliInterface {
             const chatHdrAva = document.getElementById('chatHdrAva');
             const chatHdrName = document.getElementById('chatHdrName');
             const chatHdrSub = document.getElementById('chatHdrSub');
-            if (chatHdrAva) chatHdrAva.innerHTML = this.esc(server.icon || server.name?.[0] || 'S');
+            if (chatHdrAva) {
+                chatHdrAva.style.background = this.serverAvatarBackground(server);
+                chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
+            }
             if (chatHdrName) {
                 const channelTitle = channel
                     ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
@@ -13171,7 +13364,10 @@ class ZaliInterface {
         set('chatHdrName',  peer);
         this.updateChatHeaderCryptoKey({ peer });
         const chatHdrAva = document.getElementById('chatHdrAva');
-        if (chatHdrAva) chatHdrAva.innerHTML = this.renderAvatarHTML(peer, 'avatar-img', peer);
+        if (chatHdrAva) {
+            chatHdrAva.style.background = '';
+            chatHdrAva.innerHTML = this.renderAvatarHTML(peer, 'avatar-img', peer);
+        }
         const chatCallBtn = document.getElementById('chatCallBtn');
         if (chatCallBtn) chatCallBtn.hidden = !this.S.current;
         const serverSettingsBtn = document.getElementById('serverSettingsBtn');
@@ -13513,7 +13709,7 @@ class ZaliInterface {
                 timestamp: unpacked.timestamp ? unpacked.timestamp * 1000 : payload?.timestamp,
                 attachments,
                 reactions: payload?.reactions || [],
-                myReaction: payload?.myReaction || payload?.my_reaction || '',
+                myReactions: payload?.myReactions || payload?.my_reactions || [],
                 serverId,
                 channelId,
             });
@@ -13577,7 +13773,7 @@ class ZaliInterface {
             timestamp,
             attachments,
             reactions,
-            myReaction,
+            myReactions,
         } = payload || {};
         const serverId = payload?.serverId || payload?.server_id || null;
         const channelId = payload?.channelId || payload?.channel_id || null;
@@ -13624,7 +13820,7 @@ class ZaliInterface {
                     text: incomingText || prev.text || '',
                     attachments: incomingAttachments.length ? incomingAttachments : this.normalizeAttachments(prev.attachments),
                     reactions: incomingReactions.length ? incomingReactions : this.normalizeReactions(prev.reactions),
-                    myReaction: String(myReaction || prev.myReaction || '').trim(),
+                    myReactions: this.normalizeMyReactions(myReactions?.length ? myReactions : prev.myReactions),
                     timestamp: ts || prev.timestamp || new Date().toISOString(),
                     serverId: serverId || prev.serverId || '',
                     channelId: channelId || prev.channelId || '',
@@ -13638,7 +13834,7 @@ class ZaliInterface {
                     text: incomingText,
                     attachments: incomingAttachments,
                     reactions: incomingReactions,
-                    myReaction: myReaction || '',
+                    myReactions: this.normalizeMyReactions(myReactions),
                     timestamp: ts,
                     serverId,
                     channelId,
@@ -13700,7 +13896,7 @@ class ZaliInterface {
                 text: incomingText || prev.text || '',
                 attachments: incomingAttachments.length ? incomingAttachments : this.normalizeAttachments(prev.attachments),
                 reactions: incomingReactions.length ? incomingReactions : this.normalizeReactions(prev.reactions),
-                myReaction: String(myReaction || prev.myReaction || '').trim(),
+                myReactions: this.normalizeMyReactions(myReactions?.length ? myReactions : prev.myReactions),
                 timestamp: ts || prev.timestamp || new Date().toISOString(),
             };
         } else {
@@ -13712,7 +13908,7 @@ class ZaliInterface {
                 text: incomingText,
                 attachments: incomingAttachments,
                 reactions: incomingReactions,
-                myReaction: myReaction || '',
+                myReactions: this.normalizeMyReactions(myReactions),
                 timestamp: ts
             });
             // A DM is only truly visible when its chat is selected AND the DM view is
@@ -13956,7 +14152,7 @@ class ZaliInterface {
                     ...msg,
                     attachments: normalizedAttachments,
                     reactions: normalizedReactions,
-                    myReaction: msg.myReaction || '',
+                    myReactions: this.normalizeMyReactions(msg.myReactions),
                     text: this.sanitizeDecryptionErrorText(msg.text),
                 };
                 const incomingKey = this.messageRenderKey(incoming);
@@ -13971,7 +14167,7 @@ class ZaliInterface {
                         id: msgId || msg.id || prev.id || '',
                         attachments: normalizedAttachments.length ? normalizedAttachments : this.normalizeAttachments(prev.attachments),
                         reactions: normalizedReactions.length ? normalizedReactions : this.normalizeReactions(prev.reactions),
-                        myReaction: msg.myReaction || prev.myReaction || '',
+                        myReactions: this.normalizeMyReactions(msg.myReactions?.length ? msg.myReactions : prev.myReactions),
                         text: this.sanitizeDecryptionErrorText(msg.text) || prev.text || '',
                         status: 'sent'
                     };
@@ -13981,7 +14177,7 @@ class ZaliInterface {
                         id: msgId || msg.id || '',
                         attachments: normalizedAttachments,
                         reactions: normalizedReactions,
-                        myReaction: msg.myReaction || '',
+                        myReactions: this.normalizeMyReactions(msg.myReactions),
                         text: this.sanitizeDecryptionErrorText(msg.text),
                         status: 'sent'
                     });
@@ -14241,7 +14437,7 @@ class ZaliInterface {
         if (!messageId) return;
 
         const normalizedReactions = this.normalizeReactions(payload.reactions);
-        const normalizedMyReaction = String(payload.myReaction || payload.my_reaction || '').trim();
+        const normalizedMyReactions = this.normalizeMyReactions(payload.myReactions || payload.my_reactions);
         let updated = false;
 
         const applyToList = (list) => {
@@ -14252,7 +14448,7 @@ class ZaliInterface {
                 const sameClientId = String(msg.clientId || '').trim() === messageId;
                 if (!sameId && !sameClientId) continue;
                 msg.reactions = normalizedReactions;
-                msg.myReaction = normalizedMyReaction;
+                msg.myReactions = normalizedMyReactions;
                 updated = true;
             }
         };
@@ -14364,9 +14560,7 @@ class ZaliInterface {
                 }
                 const joinBtn = e.target.closest('.server-join');
                 if (joinBtn) {
-                    const raw = prompt('Введите ссылку на сервер:');
-                    const link = this.extractInviteCode(raw);
-                    if (link) this.joinServerByLink(link);
+                    this.openJoinCodeModal();
                     e.stopPropagation();
                     return;
                 }
@@ -14383,33 +14577,33 @@ class ZaliInterface {
                     e.stopPropagation();
                     return;
                 }
-                const muteBtn = e.target.closest('.contact-mute-toggle');
-                if (muteBtn) {
-                    const username = muteBtn.getAttribute('data-toggle-mute-peer');
-                    if (username) this.toggleMutePeer(username);
-                    e.stopPropagation();
-                    return;
-                }
                 const row = e.target.closest('.contact');
                 if (row && row.dataset.name) this.switchChat(row.dataset.name);
+            });
+            contactsEl.addEventListener('contextmenu', (e) => {
+                const row = e.target.closest('.contact');
+                if (!row || !row.dataset.name) return;
+                e.preventDefault();
+                this.toggleMutePeer(row.dataset.name);
             });
         }
 
         const serverChannelList = document.getElementById('serverChannelList');
         if (serverChannelList) {
             serverChannelList.addEventListener('click', (e) => {
-                const channelMuteBtn = e.target.closest('.channel-mute-toggle');
-                if (channelMuteBtn) {
-                    const raw = channelMuteBtn.getAttribute('data-toggle-mute-channel') || '';
-                    const [sid, cid] = raw.split(':');
-                    if (sid && cid) this.toggleMuteChannel(sid, cid);
-                    e.stopPropagation();
-                    return;
-                }
                 const channelBtn = e.target.closest('.server-channel[data-channel-id]');
                 if (!channelBtn) return;
                 const channelId = channelBtn.getAttribute('data-channel-id');
                 if (channelId) this.setActiveChannel(channelId);
+            });
+            serverChannelList.addEventListener('contextmenu', (e) => {
+                const channelBtn = e.target.closest('.server-channel[data-channel-id]');
+                if (!channelBtn) return;
+                const sid = channelBtn.getAttribute('data-server-id');
+                const cid = channelBtn.getAttribute('data-channel-id');
+                if (channelBtn.getAttribute('data-channel-kind') === 'voice') return;
+                e.preventDefault();
+                if (sid && cid) this.toggleMuteChannel(sid, cid);
             });
         }
 
@@ -14763,6 +14957,8 @@ class ZaliInterface {
             });
         }
 
+        this.initA2hsBanner();
+
         requestAnimationFrame(() => {
             this.clearAuthInputs();
             this.S.auth.fieldsCleared = true;
@@ -15041,10 +15237,10 @@ class ZaliInterface {
                 try {
                     const link = await this.generateServerJoinLink();
                     if (link) {
-                        this.addLogEntry({ type: 'SUCCESS', msg: `Ссылка сервера обновлена`, ts: new Date().toLocaleTimeString() });
+                        this.addLogEntry({ type: 'SUCCESS', msg: `Код сервера обновлён`, ts: new Date().toLocaleTimeString() });
                     }
                 } catch (e) {
-                    this.setServerModalState({ error: e?.message || 'Не удалось обновить ссылку' });
+                    this.setServerModalState({ error: e?.message || 'Не удалось обновить код' });
                     this.renderServerModal();
                 }
             });
@@ -15055,9 +15251,9 @@ class ZaliInterface {
                 if (!text) return;
                 try {
                     await navigator.clipboard.writeText(text);
-                    this.addLogEntry({ type: 'SUCCESS', msg: 'Ссылка сервера скопирована', ts: new Date().toLocaleTimeString() });
+                    this.addLogEntry({ type: 'SUCCESS', msg: 'Код сервера скопирован', ts: new Date().toLocaleTimeString() });
                 } catch (e) {
-                    this.addLogEntry({ type: 'WARN', msg: 'Не удалось скопировать ссылку сервера', ts: new Date().toLocaleTimeString() });
+                    this.addLogEntry({ type: 'WARN', msg: 'Не удалось скопировать код сервера', ts: new Date().toLocaleTimeString() });
                 }
             });
         }

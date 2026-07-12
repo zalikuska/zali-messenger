@@ -53,6 +53,8 @@ mod messages;
 pub(crate) use messages::*;
 mod realtime;
 pub(crate) use realtime::*;
+mod push;
+pub(crate) use push::*;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -86,6 +88,12 @@ pub struct Config {
     rate_limit_window_secs: u64,
     rate_limit_max_attempts: usize,
     ws_channel_capacity: usize,
+    // Both unset (the common case until an operator opts in) simply disables Web Push:
+    // send_web_push() no-ops and /api/push/vapid-public-key returns 404 so the browser
+    // client never calls pushManager.subscribe() in the first place.
+    vapid_public_key: Option<String>,
+    vapid_private_key: Option<String>,
+    vapid_subject: String,
 }
 
 impl Config {
@@ -167,6 +175,20 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(128);
 
+        let vapid_public_key = std::env::var("VAPID_PUBLIC_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let vapid_private_key = std::env::var("VAPID_PRIVATE_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        if vapid_public_key.is_some() != vapid_private_key.is_some() {
+            warn!("⚠️  Задан только один из VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY — Web Push отключён");
+        }
+        let vapid_subject = std::env::var("VAPID_SUBJECT")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "mailto:admin@zalikus.org".to_string());
+
         Self {
             jwt_secret: jwt_secret.into_bytes(),
             allowed_origins,
@@ -176,6 +198,9 @@ impl Config {
             rate_limit_window_secs,
             rate_limit_max_attempts,
             ws_channel_capacity,
+            vapid_public_key: vapid_public_key.filter(|_| vapid_private_key.is_some()),
+            vapid_private_key,
+            vapid_subject,
         }
     }
 }
@@ -847,6 +872,26 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .await
         .ok();
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы push_subscriptions");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_username ON push_subscriptions (username)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
     pool
 }
 
@@ -1032,6 +1077,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/download/:id", get(download_message))
         .route("/api/message/:id", axum::routing::delete(delete_message))
         .route("/ws", get(ws_handler))
+        .route("/api/push/vapid-public-key", get(get_vapid_public_key))
+        .route("/api/push/subscribe", post(subscribe_push))
+        .route("/api/push/unsubscribe", post(unsubscribe_push))
         .route("/health", get(health_check))
         .route("/uploads/:filename", get(download_upload_file))
         .layer(middleware::from_fn(rewrite_api_v1))

@@ -42,6 +42,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 rand = "0.8"
+web-push = { version = "0.11", default-features = false }
+jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
+ct-codecs = "1.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# ece (a web-push dependency) only ships an OpenSSL-backed encryption backend — "vendored"
+# builds OpenSSL from source so the VPS doesn't need libssl-dev/pkg-config preinstalled.
+openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
