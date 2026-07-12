@@ -3,39 +3,48 @@
 
 # Разрешаем только нужные папки/файлы исходников
 
-!src/
-!src/**
-!src/main.rs
+!server/
+!server/src/
+!server/src/**
+!server/Cargo.toml
 
-!Web/
-!Web/**
-!Web/src/
-!Web/src/**
+!web/
+!web/**
+!web/src/
+!web/src/**
 
-!macOS/
-!macOS/Sources/
-!macOS/Sources/**
-!macOS/Package.swift
+!apps/macos/
+!apps/macos/Sources/
+!apps/macos/Sources/**
+!apps/macos/Package.swift
 
-!Core/
-!Core/src/
-!Core/src/**
-!Core/examples/
-!Core/examples/**
+!core/
+!core/src/
+!core/src/**
+!core/examples/
+!core/examples/**
 
-!Windows/
-!Windows/src/
-!Windows/src/**
-!Windows/build.rs
+!apps/windows/
+!apps/windows/src/
+!apps/windows/src/**
+!apps/windows/build.rs
 
-!ZaliArchiverSDK/
-!ZaliArchiverSDK/Rust/
-!ZaliArchiverSDK/Rust/src/
-!ZaliArchiverSDK/Rust/src/**
-!ZaliArchiverSDK/Rust/examples/
-!ZaliArchiverSDK/Rust/examples/**
-!ZaliArchiverSDK/Swift/
-!ZaliArchiverSDK/Swift/**
+!sdk/
+!sdk/Rust/
+!sdk/Rust/src/
+!sdk/Rust/src/**
+!sdk/Rust/examples/
+!sdk/Rust/examples/**
+!sdk/Swift/
+!sdk/Swift/**
+
+!apps/android/
+!apps/android/app/src/main/java/
+!apps/android/app/src/main/java/**
+
+!apps/ios/
+!apps/ios/ZaliMessenger/
+!apps/ios/ZaliMessenger/**
 
 # Но всё равно запрещаем мусор сборки
 graphify-out/
