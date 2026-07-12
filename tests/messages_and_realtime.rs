@@ -159,19 +159,44 @@ async fn reaction_set_and_cleared_is_visible_in_history() {
     let reacted_body: serde_json::Value = reacted.json().await.unwrap();
     assert_eq!(reacted_body["reactions"][0]["emoji"], "👍");
     assert_eq!(reacted_body["reactions"][0]["count"], 1);
+    assert_eq!(reacted_body["myReactions"], serde_json::json!(["👍"]));
 
-    // Empty emoji clears the reaction.
+    // A different emoji stacks alongside the first instead of replacing it —
+    // one user can react with several distinct emoji on the same message.
+    let stacked = app
+        .http
+        .post(app.url(&format!("/api/message/{}/reaction", message_id)))
+        .header("Authorization", bob.auth_header())
+        .json(&serde_json::json!({ "emoji": "🔥" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stacked.status(), 200);
+    let stacked_body: serde_json::Value = stacked.json().await.unwrap();
+    assert_eq!(stacked_body["reactions"].as_array().unwrap().len(), 2);
+    let mut my_reactions: Vec<String> = stacked_body["myReactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    my_reactions.sort();
+    assert_eq!(my_reactions, vec!["👍".to_string(), "🔥".to_string()]);
+
+    // Posting the same emoji again toggles it back off, leaving the other one.
     let cleared = app
         .http
         .post(app.url(&format!("/api/message/{}/reaction", message_id)))
         .header("Authorization", bob.auth_header())
-        .json(&serde_json::json!({ "emoji": "" }))
+        .json(&serde_json::json!({ "emoji": "👍" }))
         .send()
         .await
         .unwrap();
     assert_eq!(cleared.status(), 200);
     let cleared_body: serde_json::Value = cleared.json().await.unwrap();
-    assert!(cleared_body["reactions"].as_array().unwrap().is_empty());
+    assert_eq!(cleared_body["reactions"].as_array().unwrap().len(), 1);
+    assert_eq!(cleared_body["reactions"][0]["emoji"], "🔥");
+    assert_eq!(cleared_body["myReactions"], serde_json::json!(["🔥"]));
 }
 
 #[tokio::test]
