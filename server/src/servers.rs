@@ -845,11 +845,14 @@ pub(crate) async fn get_server_members(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
 ) -> impl IntoResponse {
-    if !can_manage_server(&state.db, &server_id, &auth_user)
-        .await
-        .unwrap_or(false)
-    {
-        return StatusCode::FORBIDDEN.into_response();
+    // Any current member (not just owner/admin) may list fellow members — the
+    // channel key-envelope fan-out (resolveConversationCryptoKey → publishConversationKeyToServerMembers
+    // in interface.js) needs this to know who to encrypt the channel key for, and
+    // usernames are already visible to every member via the channel itself.
+    match get_server_access_context(&state.db, &server_id, &auth_user).await {
+        Ok(Some((_, role))) if role.is_some() => {}
+        Ok(Some((server, _))) if server.owner == auth_user => {}
+        _ => return StatusCode::FORBIDDEN.into_response(),
     }
 
     match load_server_members(&state.db, &server_id).await {
