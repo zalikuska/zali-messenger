@@ -433,6 +433,37 @@ pub(crate) async fn handle_message_ws_payload(
     )
     .await
     {
+        Some(rendered)
+            if rendered
+                .get("decryptionError")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false) =>
+        {
+            // process_history_record returns a rendered placeholder (not None) when every
+            // candidate key failed to unpack the archive — e.g. the key envelope for a brand
+            // new conversation hasn't synced to this device yet. Rendering that placeholder
+            // here would permanently show "нет E2E-ключа" even after the key arrives seconds
+            // later, because unlike the None branch below, this arm used to skip the self-heal
+            // dispatch entirely. Treat it the same as a hard unpack failure: don't render, and
+            // trigger the targeted re-resolve so history reload picks it up once the key syncs.
+            trace(format!(
+                "{} skipped render for message_id={} reason=unpack_or_decrypt_failed",
+                "message_ws", message_id
+            ));
+            if !sync_peer.trim().is_empty() {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::SyncActiveConversation,
+                    json!({
+                        "force": true,
+                        "peer": sync_peer,
+                        "serverId": sync_server_id.clone().unwrap_or_default(),
+                        "channelId": sync_channel_id.clone().unwrap_or_default(),
+                    }),
+                );
+            }
+        }
         Some(rendered) => {
             // Notification decision (self-sender filter, "is this chat already open"
             // guard) now lives in JS's receiveMessage() → SHOW_NOTIFICATION bridge

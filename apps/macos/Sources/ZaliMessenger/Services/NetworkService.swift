@@ -1594,7 +1594,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         let server_id: String?
         let channel_id: String?
         let reactions: [RemoteReactionSummary]?
-        let myReaction: String?
+        let myReactions: [String]?
     }
 
     struct RemoteReactionSummary: Codable {

@@ -862,7 +862,7 @@ struct WebView: NSViewRepresentable {
                         "attachments": renderedAttachments,
                         "timestamp": record.timestamp,
                         "reactions": record.reactions ?? [],
-                        "myReaction": record.myReaction ?? ""
+                        "myReactions": record.myReactions ?? []
                     ]
                     decryptedMessageCache[messageId] = result
                     return result
@@ -896,7 +896,7 @@ struct WebView: NSViewRepresentable {
                 "attachments": [],
                 "timestamp": record.timestamp,
                 "reactions": [],
-                "myReaction": ""
+                "myReactions": []
             ]
         }
 
