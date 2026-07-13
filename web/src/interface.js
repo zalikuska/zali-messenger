@@ -1883,6 +1883,22 @@ class ZaliInterface {
                 }
             }
             await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}`, triggerRefresh: false });
+
+            // A timed-out/dropped vault or envelope fetch above looks identical to "this
+            // conversation genuinely has no key yet" — both just leave the scope unresolved.
+            // That distinction matters a lot here: inventing a local key below is NOT
+            // reversible — it gets published to the peer as the new canonical key, silently
+            // orphaning the real key (and all history encrypted under it) that a slower
+            // network round-trip would have found. So retry a couple of times with backoff
+            // before giving up, instead of inventing on the very first empty result.
+            for (let attempt = 0; attempt < 2 && !this.getStoredConversationKey(scope); attempt += 1) {
+                this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} retry=${attempt}`);
+                await new Promise(resolve => setTimeout(resolve, 1500 + attempt * 1500));
+                if (recoveredVaultPassphrase) {
+                    await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}:retry${attempt}` });
+                }
+                await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}:retry${attempt}`, triggerRefresh: false });
+            }
         }
 
         const restored = this.getStoredConversationKey(scope);
