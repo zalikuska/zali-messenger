@@ -528,7 +528,7 @@ pub(crate) fn build_history_output(
         "attachments": attachments,
         "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
         "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
-        "myReaction": record.get("myReaction").or_else(|| record.get("my_reaction")).cloned().unwrap_or(Value::String(String::new())),
+        "myReactions": record.get("myReactions").or_else(|| record.get("my_reactions")).cloned().unwrap_or_else(|| json!([])),
     });
     if let Some(server_id_value) = server_id_value {
         output["serverId"] = Value::String(server_id_value);
@@ -670,7 +670,7 @@ pub(crate) async fn process_history_record(
             "attachments": [],
             "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
             "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
-            "myReaction": record.get("myReaction").or_else(|| record.get("my_reaction")).cloned().unwrap_or(Value::String(String::new())),
+            "myReactions": record.get("myReactions").or_else(|| record.get("my_reactions")).cloned().unwrap_or_else(|| json!([])),
             "decryptionError": last_unpack_error,
         });
         if let Some(server_id_value) = server_id
