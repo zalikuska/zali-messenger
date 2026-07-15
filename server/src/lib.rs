@@ -55,6 +55,8 @@ mod realtime;
 pub(crate) use realtime::*;
 mod push;
 pub(crate) use push::*;
+mod coins;
+pub(crate) use coins::*;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -892,6 +894,34 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .await
     .ok();
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS coin_balances (
+            username TEXT PRIMARY KEY,
+            balance INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы coin_balances");
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS coin_transactions (
+            id TEXT PRIMARY KEY,
+            from_user TEXT NOT NULL,
+            to_user TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(from_user, idempotency_key)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы coin_transactions");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_coin_transactions_to_user ON coin_transactions (to_user)")
+        .execute(&pool)
+        .await
+        .ok();
+
     pool
 }
 
@@ -916,6 +946,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     }
 
     seed_default_servers(&pool).await.ok();
+    seed_zalicoin(&pool).await.ok();
     sqlx::query(
         "INSERT OR IGNORE INTO server_members (server_id, username, role, joined_at)
          SELECT id, owner, 'owner', created_at FROM servers",
@@ -1080,6 +1111,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/push/vapid-public-key", get(get_vapid_public_key))
         .route("/api/push/subscribe", post(subscribe_push))
         .route("/api/push/unsubscribe", post(unsubscribe_push))
+        .route("/api/coins/balance", get(get_coin_balance))
+        .route("/api/coins/distribution", get(get_coin_distribution))
+        .route("/api/coins/transfer", post(transfer_coins))
         .route("/health", get(health_check))
         .route("/uploads/:filename", get(download_upload_file))
         .layer(middleware::from_fn(rewrite_api_v1))
