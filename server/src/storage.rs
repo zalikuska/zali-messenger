@@ -552,6 +552,25 @@ pub(crate) async fn seed_default_servers(pool: &SqlitePool) -> Result<(), sqlx::
     Ok(())
 }
 
+/// Grants the entire fixed ZaliCoin supply (100 000) to `zalikus` on first
+/// run. Only fires when `coin_balances` is completely empty, so it never
+/// re-seeds (and thus never resets balances) once transfers have happened.
+pub(crate) async fn seed_zalicoin(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let holder_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM coin_balances")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    if holder_count > 0 {
+        return Ok(());
+    }
+
+    sqlx::query("INSERT OR IGNORE INTO coin_balances (username, balance) VALUES ('zalikus', 100000)")
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 pub(crate) async fn ensure_default_server_roles(
     pool: &SqlitePool,
     server_id: &str,
