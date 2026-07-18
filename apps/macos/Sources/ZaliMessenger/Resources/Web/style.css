@@ -232,7 +232,11 @@ button {
         0 2px 8px rgba(0,0,0,.28),
         inset 0 1px 0 rgba(255,255,255,.22),
         inset 0 -1px 0 rgba(0,0,0,.25);
-    transform: translateX(-50%);
+    /* Default: dock visible, matching pre-nav-redesign behavior before
+       setMobileNavProgress() has ever run. The actual value is written as a
+       plain inline style by setMobileNavProgress() in interface.js. */
+    transform: translate(-50%, 0);
+    transition: transform .24s cubic-bezier(.2,.8,.2,1);
     backdrop-filter: blur(28px) saturate(180%);
     -webkit-backdrop-filter: blur(28px) saturate(180%);
 }
@@ -1518,7 +1522,8 @@ body[data-nav-mode="servers"] .contacts {
     height: 18px;
 }
 
-.server-settings-btn .ui-icon-phone {
+.server-settings-btn .ui-icon-phone,
+.server-settings-btn .ui-icon-video {
     width: 19px;
     height: 19px;
     filter: drop-shadow(0 0 8px rgba(var(--accent-rgb), .16));
@@ -1704,6 +1709,50 @@ body[data-nav-mode="servers"] .contacts {
     align-items: center;
     flex-wrap: wrap;
     gap: 10px;
+}
+
+.voice-video-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.voice-video-grid:empty {
+    display: none;
+}
+
+.voice-video-tile {
+    position: relative;
+    width: min(320px, 100%);
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #000;
+    border: 1px solid rgba(255,255,255,.08);
+}
+
+.voice-video-tile video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.voice-video-tile.voice-video-local {
+    width: min(180px, 40%);
+}
+
+.voice-video-label {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.55);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
 }
 
 .voice-meter-grid {
@@ -4816,7 +4865,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .input-bar {
     display: grid;
-    grid-template-columns: 40px 1fr 40px;
+    grid-template-columns: 40px 40px 1fr 40px;
     align-items: center;
     gap: 10px;
     width: calc(100% - (var(--composer-inline-inset) * 2));
@@ -5776,21 +5825,45 @@ body[data-nav-mode="servers"] .contacts {
         padding: 12px 12px calc(152px + env(safe-area-inset-bottom, 0px));
     }
 
+    /* Mobile list<->chat push navigation. #viewChat sits ABOVE .sidebar
+       (higher z-index) and slides on the X axis (progress 0 = list screen,
+       1 = chat screen, written as a plain inline transform by
+       setMobileNavProgress() in interface.js) — it visually covers/uncovers
+       the list like a card, so the list itself never needs to move
+       sideways. The list's Y position is a separate, discrete "parked"
+       state (body.mobile-list-visible): it snaps to Y=0 the instant it can
+       become visible (tap-open or swipe-start) and only animates back down
+       (park) once the chat transition has fully settled — so a swipe-back
+       reveals the list already sitting there on the left (as the chat
+       slides right off of it), never rising up from the bottom. See
+       setMobileSidebarOpen()/setupMobileNavGestures() in interface.js. */
     .sidebar {
         position: fixed;
         top: 52px;
         left: 12px;
+        right: 12px;
         bottom: calc(12px + 82px + env(safe-area-inset-bottom, 0px));
         z-index: 20;
-        width: min(86vw, 360px);
-        transform: translateX(calc(-100% - 18px));
-        transition: transform .24s cubic-bezier(.2,.8,.2,1), box-shadow .24s ease;
+        width: auto;
+        transform: translateY(115%);
+        /* A fast, always-on transition (never toggled to transition:none)
+           reads as "already there" without needing any instant/restart
+           trickery — simpler and more robust than trying to force-restart a
+           disabled transition, which was unreliable in testing. */
+        transition: transform .12s ease-out, box-shadow .12s ease;
         will-change: transform;
     }
 
-    body.mobile-sidebar-open .sidebar {
-        transform: translateX(0);
+    body.mobile-list-visible .sidebar {
+        transform: translateY(0);
         box-shadow: 0 18px 48px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.02);
+    }
+
+    body.mobile-nav-instant #viewChat,
+    body.mobile-nav-dragging #viewChat,
+    body.mobile-nav-instant .mobile-dock,
+    body.mobile-nav-dragging .mobile-dock {
+        transition: none;
     }
 
     .main {
@@ -5799,8 +5872,26 @@ body[data-nav-mode="servers"] .contacts {
         border-radius: 20px;
     }
 
+    #viewChat {
+        z-index: 21;
+        /* .view.active's view-enter keyframe animation ends on
+           transform: translateY(0) with fill-mode: both, which — being a
+           CSS Animation — otherwise wins the cascade over this rule's plain
+           transform and permanently pins it to identity. Kill the
+           animation here; the push-nav transform below is #viewChat's own
+           entrance/exit motion on mobile. */
+        animation: none;
+        /* Default: chat visible (matches --mnav's old default of 1). The
+           actual value is written as a plain inline style by
+           setMobileNavProgress() in interface.js — see the comment there
+           for why this isn't calc(var(--mnav)) driven. */
+        transform: translateX(0);
+        transition: transform .24s cubic-bezier(.2,.8,.2,1);
+        will-change: transform;
+    }
+
     .mobile-backdrop {
-        display: block;
+        display: none;
     }
 
     .mobile-dock {
@@ -5829,18 +5920,19 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     #viewChat .msgs {
-        padding: 14px 12px 208px;
-        scroll-padding-bottom: 208px;
+        padding: 14px 12px calc(208px + var(--kbd-inset, 0px));
+        scroll-padding-bottom: calc(208px + var(--kbd-inset, 0px));
     }
 
     #viewChat .input-area {
         left: 12px;
         right: 12px;
-        bottom: 14px;
+        bottom: calc(14px + var(--kbd-inset, 0px));
         min-height: auto;
         margin: 0;
         padding: 12px 12px 24px;
         border-radius: 0 0 18px 18px;
+        transition: bottom .18s ease;
     }
 
     .input-bar {
@@ -6296,4 +6388,249 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     font-size: 16px;
     line-height: 1;
     cursor: pointer;
+}
+
+/* ============================================================
+   ZALICOIN — this app has no multi-hue categorical palette anywhere;
+   every themed surface (10 swappable themes in styler.js) is shades/
+   opacity of one accent color (--accent-rgb). The distribution bar
+   below follows that convention instead of a foreign rainbow palette:
+   rank-ordered opacity steps of the *current* theme's accent, so it
+   reads as "how much of the single accent hue this holder owns" and
+   re-themes automatically with the rest of the app.
+   ============================================================ */
+:root {
+    --zc-series-1: rgba(var(--accent-rgb), .95);
+    --zc-series-2: rgba(var(--accent-rgb), .78);
+    --zc-series-3: rgba(var(--accent-rgb), .62);
+    --zc-series-4: rgba(var(--accent-rgb), .48);
+    --zc-series-5: rgba(var(--accent-rgb), .36);
+    --zc-series-6: rgba(var(--accent-rgb), .26);
+    --zc-series-7: rgba(var(--accent-rgb), .18);
+    --zc-series-8: rgba(var(--accent-rgb), .12);
+    --zc-series-other: rgba(255,255,255,.14);
+    --zc-series-unassigned: rgba(255,255,255,.05);
+}
+
+.zc-view {
+    max-width: 880px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.zc-orb {
+    font-weight: 800;
+    letter-spacing: -.03em;
+}
+
+.zc-balance-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+}
+
+.zc-balance-card > * {
+    position: relative;
+    z-index: 1;
+}
+
+.zc-balance-main {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.zc-balance-label {
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.zc-balance-value {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-balance-unit {
+    color: var(--lime);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.zc-balance-share {
+    color: var(--text2);
+    font-size: 13px;
+    margin-right: auto;
+}
+
+.zc-distribution-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.zc-distribution-card > * {
+    position: relative;
+    z-index: 1;
+}
+
+.zc-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    height: 28px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--zc-series-unassigned);
+}
+
+.zc-segment {
+    flex-grow: 0;
+    flex-shrink: 0;
+    min-width: 3px;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: filter .15s ease, transform .15s ease;
+}
+
+.zc-segment:first-child {
+    border-top-left-radius: 999px;
+    border-bottom-left-radius: 999px;
+}
+
+.zc-segment:last-child {
+    border-top-right-radius: 999px;
+    border-bottom-right-radius: 999px;
+}
+
+.zc-segment:hover,
+.zc-segment:focus-visible {
+    filter: brightness(1.18);
+    transform: scaleY(1.08);
+}
+
+.zc-segment--me {
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.55);
+}
+
+.zc-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.zc-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+}
+
+.zc-legend-swatch {
+    flex: none;
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+}
+
+.zc-legend-label {
+    color: var(--text);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zc-legend-value {
+    color: var(--text2);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+}
+
+.zc-legend-empty {
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.coin-transfer-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    background: rgba(4, 6, 10, .78);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+.coin-transfer-modal[hidden] {
+    display: none;
+}
+
+.coin-transfer-box {
+    width: min(100%, 380px);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 22px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 20px;
+    background: linear-gradient(180deg, rgba(22,24,28,.98), rgba(10,12,16,.98));
+    box-shadow: 0 30px 90px rgba(0,0,0,.52), 0 0 0 1px rgba(var(--accent-rgb),.06);
+}
+
+.coin-transfer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.coin-transfer-head h2 {
+    margin: 0;
+    font-size: 18px;
+    color: var(--text);
+}
+
+.coin-transfer-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text2);
+}
+
+.coin-transfer-field input {
+    height: var(--control-h);
+    padding: 0 12px;
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.coin-transfer-field input:focus {
+    outline: none;
+    border-color: var(--lime);
+    box-shadow: 0 0 0 2px var(--lime-dim);
+}
+
+.coin-transfer-status {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text2);
+}
+
+.coin-transfer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
 }

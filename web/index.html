@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260713-rev10">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -103,6 +103,12 @@
                                     <path d="M14.85 5.3c1.86.55 3.3 1.99 3.85 3.85" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                                 </svg>
                             </button>
+                            <button class="server-settings-btn chat-call-btn" id="chatVideoCallBtn" type="button" title="Видеозвонок" aria-label="Видеозвонок" hidden>
+                                <svg class="ui-icon ui-icon-video" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                                    <rect x="3.5" y="6.5" width="12" height="11" rx="2.2" stroke="currentColor" stroke-width="1.8"/>
+                                    <path d="M15.5 10.4 20 7.6a.6.6 0 0 1 .92.51v7.78a.6.6 0 0 1-.92.51l-4.5-2.8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
                             <button class="server-settings-btn" id="serverSettingsBtn" type="button" title="Настройки сервера" aria-label="Настройки сервера" hidden>
                                 <svg class="ui-icon ui-icon-gear" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <path d="M10.4 3.25h3.2l.55 2.32c.54.2 1.05.5 1.5.87l2.27-.72 1.6 2.76-1.72 1.62c.05.3.08.6.08.9s-.03.6-.08.9l1.72 1.62-1.6 2.76-2.27-.72c-.45.37-.96.67-1.5.87l-.55 2.32h-3.2l-.55-2.32a5.78 5.78 0 0 1-1.5-.87l-2.27.72-1.6-2.76L6.2 11.9a5.6 5.6 0 0 1 0-1.8L4.48 8.48l1.6-2.76 2.27.72c.45-.37.96-.67 1.5-.87l.55-2.32Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
@@ -127,6 +133,12 @@
                                 </svg>
                             </button>
                             <input id="attachmentInput" type="file" accept="image/*,video/*,.gif,.webp,.png,.jpg,.jpeg,.mp4,.webm" multiple hidden>
+                            <button class="attach-btn coin-transfer-btn" id="coinTransferBtn" type="button" title="Перевести ZaliCoin" aria-label="Перевести ZaliCoin">
+                                <svg class="ui-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                                    <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.8"/>
+                                    <path d="M12 7.4v9.2M14.6 9.4c0-1.05-1.16-1.9-2.6-1.9-1.44 0-2.6.85-2.6 1.9 0 1.05 1.16 1.55 2.6 1.9 1.44.35 2.6.85 2.6 1.9 0 1.05-1.16 1.9-2.6 1.9-1.44 0-2.6-.85-2.6-1.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                </svg>
+                            </button>
                             <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
                             <button class="send-btn" id="sendBtn" disabled>
                                 <svg viewBox="0 0 24 24" fill="currentColor" width="17" height="17">
@@ -150,6 +162,41 @@
                         </section>
                         <div class="hub-grid" id="hubGrid"></div>
                         <section class="hub-components" id="hubComponents"></section>
+                    </div>
+                </div>
+
+                <!-- ZALICOIN VIEW -->
+                <div id="viewZaliCoin" class="view">
+                    <div class="hub-view zc-view">
+                        <section class="hub-hero">
+                            <div>
+                                <span class="settings-kicker">ZaliCoin</span>
+                                <h2>Ваш баланс ZaliCoin</h2>
+                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата.</p>
+                            </div>
+                            <div class="hub-orb zc-orb" aria-hidden="true">ZC</div>
+                        </section>
+
+                        <section class="settings-card zc-balance-card">
+                            <div class="zc-balance-main">
+                                <span class="zc-balance-label">Баланс</span>
+                                <span class="zc-balance-value" id="zaliCoinBalanceValue">0</span>
+                                <span class="zc-balance-unit">ZC</span>
+                            </div>
+                            <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
+                            <button class="btn-flat" id="zaliCoinSendBtn" type="button">Отправить ZaliCoin</button>
+                        </section>
+
+                        <section class="settings-card zc-distribution-card">
+                            <div class="settings-card-head">
+                                <div>
+                                    <span class="settings-kicker">Распределение</span>
+                                    <h3 class="settings-card-title">Кто делит 100 000 ZaliCoin</h3>
+                                </div>
+                            </div>
+                            <div class="zc-bar" id="zaliCoinBar" role="img" aria-label="Распределение ZaliCoin между пользователями"></div>
+                            <div class="zc-legend" id="zaliCoinLegend"></div>
+                        </section>
                     </div>
                 </div>
 
@@ -369,6 +416,28 @@
             <div class="avatar-crop-actions">
                 <button class="btn-flat" id="avatarCropCancelBtn" type="button">Отмена</button>
                 <button class="auth-btn primary" id="avatarCropSaveBtn" type="button">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="coin-transfer-modal" id="coinTransferModal" role="dialog" aria-modal="true" aria-labelledby="coinTransferTitle" hidden>
+        <div class="coin-transfer-box">
+            <div class="coin-transfer-head">
+                <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
+                <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <label class="coin-transfer-field">
+                <span>Получатель</span>
+                <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
+            </label>
+            <label class="coin-transfer-field">
+                <span>Сумма (ZC)</span>
+                <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
+            </label>
+            <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
+            <div class="coin-transfer-actions">
+                <button class="btn-flat" id="coinTransferCancelBtn" type="button" onclick="document.getElementById('coinTransferModal').hidden = true">Отмена</button>
+                <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
             </div>
         </div>
     </div>
@@ -733,6 +802,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260607-rev17"></script>
+    <script src="app.js?v=20260713-rev10"></script>
 </body>
 </html>
