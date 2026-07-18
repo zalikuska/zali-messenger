@@ -99,6 +99,11 @@
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
             permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
         },
+        coins: {
+            balance: apiRoute('/coins/balance'),
+            distribution: apiRoute('/coins/distribution'),
+            transfer: apiRoute('/coins/transfer'),
+        },
     });
 
     window.ZaliApiRoutes = API_ROUTES;
@@ -285,9 +290,13 @@
                 inviter: '',
                 status: 'idle',
                 muted: false,
+                videoEnabled: false,
+                cameraOn: false,
                 localStream: null,
+                localVideoEl: null,
                 peerConnections: new Map(),
                 remoteAudios: new Map(),
+                remoteVideos: new Map(),
                 participants: [],
                 outgoingInvite: null,
                 incomingInvite: null,
@@ -1116,6 +1125,11 @@ const DefaultApiRoutes = Object.freeze({
         invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
         permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
     },
+    coins: {
+        balance: apiRoute('/coins/balance'),
+        distribution: apiRoute('/coins/distribution'),
+        transfer: apiRoute('/coins/transfer'),
+    },
 });
 
 class ZaliInterface {
@@ -1274,6 +1288,15 @@ class ZaliInterface {
         return String(s)
             .replace(/&/g,'&amp;').replace(/</g,'&lt;')
             .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+    }
+
+    ruPlural(n, one, few, many) {
+        const abs = Math.abs(Math.trunc(Number(n) || 0));
+        const d10 = abs % 10;
+        const d100 = abs % 100;
+        if (d10 === 1 && d100 !== 11) return one;
+        if (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) return few;
+        return many;
     }
 
     safeCssColor(value) {
@@ -1693,14 +1716,173 @@ class ZaliInterface {
         return !!this.mobileLayoutQuery()?.matches;
     }
 
-    setMobileSidebarOpen(open) {
+    setMobileSidebarOpen(open, { animate = true } = {}) {
         const isOpen = !!open;
         document.body?.classList.toggle('mobile-sidebar-open', isOpen);
+        // isOpen === list/picker screen visible (--mnav 0); closed === chat screen visible (--mnav 1)
+        if (isOpen) {
+            document.body?.classList.add('mobile-list-visible');
+        }
+        this.setMobileNavProgress(isOpen ? 0 : 1, { animate });
+        if (!isOpen) {
+            this.scheduleMobileListPark();
+        }
         const btn = document.getElementById('mobileMenuBtn');
         if (btn) btn.setAttribute('aria-expanded', String(isOpen));
         const backdrop = document.getElementById('mobileBackdrop');
         if (backdrop) backdrop.hidden = !isOpen;
         return isOpen;
+    }
+
+    // Parks the list back down (translateY, out of the way of the input
+    // area) only once the chat has actually finished covering it — never
+    // while any part of the list might still be visible on screen.
+    scheduleMobileListPark() {
+        const chatEl = document.getElementById('viewChat');
+        if (!chatEl) return;
+        let done = false;
+        const attemptPark = () => {
+            // A back-swipe may have started (and re-shown the list) after this
+            // park was scheduled but before its 340ms fallback fired — at drag
+            // activation progress is still ~1, so the progress check alone
+            // would yank the list out from under the user's finger.
+            if (document.body?.classList.contains('mobile-nav-dragging')) return;
+            if (this.currentMobileNavProgress() >= 0.98 && !document.body?.classList.contains('mobile-sidebar-open')) {
+                document.body?.classList.remove('mobile-list-visible');
+            }
+        };
+        const finish = () => {
+            if (done) return;
+            done = true;
+            chatEl.removeEventListener('transitionend', onEnd);
+            attemptPark();
+        };
+        const onEnd = (e) => {
+            if (e.target === chatEl && e.propertyName === 'transform') finish();
+        };
+        chatEl.addEventListener('transitionend', onEnd);
+        // Fallback in case the transform didn't actually change (transitionend
+        // never fires) or something else interrupts the transition.
+        setTimeout(finish, 340);
+    }
+
+    // Drives the mobile list<->chat push navigation. p=0 shows the fullscreen
+    // chat/server picker, p=1 shows the chat. animate=false is used while a
+    // touch drag is in progress so the transform tracks the finger with zero
+    // transition lag.
+    //
+    // #viewChat/.mobile-dock's transform is written here directly as an
+    // inline style (plain px/percent), NOT via a CSS custom property + calc()
+    // — a `calc(var(--mnav))`-driven transform was observed to permanently
+    // stick at its pre-change value after any transition:none phase ended,
+    // regardless of how the re-enable was sequenced (classList timing,
+    // forced reflow, rAF, setTimeout). A literal, non-var()-dependent inline
+    // transform value does not have this problem.
+    setMobileNavProgress(p, { animate = true } = {}) {
+        const body = document.body;
+        if (!body) return;
+        const clamped = Math.max(0, Math.min(1, Number(p) || 0));
+        this._mobileNavProgress = clamped;
+        body.classList.toggle('mobile-nav-instant', !animate);
+        const vc = document.getElementById('viewChat');
+        if (vc) vc.style.transform = `translateX(${((1 - clamped) * 100).toFixed(4)}%)`;
+        const dock = document.querySelector('.mobile-dock');
+        if (dock) dock.style.transform = `translate(-50%, ${(clamped * 140).toFixed(4)}%)`;
+    }
+
+    currentMobileNavProgress() {
+        return typeof this._mobileNavProgress === 'number' ? this._mobileNavProgress : 1;
+    }
+
+    // Interactive back-swipe: dragging from the left edge of the open chat
+    // drags it to the right, revealing the fullscreen picker underneath
+    // (mirror of the forward transition driven by setMobileSidebarOpen).
+    setupMobileNavGestures() {
+        const chatEl = document.getElementById('viewChat');
+        if (!chatEl || chatEl.__mobileSwipeNavBound) return;
+        chatEl.__mobileSwipeNavBound = true;
+
+        const EDGE_ZONE = 28;
+        const DRAG_ACTIVATE = 8;
+        let tracking = false;
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let viewportWidth = 1;
+
+        const reset = () => {
+            tracking = false;
+            dragging = false;
+        };
+
+        chatEl.addEventListener('touchstart', (e) => {
+            if (!this.isMobileLayout() || this.currentMobileNavProgress() < 0.98) return;
+            const touch = e.touches[0];
+            if (!touch || touch.clientX > EDGE_ZONE) return;
+            tracking = true;
+            dragging = false;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            viewportWidth = window.innerWidth || 1;
+        }, { passive: true });
+
+        chatEl.addEventListener('touchmove', (e) => {
+            if (!tracking) return;
+            const touch = e.touches[0];
+            if (!touch) return;
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            if (!dragging) {
+                if (Math.abs(dy) > Math.abs(dx) + 4) { reset(); return; }
+                if (dx < DRAG_ACTIVATE) return;
+                dragging = true;
+                document.body?.classList.add('mobile-nav-dragging');
+                // Unpark the list (its own CSS transition is fast/near-
+                // instant — see .sidebar in style.css) so it's sitting at
+                // Y=0 as the chat starts moving — the reveal must look like
+                // the chat sliding off the list on the left, not the list
+                // rising from below.
+                document.body?.classList.add('mobile-list-visible');
+            }
+            if (dragging) {
+                if (e.cancelable) e.preventDefault();
+                const progress = Math.max(0, Math.min(1, 1 - dx / viewportWidth));
+                this.setMobileNavProgress(progress, { animate: false });
+            }
+        }, { passive: false });
+
+        const finish = () => {
+            if (!tracking) return;
+            document.body?.classList.remove('mobile-nav-dragging');
+            if (dragging) {
+                const openList = this.currentMobileNavProgress() < 0.6;
+                this.setMobileSidebarOpen(openList, { animate: true });
+            }
+            reset();
+        };
+
+        chatEl.addEventListener('touchend', finish);
+        chatEl.addEventListener('touchcancel', finish);
+    }
+
+    // Raises the message input above the on-screen keyboard on mobile by
+    // exposing the keyboard inset as a CSS var; style.css shifts
+    // #viewChat .input-area/.msgs by it.
+    setupMobileKeyboardAvoidance() {
+        const vv = window.visualViewport;
+        if (!vv || this._mobileKeyboardBound) return;
+        this._mobileKeyboardBound = true;
+        const apply = () => {
+            if (!this.isMobileLayout()) {
+                document.body?.style.setProperty('--kbd-inset', '0px');
+                return;
+            }
+            const inset = Math.max(0, (window.innerHeight - vv.height - vv.offsetTop));
+            document.body?.style.setProperty('--kbd-inset', `${Math.round(inset)}px`);
+        };
+        vv.addEventListener('resize', apply);
+        vv.addEventListener('scroll', apply);
+        apply();
     }
 
     syncMobileChrome() {
@@ -1750,8 +1932,10 @@ class ZaliInterface {
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
+        const zv = document.getElementById('viewZaliCoin');
         if (sv) sv.classList.remove('active');
         if (hv) hv.classList.remove('active');
+        if (zv) zv.classList.remove('active');
         if (cv) cv.classList.add('active');
         this.closeMobileSidebar();
         this.renderServerToolbar();
@@ -1763,8 +1947,10 @@ class ZaliInterface {
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
+        const zv = document.getElementById('viewZaliCoin');
         if (cv) cv.classList.remove('active');
         if (hv) hv.classList.remove('active');
+        if (zv) zv.classList.remove('active');
         if (sv) sv.classList.add('active');
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Настройки';
@@ -1781,8 +1967,10 @@ class ZaliInterface {
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
+        const zv = document.getElementById('viewZaliCoin');
         if (cv) cv.classList.remove('active');
         if (sv) sv.classList.remove('active');
+        if (zv) zv.classList.remove('active');
         if (hv) hv.classList.add('active');
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Хаб';
@@ -1790,6 +1978,283 @@ class ZaliInterface {
         this.renderHub();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+    }
+
+    openZaliCoinView() {
+        const cv = document.getElementById('viewChat');
+        const hv = document.getElementById('viewHub');
+        const sv = document.getElementById('viewSettings');
+        const zv = document.getElementById('viewZaliCoin');
+        if (cv) cv.classList.remove('active');
+        if (hv) hv.classList.remove('active');
+        if (sv) sv.classList.remove('active');
+        if (zv) zv.classList.add('active');
+        const tbChat = document.getElementById('tbChat');
+        if (tbChat) tbChat.textContent = 'ZaliCoin';
+        this.closeMobileSidebar();
+        this.renderHubSegmentNav();
+        this.syncMobileChrome();
+        this.refreshZaliCoinView();
+    }
+
+    // ============================================================
+    // ZALICOIN — fixed-supply (100 000) in-app currency. Balance/distribution
+    // come from /api/coins/*; transfers are server-authoritative (balance
+    // checks + double-spend protection live in server/src/coins.rs), this is
+    // just presentation + the idempotency key that makes a retried submit safe.
+    // ============================================================
+
+    async refreshZaliCoinView() {
+        await Promise.all([this.loadZaliCoinBalance(), this.loadZaliCoinDistribution()]);
+        this.renderZaliCoinView();
+    }
+
+    async loadZaliCoinBalance() {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.coins.balance);
+            if (!res.ok) return;
+            const data = await res.json();
+            this.S.zaliCoinBalance = Number(data.balance) || 0;
+        } catch (e) {
+            this.trace(`loadZaliCoinBalance error=${e}`);
+        }
+    }
+
+    async loadZaliCoinDistribution() {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.coins.distribution);
+            if (!res.ok) return;
+            const data = await res.json();
+            this.S.zaliCoinTotalSupply = Number(data.totalSupply) || 100000;
+            this.S.zaliCoinHolders = Array.isArray(data.holders) ? data.holders : [];
+        } catch (e) {
+            this.trace(`loadZaliCoinDistribution error=${e}`);
+        }
+    }
+
+    // Fixed categorical order (never reassigned by rank) — a holder keeps its
+    // slot as long as it stays in the top-8-by-balance ranking; overflow folds
+    // into a single muted "other" bucket instead of generating a 9th hue.
+    zaliCoinSeriesVar(index) {
+        const slot = (index % 8) + 1;
+        return `var(--zc-series-${slot})`;
+    }
+
+    renderZaliCoinView() {
+        const view = document.getElementById('viewZaliCoin');
+        if (!view) return;
+        const totalSupply = this.S.zaliCoinTotalSupply || 100000;
+        const balance = this.S.zaliCoinBalance || 0;
+        const holders = Array.isArray(this.S.zaliCoinHolders) ? this.S.zaliCoinHolders : [];
+        const me = this.myName();
+
+        const balanceValue = document.getElementById('zaliCoinBalanceValue');
+        if (balanceValue) balanceValue.textContent = balance.toLocaleString('ru-RU');
+        const balanceShare = document.getElementById('zaliCoinBalanceShare');
+        if (balanceShare) {
+            const pct = totalSupply > 0 ? (balance / totalSupply) * 100 : 0;
+            // Never round a partial share to a whole 100/0 — that reads as
+            // "all" or "none" when it's actually e.g. 99.97% or 0.04%. toFixed
+            // alone would do exactly that at the extremes, so clamp the
+            // formatted value away from the whole numbers unless exact.
+            let shareText;
+            if (pct === 0 || pct === 100) {
+                shareText = String(pct);
+            } else {
+                shareText = pct.toFixed(1);
+                if (shareText === '100.0') shareText = '>99.9';
+                if (shareText === '0.0') shareText = '<0.1';
+            }
+            balanceShare.textContent = `${shareText}% от эмиссии`;
+        }
+
+        const MAX_SEGMENTS = 8;
+        const top = holders.slice(0, MAX_SEGMENTS);
+        const rest = holders.slice(MAX_SEGMENTS);
+        const restTotal = rest.reduce((sum, h) => sum + (Number(h.balance) || 0), 0);
+        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal;
+        const unassigned = Math.max(0, totalSupply - accounted);
+
+        const segments = top.map((holder, index) => ({
+            label: holder.username,
+            value: Number(holder.balance) || 0,
+            isMe: holder.username === me,
+            color: this.zaliCoinSeriesVar(index),
+        }));
+        if (restTotal > 0) {
+            segments.push({ label: `Остальные (${rest.length})`, value: restTotal, isMe: false, color: 'var(--zc-series-other)' });
+        }
+        if (unassigned > 0) {
+            segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)' });
+        }
+
+        const bar = document.getElementById('zaliCoinBar');
+        if (bar) {
+            bar.innerHTML = segments.map(seg => {
+                const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
+                if (pct <= 0) return '';
+                const title = `${seg.label}: ${seg.value.toLocaleString('ru-RU')} ZC (${pct.toFixed(1)}%)`;
+                return `<button type="button" class="zc-segment${seg.isMe ? ' zc-segment--me' : ''}" style="flex-basis:${pct}%;background:${seg.color}" title="${this.esc(title)}" data-zc-label="${this.esc(seg.label)}" data-zc-value="${seg.value}" data-zc-pct="${pct.toFixed(2)}"></button>`;
+            }).join('');
+        }
+
+        const legend = document.getElementById('zaliCoinLegend');
+        if (legend) {
+            legend.innerHTML = segments.map(seg => {
+                const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
+                return `<div class="zc-legend-item">
+                    <span class="zc-legend-swatch" style="background:${seg.color}"></span>
+                    <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? ' (вы)' : ''}</span>
+                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} · ${pct.toFixed(1)}%</span>
+                </div>`;
+            }).join('') || '<div class="zc-legend-empty">Пока никто не держит ZaliCoin</div>';
+        }
+    }
+
+    zaliCoinNewIdempotencyKey() {
+        return this.randomBase64(16).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    openCoinTransferModal(prefillRecipient = '') {
+        const modal = document.getElementById('coinTransferModal');
+        if (!modal) return;
+        this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
+        // The key above is only valid for one exact (to, amount) payload — see
+        // submitCoinTransfer, which rotates it whenever the payload changes.
+        this._coinTransferLastPayload = '';
+        this._coinTransferInFlight = false;
+        this._coinTransferFromWallet = !prefillRecipient;
+        const recipientInput = document.getElementById('coinTransferRecipientInput');
+        const amountInput = document.getElementById('coinTransferAmountInput');
+        const submitBtn = document.getElementById('coinTransferSubmitBtn');
+        const status = document.getElementById('coinTransferStatus');
+        if (recipientInput) {
+            recipientInput.value = prefillRecipient || '';
+            recipientInput.disabled = !!prefillRecipient;
+        }
+        if (amountInput) amountInput.value = '';
+        if (submitBtn) submitBtn.disabled = false;
+        if (status) { status.textContent = ''; status.hidden = true; }
+        modal.hidden = false;
+        (prefillRecipient ? amountInput : recipientInput)?.focus();
+    }
+
+    closeCoinTransferModal() {
+        const modal = document.getElementById('coinTransferModal');
+        if (modal) modal.hidden = true;
+    }
+
+    async submitCoinTransfer() {
+        const modal = document.getElementById('coinTransferModal');
+        if (!modal || modal.hidden) return;
+        // The Enter-key path calls this directly, bypassing the disabled submit
+        // button — without this guard a held/repeated Enter fires concurrent
+        // submits (server-side idempotency makes the money safe, but the client
+        // would close/re-log/post the chat notice once per call).
+        if (this._coinTransferInFlight) return;
+        const recipientInput = document.getElementById('coinTransferRecipientInput');
+        const amountInput = document.getElementById('coinTransferAmountInput');
+        const submitBtn = document.getElementById('coinTransferSubmitBtn');
+        const status = document.getElementById('coinTransferStatus');
+        const setStatus = (msg) => { if (status) { status.textContent = msg; status.hidden = !msg; } };
+
+        const to = String(recipientInput?.value || '').trim();
+        const amount = Math.trunc(Number(amountInput?.value));
+        if (!to) { setStatus('Укажите получателя'); return; }
+        if (!Number.isFinite(amount) || amount <= 0) { setStatus('Укажите сумму больше нуля'); return; }
+        if (to === this.myName()) { setStatus('Нельзя перевести самому себе'); return; }
+
+        // The idempotency key must identify one exact payload. If the user got a
+        // transport error, then edited the recipient/amount and resubmitted, the
+        // old key could replay a transfer that DID commit server-side — the server
+        // would answer "success" for the old payload while the user believes the
+        // edited one went through. Rotate the key whenever the payload changes;
+        // keep it only for a true retry of the identical payload.
+        const payloadSignature = `${to} ${amount}`;
+        if (this._coinTransferLastPayload && this._coinTransferLastPayload !== payloadSignature) {
+            this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
+        }
+        this._coinTransferLastPayload = payloadSignature;
+
+        this._coinTransferInFlight = true;
+        if (submitBtn) submitBtn.disabled = true;
+        setStatus('Отправка...');
+
+        // The network call is isolated from everything after it: a timeout or
+        // dropped connection here doesn't tell us whether the server already
+        // committed the transfer, so a transport-level failure gets one safe
+        // automatic retry with the *same* idempotencyKey before we tell the
+        // user anything failed — the server's UNIQUE (from_user, idempotencyKey)
+        // constraint makes a resubmit a no-op if the first attempt actually
+        // landed, and returns the definitive current balance either way.
+        let res;
+        try {
+            res = await this.transferCoinsRequest(to, amount);
+        } catch (e) {
+            setStatus('Не удалось связаться с сервером, попробуйте ещё раз');
+            this.trace(`submitCoinTransfer transport_error=${e}`);
+            this._coinTransferInFlight = false;
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+
+        if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            setStatus(text || 'Не удалось выполнить перевод');
+            this._coinTransferInFlight = false;
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+
+        // From here on the transfer is authoritatively done — nothing below
+        // should be able to make this look like a failed transfer anymore.
+        const data = await res.json().catch(() => null);
+        if (data && Number.isFinite(Number(data.balance))) {
+            this.S.zaliCoinBalance = Number(data.balance);
+        }
+        this._coinTransferInFlight = false;
+        if (submitBtn) submitBtn.disabled = false;
+        this.closeCoinTransferModal();
+        this.addLogEntry({ type: 'INFO', msg: `Отправлено ${amount} ZaliCoin пользователю ${to}`, ts: new Date().toLocaleTimeString() });
+        this.refreshZaliCoinView();
+
+        // Post a normal chat message so the transfer shows up in the
+        // conversation — only when it's the peer of the chat the button
+        // was opened from; a wallet-tab transfer to an arbitrary user may
+        // have no open conversation to post into, so it's skipped there.
+        // Its own failure (e.g. a flaky send right after) is logged, not
+        // surfaced as a transfer error — the money already moved.
+        if (!this._coinTransferFromWallet && to === this.S.current) {
+            const input = document.getElementById('msgInput');
+            // A half-typed draft may be sitting in the composer — the transfer
+            // notice must not silently destroy (or worse, replace-and-send) it.
+            const draft = input ? input.value : '';
+            try {
+                if (input) {
+                    input.value = `💰 Перевёл(а) ${amount} ZaliCoin`;
+                    this.updateSendButtonState?.();
+                    await this.sendInputMessage();
+                }
+            } catch (e) {
+                this.trace(`submitCoinTransfer chat_message_post_failed=${e}`);
+                this.addLogEntry({ type: 'WARN', msg: 'ZaliCoin переведён, но не удалось отправить сообщение об этом в чат', ts: new Date().toLocaleTimeString() });
+            } finally {
+                if (input && draft) {
+                    input.value = draft;
+                    this.updateSendButtonState?.();
+                }
+            }
+        }
+    }
+
+    async transferCoinsRequest(to, amount) {
+        const body = JSON.stringify({ to, amount, idempotencyKey: this._coinTransferIdempotencyKey });
+        try {
+            return await this.apiFetch(this.apiRoutes.coins.transfer, { method: 'POST', body });
+        } catch (firstError) {
+            this.trace(`transferCoinsRequest retrying after transport error=${firstError}`);
+            return await this.apiFetch(this.apiRoutes.coins.transfer, { method: 'POST', body });
+        }
     }
 
     applyPendingMessagesScroll(box) {
@@ -1882,14 +2347,19 @@ class ZaliInterface {
         return [
             { id: 'dm', label: 'ЛС', eyebrow: 'Direct', description: 'Личные диалоги и контакты' },
             { id: 'servers', label: 'Сервера', eyebrow: 'Guilds', description: 'Каналы, роли и сообщества' },
+            { id: 'zalicoin', label: 'ZaliCoin', eyebrow: 'Economy', description: 'Баланс и переводы ZaliCoin' },
         ];
     }
 
     loadUiV2Enabled() {
         try {
-            return localStorage.getItem(this.uiV2EnabledStorageKey()) === '1';
+            const raw = localStorage.getItem(this.uiV2EnabledStorageKey());
+            // ZaliCoin ships as the 3rd segment of this nav (see hubSegmentCatalog),
+            // so this is now the default chrome — `null` (never explicitly toggled)
+            // means "on"; an explicit '0' from before this change stays respected.
+            return raw === null ? true : raw === '1';
         } catch (e) {
-            return false;
+            return true;
         }
     }
 
@@ -1911,15 +2381,15 @@ class ZaliInterface {
             next.push(id);
             if (next.length >= 3) break;
         }
-        return next.length ? next : ['dm', 'servers'];
+        return next.length ? next : ['dm', 'servers', 'zalicoin'];
     }
 
     loadUiV2Segments() {
         try {
             const raw = localStorage.getItem(this.uiV2SegmentsStorageKey());
-            return this.normalizeUiV2Segments(raw ? JSON.parse(raw) : ['dm', 'servers']);
+            return this.normalizeUiV2Segments(raw ? JSON.parse(raw) : ['dm', 'servers', 'zalicoin']);
         } catch (e) {
-            return ['dm', 'servers'];
+            return ['dm', 'servers', 'zalicoin'];
         }
     }
 
@@ -1934,6 +2404,7 @@ class ZaliInterface {
     activeHubSegmentId() {
         if (document.getElementById('viewHub')?.classList.contains('active')) return 'hub';
         if (document.getElementById('viewSettings')?.classList.contains('active')) return 'settings';
+        if (document.getElementById('viewZaliCoin')?.classList.contains('active')) return 'zalicoin';
         return this.S.navMode === 'servers' ? 'servers' : 'dm';
     }
 
@@ -1945,6 +2416,10 @@ class ZaliInterface {
         }
         if (id === 'settings') {
             this.openSettingsView();
+            return;
+        }
+        if (id === 'zalicoin') {
+            this.openZaliCoinView();
             return;
         }
         if (id === 'servers') {
@@ -1963,6 +2438,7 @@ class ZaliInterface {
             servers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 4.6h11.6a2 2 0 0 1 2 2v2.8a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2V6.6a2 2 0 0 1 2-2Z"/><path d="M6.2 12.6h11.6a2 2 0 0 1 2 2v2.8a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2v-2.8a2 2 0 0 1 2-2Z"/><path d="M7.6 8h.05M7.6 16h.05M10.4 8h6M10.4 16h6"/></svg>',
             settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h8.2"/><path d="M16.8 7H19"/><path d="M15 5.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/><path d="M5 17h2.2"/><path d="M10.8 17H19"/><path d="M9 15.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/><path d="M5 12h4.2"/><path d="M12.8 12H19"/><path d="M11 10.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/></svg>',
             hub: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.75 20.25 9v9.25a2 2 0 0 1-2 2h-4.1v-5.35h-4.3v5.35h-4.1a2 2 0 0 1-2-2V9L12 3.75Z"/></svg>',
+            zalicoin: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.25"/><path d="M12 7.4v9.2M14.6 9.4c0-1.05-1.16-1.9-2.6-1.9-1.44 0-2.6.85-2.6 1.9 0 1.05 1.16 1.55 2.6 1.9 1.44.35 2.6.85 2.6 1.9 0 1.05-1.16 1.9-2.6 1.9-1.44 0-2.6-.85-2.6-1.9"/></svg>',
         };
         return icons[key] || icons.hub;
     }
@@ -2199,18 +2675,19 @@ class ZaliInterface {
     }
 
     saveStoredMessageCache() {
+        // Keeps dataUrl (native: self-contained data: URL, survives reload; browser: a
+        // blob: URL, already dead on the next page load regardless of what's cached —
+        // that case is repaired by the network resync in loadBrowserDmHistory/
+        // syncActiveConversation, not by this cache). Dropping dataUrl here used to mean
+        // every attachment permanently degraded to a name-only, undownloadable placeholder
+        // on the next native launch, since archivePath was never wired to any re-fetch.
+        // localStorage quota overflow (large attachments) already falls back gracefully
+        // via warnStorageFallback below.
         const sanitizeMessages = (store) => Object.fromEntries(Object.entries(store || {}).map(([key, msgs]) => [
             key,
             Array.isArray(msgs) ? msgs.map(msg => ({
                 ...msg,
-                attachments: this.normalizeAttachments(msg.attachments).map(att => ({
-                    id: att.id,
-                    name: att.name,
-                    mimeType: att.mimeType,
-                    kind: att.kind,
-                    size: att.size,
-                    archivePath: att.archivePath,
-                })),
+                attachments: this.normalizeAttachments(msg.attachments),
             })) : [],
         ]));
         const payload = {
@@ -2863,11 +3340,14 @@ class ZaliInterface {
         this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} generated=true`);
         const owner = this.dmScopeOwner(scope);
         const meName = String(this.myName() || '').trim();
+        const isChannelScope = !!(serverId && channelId);
         if (owner && meName && owner !== meName) {
             // Non-owner had to invent a key because the owner's envelope was not
             // available/decryptable yet — incoming messages from the peer will stay
             // unreadable until the owner's key is adopted.
             this.addLogEntry({ type: 'WARN', msg: `Ключ диалога не получен от собеседника, сгенерирован временный (scope=${scope})`, ts: new Date().toLocaleTimeString() });
+        } else if (isChannelScope) {
+            this.addLogEntry({ type: 'INFO', msg: `Сгенерирован новый ключ канала (scope=${scope})`, ts: new Date().toLocaleTimeString() });
         } else {
             this.addLogEntry({ type: 'INFO', msg: `Сгенерирован новый ключ диалога (scope=${scope})`, ts: new Date().toLocaleTimeString() });
         }
@@ -2886,6 +3366,14 @@ class ZaliInterface {
                     this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} publish_pending=true result=${published}`);
                 }
             });
+        } else if (isChannelScope) {
+            // Channel keys used to only ever be generated locally and never handed
+            // to the rest of the server — every member who opened the channel before
+            // anyone else's envelope arrived invented their own random key, so only
+            // members who happened to share crypto material some other way (e.g.
+            // multi-device vault sync) could read each other. Fan the new key out to
+            // every other current server member the same way DM keys are published.
+            void this.publishConversationKeyToServerMembers({ serverId, channelId, scope, key: localKey, reason });
         }
         return localKey;
     }
@@ -3447,8 +3935,15 @@ class ZaliInterface {
             const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(recipient));
             if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
             const devices = await res.json();
+            // Only publish the real conversation key to devices the peer has already
+            // approved. An unapproved device gets its keys via the peer's own
+            // approveDeviceAndExport() vault export once trusted — broadcasting to it
+            // here means every brand-new (often throwaway/incognito) device registration
+            // triggers a full re-publish to all of the peer's devices, which is most of
+            // the envelope churn observed in prod (see conversation_key_envelopes: same
+            // scope re-published by 3 distinct sender devices in one day).
             const usable = Array.isArray(devices)
-                ? devices.filter(device => !device?.revoked && this.devicePublicJwk(device))
+                ? devices.filter(device => device?.approved && !device?.revoked && this.devicePublicJwk(device))
                 : [];
             if (!usable.length) {
                 this.trace(`publishConversationKeyToPeer skipped reason=${reason} peer=${recipient} devices=0`);
@@ -3497,14 +3992,64 @@ class ZaliInterface {
         return '';
     }
 
+    channelFromConversationScope(scope) {
+        const parts = String(scope || '').trim().split(':');
+        if (parts.length !== 3 || parts[0] !== 'server') return null;
+        const serverId = parts[1] || '';
+        const channelId = parts[2] || '';
+        if (!serverId || !channelId) return null;
+        return { serverId, channelId };
+    }
+
+    // Fans a channel's conversation key out to every other current server member
+    // via the same per-device key-envelope mechanism used for DMs. Unlike a DM
+    // (single recipient), a channel can have any number of members and the
+    // membership list can change, so this is re-run on every resolve/retry
+    // rather than tracked with a one-shot "published" flag.
+    async publishConversationKeyToServerMembers({ serverId, channelId, scope, key, reason = 'auto' } = {}) {
+        const sid = String(serverId || '').trim();
+        const cid = String(channelId || '').trim();
+        const scoped = String(scope || '').trim();
+        const secret = String(key || '').trim();
+        if (!this.S.session?.token || !sid || !cid || !scoped || !secret) return 0;
+        const me = String(this.myName() || '').trim();
+        let members = [];
+        try {
+            members = await this.loadServerMembers(sid);
+        } catch (e) {
+            this.trace(`publishConversationKeyToServerMembers failed reason=${reason} scope=${scoped} error=${e?.message || e}`, {}, 'WARN');
+            return 0;
+        }
+        const recipients = members
+            .map(member => String(member?.username || '').trim())
+            .filter(username => username && username !== me);
+        const results = await Promise.allSettled(
+            recipients.map(peer => this.publishConversationKeyToPeer({ peer, scope: scoped, key: secret, reason }))
+        );
+        const published = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+        this.trace(`publishConversationKeyToServerMembers reason=${reason} scope=${scoped} members=${recipients.length} published=${published}`);
+        return published;
+    }
+
     async retryPublishConversationKeys({ reason = 'auto', limit = 20 } = {}) {
         if (!this.S.session?.token) return 0;
         const stored = this.loadStoredConversationKeys();
         const entries = Object.entries(stored)
-            .filter(([scope, key]) => String(scope || '').startsWith('dm:') && String(key || '').trim())
+            .filter(([scope, key]) => (String(scope || '').startsWith('dm:') || String(scope || '').startsWith('server:')) && String(key || '').trim())
             .slice(0, Math.max(1, Number(limit) || 20));
         let published = 0;
         for (const [scope, key] of entries) {
+            const channel = this.channelFromConversationScope(scope);
+            if (channel) {
+                published += await this.publishConversationKeyToServerMembers({
+                    serverId: channel.serverId,
+                    channelId: channel.channelId,
+                    scope,
+                    key,
+                    reason: `retry:${reason}`,
+                });
+                continue;
+            }
             const peer = this.peerFromConversationScope(scope);
             if (!peer) continue;
             const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}` });
@@ -7472,6 +8017,13 @@ class ZaliInterface {
             } catch (e) {}
         }
         this.voice.remoteAudios.clear();
+        for (const video of this.voice.remoteVideos.values()) {
+            try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
+        }
+        this.voice.remoteVideos.clear();
+        this.detachLocalVideoPreview();
+        this.voice.videoEnabled = false;
+        this.voice.cameraOn = false;
         if (this.voice.localStream) {
             for (const track of this.voice.localStream.getTracks()) {
                 try { track.stop(); } catch (e) {}
@@ -7520,14 +8072,161 @@ class ZaliInterface {
         if (!this.voice.supported) {
             throw new Error('Голосовые звонки не поддерживаются в этом окружении');
         }
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        let stream;
+        if (this.voice.videoEnabled) {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: true,
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                });
+                this.voice.cameraOn = true;
+            } catch (error) {
+                this.voiceTrace('camera-request-failed', { error: error?.message || String(error) }, 'WARN');
+                this.addLogEntry({ type: 'WARN', msg: 'Камера недоступна — продолжаем аудиозвонком', ts: new Date().toLocaleTimeString() });
+                this.voice.videoEnabled = false;
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            }
+        } else {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        }
         this.voice.localStream = stream;
         this.voice.muted = false;
         this.voiceTrace('local-stream-ready', {
             tracks: stream.getTracks().map(track => `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`),
         });
         this.ensureVoiceMeterLoop();
+        this.attachLocalVideoPreview();
         return stream;
+    }
+
+    attachLocalVideoPreview() {
+        if (!this.voice.localStream || !this.voice.localStream.getVideoTracks().length) return;
+        let video = this.voice.localVideoEl;
+        if (!video) {
+            video = document.createElement('video');
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+            this.voice.localVideoEl = video;
+        }
+        if (video.srcObject !== this.voice.localStream) {
+            video.srcObject = this.voice.localStream;
+        }
+        video.play?.().catch(() => {});
+        this.scheduleRenderVoicePanel();
+    }
+
+    detachLocalVideoPreview() {
+        const video = this.voice.localVideoEl;
+        if (video) {
+            try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
+        }
+        this.voice.localVideoEl = null;
+    }
+
+    async setVoiceCameraEnabled(enabled) {
+        if (enabled) {
+            await this.enableVoiceCamera();
+        } else {
+            this.disableVoiceCamera();
+        }
+    }
+
+    async enableVoiceCamera() {
+        if (this.voice.cameraOn) return;
+        if (!this.voice.localStream) {
+            this.voice.videoEnabled = true;
+            try {
+                await this.ensureVoiceLocalStream();
+                for (const peer of this.voice.peerConnections.keys()) {
+                    await this.attachLocalVoiceTracks(peer);
+                }
+            } catch (error) {
+                this.voiceTrace('camera-enable-failed', { error: error?.message || String(error) }, 'WARN');
+                this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось включить камеру', ts: new Date().toLocaleTimeString() });
+            }
+            this.renderVoicePanel();
+            return;
+        }
+        try {
+            const camStream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+            });
+            const track = camStream.getVideoTracks()[0];
+            if (!track) return;
+            this.voice.localStream.addTrack(track);
+            this.voice.videoEnabled = true;
+            this.voice.cameraOn = true;
+            this.attachLocalVideoPreview();
+            for (const peer of this.voice.peerConnections.keys()) {
+                const entry = this.getVoicePeerEntry(peer);
+                if (entry.videoSender) {
+                    await entry.videoSender.replaceTrack(track);
+                } else {
+                    entry.videoSender = entry.pc.addTrack(track, this.voice.localStream);
+                }
+            }
+            await this.renegotiateAllVoicePeers();
+            this.renderVoicePanel();
+        } catch (error) {
+            this.voiceTrace('camera-enable-failed', { error: error?.message || String(error) }, 'WARN');
+            this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось включить камеру', ts: new Date().toLocaleTimeString() });
+        }
+    }
+
+    disableVoiceCamera() {
+        if (!this.voice.cameraOn) return;
+        const stream = this.voice.localStream;
+        if (stream) {
+            for (const track of stream.getVideoTracks()) {
+                try { track.stop(); } catch (e) {}
+                try { stream.removeTrack(track); } catch (e) {}
+            }
+        }
+        this.voice.cameraOn = false;
+        this.voice.videoEnabled = false;
+        this.detachLocalVideoPreview();
+        for (const entry of this.voice.peerConnections.values()) {
+            if (entry.videoSender) {
+                try { entry.pc.removeTrack(entry.videoSender); } catch (e) {}
+                entry.videoSender = null;
+            }
+        }
+        this.renegotiateAllVoicePeers();
+        this.renderVoicePanel();
+    }
+
+    async renegotiateAllVoicePeers() {
+        for (const peer of this.voice.peerConnections.keys()) {
+            await this.renegotiateVoicePeer(peer);
+        }
+    }
+
+    async renegotiateVoicePeer(peer) {
+        const entry = this.getVoicePeerEntry(peer);
+        if (!entry || entry.pc.signalingState !== 'stable') return;
+        try {
+            const offer = await entry.pc.createOffer();
+            await entry.pc.setLocalDescription(offer);
+            this.voiceTrace('renegotiate-offer', { peer, roomId: this.voice.roomId || '' });
+            this.sendVoiceEvent({
+                type: 'voice_signal',
+                roomId: this.voice.roomId,
+                roomType: this.voice.roomType,
+                serverId: this.voice.serverId,
+                channelId: this.voice.channelId,
+                to: peer,
+                signal: {
+                    type: 'offer',
+                    sdp: {
+                        type: entry.pc.localDescription?.type || 'offer',
+                        sdp: entry.pc.localDescription?.sdp || '',
+                    },
+                },
+            });
+        } catch (error) {
+            this.voiceTrace('renegotiate-error', { peer, error: error?.message || String(error) }, 'WARN');
+        }
     }
 
     async unlockVoicePlayback() {
@@ -7573,6 +8272,7 @@ class ZaliInterface {
                 statsTimer: null,
                 healthTimer: null,
                 audioSender: null,
+                videoSender: null,
                 generatedIceCandidates: 0,
                 receivedIceCandidates: 0,
             };
@@ -8061,38 +8761,15 @@ class ZaliInterface {
         if (!entry || !this.voice.localStream || entry.localTracksAttached) return;
         const tracks = this.voice.localStream.getTracks();
         this.voiceTrace('attach-local-tracks', { peer, tracks: tracks.length, roomId: this.voice.roomId || '' });
-        const audioTracks = this.voice.localStream.getAudioTracks();
-        if (entry.audioSender && audioTracks.length) {
-            const track = audioTracks[0];
-            try {
-                if (entry.audioSender.track !== track) {
-                    await entry.audioSender.replaceTrack(track);
-                }
-                if (typeof entry.audioSender.setStreams === 'function') {
-                    try {
-                        entry.audioSender.setStreams(this.voice.localStream);
-                    } catch (setStreamsError) {
-                        this.voiceTrace('set-streams-error', { peer, error: setStreamsError?.message || String(setStreamsError) }, 'WARN');
-                    }
-                }
-                this.voiceTrace('attach-local-sender', {
-                    peer,
-                    track: `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`,
-                    senderTrack: entry.audioSender.track ? `${entry.audioSender.track.kind}:${entry.audioSender.track.readyState}:${entry.audioSender.track.enabled ? 'on' : 'off'}` : 'none',
-                });
-            } catch (error) {
-                this.voiceTrace('attach-local-sender-error', { peer, error: error?.message || String(error) }, 'WARN');
-            }
-        } else {
-            for (const track of tracks) {
-                const sender = entry.pc.addTrack(track, this.voice.localStream);
-                entry.audioSender = sender;
-                this.voiceTrace('attach-local-track-added', {
-                    peer,
-                    track: `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`,
-                    senderTrack: sender?.track ? `${sender.track.kind}:${sender.track.readyState}:${sender.track.enabled ? 'on' : 'off'}` : 'none',
-                });
-            }
+        for (const track of tracks) {
+            const senderField = track.kind === 'video' ? 'videoSender' : 'audioSender';
+            const sender = entry.pc.addTrack(track, this.voice.localStream);
+            entry[senderField] = sender;
+            this.voiceTrace('attach-local-track-added', {
+                peer,
+                track: `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`,
+                senderTrack: sender?.track ? `${sender.track.kind}:${sender.track.readyState}:${sender.track.enabled ? 'on' : 'off'}` : 'none',
+            });
         }
         entry.localTracksAttached = true;
         this.ensureMeterEntry('local', this.voice.localStream);
@@ -8125,6 +8802,7 @@ class ZaliInterface {
         this.ensureMeterEntry(name, stream);
         this.ensureRemotePlaybackNode(name, stream);
         this.ensureVoiceMeterLoop();
+        this.attachRemoteVideoStream(name, stream);
         this.voiceTrace('remote-audio-attach', {
             peer: name,
             streamId: stream.id || '',
@@ -8137,6 +8815,34 @@ class ZaliInterface {
         attemptPlay();
         requestAnimationFrame(() => attemptPlay());
         setTimeout(attemptPlay, 250);
+    }
+
+    attachRemoteVideoStream(peer, stream) {
+        const name = String(peer || '').trim();
+        if (!name || !stream) return;
+        const hasVideo = stream.getVideoTracks().length > 0;
+        let video = this.voice.remoteVideos.get(name);
+        if (!hasVideo) {
+            if (video) {
+                try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
+                this.voice.remoteVideos.delete(name);
+                this.scheduleRenderVoicePanel();
+            }
+            return;
+        }
+        if (!video) {
+            video = document.createElement('video');
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+            video.dataset.peer = name;
+            this.voice.remoteVideos.set(name, video);
+        }
+        if (video.srcObject !== stream) {
+            video.srcObject = stream;
+        }
+        video.play?.().catch(error => this.voiceTrace('remote-video-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
+        this.scheduleRenderVoicePanel();
     }
 
     closeVoicePeer(peer) {
@@ -8158,6 +8864,7 @@ class ZaliInterface {
                 entry.statsTimer = null;
             }
             entry.audioSender = null;
+            entry.videoSender = null;
             try { entry.pc.close(); } catch (e) {}
             this.voice.peerConnections.delete(name);
         }
@@ -8169,6 +8876,15 @@ class ZaliInterface {
                 audio.remove?.();
             } catch (e) {}
             this.voice.remoteAudios.delete(name);
+        }
+        const video = this.voice.remoteVideos.get(name);
+        if (video) {
+            try {
+                video.pause?.();
+                video.srcObject = null;
+                video.remove?.();
+            } catch (e) {}
+            this.voice.remoteVideos.delete(name);
         }
         const playbackNode = this.voice.remotePlaybackNodes?.get(name);
         if (playbackNode) {
@@ -8343,13 +9059,14 @@ class ZaliInterface {
         this.resetVoiceState();
     }
 
-    async startDirectCall(peer) {
+    async startDirectCall(peer, { video = false } = {}) {
         const target = String(peer || '').trim();
         if (!target) return;
         const me = String(this.myName() || '').trim();
         const roomId = this.makeDmCallRoomId(target);
         if (!roomId) return;
-        this.voiceTrace('start-dm-call', { target, me, roomId });
+        this.voiceTrace('start-dm-call', { target, me, roomId, video });
+        this.voice.videoEnabled = !!video;
         await this.unlockVoicePlayback();
         this.voice.callTrack = {
             roomId,
@@ -8978,6 +9695,7 @@ class ZaliInterface {
             if (activeRoom) {
                 actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceLeaveBtn">Покинуть</button>`);
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceMuteBtn">${this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон'}</button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceCameraBtn">${this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру'}</button>`);
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">Присоединиться</button>`);
             }
@@ -8985,6 +9703,7 @@ class ZaliInterface {
             if (activeRoom) {
                 actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceLeaveBtn">Завершить</button>`);
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceMuteBtn">${this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон'}</button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceCameraBtn">${this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру'}</button>`);
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">Принять</button>`);
                 actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">Отклонить</button>`);
@@ -8992,6 +9711,7 @@ class ZaliInterface {
                 actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">Отменить</button>`);
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceCallBtn">Позвонить</button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceVideoCallBtn">Видеозвонок</button>`);
             }
         }
 
@@ -9005,6 +9725,7 @@ class ZaliInterface {
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
                 <div class="voice-room-actions">${actionButtons.join('')}</div>
+                <div class="voice-video-grid" id="voiceVideoGrid"></div>
                 <div class="voice-meter-grid">
                     <div class="voice-meter" id="voiceMicMeter">
                         <div class="voice-meter-head">
@@ -9085,9 +9806,36 @@ class ZaliInterface {
         }
         if (isVoiceChannel || hasDmCall || hasIncoming || this.voice.roomType === 'dm') {
             panel.innerHTML = this.renderVoiceRoomView();
+            this.mountVoiceVideoElements();
             return;
         }
         panel.innerHTML = '';
+    }
+
+    mountVoiceVideoElements() {
+        const grid = document.getElementById('voiceVideoGrid');
+        if (!grid) return;
+        grid.replaceChildren();
+        if (this.voice.localVideoEl && this.voice.cameraOn) {
+            const wrap = document.createElement('div');
+            wrap.className = 'voice-video-tile voice-video-local';
+            wrap.appendChild(this.voice.localVideoEl);
+            const label = document.createElement('span');
+            label.className = 'voice-video-label';
+            label.textContent = 'Вы';
+            wrap.appendChild(label);
+            grid.appendChild(wrap);
+        }
+        for (const [peer, video] of this.voice.remoteVideos.entries()) {
+            const wrap = document.createElement('div');
+            wrap.className = 'voice-video-tile';
+            wrap.appendChild(video);
+            const label = document.createElement('span');
+            label.className = 'voice-video-label';
+            label.textContent = peer;
+            wrap.appendChild(label);
+            grid.appendChild(wrap);
+        }
     }
 
     isOutgoingMessage(msg) {
@@ -9577,6 +10325,7 @@ class ZaliInterface {
         const chatHdrName = document.getElementById('chatHdrName');
         const chatHdrSub = document.getElementById('chatHdrSub');
         const chatCallBtn = document.getElementById('chatCallBtn');
+        const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
         const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         const tbChat = document.getElementById('tbChat');
         const server = this.currentServer();
@@ -9588,6 +10337,9 @@ class ZaliInterface {
         if (channelList) channelList.hidden = !isServers;
         if (chatCallBtn) {
             chatCallBtn.hidden = isServers || !this.S.current;
+        }
+        if (chatVideoCallBtn) {
+            chatVideoCallBtn.hidden = isServers || !this.S.current;
         }
         if (serverSettingsBtn) {
             serverSettingsBtn.hidden = !isServers || !server || !canManage;
@@ -9621,7 +10373,7 @@ class ZaliInterface {
             chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
         }
         if (chatHdrName) {
-            const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} участников` : '';
+            const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} ${this.ruPlural(server.memberCount, 'участник', 'участника', 'участников')}` : '';
             const channelTitle = channel
                 ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
                 : this.esc(server.name);
@@ -13345,10 +14097,14 @@ class ZaliInterface {
                 chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
             }
             if (chatHdrName) {
+                const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} ${this.ruPlural(server.memberCount, 'участник', 'участника', 'участников')}` : '';
                 const channelTitle = channel
                     ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
                     : this.esc(server.name);
-                chatHdrName.innerHTML = `<span class="chat-hdr-title">${channelTitle}</span>`;
+                chatHdrName.innerHTML = `
+                    <span class="chat-hdr-title">${channelTitle}</span>
+                    ${membersText ? `<span class="chat-hdr-count">${this.esc(membersText)}</span>` : ''}
+                `;
             }
             if (chatHdrSub) {
                 chatHdrSub.textContent = channel
@@ -13386,6 +14142,8 @@ class ZaliInterface {
         }
         const chatCallBtn = document.getElementById('chatCallBtn');
         if (chatCallBtn) chatCallBtn.hidden = !this.S.current;
+        const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
+        if (chatVideoCallBtn) chatVideoCallBtn.hidden = !this.S.current;
         const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         if (serverSettingsBtn) serverSettingsBtn.hidden = true;
 
@@ -14534,7 +15292,13 @@ class ZaliInterface {
         const compact = Object.entries(details)
             .filter(([, value]) => value !== undefined && value !== null && value !== '')
             .map(([key, value]) => {
-                if (Array.isArray(value)) return `${key}=[${value.join(',')}]`;
+                if (Array.isArray(value)) {
+                    const hasObjects = value.some(item => item !== null && typeof item === 'object');
+                    if (hasObjects) {
+                        try { return `${key}=${JSON.stringify(value)}`; } catch (e) { return `${key}=[object]`; }
+                    }
+                    return `${key}=[${value.join(',')}]`;
+                }
                 if (typeof value === 'object') {
                     try { return `${key}=${JSON.stringify(value)}`; } catch (e) { return `${key}=[object]`; }
                 }
@@ -14631,6 +15395,11 @@ class ZaliInterface {
                     await this.startDirectCall(this.S.current);
                     return;
                 }
+                const videoCallBtn = e.target.closest('#voiceVideoCallBtn');
+                if (videoCallBtn) {
+                    await this.startDirectCall(this.S.current, { video: true });
+                    return;
+                }
                 const joinBtn = e.target.closest('#voiceJoinBtn');
                 if (joinBtn) {
                     await this.joinVoiceChannel();
@@ -14644,6 +15413,11 @@ class ZaliInterface {
                 const muteBtn = e.target.closest('#voiceMuteBtn');
                 if (muteBtn) {
                     this.toggleVoiceMute();
+                    return;
+                }
+                const cameraBtn = e.target.closest('#voiceCameraBtn');
+                if (cameraBtn) {
+                    await this.setVoiceCameraEnabled(!this.voice.cameraOn);
                     return;
                 }
                 const acceptBtn = e.target.closest('#voiceAcceptBtn');
@@ -14677,6 +15451,14 @@ class ZaliInterface {
             chatCallBtn.addEventListener('click', async () => {
                 if (!this.S.current) return;
                 await this.startDirectCall(this.S.current);
+            });
+        }
+
+        const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
+        if (chatVideoCallBtn) {
+            chatVideoCallBtn.addEventListener('click', async () => {
+                if (!this.S.current) return;
+                await this.startDirectCall(this.S.current, { video: true });
             });
         }
 
@@ -14761,6 +15543,42 @@ class ZaliInterface {
             attachmentInput.addEventListener('change', (e) => {
                 this.handleFiles(e.target.files || []);
                 e.target.value = '';
+            });
+        }
+
+        const coinTransferBtn = document.getElementById('coinTransferBtn');
+        if (coinTransferBtn) {
+            coinTransferBtn.addEventListener('click', () => {
+                // In a DM the peer is the obvious recipient; in a server channel
+                // (or with no active chat) there is no single peer — open the
+                // wallet-style modal with a free recipient field instead of
+                // silently doing nothing.
+                const isDm = this.currentConversationMode() !== 'servers';
+                this.openCoinTransferModal(isDm && this.S.current ? this.S.current : '');
+            });
+        }
+        const zaliCoinSendBtn = document.getElementById('zaliCoinSendBtn');
+        if (zaliCoinSendBtn) zaliCoinSendBtn.addEventListener('click', () => this.openCoinTransferModal());
+        const coinTransferModal = document.getElementById('coinTransferModal');
+        const coinTransferCloseBtn = document.getElementById('coinTransferCloseBtn');
+        const coinTransferSubmitBtn = document.getElementById('coinTransferSubmitBtn');
+        if (coinTransferCloseBtn) coinTransferCloseBtn.addEventListener('click', () => this.closeCoinTransferModal());
+        if (coinTransferSubmitBtn) coinTransferSubmitBtn.addEventListener('click', () => this.submitCoinTransfer());
+        if (coinTransferModal) {
+            coinTransferModal.addEventListener('click', (e) => {
+                if (e.target === coinTransferModal) this.closeCoinTransferModal();
+            });
+        }
+        const coinTransferAmountInput = document.getElementById('coinTransferAmountInput');
+        if (coinTransferAmountInput) {
+            coinTransferAmountInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
+            });
+        }
+        const coinTransferRecipientInput = document.getElementById('coinTransferRecipientInput');
+        if (coinTransferRecipientInput) {
+            coinTransferRecipientInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); coinTransferAmountInput?.focus(); }
             });
         }
 
@@ -15834,6 +16652,8 @@ class ZaliInterface {
         this.addLogEntry({ type: 'INFO', msg: 'ZaliMessenger v6.0 (Rust Backend) запущен — шифрование и сетевой стек работают в Rust', ts: new Date().toLocaleTimeString() });
         this.resizeComposer();
         this.syncMobileChrome();
+        this.setupMobileNavGestures();
+        this.setupMobileKeyboardAvoidance();
         this.applyUiV2Chrome();
         this.applyExperimentalDesign();
         const mobileQuery = this.mobileLayoutQuery();

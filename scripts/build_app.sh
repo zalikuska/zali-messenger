@@ -98,6 +98,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>ZaliMessenger uses the microphone for voice calls and voice channels.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>ZaliMessenger uses the camera for video calls.</string>
 </dict>
 </plist>
 EOF
