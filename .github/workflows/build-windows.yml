@@ -1,0 +1,43 @@
+name: Build Windows client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/windows/**"
+      - "core/**"
+      - "sdk/Rust/**"
+      - "web/**"
+      - "scripts/bundle_web.py"
+      - "scripts/build_windows_app.ps1"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      ZALI_API_BASE_URL: https://msgs.zalikus.org
+      ZALI_WS_BASE_URL: wss://msgs.zalikus.org
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build Windows client
+        run: .\scripts\build_windows_app.ps1
+        shell: pwsh
+
+      - name: Upload ZaliMessenger.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZaliMessenger-windows
+          path: dist/windows/ZaliMessenger.exe
