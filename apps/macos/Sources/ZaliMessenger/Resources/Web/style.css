@@ -1711,6 +1711,39 @@ body[data-nav-mode="servers"] .contacts {
     gap: 10px;
 }
 
+/* Screen-share "stage" — the big, prominent area. Only shown while at
+   least one screen (local or remote) is being shared; empty otherwise. */
+.voice-stage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.voice-stage:empty {
+    display: none;
+}
+
+.voice-stage-tile {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #0a0b0f;
+    border: 1px solid rgba(var(--accent-rgb), .22);
+    box-shadow: 0 0 0 1px rgba(var(--accent-rgb), .05), 0 20px 46px rgba(0,0,0,.28);
+}
+
+.voice-stage-tile video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    display: block;
+}
+
+/* Camera feeds — small floating bubbles rather than full tiles, so they
+   read as a "who's on camera" strip and don't compete with a screen share. */
 .voice-video-grid {
     display: flex;
     flex-wrap: wrap;
@@ -1723,12 +1756,23 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-video-tile {
     position: relative;
-    width: min(320px, 100%);
-    aspect-ratio: 16 / 9;
-    border-radius: 14px;
+    width: 130px;
+    aspect-ratio: 4 / 3;
+    border-radius: 16px;
     overflow: hidden;
     background: #000;
-    border: 1px solid rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.1);
+    box-shadow: 0 8px 20px rgba(0,0,0,.22);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+
+.voice-video-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 26px rgba(0,0,0,.3);
+}
+
+.voice-video-tile.voice-video-local {
+    border-color: rgba(var(--accent-rgb), .4);
 }
 
 .voice-video-tile video {
@@ -1738,21 +1782,22 @@ body[data-nav-mode="servers"] .contacts {
     display: block;
 }
 
-.voice-video-tile.voice-video-local {
-    width: min(180px, 40%);
-}
-
 .voice-video-label {
     position: absolute;
-    left: 8px;
-    bottom: 8px;
+    left: 6px;
+    bottom: 6px;
     padding: 3px 8px;
     border-radius: 999px;
-    background: rgba(0,0,0,.55);
+    background: rgba(0,0,0,.6);
+    backdrop-filter: blur(2px);
     color: #fff;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     letter-spacing: .02em;
+    max-width: calc(100% - 12px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .voice-meter-grid {
@@ -1888,8 +1933,11 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .voice-btn {
-    min-height: 34px;
-    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 36px;
+    padding: 0 16px 0 12px;
     border: 1px solid rgba(var(--accent-rgb), .16);
     border-radius: 999px;
     background: linear-gradient(180deg, rgba(var(--accent-rgb), .98), rgba(var(--accent-rgb), .84));
@@ -1905,12 +1953,70 @@ body[data-nav-mode="servers"] .contacts {
 .voice-btn:hover {
     filter: brightness(1.05);
     box-shadow: 0 0 0 3px var(--lime-dim);
+    transform: translateY(-1px);
 }
 
 .voice-btn.danger {
     border-color: rgba(255,77,109,.24);
     background: linear-gradient(180deg, rgba(255,77,109,.96), rgba(255,77,109,.82));
     color: #fff;
+}
+
+.voice-btn .call-ctrl-icon {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+}
+
+/* In-call control bar: circular icon buttons, Zoom/Meet-style. Rendered
+   instead of the pill buttons above once a call is actually connected. */
+.call-ctrl-bar {
+    justify-content: center;
+    gap: 12px;
+    padding: 4px 0 2px;
+}
+
+.call-ctrl-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.1);
+    background: rgba(255,255,255,.05);
+    color: var(--text);
+    cursor: pointer;
+    transition: transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease, color .16s ease;
+}
+
+.call-ctrl-btn:hover {
+    transform: translateY(-2px);
+    background: rgba(255,255,255,.09);
+    box-shadow: 0 10px 22px rgba(0,0,0,.24);
+}
+
+.call-ctrl-btn .call-ctrl-icon {
+    width: 20px;
+    height: 20px;
+}
+
+.call-ctrl-btn.active {
+    border-color: rgba(var(--accent-rgb), .4);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), .95), rgba(var(--accent-rgb), .78));
+    color: #0b0b0b;
+    box-shadow: 0 0 0 3px var(--lime-dim);
+}
+
+.call-ctrl-btn.danger {
+    border-color: rgba(255,77,109,.3);
+    background: linear-gradient(180deg, rgba(255,77,109,.92), rgba(255,77,109,.74));
+    color: #fff;
+}
+
+.call-ctrl-btn.danger:hover {
+    box-shadow: 0 10px 24px rgba(255,77,109,.28);
 }
 
 .voice-room-participants {

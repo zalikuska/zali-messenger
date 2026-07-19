@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Агенты
+
+Никогда не запускать больше 1 агента одновременно. Запускать агента вообще только если это действительно необходимо — по умолчанию делать работу самостоятельно, без делегирования в Agent.
+
 ## ⚠️ Обязательно при ЛЮБЫХ изменениях в коде — проверить, не нужны ли они в другой версии
 
 Этот репозиторий содержит **несколько параллельных реализаций одной и той же логики**. Почти любой фикс в одном месте требуется и в других. **Перед завершением любой правки уточни (у пользователя и/или проверкой), не нужно ли продублировать её в:**
@@ -34,6 +38,7 @@ Rules:
 - Server repo: https://github.com/zalikuska/zali-messenger-server (branch `zali-server`)
 - Server binary runs at: `/opt/zali-server/server/target/release/zali_server` (moved from `/opt/zali-server/target/release/zali_server` by the 2026-07-12 reorg — that root `Cargo.toml` no longer exists, so the build output now lands under `server/target/`, not `target/`)
 - Env vars: `/etc/zali/zali-server.env` (symlinked to `/opt/zali-server/.env`)
+- Process management: **systemd unit** `zali-server.service` (`/etc/systemd/system/zali-server.service` on the VPS) — `enabled` (survives reboot) + `Restart=always` (auto-recovers from crashes). Introduced 2026-07-19 after the server was found dead with no panic/OOM in the logs: it had been started via an interactive-SSH `nohup ... &`, and `systemd-logind` killed it along with the login session on disconnect (`nohup`/`disown` don't reliably protect against that). **Do not go back to ad-hoc `nohup`/`pkill` for starting the server** — always use `systemctl` now.
 
 ### Deploy process
 
@@ -41,17 +46,19 @@ Rules:
 # 1. Push server/src/main.rs changes from local monorepo to server repo
 git push serverrepo codex/ui-v2-hub-segments:zali-server
 
-# 2. On VPS: pull, build, restart
+# 2. On VPS: pull, build, restart via systemd
 ssh zms "cd /opt/zali-server && git pull --ff-only origin zali-server"
 ssh zms "cd /opt/zali-server && cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -3"
-ssh zms "pkill -f zali_server; sleep 1"
-ssh zms "cd /opt/zali-server && set -a && source /etc/zali/zali-server.env && set +a && nohup ./server/target/release/zali_server >>/root/zali-server.log 2>&1 </dev/null &"
+ssh zms "systemctl restart zali-server.service"
 
 # 3. Verify
-ssh zms "sleep 3 && pidof zali_server && tail -5 /root/zali-server.log"
+ssh zms "sleep 2 && systemctl status zali-server.service --no-pager | head -10"
+ssh zms "readlink -f /proc/\$(pidof zali_server)/exe"   # confirm it's server/target/release/zali_server, not a stale path
 ```
 
-> Note: `set -a && source /etc/zali/zali-server.env && set +a` required — `nohup` doesn't inherit `source`d vars otherwise.
+Logs still land in `/root/zali-server.log` (the unit's `StandardOutput`/`StandardError` append there); `journalctl -u zali-server` also works for systemd-level events (start/stop/restart), but app-level tracing output is only in the log file.
+
+If the service ever needs hand-editing: unit file lives at `/etc/systemd/system/zali-server.service` on the VPS (not in this repo). After editing it, run `systemctl daemon-reload` before `restart`.
 
 > Note: since the Web Push feature landed (2026-07-12), the first build after pulling it will compile
 > OpenSSL from source (`openssl` crate's `vendored` feature, pulled in transitively for `web-push`'s

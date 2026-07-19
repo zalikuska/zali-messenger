@@ -297,6 +297,25 @@
                                 </div>
                             </section>
 
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Debug</span>
+                                        <h3 class="settings-card-title">Трассировка звонков</h3>
+                                    </div>
+                                    <span class="settings-card-note">dev</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputVoiceTrace" type="checkbox">
+                                        <span>
+                                            <strong>Включить трассировку во время звонка</strong>
+                                            <small>Показывает панель Voice health (ICE/RTP/candidate pair) и технический журнал сигналинга в панели звонка и в журнале событий — нужно только для диагностики проблем со связью</small>
+                                        </span>
+                                    </label>
+                                </div>
+                            </section>
+
                             <div class="settings-grid">
                                 <div class="settings-column">
                                     <section class="settings-card">
@@ -436,7 +455,7 @@
             </label>
             <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
             <div class="coin-transfer-actions">
-                <button class="btn-flat" id="coinTransferCancelBtn" type="button" onclick="document.getElementById('coinTransferModal').hidden = true">Отмена</button>
+                <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
                 <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
             </div>
         </div>

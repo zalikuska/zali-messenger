@@ -109,6 +109,21 @@ pub(crate) fn decode_data_url(value: &str) -> Option<(Vec<u8>, String, String)> 
     ))
 }
 
+/// Inverse of `decode_data_url`'s base64 branch — mirrors macOS's
+/// `NetworkService.makeDataURL`/`WebView.makeDataURL`. Used to embed an
+/// extracted attachment's bytes directly in the message payload handed to
+/// the web UI, since unlike macOS's Swift unpack helpers, the shared Rust
+/// core's `zali_net:unpack_message` command only returns attachment
+/// metadata (name/archivePath/mimeType/kind/size) — never the bytes.
+pub(crate) fn make_data_url(data: &[u8], mime_type: &str) -> String {
+    let mime = if mime_type.trim().is_empty() {
+        "application/octet-stream"
+    } else {
+        mime_type
+    };
+    format!("data:{};base64,{}", mime, BASE64_STANDARD.encode(data))
+}
+
 pub(crate) fn sanitize_download_name(name: &str, fallback_extension: &str) -> String {
     let cleaned: String = name
         .chars()

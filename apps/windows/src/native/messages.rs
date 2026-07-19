@@ -15,8 +15,8 @@ use zali_messenger_core::{zali_bus_dispatch, zali_bus_free_string};
 
 use crate::native::{
     cache_decrypted_message, cached_decrypted_message, candidate_message_keys, dispatch_ui_event,
-    http_client, json_string_literal, new_request_id, retry_with_backoff, sanitize_file_name,
-    trace, ApiSession, AppEvent, UiBusEvent, UploadError,
+    http_client, json_string_literal, make_data_url, new_request_id, retry_with_backoff,
+    sanitize_file_name, trace, ApiSession, AppEvent, UiBusEvent, UploadError,
 };
 
 pub(crate) fn dispatch_core_command(address_command: &str, args: Value) -> Result<Value, String> {
@@ -710,13 +710,57 @@ pub(crate) async fn process_history_record(
         return Some(output);
     };
 
+    // zali_net:unpack_message (core/src/net.rs) only returns attachment metadata
+    // (name/archivePath/mimeType/kind/size) — the actual bytes stay on disk under
+    // temp_dir. Read each one back and embed it as a dataUrl before the temp dir is
+    // wiped below, mirroring what macOS's Swift unpack helpers do inline. Without
+    // this, every attachment arrived at the web UI with a name but no way to render
+    // or download it.
+    let attachments_with_data = unpacked
+        .get("attachments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut attachment| {
+            let archive_path = attachment
+                .get("archivePath")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let mime_type = attachment
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            // archivePath comes from message.json INSIDE the (peer-authored)
+            // archive — unlike the extracted entry names, the SDK never
+            // validates it, so a malicious value like "../../secret" would make
+            // this read an arbitrary local file and embed it into the message
+            // payload. Only accept plain relative paths under temp_dir.
+            let path_is_safe = !archive_path.is_empty() && {
+                let p = std::path::Path::new(&archive_path);
+                !p.is_absolute()
+                    && p.components().all(|c| {
+                        matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)
+                    })
+            };
+            if path_is_safe {
+                if let Ok(data) = std::fs::read(temp_dir.join(&archive_path)) {
+                    attachment["dataUrl"] = Value::String(make_data_url(&data, &mime_type));
+                }
+            }
+            attachment
+        })
+        .collect::<Vec<_>>();
+
     let _ = tokio::fs::remove_file(&file_url).await;
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
 
     let decrypted = json!({
         "sender": unpacked.get("sender").cloned().unwrap_or(Value::Null),
         "text": unpacked.get("text").cloned().unwrap_or(Value::Null),
-        "attachments": unpacked.get("attachments").cloned().unwrap_or_else(|| json!([])),
+        "attachments": Value::Array(attachments_with_data),
     });
     cache_decrypted_message(&message_id, &decrypted);
 
