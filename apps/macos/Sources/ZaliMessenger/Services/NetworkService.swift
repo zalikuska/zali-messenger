@@ -800,11 +800,22 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             return
         }
 
-        // Voice events are handled exclusively by the dedicated voice WebSocket
-        // (see listenVoiceWebSocket) — ignoring them here avoids double-dispatch,
-        // since the server delivers voice_* events to every active connection
-        // for this user, including the message socket.
+        // Voice events are normally handled by the dedicated voice WebSocket (see
+        // listenVoiceWebSocket) — the server delivers voice_* events to every
+        // active connection for this user, including this message socket. This
+        // used to unconditionally drop them here to avoid double-dispatch, but
+        // that meant a mid-call reconnect hiccup on the *voice* socket (it has
+        // its own independent reconnect/heartbeat cycle) silently lost call
+        // signaling — hangup, camera/screen-share toggles — with no fallback,
+        // even though this socket was still alive and had the same message. Now
+        // forwarded here too as a reliability fallback; the JS side dedupes via
+        // each event's `vid` (see voiceEventPayload/isDuplicateVoiceEvent in
+        // interface.js), so double-delivery is harmless.
         if let eventType = raw["type"] as? String, eventType.hasPrefix("voice_") {
+            trace("message ws voice event fallback type=\(eventType) roomId=\(raw["roomId"] as? String ?? "")")
+            DispatchQueue.main.async {
+                self.onVoiceEvent?(raw)
+            }
             return
         }
 

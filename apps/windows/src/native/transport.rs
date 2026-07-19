@@ -342,7 +342,25 @@ pub(crate) async fn handle_message_ws_payload(
         .unwrap_or(false)
     {
         let event_type = raw.get("type").and_then(Value::as_str).unwrap_or("");
-        if event_type == "key_envelope_available" {
+        if event_type.starts_with("voice_") {
+            // Voice signaling normally travels over the dedicated voice-only
+            // WebSocket (run_voice_transport) — the server delivers voice_*
+            // events to every active connection for this user, including this
+            // message socket, so this used to just drop them here to avoid
+            // double-dispatch. But the voice socket has its own independent
+            // reconnect/heartbeat cycle; a hiccup there used to silently lose
+            // call signaling (hangup, camera/screen-share toggles) with no
+            // fallback, even though this socket was still alive and had the
+            // same message. Forward it too now; the JS side dedupes by each
+            // event's `vid` (see voiceEventPayload/isDuplicateVoiceEvent in
+            // interface.js), so double-delivery is harmless.
+            trace(format!(
+                "message ws voice event fallback type={} roomId={}",
+                event_type,
+                raw.get("roomId").and_then(Value::as_str).unwrap_or("")
+            ));
+            dispatch_voice_event(&proxy, raw);
+        } else if event_type == "key_envelope_available" {
             dispatch_ui_event(&proxy, UiBusEvent::RefreshAfterKey, serde_json::Value::Null);
         } else if event_type == "reaction_updated" {
             dispatch_ui_event(&proxy, UiBusEvent::ReactionUpdated, raw);
