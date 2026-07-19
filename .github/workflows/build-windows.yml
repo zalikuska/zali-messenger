@@ -19,6 +19,7 @@ jobs:
     env:
       ZALI_API_BASE_URL: https://msgs.zalikus.org
       ZALI_WS_BASE_URL: wss://msgs.zalikus.org
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
