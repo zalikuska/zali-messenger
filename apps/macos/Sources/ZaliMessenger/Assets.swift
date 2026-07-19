@@ -7915,6 +7915,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     remote: 0,
                 },
                 traceLines: [],
+                eventSeq: 0,
+                recentEventIds: new Map(),
             };
         },
     };
@@ -15408,9 +15410,18 @@ class ZaliInterface {
     }
 
     voiceEventPayload(payload = {}) {
+        // vid lets the receiver dedupe: voice signaling on native shells travels
+        // over a dedicated voice-only WebSocket (separate from the main message
+        // socket, with its own reconnect/heartbeat cycle) — the server delivers
+        // every voice_* event to ALL of a user's active connections, so as a
+        // reliability fallback the main socket now also forwards voice_* events
+        // instead of silently dropping them (see handleVoiceEvent's dedupe check).
+        // Without vid, that redundant delivery would double-apply offers/answers.
+        this.voice.eventSeq = (this.voice.eventSeq || 0) + 1;
         return {
             ...payload,
             type: payload.type || 'voice_signal',
+            vid: `${this.myName() || 'me'}:${Date.now().toString(36)}:${this.voice.eventSeq}`,
         };
     }
 
@@ -16187,10 +16198,35 @@ class ZaliInterface {
             entry.pc.ontrack = (event) => {
                 const stream = event.streams?.[0] || new MediaStream([event.track]);
                 const track = event.track;
+                // A remote camera/screen toggle-off doesn't remove the track from the
+                // stream (browsers keep the transceiver, just mute it) — so the old
+                // code (trace-only) left the last frame frozen on screen forever, and
+                // a later toggle-on reused the same stream/track objects, which
+                // attachRemoteVideoStream's reference-equality check then skipped as
+                // "already attached", so the picture never resumed either. Route these
+                // lifecycle events back through the same attach/detach helpers so the
+                // element actually reflects live track state.
+                const refreshRemoteVideoTrack = () => {
+                    const isScreen = !!(entry.remoteScreenStreamId && stream.id === entry.remoteScreenStreamId);
+                    if (isScreen) {
+                        this.attachRemoteScreenStream(name, stream);
+                    } else {
+                        this.attachRemoteVideoStream(name, stream);
+                    }
+                };
                 if (track) {
-                    track.onunmute = () => this.voiceTrace('remote-track-unmute', { peer: name, kind: track.kind, readyState: track.readyState }, 'INFO');
-                    track.onmute = () => this.voiceTrace('remote-track-mute', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
-                    track.onended = () => this.voiceTrace('remote-track-ended', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
+                    track.onunmute = () => {
+                        this.voiceTrace('remote-track-unmute', { peer: name, kind: track.kind, readyState: track.readyState }, 'INFO');
+                        if (track.kind === 'video') refreshRemoteVideoTrack();
+                    };
+                    track.onmute = () => {
+                        this.voiceTrace('remote-track-mute', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
+                        if (track.kind === 'video') refreshRemoteVideoTrack();
+                    };
+                    track.onended = () => {
+                        this.voiceTrace('remote-track-ended', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
+                        if (track.kind === 'video') refreshRemoteVideoTrack();
+                    };
                 }
                 this.voiceTrace('remote-track', {
                     peer: name,
@@ -16663,7 +16699,12 @@ class ZaliInterface {
     attachRemoteVideoStream(peer, stream) {
         const name = String(peer || '').trim();
         if (!name || !stream) return;
-        const hasVideo = stream.getVideoTracks().length > 0;
+        // A track being muted (peer toggled their camera off) doesn't remove it
+        // from the stream — only readyState 'ended' or a genuinely absent track
+        // does. Treating a muted-but-present track as "no video" is what makes
+        // toggling the camera off actually clear the frozen frame instead of
+        // just leaving the last rendered picture on screen forever.
+        const hasVideo = stream.getVideoTracks().some(t => t.readyState === 'live' && !t.muted);
         let video = this.voice.remoteVideos.get(name);
         if (!hasVideo) {
             if (video) {
@@ -16681,9 +16722,13 @@ class ZaliInterface {
             video.dataset.peer = name;
             this.voice.remoteVideos.set(name, video);
         }
-        if (video.srcObject !== stream) {
-            video.srcObject = stream;
-        }
+        // Always (re)assign + play, even if this exact stream object was already
+        // set as srcObject before: a camera turned back on reuses the same local
+        // MediaStream/transceiver, so the object reference here is often
+        // unchanged even though the track just came back to life — skipping the
+        // reassignment on a reference-equality check is what left a re-enabled
+        // camera showing nothing for the peer.
+        video.srcObject = stream;
         video.play?.().catch(error => this.voiceTrace('remote-video-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
         this.scheduleRenderVoicePanel();
     }
@@ -17137,7 +17182,16 @@ class ZaliInterface {
             this.voice.channelId = signal.channelId || this.voice.channelId || '';
             this.voice.targetUser = signal.target || this.voice.targetUser || '';
             this.voice.inviter = signal.from || this.voice.inviter || '';
-            this.voice.status = 'connecting';
+            // Only downgrade to 'connecting' for the initial call setup offer.
+            // Camera/screen-share toggles send a fresh offer to an already-
+            // connected peer too (mid-call renegotiation) — RTCPeerConnection's
+            // connectionState doesn't change for that (no ICE restart), so
+            // onconnectionstatechange never fires again to bring status back to
+            // 'connected'. Downgrading here unconditionally used to leave the
+            // call stuck showing "connecting" after the very first toggle.
+            if (this.voice.status !== 'connected') {
+                this.voice.status = 'connecting';
+            }
             try {
                 if (offerCollision) {
                     this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
@@ -17255,9 +17309,30 @@ class ZaliInterface {
         }
     }
 
+    // De-duplicates voice_* events that may now legitimately arrive twice — once
+    // over the dedicated voice WebSocket, once over the more reliable main
+    // message socket's fallback forwarding (see voiceEventPayload). Keeps a
+    // small bounded window of recently-seen vids rather than growing forever.
+    isDuplicateVoiceEvent(vid) {
+        const id = String(vid || '').trim();
+        if (!id) return false;
+        const seen = this.voice.recentEventIds || (this.voice.recentEventIds = new Map());
+        const now = Date.now();
+        for (const [key, ts] of seen) {
+            if (now - ts > 60000) seen.delete(key);
+        }
+        if (seen.has(id)) return true;
+        seen.set(id, now);
+        return false;
+    }
+
     async handleVoiceEvent(payload = {}) {
         const eventType = String(payload?.type || '').trim();
         if (!eventType) return;
+        if (this.isDuplicateVoiceEvent(payload.vid)) {
+            this.voiceTrace('event-dedup', { eventType, vid: payload.vid || '' }, 'INFO');
+            return;
+        }
         this.voiceTrace('event-recv', {
             eventType,
             roomId: payload.roomId || '',

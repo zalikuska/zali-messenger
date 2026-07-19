@@ -46,6 +46,8 @@
                     remote: 0,
                 },
                 traceLines: [],
+                eventSeq: 0,
+                recentEventIds: new Map(),
             };
         },
     };
