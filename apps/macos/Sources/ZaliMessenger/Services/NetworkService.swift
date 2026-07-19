@@ -870,15 +870,19 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
 	                    if let unpacked = ZaliCore.shared.unpackMessage(archivePath: fileURL.path, tempDir: tempDir, keys: candidateKeys) {
 	                        self?.trace("unpack success messageId=\(wsMsg.id) sender=\(unpacked.sender) textBytes=\(unpacked.text.count) attachments=\((unpacked.attachments ?? []).count)")
 	                        let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
-	                            let attachmentURL = URL(fileURLWithPath: tempDir).appendingPathComponent(attachment.archivePath)
+	                            let attachmentURL = Self.safeAttachmentURL(tempDir: tempDir, archivePath: attachment.archivePath)
 	                            var rendered: [String: Any] = [
 	                                "name": attachment.name,
 	                                "mimeType": attachment.mimeType,
 	                                "kind": attachment.kind,
 	                                "size": attachment.size
 	                            ]
-	                            if attachment.size <= 2 * 1024 * 1024,
-	                               let data = try? Data(contentsOf: attachmentURL) {
+	                            // No size cap here: history reload (WebView.renderHistoryRecord)
+	                            // builds dataUrl for every attachment regardless of size, so a cap
+	                            // here just meant a large attachment rendered fine after a reload
+	                            // but arrived as an undownloadable name-only placeholder on live
+	                            // WS delivery -- an inconsistency, not an intentional limit.
+	                            if let attachmentURL, let data = try? Data(contentsOf: attachmentURL) {
 	                                rendered["dataUrl"] = Self.makeDataURL(data: data, mimeType: attachment.mimeType)
 	                            }
 	                            return rendered
@@ -1792,6 +1796,18 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private static func makeDataURL(data: Data, mimeType: String) -> String {
         let base64 = data.base64EncodedString()
         return "data:\(mimeType);base64,\(base64)"
+    }
+
+    /// archivePath comes from message.json inside a peer-authored archive and is
+    /// never validated by the SDK (only extracted entry NAMES are) — reject
+    /// absolute paths and ".." components so a malicious value can't make the
+    /// client read an arbitrary local file into the message payload. Mirrors the
+    /// Windows shell's check in native/messages.rs.
+    static func safeAttachmentURL(tempDir: String, archivePath: String) -> URL? {
+        guard !archivePath.isEmpty, !archivePath.hasPrefix("/"), !archivePath.hasPrefix("~") else { return nil }
+        let components = archivePath.split(separator: "/")
+        guard !components.isEmpty, components.allSatisfy({ $0 != ".." }) else { return nil }
+        return URL(fileURLWithPath: tempDir).appendingPathComponent(archivePath)
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {

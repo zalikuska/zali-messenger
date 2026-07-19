@@ -288,6 +288,7 @@ class ZaliInterface {
         this.uiV2Enabled = this.loadUiV2Enabled();
         this.uiV2Segments = this.loadUiV2Segments();
         this.experimentalDesign = this.loadExperimentalDesign();
+        this.voiceTraceEnabled = this.loadVoiceTraceEnabled();
     }
 
     init(loader) {
@@ -1390,6 +1391,37 @@ class ZaliInterface {
         document.body?.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
         const toggle = document.getElementById('inputExperimentalDesign');
         if (toggle) toggle.checked = !!this.experimentalDesign;
+    }
+
+    voiceTraceStorageKey() {
+        return 'zali_voice_trace_enabled_v1';
+    }
+
+    loadVoiceTraceEnabled() {
+        try {
+            return localStorage.getItem(this.voiceTraceStorageKey()) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    saveVoiceTraceEnabled(enabled) {
+        this.voiceTraceEnabled = !!enabled;
+        try {
+            localStorage.setItem(this.voiceTraceStorageKey(), this.voiceTraceEnabled ? '1' : '0');
+        } catch (e) {}
+        this.applyVoiceTraceEnabled();
+    }
+
+    applyVoiceTraceEnabled() {
+        const toggle = document.getElementById('inputVoiceTrace');
+        if (toggle) toggle.checked = !!this.voiceTraceEnabled;
+        if (!this.voiceTraceEnabled && this.voice) {
+            this.voice.traceLines = [];
+        }
+        if (typeof this.renderVoicePanel === 'function') {
+            this.renderVoicePanel();
+        }
     }
 
     hubSegmentCatalog() {
@@ -6813,6 +6845,16 @@ class ZaliInterface {
         return me.localeCompare(other) < 0;
     }
 
+    // Deterministic per-pair role for resolving offer/offer glare during
+    // mid-call renegotiation — independent of who happens to click a
+    // camera/screen-share toggle first, both sides agree on who yields.
+    isPoliteVoicePeer(peer) {
+        const me = String(this.myName() || '').trim();
+        const other = String(peer || '').trim();
+        if (!me || !other) return false;
+        return me.localeCompare(other) < 0;
+    }
+
     voiceEventPayload(payload = {}) {
         return {
             ...payload,
@@ -7070,15 +7112,27 @@ class ZaliInterface {
             try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
         }
         this.voice.remoteVideos.clear();
+        for (const video of this.voice.remoteScreens.values()) {
+            try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
+        }
+        this.voice.remoteScreens.clear();
         this.detachLocalVideoPreview();
+        this.detachLocalScreenPreview();
         this.voice.videoEnabled = false;
         this.voice.cameraOn = false;
+        this.voice.screenSharing = false;
         if (this.voice.localStream) {
             for (const track of this.voice.localStream.getTracks()) {
                 try { track.stop(); } catch (e) {}
             }
         }
         this.voice.localStream = null;
+        if (this.voice.localScreenStream) {
+            for (const track of this.voice.localScreenStream.getTracks()) {
+                try { track.stop(); } catch (e) {}
+            }
+        }
+        this.voice.localScreenStream = null;
         if (this.voice.audioContext) {
             try { this.voice.audioContext.close?.(); } catch (e) {}
         }
@@ -7182,44 +7236,55 @@ class ZaliInterface {
     }
 
     async enableVoiceCamera() {
-        if (this.voice.cameraOn) return;
-        if (!this.voice.localStream) {
-            this.voice.videoEnabled = true;
-            try {
-                await this.ensureVoiceLocalStream();
-                for (const peer of this.voice.peerConnections.keys()) {
-                    await this.attachLocalVoiceTracks(peer);
+        // Guards the getUserMedia() call itself, not just the cameraOn result —
+        // cameraOn only flips true once the call resolves, so without this a
+        // fast double-click fires two concurrent capture requests; whichever
+        // resolves last would silently overwrite this.voice.localStream's video
+        // track, leaking the other's camera lock with no track.stop() ever called.
+        if (this.voice.cameraOn || this.voice.cameraRequestInFlight) return;
+        this.voice.cameraRequestInFlight = true;
+        try {
+            if (!this.voice.localStream) {
+                this.voice.videoEnabled = true;
+                try {
+                    await this.ensureVoiceLocalStream();
+                    for (const peer of this.voice.peerConnections.keys()) {
+                        await this.attachLocalVoiceTracks(peer);
+                    }
+                    await this.renegotiateAllVoicePeers();
+                } catch (error) {
+                    this.voiceTrace('camera-enable-failed', { error: error?.message || String(error) }, 'WARN');
+                    this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось включить камеру', ts: new Date().toLocaleTimeString() });
                 }
+                this.renderVoicePanel();
+                return;
+            }
+            try {
+                const camStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                });
+                const track = camStream.getVideoTracks()[0];
+                if (!track) return;
+                this.voice.localStream.addTrack(track);
+                this.voice.videoEnabled = true;
+                this.voice.cameraOn = true;
+                this.attachLocalVideoPreview();
+                for (const peer of this.voice.peerConnections.keys()) {
+                    const entry = this.getVoicePeerEntry(peer);
+                    if (entry.videoSender) {
+                        await entry.videoSender.replaceTrack(track);
+                    } else {
+                        entry.videoSender = entry.pc.addTrack(track, this.voice.localStream);
+                    }
+                }
+                await this.renegotiateAllVoicePeers();
+                this.renderVoicePanel();
             } catch (error) {
                 this.voiceTrace('camera-enable-failed', { error: error?.message || String(error) }, 'WARN');
                 this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось включить камеру', ts: new Date().toLocaleTimeString() });
             }
-            this.renderVoicePanel();
-            return;
-        }
-        try {
-            const camStream = await navigator.mediaDevices.getUserMedia({
-                video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-            });
-            const track = camStream.getVideoTracks()[0];
-            if (!track) return;
-            this.voice.localStream.addTrack(track);
-            this.voice.videoEnabled = true;
-            this.voice.cameraOn = true;
-            this.attachLocalVideoPreview();
-            for (const peer of this.voice.peerConnections.keys()) {
-                const entry = this.getVoicePeerEntry(peer);
-                if (entry.videoSender) {
-                    await entry.videoSender.replaceTrack(track);
-                } else {
-                    entry.videoSender = entry.pc.addTrack(track, this.voice.localStream);
-                }
-            }
-            await this.renegotiateAllVoicePeers();
-            this.renderVoicePanel();
-        } catch (error) {
-            this.voiceTrace('camera-enable-failed', { error: error?.message || String(error) }, 'WARN');
-            this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось включить камеру', ts: new Date().toLocaleTimeString() });
+        } finally {
+            this.voice.cameraRequestInFlight = false;
         }
     }
 
@@ -7253,7 +7318,22 @@ class ZaliInterface {
 
     async renegotiateVoicePeer(peer) {
         const entry = this.getVoicePeerEntry(peer);
-        if (!entry || entry.pc.signalingState !== 'stable') return;
+        if (!entry) return;
+        // `entry.negotiating` is set synchronously below, before any `await` —
+        // closing the race window that `signalingState` alone leaves open
+        // (createOffer() doesn't flip signalingState; only setLocalDescription
+        // does, so two renegotiations triggered back-to-back — e.g. disabling
+        // the camera then immediately stopping screen share — could otherwise
+        // both observe 'stable' and both proceed). A call arriving while busy,
+        // or while the connection is already mid-negotiation for any other
+        // reason (glare, an in-flight initial offer/answer), is queued instead
+        // of dropped — onsignalingstatechange drains it once stable again.
+        if (entry.negotiating || entry.pc.signalingState !== 'stable') {
+            entry.renegotiationPending = true;
+            this.voiceTrace('renegotiate-queued', { peer, state: entry.pc.signalingState, negotiating: !!entry.negotiating });
+            return;
+        }
+        entry.negotiating = true;
         try {
             const offer = await entry.pc.createOffer();
             await entry.pc.setLocalDescription(offer);
@@ -7275,7 +7355,157 @@ class ZaliInterface {
             });
         } catch (error) {
             this.voiceTrace('renegotiate-error', { peer, error: error?.message || String(error) }, 'WARN');
+        } finally {
+            entry.negotiating = false;
         }
+    }
+
+    attachLocalScreenPreview() {
+        if (!this.voice.localScreenStream) return;
+        let video = this.voice.localScreenVideoEl;
+        if (!video) {
+            video = document.createElement('video');
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+            this.voice.localScreenVideoEl = video;
+        }
+        if (video.srcObject !== this.voice.localScreenStream) {
+            video.srcObject = this.voice.localScreenStream;
+        }
+        video.play?.().catch(() => {});
+        this.scheduleRenderVoicePanel();
+    }
+
+    detachLocalScreenPreview() {
+        const video = this.voice.localScreenVideoEl;
+        if (video) {
+            try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
+        }
+        this.voice.localScreenVideoEl = null;
+    }
+
+    toggleScreenShare() {
+        if (this.voice.screenSharing) {
+            this.stopScreenShare();
+        } else {
+            this.startScreenShare();
+        }
+    }
+
+    // Announces which local MediaStream carries the screen share so the peer's
+    // ontrack handler can tell it apart from the camera stream (both arrive as
+    // separate video tracks from the same peer) — see handleVoiceSignal's
+    // 'screen-meta' branch. Relayed through the existing voice_signal envelope,
+    // no server changes needed since route_voice_signal is payload-agnostic.
+    sendScreenShareMeta(peer, action) {
+        this.sendVoiceEvent({
+            type: 'voice_signal',
+            roomId: this.voice.roomId,
+            roomType: this.voice.roomType,
+            serverId: this.voice.serverId,
+            channelId: this.voice.channelId,
+            to: peer,
+            signal: {
+                type: 'screen-meta',
+                action,
+                streamId: action === 'start' ? (this.voice.localScreenStream?.id || '') : '',
+            },
+        });
+    }
+
+    // Attaches the already-captured screen track to one peer's connection.
+    // Shared by startScreenShare (existing peers) and syncVoicePeers (peers
+    // that join/are created after screen sharing already started).
+    attachLocalScreenTrackToPeer(peer) {
+        if (!this.voice.screenSharing || !this.voice.localScreenStream) return false;
+        const entry = this.getVoicePeerEntry(peer);
+        if (!entry || entry.screenSender) return false;
+        const track = this.voice.localScreenStream.getVideoTracks()[0];
+        if (!track) return false;
+        entry.screenSender = entry.pc.addTrack(track, this.voice.localScreenStream);
+        this.sendScreenShareMeta(peer, 'start');
+        this.voiceTrace('screen-track-attached', { peer, streamId: this.voice.localScreenStream.id || '' });
+        return true;
+    }
+
+    async startScreenShare() {
+        // Guards the getDisplayMedia() call itself — screenSharing only flips
+        // true once it resolves, so a fast double-click before the OS picker
+        // even returns would otherwise fire two concurrent capture requests;
+        // whichever resolves last silently overwrites localScreenStream,
+        // leaking the other capture (its track.stop() never runs, so the OS's
+        // "sharing your screen" indicator can stay on for it indefinitely).
+        if (this.voice.screenSharing || this.voice.screenShareRequestInFlight) return;
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+            this.addLogEntry({ type: 'WARN', msg: 'Демонстрация экрана не поддерживается в этом окружении', ts: new Date().toLocaleTimeString() });
+            return;
+        }
+        this.voice.screenShareRequestInFlight = true;
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: { cursor: 'always', frameRate: 30 },
+                audio: false,
+            });
+            const track = stream.getVideoTracks()[0];
+            if (!track) return;
+            this.voice.localScreenStream = stream;
+            this.voice.screenSharing = true;
+            // Fires when the user stops sharing via the browser/OS's own
+            // "Stop sharing" control, not just our in-app button.
+            track.addEventListener('ended', () => this.stopScreenShare());
+            this.attachLocalScreenPreview();
+            this.voiceTrace('screen-share-start', { streamId: stream.id, label: track.label || '' });
+            for (const peer of this.voice.peerConnections.keys()) {
+                this.attachLocalScreenTrackToPeer(peer);
+            }
+            await this.renegotiateAllVoicePeers();
+            // screen-meta travels as an independent signal from the SDP that
+            // actually carries the track (see sendScreenShareMeta) — if that
+            // first send is lost (e.g. a socket reconnect at exactly the wrong
+            // moment), the peer's ontrack fires with no id to match and files
+            // the screen under camera video with no way to self-correct. A
+            // second, post-renegotiation send is cheap, idempotent insurance
+            // against a single dropped message.
+            for (const peer of this.voice.peerConnections.keys()) {
+                if (this.voice.peerConnections.get(peer)?.screenSender) {
+                    this.sendScreenShareMeta(peer, 'start');
+                }
+            }
+            this.renderVoicePanel();
+        } catch (error) {
+            // AbortError/NotAllowedError just mean the user cancelled the
+            // browser's screen/window/tab picker — not worth surfacing as a warning.
+            if (error?.name !== 'NotAllowedError' && error?.name !== 'AbortError') {
+                this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось начать демонстрацию экрана', ts: new Date().toLocaleTimeString() });
+            }
+            this.voiceTrace('screen-share-failed', { error: error?.message || String(error) }, 'WARN');
+        } finally {
+            this.voice.screenShareRequestInFlight = false;
+        }
+    }
+
+    stopScreenShare() {
+        if (!this.voice.screenSharing) return;
+        const stream = this.voice.localScreenStream;
+        if (stream) {
+            for (const track of stream.getTracks()) {
+                try { track.stop(); } catch (e) {}
+            }
+        }
+        this.voice.localScreenStream = null;
+        this.voice.screenSharing = false;
+        this.detachLocalScreenPreview();
+        for (const [peer, entry] of this.voice.peerConnections.entries()) {
+            if (entry.screenSender) {
+                try { entry.pc.removeTrack(entry.screenSender); } catch (e) {}
+                entry.screenSender = null;
+                this.sendScreenShareMeta(peer, 'stop');
+            }
+        }
+        this.voiceTrace('screen-share-stop', {});
+        this.renegotiateAllVoicePeers();
+        this.renderVoicePanel();
     }
 
     async unlockVoicePlayback() {
@@ -7322,6 +7552,10 @@ class ZaliInterface {
                 healthTimer: null,
                 audioSender: null,
                 videoSender: null,
+                screenSender: null,
+                remoteScreenStreamId: null,
+                negotiating: false,
+                renegotiationPending: false,
                 generatedIceCandidates: 0,
                 receivedIceCandidates: 0,
             };
@@ -7393,6 +7627,10 @@ class ZaliInterface {
             };
             entry.pc.onsignalingstatechange = () => {
                 this.voiceTrace('signaling-state', { peer: name, state: entry.pc.signalingState, roomId: this.voice.roomId || '' });
+                if (entry.pc.signalingState === 'stable' && entry.renegotiationPending && !entry.negotiating) {
+                    entry.renegotiationPending = false;
+                    this.renegotiateVoicePeer(name).catch(() => {});
+                }
             };
             entry.pc.ontrack = (event) => {
                 const stream = event.streams?.[0] || new MediaStream([event.track]);
@@ -7412,7 +7650,11 @@ class ZaliInterface {
                     receiverTrack: event.receiver?.track ? `${event.receiver.track.kind}:${event.receiver.track.readyState}:${event.receiver.track.enabled ? 'on' : 'off'}` : '',
                     tracks: stream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled ? 'on' : 'off'}`),
                 });
-                this.attachRemoteVoiceStream(name, stream);
+                if (track && track.kind === 'video' && entry.remoteScreenStreamId && stream.id === entry.remoteScreenStreamId) {
+                    this.attachRemoteScreenStream(name, stream);
+                } else {
+                    this.attachRemoteVoiceStream(name, stream);
+                }
             };
             entry.pc.onconnectionstatechange = () => {
                 const state = entry.pc.connectionState;
@@ -7894,6 +8136,37 @@ class ZaliInterface {
         this.scheduleRenderVoicePanel();
     }
 
+    attachRemoteScreenStream(peer, stream) {
+        const name = String(peer || '').trim();
+        if (!name || !stream) return;
+        let video = this.voice.remoteScreens.get(name);
+        if (!video) {
+            video = document.createElement('video');
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+            video.dataset.peer = name;
+            this.voice.remoteScreens.set(name, video);
+        }
+        if (video.srcObject !== stream) {
+            video.srcObject = stream;
+        }
+        video.play?.().catch(error => this.voiceTrace('remote-screen-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
+        this.voiceTrace('remote-screen-attach', { peer: name, streamId: stream.id || '' });
+        this.scheduleRenderVoicePanel();
+    }
+
+    detachRemoteScreenStream(peer) {
+        const name = String(peer || '').trim();
+        if (!name) return;
+        const video = this.voice.remoteScreens.get(name);
+        if (video) {
+            try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
+            this.voice.remoteScreens.delete(name);
+        }
+        this.scheduleRenderVoicePanel();
+    }
+
     closeVoicePeer(peer) {
         const name = String(peer || '').trim();
         if (!name) return;
@@ -7914,6 +8187,8 @@ class ZaliInterface {
             }
             entry.audioSender = null;
             entry.videoSender = null;
+            entry.screenSender = null;
+            entry.remoteScreenStreamId = null;
             try { entry.pc.close(); } catch (e) {}
             this.voice.peerConnections.delete(name);
         }
@@ -7935,6 +8210,7 @@ class ZaliInterface {
             } catch (e) {}
             this.voice.remoteVideos.delete(name);
         }
+        this.detachRemoteScreenStream(name);
         const playbackNode = this.voice.remotePlaybackNodes?.get(name);
         if (playbackNode) {
             try { playbackNode.source?.disconnect?.(); } catch (e) {}
@@ -8047,6 +8323,7 @@ class ZaliInterface {
         for (const peer of peers) {
             const entry = this.getVoicePeerEntry(peer);
             await this.attachLocalVoiceTracks(peer);
+            this.attachLocalScreenTrackToPeer(peer);
             if (this.shouldInitiateVoiceOffer(peer) && this.voice.localStream && !entry.offerSent) {
                 try {
                     await this.sendVoiceOffer(peer);
@@ -8287,6 +8564,21 @@ class ZaliInterface {
         });
 
         if (signalPayload.type === 'offer') {
+            const entry = this.getVoicePeerEntry(from);
+            // Mid-call renegotiation (camera/screen-share toggles) means either
+            // side can now send an offer at any time, not just once at call
+            // setup — so two peers toggling near-simultaneously can each have a
+            // local offer outstanding when the other's offer arrives ("glare").
+            // A bare setRemoteDescription(offer) in that state throws. Resolve it
+            // with a minimal polite/impolite split (mirrors shouldInitiateVoiceOffer's
+            // tie-break): the polite side rolls back its own offer and accepts the
+            // incoming one; the impolite side ignores the incoming offer and waits
+            // for its own outgoing offer to be answered instead.
+            const offerCollision = entry.pc.signalingState !== 'stable';
+            if (offerCollision && !this.isPoliteVoicePeer(from)) {
+                this.voiceTrace('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                return;
+            }
             this.voice.roomId = roomId;
             this.voice.roomType = signal.roomType || this.voice.roomType || 'dm';
             this.voice.serverId = signal.serverId || this.voice.serverId || '';
@@ -8294,41 +8586,49 @@ class ZaliInterface {
             this.voice.targetUser = signal.target || this.voice.targetUser || '';
             this.voice.inviter = signal.from || this.voice.inviter || '';
             this.voice.status = 'connecting';
-            const entry = this.getVoicePeerEntry(from);
             try {
-                await this.ensureVoiceLocalStream();
-            } catch (error) {
-                this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось получить доступ к микрофону', ts: new Date().toLocaleTimeString() });
-            }
-            await this.attachLocalVoiceTracks(from);
-            this.voiceTrace('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, peer: from });
-            await entry.pc.setRemoteDescription(signalPayload.sdp);
-            await this.flushPendingVoiceIceCandidates(entry, from);
-            const answer = await entry.pc.createAnswer();
-            await entry.pc.setLocalDescription(answer);
-            this.voiceTrace('signal-answer-send', {
-                roomId,
-                from,
-                peer: from,
-                localDesc: entry.pc.localDescription?.type || 'answer',
-                sdpLength: entry.pc.localDescription?.sdp?.length || 0,
-            });
-            this.sendVoiceEvent({
-                type: 'voice_signal',
-                roomId,
-                roomType: this.voice.roomType,
-                serverId: this.voice.serverId,
-                channelId: this.voice.channelId,
-                to: from,
-                signal: {
-                    type: 'answer',
-                    sdp: {
-                        type: entry.pc.localDescription?.type || 'answer',
-                        sdp: entry.pc.localDescription?.sdp || '',
+                if (offerCollision) {
+                    this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                    await entry.pc.setLocalDescription({ type: 'rollback' });
+                }
+                try {
+                    await this.ensureVoiceLocalStream();
+                } catch (error) {
+                    this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось получить доступ к микрофону', ts: new Date().toLocaleTimeString() });
+                }
+                await this.attachLocalVoiceTracks(from);
+                this.voiceTrace('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, peer: from });
+                await entry.pc.setRemoteDescription(signalPayload.sdp);
+                await this.flushPendingVoiceIceCandidates(entry, from);
+                const answer = await entry.pc.createAnswer();
+                await entry.pc.setLocalDescription(answer);
+                this.voiceTrace('signal-answer-send', {
+                    roomId,
+                    from,
+                    peer: from,
+                    localDesc: entry.pc.localDescription?.type || 'answer',
+                    sdpLength: entry.pc.localDescription?.sdp?.length || 0,
+                });
+                this.sendVoiceEvent({
+                    type: 'voice_signal',
+                    roomId,
+                    roomType: this.voice.roomType,
+                    serverId: this.voice.serverId,
+                    channelId: this.voice.channelId,
+                    to: from,
+                    signal: {
+                        type: 'answer',
+                        sdp: {
+                            type: entry.pc.localDescription?.type || 'answer',
+                            sdp: entry.pc.localDescription?.sdp || '',
+                        },
                     },
-                },
-            });
-            this.voice.participants = Array.from(new Set([this.myName(), from].concat(this.voice.participants || [])));
+                });
+                this.voice.participants = Array.from(new Set([this.myName(), from].concat(this.voice.participants || [])));
+            } catch (error) {
+                this.voiceTrace('offer-apply-error', { roomId, from, error: error?.message || String(error) }, 'WARN');
+                this.addLogEntry({ type: 'WARN', msg: error?.message || `Не удалось применить предложение звонка от ${from}`, ts: new Date().toLocaleTimeString() });
+            }
             this.renderVoicePanel();
             return;
         }
@@ -8346,6 +8646,31 @@ class ZaliInterface {
             await entry.pc.setRemoteDescription(signalPayload.sdp);
             await this.flushPendingVoiceIceCandidates(entry, from);
             this.voice.status = 'connected';
+            this.renderVoicePanel();
+            return;
+        }
+
+        if (signalPayload.type === 'screen-meta') {
+            if (signalPayload.action === 'start' && signalPayload.streamId) {
+                entry.remoteScreenStreamId = String(signalPayload.streamId);
+                // This id-announcement and the SDP offer carrying the actual
+                // track are two independent signals — if ontrack already fired
+                // before this arrived, the stream was filed as camera video
+                // (attachRemoteVoiceStream) for lack of an id to match. Re-route
+                // it now instead of leaving it stuck in the camera bubble.
+                const misfiledVideo = this.voice.remoteVideos.get(from);
+                if (misfiledVideo?.srcObject && misfiledVideo.srcObject.id === entry.remoteScreenStreamId) {
+                    const misroutedStream = misfiledVideo.srcObject;
+                    this.voice.remoteVideos.delete(from);
+                    try { misfiledVideo.pause?.(); misfiledVideo.srcObject = null; misfiledVideo.remove?.(); } catch (e) {}
+                    this.attachRemoteScreenStream(from, misroutedStream);
+                }
+                this.voiceTrace('screen-meta-start', { roomId, from, streamId: entry.remoteScreenStreamId });
+            } else if (signalPayload.action === 'stop') {
+                entry.remoteScreenStreamId = null;
+                this.detachRemoteScreenStream(from);
+                this.voiceTrace('screen-meta-stop', { roomId, from });
+            }
             this.renderVoicePanel();
             return;
         }
@@ -8695,6 +9020,31 @@ class ZaliInterface {
         }
     }
 
+    voiceIcon(kind) {
+        const phone = '<path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>';
+        const mic = '<rect x="9" y="3" width="6" height="10" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 18v3M9 21h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+        const cam = '<rect x="3.5" y="6.5" width="12" height="11" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 10.4 20 7.6a.6.6 0 0 1 .92.51v7.78a.6.6 0 0 1-.92.51l-4.5-2.8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
+        const screen = '<rect x="3" y="4.5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 6.5v6M9.5 10 12 7.5 14.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
+        const slash = '<path d="M4.5 4.5l15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        const icons = {
+            phone,
+            'phone-off': phone + slash,
+            mic,
+            'mic-off': mic + slash,
+            cam,
+            'cam-off': cam + slash,
+            screen,
+            'screen-off': screen + slash,
+            video: cam,
+        };
+        return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
+    }
+
+    callCtrlBtn({ id, kind, label, active = false, danger = false }) {
+        const cls = ['call-ctrl-btn', active ? 'active' : '', danger ? 'danger' : ''].filter(Boolean).join(' ');
+        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(kind)}</button>`;
+    }
+
     renderVoiceParticipants() {
         const participants = Array.isArray(this.voice.participants) ? this.voice.participants : [];
         if (!participants.length) {
@@ -8726,7 +9076,7 @@ class ZaliInterface {
         const activeRoom = isVoice ? !!this.voice.roomId && participantMatch : connectedDmRoom;
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
-        const voiceHealth = this.getVoiceHealthSnapshot();
+        const voiceHealth = this.voiceTraceEnabled ? this.getVoiceHealthSnapshot() : [];
         const title = isVoice
             ? `Голосовой канал: ${this.currentChannel()?.name || 'room'}`
             : activeRoom
@@ -8742,27 +9092,30 @@ class ZaliInterface {
         const actionButtons = [];
         if (isVoice) {
             if (activeRoom) {
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceLeaveBtn">Покинуть</button>`);
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceMuteBtn">${this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон'}</button>`);
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceCameraBtn">${this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру'}</button>`);
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Покинуть', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
             } else {
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">Присоединиться</button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Присоединиться</span></button>`);
             }
         } else if (this.S.navMode === 'dm' && this.S.current) {
             if (activeRoom) {
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceLeaveBtn">Завершить</button>`);
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceMuteBtn">${this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон'}</button>`);
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceCameraBtn">${this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру'}</button>`);
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Завершить', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">Принять</button>`);
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">Отклонить</button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">${this.voiceIcon('phone')}<span>Принять</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>`);
             } else if (this.voice.status === 'calling') {
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">Отменить</button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-off')}<span>Отменить</span></button>`);
             } else {
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceCallBtn">Позвонить</button>`);
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceVideoCallBtn">Видеозвонок</button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceCallBtn">${this.voiceIcon('phone')}<span>Позвонить</span></button>`);
+                actionButtons.push(`<button class="voice-btn" type="button" id="voiceVideoCallBtn">${this.voiceIcon('video')}<span>Видеозвонок</span></button>`);
             }
         }
+        const actionsBarClass = activeRoom ? 'voice-room-actions call-ctrl-bar' : 'voice-room-actions';
 
         return `
             <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
@@ -8773,7 +9126,8 @@ class ZaliInterface {
                     </div>
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
-                <div class="voice-room-actions">${actionButtons.join('')}</div>
+                <div class="${actionsBarClass}">${actionButtons.join('')}</div>
+                <div class="voice-stage" id="voiceStage"></div>
                 <div class="voice-video-grid" id="voiceVideoGrid"></div>
                 <div class="voice-meter-grid">
                     <div class="voice-meter" id="voiceMicMeter">
@@ -8862,6 +9216,30 @@ class ZaliInterface {
     }
 
     mountVoiceVideoElements() {
+        const stage = document.getElementById('voiceStage');
+        if (stage) {
+            stage.replaceChildren();
+            if (this.voice.localScreenVideoEl && this.voice.screenSharing) {
+                const wrap = document.createElement('div');
+                wrap.className = 'voice-stage-tile';
+                wrap.appendChild(this.voice.localScreenVideoEl);
+                const label = document.createElement('span');
+                label.className = 'voice-video-label';
+                label.textContent = 'Ваш экран';
+                wrap.appendChild(label);
+                stage.appendChild(wrap);
+            }
+            for (const [peer, video] of this.voice.remoteScreens.entries()) {
+                const wrap = document.createElement('div');
+                wrap.className = 'voice-stage-tile';
+                wrap.appendChild(video);
+                const label = document.createElement('span');
+                label.className = 'voice-video-label';
+                label.textContent = `Экран: ${peer}`;
+                wrap.appendChild(label);
+                stage.appendChild(wrap);
+            }
+        }
         const grid = document.getElementById('voiceVideoGrid');
         if (!grid) return;
         grid.replaceChildren();
@@ -14337,6 +14715,7 @@ class ZaliInterface {
     }
 
     voiceTrace(stage, details = {}, level = 'INFO') {
+        if (!this.voiceTraceEnabled) return;
         const ts = new Date().toLocaleTimeString();
         const compact = Object.entries(details)
             .filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -14467,6 +14846,11 @@ class ZaliInterface {
                 const cameraBtn = e.target.closest('#voiceCameraBtn');
                 if (cameraBtn) {
                     await this.setVoiceCameraEnabled(!this.voice.cameraOn);
+                    return;
+                }
+                const screenShareBtn = e.target.closest('#voiceScreenShareBtn');
+                if (screenShareBtn) {
+                    this.toggleScreenShare();
                     return;
                 }
                 const acceptBtn = e.target.closest('#voiceAcceptBtn');
@@ -14610,8 +14994,10 @@ class ZaliInterface {
         if (zaliCoinSendBtn) zaliCoinSendBtn.addEventListener('click', () => this.openCoinTransferModal());
         const coinTransferModal = document.getElementById('coinTransferModal');
         const coinTransferCloseBtn = document.getElementById('coinTransferCloseBtn');
+        const coinTransferCancelBtn = document.getElementById('coinTransferCancelBtn');
         const coinTransferSubmitBtn = document.getElementById('coinTransferSubmitBtn');
         if (coinTransferCloseBtn) coinTransferCloseBtn.addEventListener('click', () => this.closeCoinTransferModal());
+        if (coinTransferCancelBtn) coinTransferCancelBtn.addEventListener('click', () => this.closeCoinTransferModal());
         if (coinTransferSubmitBtn) coinTransferSubmitBtn.addEventListener('click', () => this.submitCoinTransfer());
         if (coinTransferModal) {
             coinTransferModal.addEventListener('click', (e) => {
@@ -14887,6 +15273,7 @@ class ZaliInterface {
         const meAva = document.getElementById('meAva');
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
         const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
+        const inputVoiceTrace = document.getElementById('inputVoiceTrace');
         const hubSegmentSettings = document.getElementById('hubSegmentSettings');
         const recentAccounts = document.getElementById('recentAccounts');
 
@@ -14954,6 +15341,11 @@ class ZaliInterface {
         if (inputExperimentalDesign) {
             inputExperimentalDesign.addEventListener('change', () => {
                 this.saveExperimentalDesign(!!inputExperimentalDesign.checked);
+            });
+        }
+        if (inputVoiceTrace) {
+            inputVoiceTrace.addEventListener('change', () => {
+                this.saveVoiceTraceEnabled(!!inputVoiceTrace.checked);
             });
         }
         if (hubSegmentSettings) {
@@ -15705,6 +16097,7 @@ class ZaliInterface {
         this.setupMobileKeyboardAvoidance();
         this.applyUiV2Chrome();
         this.applyExperimentalDesign();
+        this.applyVoiceTraceEnabled();
         const mobileQuery = this.mobileLayoutQuery();
         if (mobileQuery) {
             const onMobileChange = () => {

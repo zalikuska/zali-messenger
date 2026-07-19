@@ -64,6 +64,11 @@
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
             permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
         },
+        coins: {
+            balance: apiRoute('/coins/balance'),
+            distribution: apiRoute('/coins/distribution'),
+            transfer: apiRoute('/coins/transfer'),
+        },
     });
 
     window.ZaliApiRoutes = API_ROUTES;

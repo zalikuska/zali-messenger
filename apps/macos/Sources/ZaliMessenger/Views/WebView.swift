@@ -841,8 +841,10 @@ struct WebView: NSViewRepresentable {
                     keys: keys
                 ) {
                     let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
-                        let attachmentURL = URL(fileURLWithPath: tempDir).appendingPathComponent(attachment.archivePath)
-                        guard let data = try? Data(contentsOf: attachmentURL) else { return nil }
+                        // Same peer-authored-archivePath validation as live delivery
+                        // (NetworkService) and the Windows shell (native/messages.rs).
+                        guard let attachmentURL = NetworkService.safeAttachmentURL(tempDir: tempDir, archivePath: attachment.archivePath),
+                              let data = try? Data(contentsOf: attachmentURL) else { return nil }
 
                         return [
                             "name": attachment.name,
@@ -988,8 +990,13 @@ struct WebView: NSViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame else { return }
             if message.name == "zaliLog" {
-                if let line = message.body as? String {
-                    Coordinator.appendDebugLog(line)
+                if let batch = message.body as? String {
+                    // JS batches multiple console.* lines per message.body (see
+                    // consoleHook) — split back out so each still gets its own
+                    // timestamped line on disk.
+                    for line in batch.split(separator: "\n", omittingEmptySubsequences: true) {
+                        Coordinator.appendDebugLog(String(line))
+                    }
                 }
                 return
             }
@@ -1512,14 +1519,32 @@ struct WebView: NSViewRepresentable {
         let consoleHook = """
         (function(){
           if (window.__zaliConsoleHooked) return; window.__zaliConsoleHooked = true;
+          // Buffered: a naive per-call postMessage() here was the dominant source of
+          // UI-click latency on macOS — every console.log/trace() in the app (there
+          // are hundreds along common paths like switchChat) took its own synchronous
+          // hop across the WKWebView JS<->native bridge, contending with the main
+          // thread that also has to paint. Batch lines and flush on a short timer
+          // instead, so one click costs at most one bridge hop, not dozens.
+          var buf = [];
+          var flushTimer = null;
+          var flush = function(){
+            flushTimer = null;
+            if (!buf.length) return;
+            var payload = buf.join('\\n');
+            buf = [];
+            try { window.webkit.messageHandlers.zaliLog.postMessage(payload); } catch(e){}
+          };
           var post = function(lvl, args){
             try {
               var parts = Array.prototype.map.call(args, function(a){
                 try { return (typeof a === 'string') ? a : JSON.stringify(a); } catch(e){ return String(a); }
               });
-              window.webkit.messageHandlers.zaliLog.postMessage(lvl + ' ' + parts.join(' '));
+              buf.push(lvl + ' ' + parts.join(' '));
+              if (buf.length > 200) { flush(); return; }
+              if (!flushTimer) flushTimer = setTimeout(flush, 200);
             } catch(e){}
           };
+          window.addEventListener('pagehide', flush);
           ['log','info','warn','error'].forEach(function(k){
             var orig = console[k] ? console[k].bind(console) : function(){};
             console[k] = function(){ post(k.toUpperCase(), arguments); orig.apply(console, arguments); };

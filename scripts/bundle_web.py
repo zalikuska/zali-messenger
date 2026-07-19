@@ -107,11 +107,18 @@ def main():
     # (no external file loading needed in WKWebView)
     inline_html = html_content
 
-    # Replace <link rel="stylesheet" href="style.css"> with an inline <style> block
-    inline_html = inline_html.replace(
-        '<link rel="stylesheet" href="style.css">',
-        f'<style id="zali-base-style">\n{css_content}\n</style>'
+    # Replace <link rel="stylesheet" href="style.css"> with an inline <style> block.
+    # Tolerates a cache-busting query string (e.g. style.css?v=...) the same way
+    # the app.js replacement below does — a plain .replace() silently no-ops on
+    # mismatch, leaving an unresolvable <link> in loadHTMLString's fake baseURL.
+    inline_html, css_replaced = re.subn(
+        r'<link\s+rel="stylesheet"\s+href="style\.css(?:\?[^"]*)?"\s*>',
+        lambda _: f'<style id="zali-base-style">\n{css_content}\n</style>',
+        inline_html,
+        count=1,
     )
+    if not css_replaced:
+        raise RuntimeError("Could not find <link rel=\"stylesheet\" href=\"style.css...\"> in index.html to inline")
 
     # Inject saved CSS loader script right after <head> open tag or before </head>
     saved_css_loader = """
