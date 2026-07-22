@@ -5973,16 +5973,28 @@ body[data-nav-mode="servers"] .contacts {
         z-index: 20;
         width: auto;
         transform: translateY(115%);
-        /* A fast, always-on transition (never toggled to transition:none)
-           reads as "already there" without needing any instant/restart
-           trickery — simpler and more robust than trying to force-restart a
-           disabled transition, which was unreliable in testing. */
+        /* This declared transform value only matters for the very first
+           paint, before any JS has run — from then on
+           setMobileListParked() in interface.js always writes both the
+           parked and unparked position as an explicit inline style (never
+           clears it to fall back on this rule), for the same reason
+           #viewChat's own transform is inline-driven: falling back to a
+           cascade value on inline-style removal was tried and measured
+           unreliable — after clearing the override, the element kept
+           reporting its old computed transform indefinitely instead of
+           transitioning to this rule's value. Only the transition DURATION
+           is still controlled here/by the class below: none while becoming
+           visible (tap-open or swipe-start — the list must be sitting at
+           Y=0 instantly, not visibly rising while #viewChat's own .24s
+           slide, see further down, is still covering it), this rule's fast
+           .12s once parking (once scheduleMobileListPark() confirms the
+           chat has fully covered the list again). */
         transition: transform .12s ease-out, box-shadow .12s ease;
         will-change: transform;
     }
 
     body.mobile-list-visible .sidebar {
-        transform: translateY(0);
+        transition: none;
         box-shadow: 0 18px 48px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.02);
     }
 
@@ -7178,10 +7190,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         </div>
 
         <div class="mobile-dock" id="mobileDock" aria-label="Мобильная навигация">
-            <button class="mobile-dock-btn" id="mobileChatsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Чаты'; var dm=document.getElementById('modeDmBtn'); if (dm) dm.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></span><span class="mobile-dock-label">Чаты</span></button>
-            <button class="mobile-dock-btn" id="mobileServersBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.add('active'); if (sv) sv.classList.remove('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Сервера'; var svBtn=document.getElementById('modeServersBtn'); if (svBtn) svBtn.click(); document.body.classList.add('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = false; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'true')"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg></span><span class="mobile-dock-label">Сервера</span></button>
+            <button class="mobile-dock-btn" id="mobileChatsBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></span><span class="mobile-dock-label">Чаты</span></button>
+            <button class="mobile-dock-btn" id="mobileServersBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg></span><span class="mobile-dock-label">Сервера</span></button>
             <button class="mobile-dock-btn" id="mobileHubBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/></svg></span><span class="mobile-dock-label">Хаб</span></button>
-            <button class="mobile-dock-btn" id="mobileSettingsBtn" type="button" onclick="var cv=document.getElementById('viewChat'), sv=document.getElementById('viewSettings'); if (cv) cv.classList.remove('active'); if (sv) sv.classList.add('active'); var t=document.getElementById('tbChat'); if (t) t.textContent='Настройки'; document.body.classList.remove('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="mobile-dock-label">Настройки</span></button>
+            <button class="mobile-dock-btn" id="mobileSettingsBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="mobile-dock-label">Настройки</span></button>
         </div>
     </div>
 
@@ -8008,6 +8020,7 @@ const ZaliBusEvents = window.ZaliBusEvents || Object.freeze({
     LOAD_HISTORY: 'load_history',
     LOAD_SERVER_HISTORY: 'load_server_history',
     REFRESH_AFTER_KEY: 'refresh_after_key',
+    RETRY_PUBLISH_KEYS: 'retry_publish_keys',
     SYNC_ACTIVE_CONVERSATION: 'sync_active_conversation',
     SET_LOADING: 'set_loading',
     SET_CONNECTION_STATUS: 'set_connection_status',
@@ -8861,6 +8874,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.LOAD_HISTORY || 'load_history', (messages) => this.loadHistory(messages));
         this.bus.registerCommand('zali_interface', E.LOAD_SERVER_HISTORY || 'load_server_history', (payload) => this.loadServerHistory(payload));
         this.bus.registerCommand('zali_interface', E.REFRESH_AFTER_KEY || 'refresh_after_key', () => this.refreshAfterKey());
+        this.bus.registerCommand('zali_interface', E.RETRY_PUBLISH_KEYS || 'retry_publish_keys', () => this.retryPublishConversationKeys({ reason: 'device_approved_push' }));
         this.bus.registerCommand('zali_interface', E.SYNC_ACTIVE_CONVERSATION || 'sync_active_conversation', (payload) => this.syncConversationFromNative(payload));
         this.bus.registerCommand('zali_interface', E.SET_LOADING || 'set_loading', (on) => this.setLoading(on));
         this.bus.registerCommand('zali_interface', E.SET_CONNECTION_STATUS || 'set_connection_status', (connected) => this.setConnectionStatus(connected));
@@ -9320,12 +9334,31 @@ class ZaliInterface {
         return !!this.mobileLayoutQuery()?.matches;
     }
 
+    // Drives .sidebar's parked/unparked position as a plain inline style —
+    // mirroring setMobileNavProgress()'s #viewChat/.mobile-dock handling —
+    // always writing an explicit value, never clearing the inline style to
+    // fall back on the CSS rule's own translateY(115%). That fallback was
+    // tried first and measured unreliable: after clearing the inline
+    // override, getComputedStyle kept reporting the identity matrix
+    // indefinitely instead of transitioning to the cascade's parked value —
+    // even a full second later, nothing had moved. Writing both states
+    // explicitly (like #viewChat already does) sidesteps that fallback path
+    // entirely; only the transition duration is still gated by class
+    // (transition: none while becoming visible, so the reveal is instant;
+    // the class removed, so the .12s park plays once the caller sets the
+    // parked value).
+    setMobileListParked(parked) {
+        const sidebar = document.querySelector('.sidebar');
+        if (sidebar) sidebar.style.transform = parked ? 'translateY(115%)' : 'translateY(0)';
+    }
+
     setMobileSidebarOpen(open, { animate = true } = {}) {
         const isOpen = !!open;
         document.body?.classList.toggle('mobile-sidebar-open', isOpen);
         // isOpen === list/picker screen visible (--mnav 0); closed === chat screen visible (--mnav 1)
         if (isOpen) {
             document.body?.classList.add('mobile-list-visible');
+            this.setMobileListParked(false);
         }
         this.setMobileNavProgress(isOpen ? 0 : 1, { animate });
         if (!isOpen) {
@@ -9353,6 +9386,11 @@ class ZaliInterface {
             if (document.body?.classList.contains('mobile-nav-dragging')) return;
             if (this.currentMobileNavProgress() >= 0.98 && !document.body?.classList.contains('mobile-sidebar-open')) {
                 document.body?.classList.remove('mobile-list-visible');
+                // Class removal switches .sidebar back to its normal .12s
+                // transition; writing the parked value now (not clearing to
+                // fall back on it) animates the park — harmless either way
+                // visually since the chat is already fully covering it.
+                this.setMobileListParked(true);
             }
         };
         const finish = () => {
@@ -9441,12 +9479,12 @@ class ZaliInterface {
                 if (dx < DRAG_ACTIVATE) return;
                 dragging = true;
                 document.body?.classList.add('mobile-nav-dragging');
-                // Unpark the list (its own CSS transition is fast/near-
-                // instant — see .sidebar in style.css) so it's sitting at
-                // Y=0 as the chat starts moving — the reveal must look like
-                // the chat sliding off the list on the left, not the list
-                // rising from below.
+                // Unpark the list — see setMobileListParked() — so it's
+                // sitting at Y=0 as the chat starts moving: the reveal must
+                // look like the chat sliding off the list on the left, not
+                // the list rising from below.
                 document.body?.classList.add('mobile-list-visible');
+                this.setMobileListParked(false);
             }
             if (dragging) {
                 if (e.cancelable) e.preventDefault();
@@ -9532,7 +9570,13 @@ class ZaliInterface {
         return this.setMobileSidebarOpen(next);
     }
 
-    openChatView() {
+    // showList=true lands on the mobile list/picker screen instead of the
+    // chat screen — pass it when the caller is about to show the list right
+    // after, so we settle on the final state in one step instead of closing
+    // then reopening the sidebar (which used to flash the chat screen before
+    // sliding back, because renderHubSegmentNav()'s layout reads in between
+    // forced the browser to commit the intermediate transform).
+    openChatView({ showList = false } = {}) {
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -9541,7 +9585,7 @@ class ZaliInterface {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (cv) cv.classList.add('active');
-        this.closeMobileSidebar();
+        this.setMobileSidebarOpen(showList);
         this.renderServerToolbar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
@@ -11482,29 +11526,52 @@ class ZaliInterface {
                 if (res.ok) {
                     const events = await res.json();
                     if (Array.isArray(events) && events.length > 0) {
-                        const latest = events[events.length - 1];
-                        const encrypted = String(latest?.encryptedVaultEvent || '').trim();
-                        if (encrypted) {
-                            let payload = null;
+                        // Scan backward for the newest event THIS passphrase can decrypt,
+                        // instead of only ever looking at events[events.length-1]. The vault
+                        // event stream is shared with one-time-code exports
+                        // (approveDeviceAndExport/exportCurrentVaultPackage) that are never
+                        // encrypted with the account passphrase — those used to permanently
+                        // "poison" auto-sync the moment one landed after a real event, because
+                        // the old code gave up for good the first time the single newest row
+                        // failed to decrypt. Scanning a bounded window back makes this
+                        // self-healing: any account already stuck on this recovers
+                        // automatically once this ships, no server/data change needed.
+                        const SCAN_WINDOW = 8;
+                        const scanStart = Math.max(0, events.length - SCAN_WINDOW);
+                        let matchIndex = -1;
+                        let payload = null;
+                        let anyDecryptAttempted = false;
+                        for (let i = events.length - 1; i >= scanStart; i -= 1) {
+                            const encrypted = String(events[i]?.encryptedVaultEvent || '').trim();
+                            if (!encrypted) continue;
+                            anyDecryptAttempted = true;
                             try {
                                 payload = await this.decryptVaultPackage(encrypted, code);
+                                matchIndex = i;
+                                break;
                             } catch (e) {
-                                undecryptableServerEvents = true;
-                                this.trace(`syncCloudVaultPackage decrypt failed reason=${reason} error=${e?.message || e}`);
+                                this.trace(`syncCloudVaultPackage decrypt failed reason=${reason} index=${i} error=${e?.message || e}`);
                             }
-                            if (payload) {
-                                try {
-                                    this.applyVaultPlainPayload(payload);
-                                    await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
-                                    sawCompatibleServerEvents = true;
-                                    imported = true;
-                                    this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length}`);
-                                } catch (e) {
-                                    // Расшифровалось, но пакет старой схемы — публикация ниже
-                                    // выступает как upgrade до v2, это допустимо.
-                                    this.trace(`syncCloudVaultPackage import failed reason=${reason} error=${e?.message || e}`);
-                                }
+                        }
+                        if (payload) {
+                            try {
+                                this.applyVaultPlainPayload(payload);
+                                await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
+                                imported = true;
+                                // Only skip republishing when the newest event itself was the
+                                // match — an older match means newer, undecryptable rows
+                                // (foreign-code exports) sit on top of it; falling through to
+                                // publish below pushes "latest" back to something every device
+                                // can read again instead of leaving it stuck behind them.
+                                sawCompatibleServerEvents = matchIndex === events.length - 1;
+                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length} matchIndex=${matchIndex}`);
+                            } catch (e) {
+                                // Расшифровалось, но пакет старой схемы — публикация ниже
+                                // выступает как upgrade до v2, это допустимо.
+                                this.trace(`syncCloudVaultPackage import failed reason=${reason} error=${e?.message || e}`);
                             }
+                        } else if (anyDecryptAttempted) {
+                            undecryptableServerEvents = true;
                         }
                     }
                 }
@@ -11522,10 +11589,10 @@ class ZaliInterface {
             }
 
             if (undecryptableServerEvents) {
-                // На сервере есть vault-события, которые не открылись этой passphrase.
-                // Публиковать поверх них нельзя: локальные ключи здесь могут быть
-                // свежесгенерированными временными, и новое «последнее» событие
-                // затенило бы настоящие ключи для всех последующих устройств.
+                // Ни одно из последних SCAN_WINDOW событий не расшифровалось этой
+                // passphrase — похоже на реальную смену пароля на другом устройстве, а
+                // не на one-time-code экспорт. Публиковать поверх нельзя: локальные
+                // ключи здесь могут быть свежесгенерированными временными.
                 this.trace(`syncCloudVaultPackage publish skipped reason=${reason} undecryptable_server_events=true`);
                 this.addLogEntry({ type: 'WARN', msg: 'Cloud vault: события на сервере не расшифровались текущей passphrase, публикация ключей пропущена', ts: new Date().toLocaleTimeString() });
                 return false;
@@ -11666,7 +11733,7 @@ class ZaliInterface {
         return published;
     }
 
-    async retryPublishConversationKeys({ reason = 'auto', limit = 20 } = {}) {
+    async retryPublishConversationKeys({ reason = 'auto', limit = 200 } = {}) {
         if (!this.S.session?.token) return 0;
         const stored = this.loadStoredConversationKeys();
         const entries = Object.entries(stored)
@@ -11700,7 +11767,23 @@ class ZaliInterface {
         return published;
     }
 
-    async syncIncomingKeyEnvelopes({ reason = 'auto', triggerRefresh = true } = {}) {
+    // Concurrent callers (e.g. bootstrapDeviceTrust's background sync overlapping
+    // postAuthSetup's own awaited call) used to each run an independent
+    // load-mutate-save cycle over the same stored-conversation-keys object with no
+    // locking, so a freshly generated local key from _resolveConversationCryptoKeyImpl
+    // could be silently clobbered by whichever save landed last. Dedup to a single
+    // in-flight run, mirroring _resolveKeyInFlight/_restoreVaultInFlight.
+    async syncIncomingKeyEnvelopes(opts = {}) {
+        if (this._syncEnvelopesInFlight) return this._syncEnvelopesInFlight;
+        this._syncEnvelopesInFlight = this._syncIncomingKeyEnvelopesImpl(opts);
+        try {
+            return await this._syncEnvelopesInFlight;
+        } finally {
+            this._syncEnvelopesInFlight = null;
+        }
+    }
+
+    async _syncIncomingKeyEnvelopesImpl({ reason = 'auto', triggerRefresh = true } = {}) {
         if (!this.S.session?.token) return 0;
         try {
             const identity = await this.ensureDeviceCryptoIdentity();
@@ -11873,6 +11956,11 @@ class ZaliInterface {
             const vaultRes = await this.apiFetch(this.apiRoutes.vault.events, {
                 method: 'POST',
                 body: JSON.stringify({
+                    // Targeted at the new device specifically — it's encrypted with a
+                    // one-time code, not the account passphrase, so it must not be
+                    // mistaken for the regular auto-sync broadcast event by any client
+                    // that filters on issuedToDeviceId.
+                    issuedToDeviceId: targetId,
                     vaultEpoch: payload.vaultEpoch,
                     encryptedVaultEvent,
                 }),
@@ -15592,6 +15680,18 @@ class ZaliInterface {
                     // `zali_interface:reaction_updated` bus command); the browser has no
                     // such bridge, so this WS is the only path for it here.
                     this.onReactionUpdated(payload);
+                } else if (payload && typeof payload === 'object' && payload.type === 'key_envelope_available') {
+                    // Native shells receive this over their own bridge (REFRESH_AFTER_KEY);
+                    // the browser has no such bridge — without this branch a browser-tab
+                    // user with a conversation open never picks up a freshly published key
+                    // until they navigate away and back.
+                    this.refreshAfterKey();
+                } else if (payload && typeof payload === 'object' && payload.type === 'device_approved') {
+                    // Pushed when one of our peers approves a new device — republish our
+                    // side of any DM/channel keys we've already shared with them instead of
+                    // waiting for our own next login (retryPublishConversationKeys already
+                    // only targets approved devices, so this is safe to fire eagerly).
+                    void this.retryPublishConversationKeys({ reason: 'device_approved_push' });
                 } else if (payload && typeof payload === 'object' && !payload.type && payload.id && payload.sender && payload.receiver) {
                     // No `type` field = a raw `Message` row pushed by deliver_to_user/
                     // deliver_server_message (server/src/realtime.rs), not a voice/avatar
@@ -24369,16 +24469,14 @@ class ZaliInterface {
         if (mobileChatsBtn) {
             mobileChatsBtn.addEventListener('click', () => {
                 this.setNavMode('dm');
-                showChatView();
-                this.openMobileSidebar();
+                this.openChatView({ showList: true });
             });
         }
         const mobileServersBtn = document.getElementById('mobileServersBtn');
         if (mobileServersBtn) {
             mobileServersBtn.addEventListener('click', () => {
                 this.setNavMode('servers');
-                showChatView();
-                this.openMobileSidebar();
+                this.openChatView({ showList: true });
             });
         }
         const mobileHubBtn = document.getElementById('mobileHubBtn');
@@ -24907,6 +25005,9 @@ window.ZaliInterface = ZaliInterface;
     };
     window.refreshAfterKey = function() {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.REFRESH_AFTER_KEY || 'refresh_after_key'}`);
+    };
+    window.retryPublishKeys = function() {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.RETRY_PUBLISH_KEYS || 'retry_publish_keys'}`);
     };
     window.loadServerHistory = function(serverId, channelId, messages) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.LOAD_SERVER_HISTORY || 'load_server_history'}`, { serverId, channelId, messages });

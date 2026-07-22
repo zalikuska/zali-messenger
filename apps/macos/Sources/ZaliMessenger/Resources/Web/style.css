@@ -5952,16 +5952,28 @@ body[data-nav-mode="servers"] .contacts {
         z-index: 20;
         width: auto;
         transform: translateY(115%);
-        /* A fast, always-on transition (never toggled to transition:none)
-           reads as "already there" without needing any instant/restart
-           trickery — simpler and more robust than trying to force-restart a
-           disabled transition, which was unreliable in testing. */
+        /* This declared transform value only matters for the very first
+           paint, before any JS has run — from then on
+           setMobileListParked() in interface.js always writes both the
+           parked and unparked position as an explicit inline style (never
+           clears it to fall back on this rule), for the same reason
+           #viewChat's own transform is inline-driven: falling back to a
+           cascade value on inline-style removal was tried and measured
+           unreliable — after clearing the override, the element kept
+           reporting its old computed transform indefinitely instead of
+           transitioning to this rule's value. Only the transition DURATION
+           is still controlled here/by the class below: none while becoming
+           visible (tap-open or swipe-start — the list must be sitting at
+           Y=0 instantly, not visibly rising while #viewChat's own .24s
+           slide, see further down, is still covering it), this rule's fast
+           .12s once parking (once scheduleMobileListPark() confirms the
+           chat has fully covered the list again). */
         transition: transform .12s ease-out, box-shadow .12s ease;
         will-change: transform;
     }
 
     body.mobile-list-visible .sidebar {
-        transform: translateY(0);
+        transition: none;
         box-shadow: 0 18px 48px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.02);
     }
 

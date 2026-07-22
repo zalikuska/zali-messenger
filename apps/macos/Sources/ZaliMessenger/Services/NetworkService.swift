@@ -83,6 +83,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     var onAvatarChanged: ((_ username: String, _ deleted: Bool) -> Void)?
     var onVoiceEvent: ((_ payload: [String: Any]) -> Void)?
     var onKeyEnvelopeAvailable: (() -> Void)?
+    var onDeviceApproved: (() -> Void)?
     var onWebSocketConnected: (() -> Void)?
     var onWebSocketDisconnected: (() -> Void)?
     var currentKey: String = ""
@@ -823,6 +824,14 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             trace("handleWebSocketMessage key_envelope_available")
             DispatchQueue.main.async {
                 self.onKeyEnvelopeAvailable?()
+            }
+            return
+        }
+
+        if let eventType = raw["type"] as? String, eventType == "device_approved" {
+            trace("handleWebSocketMessage device_approved")
+            DispatchQueue.main.async {
+                self.onDeviceApproved?()
             }
             return
         }

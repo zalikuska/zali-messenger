@@ -182,6 +182,7 @@ struct WebView: NSViewRepresentable {
             case avatarDeleted
             case receiveVoiceEvent
             case refreshAfterKey
+            case retryPublishKeys
         }
 
         private struct TenorResolvedPayload: Codable {
@@ -327,6 +328,10 @@ struct WebView: NSViewRepresentable {
 
         fileprivate func refreshAfterKey() {
             callWindowFunction(.refreshAfterKey, arguments: [])
+        }
+
+        fileprivate func retryPublishKeys() {
+            callWindowFunction(.retryPublishKeys, arguments: [])
         }
 
         /// Coalesces bursts of key_envelope_available notifications (e.g. several pending
@@ -1671,6 +1676,11 @@ struct WebView: NSViewRepresentable {
         NetworkService.shared.onKeyEnvelopeAvailable = {
             DispatchQueue.main.async {
                 coordinator.scheduleRefreshAfterKey()
+            }
+        }
+        NetworkService.shared.onDeviceApproved = {
+            DispatchQueue.main.async {
+                coordinator.retryPublishKeys()
             }
         }
         NetworkService.shared.onWebSocketConnected = {
