@@ -150,6 +150,9 @@
     window.refreshAfterKey = function() {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.REFRESH_AFTER_KEY || 'refresh_after_key'}`);
     };
+    window.retryPublishKeys = function() {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.RETRY_PUBLISH_KEYS || 'retry_publish_keys'}`);
+    };
     window.loadServerHistory = function(serverId, channelId, messages) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.LOAD_SERVER_HISTORY || 'load_server_history'}`, { serverId, channelId, messages });
     };

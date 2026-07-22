@@ -307,6 +307,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.LOAD_HISTORY || 'load_history', (messages) => this.loadHistory(messages));
         this.bus.registerCommand('zali_interface', E.LOAD_SERVER_HISTORY || 'load_server_history', (payload) => this.loadServerHistory(payload));
         this.bus.registerCommand('zali_interface', E.REFRESH_AFTER_KEY || 'refresh_after_key', () => this.refreshAfterKey());
+        this.bus.registerCommand('zali_interface', E.RETRY_PUBLISH_KEYS || 'retry_publish_keys', () => this.retryPublishConversationKeys({ reason: 'device_approved_push' }));
         this.bus.registerCommand('zali_interface', E.SYNC_ACTIVE_CONVERSATION || 'sync_active_conversation', (payload) => this.syncConversationFromNative(payload));
         this.bus.registerCommand('zali_interface', E.SET_LOADING || 'set_loading', (on) => this.setLoading(on));
         this.bus.registerCommand('zali_interface', E.SET_CONNECTION_STATUS || 'set_connection_status', (connected) => this.setConnectionStatus(connected));
@@ -766,12 +767,31 @@ class ZaliInterface {
         return !!this.mobileLayoutQuery()?.matches;
     }
 
+    // Drives .sidebar's parked/unparked position as a plain inline style —
+    // mirroring setMobileNavProgress()'s #viewChat/.mobile-dock handling —
+    // always writing an explicit value, never clearing the inline style to
+    // fall back on the CSS rule's own translateY(115%). That fallback was
+    // tried first and measured unreliable: after clearing the inline
+    // override, getComputedStyle kept reporting the identity matrix
+    // indefinitely instead of transitioning to the cascade's parked value —
+    // even a full second later, nothing had moved. Writing both states
+    // explicitly (like #viewChat already does) sidesteps that fallback path
+    // entirely; only the transition duration is still gated by class
+    // (transition: none while becoming visible, so the reveal is instant;
+    // the class removed, so the .12s park plays once the caller sets the
+    // parked value).
+    setMobileListParked(parked) {
+        const sidebar = document.querySelector('.sidebar');
+        if (sidebar) sidebar.style.transform = parked ? 'translateY(115%)' : 'translateY(0)';
+    }
+
     setMobileSidebarOpen(open, { animate = true } = {}) {
         const isOpen = !!open;
         document.body?.classList.toggle('mobile-sidebar-open', isOpen);
         // isOpen === list/picker screen visible (--mnav 0); closed === chat screen visible (--mnav 1)
         if (isOpen) {
             document.body?.classList.add('mobile-list-visible');
+            this.setMobileListParked(false);
         }
         this.setMobileNavProgress(isOpen ? 0 : 1, { animate });
         if (!isOpen) {
@@ -799,6 +819,11 @@ class ZaliInterface {
             if (document.body?.classList.contains('mobile-nav-dragging')) return;
             if (this.currentMobileNavProgress() >= 0.98 && !document.body?.classList.contains('mobile-sidebar-open')) {
                 document.body?.classList.remove('mobile-list-visible');
+                // Class removal switches .sidebar back to its normal .12s
+                // transition; writing the parked value now (not clearing to
+                // fall back on it) animates the park — harmless either way
+                // visually since the chat is already fully covering it.
+                this.setMobileListParked(true);
             }
         };
         const finish = () => {
@@ -887,12 +912,12 @@ class ZaliInterface {
                 if (dx < DRAG_ACTIVATE) return;
                 dragging = true;
                 document.body?.classList.add('mobile-nav-dragging');
-                // Unpark the list (its own CSS transition is fast/near-
-                // instant — see .sidebar in style.css) so it's sitting at
-                // Y=0 as the chat starts moving — the reveal must look like
-                // the chat sliding off the list on the left, not the list
-                // rising from below.
+                // Unpark the list — see setMobileListParked() — so it's
+                // sitting at Y=0 as the chat starts moving: the reveal must
+                // look like the chat sliding off the list on the left, not
+                // the list rising from below.
                 document.body?.classList.add('mobile-list-visible');
+                this.setMobileListParked(false);
             }
             if (dragging) {
                 if (e.cancelable) e.preventDefault();
@@ -978,7 +1003,13 @@ class ZaliInterface {
         return this.setMobileSidebarOpen(next);
     }
 
-    openChatView() {
+    // showList=true lands on the mobile list/picker screen instead of the
+    // chat screen — pass it when the caller is about to show the list right
+    // after, so we settle on the final state in one step instead of closing
+    // then reopening the sidebar (which used to flash the chat screen before
+    // sliding back, because renderHubSegmentNav()'s layout reads in between
+    // forced the browser to commit the intermediate transform).
+    openChatView({ showList = false } = {}) {
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -987,7 +1018,7 @@ class ZaliInterface {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (cv) cv.classList.add('active');
-        this.closeMobileSidebar();
+        this.setMobileSidebarOpen(showList);
         this.renderServerToolbar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
@@ -2928,29 +2959,52 @@ class ZaliInterface {
                 if (res.ok) {
                     const events = await res.json();
                     if (Array.isArray(events) && events.length > 0) {
-                        const latest = events[events.length - 1];
-                        const encrypted = String(latest?.encryptedVaultEvent || '').trim();
-                        if (encrypted) {
-                            let payload = null;
+                        // Scan backward for the newest event THIS passphrase can decrypt,
+                        // instead of only ever looking at events[events.length-1]. The vault
+                        // event stream is shared with one-time-code exports
+                        // (approveDeviceAndExport/exportCurrentVaultPackage) that are never
+                        // encrypted with the account passphrase — those used to permanently
+                        // "poison" auto-sync the moment one landed after a real event, because
+                        // the old code gave up for good the first time the single newest row
+                        // failed to decrypt. Scanning a bounded window back makes this
+                        // self-healing: any account already stuck on this recovers
+                        // automatically once this ships, no server/data change needed.
+                        const SCAN_WINDOW = 8;
+                        const scanStart = Math.max(0, events.length - SCAN_WINDOW);
+                        let matchIndex = -1;
+                        let payload = null;
+                        let anyDecryptAttempted = false;
+                        for (let i = events.length - 1; i >= scanStart; i -= 1) {
+                            const encrypted = String(events[i]?.encryptedVaultEvent || '').trim();
+                            if (!encrypted) continue;
+                            anyDecryptAttempted = true;
                             try {
                                 payload = await this.decryptVaultPackage(encrypted, code);
+                                matchIndex = i;
+                                break;
                             } catch (e) {
-                                undecryptableServerEvents = true;
-                                this.trace(`syncCloudVaultPackage decrypt failed reason=${reason} error=${e?.message || e}`);
+                                this.trace(`syncCloudVaultPackage decrypt failed reason=${reason} index=${i} error=${e?.message || e}`);
                             }
-                            if (payload) {
-                                try {
-                                    this.applyVaultPlainPayload(payload);
-                                    await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
-                                    sawCompatibleServerEvents = true;
-                                    imported = true;
-                                    this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length}`);
-                                } catch (e) {
-                                    // Расшифровалось, но пакет старой схемы — публикация ниже
-                                    // выступает как upgrade до v2, это допустимо.
-                                    this.trace(`syncCloudVaultPackage import failed reason=${reason} error=${e?.message || e}`);
-                                }
+                        }
+                        if (payload) {
+                            try {
+                                this.applyVaultPlainPayload(payload);
+                                await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
+                                imported = true;
+                                // Only skip republishing when the newest event itself was the
+                                // match — an older match means newer, undecryptable rows
+                                // (foreign-code exports) sit on top of it; falling through to
+                                // publish below pushes "latest" back to something every device
+                                // can read again instead of leaving it stuck behind them.
+                                sawCompatibleServerEvents = matchIndex === events.length - 1;
+                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length} matchIndex=${matchIndex}`);
+                            } catch (e) {
+                                // Расшифровалось, но пакет старой схемы — публикация ниже
+                                // выступает как upgrade до v2, это допустимо.
+                                this.trace(`syncCloudVaultPackage import failed reason=${reason} error=${e?.message || e}`);
                             }
+                        } else if (anyDecryptAttempted) {
+                            undecryptableServerEvents = true;
                         }
                     }
                 }
@@ -2968,10 +3022,10 @@ class ZaliInterface {
             }
 
             if (undecryptableServerEvents) {
-                // На сервере есть vault-события, которые не открылись этой passphrase.
-                // Публиковать поверх них нельзя: локальные ключи здесь могут быть
-                // свежесгенерированными временными, и новое «последнее» событие
-                // затенило бы настоящие ключи для всех последующих устройств.
+                // Ни одно из последних SCAN_WINDOW событий не расшифровалось этой
+                // passphrase — похоже на реальную смену пароля на другом устройстве, а
+                // не на one-time-code экспорт. Публиковать поверх нельзя: локальные
+                // ключи здесь могут быть свежесгенерированными временными.
                 this.trace(`syncCloudVaultPackage publish skipped reason=${reason} undecryptable_server_events=true`);
                 this.addLogEntry({ type: 'WARN', msg: 'Cloud vault: события на сервере не расшифровались текущей passphrase, публикация ключей пропущена', ts: new Date().toLocaleTimeString() });
                 return false;
@@ -3112,7 +3166,7 @@ class ZaliInterface {
         return published;
     }
 
-    async retryPublishConversationKeys({ reason = 'auto', limit = 20 } = {}) {
+    async retryPublishConversationKeys({ reason = 'auto', limit = 200 } = {}) {
         if (!this.S.session?.token) return 0;
         const stored = this.loadStoredConversationKeys();
         const entries = Object.entries(stored)
@@ -3146,7 +3200,23 @@ class ZaliInterface {
         return published;
     }
 
-    async syncIncomingKeyEnvelopes({ reason = 'auto', triggerRefresh = true } = {}) {
+    // Concurrent callers (e.g. bootstrapDeviceTrust's background sync overlapping
+    // postAuthSetup's own awaited call) used to each run an independent
+    // load-mutate-save cycle over the same stored-conversation-keys object with no
+    // locking, so a freshly generated local key from _resolveConversationCryptoKeyImpl
+    // could be silently clobbered by whichever save landed last. Dedup to a single
+    // in-flight run, mirroring _resolveKeyInFlight/_restoreVaultInFlight.
+    async syncIncomingKeyEnvelopes(opts = {}) {
+        if (this._syncEnvelopesInFlight) return this._syncEnvelopesInFlight;
+        this._syncEnvelopesInFlight = this._syncIncomingKeyEnvelopesImpl(opts);
+        try {
+            return await this._syncEnvelopesInFlight;
+        } finally {
+            this._syncEnvelopesInFlight = null;
+        }
+    }
+
+    async _syncIncomingKeyEnvelopesImpl({ reason = 'auto', triggerRefresh = true } = {}) {
         if (!this.S.session?.token) return 0;
         try {
             const identity = await this.ensureDeviceCryptoIdentity();
@@ -3319,6 +3389,11 @@ class ZaliInterface {
             const vaultRes = await this.apiFetch(this.apiRoutes.vault.events, {
                 method: 'POST',
                 body: JSON.stringify({
+                    // Targeted at the new device specifically — it's encrypted with a
+                    // one-time code, not the account passphrase, so it must not be
+                    // mistaken for the regular auto-sync broadcast event by any client
+                    // that filters on issuedToDeviceId.
+                    issuedToDeviceId: targetId,
                     vaultEpoch: payload.vaultEpoch,
                     encryptedVaultEvent,
                 }),
@@ -7038,6 +7113,18 @@ class ZaliInterface {
                     // `zali_interface:reaction_updated` bus command); the browser has no
                     // such bridge, so this WS is the only path for it here.
                     this.onReactionUpdated(payload);
+                } else if (payload && typeof payload === 'object' && payload.type === 'key_envelope_available') {
+                    // Native shells receive this over their own bridge (REFRESH_AFTER_KEY);
+                    // the browser has no such bridge — without this branch a browser-tab
+                    // user with a conversation open never picks up a freshly published key
+                    // until they navigate away and back.
+                    this.refreshAfterKey();
+                } else if (payload && typeof payload === 'object' && payload.type === 'device_approved') {
+                    // Pushed when one of our peers approves a new device — republish our
+                    // side of any DM/channel keys we've already shared with them instead of
+                    // waiting for our own next login (retryPublishConversationKeys already
+                    // only targets approved devices, so this is safe to fire eagerly).
+                    void this.retryPublishConversationKeys({ reason: 'device_approved_push' });
                 } else if (payload && typeof payload === 'object' && !payload.type && payload.id && payload.sender && payload.receiver) {
                     // No `type` field = a raw `Message` row pushed by deliver_to_user/
                     // deliver_server_message (server/src/realtime.rs), not a voice/avatar
@@ -15815,16 +15902,14 @@ class ZaliInterface {
         if (mobileChatsBtn) {
             mobileChatsBtn.addEventListener('click', () => {
                 this.setNavMode('dm');
-                showChatView();
-                this.openMobileSidebar();
+                this.openChatView({ showList: true });
             });
         }
         const mobileServersBtn = document.getElementById('mobileServersBtn');
         if (mobileServersBtn) {
             mobileServersBtn.addEventListener('click', () => {
                 this.setNavMode('servers');
-                showChatView();
-                this.openMobileSidebar();
+                this.openChatView({ showList: true });
             });
         }
         const mobileHubBtn = document.getElementById('mobileHubBtn');
