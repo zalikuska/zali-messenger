@@ -475,6 +475,25 @@ pub(crate) async fn approve_device(
     )
     .await;
 
+    // Nudge everyone who has ever published a conversation key to this owner: a
+    // freshly-approved device has zero matching envelope rows (get_key_envelopes
+    // filters by exact recipient_device_id), so without this a sender only
+    // republishes on their own next login — unbounded wait for the new device to
+    // ever become readable. Reuses the same push primitive as post_key_envelope's
+    // key_envelope_available notification, no new table/schema needed.
+    if let Ok(senders) = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT sender FROM conversation_key_envelopes WHERE owner = ?",
+    )
+    .bind(&owner)
+    .fetch_all(&state.db)
+    .await
+    {
+        let notify_payload = serde_json::json!({ "type": "device_approved" }).to_string();
+        for sender in senders {
+            send_payload_to_user(&state, &sender, notify_payload.clone(), "approve_device").await;
+        }
+    }
+
     match load_device(&state.db, &owner, &target_id).await {
         Ok(Some(device)) => Json(device_record_to_response(device)).into_response(),
         Ok(None) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
