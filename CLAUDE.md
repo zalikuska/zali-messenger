@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Агенты
 
-Никогда не запускать больше 1 агента одновременно. Запускать агента вообще только если это действительно необходимо — по умолчанию делать работу самостоятельно, без делегирования в Agent.
+Агентов (инструмент Agent/Task) не использовать вообще. Всю работу выполнять самостоятельно, без делегирования в сабагентов.
 
 ## ⚠️ Обязательно при ЛЮБЫХ изменениях в коде — проверить, не нужны ли они в другой версии
 
@@ -21,9 +21,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > Пример из практики (2026-07): фикс загрузки/показа аватара делался в macOS Swift-клиенте (multipart CRLF в raw-строке `\#r\#n`, роутинг upload через нативный мост, ретрай `performAvatarFetch` на свежем соединении). Windows/Rust-шелл использует `reqwest` (сам ставит CRLF) и уже имеет `perform_avatar_fetch`+`retry_with_backoff` — там правки 1:1 не нужны, но проверить это надо было явно.
 
-## graphify
+## graphify — ОБЯЗАТЕЛЬНО, не пропускать
 
-This project has a knowledge graph at `graphify-out/` with god nodes, community structure, and cross-file relationships.
+`graphify-out/graph.json` в этом репозитории существует. Это значит: **перед любым Read/Grep/поиском по коду** (в том числе в начале работы над задачей, до первого открытия исходников) сначала выполни `graphify query "<question>"` (или `graphify explain "<concept>"` / `graphify path "<A>" "<B>"`). Не открывай файлы "по памяти" или "чтобы просто посмотреть" — это правило действует всегда, а не только когда явно вспомнилось. Это касается и сабагентов: если делегируешь исследование кода — включи это требование в промпт сабагента.
 
 Rules:
 - For codebase questions, first run `graphify query "<question>"` when `graphify-out/graph.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
