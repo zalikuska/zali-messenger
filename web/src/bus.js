@@ -23,6 +23,7 @@ const ZaliBusEvents = window.ZaliBusEvents || Object.freeze({
     NATIVE_RESPONSE: 'native_response',
     ADD_LOG_ENTRY: 'add_log_entry',
     VOICE_EVENT: 'voice_event',
+    UPDATE_EVENT: 'update_event',
 });
 
 window.ZaliBusEvents = ZaliBusEvents;

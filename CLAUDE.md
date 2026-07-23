@@ -68,6 +68,27 @@ If the service ever needs hand-editing: unit file lives at `/etc/systemd/system/
 > `cargo run --manifest-path server/Cargo.toml --example gen_vapid_keys` on the VPS (or copy from local
 > dev, VAPID keys aren't tied to any account/domain). Leaving them unset just disables push silently.
 
+### Publishing a client release (in-app updater)
+
+macOS (`apps/macos/`) and Windows (`apps/windows/`) clients check `GET /api/version?platform=macos|windows`
+on login and prompt to update if the server's version is newer (`web/src/interface.js`
+`checkForAppUpdate()`). Declining keeps it available under the Hub's "Обновления" card. To ship a release:
+
+1. Bump the version string: `APP_VERSION` in `scripts/build_app.sh` (macOS) and/or `version` in
+   `apps/windows/Cargo.toml` (Windows).
+2. Build the client(s) (`./scripts/build_app.sh`, `scripts/build_windows_app.ps1`), zip the macOS
+   `.app` (Windows ships as the raw `.exe`, no zip needed).
+3. Upload the artifact(s) somewhere HTTPS-reachable — e.g. the server's `/uploads/:filename` static
+   route — and compute their SHA-256 (`shasum -a 256 <file>`).
+4. Publish, once per platform (requires `RELEASE_ADMIN_TOKEN` set in the server's env — see `.env.example`;
+   unset means this route always 403s):
+   ```bash
+   curl -X POST https://msgs.zalikus.org/api/version \
+     -H "Authorization: Bearer $RELEASE_ADMIN_TOKEN" -H "Content-Type: application/json" \
+     -d '{"platform":"macos","version":"1.1.0","notes":"...","downloadUrl":"https://msgs.zalikus.org/uploads/ZaliMessenger-1.1.0.zip","sha256":"<hex>"}'
+   ```
+5. Verify: `curl https://msgs.zalikus.org/api/version?platform=macos` returns the new metadata.
+
 > Note: after the 2026-07-12 repo reorg there is no root `Cargo.toml` on the VPS checkout — always pass `--manifest-path server/Cargo.toml` to `cargo build`, and restart from `server/target/release/zali_server`, not `target/release/zali_server`. On 2026-07-12 a deploy silently kept running a week-old binary at the old `target/release/zali_server` path (still present from a prior build) while the freshly built binary sat unused at `server/target/release/zali_server` — `pkill`+`nohup` "succeeded" with no errors and the new code never went live. If in doubt, verify with `ssh zms "readlink -f /proc/\$(pidof zali_server)/exe"` after restart. Consider deleting the stale `/opt/zali-server/target/` directory on the VPS once confirmed unused (ask before doing this — it's a production server path).
 
 ## Build Commands
@@ -261,6 +282,7 @@ native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachme
 
 ```
 apps/windows/     — Rust-клиент (WRY/TAO)
+apps/windows/installer/ZaliMessenger.iss — Inno Setup скрипт установщика
 core/             — Rust core library (зависимость apps/windows)
 sdk/Rust/         — архивный SDK (зависимость core)
 web/src/          — JS-модули и CSS/HTML
@@ -268,7 +290,7 @@ web/bridge_protocol.json
 web/style.css
 web/index.html
 scripts/bundle_web.py         — бандлер веб-ассетов
-scripts/build_windows_app.ps1 — PowerShell-скрипт сборки
+scripts/build_windows_app.ps1 — PowerShell-скрипт сборки (+ установщика, см. ниже)
 ```
 
 Сервер (`server/src/main.rs`), `apps/macos/`, `sdk/Swift/` — **не нужны**.
@@ -281,7 +303,8 @@ zip -r zali-windows-source.zip \
   core/src core/Cargo.toml core/Cargo.lock \
   sdk/Rust/src sdk/Rust/Cargo.toml sdk/Rust/Cargo.lock \
   web/src web/bridge_protocol.json web/style.css web/index.html \
-  scripts/bundle_web.py scripts/build_windows_app.ps1
+  scripts/bundle_web.py scripts/build_windows_app.ps1 \
+  apps/windows/installer/ZaliMessenger.iss
 ```
 
 ### Сборка на Windows-машине
@@ -310,6 +333,63 @@ $env:ZALI_API_BASE_URL = "https://msgs.zalikus.org"
 $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
 .\scripts\build_windows_app.ps1
 ```
+
+### Установщик (Inno Setup)
+
+`apps/windows/installer/ZaliMessenger.iss` собирается в `ZaliMessengerSetup-<version>.exe`
+поверх уже собранного `dist\windows\ZaliMessenger.exe` — сам установщик Rust не собирает.
+
+**Дополнительное требование:** [Inno Setup](https://jrsoftware.org/isinfo.php) (`ISCC.exe` должен быть в PATH).
+
+```powershell
+.\scripts\build_windows_app.ps1 -Installer
+# Результат: dist\windows\installer\ZaliMessengerSetup-<version>.exe
+```
+
+Версия берётся из `apps/windows/Cargo.toml` (`version = "..."`) — та же переменная,
+что читает `env!("CARGO_PKG_VERSION")` для сравнения с `/api/version` в апдейтере
+(см. «Publishing a client release» выше), бампать в одном месте.
+
+Установщик регистрирует **AppUserModelID** (`com.zali.messenger`) на ярлыке в Start
+Menu — это единственное, чего не хватало для стабильных Windows toast-уведомлений:
+`set_windows_app_user_model_id()` в `main.rs` задаёт AUMID процесса в рантайме, но
+Windows показывает тосты для неупакованных (non-MSIX) Win32-приложений надёжно,
+только если тот же AUMID ещё и зарегистрирован через persistent-ярлык — это делает
+параметр `AppUserModelID` в секции `[Icons]` `.iss`-скрипта.
+
+Также добавляет (через чекбоксы в мастере установки, `[Tasks]` в `.iss`):
+- ярлык на рабочем столе (не отмечен по умолчанию);
+- автозапуск при входе в Windows со свёрнутым окном (`--start-minimized`,
+  `HKCU\...\Run`) — отмечен по умолчанию, поскольку без этого приложение не работает
+  в фоне и локальные уведомления просто не приходят, пока пользователь не откроет
+  чат руками.
+
+Соответствующее поведение в самом клиенте (`apps/windows/src/main.rs`, Windows-only):
+- `install_windows_tray()` создаёт иконку в трее (крейт `tray-icon`, меню через его
+  реэкспорт `muda` — **не** тот же `muda 0.12`, что использует macOS Rust-шелл
+  напрямую: Cargo резолвит их как два независимых экземпляра одноимённого крейта,
+  их типы несовместимы, смешивать нельзя) с пунктами «Открыть»/«Выход».
+- `WindowEvent::CloseRequested` на Windows сворачивает окно в трей вместо выхода
+  (`window.set_visible(false)`) — выйти по-настоящему можно только через «Выход» в
+  трее (`AppEvent::Quit`, тот же путь, что использует апдейтер после установки
+  обновления) или через диспетчер задач. На остальных платформах поведение не
+  менялось.
+- Флаг `--start-minimized` не показывает окно при старте (`with_visible(!start_minimized)`
+  в `WindowBuilder`) — используется только автозапуском из установщика.
+
+Иконка трея сейчас — сплошной квадрат брендового цвета (`--lime: #cbff00`),
+сгенерированный в коде (`tray_icon_image()` в `main.rs`), а не настоящий `.ico` —
+это осознанное упрощение, чтобы не тащить крейт декодирования изображений ради
+одной маленькой иконки. Замена на нормальный многоразмерный `.ico` — косметическая
+доработка на будущее.
+
+**Ничего из этого не собиралось и не проверялось на реальной Windows-машине** (на
+этом Mac нет Windows и даже кросс-компиляция под `x86_64-pc-windows-msvc` не проходит
+из-за `ring`, см. выше) — код написан по документированному API используемых крейтов
+и по возможности перепроверен компиляцией на macOS с временно снятыми
+`#[cfg(target_os = "windows")]`-гейтами (у `tray-icon`/`muda` идентичный публичный API
+на обеих платформах), но живое поведение трея/автозапуска/установщика/AUMID-фикса
+нужно проверить вручную на Windows.
 
 ## Git Safety — уроки реального инцидента с потерей кода
 

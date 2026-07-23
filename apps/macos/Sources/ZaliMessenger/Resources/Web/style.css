@@ -157,8 +157,68 @@ button {
 .tb-l {
     display: flex;
     align-items: center;
+    gap: 10px;
     justify-content: flex-start;
     min-width: 0;
+}
+
+/* In-app window controls (Windows only — see NativeCapabilities::window_controls
+   in apps/windows/src/native.rs). Hidden by default; interface.js adds
+   .has-window-controls to #titlebar only when the native shell advertises the
+   capability, since it's the one that switched off the OS title bar. */
+.win-controls {
+    display: none;
+    align-items: center;
+    gap: 2px;
+}
+
+.titlebar.has-window-controls .win-controls {
+    display: flex;
+}
+
+.win-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 30px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text2);
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+
+.win-btn svg {
+    display: block;
+    pointer-events: none;
+}
+
+.win-btn:hover {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+}
+
+.win-btn:active {
+    background: rgba(255,255,255,.14);
+}
+
+.win-btn-close:hover {
+    background: var(--red);
+    color: #fff;
+}
+
+.win-btn-max .ico-restore {
+    display: none;
+}
+
+.titlebar.win-maximized .win-btn-max .ico-max {
+    display: none;
+}
+
+.titlebar.win-maximized .win-btn-max .ico-restore {
+    display: block;
 }
 
 .mobile-menu-btn {
@@ -755,7 +815,12 @@ body[data-nav-mode="servers"] .contacts {
     -webkit-backdrop-filter: none;
     cursor: pointer;
     transition: color .18s ease, opacity .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease;
-    animation: contact-in .26s cubic-bezier(.2,.8,.2,1) both;
+    /* Deliberately no entry animation. The sidebar is re-rendered as one innerHTML
+       write whenever any row's content changes (a new message, an unread count, an
+       avatar that finished loading), so a per-row entry animation replayed across
+       the whole list every time — read as jitter, not as polish. Mobile already
+       disabled it for exactly this reason; this makes it consistent everywhere. */
+    contain: layout style;
 }
 
 .contact:hover,
@@ -767,14 +832,12 @@ body[data-nav-mode="servers"] .contacts {
 .contact.active {
     background: rgba(var(--accent-rgb), .10);
     box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
-    animation: contact-active .24s cubic-bezier(.2,.8,.2,1) both;
 }
 
 .contact.active .ava {
     box-shadow:
         0 0 0 1px rgba(var(--accent-rgb), .18),
         0 0 0 4px rgba(var(--accent-rgb), .08);
-    animation: avatar-pulse .55s ease-out both;
 }
 
 .contact.active .contact-name {
@@ -946,7 +1009,7 @@ body[data-nav-mode="servers"] .contacts {
     cursor: pointer;
     box-shadow: none;
     transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, color .18s ease;
-    animation: contact-in .26s cubic-bezier(.2,.8,.2,1) both;
+    /* No entry animation — same reason as .contact: the list is rebuilt as a whole. */
     content-visibility: auto;
     contain-intrinsic-size: 62px;
 }
@@ -4881,7 +4944,9 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text2);
     font-size: 11px;
     font-weight: 800;
-    animation: chip-pop .22s cubic-bezier(.2,.9,.18,1) both;
+    /* No entry animation: the message list is rebuilt wholesale on every new
+       message, so an animation here replayed on every separator each time a
+       message arrived — a list-wide flicker rather than a one-off flourish. */
 }
 
 .input-area {
@@ -6303,6 +6368,10 @@ body[data-experimental-design="on"] .hub-orb {
     background: rgb(var(--accent-rgb));
     box-shadow: none;
 }
+body[data-experimental-design="on"] .contact-add-btn.is-active {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--lime);
+}
 body[data-experimental-design="on"] .voice-btn.danger {
     background: rgb(255, 77, 109);
 }
@@ -6752,3 +6821,519 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     justify-content: flex-end;
     gap: 10px;
 }
+
+/* ============================================================================
+   MOBILE REDESIGN 2026 — Telegram-class shell, Zali brand (dark + neon-lime)
+   Scoped to <=760px and appended last so it wins equal-specificity cascades.
+   Phase A: navigation shell (app-bars, full-bleed frame, dock, reconnect strip).
+   ========================================================================== */
+@media (max-width: 760px) {
+    :root {
+        --m-safe-top: env(safe-area-inset-top, 0px);
+        --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+        --m-appbar-h: 54px;
+        --m-dock-h: 64px;
+        --m-net-h: 26px;
+        --m-spring: cubic-bezier(.22, .9, .24, 1);
+        --m-surface: #0c0f14;
+        --m-surface-2: #12161d;
+        --m-hairline: rgba(255,255,255,.07);
+    }
+
+    /* ── Kill desktop chrome: the global titlebar is replaced by per-screen
+       app-bars (list = .sidebar-head, chat = .chat-hdr). ─────────────────── */
+    .titlebar { display: none !important; }
+
+    /* Full-bleed app frame — no desktop card insets / rounded panels. */
+    .body {
+        grid-template-columns: 1fr;
+        gap: 0;
+        padding: 0;
+        min-height: 100vh;
+    }
+    .main {
+        width: 100%;
+        min-height: 100vh;
+        border-radius: 0;
+        border: 0;
+        background: transparent;
+    }
+
+    /* ── LIST SCREEN: sidebar becomes a full-bleed panel with a sticky
+       app-bar (brand title + search) over a scrolling dialog list. ──────── */
+    .sidebar {
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        border-radius: 0;
+        border: 0;
+        background: var(--bg);
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        box-shadow: none;
+    }
+    body.mobile-list-visible .sidebar { box-shadow: none; }
+
+    .sidebar-head {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        padding: calc(var(--m-safe-top) + 8px) 16px 8px;
+        margin: 0;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        -webkit-backdrop-filter: blur(18px) saturate(160%);
+        backdrop-filter: blur(18px) saturate(160%);
+        border-bottom: 1px solid var(--m-hairline);
+    }
+    .sidebar-brand-stack { width: 100%; }
+    .sidebar-head .brand {
+        font-size: 22px;
+        font-weight: 900;
+        letter-spacing: .2px;
+        line-height: 1.1;
+        margin: 0;
+    }
+    /* Section switching lives in the bottom dock on mobile — hide the
+       in-sidebar duplicate switches. */
+    .sidebar-head .mode-switch,
+    .sidebar-head .hub-segment-nav { display: none !important; }
+    /* Settings live in the dock too — drop the desktop "me" footer row. */
+    .sidebar .me { display: none !important; }
+
+    .search-wrap {
+        width: 100%;
+        align-self: stretch;
+        display: flex;
+        gap: 10px;
+        padding: 10px 16px 8px;
+        margin: 0;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        -webkit-backdrop-filter: blur(18px) saturate(160%);
+        backdrop-filter: blur(18px) saturate(160%);
+        position: sticky;
+        top: calc(var(--m-safe-top) + 46px);
+        z-index: 4;
+        border-bottom: 1px solid var(--m-hairline);
+    }
+    .search-box {
+        flex: 1 1 auto;
+        border-radius: 12px;
+        background: var(--m-surface-2);
+    }
+    .nav-label {
+        display: block;
+        padding: 12px 16px 6px;
+        margin: 0;
+        font-size: 12px;
+    }
+    .contacts {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 0 0 calc(var(--m-dock-h) + var(--m-safe-bottom) + 22px);
+    }
+
+    /* ── CHAT SCREEN: #viewChat is a full-bleed column with a sticky
+       app-bar; back chevron returns to the list. ────────────────────────── */
+    #viewChat,
+    #viewSettings {
+        padding-left: 0;
+        padding-right: 0;
+    }
+    #viewChat {
+        padding: 0;
+        gap: 0;
+        background: var(--bg);
+        /* Base rule makes .view.active a 3-row grid (auto auto 1fr); with the
+           voice-panel hidden the message list lands in the 2nd auto row and an
+           empty 1fr track eats the space below it (dead gap + a seam line).
+           A flex column lets .msgs stretch to fill the whole chat area. */
+        display: flex;
+        flex-direction: column;
+    }
+    #viewChat > .msgs { flex: 1 1 auto; min-height: 0; }
+    #viewChat .chat-hdr {
+        position: sticky;
+        top: 0;
+        z-index: 6;
+        padding: calc(var(--m-safe-top) + 8px) 10px 8px;
+        border-radius: 0;
+        border: 0;
+        border-bottom: 1px solid var(--m-hairline);
+        background: color-mix(in srgb, var(--bg) 86%, transparent);
+        -webkit-backdrop-filter: blur(18px) saturate(160%);
+        backdrop-filter: blur(18px) saturate(160%);
+        gap: 8px;
+        align-items: center;
+    }
+    .chat-back-btn {
+        display: inline-grid !important;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 auto;
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        transition: background .18s ease, transform .12s ease;
+    }
+    .chat-back-btn svg { width: 24px; height: 24px; }
+    .chat-back-btn:active { background: rgba(255,255,255,.06); transform: scale(.92); }
+    #viewChat .chat-hdr-ava { width: 40px; height: 40px; font-size: 16px; }
+    #viewChat .msgs {
+        padding: 12px 10px calc(96px + var(--kbd-inset, 0px) + var(--m-safe-bottom));
+        scroll-padding-bottom: calc(96px + var(--kbd-inset, 0px) + var(--m-safe-bottom));
+    }
+    #viewChat .input-area {
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 8px 10px calc(8px + var(--m-safe-bottom));
+        border-radius: 0;
+        border-top: 1px solid var(--m-hairline);
+        background: color-mix(in srgb, var(--bg) 92%, transparent);
+        -webkit-backdrop-filter: blur(18px) saturate(160%);
+        backdrop-filter: blur(18px) saturate(160%);
+    }
+    #viewChat .input-area::before { display: none; }
+
+    /* ── Bottom dock: keep the existing glass pill, only widen touch area
+       and let it hug the safe-area. Transform stays JS-driven. ──────────── */
+    .mobile-dock {
+        width: min(100vw - 20px, 480px);
+        bottom: calc(10px + var(--m-safe-bottom));
+    }
+
+    /* Desktop status pill is hidden; the mobile reconnect strip takes over. */
+    .ws-pill { display: none; }
+
+    /* When the reconnect strip is up, push the sticky app-bars below it so it
+       never overlaps the title / chat header. */
+    body.ws-offline .sidebar-head,
+    body.ws-offline #viewChat .chat-hdr {
+        padding-top: calc(var(--m-safe-top) + var(--m-net-h) + 8px);
+    }
+    body.ws-offline .search-wrap { top: calc(var(--m-safe-top) + var(--m-net-h) + 46px); }
+}
+
+/* The chat app-bar back chevron is mobile-only (the mobile media query
+   force-shows it); hide it on desktop where the sidebar is always present. */
+.chat-back-btn { display: none; }
+
+/* Mobile reconnect strip — a slim animated banner shown under the app-bar
+   only while the socket is down. Hidden on desktop and while connected. */
+.m-net-strip { display: none; }
+@media (max-width: 760px) {
+    body.ws-offline .m-net-strip {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: calc(var(--m-safe-top) + 5px) 12px 5px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #05210b;
+        background: linear-gradient(180deg, rgba(var(--accent-rgb),.96), rgba(var(--accent-rgb),.82));
+        animation: m-net-slide .28s var(--m-spring) both;
+    }
+    .m-net-spin {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 2px solid rgba(5,33,11,.35);
+        border-top-color: #05210b;
+        animation: m-net-rot .7s linear infinite;
+    }
+}
+@keyframes m-net-slide { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+@keyframes m-net-rot { to { transform: rotate(360deg); } }
+
+/* ============================================================================
+   MOBILE REDESIGN 2026 — Phase C: conversation (bubbles, time, composer)
+   ========================================================================== */
+@media (max-width: 760px) {
+    /* Bubbles hug their content a bit tighter and use softer shadows. */
+    .bwrap { max-width: 80%; }
+    #viewChat .bubble {
+        padding: 7px 12px 6px;
+        border-radius: 19px;
+        box-shadow: 0 1px 1.5px rgba(0,0,0,.16);
+    }
+
+    /* Telegram-style grouped corners: the side facing the avatar squares off on
+       stacked / last bubbles, giving a subtle tail without a triangle. */
+    .msg.in .bubble  { border-radius: 19px; }
+    .msg.out .bubble { border-radius: 19px; }
+    .msg.in.group-start  .bubble { border-bottom-left-radius: 7px; }
+    .msg.in.group-mid    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
+    .msg.in.group-end    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
+    .msg.in.group-single .bubble { border-bottom-left-radius: 7px; }
+    .msg.out.group-start  .bubble { border-bottom-right-radius: 7px; }
+    .msg.out.group-mid    .bubble { border-top-right-radius: 7px; border-bottom-right-radius: 7px; }
+    .msg.out.group-end    .bubble { border-top-right-radius: 7px; border-bottom-right-radius: 7px; }
+    .msg.out.group-single .bubble { border-bottom-right-radius: 7px; }
+
+    /* Timestamp INSIDE the bubble (the desktop design floats it in the margin,
+       which clips off-screen on a phone). Render it as a compact right-aligned
+       line at the bottom of the bubble — never overlapping the text. */
+    #viewChat .msg-time {
+        position: static;
+        left: auto; right: auto; top: auto; bottom: auto;
+        transform: none;
+        display: block;
+        width: 100%;
+        text-align: right;
+        margin: 1px 0 -1px;
+        padding: 0;
+        font-size: 10.5px;
+        opacity: .5;
+        pointer-events: none;
+    }
+    .msg.in .msg-time  { color: var(--text3); }
+    .msg.out .msg-time { color: rgba(15,20,0,.5); }
+    .msg.time-visible .msg-time { opacity: .6; }
+
+    /* Received-message avatar sits at the bottom of the last bubble in a group. */
+    #viewChat .msg-ava { width: 30px; height: 30px; font-size: 12px; }
+
+    /* Composer becomes a single rounded pill: round attach / coin / send inside. */
+    #viewChat .input-bar {
+        grid-template-columns: auto auto 1fr auto;
+        align-items: center;
+        gap: 2px;
+        height: auto;
+        min-height: 48px;
+        width: 100%;
+        margin: 0;
+        padding: 4px 5px 4px 6px;
+        border-radius: 26px;
+        border: 1px solid var(--m-hairline);
+        background: var(--m-surface-2);
+        box-shadow: none;
+    }
+    #viewChat .attach-btn,
+    #viewChat .coin-transfer-btn {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 0;
+        background: transparent;
+        color: var(--text2);
+        box-shadow: none;
+    }
+    #viewChat .attach-btn:hover,
+    #viewChat .coin-transfer-btn:hover { background: rgba(255,255,255,.06); }
+    #viewChat #msgInput {
+        height: auto;
+        min-height: 24px;
+        padding: 8px 6px;
+        font-size: 16px;
+    }
+    #viewChat .send-btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        box-shadow: 0 4px 14px rgba(var(--accent-rgb),.30);
+    }
+    #viewChat .send-btn:disabled { box-shadow: none; }
+
+    /* Day separator: neat centered pill. */
+    #viewChat .date-sep span {
+        background: rgba(255,255,255,.06);
+        border-radius: 12px;
+        padding: 3px 12px;
+        font-size: 11px;
+    }
+}
+
+/* Mobile chat header: presence-style subtitle, drop the crypto-debug key line
+   and the redundant "Диалог с …" prefix clutter to a single quiet line. */
+@media (max-width: 760px) {
+    #viewChat .chat-hdr-key { display: none; }
+    #viewChat .chat-hdr-info { gap: 1px; }
+    #viewChat .chat-hdr-name { font-size: 16px; font-weight: 800; }
+    #viewChat .chat-hdr-sub,
+    #viewChat .chat-hdr-desc { font-size: 12px; color: var(--text2); }
+    #viewChat .chat-hdr-actions .server-settings-btn { width: 40px; height: 40px; }
+}
+
+/* Row last-message time is a mobile-only affordance; hidden on desktop. */
+.contact-time { display: none; }
+
+/* ============================================================================
+   MOBILE REDESIGN 2026 — Phase B: dialog list rows (Telegram-style density)
+   ========================================================================== */
+@media (max-width: 760px) {
+    .contacts .contact,
+    .contact {
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        gap: 12px;
+        min-height: 68px;
+        padding: 8px 16px;
+        border-radius: 0;
+        animation: none;
+    }
+    .contact:active { background: rgba(255,255,255,.06); }
+    .contact.active {
+        background: rgba(var(--accent-rgb), .12);
+        box-shadow: none;
+    }
+    /* Bigger avatars, and drop the heavy glow/pulse the desktop active row uses. */
+    .contact .ava { width: 52px; height: 52px; }
+    .contact.active .ava { box-shadow: 0 0 0 1px rgba(255,255,255,.05); animation: none; }
+
+    .contact-name { font-size: 16px; font-weight: 700; }
+    .contact-prev { font-size: 13.5px; margin-top: 2px; }
+
+    /* Right column: time on top, unread pill below — the classic list layout. */
+    .contact-actions {
+        flex-direction: column;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 6px;
+        min-height: 52px;
+        align-self: center;
+    }
+    .contact-time {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text3);
+        line-height: 1;
+    }
+    .contact.active .contact-time { color: var(--text2); }
+
+    /* Unread pill — compact lime counter, right aligned. */
+    .contact .badge {
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--lime);
+        color: #05210b;
+    }
+
+    /* The per-row delete button is replaced by swipe-to-reveal on mobile. */
+    .contact .contact-remove { display: none; }
+
+    /* Row separators like a native list (indented past the avatar). */
+    .contacts .contact + .contact::before {
+        content: "";
+        position: absolute;
+        left: 80px;
+        right: 0;
+        top: 0;
+        height: 1px;
+        background: var(--m-hairline);
+    }
+    .contacts .contact { position: relative; }
+
+    /* Section caption ("Диалоги") — quieter, uppercase. */
+    .nav-label {
+        color: var(--text3);
+        text-transform: uppercase;
+        letter-spacing: .08em;
+        font-weight: 700;
+    }
+}
+
+/* Hide custom scrollbars on mobile scroll areas — native mobile lists auto-hide
+   their scrollbars; the desktop lime scrollbar looks out of place on a phone. */
+@media (max-width: 760px) {
+    .contacts, #viewChat .msgs, .server-channel-list {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+    .contacts::-webkit-scrollbar,
+    #viewChat .msgs::-webkit-scrollbar,
+    .server-channel-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+}
+
+/* ============================================================================
+   MOBILE REDESIGN 2026 — Phase D: gestures (swipe-to-delete, long-press)
+   ========================================================================== */
+@media (max-width: 760px) {
+    /* Keep the revealed delete panel clipped to the list. */
+    .contacts { overflow-x: hidden; }
+
+    /* The delete action lives just off the row's right edge; swiping the row
+       left (JS writes the transform) slides it into view. */
+    .contacts .contact::after {
+        content: "Удалить";
+        position: absolute;
+        left: 100%;
+        top: 0;
+        bottom: 0;
+        width: 96px;
+        display: grid;
+        place-items: center;
+        background: var(--red);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: .01em;
+        pointer-events: none;
+    }
+    /* Opaque while sliding so rows underneath never show through. */
+    .contacts .contact.swiping,
+    .contacts .contact.swipe-open {
+        background: var(--bg);
+        z-index: 1;
+    }
+    .contacts .contact.swiping { transition: none; }
+
+    /* Long-press feedback on a message before the reaction menu opens. */
+    .msg.press-hold .bubble {
+        transform: scale(.97);
+        transition: transform .18s cubic-bezier(.2,.9,.24,1);
+    }
+    .msg .bubble { transition: transform .18s cubic-bezier(.2,.9,.24,1); }
+
+    /* Reaction menu: bigger touch targets on a phone. */
+    .reaction-menu { padding: 6px; border-radius: 22px; }
+    .reaction-menu .reaction-btn { width: 44px; height: 44px; font-size: 22px; }
+}
+
+/* ============================================================================
+   MOBILE REDESIGN 2026 — Phase E: motion & micro-interactions
+   (The existing prefers-reduced-motion block disables these with !important.)
+   ========================================================================== */
+@media (max-width: 760px) {
+    /* NOTE: deliberately no entrance animation on .contact / .msg here.
+       renderContacts() and _renderMessagesNow() rebuild their lists with
+       innerHTML on every update, so a per-item entrance would re-fire on every
+       row and bubble each time a message arrives — the desktop rule neutralises
+       its own `contact-in` for the same reason. Motion below is limited to
+       states that only change on real interaction. */
+
+    /* Press feedback on the primary touch targets. */
+    .mobile-dock-btn:active { transform: scale(.92); }
+    .chat-hdr-actions .server-settings-btn:active { transform: scale(.9); }
+    .send-btn:active { transform: scale(.9); }
+    .attach-btn:active,
+    .coin-transfer-btn:active { transform: scale(.88); }
+
+    /* App-bars settle in when a screen becomes visible. */
+    .sidebar-head,
+    #viewChat .chat-hdr { transition: padding-top .2s var(--m-spring); }
+}
+

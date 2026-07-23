@@ -10,6 +10,9 @@
     "SAVE_PENDING_OUTBOX": { "fields": ["items"] },
     "DOWNLOAD_ATTACHMENT": { "fields": ["dataUrl", "filename"] },
     "START_DRAG": { "fields": [] },
+    "MINIMIZE_WINDOW": { "fields": [] },
+    "MAXIMIZE_WINDOW": { "fields": [] },
+    "CLOSE_WINDOW": { "fields": [] },
     "RESOLVE_TENOR": { "fields": ["url", "requestId"] },
     "SET_KEY": { "fields": ["key"] },
     "SET_MESSAGE_REACTION": { "fields": ["messageId", "emoji"] },
@@ -23,6 +26,11 @@
     "DELETE_AVATAR_REQUEST": { "fields": ["requestId"] },
     "LOAD_AVATAR_REQUEST": { "fields": ["username", "requestId"] },
     "SHOW_NOTIFICATION": { "fields": ["sender", "text", "attachmentCount", "serverId", "channelId"] },
-    "PERSIST_DEVICE_IDENTITY": { "fields": ["username", "identity"] }
+    "PERSIST_DEVICE_IDENTITY": { "fields": ["username", "identity"] },
+    "DOWNLOAD_UPDATE_REQUEST": { "fields": ["url", "sha256", "requestId"] },
+    "INSTALL_UPDATE_REQUEST": { "fields": ["requestId"] },
+    "SET_UNREAD_BADGE": { "fields": ["count"] },
+    "START_SCREEN_CAPTURE": { "fields": ["requestId"] },
+    "STOP_SCREEN_CAPTURE": { "fields": ["requestId"] }
   }
 }

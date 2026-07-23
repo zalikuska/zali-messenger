@@ -25,6 +25,9 @@
         NATIVE_RESPONSE: 'native_response',
         ADD_LOG_ENTRY: 'add_log_entry',
         VOICE_EVENT: 'voice_event',
+        UPDATE_EVENT: 'update_event',
+        SCREEN_CAPTURE_FRAME: 'screen_capture_frame',
+        SCREEN_CAPTURE_ERROR: 'screen_capture_error',
     });
 
     window.ZaliBusEvents = ZaliBusEvents;

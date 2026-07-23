@@ -220,6 +220,8 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
                 }
                 conversationKeys = next
             }
+        case "REFRESH_HISTORY":
+            handleRefreshHistory(dict)
         case "SEND_MESSAGE":
             handleSendMessage(dict)
         case "UPLOAD_AVATAR_REQUEST":
@@ -1052,6 +1054,188 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         default:
             break
         }
+    }
+
+    // MARK: - DM history load (REFRESH_HISTORY)
+    //
+    // Ported from macOS's `.refreshHistory` IPC case + `WebView.reloadHistory(for:)` /
+    // `NetworkService.fetchMessages`. `Web/src/interface.js` sends this whenever a
+    // chat is opened or refreshed (`syncActiveConversation()`, `refreshAfterKey()`)
+    // — until this handler existed, it was silently dropped here, so DM history
+    // never loaded on iOS ("Начните диалог" for every real contact).
+    private var historyReloadToken = 0
+
+    private func handleRefreshHistory(_ dict: [String: Any]) {
+        if let key = dict["key"] as? String, !key.isEmpty { currentE2eKey = key }
+        guard let peer = (dict["peer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !peer.isEmpty else { return }
+        historyReloadToken += 1
+        let token = historyReloadToken
+        fetchMessagesPage(username: peer, limit: 200, offset: 0, accumulated: []) { [weak self] records, ok in
+            guard let self, token == self.historyReloadToken else { return }
+            guard ok else { return } // transient fetch failure — keep whatever's already shown
+            guard !records.isEmpty else {
+                self.webView.evaluateJavaScript("window.loadHistory && window.loadHistory([]);", completionHandler: nil)
+                return
+            }
+            self.renderHistoryRecords(records: records, peer: peer, token: token) { rendered in
+                guard token == self.historyReloadToken,
+                      let jsonData = try? JSONSerialization.data(withJSONObject: rendered),
+                      let json = String(data: jsonData, encoding: .utf8) else { return }
+                self.webView.evaluateJavaScript("window.loadHistory && window.loadHistory(\(json));", completionHandler: nil)
+            }
+        }
+    }
+
+    /// `GET /api/messages/{user}?limit&offset`, same pagination as macOS's
+    /// `fetchMessagesPage` — recurse while a page comes back full.
+    private func fetchMessagesPage(
+        username: String, limit: Int, offset: Int, accumulated: [[String: Any]],
+        completion: @escaping ([[String: Any]], Bool) -> Void
+    ) {
+        guard let encodedUser = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))),
+              var components = URLComponents(string: apiBaseURL + "/api/messages/" + encodedUser) else {
+            completion(accumulated, false)
+            return
+        }
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "offset", value: String(offset))]
+        guard let url = components.url else {
+            completion(accumulated, false)
+            return
+        }
+        var request = URLRequest(url: url)
+        if !wsAuthToken.isEmpty { request.setValue("Bearer \(wsAuthToken)", forHTTPHeaderField: "Authorization") }
+
+        apiSession.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+            guard error == nil, let data, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let page = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+                Task { @MainActor in completion(accumulated, false) }
+                return
+            }
+            let merged = accumulated + page
+            Task { @MainActor in
+                if page.count < limit {
+                    completion(merged, true)
+                } else {
+                    self.fetchMessagesPage(username: username, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
+                }
+            }
+        }.resume()
+    }
+
+    /// Sequentially downloads + decrypts every record (mirrors macOS's `for record in
+    /// records { await ... }` — not parallel: a burst of many concurrent downloads
+    /// previously saturated the connection pool and stalled every request, see
+    /// `apiSession`'s doc comment above).
+    private func renderHistoryRecords(
+        records: [[String: Any]], peer: String, token: Int, completion: @escaping ([[String: Any]]) -> Void
+    ) {
+        var rendered: [[String: Any]] = []
+        func next(_ index: Int) {
+            guard token == historyReloadToken else { return }
+            guard index < records.count else {
+                completion(rendered)
+                return
+            }
+            renderHistoryRecord(record: records[index], peer: peer) { result in
+                if let result { rendered.append(result) }
+                next(index + 1)
+            }
+        }
+        next(0)
+    }
+
+    private func renderHistoryRecord(record: [String: Any], peer: String, completion: @escaping ([String: Any]?) -> Void) {
+        guard let messageId = (record["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !messageId.isEmpty else {
+            completion(nil)
+            return
+        }
+        let sender = (record["sender"] as? String) ?? peer
+        let receiver = (record["receiver"] as? String) ?? peer
+        let clientId = (record["clientId"] as? String) ?? (record["client_id"] as? String) ?? ""
+
+        func placeholder(_ text: String) -> [String: Any] {
+            [
+                "id": messageId, "clientId": clientId, "sender": sender, "receiver": receiver,
+                "text": text, "attachments": [],
+                "timestamp": record["timestamp"] ?? NSNull(),
+                "reactions": record["reactions"] ?? [],
+                "myReactions": record["myReactions"] ?? [],
+            ]
+        }
+
+        guard let encodedId = messageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: apiBaseURL + "/api/download/" + encodedId) else {
+            completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+            return
+        }
+        var request = URLRequest(url: url)
+        if !wsAuthToken.isEmpty { request.setValue("Bearer \(wsAuthToken)", forHTTPHeaderField: "Authorization") }
+
+        apiSession.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self else { return }
+            let http = response as? HTTPURLResponse
+            Task { @MainActor in
+                if http?.statusCode == 413 {
+                    completion(placeholder("📦 Файл сообщения превышает допустимый размер"))
+                    return
+                }
+                guard let data, let http, (200..<300).contains(http.statusCode) else {
+                    completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+                    return
+                }
+
+                let workDirName = UUID().uuidString
+                let archivePath = NSTemporaryDirectory() + workDirName + ".zali"
+                let tempDir = NSTemporaryDirectory() + workDirName + "-unpack"
+                defer {
+                    try? FileManager.default.removeItem(atPath: archivePath)
+                    try? FileManager.default.removeItem(atPath: tempDir)
+                }
+                guard (try? data.write(to: URL(fileURLWithPath: archivePath))) != nil else {
+                    completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+                    return
+                }
+                try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+
+                // Same candidate-key list as macOS's renderHistoryRecord: the
+                // conversation-scoped key plus every other known conversation key
+                // as a last resort (covers a stale/renamed scope).
+                var keys = ZaliCore.candidateMessageKeys(
+                    currentKey: self.currentE2eKey, conversationKeys: self.conversationKeys,
+                    participantA: sender, participantB: receiver
+                )
+                for value in self.conversationKeys.values {
+                    let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !normalized.isEmpty, !keys.contains(normalized) { keys.append(normalized) }
+                }
+
+                guard let payload = ZaliCore.shared.unpackMessage(archivePath: archivePath, tempDir: tempDir, keys: keys) else {
+                    completion(placeholder("🔒 Сообщение зашифровано другим ключом"))
+                    return
+                }
+
+                let attachments: [[String: Any]] = (payload.attachments ?? []).compactMap { attachment in
+                    var renderedAttachment: [String: Any] = [
+                        "name": attachment.name, "mimeType": attachment.mimeType,
+                        "kind": attachment.kind, "size": attachment.size,
+                    ]
+                    let attachmentURL = URL(fileURLWithPath: tempDir).appendingPathComponent(attachment.archivePath)
+                    if attachment.size <= 2 * 1024 * 1024, let fileData = try? Data(contentsOf: attachmentURL) {
+                        renderedAttachment["dataUrl"] = "data:\(attachment.mimeType);base64,\(fileData.base64EncodedString())"
+                    }
+                    return renderedAttachment
+                }
+
+                completion([
+                    "id": messageId, "clientId": clientId, "sender": payload.sender, "receiver": receiver,
+                    "text": payload.text, "attachments": attachments,
+                    "timestamp": record["timestamp"] ?? NSNull(),
+                    "reactions": record["reactions"] ?? [],
+                    "myReactions": record["myReactions"] ?? [],
+                ])
+            }
+        }.resume()
     }
 
     // MARK: - Message download + decrypt (ZaliCore)

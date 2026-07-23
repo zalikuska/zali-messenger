@@ -22,8 +22,14 @@ mod messages;
 pub(crate) use messages::*;
 mod transport;
 pub(crate) use transport::*;
+mod updates;
+pub(crate) use updates::*;
 mod util;
 pub(crate) use util::*;
+#[cfg(target_os = "windows")]
+mod taskbar_badge;
+#[cfg(target_os = "windows")]
+pub use taskbar_badge::set_unread_badge;
 
 fn trace(message: impl AsRef<str>) {
     tracing::trace!("[ZALI][WIN] {}", message.as_ref());
@@ -44,6 +50,20 @@ struct AuthRequestPayload {
 pub enum AppEvent {
     EvaluateScript(String),
     StartDrag,
+    Quit,
+    /// Windows only: tray icon "Открыть" / left-click — restore and focus the window.
+    TrayShow,
+    /// Windows only: total unread count changed — update the taskbar overlay badge
+    /// (see native/taskbar_badge.rs). Carries the raw count; 0 clears the overlay.
+    SetTaskbarBadge(u32),
+    /// Windows only: in-app titlebar minimize button (native OS decorations are
+    /// switched off there — see NativeCapabilities::window_controls).
+    MinimizeWindow,
+    /// Windows only: in-app titlebar maximize/restore button, and titlebar double-click.
+    ToggleMaximizeWindow,
+    /// Windows only: in-app titlebar close button — mirrors the hide-to-tray
+    /// behavior of the native close button it replaces.
+    CloseWindowRequest,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +86,7 @@ enum UiBusEvent {
     OnSendError,
     AvatarUpdated,
     SyncActiveConversation,
+    UpdateEvent,
 }
 
 impl UiBusEvent {
@@ -89,6 +110,7 @@ impl UiBusEvent {
             UiBusEvent::OnSendError => "on_send_error",
             UiBusEvent::AvatarUpdated => "avatar_updated",
             UiBusEvent::SyncActiveConversation => "sync_active_conversation",
+            UiBusEvent::UpdateEvent => "update_event",
         }
     }
 }
@@ -182,6 +204,17 @@ struct NativeCapabilities {
     voice: bool,
     window_drag: bool,
     message_cache: bool,
+    app_update: bool,
+    /// Windows-only: taskbar overlay icon showing the total unread count (see
+    /// native/taskbar_badge.rs). False on the experimental macOS Rust shell — that
+    /// build has no taskbar to overlay, and the dock/Swift client isn't touched by
+    /// this feature at all (user asked for Windows specifically).
+    taskbar_badge: bool,
+    /// Windows-only: native OS window decorations are switched off there (see
+    /// main.rs's WindowBuilder) in favor of an in-app titlebar with its own
+    /// minimize/maximize/close buttons. False everywhere else — macOS (Swift and
+    /// this experimental Rust shell) keeps its native traffic-light buttons.
+    window_controls: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -201,6 +234,9 @@ impl Default for NativeCapabilities {
             voice: true,
             window_drag: true,
             message_cache: true,
+            app_update: true,
+            taskbar_badge: cfg!(target_os = "windows"),
+            window_controls: cfg!(target_os = "windows"),
         }
     }
 }
@@ -403,7 +439,7 @@ impl NativeState {
         state
     }
 
-    fn app_data_dir() -> PathBuf {
+    pub(crate) fn app_data_dir() -> PathBuf {
         #[cfg(target_os = "windows")]
         {
             std::env::var_os("LOCALAPPDATA")
@@ -678,6 +714,12 @@ impl NativeState {
 
         if let Ok(json) = serde_json::to_string(&self.native_capabilities()) {
             script.push_str(&format!("window.__ZALI_NATIVE_CAPS__ = {};\n", json));
+        }
+        if let Ok(version_json) = serde_json::to_string(env!("CARGO_PKG_VERSION")) {
+            script.push_str(&format!(
+                "window.__ZALI_NATIVE_APP_VERSION = {}; window.__ZALI_NATIVE_PLATFORM = \"windows\";\n",
+                version_json
+            ));
         }
 
         if !self.saved_css.trim().is_empty() {
@@ -991,6 +1033,75 @@ pub fn handle_ipc_message(
                     ),
                 }
             });
+        }
+        BridgeProtocolMessageType::DownloadUpdateRequest => {
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let url = payload
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let sha256 = payload
+                .get("sha256")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if request_id.is_empty() || url.is_empty() || sha256.len() != 64 {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::NativeResponse,
+                    json!({ "requestId": request_id, "ok": false, "error": "Некорректные параметры обновления" }),
+                );
+                return;
+            }
+            let proxy_for_task = proxy.clone();
+            runtime.spawn(async move {
+                match download_update(url, sha256, proxy_for_task.clone()).await {
+                    Ok(path) => {
+                        set_pending_update_path(Some(path));
+                        dispatch_ui_event(
+                            &proxy_for_task,
+                            UiBusEvent::NativeResponse,
+                            json!({ "requestId": request_id, "ok": true, "data": {} }),
+                        );
+                    }
+                    Err(error) => dispatch_ui_event(
+                        &proxy_for_task,
+                        UiBusEvent::NativeResponse,
+                        json!({ "requestId": request_id, "ok": false, "error": error }),
+                    ),
+                }
+            });
+        }
+        BridgeProtocolMessageType::InstallUpdateRequest => {
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let Some(path) = pending_update_path() else {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::NativeResponse,
+                    json!({ "requestId": request_id, "ok": false, "error": "Обновление ещё не загружено" }),
+                );
+                return;
+            };
+            if let Err(error) = install_and_relaunch(path, proxy.clone()) {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::NativeResponse,
+                    json!({ "requestId": request_id, "ok": false, "error": error }),
+                );
+            }
         }
         BridgeProtocolMessageType::AddContactRequest
         | BridgeProtocolMessageType::RemoveContactRequest => {
@@ -1900,6 +2011,19 @@ pub fn handle_ipc_message(
         BridgeProtocolMessageType::StartDrag => {
             let _ = proxy.send_event(AppEvent::StartDrag);
         }
+        BridgeProtocolMessageType::MinimizeWindow => {
+            let _ = proxy.send_event(AppEvent::MinimizeWindow);
+        }
+        BridgeProtocolMessageType::MaximizeWindow => {
+            let _ = proxy.send_event(AppEvent::ToggleMaximizeWindow);
+        }
+        BridgeProtocolMessageType::CloseWindow => {
+            let _ = proxy.send_event(AppEvent::CloseWindowRequest);
+        }
+        BridgeProtocolMessageType::SetUnreadBadge => {
+            let count = payload.get("count").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let _ = proxy.send_event(AppEvent::SetTaskbarBadge(count));
+        }
         BridgeProtocolMessageType::ShowNotification => {
             let sender = payload
                 .get("sender")
@@ -1957,6 +2081,12 @@ pub fn handle_ipc_message(
             if let Ok(guard) = state.lock() {
                 guard.persist_shared_device_identity(&username, &identity);
             }
+        }
+        BridgeProtocolMessageType::StartScreenCapture | BridgeProtocolMessageType::StopScreenCapture => {
+            // Android-only (MediaProjection capture, see apps/android's
+            // NativeBridge.kt / ScreenCaptureService.kt). WebView2 already
+            // supports getDisplayMedia() natively, so interface.js's
+            // screen-share path never takes the native branch here.
         }
     }
 }

@@ -20,8 +20,8 @@ import java.util.UUID
  *   cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs \
  *       build --release --manifest-path core/Cargo.toml --features android
  *
- * (`android/build_android_core.sh` wraps this.) Run it whenever `Core/src/*.rs`
- * changes, before building the APK.
+ * (`android/build_android_core.sh` wraps this.) Run it whenever the Rust
+ * sources under `Core/src` change, before building the APK.
  */
 object ZaliCoreBridge {
     /** True once `libzali_messenger_core.so` loaded successfully. */

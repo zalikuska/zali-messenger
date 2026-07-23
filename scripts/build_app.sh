@@ -8,6 +8,10 @@ cd "$PROJECT_ROOT"
 BUILD_DIR="$PROJECT_ROOT/apps/macos/.build/release"
 APP_NAME="ZaliMessenger"
 APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
+# Bump this on every release published via POST /api/version (see CLAUDE.md's
+# "Publishing a client release" section) — the in-app updater compares it
+# against the server's app_releases.version for platform=macos.
+APP_VERSION="1.1.0"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 
@@ -91,7 +95,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$APP_VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
