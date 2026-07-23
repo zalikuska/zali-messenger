@@ -6,11 +6,14 @@
 //! `native.rs`), so `nativeSupports('taskbarBadge')` on the JS side is false anywhere
 //! else and this code never runs there.
 //!
-//! NOTE: written against the documented Win32/COM surface (windows-rs 0.61) but not
-//! compiled on a real Windows machine in this session — cross-compiling to
-//! x86_64-pc-windows-msvc from this Mac fails on unrelated `ring` C code (see
-//! CLAUDE.md). Verify on Windows before relying on it; a failure here is designed to
-//! be silent (a missing badge), never a crash.
+//! NOTE: originally written against the documented Win32/COM surface (windows-rs
+//! 0.61) without compiling on a real Windows machine — cross-compiling to
+//! x86_64-pc-windows-msvc from a Mac fails on unrelated `ring` C code (see
+//! CLAUDE.md). The `.github/workflows/build-windows.yml` CI run caught the actual
+//! signature mismatches (`CreateBitmap` returns `HBITMAP` directly rather than a
+//! `Result`, `DeleteObject` takes `HGDIOBJ` not `HBITMAP`, `SetOverlayIcon`'s icon
+//! param is a plain `HICON` not `Option<HICON>`) — fixed against that feedback.
+//! A failure here is still designed to be silent (a missing badge), never a crash.
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
@@ -85,7 +88,7 @@ fn build_badge_icon(label: &str) -> Option<HICON> {
     };
     if bits_ptr.is_null() {
         unsafe {
-            let _ = DeleteObject(color_bitmap);
+            let _ = DeleteObject(color_bitmap.into());
             let _ = DeleteDC(dc);
         }
         return None;
@@ -120,15 +123,16 @@ fn build_badge_icon(label: &str) -> Option<HICON> {
 
     // Fully-zero 1bpp mask: the color bitmap's own alpha channel drives
     // transparency for a 32bpp icon, so the mask just needs to not black out
-    // anything.
+    // anything. Unlike CreateDIBSection, CreateBitmap returns the handle
+    // directly (not a Result) — a failure comes back as a null/invalid handle.
     let mask_bitmap = unsafe { CreateBitmap(SIZE, SIZE, 1, 1, None) };
-    let Ok(mask_bitmap) = mask_bitmap else {
+    if mask_bitmap.is_invalid() {
         unsafe {
-            let _ = DeleteObject(color_bitmap);
+            let _ = DeleteObject(color_bitmap.into());
             let _ = DeleteDC(dc);
         }
         return None;
-    };
+    }
 
     let icon_info = ICONINFO {
         fIcon: windows::Win32::Foundation::TRUE,
@@ -140,8 +144,8 @@ fn build_badge_icon(label: &str) -> Option<HICON> {
     let hicon = unsafe { CreateIconIndirect(&icon_info) };
 
     unsafe {
-        let _ = DeleteObject(color_bitmap);
-        let _ = DeleteObject(mask_bitmap);
+        let _ = DeleteObject(color_bitmap.into());
+        let _ = DeleteObject(mask_bitmap.into());
         let _ = DeleteDC(dc);
     }
 
@@ -166,7 +170,7 @@ pub fn set_unread_badge(hwnd_raw: isize, count: u32) {
 
     if count == 0 {
         unsafe {
-            let _ = taskbar.SetOverlayIcon(hwnd, None, PCWSTR::null());
+            let _ = taskbar.SetOverlayIcon(hwnd, HICON::default(), PCWSTR::null());
         }
         return;
     }
