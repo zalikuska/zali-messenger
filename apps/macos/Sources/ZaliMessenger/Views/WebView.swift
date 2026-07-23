@@ -54,6 +54,7 @@ struct WebView: NSViewRepresentable {
         // ("reloadHistory:<username>") never cancel each other — a single shared work item
         // would reload only the last peer of a reconnect catch-up burst.
         private var debounceWorkItems: [String: DispatchWorkItem] = [:]
+        private var pendingUpdateArchivePath: URL?
 
         /// Plain file, not Keychain (see sharedAppSupportDir below for why): a Keychain
         /// item's ACL is bound to the app's code signature, and build_app.sh's ad-hoc
@@ -166,6 +167,7 @@ struct WebView: NSViewRepresentable {
             case syncActiveConversation = "zali_interface:sync_active_conversation"
             case authResponse = "zali_interface:auth_response"
             case nativeResponse = "zali_interface:native_response"
+            case updateEvent = "zali_interface:update_event"
         }
 
         fileprivate enum WindowFunction: String {
@@ -421,6 +423,47 @@ struct WebView: NSViewRepresentable {
                             "error": error ?? "Не удалось выполнить операцию",
                         ])
                     }
+                }
+            }
+        }
+
+        private func handleDownloadUpdateRequest(dict: [String: Any], requestId: String) {
+            let url = (dict["url"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let sha256 = (dict["sha256"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty, sha256.count == 64 else {
+                self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Некорректные параметры обновления"])
+                return
+            }
+            UpdateService.shared.downloadUpdate(
+                urlString: url,
+                expectedSha256: sha256,
+                progress: { [weak self] fraction in
+                    self?.sendBusEvent(.updateEvent, payload: WebView.javascriptLiteral(["kind": "progress", "progress": fraction]))
+                },
+                completion: { [weak self] ok, archivePath, errorMessage in
+                    guard let self else { return }
+                    if ok, let archivePath {
+                        self.pendingUpdateArchivePath = archivePath
+                        self.sendNativeResponse(["requestId": requestId, "ok": true, "data": [:]])
+                    } else {
+                        self.sendNativeResponse(["requestId": requestId, "ok": false, "error": errorMessage ?? "Не удалось загрузить обновление"])
+                    }
+                }
+            )
+        }
+
+        private func handleInstallUpdateRequest(requestId: String) {
+            guard let archivePath = self.pendingUpdateArchivePath else {
+                self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Обновление ещё не загружено"])
+                return
+            }
+            UpdateService.shared.installAndRelaunch(archivePath: archivePath) { [weak self] ok, errorMessage in
+                if ok {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        NSApp.terminate(nil)
+                    }
+                } else {
+                    self?.sendNativeResponse(["requestId": requestId, "ok": false, "error": errorMessage ?? "Не удалось установить обновление"])
                 }
             }
         }
@@ -1158,7 +1201,17 @@ struct WebView: NSViewRepresentable {
                     }
                     return
                 }
-                
+
+                case .downloadUpdateRequest: do {
+                    self.handleDownloadUpdateRequest(dict: dict, requestId: requestId)
+                    return
+                }
+
+                case .installUpdateRequest: do {
+                    self.handleInstallUpdateRequest(requestId: requestId)
+                    return
+                }
+
                 case .sendMessage: do {
                     guard Coordinator.tryClaimSendClientId(clientId) else {
                         print("[ZALI][WEBVIEW] SEND_MESSAGE duplicate_in_flight clientId=\(clientId)")
@@ -1432,6 +1485,30 @@ struct WebView: NSViewRepresentable {
                         self.exportDeviceIdentityToSharedFile()
                     }
                 }
+
+                case .setUnreadBadge:
+                    // Windows-only feature (taskbar overlay badge, see CLAUDE.md /
+                    // apps/windows/src/native/taskbar_badge.rs) — `taskbarBadge` is never
+                    // advertised as a supported capability here, so the JS side never
+                    // actually sends this on macOS. No-op kept only for switch exhaustiveness.
+                    break
+
+                case .startScreenCapture, .stopScreenCapture:
+                    // Android-only (MediaProjection capture, see NativeBridge.kt /
+                    // ScreenCaptureService.kt). macOS's WKWebView already supports
+                    // getDisplayMedia() natively, so interface.js's screen-share
+                    // path never takes the native branch here. No-op kept only for
+                    // switch exhaustiveness.
+                    break
+
+                case .minimizeWindow, .maximizeWindow, .closeWindow:
+                    // Windows-only (native OS decorations are switched off there in
+                    // favor of an in-app titlebar, see apps/windows/src/main.rs). This
+                    // client keeps native decorations with the real traffic-light
+                    // buttons via titlebarAppearsTransparent, so `windowControls` is
+                    // never advertised as a supported capability here and JS never
+                    // sends these. No-op kept only for switch exhaustiveness.
+                    break
             }
             }
         }
@@ -1573,9 +1650,13 @@ struct WebView: NSViewRepresentable {
             "voice": true,
             "windowDrag": true,
             "apiRequest": true,
+            "appUpdate": true,
         ]
         let nativeCapsBootstrap = "window.__ZALI_NATIVE_CAPS__ = \(WebView.javascriptLiteral(nativeCapabilities));"
         config.userContentController.addUserScript(WKUserScript(source: nativeCapsBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0"
+        let versionBootstrap = "window.__ZALI_NATIVE_APP_VERSION = \(WebView.javascriptLiteral(appVersion)); window.__ZALI_NATIVE_PLATFORM = \(WebView.javascriptLiteral("macos"));"
+        config.userContentController.addUserScript(WKUserScript(source: versionBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let savedCss = UserDefaults.standard.string(forKey: "custom_css") ?? ""
         let savedCssBootstrap = "window.__ZALI_SAVED_CSS = \(WebView.javascriptLiteral(savedCss));"
         config.userContentController.addUserScript(WKUserScript(source: savedCssBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))

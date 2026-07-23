@@ -13,6 +13,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.webkit.WebViewFeature
 import okhttp3.Call
@@ -96,6 +97,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     /** In-flight SEND_MESSAGE clientId guard — mirrors macOS/iOS's dedup guard. */
     private val inFlightSendClientIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
+    // MARK: - Screen capture (START_SCREEN_CAPTURE / STOP_SCREEN_CAPTURE)
+    //
+    // ScreenCaptureService can't be handed a NativeBridge reference directly
+    // (Android starts services via Intent, not direct construction), so it
+    // reaches back through this static instance to push frames/errors — same
+    // reasoning as why it can't just call back into MainActivity. Set/cleared
+    // alongside this bridge's own lifecycle (init / teardown below).
+    @Volatile
+    private var activeScreenCaptureRequestId = ""
+
+    /** Set by MainActivity right after constructing this bridge: launches the
+     * system screen-capture consent dialog via ActivityResultContracts, which
+     * only an Activity can own. */
+    var requestScreenCapturePermission: ((requestId: String) -> Unit)? = null
+
     init {
         val lastUser = prefs.getString(LAST_USERNAME_KEY, null)
         if (!lastUser.isNullOrEmpty()) {
@@ -103,6 +119,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 try { JSONObject(json).optString("deviceId", "") } catch (e: Exception) { "" }
             }.orEmpty()
         }
+        activeInstance = this
     }
 
     /**
@@ -141,7 +158,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             avatarFetch: true,
             tenor: true,
             voice: false,
-            windowDrag: false
+            windowDrag: false,
+            screenCapture: true
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
@@ -196,12 +214,15 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     conversationKeys = next
                 }
             }
+            "REFRESH_HISTORY" -> handleRefreshHistory(dict)
             "SEND_MESSAGE" -> handleSendMessage(dict)
             "UPLOAD_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = false)
             "DELETE_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = true)
             "LOAD_AVATAR_REQUEST" -> handleLoadAvatarRequest(dict)
             "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
             "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
+            "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
+            "STOP_SCREEN_CAPTURE" -> handleStopScreenCapture()
             "SHOW_NOTIFICATION" -> showMessageNotification(
                 sender = dict.optString("sender", "").trim(),
                 text = dict.optString("text", ""),
@@ -316,13 +337,25 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             val k = keys.next()
             builder.header(k, rawHeaders.optString(k))
         }
-        val mediaType = "application/octet-stream".toMediaTypeOrNull()
+        // OkHttp's BridgeInterceptor overwrites the "Content-Type" header with
+        // the RequestBody's own contentType() unconditionally, even when the
+        // header above was already set explicitly — a hardcoded
+        // "application/octet-stream" here silently clobbered JS's
+        // "application/json" on every POST (e.g. login), and the server's JSON
+        // extractor rejected the request outright. Must reuse whatever
+        // Content-Type JS actually sent.
+        val contentTypeKey = rawHeaders.keys().asSequence().firstOrNull { it.equals("Content-Type", ignoreCase = true) }
+        val mediaType = (contentTypeKey?.let { rawHeaders.optString(it) } ?: "application/octet-stream").toMediaTypeOrNull()
         val needsBody = method == "POST" || method == "PUT" || method == "PATCH"
-        val reqBody = when {
-            bodyStr != null -> bodyStr.toRequestBody(mediaType)
-            needsBody -> "".toRequestBody(mediaType)
-            else -> null
-        }
+        // interface.js's nativeApiFetch always sends body:'' (empty string, not
+        // null/undefined) even for bodyless GETs — bodyStr is therefore "" rather
+        // than null there. OkHttp's Request.Builder throws synchronously
+        // ("method GET must not have a request body") if ANY RequestBody,
+        // even an empty one, is attached to GET/HEAD/DELETE — so the body must
+        // be gated on the method needing one, not merely on bodyStr being
+        // non-null. This crashed every native GET call (contacts/users/key
+        // envelopes) with "Java exception was raised during method invocation".
+        val reqBody = if (needsBody) (bodyStr ?: "").toRequestBody(mediaType) else null
         builder.method(method, reqBody)
 
         client.newCall(builder.build()).enqueue(object : Callback {
@@ -678,6 +711,74 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
      * the avatar response falls back to the last-persisted device-identity username. */
     private fun currentUsername(): String = prefs.getString(LAST_USERNAME_KEY, "") ?: ""
 
+    // MARK: - Screen capture (START_SCREEN_CAPTURE / STOP_SCREEN_CAPTURE)
+    //
+    // Android WebView has no getDisplayMedia() at all (Chromium/WebView
+    // limitation — see project_mobile_parity_effort memory), so this drives
+    // native MediaProjection capture (ScreenCaptureService) instead. Frames
+    // come back on that service's own background thread via
+    // onScreenCaptureFrame and are relayed to JS as screen_capture_frame bus
+    // events; interface.js's onNativeScreenCaptureFrame paints them onto an
+    // offscreen <canvas> and turns canvas.captureStream() into the same kind
+    // of MediaStreamTrack a desktop getDisplayMedia() call would produce.
+
+    private fun handleStartScreenCapture(dict: JSONObject) {
+        val requestId = dict.optString("requestId", "")
+        if (requestId.isEmpty()) return
+        activeScreenCaptureRequestId = requestId
+        val launcher = requestScreenCapturePermission
+        if (launcher == null) {
+            emitScreenCaptureError(requestId, "Демонстрация экрана недоступна")
+            return
+        }
+        mainHandler.post { launcher(requestId) }
+    }
+
+    private fun handleStopScreenCapture() {
+        if (activeScreenCaptureRequestId.isEmpty()) return
+        activeScreenCaptureRequestId = ""
+        context.stopService(android.content.Intent(context, ScreenCaptureService::class.java))
+    }
+
+    /** Called by MainActivity when the user declines the system screen-capture
+     * consent dialog (or it's dismissed without a result). */
+    fun onScreenCaptureDenied(requestId: String) {
+        if (requestId != activeScreenCaptureRequestId) return
+        activeScreenCaptureRequestId = ""
+        emitScreenCaptureError(requestId, null)
+    }
+
+    /** Called by [ScreenCaptureService] on its own background capture thread —
+     * the base64 encode happens off the main thread on purpose; only the
+     * final evaluateJavascript hop needs to run there. */
+    fun onScreenCaptureFrame(requestId: String, jpegBytes: ByteArray) {
+        if (requestId != activeScreenCaptureRequestId) return
+        val dataUrl = "data:image/jpeg;base64," + android.util.Base64.encodeToString(jpegBytes, android.util.Base64.NO_WRAP)
+        val payload = JSONObject().apply {
+            put("requestId", requestId)
+            put("dataUrl", dataUrl)
+        }
+        val js = "window.loader && window.loader.bus.send('zali_interface:screen_capture_frame', $payload);"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
+    /** Called by [ScreenCaptureService] when MediaProjection setup itself fails
+     * (distinct from the user simply declining the consent dialog). */
+    fun onScreenCaptureError(requestId: String, message: String?) {
+        if (requestId != activeScreenCaptureRequestId) return
+        activeScreenCaptureRequestId = ""
+        emitScreenCaptureError(requestId, message)
+    }
+
+    private fun emitScreenCaptureError(requestId: String, message: String?) {
+        val payload = JSONObject().apply {
+            put("requestId", requestId)
+            if (message != null) put("message", message)
+        }
+        val js = "window.loader && window.loader.bus.send('zali_interface:screen_capture_error', $payload);"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
     // MARK: - Tenor GIF preview resolution (RESOLVE_TENOR)
     //
     // Ported from macOS's `.resolveTenor` IPC case + `resolveTenor`/`extractTenorMediaURL`,
@@ -925,6 +1026,226 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    // MARK: - DM history load (REFRESH_HISTORY)
+    //
+    // Ported from macOS's `.refreshHistory` IPC case + `WebView.reloadHistory(for:)` /
+    // `NetworkService.fetchMessages`. interface.js sends this whenever a chat is
+    // opened or refreshed (`syncActiveConversation()`, `refreshAfterKey()`) — until
+    // this handler existed, it was silently dropped here, so DM history never loaded
+    // on Android ("Начните диалог" for every real contact).
+    private var historyReloadToken = 0
+
+    private fun handleRefreshHistory(dict: JSONObject) {
+        val key = dict.optString("key", "").trim()
+        if (key.isNotEmpty()) currentE2eKey = key
+        val peer = dict.optString("peer", "").trim()
+        if (peer.isEmpty()) return
+        val token = ++historyReloadToken
+        fetchMessagesPage(peer, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
+            if (token != historyReloadToken) return@fetchMessagesPage // a newer reload superseded this one
+            if (!ok) return@fetchMessagesPage // transient fetch failure — keep whatever's already shown, don't blank it
+            if (records.isEmpty()) {
+                mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory([]);", null) }
+                return@fetchMessagesPage
+            }
+            renderHistoryRecords(records, peer, token) { rendered ->
+                if (token != historyReloadToken) return@renderHistoryRecords
+                val json = JSONArray(rendered)
+                mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory($json);", null) }
+            }
+        }
+    }
+
+    /** `GET /api/messages/{user}?limit&offset`, same pagination as macOS's
+     * `fetchMessagesPage` — recurse while a page comes back full. */
+    private fun fetchMessagesPage(
+        username: String,
+        limit: Int,
+        offset: Int,
+        accumulated: MutableList<JSONObject>,
+        completion: (List<JSONObject>, Boolean) -> Unit,
+    ) {
+        val encodedUser = java.net.URLEncoder.encode(username, "UTF-8")
+        val request = Request.Builder().url("$apiBaseUrl/api/messages/$encodedUser?limit=$limit&offset=$offset").apply {
+            if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
+        }.build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                completion(accumulated, false)
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        completion(accumulated, false)
+                        return
+                    }
+                    val bodyString = try { it.body?.string() } catch (e: IOException) { null }
+                    val page = try { bodyString?.let { s -> JSONArray(s) } } catch (e: Exception) { null }
+                    if (page == null) {
+                        completion(accumulated, false)
+                        return
+                    }
+                    for (i in 0 until page.length()) accumulated.add(page.getJSONObject(i))
+                    if (page.length() < limit) {
+                        completion(accumulated, true)
+                    } else {
+                        fetchMessagesPage(username, limit, offset + limit, accumulated, completion)
+                    }
+                }
+            }
+        })
+    }
+
+    /** Sequentially downloads + decrypts every record (mirrors macOS's `for record in
+     * records { await ... }` — not parallel: a burst of many concurrent downloads
+     * previously saturated the connection pool and stalled every request, see
+     * NativeBridge's httpClient dispatcher comment above). */
+    private fun renderHistoryRecords(
+        records: List<JSONObject>,
+        peer: String,
+        token: Int,
+        completion: (List<JSONObject>) -> Unit,
+    ) {
+        val rendered = mutableListOf<JSONObject>()
+        fun next(index: Int) {
+            if (token != historyReloadToken) return
+            if (index >= records.size) {
+                completion(rendered)
+                return
+            }
+            renderHistoryRecord(records[index], peer) { result ->
+                if (result != null) rendered.add(result)
+                next(index + 1)
+            }
+        }
+        next(0)
+    }
+
+    /** archivePath comes from message.json INSIDE the (peer-authored) archive — the
+     * SDK never validates it, so a malicious value like "../../secret" would make
+     * `File(tempDir, archivePath)` resolve outside tempDir and read an arbitrary
+     * local file. Mirrors the guard in apps/windows/src/native/messages.rs and
+     * macOS's NetworkService.safeAttachmentURL: only a plain relative path with no
+     * ".." segments is accepted. */
+    private fun isSafeArchivePath(path: String): Boolean {
+        if (path.isEmpty() || path.startsWith("/") || path.contains('\\')) return false
+        return path.split('/').none { it.isEmpty() || it == ".." }
+    }
+
+    private fun renderHistoryRecord(record: JSONObject, peer: String, completion: (JSONObject?) -> Unit) {
+        val messageId = record.optString("id", "").trim()
+        if (messageId.isEmpty()) {
+            completion(null)
+            return
+        }
+        val sender = record.optString("sender", peer)
+        val receiver = record.optString("receiver", peer)
+        val clientId = record.optString("clientId", record.optString("client_id", ""))
+
+        fun placeholder(text: String): JSONObject = JSONObject().apply {
+            put("id", messageId)
+            put("clientId", clientId)
+            put("sender", sender)
+            put("receiver", receiver)
+            put("text", text)
+            put("attachments", JSONArray())
+            put("timestamp", record.opt("timestamp"))
+            put("reactions", record.optJSONArray("reactions") ?: JSONArray())
+            put("myReactions", record.optJSONArray("myReactions") ?: JSONArray())
+        }
+
+        if (!ZaliCoreBridge.isAvailable) {
+            completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+            return
+        }
+
+        val encodedId = java.net.URLEncoder.encode(messageId, "UTF-8")
+        val request = Request.Builder().url("$apiBaseUrl/api/download/$encodedId").apply {
+            if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
+        }.build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (it.code == 413) {
+                        completion(placeholder("📦 Файл сообщения превышает допустимый размер"))
+                        return
+                    }
+                    if (!it.isSuccessful) {
+                        completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+                        return
+                    }
+                    val bytes = try { it.body?.bytes() } catch (e: IOException) { null }
+                    if (bytes == null) {
+                        completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+                        return
+                    }
+
+                    val workDirName = UUID.randomUUID().toString()
+                    val archiveFile = File(context.cacheDir, "$workDirName.zali")
+                    val tempDir = File(context.cacheDir, "$workDirName-unpack")
+                    try {
+                        archiveFile.writeBytes(bytes)
+                        tempDir.mkdirs()
+
+                        // Same candidate-key list as macOS's renderHistoryRecord: the
+                        // conversation-scoped key plus every other known conversation
+                        // key as a last resort (covers a stale/renamed scope).
+                        val keys = ZaliCoreBridge.candidateMessageKeys(
+                            currentKey = currentE2eKey, conversationKeys = conversationKeys,
+                            participantA = sender, participantB = receiver, serverId = null, channelId = null
+                        ).toMutableList()
+                        for (k in conversationKeys.values) {
+                            val normalized = k.trim()
+                            if (normalized.isNotEmpty() && !keys.contains(normalized)) keys.add(normalized)
+                        }
+
+                        val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
+                        if (payload == null) {
+                            completion(placeholder("🔒 Сообщение зашифровано другим ключом"))
+                            return
+                        }
+
+                        val attachments = JSONArray()
+                        for (attachment in payload.attachments) {
+                            val renderedAttachment = JSONObject().apply {
+                                put("name", attachment.name)
+                                put("mimeType", attachment.mimeType)
+                                put("kind", attachment.kind)
+                                put("size", attachment.size)
+                            }
+                            if (attachment.size <= 2 * 1024 * 1024 && isSafeArchivePath(attachment.archivePath)) {
+                                val attachmentFile = File(tempDir, attachment.archivePath)
+                                if (attachmentFile.exists()) {
+                                    val b64 = android.util.Base64.encodeToString(attachmentFile.readBytes(), android.util.Base64.NO_WRAP)
+                                    renderedAttachment.put("dataUrl", "data:${attachment.mimeType};base64,$b64")
+                                }
+                            }
+                            attachments.put(renderedAttachment)
+                        }
+
+                        completion(JSONObject().apply {
+                            put("id", messageId)
+                            put("clientId", clientId)
+                            put("sender", payload.sender)
+                            put("receiver", receiver)
+                            put("text", payload.text)
+                            put("attachments", attachments)
+                            put("timestamp", record.opt("timestamp"))
+                            put("reactions", record.optJSONArray("reactions") ?: JSONArray())
+                            put("myReactions", record.optJSONArray("myReactions") ?: JSONArray())
+                        })
+                    } finally {
+                        archiveFile.delete()
+                        tempDir.deleteRecursively()
+                    }
+                }
+            }
+        })
+    }
+
     // MARK: - Message download + decrypt (ZaliCoreBridge)
 
     /** Downloads the `.zali` archive for a WS-pushed message envelope. Server-side
@@ -1006,6 +1327,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     fun teardown() {
         wsInstance?.cancel()
+        if (activeInstance === this) activeInstance = null
+        context.stopService(android.content.Intent(context, ScreenCaptureService::class.java))
     }
 
     companion object {
@@ -1014,5 +1337,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         /** Feature-checked at the call site before using [androidx.webkit.WebViewCompat.addDocumentStartJavaScript]. */
         val documentStartScriptSupported: Boolean
             get() = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+        /** See the "Screen capture" section above — lets [ScreenCaptureService]
+         * (started via Intent, not direct construction) reach back into the
+         * live bridge to push frames/errors. */
+        @Volatile
+        var activeInstance: NativeBridge? = null
     }
 }

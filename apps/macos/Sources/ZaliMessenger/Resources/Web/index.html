@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260713-rev10">
+    <link rel="stylesheet" href="style.css?v=20260722-rev14">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -20,7 +20,7 @@
         <!-- TITLE BAR -->
         <header class="titlebar" id="titlebar">
             <div class="tb-l">
-                <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false" onclick="document.body.classList.toggle('mobile-sidebar-open'); var b=document.getElementById('mobileBackdrop'); if (b) b.hidden = !document.body.classList.contains('mobile-sidebar-open'); this.setAttribute('aria-expanded', document.body.classList.contains('mobile-sidebar-open') ? 'true' : 'false')">☰</button>
+                <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false" onclick="try{window.loader.modules.get('zali_interface').toggleMobileSidebar()}catch(e){}">☰</button>
             </div>
             <div class="tb-c">
                 <span class="tb-brand">ZaliMessenger</span>
@@ -32,10 +32,25 @@
                     <span class="ws-dot" id="wsDot"></span>
                     <span id="wsLabel">Подключение...</span>
                 </div>
+                <div class="win-controls" id="winControls">
+                    <button class="win-btn win-btn-min" id="winMinBtn" type="button" aria-label="Свернуть">
+                        <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1"/></svg>
+                    </button>
+                    <button class="win-btn win-btn-max" id="winMaxBtn" type="button" aria-label="Развернуть">
+                        <svg class="ico-max" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+                        <svg class="ico-restore" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><rect x="2.5" y="0.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/><rect x="0.5" y="2.5" width="7" height="7" fill="var(--bg)" stroke="currentColor" stroke-width="1"/></svg>
+                    </button>
+                    <button class="win-btn win-btn-close" id="winCloseBtn" type="button" aria-label="Закрыть">
+                        <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1"/></svg>
+                    </button>
+                </div>
             </div>
         </header>
 
         <button class="mobile-backdrop" id="mobileBackdrop" type="button" aria-label="Закрыть меню" hidden onclick="document.body.classList.remove('mobile-sidebar-open'); this.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')"></button>
+
+        <!-- Mobile-only reconnect strip (shown under the app-bar while offline) -->
+        <div class="m-net-strip" id="mNetStrip" aria-hidden="true"><span class="m-net-spin"></span>Соединение…</div>
 
         <div class="body">
 
@@ -91,6 +106,9 @@
                 <!-- CHAT VIEW -->
                 <div id="viewChat" class="view active">
                     <div class="chat-hdr" id="chatHdr">
+                        <button class="chat-back-btn" id="chatBackBtn" type="button" aria-label="Назад к чатам" title="Назад">
+                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
                         <div class="chat-hdr-ava" id="chatHdrAva">A</div>
                         <div class="chat-hdr-info">
                             <div class="chat-hdr-name" id="chatHdrName">Alice</div>
@@ -461,6 +479,25 @@
         </div>
     </div>
 
+    <div class="coin-transfer-modal" id="updateAvailableModal" role="dialog" aria-modal="true" aria-labelledby="updateModalVersion" hidden>
+        <div class="coin-transfer-box">
+            <div class="coin-transfer-head">
+                <h2 id="updateModalVersion">Доступно обновление</h2>
+            </div>
+            <p id="updateModalNotes"></p>
+            <p class="coin-transfer-status" id="updateModalError" hidden></p>
+            <div class="coin-transfer-field" id="updateModalProgressWrap" hidden>
+                <div style="height:6px;border-radius:999px;background:rgba(127,127,127,0.25);overflow:hidden;">
+                    <div id="updateModalProgressBar" style="height:100%;width:0%;background:currentColor;transition:width 0.2s ease;"></div>
+                </div>
+            </div>
+            <div class="coin-transfer-actions">
+                <button class="btn-flat" id="updateModalDeclineBtn" type="button">Позже</button>
+                <button class="auth-btn primary" id="updateModalAcceptBtn" type="button">Обновить</button>
+            </div>
+        </div>
+    </div>
+
     <div class="server-overlay" id="serverOverlay" hidden>
         <div class="server-modal" id="serverModal" role="dialog" aria-modal="true" aria-labelledby="serverModalTitle">
             <div class="server-modal-head">
@@ -821,6 +858,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260713-rev10"></script>
+    <script src="app.js?v=20260722-rev14"></script>
 </body>
 </html>

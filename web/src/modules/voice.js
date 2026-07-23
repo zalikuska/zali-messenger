@@ -25,6 +25,13 @@
                 screenShareRequestInFlight: false,
                 localScreenStream: null,
                 localScreenVideoEl: null,
+                // Android-only path: getDisplayMedia() doesn't exist in Android
+                // WebView, so native MediaProjection frames are painted onto this
+                // canvas and canvas.captureStream() stands in for the browser API.
+                screenCaptureFromNative: false,
+                screenCaptureRequestId: '',
+                screenCaptureCanvas: null,
+                screenCaptureCtx: null,
                 remoteScreens: new Map(),
                 peerConnections: new Map(),
                 remoteAudios: new Map(),

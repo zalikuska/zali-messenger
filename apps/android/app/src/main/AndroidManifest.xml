@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Screen-share (START_SCREEN_CAPTURE in NativeBridge.kt, see
+         ScreenCaptureService) — Android 14+ (targetSdk 35) requires both the
+         foreground-service permission and the mediaProjection-specific one
+         before MediaProjection.createVirtualDisplay() will succeed. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -27,6 +33,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Hosts the MediaProjection/VirtualDisplay capture loop for screen
+             sharing (START_SCREEN_CAPTURE). Must be a foreground service with
+             this exact type on API 34+ or createVirtualDisplay() throws. -->
+        <service
+            android:name=".ScreenCaptureService"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="false" />
 
         <!-- DOWNLOAD_ATTACHMENT (NativeBridge.kt's saveAttachment) shares attachments
              via a content:// Uri through the system share sheet, mirroring iOS's

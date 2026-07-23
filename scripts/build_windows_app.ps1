@@ -1,6 +1,7 @@
 param(
     [switch]$Run,
-    [switch]$SkipBundle
+    [switch]$SkipBundle,
+    [switch]$Installer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,6 +68,27 @@ Write-Host "Windows build ready: $distExe"
 Write-Host 'Notes:'
 Write-Host '  - Install the Microsoft Edge WebView2 Runtime on the target machine.'
 Write-Host '  - Start the server before launching the client.'
+
+if ($Installer) {
+    $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if (-not $iscc) {
+        throw 'Inno Setup (ISCC.exe) not found on PATH. Install it from https://jrsoftware.org/isinfo.php'
+    }
+
+    $cargoTomlPath = Join-Path $RepoRoot 'apps\windows\Cargo.toml'
+    $versionMatch = Select-String -Path $cargoTomlPath -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if (-not $versionMatch) {
+        throw "Could not read version from $cargoTomlPath"
+    }
+    $version = $versionMatch.Matches[0].Groups[1].Value
+
+    Write-Host "Building installer for version $version..."
+    $issPath = Join-Path $RepoRoot 'apps\windows\installer\ZaliMessenger.iss'
+    Invoke-CommandChecked -Command $iscc.Source -Arguments @("/DMyAppVersion=$version", $issPath)
+
+    $installerExe = Join-Path $RepoRoot "dist\windows\installer\ZaliMessengerSetup-$version.exe"
+    Write-Host "Installer ready: $installerExe"
+}
 
 if ($Run) {
     Write-Host 'Launching Windows client...'

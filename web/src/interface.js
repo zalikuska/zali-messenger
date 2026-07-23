@@ -15,6 +15,9 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     SAVE_PENDING_OUTBOX: 'SAVE_PENDING_OUTBOX',
     DOWNLOAD_ATTACHMENT: 'DOWNLOAD_ATTACHMENT',
     START_DRAG: 'START_DRAG',
+    MINIMIZE_WINDOW: 'MINIMIZE_WINDOW',
+    MAXIMIZE_WINDOW: 'MAXIMIZE_WINDOW',
+    CLOSE_WINDOW: 'CLOSE_WINDOW',
     RESOLVE_TENOR: 'RESOLVE_TENOR',
     SET_KEY: 'SET_KEY',
     SET_MESSAGE_REACTION: 'SET_MESSAGE_REACTION',
@@ -29,6 +32,8 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     LOAD_AVATAR_REQUEST: 'LOAD_AVATAR_REQUEST',
     SHOW_NOTIFICATION: 'SHOW_NOTIFICATION',
     PERSIST_DEVICE_IDENTITY: 'PERSIST_DEVICE_IDENTITY',
+    DOWNLOAD_UPDATE_REQUEST: 'DOWNLOAD_UPDATE_REQUEST',
+    INSTALL_UPDATE_REQUEST: 'INSTALL_UPDATE_REQUEST',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
@@ -320,6 +325,9 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.NATIVE_RESPONSE || 'native_response', (payload) => this.onNativeResponse(payload));
         this.bus.registerCommand('zali_interface', E.ADD_LOG_ENTRY || 'add_log_entry', (data) => this.addLogEntry(data));
         this.bus.registerCommand('zali_interface', E.VOICE_EVENT || 'voice_event', (payload) => this.handleVoiceEvent(payload));
+        this.bus.registerCommand('zali_interface', E.UPDATE_EVENT || 'update_event', (payload) => this.handleUpdateEvent(payload));
+        this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_FRAME || 'screen_capture_frame', (payload) => this.onNativeScreenCaptureFrame(payload));
+        this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_ERROR || 'screen_capture_error', (payload) => this.onNativeScreenCaptureError(payload));
 
         // Bind events after DOM is loaded
         if (document.readyState === 'loading') {
@@ -402,11 +410,19 @@ class ZaliInterface {
         return this.fmtTime(msg?.timestamp || '');
     }
 
+    // Sidebar sorting calls this once per contact on every renderContacts(), so a
+    // full scan of every conversation was O(contacts × messages) per sidebar paint
+    // — tens of thousands of Date parses per incoming message on a busy account.
+    // Messages are appended chronologically, so the newest timestamp lives at the
+    // tail; scan backwards over a small bounded tail to stay tolerant of the slight
+    // out-of-order that reconciliation can leave behind, and stop there.
     conversationLastMessageAt(peer) {
         const msgs = Array.isArray(this.S.chats?.[peer]) ? this.S.chats[peer] : [];
+        const TAIL_SCAN = 24;
         let lastTs = 0;
-        for (const msg of msgs) {
-            const ts = this.messageTimestampValue(msg?.timestamp);
+        let scanned = 0;
+        for (let i = msgs.length - 1; i >= 0 && scanned < TAIL_SCAN; i -= 1, scanned += 1) {
+            const ts = this.messageTimestampValue(msgs[i]?.timestamp);
             if (ts > lastTs) lastTs = ts;
         }
         return lastTs;
@@ -541,8 +557,9 @@ class ZaliInterface {
             document.addEventListener('visibilitychange', onVisibilityChange);
             window.addEventListener('focus', onVisibilityChange);
             // Debounced message-cache saves must land before the page goes away.
-            window.addEventListener('pagehide', () => this.flushPendingMessageCacheSave());
-            window.addEventListener('beforeunload', () => this.flushPendingMessageCacheSave());
+            window.addEventListener('pagehide', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); });
+            window.addEventListener('beforeunload', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); });
+            window.addEventListener('error', () => this.flushTrace());
         }
 
         this.scheduleAvatarRefreshPolling();
@@ -620,9 +637,36 @@ class ZaliInterface {
         return true;
     }
 
+    // Every console.log is mirrored to zali-debug.log through the native bridge on
+    // the macOS/iOS shells, so each trace used to cost a synchronous IPC hop. The
+    // hot paths (history batches, per-message decrypt, key resolution) emit these in
+    // bursts, which showed up as stutter. Coalesce a frame's worth of traces into one
+    // console call — same lines, same order, one hop.
     trace(message) {
+        const line = `[ZALI][WEB] ${message}`;
+        this._traceBuffer = this._traceBuffer || [];
+        this._traceBuffer.push(line);
+        if (this._traceBuffer.length >= 64) {
+            this.flushTrace();
+            return;
+        }
+        if (this._traceFlushScheduled) return;
+        this._traceFlushScheduled = true;
+        const schedule = typeof requestAnimationFrame === 'function'
+            ? requestAnimationFrame
+            : (cb) => setTimeout(cb, 16);
+        schedule(() => {
+            this._traceFlushScheduled = false;
+            this.flushTrace();
+        });
+    }
+
+    flushTrace() {
+        const buffer = this._traceBuffer;
+        if (!buffer || buffer.length === 0) return;
+        this._traceBuffer = [];
         try {
-            console.log(`[ZALI][WEB] ${message}`);
+            console.log(buffer.length === 1 ? buffer[0] : buffer.join('\n'));
         } catch (e) {}
     }
 
@@ -675,10 +719,26 @@ class ZaliInterface {
         this.scheduleRenderMessages();
     }
 
+    // Any scrollTop we assign ourselves fires a scroll event a frame later. Without
+    // this marker that event was indistinguishable from the user scrolling, so it
+    // cancelled the queued "open at the bottom" of a chat we had just switched to —
+    // leaving the new conversation parked at an arbitrary offset.
+    markProgrammaticScroll() {
+        this._programmaticScrollUntil = (typeof performance !== 'undefined' ? performance.now() : Date.now()) + 200;
+    }
+
+    isProgrammaticScroll() {
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        return now <= Number(this._programmaticScrollUntil || 0);
+    }
+
     onMessagesScroll() {
         const box = document.getElementById('msgs');
         if (!box) return;
-        this.pendingMessagesScroll = null;
+        if (!this.isProgrammaticScroll()) {
+            this.pendingMessagesScroll = null;
+            this._bottomIntent = false;
+        }
         if (this.messageScrollRaf) return;
         this.messageScrollRaf = requestAnimationFrame(() => {
             this.messageScrollRaf = 0;
@@ -817,6 +877,10 @@ class ZaliInterface {
             // activation progress is still ~1, so the progress check alone
             // would yank the list out from under the user's finger.
             if (document.body?.classList.contains('mobile-nav-dragging')) return;
+            // The window may have grown to the desktop layout between scheduling
+            // and firing; parking there would translate the always-visible
+            // desktop sidebar off the bottom of the screen.
+            if (!this.isMobileLayout()) return;
             if (this.currentMobileNavProgress() >= 0.98 && !document.body?.classList.contains('mobile-sidebar-open')) {
                 document.body?.classList.remove('mobile-list-visible');
                 // Class removal switches .sidebar back to its normal .12s
@@ -884,10 +948,16 @@ class ZaliInterface {
         let startX = 0;
         let startY = 0;
         let viewportWidth = 1;
+        let velocity = 0;
+        let lastT = 0;
+        let lastDx = 0;
 
         const reset = () => {
             tracking = false;
             dragging = false;
+            velocity = 0;
+            lastT = 0;
+            lastDx = 0;
         };
 
         chatEl.addEventListener('touchstart', (e) => {
@@ -921,6 +991,10 @@ class ZaliInterface {
             }
             if (dragging) {
                 if (e.cancelable) e.preventDefault();
+                const now = (e.timeStamp || Date.now());
+                if (lastT && now > lastT) velocity = (dx - lastDx) / (now - lastT); // px/ms
+                lastT = now;
+                lastDx = dx;
                 const progress = Math.max(0, Math.min(1, 1 - dx / viewportWidth));
                 this.setMobileNavProgress(progress, { animate: false });
             }
@@ -930,7 +1004,10 @@ class ZaliInterface {
             if (!tracking) return;
             document.body?.classList.remove('mobile-nav-dragging');
             if (dragging) {
-                const openList = this.currentMobileNavProgress() < 0.6;
+                // Commit on a fast flick even when the drag is short — matching
+                // native back-swipes — otherwise fall back to the 40% position.
+                const flicked = velocity > 0.45;
+                const openList = flicked || this.currentMobileNavProgress() < 0.6;
                 this.setMobileSidebarOpen(openList, { animate: true });
             }
             reset();
@@ -954,15 +1031,185 @@ class ZaliInterface {
             }
             const inset = Math.max(0, (window.innerHeight - vv.height - vv.offsetTop));
             document.body?.style.setProperty('--kbd-inset', `${Math.round(inset)}px`);
+            // The keyboard opening/closing resizes the message list under a fixed
+            // scrollTop, which pushed the newest message off-screen exactly when the
+            // user was about to reply to it. Re-pin, but only if we were the ones
+            // holding the view at the bottom.
+            this.repinMessagesAfterViewportChange();
         };
         vv.addEventListener('resize', apply);
         vv.addEventListener('scroll', apply);
         apply();
     }
 
+    // Mobile touch gestures, delegated on the persistent containers (#msgs /
+    // #contacts) so they survive the innerHTML re-renders those lists do.
+    //
+    //  • Long-press a message  → opens the existing reaction menu. The desktop
+    //    path is `contextmenu`, which touch browsers fire inconsistently (and
+    //    iOS shows its own callout instead).
+    //  • Swipe a dialog row left → reveals a Delete action that must then be
+    //    tapped. removeContact() deletes immediately with no confirmation, so
+    //    the swipe deliberately only *reveals* — committing on release alone
+    //    would make an accidental swipe destructive.
+    setupMobileTouchGestures() {
+        const LONG_PRESS_MS = 420;
+        const MOVE_CANCEL = 10;
+
+        const msgsEl = document.getElementById('msgs');
+        if (msgsEl && !msgsEl.__mobileLongPressBound) {
+            msgsEl.__mobileLongPressBound = true;
+            let timer = null;
+            let startX = 0;
+            let startY = 0;
+            let held = null;
+            const cancelPress = () => {
+                if (timer) { clearTimeout(timer); timer = null; }
+                if (held) { held.classList.remove('press-hold'); held = null; }
+            };
+            msgsEl.addEventListener('touchstart', (e) => {
+                if (!this.isMobileLayout()) return;
+                const touch = e.touches[0];
+                const msgEl = e.target?.closest?.('.msg[data-message-id]');
+                if (!touch || !msgEl) return;
+                startX = touch.clientX;
+                startY = touch.clientY;
+                held = msgEl;
+                msgEl.classList.add('press-hold');
+                timer = setTimeout(() => {
+                    const id = msgEl.getAttribute('data-message-id');
+                    if (id) {
+                        this.showReactionMenu(msgEl, id, startX, startY);
+                        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* no haptics */ } }
+                    }
+                    cancelPress();
+                }, LONG_PRESS_MS);
+            }, { passive: true });
+            msgsEl.addEventListener('touchmove', (e) => {
+                const touch = e.touches[0];
+                if (!touch || !timer) return;
+                if (Math.abs(touch.clientX - startX) > MOVE_CANCEL || Math.abs(touch.clientY - startY) > MOVE_CANCEL) cancelPress();
+            }, { passive: true });
+            msgsEl.addEventListener('touchend', cancelPress);
+            msgsEl.addEventListener('touchcancel', cancelPress);
+        }
+
+        const contactsEl = document.getElementById('contacts');
+        if (contactsEl && !contactsEl.__mobileSwipeBound) {
+            contactsEl.__mobileSwipeBound = true;
+            const REVEAL = 96;
+            const COMMIT = 56;
+            let row = null;
+            let sx = 0;
+            let sy = 0;
+            let dragging = false;
+
+            const closeRevealed = () => {
+                const open = this._swipedRow;
+                if (open && open.isConnected) {
+                    open.style.transition = 'transform .2s cubic-bezier(.2,.9,.24,1)';
+                    open.style.transform = 'translateX(0)';
+                    open.classList.remove('swipe-open');
+                }
+                this._swipedRow = null;
+            };
+            this.closeSwipedContactRow = closeRevealed;
+
+            contactsEl.addEventListener('touchstart', (e) => {
+                if (!this.isMobileLayout()) return;
+                const touch = e.touches[0];
+                const el = e.target?.closest?.('.contact[data-name]');
+                if (!touch) return;
+                if (this._swipedRow && this._swipedRow !== el) closeRevealed();
+                if (!el) return;
+                row = el;
+                sx = touch.clientX;
+                sy = touch.clientY;
+                dragging = false;
+            }, { passive: true });
+
+            contactsEl.addEventListener('touchmove', (e) => {
+                if (!row) return;
+                const touch = e.touches[0];
+                if (!touch) return;
+                const dx = touch.clientX - sx;
+                const dy = touch.clientY - sy;
+                if (!dragging) {
+                    // Vertical intent wins — never fight the list's own scroll.
+                    if (Math.abs(dy) > Math.abs(dx)) { row = null; return; }
+                    if (dx > -6) return;
+                    dragging = true;
+                    row.classList.add('swiping');
+                }
+                if (e.cancelable) e.preventDefault();
+                const base = this._swipedRow === row ? -REVEAL : 0;
+                const offset = Math.max(-REVEAL, Math.min(0, base + dx));
+                row.style.transition = '';
+                row.style.transform = `translateX(${offset}px)`;
+            }, { passive: false });
+
+            const finishSwipe = () => {
+                if (!row) return;
+                const current = row;
+                row = null;
+                current.classList.remove('swiping');
+                if (!dragging) return;
+                dragging = false;
+                const match = /translateX\((-?[\d.]+)px\)/.exec(current.style.transform || '');
+                const offset = match ? parseFloat(match[1]) : 0;
+                current.style.transition = 'transform .2s cubic-bezier(.2,.9,.24,1)';
+                if (offset <= -COMMIT) {
+                    current.style.transform = `translateX(${-REVEAL}px)`;
+                    current.classList.add('swipe-open');
+                    this._swipedRow = current;
+                } else {
+                    current.style.transform = 'translateX(0)';
+                    current.classList.remove('swipe-open');
+                    if (this._swipedRow === current) this._swipedRow = null;
+                }
+            };
+            contactsEl.addEventListener('touchend', finishSwipe);
+            contactsEl.addEventListener('touchcancel', finishSwipe);
+            contactsEl.addEventListener('scroll', () => { if (this._swipedRow) closeRevealed(); }, { passive: true });
+
+            // Capture phase: while a row is revealed its taps belong to the
+            // swipe UI, not to the row's normal "open this chat" handler.
+            contactsEl.addEventListener('click', (e) => {
+                const open = this._swipedRow;
+                if (!open) return;
+                const el = e.target?.closest?.('.contact[data-name]');
+                e.preventDefault();
+                e.stopPropagation();
+                if (el === open) {
+                    const rect = open.getBoundingClientRect();
+                    if (e.clientX >= rect.right - REVEAL) {
+                        const name = open.getAttribute('data-name');
+                        closeRevealed();
+                        if (name) this.removeContact(name);
+                        return;
+                    }
+                }
+                closeRevealed();
+            }, true);
+        }
+    }
+
     syncMobileChrome() {
         const isMobile = this.isMobileLayout();
         document.body?.classList.toggle('is-mobile-layout', isMobile);
+
+        // The mobile push-nav drives .sidebar / #viewChat with inline transforms
+        // (see setMobileListParked / setMobileNavProgress). Those are meaningless
+        // on desktop and actively harmful — a parked translateY(115%) pushes the
+        // always-visible desktop sidebar off-screen — so clear them on the way out.
+        if (!isMobile) {
+            const sidebar = document.querySelector('.sidebar');
+            if (sidebar) sidebar.style.transform = '';
+            const viewChat = document.getElementById('viewChat');
+            if (viewChat) viewChat.style.transform = '';
+            document.body?.classList.remove('mobile-list-visible', 'mobile-nav-instant', 'mobile-nav-dragging');
+            this.closeSwipedContactRow?.();
+        }
 
         const dock = document.getElementById('mobileDock');
         if (dock) {
@@ -1092,7 +1339,7 @@ class ZaliInterface {
 
     async loadZaliCoinBalance() {
         try {
-            const res = await this.apiFetch(this.apiRoutes.coins.balance);
+            const res = await this.apiFetch(this.apiRoutes.coins.balance, { interactive: true });
             if (!res.ok) return;
             const data = await res.json();
             this.S.zaliCoinBalance = Number(data.balance) || 0;
@@ -1103,7 +1350,7 @@ class ZaliInterface {
 
     async loadZaliCoinDistribution() {
         try {
-            const res = await this.apiFetch(this.apiRoutes.coins.distribution);
+            const res = await this.apiFetch(this.apiRoutes.coins.distribution, { interactive: true });
             if (!res.ok) return;
             const data = await res.json();
             this.S.zaliCoinTotalSupply = Number(data.totalSupply) || 100000;
@@ -1251,7 +1498,7 @@ class ZaliInterface {
         // would answer "success" for the old payload while the user believes the
         // edited one went through. Rotate the key whenever the payload changes;
         // keep it only for a true retry of the identical payload.
-        const payloadSignature = `${to} ${amount}`;
+        const payloadSignature = `${to}\0${amount}`;
         if (this._coinTransferLastPayload && this._coinTransferLastPayload !== payloadSignature) {
             this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
         }
@@ -1342,20 +1589,63 @@ class ZaliInterface {
         if (!box || !this.pendingMessagesScroll) return;
         const target = this.pendingMessagesScroll;
         this.pendingMessagesScroll = null;
+        this.markProgrammaticScroll();
         if (target === 'bottom') {
-            void box.offsetHeight;
             box.scrollTop = box.scrollHeight;
+            this.pinToBottomAfterLayout(box);
         } else {
+            // Jumping to the top is an explicit "don't follow the bottom" intent —
+            // otherwise the next viewport change would re-pin and undo it.
+            this._bottomIntent = false;
             box.scrollTop = 0;
         }
+    }
+
+    // Height is not final at the moment we scroll: the virtual window's spacers are
+    // sized from an average message height that this very render recalibrates, and
+    // avatars/images/fonts settle a frame later. Scrolling once therefore left the
+    // newly opened chat a screen or two above the last message. Re-pin on the next
+    // frame — once, and only while nothing else has claimed the scroll position.
+    pinToBottomAfterLayout(box) {
+        if (!box) return;
+        // A real user scroll clears this intent (see onMessagesScroll), so the
+        // correction can never fight someone who has started reading history.
+        this._bottomIntent = true;
+        if (this._pinBottomRaf) return;
+        this._pinBottomRaf = requestAnimationFrame(() => {
+            this._pinBottomRaf = 0;
+            if (!this._bottomIntent || this.pendingMessagesScroll) return;
+            if (box.scrollHeight - (box.scrollTop + box.clientHeight) <= 1) return;
+            this.markProgrammaticScroll();
+            box.scrollTop = box.scrollHeight;
+        });
     }
 
     captureMessageScrollAnchor(box) {
         if (!box) return null;
         const boxRect = box.getBoundingClientRect?.();
         if (!boxRect) return null;
-        const nodes = Array.from(box.querySelectorAll('.msg[data-message-id]'));
-        for (const node of nodes) {
+        const nodes = box.querySelectorAll('.msg[data-message-id]');
+        if (!nodes.length) return null;
+        // Binary search on offsetTop for the first node at or below the viewport top,
+        // instead of walking the list front-to-back measuring every node. Nodes are in
+        // document order, so offsetTop is monotonic.
+        const viewportTop = box.scrollTop;
+        let lo = 0;
+        let hi = nodes.length - 1;
+        let candidate = 0;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const node = nodes[mid];
+            if (node.offsetTop + node.offsetHeight >= viewportTop) {
+                candidate = mid;
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        for (let i = candidate; i < nodes.length; i += 1) {
+            const node = nodes[i];
             const messageId = String(node.dataset?.messageId || '').trim();
             if (!messageId) continue;
             const rect = node.getBoundingClientRect?.();
@@ -1371,14 +1661,38 @@ class ZaliInterface {
 
     restoreMessageScrollAnchor(box, anchor) {
         if (!box || !anchor?.messageId) return false;
-        const nodes = Array.from(box.querySelectorAll('.msg[data-message-id]'));
-        const node = nodes.find(item => String(item.dataset?.messageId || '').trim() === anchor.messageId);
+        // Selector lookup instead of materialising every .msg node and comparing
+        // datasets in JS — this runs inside the render path on every scroll-preserving
+        // update.
+        let node = null;
+        try {
+            const escaped = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+                ? CSS.escape(anchor.messageId)
+                : null;
+            if (escaped) node = box.querySelector(`.msg[data-message-id="${escaped}"]`);
+        } catch (e) {
+            node = null;
+        }
+        if (!node) {
+            const nodes = Array.from(box.querySelectorAll('.msg[data-message-id]'));
+            node = nodes.find(item => String(item.dataset?.messageId || '').trim() === anchor.messageId) || null;
+        }
         if (!node) return false;
         const boxRect = box.getBoundingClientRect?.();
         const rect = node.getBoundingClientRect?.();
         if (!boxRect || !rect) return false;
         box.scrollTop += (rect.top - boxRect.top) - Number(anchor.topOffset || 0);
         return true;
+    }
+
+    // Called when the viewport itself changes size (rotation, window resize, the
+    // mobile keyboard). A resize does not move scrollTop, so a list that was pinned
+    // to its newest message silently ends up scrolled away from it.
+    repinMessagesAfterViewportChange() {
+        if (!this._bottomIntent) return;
+        const box = document.getElementById('msgs');
+        if (!box) return;
+        this.pinToBottomAfterLayout(box);
     }
 
     isMessagesNearBottom(box, threshold = 56) {
@@ -7534,6 +7848,13 @@ class ZaliInterface {
         // "sharing your screen" indicator can stay on for it indefinitely).
         if (this.voice.screenSharing || this.voice.screenShareRequestInFlight) return;
         if (!navigator.mediaDevices?.getDisplayMedia) {
+            // Android WebView has no getDisplayMedia() at all (Chromium/WebView
+            // limitation, not a missing bridge hook) — route through native
+            // MediaProjection capture instead when the platform offers it.
+            if (this.nativeSupports('screenCapture')) {
+                this.startNativeScreenCapture();
+                return;
+            }
             this.addLogEntry({ type: 'WARN', msg: 'Демонстрация экрана не поддерживается в этом окружении', ts: new Date().toLocaleTimeString() });
             return;
         }
@@ -7583,6 +7904,12 @@ class ZaliInterface {
 
     stopScreenShare() {
         if (!this.voice.screenSharing) return;
+        if (this.voice.screenCaptureFromNative) {
+            this.postNativeMessage({
+                type: NativeMessageTypes.STOP_SCREEN_CAPTURE,
+                requestId: this.voice.screenCaptureRequestId,
+            });
+        }
         const stream = this.voice.localScreenStream;
         if (stream) {
             for (const track of stream.getTracks()) {
@@ -7591,6 +7918,7 @@ class ZaliInterface {
         }
         this.voice.localScreenStream = null;
         this.voice.screenSharing = false;
+        this.resetNativeScreenCaptureState();
         this.detachLocalScreenPreview();
         for (const [peer, entry] of this.voice.peerConnections.entries()) {
             if (entry.screenSender) {
@@ -7602,6 +7930,105 @@ class ZaliInterface {
         this.voiceTrace('screen-share-stop', {});
         this.renegotiateAllVoicePeers();
         this.renderVoicePanel();
+    }
+
+    // --- Android-only screen capture path (MediaProjection → <canvas> →
+    // canvas.captureStream()). See CLAUDE.md / project_mobile_parity_effort
+    // memory: Android WebView has no getDisplayMedia() at the engine level, so
+    // native captures frames and this repaints them onto an offscreen canvas;
+    // the resulting MediaStreamTrack then flows through the exact same
+    // attach/renegotiate/sendScreenShareMeta code the browser path uses above.
+
+    resetNativeScreenCaptureState() {
+        this.voice.screenCaptureFromNative = false;
+        this.voice.screenCaptureRequestId = '';
+        this.voice.screenCaptureCanvas = null;
+        this.voice.screenCaptureCtx = null;
+        this.voice.screenShareRequestInFlight = false;
+    }
+
+    startNativeScreenCapture() {
+        this.voice.screenShareRequestInFlight = true;
+        const requestId = this.newRequestId();
+        this.voice.screenCaptureRequestId = requestId;
+        const canvas = document.createElement('canvas');
+        this.voice.screenCaptureCanvas = canvas;
+        this.voice.screenCaptureCtx = canvas.getContext('2d');
+        const sent = this.postNativeMessage({ type: NativeMessageTypes.START_SCREEN_CAPTURE, requestId });
+        if (!sent) {
+            this.resetNativeScreenCaptureState();
+            this.addLogEntry({ type: 'WARN', msg: 'Не удалось начать демонстрацию экрана', ts: new Date().toLocaleTimeString() });
+        }
+    }
+
+    // Fires once per captured frame (~8fps) while native MediaProjection
+    // capture is active. First frame sizes the canvas and turns it into a
+    // real MediaStreamTrack via captureStream(); later frames just repaint.
+    async onNativeScreenCaptureFrame(payload = {}) {
+        const { requestId, dataUrl } = payload;
+        if (!requestId || requestId !== this.voice.screenCaptureRequestId || !dataUrl) return;
+        const canvas = this.voice.screenCaptureCanvas;
+        const ctx = this.voice.screenCaptureCtx;
+        if (!canvas || !ctx) return;
+
+        let bitmap;
+        try {
+            const blob = await (await fetch(dataUrl)).blob();
+            bitmap = await createImageBitmap(blob);
+        } catch (error) {
+            return;
+        }
+        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+        }
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close?.();
+
+        if (!this.voice.screenSharing) {
+            await this.beginNativeScreenCaptureStream();
+        }
+    }
+
+    async beginNativeScreenCaptureStream() {
+        const canvas = this.voice.screenCaptureCanvas;
+        if (!canvas) return;
+        const stream = canvas.captureStream(8);
+        const track = stream.getVideoTracks()[0];
+        if (!track) return;
+        this.voice.localScreenStream = stream;
+        this.voice.screenSharing = true;
+        this.voice.screenCaptureFromNative = true;
+        this.voice.screenShareRequestInFlight = false;
+        // Native-originated stream has no browser "Stop sharing" control, but
+        // the track still ends if the underlying canvas stream is torn down.
+        track.addEventListener('ended', () => this.stopScreenShare());
+        this.attachLocalScreenPreview();
+        this.voiceTrace('screen-share-start', { streamId: stream.id, label: 'native-capture' });
+        for (const peer of this.voice.peerConnections.keys()) {
+            this.attachLocalScreenTrackToPeer(peer);
+        }
+        await this.renegotiateAllVoicePeers();
+        for (const peer of this.voice.peerConnections.keys()) {
+            if (this.voice.peerConnections.get(peer)?.screenSender) {
+                this.sendScreenShareMeta(peer, 'start');
+            }
+        }
+        this.renderVoicePanel();
+    }
+
+    onNativeScreenCaptureError(payload = {}) {
+        const { requestId, message } = payload;
+        if (requestId && requestId !== this.voice.screenCaptureRequestId) return;
+        this.resetNativeScreenCaptureState();
+        // Native sends no `message` when the user just declined the system
+        // screen-capture consent dialog — matches the browser path's silent
+        // handling of getDisplayMedia()'s NotAllowedError/AbortError. A
+        // non-empty message means a real failure worth surfacing.
+        if (message) {
+            this.addLogEntry({ type: 'WARN', msg: message, ts: new Date().toLocaleTimeString() });
+        }
+        this.voiceTrace('screen-share-failed', { error: message || 'native-capture-cancelled' }, 'WARN');
     }
 
     async unlockVoicePlayback() {
@@ -9185,7 +9612,7 @@ class ZaliInterface {
         const mic = '<rect x="9" y="3" width="6" height="10" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 18v3M9 21h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
         const cam = '<rect x="3.5" y="6.5" width="12" height="11" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 10.4 20 7.6a.6.6 0 0 1 .92.51v7.78a.6.6 0 0 1-.92.51l-4.5-2.8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
         const screen = '<rect x="3" y="4.5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 6.5v6M9.5 10 12 7.5 14.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
-        const slash = '<path d="M4.5 4.5l15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
         const icons = {
             phone,
             'phone-off': phone + slash,
@@ -9936,7 +10363,8 @@ class ZaliInterface {
             if (channelList) channelList.innerHTML = '';
             if (chatHdrAva) {
                 chatHdrAva.style.background = '';
-                chatHdrAva.innerHTML = this.renderAvatarHTML(this.S.current || this.myName(), 'avatar-img', this.S.current || this.myName());
+                const who = this.S.current || this.myName();
+                this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(who, 'avatar-img', who));
             }
             if (chatHdrName) chatHdrName.textContent = this.S.current || 'Выберите чат';
             if (tbChat) tbChat.textContent = this.S.current || (this.S.contacts.length ? 'Выберите чат' : 'Нет контактов');
@@ -9957,17 +10385,17 @@ class ZaliInterface {
 
         if (chatHdrAva) {
             chatHdrAva.style.background = this.serverAvatarBackground(server);
-            chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
+            this.setHTMLIfChanged(chatHdrAva, this.serverAvatarInnerHTML(server));
         }
         if (chatHdrName) {
             const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} ${this.ruPlural(server.memberCount, 'участник', 'участника', 'участников')}` : '';
             const channelTitle = channel
                 ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
                 : this.esc(server.name);
-            chatHdrName.innerHTML = `
+            this.setHTMLIfChanged(chatHdrName, `
                 <span class="chat-hdr-title">${channelTitle}</span>
                 ${membersText ? `<span class="chat-hdr-count">${this.esc(membersText)}</span>` : ''}
-            `;
+            `);
         }
         if (chatHdrSub) {
             chatHdrSub.textContent = channel
@@ -9982,7 +10410,7 @@ class ZaliInterface {
 
         if (channelList) {
             const channels = Array.isArray(server.channels) ? server.channels : [];
-            channelList.innerHTML = channels.map(ch => {
+            const channelsHTML = channels.map(ch => {
             const active = ch.id === this.S.activeChannel ? 'active' : '';
             const kind = String(ch.kind || 'text').trim().toLowerCase();
             const title = kind === 'voice' ? 'Голосовой канал' : 'Текстовый канал';
@@ -9999,11 +10427,23 @@ class ZaliInterface {
                 </div>`;
         }).join('');
 
-            const activeChannel = channelList.querySelector('.server-channel.active');
-            if (activeChannel && typeof activeChannel.scrollIntoView === 'function') {
-                requestAnimationFrame(() => {
-                    activeChannel.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                });
+            this.commitListHTML(channelList, `channels:${server.id}`, channelsHTML);
+
+            // renderServerToolbar() runs on every avatar that finishes loading, every
+            // nav refresh and every toolbar sync. Firing a *smooth* scrollIntoView on
+            // each of those made the channel rail (and, since scrollIntoView walks
+            // every scrollable ancestor, whatever else was scrollable around it) drift
+            // on its own — the unexplained jumps while just reading a channel. Only
+            // scroll when the selected channel actually changed.
+            const activeChannelKey = `${server.id}:${String(this.S.activeChannel || '')}`;
+            if (this._lastScrolledChannelKey !== activeChannelKey) {
+                this._lastScrolledChannelKey = activeChannelKey;
+                const activeChannel = channelList.querySelector('.server-channel.active');
+                if (activeChannel && typeof activeChannel.scrollIntoView === 'function') {
+                    requestAnimationFrame(() => {
+                        activeChannel.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+                    });
+                }
             }
         }
     }
@@ -10027,6 +10467,7 @@ class ZaliInterface {
         // S.unread[peer] = 0 for DMs.
         this.S.channelUnread = this.S.channelUnread || {};
         this.S.channelUnread[`${server.id}:${next}`] = 0;
+        this.syncTaskbarBadge();
         if (persist) this.saveStoredActiveChannel(next);
         this.saveStoredNavMode('servers');
         this.renderServerToolbar();
@@ -10080,6 +10521,7 @@ class ZaliInterface {
             this.S.channelUnread = this.S.channelUnread || {};
             this.S.channelUnread[`${this.S.activeServer}:${this.S.activeChannel}`] = 0;
         }
+        this.syncTaskbarBadge();
         this.updateNavModeButtons();
         if (!refresh) return;
         this.resetMessageWindow();
@@ -10516,9 +10958,9 @@ class ZaliInterface {
         const avatarPreview = document.getElementById('avatarPreview');
         const username = this.myName();
         if (meName) meName.textContent = username;
-        if (meAva) meAva.innerHTML = this.renderAvatarHTML(username, 'avatar-img', username);
+        if (meAva) this.setHTMLIfChanged(meAva, this.renderAvatarHTML(username, 'avatar-img', username));
         if (avatarPreview) {
-            avatarPreview.innerHTML = this.renderAvatarHTML(username, 'avatar-img', username);
+            this.setHTMLIfChanged(avatarPreview, this.renderAvatarHTML(username, 'avatar-img', username));
             avatarPreview.title = `Ваш аватар: ${username}`;
         }
         this.ensureAvatarLoaded(username);
@@ -11139,6 +11581,9 @@ class ZaliInterface {
             if (this.nativeSupports('sessionSync')) {
                 this.syncNativeSession();
             }
+            if (this.S.session?.token) {
+                this.checkForAppUpdate();
+            }
         } finally {
             this.sessionBootstrapInProgress = false;
             this.rehydratePendingOutbox();
@@ -11316,6 +11761,7 @@ class ZaliInterface {
         }
         this.setContactStatus('');
         this.updateContactAddButtonState();
+        this.renderContactSuggestions(true);
         void this.loadUsers('').then(() => this.renderContactSuggestions(true));
     }
 
@@ -11960,6 +12406,9 @@ class ZaliInterface {
         this.S.contacts = [];
         this.S.users = [];
         this.S.current = null;
+        this.S.unread = {};
+        this.S.channelUnread = {};
+        this.syncTaskbarBadge();
         this.resetVoiceState({ preserveInvite: false });
         this.disconnectBrowserVoiceSocket();
         this.renderContacts();
@@ -12849,11 +13298,18 @@ class ZaliInterface {
         const preferredLeft = anchorRect.left + (anchorRect.width - menuRect.width) / 2;
         const fallbackLeft = Number.isFinite(x) ? x - menuRect.width / 2 : preferredLeft;
         const left = Math.max(pad, Math.min(Number.isFinite(preferredLeft) ? preferredLeft : fallbackLeft, maxLeft));
+        // On mobile the chat app-bar is sticky over the message list, so the
+        // menu must never be placed under it — clamp to just below its bottom
+        // edge instead of the plain viewport padding.
+        const headerBottom = this.isMobileLayout()
+            ? (document.querySelector('#viewChat .chat-hdr')?.getBoundingClientRect().bottom || 0) + 8
+            : 0;
+        const topInset = Math.max(pad, headerBottom);
         const topAbove = anchorRect.top - menuRect.height - gap;
         const topBelow = anchorRect.bottom + gap;
-        const preferredTop = topAbove >= pad ? topAbove : topBelow;
+        const preferredTop = topAbove >= topInset ? topAbove : topBelow;
         const fallbackTop = Number.isFinite(y) ? y - menuRect.height - gap : preferredTop;
-        const top = Math.max(pad, Math.min(Number.isFinite(preferredTop) ? preferredTop : fallbackTop, maxTop));
+        const top = Math.max(topInset, Math.min(Number.isFinite(preferredTop) ? preferredTop : fallbackTop, maxTop));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
     }
@@ -13085,11 +13541,11 @@ class ZaliInterface {
             .map(item => item.name);
 
         if (list.length === 0) {
-            el.innerHTML = `<div style="text-align:center;color:var(--text3);font-size:11px;padding:24px 0">${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</div>`;
+            this.commitListHTML(el, 'contacts', `<div style="text-align:center;color:var(--text3);font-size:11px;padding:24px 0">${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</div>`);
             return;
         }
 
-        el.innerHTML = list.map(contact => {
+        const html = list.map(contact => {
             this.initChat(contact);
             const msgs = this.S.chats[contact];
             const last = msgs[msgs.length-1];
@@ -13102,6 +13558,17 @@ class ZaliInterface {
             const badge = cnt > 0 ? `<div class="badge">${cnt > 99 ? '99+' : cnt}</div>` : '';
             const active = contact === this.S.current ? 'active' : '';
             const muted = this.isPeerMuted(contact);
+            // Last-message time for the row's right column (hidden on desktop via
+            // CSS, shown on the mobile Telegram-style list). Today → time,
+            // otherwise a short date — same helpers the message list uses.
+            let timeLabel = '';
+            if (last && last.timestamp) {
+                const d = new Date(last.timestamp);
+                const now = new Date();
+                timeLabel = d.toDateString() === now.toDateString()
+                    ? this.fmtTime(last.timestamp)
+                    : this.fmtDate(last.timestamp);
+            }
             return `<div class="contact ${active}" data-name="${this.esc(contact)}">
                 <div class="ava">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
@@ -13109,12 +13576,59 @@ class ZaliInterface {
                     <div class="contact-prev">${preview}</div>
                 </div>
                 <div class="contact-actions">
+                    ${timeLabel ? `<span class="contact-time">${this.esc(timeLabel)}</span>` : ''}
                     ${badge}
                     ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
         }).join('');
+        this.commitListHTML(el, 'contacts', html);
+    }
+
+    // renderContacts()/renderServers() are called from ~30 places (every incoming
+    // message, every async avatar that finishes loading, every nav change), and each
+    // call used to reassign innerHTML unconditionally. That rebuilt every row's DOM
+    // and re-fired the CSS entry animations (.contact/.server-item `contact-in`,
+    // .badge `badge-pop`), which is what made the sidebar visibly twitch and flash
+    // avatars while chatting. Writing only on a real content change makes the common
+    // case a string compare.
+    commitListHTML(el, slot, html) {
+        if (!el) return false;
+        this._listHTMLCache = this._listHTMLCache || new Map();
+        const key = `${slot}`;
+        const unchanged = this._listHTMLCache.get(key) === html
+            && el.dataset.listSlot === key
+            // Guard against the container having been emptied/replaced by something
+            // else since we cached — never let the cache hide an empty list.
+            && (el.childElementCount > 0 || !html);
+        if (unchanged) {
+            return false;
+        }
+        el.dataset.listSlot = key;
+        el.innerHTML = html;
+        this._listHTMLCache.set(key, html);
+        return true;
+    }
+
+    // Avatars are <img> tags rebuilt from a cached blob/data URL. Reassigning the
+    // same markup drops the decoded image and makes the browser decode it again,
+    // which is what made avatars blink on every unrelated re-render.
+    setHTMLIfChanged(el, html) {
+        if (!el) return false;
+        const next = String(html == null ? '' : html);
+        // WeakMap, not a data-attribute: avatar markup embeds full data: URLs on the
+        // native shells, and stashing those in the DOM would double their memory.
+        this._htmlSigCache = this._htmlSigCache || new WeakMap();
+        // The childElementCount check is load-bearing, not just an empty-list guard:
+        // some paths (switchChat, the DM branch of renderServerToolbar) write these
+        // same elements with textContent, which leaves no element children and never
+        // touches this cache. Without the check, a later HTML write matching the
+        // cached signature would be skipped and the plain-text value would stick.
+        if (this._htmlSigCache.get(el) === next && (el.childElementCount > 0 || !next)) return false;
+        this._htmlSigCache.set(el, next);
+        el.innerHTML = next;
+        return true;
     }
 
     componentRegistry() {
@@ -13240,6 +13754,154 @@ class ZaliInterface {
         `;
     }
 
+    // --- App updates (macOS/Windows native shells only — see nativeSupports('appUpdate')) ---
+
+    updateDeclinedStorageKey() {
+        return 'zali_update_declined_version';
+    }
+
+    compareVersions(a, b) {
+        const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
+        const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+        const len = Math.max(pa.length, pb.length);
+        for (let i = 0; i < len; i++) {
+            const diff = (pa[i] || 0) - (pb[i] || 0);
+            if (diff !== 0) return diff > 0 ? 1 : -1;
+        }
+        return 0;
+    }
+
+    async checkForAppUpdate() {
+        if (!this.hasNativeBridge() || !this.nativeSupports('appUpdate')) return;
+        const platform = String(window.__ZALI_NATIVE_PLATFORM || '').trim();
+        const currentVersion = String(window.__ZALI_NATIVE_APP_VERSION || '').trim();
+        if (!platform || !currentVersion) return;
+        try {
+            const res = await this.apiFetch(`/api/version?platform=${encodeURIComponent(platform)}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const latestVersion = String(data?.version || '').trim();
+            if (!latestVersion || this.compareVersions(latestVersion, currentVersion) <= 0) {
+                return;
+            }
+            this.S.updateStatus = {
+                available: true,
+                version: latestVersion,
+                notes: String(data?.notes || ''),
+                downloadUrl: String(data?.downloadUrl || ''),
+                sha256: String(data?.sha256 || ''),
+                mandatory: !!data?.mandatory,
+                downloading: false,
+                progress: 0,
+                readyToInstall: false,
+                error: '',
+            };
+            this.renderHub();
+            const declined = (() => {
+                try { return localStorage.getItem(this.updateDeclinedStorageKey()); } catch (e) { return null; }
+            })();
+            if (this.S.updateStatus.mandatory || declined !== latestVersion) {
+                this.openUpdateModal();
+            }
+        } catch (e) {
+            this.trace(`checkForAppUpdate failed err=${e?.message || e}`);
+        }
+    }
+
+    openUpdateModal() {
+        const modal = document.getElementById('updateAvailableModal');
+        if (!modal || !this.S.updateStatus?.available) return;
+        this.renderUpdateModal();
+        modal.hidden = false;
+    }
+
+    closeUpdateModal() {
+        const modal = document.getElementById('updateAvailableModal');
+        if (modal) modal.hidden = true;
+    }
+
+    declineAppUpdate() {
+        if (this.S.updateStatus?.mandatory) return;
+        const version = String(this.S.updateStatus?.version || '').trim();
+        if (version) {
+            try { localStorage.setItem(this.updateDeclinedStorageKey(), version); } catch (e) {}
+        }
+        this.closeUpdateModal();
+    }
+
+    renderUpdateModal() {
+        const modal = document.getElementById('updateAvailableModal');
+        if (!modal) return;
+        const status = this.S.updateStatus || {};
+        const titleEl = modal.querySelector('#updateModalVersion');
+        const notesEl = modal.querySelector('#updateModalNotes');
+        const progressWrap = modal.querySelector('#updateModalProgressWrap');
+        const progressBar = modal.querySelector('#updateModalProgressBar');
+        const errorEl = modal.querySelector('#updateModalError');
+        const acceptBtn = modal.querySelector('#updateModalAcceptBtn');
+        const declineBtn = modal.querySelector('#updateModalDeclineBtn');
+        if (titleEl) titleEl.textContent = `Доступно обновление v${status.version || ''}`;
+        if (notesEl) notesEl.textContent = status.notes || 'Новая версия готова к загрузке.';
+        if (errorEl) {
+            errorEl.hidden = !status.error;
+            errorEl.textContent = status.error || '';
+        }
+        if (declineBtn) declineBtn.hidden = !!status.downloading || !!status.readyToInstall || !!status.mandatory;
+        if (progressWrap) progressWrap.hidden = !status.downloading;
+        if (progressBar) progressBar.style.width = `${Math.round((status.progress || 0) * 100)}%`;
+        if (acceptBtn) {
+            if (status.readyToInstall) {
+                acceptBtn.textContent = 'Перезапустить и установить';
+                acceptBtn.disabled = false;
+            } else if (status.downloading) {
+                acceptBtn.textContent = `Загрузка… ${Math.round((status.progress || 0) * 100)}%`;
+                acceptBtn.disabled = true;
+            } else {
+                acceptBtn.textContent = 'Обновить';
+                acceptBtn.disabled = false;
+            }
+        }
+    }
+
+    async acceptAppUpdate() {
+        const status = this.S.updateStatus || {};
+        if (!status.available) return;
+        if (status.readyToInstall) {
+            this.requestNativeAction({ type: NativeMessageTypes.INSTALL_UPDATE_REQUEST }, 5000).catch(() => {});
+            return;
+        }
+        if (status.downloading || !status.downloadUrl) return;
+        this.S.updateStatus = { ...status, downloading: true, progress: 0, error: '' };
+        this.renderUpdateModal();
+        this.renderHub();
+        try {
+            await this.requestNativeAction({
+                type: NativeMessageTypes.DOWNLOAD_UPDATE_REQUEST,
+                url: status.downloadUrl,
+                sha256: status.sha256,
+            }, 10 * 60 * 1000);
+            this.S.updateStatus = { ...this.S.updateStatus, downloading: false, progress: 1, readyToInstall: true };
+        } catch (e) {
+            this.S.updateStatus = { ...this.S.updateStatus, downloading: false, error: String(e?.message || e) };
+        }
+        this.renderUpdateModal();
+        this.renderHub();
+    }
+
+    handleUpdateEvent(payload) {
+        if (String(payload?.kind || '') !== 'progress') return;
+        const status = this.S.updateStatus || {};
+        if (!status.downloading) return;
+        this.S.updateStatus = { ...status, progress: Number(payload?.progress || 0) };
+        this.renderUpdateModal();
+    }
+
+    handleHubUpdateAction() {
+        const status = this.S.updateStatus || {};
+        if (!status.available) return;
+        this.openUpdateModal();
+    }
+
     renderHub() {
         const grid = document.getElementById('hubGrid');
         if (!grid) return;
@@ -13264,14 +13926,31 @@ class ZaliInterface {
                 action: 'К диалогам',
                 segment: 'dm',
             },
-            {
-                kind: 'updates',
-                title: 'Обновления',
-                value: onlineLabel,
-                body: `Контактов: ${contactsCount}. Серверов: ${serversCount}.`,
-                action: 'Сервера',
-                segment: 'servers',
-            },
+            (() => {
+                const status = this.S.updateStatus || {};
+                if (status.available) {
+                    return {
+                        kind: 'updates',
+                        title: 'Обновления',
+                        value: `v${status.version}`,
+                        body: status.readyToInstall
+                            ? 'Загружено — установите и перезапустите приложение.'
+                            : (status.downloading
+                                ? `Загрузка… ${Math.round((status.progress || 0) * 100)}%`
+                                : 'Доступна новая версия приложения.'),
+                        action: status.readyToInstall ? 'Установить и перезапустить' : 'Скачать',
+                        actionId: 'update',
+                    };
+                }
+                return {
+                    kind: 'updates',
+                    title: 'Обновления',
+                    value: 'Актуально',
+                    body: `${onlineLabel}. Контактов: ${contactsCount}. Серверов: ${serversCount}.`,
+                    action: 'Сервера',
+                    segment: 'servers',
+                };
+            })(),
             {
                 kind: 'apps',
                 title: 'Подприложения',
@@ -13348,7 +14027,7 @@ class ZaliInterface {
             </button>
         `;
 
-        target.innerHTML = `
+        const html = `
             <div class="server-list">
                 ${list.length === 0 ? `<div class="server-empty">
                     <div class="empty-ttl">Сервера не найдены</div>
@@ -13383,6 +14062,7 @@ class ZaliInterface {
                 ${publicTile}
             </div>
         `;
+        this.commitListHTML(target, 'servers', html);
     }
 
     updateServerSelection() {
@@ -13488,7 +14168,13 @@ class ZaliInterface {
         const previousScrollTop = box.scrollTop;
         const previousScrollHeight = box.scrollHeight;
         const stickToBottom = this.isMessagesNearBottom(box);
-        const scrollAnchor = this.captureMessageScrollAnchor(box);
+        // Capturing the anchor walks message nodes reading getBoundingClientRect() —
+        // a forced layout per node. It is only ever consumed by the `preserveScroll`
+        // branch below, so skip the work outright in the cases that branch can't run
+        // (conversation switch, queued scroll, or we're pinned to the bottom).
+        const scrollAnchor = (conversationChanged || this.pendingMessagesScroll || stickToBottom)
+            ? null
+            : this.captureMessageScrollAnchor(box);
         const msgs = this.getCurrentMessages();
         const channel = this.currentChannel();
         const server = this.currentServer();
@@ -13503,6 +14189,7 @@ class ZaliInterface {
         }
 
         if (isServers && channel && this.isVoiceChannel(channel)) {
+            this._lastMessagesHTML = null;
             box.innerHTML = this.renderVoiceRoomView();
             this.requestMessagesScroll('top');
             this.applyPendingMessagesScroll(box);
@@ -13512,9 +14199,9 @@ class ZaliInterface {
                 const chatHdrSub = document.getElementById('chatHdrSub');
                 if (chatHdrAva) {
                     chatHdrAva.style.background = this.serverAvatarBackground(server);
-                    chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
+                    this.setHTMLIfChanged(chatHdrAva, this.serverAvatarInnerHTML(server));
                 }
-                if (chatHdrName) chatHdrName.innerHTML = `<span class="chat-hdr-title">${this.channelKindIcon('voice', 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span></span><span class="chat-hdr-count">${this.esc(`Голосовой канал`)}</span>`;
+                if (chatHdrName) this.setHTMLIfChanged(chatHdrName, `<span class="chat-hdr-title">${this.channelKindIcon('voice', 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span></span><span class="chat-hdr-count">${this.esc(`Голосовой канал`)}</span>`);
                 if (chatHdrSub) chatHdrSub.textContent = `${server.name}${channel.topic ? ` · ${channel.topic}` : ''}`;
                 this.updateChatHeaderCryptoKey({
                     serverId: server.id,
@@ -13526,6 +14213,8 @@ class ZaliInterface {
         }
 
         if (msgs.length === 0 && !this.S.loading) {
+            this._lastMessagesHTML = null;
+            this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
                 box.innerHTML = `<div class="empty-state">
                     <div class="empty-ttl">Нет сообщений в канале</div>
@@ -13633,16 +14322,37 @@ class ZaliInterface {
             html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`;
         }
 
-        box.innerHTML = html;
-        this.hydrateGifMedia(box);
+        // Redundant re-renders are common (an avatar finishing its fetch, an unrelated
+        // state sync). Reassigning identical innerHTML would still destroy and rebuild
+        // every bubble, restart the media hydration and re-run the height probe — and
+        // on WebKit it also resets scrollTop mid-scroll. Compare first.
+        const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
+        if (htmlChanged) {
+            box.innerHTML = html;
+            this._lastMessagesHTML = html;
+            this.hydrateGifMedia(box);
 
-        const msgNodes = box.querySelectorAll('.msg');
-        if (msgNodes.length) {
-            const heights = Array.from(msgNodes).map(node => Number(node.getBoundingClientRect?.().height || node.offsetHeight || 0)).filter(Boolean);
-            if (heights.length) {
-                const avgHeight = heights.reduce((sum, value) => sum + value, 0) / heights.length;
-                const current = Number(this.messageWindow?.avgHeight || 92);
-                this.messageWindow.avgHeight = Math.max(56, Math.min(160, current * 0.7 + avgHeight * 0.3));
+            // Sampling the whole list meant one forced layout per message node on
+            // every render. A dozen evenly spread samples give the same running
+            // average for the virtual-window estimate at a fraction of the cost.
+            const msgNodes = box.querySelectorAll('.msg');
+            if (msgNodes.length) {
+                const SAMPLES = 12;
+                const step = Math.max(1, Math.floor(msgNodes.length / SAMPLES));
+                let total = 0;
+                let counted = 0;
+                for (let i = 0; i < msgNodes.length && counted < SAMPLES; i += step) {
+                    const height = Number(msgNodes[i].offsetHeight || 0);
+                    if (height > 0) {
+                        total += height;
+                        counted += 1;
+                    }
+                }
+                if (counted > 0) {
+                    const avgHeight = total / counted;
+                    const current = Number(this.messageWindow?.avgHeight || 92);
+                    this.messageWindow.avgHeight = Math.max(56, Math.min(160, current * 0.7 + avgHeight * 0.3));
+                }
             }
         }
         this.messageWindow.conversationKey = conversationKey;
@@ -13652,7 +14362,10 @@ class ZaliInterface {
         this.messageWindow.useWindow = !!windowInfo.useWindow;
 
         const preserveScroll = !conversationChanged && !this.pendingMessagesScroll && !stickToBottom;
-        if (preserveScroll && previousScrollHeight > 0) {
+        if (preserveScroll && previousScrollHeight > 0 && htmlChanged) {
+            // Holding a position in history is the opposite of following the bottom.
+            this._bottomIntent = false;
+            this.markProgrammaticScroll();
             const restored = this.restoreMessageScrollAnchor(box, scrollAnchor);
             if (!restored) {
                 const scrollDelta = box.scrollHeight - previousScrollHeight;
@@ -13670,9 +14383,18 @@ class ZaliInterface {
             } else {
                 this.pendingMessagesScroll = null;
             }
-        } else if (!conversationChanged && stickToBottom) {
-            void box.offsetHeight;
+        } else if (!conversationChanged && stickToBottom && htmlChanged) {
+            this.markProgrammaticScroll();
             box.scrollTop = box.scrollHeight;
+            this.pinToBottomAfterLayout(box);
+        } else if (conversationChanged) {
+            // A conversation switch with no queued scroll used to leave the old
+            // chat's scrollTop in place over freshly written content — the classic
+            // "opened a chat somewhere in the middle of last week" jump. Opening at
+            // the newest message is the only correct default here.
+            this.markProgrammaticScroll();
+            box.scrollTop = box.scrollHeight;
+            this.pinToBottomAfterLayout(box);
         }
 
         if (isServers && server) {
@@ -13681,17 +14403,17 @@ class ZaliInterface {
             const chatHdrSub = document.getElementById('chatHdrSub');
             if (chatHdrAva) {
                 chatHdrAva.style.background = this.serverAvatarBackground(server);
-                chatHdrAva.innerHTML = this.serverAvatarInnerHTML(server);
+                this.setHTMLIfChanged(chatHdrAva, this.serverAvatarInnerHTML(server));
             }
             if (chatHdrName) {
                 const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} ${this.ruPlural(server.memberCount, 'участник', 'участника', 'участников')}` : '';
                 const channelTitle = channel
                     ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
                     : this.esc(server.name);
-                chatHdrName.innerHTML = `
+                this.setHTMLIfChanged(chatHdrName, `
                     <span class="chat-hdr-title">${channelTitle}</span>
                     ${membersText ? `<span class="chat-hdr-count">${this.esc(membersText)}</span>` : ''}
-                `;
+                `);
             }
             if (chatHdrSub) {
                 chatHdrSub.textContent = channel
@@ -13708,8 +14430,15 @@ class ZaliInterface {
         this.trace(`switchChat peer=${peer}`);
         this.clearActiveServerSelection();
         this.S.current = peer;
-        this.lastRenderedConversationKey = peer;
+        // NB: lastRenderedConversationKey must NOT be pre-set to the new peer here.
+        // _renderMessagesNow() derives `conversationChanged` from it, and that flag
+        // drives (a) the virtual-window reset, (b) whether the pending
+        // "scroll to bottom" is honoured and (c) whether the *previous* chat's
+        // scroll anchor gets restored. Pre-setting it made every chat switch look
+        // like an in-place update: the new conversation opened at whatever scroll
+        // offset the old one had, i.e. the random jumps between chats.
         this.S.unread[peer] = 0;
+        this.syncTaskbarBadge();
         this.initChat(peer);
         this.ensureConversationCryptoKey({ peer, reason: 'switchChat' });
         this.saveStoredCurrentContact(peer);
@@ -13718,14 +14447,14 @@ class ZaliInterface {
         this.setNavMode('dm', { refresh: !wasServers });
         this.resetMessageWindow();
 
-        const set = (id, v) => { const e = document.getElementById(id); if(e) e.textContent = v; };
+        const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
         set('tbChat',       peer);
         set('chatHdrName',  peer);
         this.updateChatHeaderCryptoKey({ peer });
         const chatHdrAva = document.getElementById('chatHdrAva');
         if (chatHdrAva) {
             chatHdrAva.style.background = '';
-            chatHdrAva.innerHTML = this.renderAvatarHTML(peer, 'avatar-img', peer);
+            this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(peer, 'avatar-img', peer));
         }
         const chatCallBtn = document.getElementById('chatCallBtn');
         if (chatCallBtn) chatCallBtn.hidden = !this.S.current;
@@ -14378,6 +15107,7 @@ class ZaliInterface {
         } else {
             this.S.unread[muteKey] = (this.S.unread[muteKey] || 0) + 1;
         }
+        this.syncTaskbarBadge();
         if ((this.S.mutedChats || {})[muteKey]) return;
         this.postNativeMessage({
             type: NativeMessageTypes.SHOW_NOTIFICATION,
@@ -14386,6 +15116,23 @@ class ZaliInterface {
             attachmentCount,
             serverId: serverId || null,
             channelId: channelId || null,
+        });
+    }
+
+    // Total unread count across DMs and server channels — feeds the Windows
+    // taskbar overlay badge (see syncTaskbarBadge). Mirrors the per-surface sums
+    // already used by renderHub()/renderServers() for their own badges.
+    computeTotalUnreadCount() {
+        const dmTotal = Object.values(this.S.unread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        const channelTotal = Object.values(this.S.channelUnread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        return dmTotal + channelTotal;
+    }
+
+    syncTaskbarBadge() {
+        if (!this.nativeSupports('taskbarBadge')) return;
+        this.postNativeMessage({
+            type: NativeMessageTypes.SET_UNREAD_BADGE,
+            count: this.computeTotalUnreadCount(),
         });
     }
 
@@ -14625,6 +15372,10 @@ class ZaliInterface {
         const lbl  = document.getElementById('wsLabel');
         if (pill) pill.className = 'ws-pill' + (connected ? ' on' : '');
         if (lbl)  lbl.textContent = connected ? 'Подключено' : 'Переподключение...';
+        // Body-level flag so the mobile shell can surface a slim reconnect strip
+        // (the desktop #wsPill is hidden on mobile). Only marks "not connected"
+        // once a first status has arrived, so the strip doesn't flash on boot.
+        document.body?.classList.toggle('ws-offline', !connected);
         this.addLogEntry({ type: connected ? 'SUCCESS' : 'WARN', msg: connected ? 'WebSocket соединение установлено' : 'WebSocket соединение разорвано', ts: new Date().toLocaleTimeString() });
         if (connected) {
             // Connection (re)established — drain the outbox immediately instead of
@@ -15055,6 +15806,13 @@ class ZaliInterface {
             });
         }
 
+        // Mobile chat app-bar back chevron: returns to the dialog list screen
+        // via the same push-nav path a back-swipe uses.
+        const chatBackBtn = document.getElementById('chatBackBtn');
+        if (chatBackBtn) {
+            chatBackBtn.addEventListener('click', () => this.openChatView({ showList: true }));
+        }
+
         const msgsEl = document.getElementById('msgs');
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
@@ -15164,6 +15922,10 @@ class ZaliInterface {
                 if (e.target === coinTransferModal) this.closeCoinTransferModal();
             });
         }
+        const updateModalDeclineBtn = document.getElementById('updateModalDeclineBtn');
+        const updateModalAcceptBtn = document.getElementById('updateModalAcceptBtn');
+        if (updateModalDeclineBtn) updateModalDeclineBtn.addEventListener('click', () => this.declineAppUpdate());
+        if (updateModalAcceptBtn) updateModalAcceptBtn.addEventListener('click', () => this.acceptAppUpdate());
         const coinTransferAmountInput = document.getElementById('coinTransferAmountInput');
         if (coinTransferAmountInput) {
             coinTransferAmountInput.addEventListener('keydown', (e) => {
@@ -15235,6 +15997,7 @@ class ZaliInterface {
                     const query = searchInput.value || '';
                     this.updateContactAddButtonState();
                     this.setContactStatus('');
+                    this.renderContactSuggestions(true);
                     void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
                     return;
                 }
@@ -15245,6 +16008,7 @@ class ZaliInterface {
                 if (!this.S.contactAddMode) return;
                 const query = searchInput.value || '';
                 this.setContactStatus('');
+                this.renderContactSuggestions(true);
                 void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
             });
             searchInput.addEventListener('blur', () => {
@@ -15931,6 +16695,8 @@ class ZaliInterface {
                     const action = actionCard.getAttribute('data-hub-action');
                     if (action === 'components') {
                         document.getElementById('hubComponents')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    } else if (action === 'update') {
+                        this.handleHubUpdateAction();
                     }
                     return;
                 }
@@ -16241,8 +17007,37 @@ class ZaliInterface {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
+                }
+            });
+        }
+
+        // 8b. In-app window controls (Windows only — native OS decorations are
+        // switched off there in favor of this titlebar, see
+        // NativeCapabilities::window_controls in apps/windows/src/native.rs).
+        if (titlebar && this.nativeSupports('windowControls')) {
+            titlebar.classList.add('has-window-controls');
+            // Windows only: the connection pill moves to the left of the titlebar so
+            // it doesn't crowd the window controls on the right. macOS/browser keep
+            // it on the right (default DOM position, untouched here).
+            const tbL = titlebar.querySelector('.tb-l');
+            const wsPill = document.getElementById('wsPill');
+            if (tbL && wsPill) {
+                tbL.insertBefore(wsPill, tbL.firstChild);
+            }
+            document.getElementById('winMinBtn')?.addEventListener('click', () => {
+                this.postNativeMessage({ type: NativeMessageTypes.MINIMIZE_WINDOW });
+            });
+            document.getElementById('winMaxBtn')?.addEventListener('click', () => {
+                this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
+            });
+            document.getElementById('winCloseBtn')?.addEventListener('click', () => {
+                this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
+            });
+            titlebar.addEventListener('dblclick', (e) => {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn')) {
+                    this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });
         }
@@ -16253,6 +17048,7 @@ class ZaliInterface {
         this.syncMobileChrome();
         this.setupMobileNavGestures();
         this.setupMobileKeyboardAvoidance();
+        this.setupMobileTouchGestures();
         this.applyUiV2Chrome();
         this.applyExperimentalDesign();
         this.applyVoiceTraceEnabled();
@@ -16270,11 +17066,19 @@ class ZaliInterface {
                 mobileQuery.addListener(onMobileChange);
             }
         }
+        // Resize fires continuously while a desktop window is dragged. Coalescing to
+        // one frame keeps that from running the mobile-chrome sync (which reads
+        // layout) dozens of times per second.
         window.addEventListener('resize', () => {
-            if (!this.isMobileLayout()) {
-                this.closeMobileSidebar();
-            }
-            this.syncMobileChrome();
+            if (this._resizeRaf) return;
+            this._resizeRaf = requestAnimationFrame(() => {
+                this._resizeRaf = 0;
+                if (!this.isMobileLayout()) {
+                    this.closeMobileSidebar();
+                }
+                this.syncMobileChrome();
+                this.repinMessagesAfterViewportChange();
+            });
         }, { passive: true });
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.isMobileLayout() && document.body?.classList.contains('mobile-sidebar-open')) {

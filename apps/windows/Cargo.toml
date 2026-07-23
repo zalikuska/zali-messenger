@@ -1,6 +1,10 @@
 [package]
 name = "zali_messenger_win"
-version = "0.1.0"
+# Bump this on every release published via POST /api/version (see CLAUDE.md's
+# "Publishing a client release" section) — the in-app updater compares it
+# (via CARGO_PKG_VERSION) against the server's app_releases.version for
+# platform=windows.
+version = "1.1.0"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +12,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+sha2 = "0.10"
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 wry = { version = "0.35", features = ["devtools"] }
@@ -21,12 +26,38 @@ futures-util = "0.3"
 notify-rust = "4.17"
 keyring = "2.3"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+# Needed to read the window's raw HWND for the taskbar-badge overlay (see
+# native/taskbar_badge.rs) — same 0.5.x already resolved transitively via tao's
+# "rwh_05" feature, so this doesn't add a new version to the dependency tree.
+raw-window-handle = "0.5"
+muda = "0.12"
+# Windows-only: system tray icon + minimize-to-tray, backing the installer's
+# "launch at login" task (see apps/windows/installer/). Not used on macOS —
+# the Rust shell there is the experimental, non-primary build (see CLAUDE.md)
+# and already has its own quit path via the menu bar.
+tray-icon = "0.19"
+# Same channel type tray-icon/muda use for their global event receivers
+# (TrayIconEvent::receiver()/MenuEvent::receiver()) — needed directly to select()
+# over both without polling.
+crossbeam-channel = "0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-muda = "0.12"
 # Те же версии, что использует wry 0.35 — новых деревьев зависимостей не добавляют.
 objc = "0.2"
 block = "0.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Full COM bindings (unlike windows-sys, which only emits flat function/const
+# declarations) — needed for the ITaskbarList3 interface behind the taskbar-badge
+# overlay (native/taskbar_badge.rs). Already resolved transitively via wry/tao's
+# own Win32 backend, so this pins rather than adds a new major version.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 serde_json = "1.0"

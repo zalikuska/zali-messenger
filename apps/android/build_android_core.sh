@@ -26,12 +26,17 @@ fi
 rustup target add aarch64-linux-android x86_64-linux-android >/dev/null 2>&1 || true
 
 mkdir -p apps/android/app/src/main/jniLibs
+repo_root="$(pwd)"
 
-cargo ndk \
+# cargo-ndk 4.x's --manifest-path doesn't reach the `cargo metadata` call it
+# makes internally (fails with "could not find Cargo.toml in ..." regardless
+# of where the flag is placed) — running from inside core/ directly sidesteps
+# it. Confirmed against cargo-ndk 4.1.2.
+(cd core && cargo ndk \
     -t arm64-v8a \
     -t x86_64 \
-    -o apps/android/app/src/main/jniLibs \
-    build --release --manifest-path core/Cargo.toml --features android
+    -o "$repo_root/apps/android/app/src/main/jniLibs" \
+    build --release --features android)
 
 echo "✅ Rust Core собран для Android (arm64-v8a + x86_64) и скопирован в apps/android/app/src/main/jniLibs"
 echo "Дальше: cd apps/android && ./gradlew assembleDebug"

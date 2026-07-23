@@ -57,6 +57,8 @@ mod push;
 pub(crate) use push::*;
 mod coins;
 pub(crate) use coins::*;
+mod updates;
+pub(crate) use updates::*;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -96,6 +98,9 @@ pub struct Config {
     vapid_public_key: Option<String>,
     vapid_private_key: Option<String>,
     vapid_subject: String,
+    // Unset (the default) disables POST /api/version entirely (always 403s) — same
+    // opt-in-per-deployment shape as the VAPID keys above.
+    release_admin_token: Option<String>,
 }
 
 impl Config {
@@ -191,6 +196,10 @@ impl Config {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "mailto:admin@zalikus.org".to_string());
 
+        let release_admin_token = std::env::var("RELEASE_ADMIN_TOKEN")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+
         Self {
             jwt_secret: jwt_secret.into_bytes(),
             allowed_origins,
@@ -203,6 +212,7 @@ impl Config {
             vapid_public_key: vapid_public_key.filter(|_| vapid_private_key.is_some()),
             vapid_private_key,
             vapid_subject,
+            release_admin_token,
         }
     }
 }
@@ -895,6 +905,21 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .ok();
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_releases (
+            platform TEXT PRIMARY KEY,
+            version TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            download_url TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            mandatory INTEGER NOT NULL DEFAULT 0,
+            published_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы app_releases");
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS coin_balances (
             username TEXT PRIMARY KEY,
             balance INTEGER NOT NULL DEFAULT 0
@@ -1114,6 +1139,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/coins/balance", get(get_coin_balance))
         .route("/api/coins/distribution", get(get_coin_distribution))
         .route("/api/coins/transfer", post(transfer_coins))
+        .route("/api/version", get(get_latest_version).post(publish_version))
         .route("/health", get(health_check))
         .route("/uploads/:filename", get(download_upload_file))
         .layer(middleware::from_fn(rewrite_api_v1))
