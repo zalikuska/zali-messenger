@@ -15,6 +15,7 @@
 | Репозиторий сервера | `serverrepo` → `git@github.com:zalikuska/zali-messenger-server.git`, ветка `zali-server` |
 | Чекаут на VPS | `/opt/zali-server` |
 | Бинарник | `/opt/zali-server/server/target/release/zali_server` |
+| Каталог данных | `/var/lib/zali` (из `ZALI_DATA_DIR`) — БД, `uploads/`, `releases/` |
 | systemd-юнит | `zali-server.service` (`enabled`, `Restart=always`) |
 | Логи приложения | `/root/zali-server.log` (`journalctl -u zali-server` — только события systemd) |
 | Версия Windows-клиента | `version` в `apps/windows/Cargo.toml` |
@@ -177,11 +178,21 @@ Windows публикуется как «голый» `.exe`, zip ему не н�
 Штатное место — публичный роут `/releases/:filename`:
 
 ```bash
-scp <файл> zms:/opt/zali-server/releases/
+scp <файл> zms:/var/lib/zali/releases/
 ```
 
 Каталог создаётся сервером при старте. Ссылка для `downloadUrl` будет вида
 `https://msgs.zalikus.org/releases/<имя файла>`.
+
+> **Путь к данным задаётся через `ZALI_DATA_DIR`**, и на проде это
+> `/var/lib/zali` — **не** `/opt/zali-server`. В `/opt/zali-server` лежат
+> `uploads/` и `releases/`, оставшиеся с тех времён, когда переменная не была
+> задана; сервер в них не смотрит. Если файл положить туда, роут вернёт `404`.
+> Проверить актуальное значение:
+>
+> ```bash
+> ssh zms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"
+> ```
 
 > **Не используйте `/uploads/:filename`**, вопреки тому что написано в
 > `CLAUDE.md`. Это не статическая раздача, а роут вложений:
