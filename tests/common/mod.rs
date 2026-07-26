@@ -12,6 +12,10 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct TestApp {
     pub addr: SocketAddr,
     pub http: reqwest::Client,
+    /// This instance's throwaway data directory, so tests can plant files the
+    /// server serves from disk (e.g. `releases/` for `/releases/:filename`).
+    #[allow(dead_code)]
+    pub data_dir: PathBuf,
 }
 
 impl TestApp {
@@ -34,7 +38,7 @@ pub async fn spawn_app() -> TestApp {
         std::env::temp_dir().join(format!("zali-server-test-{}-{}", std::process::id(), n));
 
     let config = zali_server::Config::from_env();
-    let state = zali_server::build_app_state(data_dir, config).await;
+    let state = zali_server::build_app_state(data_dir.clone(), config).await;
     let app = zali_server::build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -56,6 +60,7 @@ pub async fn spawn_app() -> TestApp {
         http: reqwest::Client::builder()
             .build()
             .expect("build reqwest client"),
+        data_dir,
     }
 }
 

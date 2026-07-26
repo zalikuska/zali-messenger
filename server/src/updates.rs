@@ -8,14 +8,17 @@
 
 use crate::AppState;
 use axum::{
-    extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    body::Body,
+    extract::{Path as AxumPath, Query, State},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::sync::Arc;
+use tokio::fs;
+use tokio_util::io::ReaderStream;
 use tracing::{info, warn};
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +54,63 @@ pub(crate) struct PublishReleaseRequest {
 
 fn is_supported_platform(platform: &str) -> bool {
     matches!(platform, "macos" | "windows")
+}
+
+/// Strict allowlist for `/releases/:filename`. This route is unauthenticated, so
+/// the name is never trusted: anything outside `[A-Za-z0-9._-]` is rejected
+/// outright rather than sanitized. That makes `..`, any separator (`/`, `\`),
+/// URL-encoded variants, NUL, and absolute paths unrepresentable instead of
+/// merely filtered, so no traversal can reach outside `releases_dir`. A leading
+/// dot is also refused, which keeps dotfiles and the `..` entry out.
+fn is_safe_release_filename(filename: &str) -> bool {
+    !filename.is_empty()
+        && filename.len() <= 128
+        && !filename.starts_with('.')
+        && filename
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Serves a client release artifact. Unauthenticated by necessity — both the
+/// in-app updater and the Inno Setup online installer download with no
+/// Authorization header — and therefore backed by its own directory, never
+/// `uploads_dir`, which holds user attachments guarded by per-message access
+/// checks. Only what an operator puts in `releases_dir` is reachable, and the
+/// directory itself is not listable: there is no index route.
+pub(crate) async fn download_release_file(
+    AxumPath(filename): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if !is_safe_release_filename(&filename) {
+        warn!("Отклонено имя файла релиза: {:?}", filename);
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let path = state.releases_dir.join(&filename);
+    match fs::File::open(&path).await {
+        Ok(file) => {
+            info!("RELEASE download file={}", filename);
+            (
+                [
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/octet-stream"),
+                    ),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+                            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+                    ),
+                ],
+                Body::from_stream(ReaderStream::new(file)),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            warn!("Файл релиза не найден {}: {}", path.display(), e);
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
 }
 
 /// Byte-wise comparison with no early exit, so a wrong RELEASE_ADMIN_TOKEN guess
