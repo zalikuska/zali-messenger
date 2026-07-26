@@ -29,6 +29,10 @@ path = "../tests/servers_channels_roles.rs"
 name = "conversation_keys"
 path = "../tests/conversation_keys.rs"
 
+[[test]]
+name = "releases"
+path = "../tests/releases.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }

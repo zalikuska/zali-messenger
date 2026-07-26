@@ -332,6 +332,10 @@ pub struct AppState {
     db: SqlitePool,
     data_dir: PathBuf,
     uploads_dir: PathBuf,
+    // Client release artifacts, served publicly and without auth by
+    // `/releases/:filename`. Deliberately separate from `uploads_dir`, which
+    // holds user attachments and must stay behind per-message authorization.
+    releases_dir: PathBuf,
     user_connections: DashMap<String, Vec<WsSender>>,
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
@@ -978,8 +982,10 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
 /// per-test directory instead of the canonical one.
 pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState> {
     let uploads_dir = data_dir.join("uploads");
+    let releases_dir = data_dir.join("releases");
     fs::create_dir_all(&data_dir).await.ok();
     fs::create_dir_all(&uploads_dir).await.ok();
+    fs::create_dir_all(&releases_dir).await.ok();
 
     let pool = init_db(&data_dir).await;
 
@@ -1006,6 +1012,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         db: pool,
         data_dir,
         uploads_dir,
+        releases_dir,
         user_connections: DashMap::new(),
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
@@ -1170,6 +1177,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/version", get(get_latest_version).post(publish_version))
         .route("/health", get(health_check))
         .route("/uploads/:filename", get(download_upload_file))
+        // Public on purpose: the in-app updater (download_update in the Windows
+        // client) and the Inno Setup online installer both fetch the artifact
+        // with no Authorization header, so a release download cannot be gated.
+        // Only files an operator explicitly places in releases_dir are exposed.
+        .route("/releases/:filename", get(download_release_file))
         .layer(middleware::from_fn(rewrite_api_v1))
         .layer(DefaultBodyLimit::max(max_upload))
         .layer(cors)
