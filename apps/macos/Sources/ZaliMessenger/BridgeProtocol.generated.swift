@@ -13,6 +13,7 @@ enum BridgeProtocolMessageType: String, CaseIterable {
     case loadServerHistory = "LOAD_SERVER_HISTORY"
     case maximizeWindow = "MAXIMIZE_WINDOW"
     case minimizeWindow = "MINIMIZE_WINDOW"
+    case mobileNavProgress = "MOBILE_NAV_PROGRESS"
     case networkConfig = "NETWORK_CONFIG"
     case persistDeviceIdentity = "PERSIST_DEVICE_IDENTITY"
     case refreshHistory = "REFRESH_HISTORY"

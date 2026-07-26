@@ -2088,5 +2088,9 @@ pub fn handle_ipc_message(
             // supports getDisplayMedia() natively, so interface.js's
             // screen-share path never takes the native branch here.
         }
+        BridgeProtocolMessageType::MobileNavProgress => {
+            // Android-only (drives the system back-gesture progress indicator via
+            // MainActivity's OnBackAnimationCallback). No desktop equivalent.
+        }
     }
 }

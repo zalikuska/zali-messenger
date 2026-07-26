@@ -170,15 +170,31 @@ async fn join_voice_room(
     room_type: &str,
     server_id: Option<&str>,
     channel_id: Option<&str>,
+    keepalive: bool,
 ) {
     info!(
-        "[VOICE] '{}' joining room {} ({})",
-        username, room_id, room_type
+        "[VOICE] '{}' joining room {} ({}) keepalive={}",
+        username, room_id, room_type, keepalive
     );
     let should_leave_current_room = match state.user_voice_rooms.get(username) {
         Some(current_room) => current_room.value().as_str() != room_id,
         None => true,
     };
+
+    // user_voice_rooms is keyed by USERNAME, so a user can only be in one voice
+    // room account-wide: joining evicts whatever room they were in. That is fine
+    // for an explicit join, but a keepalive must never do it — with the same
+    // account signed in on two devices sitting in two different rooms, each
+    // device's keepalive would evict the other every few seconds, flapping both
+    // calls forever. Absent mapping (the eviction we are recovering from) is not
+    // "a different room", so the recovery path still works.
+    if keepalive && should_leave_current_room && state.user_voice_rooms.contains_key(username) {
+        info!(
+            "[VOICE] ignoring keepalive from '{}' for {} — already in another room",
+            username, room_id
+        );
+        return;
+    }
 
     if should_leave_current_room {
         leave_voice_room(state, username).await;
@@ -195,20 +211,30 @@ async fn join_voice_room(
             )
         });
 
-    {
+    let roster_changed = {
         let room = room.value_mut();
         room.room_type = room_type.to_string();
         room.server_id = server_id.map(|v| v.to_string());
         room.channel_id = channel_id.map(|v| v.to_string());
-        room.participants.insert(username.to_string());
-    }
+        room.participants.insert(username.to_string())
+    };
     drop(room); // release DashMap shard lock before re-entering voice_rooms via broadcast
 
     state
         .user_voice_rooms
         .insert(username.to_string(), room_id.to_string());
 
-    broadcast_voice_room_state(state, room_id).await;
+    if roster_changed {
+        broadcast_voice_room_state(state, room_id).await;
+    } else {
+        // Idempotent re-join. Clients re-assert voice_join on a timer while in a
+        // room (see sendVoiceRoomPresence in interface.js) so a transport blip past
+        // the delayed cleanup in realtime.rs doesn't silently evict them — that
+        // keepalive must not fan a room-state broadcast out to every participant
+        // every few seconds. The roster is unchanged, so only the sender needs the
+        // snapshot; for everyone else this is a no-op.
+        send_voice_room_snapshot_to_user(state, username).await;
+    }
 }
 
 async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde_json::Value) {
@@ -342,6 +368,10 @@ pub(crate) async fn handle_voice_event(
                 .to_string();
             let server_id = payload["serverId"].as_str().map(|s| s.trim().to_string());
             let channel_id = payload["channelId"].as_str().map(|s| s.trim().to_string());
+            // Set by the client's periodic membership re-assert (sendVoiceRoomPresence)
+            // as opposed to a user actually joining a channel. Non-destructive: it may
+            // restore a room the client was evicted from, never move it out of one.
+            let keepalive = payload["keepalive"].as_bool().unwrap_or(false);
             if room_id.is_empty() {
                 return;
             }
@@ -434,6 +464,7 @@ pub(crate) async fn handle_voice_event(
                 room_type,
                 server_id.as_deref(),
                 channel_id.as_deref(),
+                keepalive,
             )
             .await;
         }
@@ -521,7 +552,7 @@ pub(crate) async fn handle_voice_event(
             // join_voice_room() already broadcasts the current room state (call_state
             // is already "ringing" above, before this call) — a second identical
             // broadcast here just doubled every invite's room-state traffic.
-            join_voice_room(state, sender, &room_key, "dm", None, None).await;
+            join_voice_room(state, sender, &room_key, "dm", None, None, false).await;
             send_json_to_user(
                 state,
                 &target,
@@ -626,7 +657,7 @@ pub(crate) async fn handle_voice_event(
                 sender, room_id, inviter
             );
 
-            join_voice_room(state, sender, &room_id, "dm", None, None).await;
+            join_voice_room(state, sender, &room_id, "dm", None, None, false).await;
 
             if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
                 let room = room.value_mut();
@@ -772,8 +803,17 @@ pub(crate) async fn handle_voice_event(
                 sender, target, room_id
             );
             state.voice_rooms.remove(&room_id);
-            state.user_voice_rooms.remove(sender);
-            state.user_voice_rooms.remove(target.as_str());
+            // Same reasoning as the reject branch above: the cancelled invite's target
+            // is never joined to the ringing room, so their user->room mapping may well
+            // point at a *different* call they are actually in. Removing it
+            // unconditionally orphaned that room (leave_voice_room then finds no
+            // mapping and never drops them from its participant list).
+            state
+                .user_voice_rooms
+                .remove_if(sender, |_, v| v == &room_id);
+            state
+                .user_voice_rooms
+                .remove_if(target.as_str(), |_, v| v == &room_id);
             send_json_to_user(
                 state,
                 &target,

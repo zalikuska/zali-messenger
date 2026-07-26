@@ -26,6 +26,19 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     /// (`body[data-ui-v2="off"] #mobileHubBtn { display:none }`).
     @Published var includeHub: Bool = false
 
+    /// Mobile list↔chat navigation progress reported by the web UI
+    /// (`setMobileNavProgress` in interface.js): 0 = dialog list, 1 = chat.
+    ///
+    /// `LiquidGlassTabBar` has to follow it, because the document-start script
+    /// below hides the web `.mobile-dock` and this shell draws its own bar over
+    /// the WebView instead — so the web transform that slides the dock off the
+    /// chat screen is invisible to it, and without this the bar sits on top of
+    /// the message input (same defect fixed on Android, see MainActivity.kt).
+    @Published var mobileNavProgress: Double = 0
+    /// False while a swipe is dragging (the bar must track the finger frame by
+    /// frame), true for a committed transition (the bar runs its own slide).
+    @Published var mobileNavAnimated: Bool = true
+
     /// Matches the JS default in `Web/index.html`'s server-address field; overridden
     /// live when the web UI posts a `NETWORK_CONFIG` message (user changes the
     /// server address on the login screen).
@@ -120,7 +133,8 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             avatarFetch: true,
             tenor: true,
             voice: false,
-            windowDrag: false
+            windowDrag: false,
+            mobileNav: true
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
@@ -140,9 +154,17 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
           document.body && document.body.classList.add('zali-native-ios');
         })();
         """
-        if let lastUser = UserDefaults.standard.string(forKey: WebViewStore.lastUsernameKey),
-           let identityJSON = WebViewStore.loadSharedDeviceIdentity(for: lastUser) {
-            bridge = "window.__ZALI_INJECTED_DEVICE_IDENTITY = \(identityJSON);\n" + bridge
+        if let lastUser = UserDefaults.standard.string(forKey: WebViewStore.lastUsernameKey) {
+            if let identityJSON = WebViewStore.loadSharedDeviceIdentity(for: lastUser) {
+                bridge = "window.__ZALI_INJECTED_DEVICE_IDENTITY = \(identityJSON);\n" + bridge
+            }
+            // Re-adopt the conversation keys saved on the last run — `file://` pages
+            // have no durable localStorage, so without this the shared UI starts
+            // keyless and invents new keys for conversations that already have one.
+            // `loadStoredConversationKeys()` in interface.js merges this in.
+            if let keysJSON = WebViewStore.loadStoredConversationKeys(for: lastUser) {
+                bridge = "window.__ZALI_CONVERSATION_KEYS = \(keysJSON);\n" + bridge
+            }
         }
         let script = WKUserScript(source: bridge,
                                   injectionTime: .atDocumentStart,
@@ -219,6 +241,7 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
                     if let sv = v as? String { next[k] = sv }
                 }
                 conversationKeys = next
+                persistConversationKeys()
             }
         case "REFRESH_HISTORY":
             handleRefreshHistory(dict)
@@ -245,6 +268,10 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             let dataUrl = dict["dataUrl"] as? String ?? ""
             let filename = dict["filename"] as? String ?? "attachment"
             saveAttachment(dataUrl: dataUrl, filename: filename)
+        case "MOBILE_NAV_PROGRESS":
+            let progress = (dict["progress"] as? NSNumber)?.doubleValue ?? 0
+            mobileNavAnimated = (dict["animate"] as? NSNumber)?.boolValue ?? true
+            mobileNavProgress = min(max(progress, 0), 1)
         default:
             break
         }
@@ -579,6 +606,40 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+
+    /// Per-conversation E2E keys, mirrored out of the WebView so they survive an app
+    /// relaunch.
+    ///
+    /// These used to live only in `conversationKeys` (in memory) plus the page's own
+    /// storage — and the page loads over `file://`, where WKWebView gives it an opaque
+    /// origin with no durable localStorage. Every relaunch therefore came up with an
+    /// empty key map, which the shared UI cannot distinguish from "this conversation
+    /// has no key yet": it generated a fresh random key and encrypted real messages
+    /// with it. macOS and Windows already mirror + re-inject these; iOS did not.
+    private static func conversationKeysPath(for username: String) -> URL? {
+        let user = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !user.isEmpty, let dir = sharedAppSupportDir else { return nil }
+        return dir.appendingPathComponent("conversation_keys_\(user).json")
+    }
+
+    private static func loadStoredConversationKeys(for username: String) -> String? {
+        guard let path = conversationKeysPath(for: username),
+              let raw = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data),
+              parsed is [String: Any] else { return nil }
+        return trimmed
+    }
+
+    private func persistConversationKeys() {
+        let user = currentUsername
+        guard let path = WebViewStore.conversationKeysPath(for: user),
+              let data = try? JSONSerialization.data(withJSONObject: conversationKeys),
+              let json = String(data: data, encoding: .utf8) else { return }
+        try? json.write(to: path, atomically: true, encoding: .utf8)
+    }
 
     /// Loads the shared device identity for `username`, for injection at document-start.
     /// Returns the raw JSON only if it parses — a corrupt file must never break page load.
@@ -1043,6 +1104,12 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             webView.evaluateJavaScript("window.receiveReactionUpdate && window.receiveReactionUpdate(\(payloadJSON));", completionHandler: nil)
         case "key_envelope_available":
             webView.evaluateJavaScript("window.refreshAfterKey && window.refreshAfterKey();", completionHandler: nil)
+        case "device_approved", "key_republish_request":
+            // A peer registered/approved a device, or reported it cannot decrypt a
+            // shared conversation — push our conversation keys out again instead of
+            // waiting for our own next login. iOS handled neither event before, so
+            // a phone was a permanent dead end for key redistribution.
+            webView.evaluateJavaScript("window.retryPublishKeys && window.retryPublishKeys();", completionHandler: nil)
         case "":
             if let id = raw["id"] as? String, !id.isEmpty,
                let sender = raw["sender"] as? String, let receiver = raw["receiver"] as? String {

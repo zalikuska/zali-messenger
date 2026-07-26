@@ -31,6 +31,9 @@ use voice::{handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_us
 mod devices;
 use devices::*;
 
+mod conversation_keys;
+use conversation_keys::*;
+
 mod models;
 pub(crate) use models::*;
 mod util;
@@ -462,6 +465,25 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы conversation_keys");
+
+    // Authoritative "which key is canonical for this conversation" registry.
+    // Holds only a client-computed SHA-256 fingerprint of the key, never key
+    // material — see conversation_keys.rs for why this exists (clients used to
+    // invent a competing key whenever their local store came up empty, which is
+    // how a single DM ended up with seven different keys in production).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS conversation_key_registry (
+            scope_key TEXT PRIMARY KEY,
+            key_id TEXT NOT NULL,
+            claimed_by TEXT NOT NULL,
+            claimed_device_id TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы conversation_key_registry");
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS account_devices (
@@ -1121,6 +1143,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(get_key_envelopes)
                 .post(post_key_envelope)
                 .delete(delete_key_envelopes),
+        )
+        .route("/api/conversation-keys", get(get_conversation_keys))
+        .route("/api/conversation-keys/claim", post(claim_conversation_key))
+        .route(
+            "/api/conversation-keys/republish",
+            post(request_key_republish),
         )
         .route(
             "/api/history-tickets",

@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260722-rev14">
+    <link rel="stylesheet" href="style.css?v=20260726-rev15">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -312,6 +312,31 @@
                                             <small>Тот же интерфейс, но без градиентов и свечений — матовые поверхности</small>
                                         </span>
                                     </label>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Voice</span>
+                                        <h3 class="settings-card-title">Микрофон и динамики</h3>
+                                    </div>
+                                    <span class="settings-card-note">audio</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="settings-field">
+                                        <span>Микрофон</span>
+                                        <select id="inputAudioMic" class="settings-input"></select>
+                                    </label>
+                                    <label class="settings-field">
+                                        <span>Динамики</span>
+                                        <select id="inputAudioSpeaker" class="settings-input"></select>
+                                    </label>
+                                    <label class="settings-field">
+                                        <span>Громкость собеседников: <span id="masterVolumeValue">100%</span></span>
+                                        <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
+                                    </label>
+                                    <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
                                 </div>
                             </section>
 
@@ -858,6 +883,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260722-rev14"></script>
+    <script src="app.js?v=20260726-rev15"></script>
 </body>
 </html>

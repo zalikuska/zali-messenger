@@ -339,6 +339,7 @@ pub(crate) async fn handle_message_ws_payload(
                 || value == "avatar_deleted"
                 || value == "key_envelope_available"
                 || value == "device_approved"
+                || value == "key_republish_request"
         })
         .unwrap_or(false)
     {
@@ -363,11 +364,14 @@ pub(crate) async fn handle_message_ws_payload(
             dispatch_voice_event(&proxy, raw);
         } else if event_type == "key_envelope_available" {
             dispatch_ui_event(&proxy, UiBusEvent::RefreshAfterKey, serde_json::Value::Null);
-        } else if event_type == "device_approved" {
-            // Pushed when one of our peers approves a new device — republish our side
-            // of any DM/channel keys we've already shared with them instead of waiting
-            // for our own next login. Mirrors macOS NetworkService.swift's
-            // onDeviceApproved -> WebView.swift's retryPublishKeys().
+        } else if event_type == "device_approved" || event_type == "key_republish_request" {
+            // Pushed when a peer registers or approves a device, or when a
+            // participant reports it cannot decrypt a shared conversation —
+            // republish our side of any DM/channel keys instead of waiting for our
+            // own next login. Mirrors macOS NetworkService.swift's onDeviceApproved
+            // -> WebView.swift's retryPublishKeys(). The sweep is idempotent, so
+            // both event types share it rather than carrying a scope payload
+            // through every platform's bridge.
             dispatch_ui_event(&proxy, UiBusEvent::RetryPublishKeys, serde_json::Value::Null);
         } else if event_type == "reaction_updated" {
             dispatch_ui_event(&proxy, UiBusEvent::ReactionUpdated, raw);

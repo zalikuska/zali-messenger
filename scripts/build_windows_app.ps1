@@ -1,13 +1,34 @@
 param(
     [switch]$Run,
     [switch]$SkipBundle,
-    [switch]$Installer
+    [switch]$OnlineInstallerOnly
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
+
+if ($OnlineInstallerOnly) {
+    # The online installer (apps\windows\installer\ZaliMessenger.iss) downloads
+    # ZaliMessenger.exe from the server's /api/version endpoint at install time
+    # instead of bundling a locally built one, so this path needs neither
+    # cargo nor a web-asset bundle — just ISCC.exe.
+    $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if (-not $iscc) {
+        throw 'Inno Setup (ISCC.exe) not found on PATH. Install it from https://jrsoftware.org/isinfo.php'
+    }
+
+    $issPath = Join-Path $RepoRoot 'apps\windows\installer\ZaliMessenger.iss'
+    & $iscc.Source $issPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "ISCC.exe failed with exit code $LASTEXITCODE"
+    }
+
+    $installerExe = Join-Path $RepoRoot 'dist\windows\installer\ZaliMessengerOnlineSetup.exe'
+    Write-Host "Online installer ready: $installerExe"
+    exit 0
+}
 
 function Resolve-PythonCommand {
     if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -68,27 +89,9 @@ Write-Host "Windows build ready: $distExe"
 Write-Host 'Notes:'
 Write-Host '  - Install the Microsoft Edge WebView2 Runtime on the target machine.'
 Write-Host '  - Start the server before launching the client.'
-
-if ($Installer) {
-    $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-    if (-not $iscc) {
-        throw 'Inno Setup (ISCC.exe) not found on PATH. Install it from https://jrsoftware.org/isinfo.php'
-    }
-
-    $cargoTomlPath = Join-Path $RepoRoot 'apps\windows\Cargo.toml'
-    $versionMatch = Select-String -Path $cargoTomlPath -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
-    if (-not $versionMatch) {
-        throw "Could not read version from $cargoTomlPath"
-    }
-    $version = $versionMatch.Matches[0].Groups[1].Value
-
-    Write-Host "Building installer for version $version..."
-    $issPath = Join-Path $RepoRoot 'apps\windows\installer\ZaliMessenger.iss'
-    Invoke-CommandChecked -Command $iscc.Source -Arguments @("/DMyAppVersion=$version", $issPath)
-
-    $installerExe = Join-Path $RepoRoot "dist\windows\installer\ZaliMessengerSetup-$version.exe"
-    Write-Host "Installer ready: $installerExe"
-}
+Write-Host '  - To publish this build, upload it and run POST /api/version (see CLAUDE.md'
+Write-Host '    "Publishing a client release") — the online installer (-OnlineInstallerOnly)'
+Write-Host '    downloads whatever that endpoint currently points to, not this local build.'
 
 if ($Run) {
     Write-Host 'Launching Windows client...'

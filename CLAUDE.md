@@ -334,21 +334,42 @@ $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
 .\scripts\build_windows_app.ps1
 ```
 
-### Установщик (Inno Setup)
+### Установщик (Inno Setup) — онлайн-инсталлятор
 
-`apps/windows/installer/ZaliMessenger.iss` собирается в `ZaliMessengerSetup-<version>.exe`
-поверх уже собранного `dist\windows\ZaliMessenger.exe` — сам установщик Rust не собирает.
+`apps/windows/installer/ZaliMessenger.iss` (обновлён 2026-07-26) — это **онлайн-инсталлятор**:
+он НЕ содержит `ZaliMessenger.exe` внутри себя. Вместо этого во время установки он сам
+дёргает `GET {UpdateApiBaseUrl}/api/version?platform=windows` (тот же эндпоинт, что
+проверяет апдейтер клиента, `server/src/updates.rs::get_latest_version`), скачивает
+`downloadUrl`, проверяет `sha256` (через `certutil -hashfile`, встроен в Windows) и
+только потом копирует файл в `{app}\ZaliMessenger.exe`. HTTP/скачивание — через
+`WinHttp.WinHttpRequest.5.1` + `ADODB.Stream` (COM-объекты, встроены в Windows, никаких
+доп. плагинов Inno не нужно). Значит один раз собранный `ZaliMessengerOnlineSetup.exe`
+всегда ставит текущую опубликованную версию — не нужно пересобирать инсталлятор на
+каждый релиз, только `POST /api/version` (см. «Publishing a client release» выше).
 
-**Дополнительное требование:** [Inno Setup](https://jrsoftware.org/isinfo.php) (`ISCC.exe` должен быть в PATH).
+**Дополнительное требование:** [Inno Setup](https://jrsoftware.org/isinfo.php) (`ISCC.exe` должен быть в PATH). Локальная сборка Rust/Cargo для этого НЕ нужна.
 
 ```powershell
-.\scripts\build_windows_app.ps1 -Installer
-# Результат: dist\windows\installer\ZaliMessengerSetup-<version>.exe
+.\scripts\build_windows_app.ps1 -OnlineInstallerOnly
+# Результат: dist\windows\installer\ZaliMessengerOnlineSetup.exe
 ```
 
-Версия берётся из `apps/windows/Cargo.toml` (`version = "..."`) — та же переменная,
-что читает `env!("CARGO_PKG_VERSION")` для сравнения с `/api/version` в апдейтере
-(см. «Publishing a client release» выше), бампать в одном месте.
+Базовый URL API зашит по умолчанию как `https://msgs.zalikus.org` (`#define UpdateApiBaseUrl`
+в начале `.iss`); переопределить на другой сервер можно через `/DUpdateApiBaseUrl=...` при
+вызове `ISCC.exe` напрямую.
+
+Ограничение: AppVersion инсталлятора (в Add/Remove Programs) — статичный плейсхолдер
+`1.0.0`, а не реальная версия скачанного клиента (та известна только во время установки,
+до компиляции `.iss` — не пробрасывается обратно в реестр Uninstall). Это косметическое
+ограничение подхода «скачать при установке», сам клиент свою версию знает штатно.
+
+**Не собирался и не проверялся на реальной Windows-машине** (см. общее ограничение среды
+разработки ниже) — код написан по документированному COM/Pascal Script API Inno Setup,
+но живое поведение (реальная загрузка с прод-сервера, проверка sha256, установка,
+появление уведомлений) нужно проверить вручную на Windows.
+
+Классический офлайн-путь (локальная сборка `.exe` + `-Run` без установщика) не изменился —
+см. команды выше; он остаётся способом быстро проверить сам билд без инсталлятора.
 
 Установщик регистрирует **AppUserModelID** (`com.zali.messenger`) на ярлыке в Start
 Menu — это единственное, чего не хватало для стабильных Windows toast-уведомлений:

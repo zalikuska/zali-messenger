@@ -19,6 +19,11 @@
             list: (deviceId = '') => apiRoute(`/key-envelopes${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
             base: apiRoute('/key-envelopes'),
         },
+        conversationKeys: {
+            lookup: (scopes) => apiRoute(`/conversation-keys?scopes=${encodeURIComponent(scopes)}`),
+            claim: apiRoute('/conversation-keys/claim'),
+            republish: apiRoute('/conversation-keys/republish'),
+        },
         historyTickets: apiRoute('/history-tickets'),
         discover: {
             servers: apiRoute('/discover/servers'),

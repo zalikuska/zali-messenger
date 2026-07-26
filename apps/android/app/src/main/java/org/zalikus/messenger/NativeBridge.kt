@@ -63,9 +63,37 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     // `startPostAuthSetup()` in interface.js fires ~5 API calls the instant login
     // succeeds; capping per-host connections avoids asking a slow/narrow link to
     // open several at once (same reasoning as iOS's httpMaximumConnectionsPerHost).
+    //
+    // Small JSON API calls ONLY. Bulk transfers must never share this client: every
+    // `.zali` archive download during a history load, every avatar, and every send
+    // used to run through here too, so a history reload (which downloads and
+    // decrypts each message one by one) held both slots for its entire duration and
+    // everything else — including the user's own outgoing message — queued behind
+    // it. That is the "huge send delay + requests timing out" symptom macOS
+    // documents from the other direction in NetworkService.swift (it raised its API
+    // pool to 16 after the same burst-timeout signature). Splitting the two pools
+    // keeps iOS's deliberately narrow API cap while giving transfers their own.
     private val httpClient = OkHttpClient.Builder()
         .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 2 })
         .build()
+
+    // Message uploads/downloads and avatars. Mirrors macOS's separate `httpSession`
+    // (NetworkService.swift), including its far more generous timeouts — OkHttp
+    // defaults to a 10s read timeout, which a multi-megabyte attachment upload on a
+    // mobile link can easily exceed, silently failing the send.
+    private val transferClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(300, TimeUnit.SECONDS)
+        .build()
+
+    // Pack/unpack are CPU-bound (PBKDF2-SHA256 at 210 000 iterations + AES-GCM over
+    // the whole payload) and MUST NOT run on either the JS bridge thread or the
+    // Android main thread — see handleSendMessage / decryptAndDeliver for why.
+    private val cryptoExecutor = java.util.concurrent.Executors.newFixedThreadPool(2) { runnable ->
+        Thread(runnable, "zali-crypto").apply { isDaemon = true }
+    }
 
     // MARK: - WebSocket transport (connection status, message decrypt, metadata push)
     //
@@ -112,6 +140,19 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
      * only an Activity can own. */
     var requestScreenCapturePermission: ((requestId: String) -> Unit)? = null
 
+    /**
+     * Mobile list↔chat navigation progress reported by the web UI
+     * (`setMobileNavProgress` in interface.js): 0 = dialog list, 1 = chat.
+     *
+     * The native bottom bar has to follow it, because `documentStartScript()`
+     * hides the web `.mobile-dock` and draws that bar over the WebView instead —
+     * so the web transform that slides the dock away on the chat screen is
+     * invisible to it, and without this the bar just sat on top of the message
+     * input. `animate` is false while a swipe is tracking the finger (follow it
+     * frame by frame) and true for a committed transition (run our own slide).
+     */
+    var onMobileNavProgress: ((progress: Float, animate: Boolean) -> Unit)? = null
+
     init {
         val lastUser = prefs.getString(LAST_USERNAME_KEY, null)
         if (!lastUser.isNullOrEmpty()) {
@@ -142,9 +183,17 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val lastUser = prefs.getString(LAST_USERNAME_KEY, null)
         val identityJson = if (!lastUser.isNullOrEmpty()) readSharedDeviceIdentity(lastUser) else null
         val identityLine = if (identityJson != null) "window.__ZALI_INJECTED_DEVICE_IDENTITY = $identityJson;" else ""
+        // Re-adopt the conversation keys saved on the last run. The shared UI cannot
+        // tell an empty key map apart from "this conversation has no key yet" — it
+        // generates a fresh random key and encrypts real messages with it — so losing
+        // them across a relaunch or a WebView data wipe silently forks every chat.
+        // macOS and Windows already mirror + re-inject these; Android did not.
+        val conversationKeysJson = if (!lastUser.isNullOrEmpty()) readStoredConversationKeys(lastUser) else null
+        val conversationKeysLine = if (conversationKeysJson != null) "window.__ZALI_CONVERSATION_KEYS = $conversationKeysJson;" else ""
         return """
         (function () {
           $identityLine
+          $conversationKeysLine
           window.__ZALI_NATIVE_CAPS__ = {
             apiRequest: true,
             networkConfig: true,
@@ -159,7 +208,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             tenor: true,
             voice: false,
             windowDrag: false,
-            screenCapture: true
+            screenCapture: true,
+            mobileNav: true
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
@@ -212,6 +262,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                         next[k] = convKeys.optString(k)
                     }
                     conversationKeys = next
+                    persistConversationKeys()
                 }
             }
             "REFRESH_HISTORY" -> handleRefreshHistory(dict)
@@ -221,6 +272,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "LOAD_AVATAR_REQUEST" -> handleLoadAvatarRequest(dict)
             "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
             "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
+            "MOBILE_NAV_PROGRESS" -> {
+                val progress = dict.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+                val animate = dict.optBoolean("animate", true)
+                mainHandler.post { onMobileNavProgress?.invoke(progress, animate) }
+            }
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
             "STOP_SCREEN_CAPTURE" -> handleStopScreenCapture()
             "SHOW_NOTIFICATION" -> showMessageNotification(
@@ -252,6 +308,35 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             raw
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /// Per-conversation E2E keys mirrored out of the WebView so they survive a
+    /// relaunch or a WebView data wipe. See documentStartScript() for why.
+    private fun readStoredConversationKeys(username: String): String? {
+        val user = username.trim().lowercase()
+        if (user.isEmpty()) return null
+        val file = File(context.filesDir, "conversation_keys_$user.json")
+        if (!file.exists()) return null
+        return try {
+            val raw = file.readText().trim()
+            if (raw.isEmpty()) return null
+            JSONObject(raw) // validate it parses before handing back to JS
+            raw
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun persistConversationKeys() {
+        val user = currentUsername()
+        if (user.isEmpty()) return
+        try {
+            val obj = JSONObject()
+            for ((scope, key) in conversationKeys) obj.put(scope, key)
+            File(context.filesDir, "conversation_keys_$user.json").writeText(obj.toString())
+        } catch (e: Exception) {
+            // Best effort — a failed mirror still leaves the in-memory map usable.
         }
     }
 
@@ -409,8 +494,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     private fun handleSendMessage(dict: JSONObject) {
         val clientId = dict.optString("clientId", UUID.randomUUID().toString())
+        // Dedup guard stays on the calling thread so two rapid sends of the same
+        // clientId can't both get past it.
         if (!inFlightSendClientIds.add(clientId)) return
+        // Everything below is heavy (base64-decoding every attachment data URL,
+        // writing temp files, then PBKDF2 210k + AES-GCM in packMessage) and this
+        // method is reached straight from `@JavascriptInterface postMessage`, which
+        // Android runs SYNCHRONOUSLY — the JS caller blocks until it returns. Doing
+        // the work inline froze the entire web UI for the whole pack (hundreds of ms
+        // for text, seconds with an attachment) on every single send. macOS/iOS
+        // (WKScriptMessageHandler) and Windows (async IPC) never block their JS side
+        // this way, which is why only Android showed it.
+        cryptoExecutor.execute { performSendMessage(dict, clientId) }
+    }
 
+    private fun performSendMessage(dict: JSONObject, clientId: String) {
         val text = dict.optString("text", "")
         val recipient = dict.optString("recipient", "")
         val sender = dict.optString("sender", "")
@@ -541,7 +639,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         if (wsAuthToken.isNotEmpty()) requestBuilder.header("Authorization", "Bearer $wsAuthToken")
         if (wsDeviceId.isNotEmpty()) requestBuilder.header("X-Zali-Device-ID", wsDeviceId)
 
-        httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+        transferClient.newCall(requestBuilder.build()).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 mainHandler.post { completion(false, null, null, e.message) }
             }
@@ -621,7 +719,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
         if (delete) {
             requestBuilder.delete()
-            httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+            transferClient.newCall(requestBuilder.build()).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось выполнить операцию")
                 }
@@ -654,7 +752,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             .build()
         requestBuilder.post(body)
 
-        httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+        transferClient.newCall(requestBuilder.build()).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось выполнить операцию")
             }
@@ -683,7 +781,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val requestBuilder = Request.Builder().url("$apiBaseUrl/api/avatar/$encoded")
         if (wsAuthToken.isNotEmpty()) requestBuilder.header("Authorization", "Bearer $wsAuthToken")
 
-        httpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+        transferClient.newCall(requestBuilder.build()).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 // No avatar set is a normal, non-error outcome (mirrors macOS's 404-as-empty).
                 sendNativeResponse(requestId, ok = true, data = JSONObject().put("dataUrl", ""))
@@ -1013,6 +1111,13 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "key_envelope_available" -> {
                 webView.evaluateJavascript("window.refreshAfterKey && window.refreshAfterKey();", null)
             }
+            "device_approved", "key_republish_request" -> {
+                // A peer registered/approved a device, or reported it cannot decrypt a
+                // shared conversation — push our conversation keys out again instead of
+                // waiting for our own next login. Android handled neither event before,
+                // so a phone was a permanent dead end for key redistribution.
+                webView.evaluateJavascript("window.retryPublishKeys && window.retryPublishKeys();", null)
+            }
             "" -> {
                 val id = raw.optString("id", "")
                 val sender = if (raw.has("sender")) raw.optString("sender") else null
@@ -1163,7 +1268,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val request = Request.Builder().url("$apiBaseUrl/api/download/$encodedId").apply {
             if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
         }.build()
-        httpClient.newCall(request).enqueue(object : Callback {
+        transferClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 completion(placeholder("⚠️ Не удалось загрузить сообщение"))
             }
@@ -1257,13 +1362,16 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val request = Request.Builder().url("$apiBaseUrl/api/download/$encodedId").apply {
             if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
         }.build()
-        httpClient.newCall(request).enqueue(object : Callback {
+        transferClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     if (!it.isSuccessful) return
                     val bytes = try { it.body?.bytes() } catch (e: IOException) { null } ?: return
-                    mainHandler.post { decryptAndDeliver(bytes, id, sender, receiver, serverId, channelId) }
+                    // NOT mainHandler: unpackMessage is PBKDF2 210k + AES-GCM, and
+                    // running it on the UI thread janked (and on slow devices ANR'd)
+                    // the app on every single incoming message.
+                    cryptoExecutor.execute { decryptAndDeliver(bytes, id, sender, receiver, serverId, channelId) }
                 }
             }
         })
@@ -1283,7 +1391,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             val keys = ZaliCoreBridge.candidateMessageKeys(
                 currentKey = currentE2eKey, conversationKeys = conversationKeys,
                 participantA = sender, participantB = receiver, serverId = serverId, channelId = channelId
-            )
+            ).toMutableList()
+            // Last-resort fallback: try every other known conversation key too. Both
+            // reference implementations do this on the live-receive path — macOS in
+            // WebView.swift's decrypt helper, Windows inside candidate_message_keys()
+            // itself (see its `includes_other_scopes_as_last_resort` test) — but this
+            // path (ported from iOS, which has the same gap) only ever tried the
+            // scoped key and the current key. A message whose scope→key mapping is
+            // stale or not yet synced then failed to unpack and was dropped in
+            // silence, which is a direct cause of "many messages never arrive".
+            // renderHistoryRecord below already had this fallback, so the same
+            // message often appeared later on a history reload but never live.
+            for (k in conversationKeys.values) {
+                val normalized = k.trim()
+                if (normalized.isNotEmpty() && !keys.contains(normalized)) keys.add(normalized)
+            }
             val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys) ?: return
 
             val attachments = JSONArray()
@@ -1314,7 +1436,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 if (serverId != null) put("serverId", serverId)
                 if (channelId != null) put("channelId", channelId)
             }
-            webView.evaluateJavascript("window.receiveMessage && window.receiveMessage($messagePayload);", null)
+            // evaluateJavascript must be called on the main thread — this method now
+            // runs on cryptoExecutor.
+            mainHandler.post {
+                webView.evaluateJavascript("window.receiveMessage && window.receiveMessage($messagePayload);", null)
+            }
         } finally {
             archiveFile.delete()
             tempDir.deleteRecursively()
@@ -1326,6 +1452,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     }
 
     fun teardown() {
+        cryptoExecutor.shutdown()
         wsInstance?.cancel()
         if (activeInstance === this) activeInstance = null
         context.stopService(android.content.Intent(context, ScreenCaptureService::class.java))

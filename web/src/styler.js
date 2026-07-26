@@ -340,21 +340,26 @@ class ZaliStyler {
         try {
             window.__ZALI_SAVED_KEY = this.currentKey;
         } catch (e) {}
-        try {
-            const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
-            if (scope) {
-                const convKey = this._conversationKeysStorageKey();
-                const raw = sessionStorage.getItem(convKey) || localStorage.getItem(convKey);
-                const stored = raw ? (JSON.parse(raw) || {}) : {};
-                if (this.currentKey) {
-                    stored[scope] = this.currentKey;
-                } else {
-                    delete stored[scope];
-                }
-                sessionStorage.setItem(convKey, JSON.stringify(stored));
-                localStorage.removeItem(convKey);
-            }
-        } catch (e) {}
+
+        // No per-scope conversation-key write here anymore. This used to read
+        // window.__ZALI_ACTIVE_CONVERSATION_SCOPE — a single shared global — and
+        // stamp `key` into the conversation-keys map under whatever scope that
+        // global happened to hold *at the moment this ran*, not necessarily the
+        // scope `key` actually belongs to. Every real caller of
+        // ZaliInterface.setKey() (interface.js's resolveConversationCryptoKey /
+        // reconcileConversationKey) already writes the correct scope->key mapping
+        // itself, with the explicit scope it just resolved, before calling this.
+        // With two conversations resolving concurrently (e.g. fast chat-switching,
+        // or the background reconcile this session added), the global scope value
+        // can flip to the *other* conversation between that correct write and this
+        // call — so this block would silently overwrite one conversation's key
+        // with a different conversation's key. Confirmed live: two scopes resolved
+        // via Promise.all ended up sharing the same stored key, traced to this
+        // exact write. It also blew away the durable localStorage copy
+        // (`localStorage.removeItem(convKey)`) on every call, which defeated the
+        // "keys survive a browser restart" fix in interface.js's
+        // loadStoredConversationKeys(). Not needed for correctness or for display
+        // (updateKeyDisplay() below reads this.currentKey directly) — just remove it.
 
         const input = document.getElementById('inputCryptoKey');
         if (input && input.value !== this.currentKey) {

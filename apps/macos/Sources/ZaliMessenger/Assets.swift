@@ -20,6 +20,20 @@ struct WebAssets {
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <style id="zali-base-style">
 :root {
+    /* Safe-area insets, defined ONCE here and consumed everywhere else as
+       var(--m-safe-*) — never as a bare env() — so a native shell can override
+       them by writing an inline custom property on <html> (inline wins over
+       this rule).
+       Why that matters: Android WebView only ever reports display *cutouts*
+       through env(safe-area-inset-*), never the status bar or the navigation
+       bar. With the Activity edge-to-edge (enableEdgeToEdge() in MainActivity),
+       the page really does extend under both, but env() stays 0 — so the chat
+       header rendered under the clock/battery and the message input under the
+       3-button navigation bar. MainActivity pushes the real WindowInsets
+       (system bars ∪ display cutout, in dp == CSS px at initial-scale=1) into
+       these two variables instead. iOS/macOS/browsers keep the env() values. */
+    --m-safe-top: env(safe-area-inset-top, 0px);
+    --m-safe-bottom: env(safe-area-inset-bottom, 0px);
     --lime: #cbff00;
     --lime-dim: rgba(203,255,0,.1);
     --lime-glow: rgba(203,255,0,.25);
@@ -296,7 +310,7 @@ button {
 .mobile-dock {
     position: fixed;
     left: 50%;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + var(--m-safe-bottom));
     z-index: 22;
     display: none;
     align-items: stretch;
@@ -2759,6 +2773,63 @@ body[data-nav-mode="servers"] .contacts {
     gap: 12px;
 }
 
+.settings-field {
+    display: grid;
+    gap: 6px;
+}
+
+.settings-field > span:first-child {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.settings-range {
+    width: 100%;
+    accent-color: var(--lime);
+}
+
+.peer-context-menu {
+    position: fixed;
+    z-index: 500;
+    min-width: 240px;
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--sidebar);
+    box-shadow: 0 18px 40px rgba(0,0,0,.45);
+    display: grid;
+    gap: 6px;
+}
+
+.peer-context-menu-item {
+    display: flex;
+    align-items: center;
+    padding: 9px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.03);
+    cursor: pointer;
+    color: var(--text);
+    font-size: 13px;
+    border: none;
+    text-align: left;
+}
+
+.peer-context-menu-item:hover {
+    background: rgba(var(--accent-rgb), .12);
+}
+
+.peer-context-menu-volume {
+    display: grid;
+    gap: 6px;
+    padding: 8px 10px;
+}
+
+.peer-context-menu-volume span {
+    font-size: 12px;
+    color: var(--text2);
+}
+
 .settings-control-row {
     display: grid;
     grid-template-columns: 88px minmax(0, 1fr) 64px;
@@ -4327,6 +4398,15 @@ body[data-nav-mode="servers"] .contacts {
     align-items: flex-end;
     position: relative;
     margin: 0 0 calc(var(--msg-gap) * 1px);
+    /* Same containment .contact already carries: it caps how far a single row's
+       layout invalidation can propagate, so editing/hydrating one bubble stops
+       costing a relayout of the entire list inside the blurred panel.
+       `paint` is deliberately NOT in the list — .msg.group-start::before sits at
+       top:-7px, outside the row's own box, and paint containment would clip that
+       separator away. layout+style clip nothing, and .msg is already
+       position:relative + a flex container, so neither the containing block for
+       absolute descendants nor the formatting context changes here. */
+    contain: layout style;
 }
 
 .server-msg {
@@ -6014,7 +6094,7 @@ body[data-nav-mode="servers"] .contacts {
     .body {
         grid-template-columns: 1fr;
         gap: 0;
-        padding: 12px 12px calc(152px + env(safe-area-inset-bottom, 0px));
+        padding: 12px 12px calc(152px + var(--m-safe-bottom));
     }
 
     /* Mobile list<->chat push navigation. #viewChat sits ABOVE .sidebar
@@ -6034,7 +6114,7 @@ body[data-nav-mode="servers"] .contacts {
         top: 52px;
         left: 12px;
         right: 12px;
-        bottom: calc(12px + 82px + env(safe-area-inset-bottom, 0px));
+        bottom: calc(12px + 82px + var(--m-safe-bottom));
         z-index: 20;
         width: auto;
         transform: translateY(115%);
@@ -6550,7 +6630,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
    overlaps the top of the viewport instead of pushing it down, so pad it ourselves. */
 @media (display-mode: standalone) {
     .titlebar {
-        padding-top: env(safe-area-inset-top, 0px);
+        padding-top: var(--m-safe-top);
     }
 }
 
@@ -6559,7 +6639,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     position: fixed;
     left: 12px;
     right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + var(--m-safe-bottom));
     z-index: 60;
     display: none;
     align-items: center;
@@ -6850,8 +6930,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
    ========================================================================== */
 @media (max-width: 760px) {
     :root {
-        --m-safe-top: env(safe-area-inset-top, 0px);
-        --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+        /* --m-safe-top / --m-safe-bottom are defined at the top of this file
+           (and may be overridden inline by a native shell) — redefining them
+           here would clobber that override. */
         --m-appbar-h: 54px;
         --m-dock-h: 64px;
         --m-net-h: 26px;
@@ -6878,6 +6959,25 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border-radius: 0;
         border: 0;
         background: transparent;
+        /* MUST drop the desktop glass here, and not only for looks: any
+           backdrop-filter other than `none` turns .main into a *stacking
+           context*, which traps #viewChat's `z-index: 21` inside it. .main
+           itself has `z-index: auto` (paints at 0), so the whole chat subtree
+           was painted BELOW the fixed `.sidebar` (z-index: 20) no matter how
+           high #viewChat's own z-index went. That is what made the back-swipe
+           look wrong: instead of the chat sliding right off a list that is
+           already sitting underneath it, the list — unparked instantly, by
+           design, with `transition: none` — slammed on top of everything the
+           moment the drag/tap started, reading as "popping up from the
+           bottom and covering the chat". Verified live via elementFromPoint:
+           with the blur on, the topmost element over the still-visible half
+           of the translated #viewChat was .sidebar's #contacts; with it off,
+           it is #viewChat, and only the uncovered strip hits the sidebar.
+           .main's background is already transparent on mobile, so there is
+           nothing left for the blur to do anyway. */
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        box-shadow: none;
     }
 
     /* ── LIST SCREEN: sidebar becomes a full-bleed panel with a sticky
@@ -6971,10 +7071,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         padding: 0;
         gap: 0;
         background: var(--bg);
-        /* Base rule makes .view.active a 3-row grid (auto auto 1fr); with the
-           voice-panel hidden the message list lands in the 2nd auto row and an
-           empty 1fr track eats the space below it (dead gap + a seam line).
-           A flex column lets .msgs stretch to fill the whole chat area. */
+    }
+    /* MUST stay scoped to .active. `.view { display: none }` is a class
+       selector (0,1,0), so an *unconditional* `#viewChat { display: flex }`
+       (1,0,0) outranks it and pins the chat visible even when it isn't the
+       active view — and since #viewChat is `position: absolute; inset: 0`
+       with z-index 21, it then permanently covers #viewSettings/#viewHub,
+       which is why the Settings and Hub screens could never be seen on
+       mobile (confirmed live via DevTools: both #viewChat and #viewSettings
+       reported a non-none display at the same time).
+
+       Why flex at all: the base rule makes .view.active a 3-row grid
+       (auto auto 1fr); with the voice-panel hidden the message list lands in
+       the 2nd auto row and an empty 1fr track eats the space below it (dead
+       gap + a seam line). A flex column lets .msgs stretch to fill the whole
+       chat area. */
+    #viewChat.active {
         display: flex;
         flex-direction: column;
     }
@@ -7026,6 +7138,18 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         backdrop-filter: blur(18px) saturate(160%);
     }
     #viewChat .input-area::before { display: none; }
+
+    /* The other full-screen sections have no sticky app-bar of their own to
+       absorb the top inset the way .sidebar-head / .chat-hdr do, and the bottom
+       bar (the web dock, or a native shell's own bar) floats over their content
+       — so they reserve both insets themselves. Without this the Settings
+       heading rendered under the clock and its last card under the bar. */
+    #viewSettings,
+    #viewHub,
+    #viewZaliCoin {
+        padding-top: calc(var(--m-safe-top) + 12px);
+        padding-bottom: calc(var(--m-dock-h) + var(--m-safe-bottom) + 16px);
+    }
 
     /* ── Bottom dock: keep the existing glass pill, only widen touch area
        and let it hug the safe-area. Transform stays JS-driven. ──────────── */
@@ -7253,8 +7377,16 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         color: #05210b;
     }
 
-    /* The per-row delete button is replaced by swipe-to-reveal on mobile. */
-    .contact .contact-remove { display: none; }
+    /* Deleting a dialog is this button, not a gesture: swipe-to-reveal-Delete
+       used to hide it here, but the left-swipe now belongs to the forward
+       navigation gesture (list → last open chat), so the button is back — and
+       sized for a finger. */
+    .contact .contact-remove {
+        /* Sizing/touch target already come from the earlier mobile blocks
+           (inline-grid, 36×36); this only undoes the old `display: none`. */
+        display: inline-grid;
+        opacity: .55;
+    }
 
     /* Row separators like a native list (indented past the avatar). */
     .contacts .contact + .contact::before {
@@ -7290,37 +7422,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ============================================================================
-   MOBILE REDESIGN 2026 — Phase D: gestures (swipe-to-delete, long-press)
+   MOBILE REDESIGN 2026 — Phase D: gestures (long-press)
+   Horizontal row gestures were removed here: a left-swipe on the list screen
+   now navigates forward to the last open chat (setupMobileForwardNavGesture in
+   interface.js), so a row can no longer claim the same drag for a destructive
+   reveal-Delete action.
    ========================================================================== */
 @media (max-width: 760px) {
-    /* Keep the revealed delete panel clipped to the list. */
     .contacts { overflow-x: hidden; }
-
-    /* The delete action lives just off the row's right edge; swiping the row
-       left (JS writes the transform) slides it into view. */
-    .contacts .contact::after {
-        content: "Удалить";
-        position: absolute;
-        left: 100%;
-        top: 0;
-        bottom: 0;
-        width: 96px;
-        display: grid;
-        place-items: center;
-        background: var(--red);
-        color: #fff;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: .01em;
-        pointer-events: none;
-    }
-    /* Opaque while sliding so rows underneath never show through. */
-    .contacts .contact.swiping,
-    .contacts .contact.swipe-open {
-        background: var(--bg);
-        z-index: 1;
-    }
-    .contacts .contact.swiping { transition: none; }
 
     /* Long-press feedback on a message before the reaction menu opens. */
     .msg.press-hold .bubble {
@@ -7379,7 +7488,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     </script>
 
     <script>
-    window.__ZALI_BRIDGE_PROTOCOL__ = {"version": 1, "messages": {"SEND_MESSAGE": {"fields": ["text", "recipient", "key", "clientId", "attachments"]}, "SET_SESSION": {"fields": ["username", "token", "deviceId"]}, "REFRESH_HISTORY": {"fields": ["key", "peer"]}, "LOAD_SERVER_HISTORY": {"fields": ["serverId", "channelId", "key"]}, "SAVE_STYLE": {"fields": ["css"]}, "SAVE_MESSAGE_CACHE": {"fields": ["cache"]}, "SAVE_PENDING_OUTBOX": {"fields": ["items"]}, "DOWNLOAD_ATTACHMENT": {"fields": ["dataUrl", "filename"]}, "START_DRAG": {"fields": []}, "MINIMIZE_WINDOW": {"fields": []}, "MAXIMIZE_WINDOW": {"fields": []}, "CLOSE_WINDOW": {"fields": []}, "RESOLVE_TENOR": {"fields": ["url", "requestId"]}, "SET_KEY": {"fields": ["key"]}, "SET_MESSAGE_REACTION": {"fields": ["messageId", "emoji"]}, "NETWORK_CONFIG": {"fields": ["apiBaseUrl", "wsBaseUrl", "iceServers"]}, "VOICE_EVENT": {"fields": ["payload"]}, "AUTH_REQUEST": {"fields": ["mode", "username", "password", "requestId"]}, "API_REQUEST": {"fields": ["method", "path", "headers", "body", "includeDeviceId", "requestId"]}, "ADD_CONTACT_REQUEST": {"fields": ["username", "requestId"]}, "REMOVE_CONTACT_REQUEST": {"fields": ["username", "requestId"]}, "UPLOAD_AVATAR_REQUEST": {"fields": ["dataUrl", "mimeType", "filename", "requestId"]}, "DELETE_AVATAR_REQUEST": {"fields": ["requestId"]}, "LOAD_AVATAR_REQUEST": {"fields": ["username", "requestId"]}, "SHOW_NOTIFICATION": {"fields": ["sender", "text", "attachmentCount", "serverId", "channelId"]}, "PERSIST_DEVICE_IDENTITY": {"fields": ["username", "identity"]}, "DOWNLOAD_UPDATE_REQUEST": {"fields": ["url", "sha256", "requestId"]}, "INSTALL_UPDATE_REQUEST": {"fields": ["requestId"]}, "SET_UNREAD_BADGE": {"fields": ["count"]}, "START_SCREEN_CAPTURE": {"fields": ["requestId"]}, "STOP_SCREEN_CAPTURE": {"fields": ["requestId"]}}};
+    window.__ZALI_BRIDGE_PROTOCOL__ = {"version": 1, "messages": {"SEND_MESSAGE": {"fields": ["text", "recipient", "key", "clientId", "attachments"]}, "SET_SESSION": {"fields": ["username", "token", "deviceId"]}, "REFRESH_HISTORY": {"fields": ["key", "peer"]}, "LOAD_SERVER_HISTORY": {"fields": ["serverId", "channelId", "key"]}, "SAVE_STYLE": {"fields": ["css"]}, "SAVE_MESSAGE_CACHE": {"fields": ["cache"]}, "SAVE_PENDING_OUTBOX": {"fields": ["items"]}, "DOWNLOAD_ATTACHMENT": {"fields": ["dataUrl", "filename"]}, "START_DRAG": {"fields": []}, "MINIMIZE_WINDOW": {"fields": []}, "MAXIMIZE_WINDOW": {"fields": []}, "CLOSE_WINDOW": {"fields": []}, "RESOLVE_TENOR": {"fields": ["url", "requestId"]}, "SET_KEY": {"fields": ["key"]}, "SET_MESSAGE_REACTION": {"fields": ["messageId", "emoji"]}, "NETWORK_CONFIG": {"fields": ["apiBaseUrl", "wsBaseUrl", "iceServers"]}, "VOICE_EVENT": {"fields": ["payload"]}, "AUTH_REQUEST": {"fields": ["mode", "username", "password", "requestId"]}, "API_REQUEST": {"fields": ["method", "path", "headers", "body", "includeDeviceId", "requestId"]}, "ADD_CONTACT_REQUEST": {"fields": ["username", "requestId"]}, "REMOVE_CONTACT_REQUEST": {"fields": ["username", "requestId"]}, "UPLOAD_AVATAR_REQUEST": {"fields": ["dataUrl", "mimeType", "filename", "requestId"]}, "DELETE_AVATAR_REQUEST": {"fields": ["requestId"]}, "LOAD_AVATAR_REQUEST": {"fields": ["username", "requestId"]}, "SHOW_NOTIFICATION": {"fields": ["sender", "text", "attachmentCount", "serverId", "channelId"]}, "PERSIST_DEVICE_IDENTITY": {"fields": ["username", "identity"]}, "DOWNLOAD_UPDATE_REQUEST": {"fields": ["url", "sha256", "requestId"]}, "INSTALL_UPDATE_REQUEST": {"fields": ["requestId"]}, "SET_UNREAD_BADGE": {"fields": ["count"]}, "MOBILE_NAV_PROGRESS": {"fields": ["progress", "animate"]}, "START_SCREEN_CAPTURE": {"fields": ["requestId"]}, "STOP_SCREEN_CAPTURE": {"fields": ["requestId"]}}};
     </script>
 </head>
 <body>
@@ -7680,6 +7789,31 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                             <small>Тот же интерфейс, но без градиентов и свечений — матовые поверхности</small>
                                         </span>
                                     </label>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Voice</span>
+                                        <h3 class="settings-card-title">Микрофон и динамики</h3>
+                                    </div>
+                                    <span class="settings-card-note">audio</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="settings-field">
+                                        <span>Микрофон</span>
+                                        <select id="inputAudioMic" class="settings-input"></select>
+                                    </label>
+                                    <label class="settings-field">
+                                        <span>Динамики</span>
+                                        <select id="inputAudioSpeaker" class="settings-input"></select>
+                                    </label>
+                                    <label class="settings-field">
+                                        <span>Громкость собеседников: <span id="masterVolumeValue">100%</span></span>
+                                        <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
+                                    </label>
+                                    <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
                                 </div>
                             </section>
 
@@ -8286,6 +8420,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             list: (deviceId = '') => apiRoute(`/key-envelopes${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
             base: apiRoute('/key-envelopes'),
         },
+        conversationKeys: {
+            lookup: (scopes) => apiRoute(`/conversation-keys?scopes=${encodeURIComponent(scopes)}`),
+            claim: apiRoute('/conversation-keys/claim'),
+            republish: apiRoute('/conversation-keys/republish'),
+        },
         historyTickets: apiRoute('/history-tickets'),
         discover: {
             servers: apiRoute('/discover/servers'),
@@ -8362,6 +8501,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         LOAD_SERVER_HISTORY: "LOAD_SERVER_HISTORY",
         MAXIMIZE_WINDOW: "MAXIMIZE_WINDOW",
         MINIMIZE_WINDOW: "MINIMIZE_WINDOW",
+        MOBILE_NAV_PROGRESS: "MOBILE_NAV_PROGRESS",
         NETWORK_CONFIG: "NETWORK_CONFIG",
         PERSIST_DEVICE_IDENTITY: "PERSIST_DEVICE_IDENTITY",
         REFRESH_HISTORY: "REFRESH_HISTORY",
@@ -8534,6 +8674,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 cameraOn: false,
                 cameraRequestInFlight: false,
                 localStream: null,
+                // In-flight getUserMedia() promise, shared by every concurrent
+                // ensureVoiceLocalStream() caller so a group call can't open
+                // several parallel mic captures (see ensureVoiceLocalStream).
+                localStreamInFlight: null,
                 localVideoEl: null,
                 screenSharing: false,
                 screenShareRequestInFlight: false,
@@ -8556,7 +8700,21 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 socket: null,
                 socketReady: false,
                 callTrack: null,
+                // Set while startDirectCall/acceptIncomingCall is mid-flight so a
+                // second click can't open a parallel call setup.
+                callSetupInFlight: false,
+                negotiationRetryTimer: null,
+                negotiationRetries: 0,
+                // Re-asserts voice_join while in a room, so a transport blip longer
+                // than the server's 12 s eviction window doesn't silently drop us.
+                presenceTimer: null,
+                // Participant roster the current retry budget was granted for.
+                peerRosterKey: '',
+                // peer -> tail of that peer's in-order signal application chain.
+                signalChains: new Map(),
                 audioContext: null,
+                audioResumePending: false,
+                masterGainNode: null,
                 playbackUnlocked: false,
                 meterRaf: 0,
                 meterLocal: null,
@@ -9142,21 +9300,26 @@ class ZaliStyler {
         try {
             window.__ZALI_SAVED_KEY = this.currentKey;
         } catch (e) {}
-        try {
-            const scope = String(window.__ZALI_ACTIVE_CONVERSATION_SCOPE || '').trim();
-            if (scope) {
-                const convKey = this._conversationKeysStorageKey();
-                const raw = sessionStorage.getItem(convKey) || localStorage.getItem(convKey);
-                const stored = raw ? (JSON.parse(raw) || {}) : {};
-                if (this.currentKey) {
-                    stored[scope] = this.currentKey;
-                } else {
-                    delete stored[scope];
-                }
-                sessionStorage.setItem(convKey, JSON.stringify(stored));
-                localStorage.removeItem(convKey);
-            }
-        } catch (e) {}
+
+        // No per-scope conversation-key write here anymore. This used to read
+        // window.__ZALI_ACTIVE_CONVERSATION_SCOPE — a single shared global — and
+        // stamp `key` into the conversation-keys map under whatever scope that
+        // global happened to hold *at the moment this ran*, not necessarily the
+        // scope `key` actually belongs to. Every real caller of
+        // ZaliInterface.setKey() (interface.js's resolveConversationCryptoKey /
+        // reconcileConversationKey) already writes the correct scope->key mapping
+        // itself, with the explicit scope it just resolved, before calling this.
+        // With two conversations resolving concurrently (e.g. fast chat-switching,
+        // or the background reconcile this session added), the global scope value
+        // can flip to the *other* conversation between that correct write and this
+        // call — so this block would silently overwrite one conversation's key
+        // with a different conversation's key. Confirmed live: two scopes resolved
+        // via Promise.all ended up sharing the same stored key, traced to this
+        // exact write. It also blew away the durable localStorage copy
+        // (`localStorage.removeItem(convKey)`) on every call, which defeated the
+        // "keys survive a browser restart" fix in interface.js's
+        // loadStoredConversationKeys(). Not needed for correctness or for display
+        // (updateKeyDisplay() below reads this.currentKey directly) — just remove it.
 
         const input = document.getElementById('inputCryptoKey');
         if (input && input.value !== this.currentKey) {
@@ -9242,6 +9405,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     PERSIST_DEVICE_IDENTITY: 'PERSIST_DEVICE_IDENTITY',
     DOWNLOAD_UPDATE_REQUEST: 'DOWNLOAD_UPDATE_REQUEST',
     INSTALL_UPDATE_REQUEST: 'INSTALL_UPDATE_REQUEST',
+    MOBILE_NAV_PROGRESS: 'MOBILE_NAV_PROGRESS',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
@@ -9342,6 +9506,11 @@ const DefaultApiRoutes = Object.freeze({
     keyEnvelopes: {
         list: (deviceId = '') => apiRoute(`/key-envelopes${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
         base: apiRoute('/key-envelopes'),
+    },
+    conversationKeys: {
+        lookup: (scopes) => apiRoute(`/conversation-keys?scopes=${encodeURIComponent(scopes)}`),
+        claim: apiRoute('/conversation-keys/claim'),
+        republish: apiRoute('/conversation-keys/republish'),
     },
     historyTickets: apiRoute('/history-tickets'),
     discover: {
@@ -9465,6 +9634,7 @@ class ZaliInterface {
             status: 'idle',
             muted: false,
             localStream: null,
+            localStreamInFlight: null,
             peerConnections: new Map(),
             remoteAudios: new Map(),
             participants: [],
@@ -9474,6 +9644,7 @@ class ZaliInterface {
             socketReady: false,
             callTrack: null,
             audioContext: null,
+            masterGainNode: null,
             playbackUnlocked: false,
             meterRaf: 0,
             meterLocal: null,
@@ -9485,6 +9656,7 @@ class ZaliInterface {
             },
             traceLines: [],
         };
+        this.audioPrefs = this.loadAudioPrefs();
 
         const cachedMessages = this.loadStoredMessageCache();
         this.S.chats = cachedMessages.chats || {};
@@ -9547,6 +9719,11 @@ class ZaliInterface {
         this.bootstrapSession();
         setTimeout(() => this.syncNativeConversationKeys(), 0);
         this.startEnergyAwareMaintenance();
+        // Resolves the tier once and stamps data-perf-tier on <html> before the
+        // first message list is built, so the very first render already uses the
+        // right window size instead of re-windowing a frame later.
+        this.perfTier();
+        this.probeDisplayRefreshRate();
     }
 
     // --- HTML Helper Utilities ---
@@ -9760,6 +9937,10 @@ class ZaliInterface {
                 this.syncActiveConversation({ force: !this.nativeSupports('sendMessage') });
                 if (this.voice.roomId || this.voice.localStream || this.voice.peerConnections.size > 0) {
                     this.ensureVoiceMeterLoop();
+                    // Timers were throttled while hidden, so the voice socket's own
+                    // ping is overdue and a link that died meanwhile hasn't been
+                    // noticed yet. Probe now instead of waiting out the next tick.
+                    this.probeVoiceSocketLiveness();
                 }
             };
             document.addEventListener('visibilitychange', onVisibilityChange);
@@ -9975,7 +10156,14 @@ class ZaliInterface {
     computeMessageWindow(msgs, box, { conversationChanged = false, stickToBottom = false } = {}) {
         const total = Array.isArray(msgs) ? msgs.length : 0;
         const baseAvg = Math.max(56, Math.min(160, Number(this.messageWindow?.avgHeight || 92)));
-        if (total <= 180 || !box) {
+        // Windowing threshold by tier. Every mounted bubble costs layout, paint and
+        // a share of the blurred panel it sits inside, so a budget phone starts
+        // virtualising sooner than a desktop does. Purely a cost knob: the spacers
+        // below reproduce the exact scroll geometry of the unmounted rows, so the
+        // list looks and scrolls identically no matter where the threshold sits.
+        const tier = this.perfTier();
+        const windowThreshold = tier === 'weak' ? 100 : tier === 'mid' ? 140 : 180;
+        if (total <= windowThreshold || !box) {
             return {
                 useWindow: false,
                 start: 0,
@@ -9987,7 +10175,14 @@ class ZaliInterface {
         }
 
         const viewportCount = Math.max(18, Math.ceil(Math.max(1, box.clientHeight) / baseAvg) + 8);
-        const overscan = Math.max(30, Math.floor(viewportCount * 0.7));
+        // Overscan is deliberately NOT cut hard on weak devices. It is what keeps a
+        // fast fling from outrunning the render and exposing bare spacer — trimming
+        // it to save paint would trade a frame-rate win for visible blank gaps on
+        // exactly the devices least able to refill them. 0.55/24 is a modest trim,
+        // still well over a screenful either side of the viewport.
+        const overscanFactor = tier === 'weak' ? 0.55 : 0.7;
+        const overscanFloor = tier === 'weak' ? 24 : 30;
+        const overscan = Math.max(overscanFloor, Math.floor(viewportCount * overscanFactor));
         const windowSize = Math.min(total, viewportCount + overscan * 2);
         const nearTop = box.scrollTop <= baseAvg * 4;
         const nearBottom = this.isMessagesNearBottom(box, baseAvg * 2);
@@ -10019,6 +10214,68 @@ class ZaliInterface {
             bottomSpacer: Math.max(0, (total - end) * baseAvg),
             avgHeight: baseAvg,
         };
+    }
+
+    // Frame-rate tiering.
+    //
+    // What the display can do and what the device can afford per frame are two
+    // different facts, and both matter: a 120 Hz panel on a budget phone still
+    // misses frames if we ask it to lay out a thousand off-screen nodes, while a
+    // fast desktop pinned to a 60 Hz panel gains nothing from extra headroom.
+    //
+    // Hard rule for everything keyed off this: the tier may only scale work the
+    // user cannot see — how many *off-screen* message rows stay mounted. It must
+    // never change a colour, a size, a blur, a shadow or a duration, so the
+    // rendered result is byte-identical across tiers and only the cost differs.
+    perfTier() {
+        if (this._perfTier) return this._perfTier;
+        const nav = typeof navigator !== 'undefined' ? navigator : {};
+        const cores = Number(nav.hardwareConcurrency || 0);
+        const memory = Number(nav.deviceMemory || 0);
+        // A coarse primary pointer is the most reliable "this is a phone/tablet"
+        // signal available to us; UA sniffing is not.
+        const coarsePointer = typeof window.matchMedia === 'function'
+            && window.matchMedia('(pointer: coarse)').matches;
+        let tier;
+        if (!coarsePointer && (cores === 0 || cores >= 8)) {
+            tier = 'high';
+        } else if ((memory && memory <= 3) || (cores && cores <= 4)) {
+            tier = 'weak';
+        } else {
+            tier = coarsePointer ? 'mid' : 'high';
+        }
+        this._perfTier = tier;
+        try {
+            document.documentElement.dataset.perfTier = tier;
+        } catch (e) {}
+        this.trace(`perf tier=${tier} cores=${cores || '?'} memory=${memory || '?'} coarse=${coarsePointer}`);
+        return tier;
+    }
+
+    // Measured refresh ceiling, from real rAF cadence rather than assumption —
+    // a 120 Hz phone whose panel is currently running at 60 (battery saver, an
+    // OEM policy that ignored our request) must be treated as 60. Diagnostics
+    // only today: nothing renders differently because of it, it exists so the
+    // frame ceiling is observable in the log instead of guessed at.
+    probeDisplayRefreshRate() {
+        if (this._displayHzProbeStarted) return;
+        this._displayHzProbeStarted = true;
+        if (typeof requestAnimationFrame !== 'function') return;
+        const samples = [];
+        let last = 0;
+        const tick = (now) => {
+            if (last) samples.push(now - last);
+            last = now;
+            if (samples.length < 20) {
+                requestAnimationFrame(tick);
+                return;
+            }
+            const sorted = samples.slice().sort((a, b) => a - b);
+            const median = sorted[Math.floor(sorted.length / 2)] || 16.7;
+            this._displayHz = Math.round(1000 / median);
+            this.trace(`perf displayHz≈${this._displayHz} tier=${this.perfTier()}`);
+        };
+        requestAnimationFrame(tick);
     }
 
     mobileLayoutQuery() {
@@ -10135,6 +10392,55 @@ class ZaliInterface {
         if (vc) vc.style.transform = `translateX(${((1 - clamped) * 100).toFixed(4)}%)`;
         const dock = document.querySelector('.mobile-dock');
         if (dock) dock.style.transform = `translate(-50%, ${(clamped * 140).toFixed(4)}%)`;
+        this.notifyNativeMobileNav(clamped, animate);
+    }
+
+    // The Android shell hides the web .mobile-dock and draws its own native bar
+    // over the WebView, so that bar can't see the transform above — it has to be
+    // told, or it keeps sitting on top of the chat's message input. `animate`
+    // separates a finger-tracked drag (native must follow instantly, frame by
+    // frame) from a committed transition (native runs its own ~240ms slide).
+    // Re-reports the current position from the DOM. Needed wherever the position
+    // itself didn't change but what it *means* for the native bar did:
+    // setMobileNavProgress() only fires on an actual move, so a session that
+    // lands straight on a screen (guest login opening the chat placeholder, a
+    // restored conversation, the login overlay closing) would never report
+    // anything and the bar would stay wherever it was — parked over the message
+    // input, or floating over a chat. Derived from the DOM, not from
+    // _mobileNavProgress, which is undefined until the first navigation.
+    syncNativeMobileNav() {
+        if (!this.nativeSupports('mobileNav')) return;
+        // Never yank the bar out from under a finger mid-swipe.
+        if (document.body?.classList.contains('mobile-nav-dragging')) return;
+        const listVisible = !!document.body?.classList.contains('mobile-sidebar-open');
+        this.notifyNativeMobileNav(listVisible ? 0 : this.currentMobileNavProgress(), true);
+    }
+
+    notifyNativeMobileNav(progress, animate) {
+        if (!this.nativeSupports('mobileNav')) return;
+        // Only the chat screen wants the bar gone. Settings/Хаб/ZaliCoin close
+        // the mobile sidebar too — which drives progress to 1 — but they are
+        // full screens the user navigates *between* with that very bar, so
+        // report 0 for them regardless of the nav transform.
+        // The login overlay covers whichever view is active underneath (normally
+        // the chat one) — leave the bar alone there, as it was before.
+        const authUp = !!document.getElementById('authOverlay')?.classList.contains('visible');
+        const chatScreen = !authUp
+            && !!document.getElementById('viewChat')?.classList.contains('active');
+        const value = chatScreen ? (Number(progress) || 0) : 0;
+        const flag = !!animate;
+        // Drag frames arrive at display rate; only the visible steps are worth
+        // a bridge hop.
+        if (this._lastNativeNavProgress != null
+            && Math.abs(value - this._lastNativeNavProgress) < 0.01
+            && flag === this._lastNativeNavAnimate) return;
+        this._lastNativeNavProgress = value;
+        this._lastNativeNavAnimate = flag;
+        this.postNativeMessage({
+            type: NativeMessageTypes.MOBILE_NAV_PROGRESS,
+            progress: value,
+            animate: flag,
+        });
     }
 
     currentMobileNavProgress() {
@@ -10225,6 +10531,119 @@ class ZaliInterface {
         chatEl.addEventListener('touchcancel', finish);
     }
 
+    // True when sliding the chat screen back in would actually show something:
+    // the chat view is the active one AND it has a conversation loaded. Without
+    // this the forward-swipe would drag in an empty "Выберите чат" placeholder.
+    hasOpenMobileConversation() {
+        if (!document.getElementById('viewChat')?.classList.contains('active')) return false;
+        if (this.S?.navMode === 'servers') return !!this.currentServerChatKey();
+        return !!String(this.S?.current || '').trim();
+    }
+
+    // Interactive forward-swipe: dragging left anywhere on the list screen pulls
+    // the last open chat back in from the right — the mirror of the back-swipe
+    // above, and the reason dialog rows no longer own a horizontal gesture of
+    // their own (swipe-to-delete was removed; the row's × button deletes).
+    //
+    // Bound on .sidebar rather than #viewChat because while the list is showing
+    // it is the sidebar that's under the finger — #viewChat is parked off-screen
+    // to the right at that point.
+    setupMobileForwardNavGesture() {
+        const sidebarEl = document.querySelector('.sidebar');
+        if (!sidebarEl || sidebarEl.__mobileForwardSwipeBound) return;
+        sidebarEl.__mobileForwardSwipeBound = true;
+
+        const DRAG_ACTIVATE = 8;
+        let tracking = false;
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let viewportWidth = 1;
+        let velocity = 0;
+        let lastT = 0;
+        let lastDx = 0;
+
+        const reset = () => {
+            tracking = false;
+            dragging = false;
+            velocity = 0;
+            lastT = 0;
+            lastDx = 0;
+        };
+
+        sidebarEl.addEventListener('touchstart', (e) => {
+            if (!this.isMobileLayout()) return;
+            // Only from the settled list screen, and only when there is a chat
+            // to come back to.
+            if (this.currentMobileNavProgress() > 0.02) return;
+            if (!this.hasOpenMobileConversation()) return;
+            const touch = e.touches[0];
+            if (!touch) return;
+            // Anything that owns horizontal dragging itself (text fields, the
+            // horizontally scrolling server rail) keeps its gesture.
+            if (e.target?.closest?.('input, textarea, [contenteditable="true"], .server-rail, .mode-switch')) return;
+            tracking = true;
+            dragging = false;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            viewportWidth = window.innerWidth || 1;
+        }, { passive: true });
+
+        sidebarEl.addEventListener('touchmove', (e) => {
+            if (!tracking) return;
+            const touch = e.touches[0];
+            if (!touch) return;
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            if (!dragging) {
+                // Vertical intent wins — never fight the dialog list's scroll.
+                if (Math.abs(dy) > Math.abs(dx) + 4) { reset(); return; }
+                if (dx > -DRAG_ACTIVATE) return;
+                dragging = true;
+                document.body?.classList.add('mobile-nav-dragging');
+                // The list must stay put at Y=0 for the whole drag — the chat
+                // slides in over it, the list never moves.
+                document.body?.classList.add('mobile-list-visible');
+                this.setMobileListParked(false);
+            }
+            if (dragging) {
+                if (e.cancelable) e.preventDefault();
+                const now = (e.timeStamp || Date.now());
+                if (lastT && now > lastT) velocity = (dx - lastDx) / (now - lastT); // px/ms
+                lastT = now;
+                lastDx = dx;
+                const progress = Math.max(0, Math.min(1, -dx / viewportWidth));
+                this.setMobileNavProgress(progress, { animate: false });
+            }
+        }, { passive: false });
+
+        const finish = () => {
+            if (!tracking) return;
+            document.body?.classList.remove('mobile-nav-dragging');
+            if (dragging) {
+                // Mirror of the back-swipe: a fast flick commits regardless of
+                // distance, otherwise the 40%-travelled position decides.
+                const flicked = velocity < -0.45;
+                const openChat = flicked || this.currentMobileNavProgress() > 0.4;
+                this.setMobileSidebarOpen(!openChat, { animate: true });
+                // A drag that ended over a dialog row must not also count as a
+                // tap on it (which would open that chat instead of the last one).
+                this._suppressNextSidebarClick = true;
+                setTimeout(() => { this._suppressNextSidebarClick = false; }, 400);
+            }
+            reset();
+        };
+
+        sidebarEl.addEventListener('touchend', finish);
+        sidebarEl.addEventListener('touchcancel', finish);
+        sidebarEl.addEventListener('click', (e) => {
+            if (!this._suppressNextSidebarClick) return;
+            this._suppressNextSidebarClick = false;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+    }
+
     // Raises the message input above the on-screen keyboard on mobile by
     // exposing the keyboard inset as a CSS var; style.css shifts
     // #viewChat .input-area/.msgs by it.
@@ -10256,10 +10675,12 @@ class ZaliInterface {
     //  • Long-press a message  → opens the existing reaction menu. The desktop
     //    path is `contextmenu`, which touch browsers fire inconsistently (and
     //    iOS shows its own callout instead).
-    //  • Swipe a dialog row left → reveals a Delete action that must then be
-    //    tapped. removeContact() deletes immediately with no confirmation, so
-    //    the swipe deliberately only *reveals* — committing on release alone
-    //    would make an accidental swipe destructive.
+    //
+    // Dialog rows deliberately have NO horizontal gesture of their own: a
+    // left-swipe on the list screen belongs to the forward navigation gesture
+    // (setupMobileForwardNavGesture → return to the last open chat). Deleting a
+    // dialog is the row's own × button (.contact-remove), which the mobile
+    // stylesheet used to hide in favour of swipe-to-reveal-Delete.
     setupMobileTouchGestures() {
         const LONG_PRESS_MS = 420;
         const MOVE_CANCEL = 10;
@@ -10302,104 +10723,6 @@ class ZaliInterface {
             msgsEl.addEventListener('touchcancel', cancelPress);
         }
 
-        const contactsEl = document.getElementById('contacts');
-        if (contactsEl && !contactsEl.__mobileSwipeBound) {
-            contactsEl.__mobileSwipeBound = true;
-            const REVEAL = 96;
-            const COMMIT = 56;
-            let row = null;
-            let sx = 0;
-            let sy = 0;
-            let dragging = false;
-
-            const closeRevealed = () => {
-                const open = this._swipedRow;
-                if (open && open.isConnected) {
-                    open.style.transition = 'transform .2s cubic-bezier(.2,.9,.24,1)';
-                    open.style.transform = 'translateX(0)';
-                    open.classList.remove('swipe-open');
-                }
-                this._swipedRow = null;
-            };
-            this.closeSwipedContactRow = closeRevealed;
-
-            contactsEl.addEventListener('touchstart', (e) => {
-                if (!this.isMobileLayout()) return;
-                const touch = e.touches[0];
-                const el = e.target?.closest?.('.contact[data-name]');
-                if (!touch) return;
-                if (this._swipedRow && this._swipedRow !== el) closeRevealed();
-                if (!el) return;
-                row = el;
-                sx = touch.clientX;
-                sy = touch.clientY;
-                dragging = false;
-            }, { passive: true });
-
-            contactsEl.addEventListener('touchmove', (e) => {
-                if (!row) return;
-                const touch = e.touches[0];
-                if (!touch) return;
-                const dx = touch.clientX - sx;
-                const dy = touch.clientY - sy;
-                if (!dragging) {
-                    // Vertical intent wins — never fight the list's own scroll.
-                    if (Math.abs(dy) > Math.abs(dx)) { row = null; return; }
-                    if (dx > -6) return;
-                    dragging = true;
-                    row.classList.add('swiping');
-                }
-                if (e.cancelable) e.preventDefault();
-                const base = this._swipedRow === row ? -REVEAL : 0;
-                const offset = Math.max(-REVEAL, Math.min(0, base + dx));
-                row.style.transition = '';
-                row.style.transform = `translateX(${offset}px)`;
-            }, { passive: false });
-
-            const finishSwipe = () => {
-                if (!row) return;
-                const current = row;
-                row = null;
-                current.classList.remove('swiping');
-                if (!dragging) return;
-                dragging = false;
-                const match = /translateX\((-?[\d.]+)px\)/.exec(current.style.transform || '');
-                const offset = match ? parseFloat(match[1]) : 0;
-                current.style.transition = 'transform .2s cubic-bezier(.2,.9,.24,1)';
-                if (offset <= -COMMIT) {
-                    current.style.transform = `translateX(${-REVEAL}px)`;
-                    current.classList.add('swipe-open');
-                    this._swipedRow = current;
-                } else {
-                    current.style.transform = 'translateX(0)';
-                    current.classList.remove('swipe-open');
-                    if (this._swipedRow === current) this._swipedRow = null;
-                }
-            };
-            contactsEl.addEventListener('touchend', finishSwipe);
-            contactsEl.addEventListener('touchcancel', finishSwipe);
-            contactsEl.addEventListener('scroll', () => { if (this._swipedRow) closeRevealed(); }, { passive: true });
-
-            // Capture phase: while a row is revealed its taps belong to the
-            // swipe UI, not to the row's normal "open this chat" handler.
-            contactsEl.addEventListener('click', (e) => {
-                const open = this._swipedRow;
-                if (!open) return;
-                const el = e.target?.closest?.('.contact[data-name]');
-                e.preventDefault();
-                e.stopPropagation();
-                if (el === open) {
-                    const rect = open.getBoundingClientRect();
-                    if (e.clientX >= rect.right - REVEAL) {
-                        const name = open.getAttribute('data-name');
-                        closeRevealed();
-                        if (name) this.removeContact(name);
-                        return;
-                    }
-                }
-                closeRevealed();
-            }, true);
-        }
     }
 
     syncMobileChrome() {
@@ -10416,13 +10739,14 @@ class ZaliInterface {
             const viewChat = document.getElementById('viewChat');
             if (viewChat) viewChat.style.transform = '';
             document.body?.classList.remove('mobile-list-visible', 'mobile-nav-instant', 'mobile-nav-dragging');
-            this.closeSwipedContactRow?.();
         }
 
         const dock = document.getElementById('mobileDock');
         if (dock) {
             dock.classList.toggle('visible', isMobile);
         }
+
+        if (isMobile) this.syncNativeMobileNav();
 
         const settingsActive = !!document.getElementById('viewSettings')?.classList.contains('active');
         const hubActive = !!document.getElementById('viewHub')?.classList.contains('active');
@@ -10492,6 +10816,7 @@ class ZaliInterface {
         if (tbChat) tbChat.textContent = 'Настройки';
         this.applyNetworkConfigToInputs();
         this.renderUiV2Settings();
+        this.renderAudioDeviceSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         this.closeMobileSidebar();
@@ -10974,6 +11299,188 @@ class ZaliInterface {
         }
         if (typeof this.renderVoicePanel === 'function') {
             this.renderVoicePanel();
+        }
+    }
+
+    // ============================================================
+    // AUDIO DEVICE + VOLUME PREFERENCES — mic/speaker selection and playback
+    // volume (master + per-contact). Device/volume choices persist across
+    // sessions in localStorage; the actual WebAudio gain nodes they drive
+    // live on this.voice and only exist while a call is active.
+    // ============================================================
+
+    audioPrefsStorageKey() {
+        return 'zali_audio_prefs_v1';
+    }
+
+    loadAudioPrefs() {
+        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, peerVolumePercents: {} };
+        try {
+            const raw = localStorage.getItem(this.audioPrefsStorageKey());
+            if (!raw) return fallback;
+            const parsed = JSON.parse(raw);
+            return {
+                micDeviceId: String(parsed?.micDeviceId || ''),
+                speakerDeviceId: String(parsed?.speakerDeviceId || ''),
+                masterVolumePercent: Number.isFinite(parsed?.masterVolumePercent) ? Math.max(0, Math.min(200, parsed.masterVolumePercent)) : 100,
+                peerVolumePercents: (parsed?.peerVolumePercents && typeof parsed.peerVolumePercents === 'object') ? parsed.peerVolumePercents : {},
+            };
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    saveAudioPrefs() {
+        try {
+            localStorage.setItem(this.audioPrefsStorageKey(), JSON.stringify(this.audioPrefs));
+        } catch (e) {}
+    }
+
+    getPeerVolumePercent(peer) {
+        const name = String(peer || '').trim();
+        if (!name) return 100;
+        const value = this.audioPrefs?.peerVolumePercents?.[name];
+        return Number.isFinite(value) ? Math.max(0, Math.min(200, value)) : 100;
+    }
+
+    setPeerVolumePercent(peer, percent) {
+        const name = String(peer || '').trim();
+        if (!name) return;
+        const clamped = Math.max(0, Math.min(200, Math.round(Number(percent) || 0)));
+        this.audioPrefs.peerVolumePercents[name] = clamped;
+        this.saveAudioPrefs();
+        this.applyPeerVolume(name);
+    }
+
+    setMasterVolumePercent(percent) {
+        const clamped = Math.max(0, Math.min(200, Math.round(Number(percent) || 0)));
+        this.audioPrefs.masterVolumePercent = clamped;
+        this.saveAudioPrefs();
+        this.applyMasterVolume();
+        const label = document.getElementById('masterVolumeValue');
+        if (label) label.textContent = `${clamped}%`;
+    }
+
+    // One shared gain node per call, inserted between every per-peer gain node
+    // and ctx.destination — lets the master slider scale everyone at once
+    // without touching each peer's individually-set gain value.
+    ensureVoiceMasterGain() {
+        const ctx = this.voice.audioContext;
+        if (!ctx) return null;
+        if (!this.voice.masterGainNode) {
+            this.voice.masterGainNode = ctx.createGain();
+            this.voice.masterGainNode.gain.value = (this.audioPrefs.masterVolumePercent || 100) / 100;
+            this.voice.masterGainNode.connect(ctx.destination);
+        }
+        return this.voice.masterGainNode;
+    }
+
+    applyMasterVolume() {
+        if (this.voice.masterGainNode) {
+            this.voice.masterGainNode.gain.value = (this.audioPrefs.masterVolumePercent || 100) / 100;
+        }
+    }
+
+    applyPeerVolume(peer) {
+        const node = this.voice.remotePlaybackNodes?.get(String(peer || '').trim());
+        if (node?.gain) {
+            node.gain.gain.value = this.getPeerVolumePercent(peer) / 100;
+        }
+    }
+
+    async refreshAudioDeviceOptions() {
+        const micSelect = document.getElementById('inputAudioMic');
+        const speakerSelect = document.getElementById('inputAudioSpeaker');
+        if (!micSelect && !speakerSelect) return;
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        try {
+            // Device labels are only populated after a getUserMedia grant; until
+            // then they just show as "Микрофон N" / "Динамики N" placeholders.
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const mics = devices.filter(d => d.kind === 'audioinput');
+            const speakers = devices.filter(d => d.kind === 'audiooutput');
+            if (micSelect) {
+                const current = this.audioPrefs.micDeviceId;
+                micSelect.innerHTML = ['<option value="">Системный микрофон по умолчанию</option>']
+                    .concat(mics.map((d, i) => `<option value="${this.esc(d.deviceId)}">${this.esc(d.label || `Микрофон ${i + 1}`)}</option>`))
+                    .join('');
+                micSelect.value = mics.some(d => d.deviceId === current) ? current : '';
+            }
+            if (speakerSelect) {
+                const current = this.audioPrefs.speakerDeviceId;
+                const supported = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+                speakerSelect.disabled = !supported;
+                speakerSelect.innerHTML = ['<option value="">Системные динамики по умолчанию</option>']
+                    .concat(speakers.map((d, i) => `<option value="${this.esc(d.deviceId)}">${this.esc(d.label || `Динамики ${i + 1}`)}</option>`))
+                    .join('');
+                speakerSelect.value = speakers.some(d => d.deviceId === current) ? current : '';
+            }
+        } catch (error) {
+            this.voiceTrace?.('device-enumerate-failed', { error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
+    renderAudioDeviceSettings() {
+        const volumeInput = document.getElementById('inputMasterVolume');
+        if (volumeInput) volumeInput.value = String(this.audioPrefs.masterVolumePercent);
+        const volumeLabel = document.getElementById('masterVolumeValue');
+        if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.masterVolumePercent}%`;
+        this.refreshAudioDeviceOptions();
+    }
+
+    async setAudioInputDevice(deviceId) {
+        this.audioPrefs.micDeviceId = String(deviceId || '');
+        this.saveAudioPrefs();
+        if (!this.voice.localStream) return;
+        try {
+            const constraints = this.audioPrefs.micDeviceId
+                ? { audio: { deviceId: { exact: this.audioPrefs.micDeviceId } }, video: false }
+                : { audio: true, video: false };
+            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const newTrack = newStream.getAudioTracks()[0];
+            if (!newTrack) return;
+            const oldTrack = this.voice.localStream.getAudioTracks()[0];
+            for (const entry of this.voice.peerConnections.values()) {
+                if (entry.audioSender) {
+                    await entry.audioSender.replaceTrack(newTrack);
+                }
+            }
+            if (oldTrack) {
+                this.voice.localStream.removeTrack(oldTrack);
+                try { oldTrack.stop(); } catch (e) {}
+            }
+            this.voice.localStream.addTrack(newTrack);
+            this.ensureMeterEntry('local', this.voice.localStream);
+            this.voiceTrace('mic-switched', { deviceId: this.audioPrefs.micDeviceId || 'default' }, 'SUCCESS');
+        } catch (error) {
+            this.addLogEntry({ type: 'ERROR', msg: error?.message || 'Не удалось переключить микрофон', ts: new Date().toLocaleTimeString() });
+            this.voiceTrace('mic-switch-failed', { error: error?.message || String(error) }, 'ERROR');
+        }
+    }
+
+    async setAudioOutputDevice(deviceId) {
+        this.audioPrefs.speakerDeviceId = String(deviceId || '');
+        this.saveAudioPrefs();
+        await this.applyAudioOutputDevice();
+    }
+
+    async applyAudioOutputDevice() {
+        const id = this.audioPrefs.speakerDeviceId || '';
+        for (const audio of this.voice.remoteAudios.values()) {
+            if (typeof audio.setSinkId === 'function') {
+                try { await audio.setSinkId(id); } catch (error) {
+                    this.voiceTrace?.('speaker-sink-failed', { error: error?.message || String(error) }, 'WARN');
+                }
+            }
+        }
+        // AudioContext.setSinkId is a newer API (not universally supported) — the
+        // per-<audio>-element setSinkId above already covers the fallback
+        // 'element' playback route from syncRemoteAudioPlaybackMode.
+        const ctx = this.voice.audioContext;
+        if (ctx && typeof ctx.setSinkId === 'function') {
+            try { await ctx.setSinkId(id || 'default'); } catch (error) {
+                this.voiceTrace?.('speaker-sink-context-failed', { error: error?.message || String(error) }, 'WARN');
+            }
         }
     }
 
@@ -11623,6 +12130,217 @@ class ZaliInterface {
         return true;
     }
 
+    // ---------------------------------------------------------------------
+    // Canonical conversation-key registry (server-backed, see
+    // server/src/conversation_keys.rs).
+    //
+    // Historically "which key is the real one for this conversation" had no
+    // answer anywhere: whoever opened a chat with an empty local key store
+    // invented a random key and started encrypting with it, and convergence was
+    // attempted after the fact with a lexicographic-owner tiebreak that did not
+    // apply to channels at all. The registry replaces guessing with a fact: the
+    // first claim for a scope wins, everyone else can see they hold the wrong
+    // key and ask for a republish instead of silently forking the conversation.
+    //
+    // Only a SHA-256 fingerprint of the key ever leaves the device.
+    // ---------------------------------------------------------------------
+
+    async conversationKeyId(key) {
+        const value = String(key || '').trim();
+        if (!value) return '';
+        if (!this._keyIdCache) this._keyIdCache = new Map();
+        const cached = this._keyIdCache.get(value);
+        if (cached) return cached;
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+        const id = this.base64FromBytes(new Uint8Array(digest))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+        this._keyIdCache.set(value, id);
+        return id;
+    }
+
+    canonicalKeyIdCache() {
+        if (!this._canonicalKeyIds) this._canonicalKeyIds = new Map();
+        return this._canonicalKeyIds;
+    }
+
+    // Serializes read-modify-write cycles over the conversation-key store.
+    //
+    // promoteCanonicalConversationKey is fired in the background (not awaited)
+    // from several places at once — resolveConversationCryptoKey for every chat
+    // that already has a key, and reconcileVaultScopes after a vault sync. Each
+    // call does loadStoredConversationKeys() → mutate → saveStoredConversationKeys(),
+    // and without serializing them, two concurrent calls for different scopes can
+    // race: the second one's load can miss the first one's not-yet-saved write,
+    // and its save then clobbers it. The lost update is a promotion, not real key
+    // material — self-heals on the next resolve/sync — but there is no reason to
+    // leave the race in when queuing the callback is nearly free.
+    withConversationKeysWriteLock(fn) {
+        const previous = this._conversationKeysWriteLock || Promise.resolve();
+        const run = previous.then(fn, fn);
+        this._conversationKeysWriteLock = run.catch(() => {});
+        return run;
+    }
+
+    // Every key this device could decrypt with for a scope: the active one plus
+    // every `alt:` candidate. Used to promote an already-held key to active once
+    // the registry tells us which one is canonical.
+    conversationKeyCandidates(stored, scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return [];
+        const out = [];
+        const push = (value) => {
+            const key = String(value || '').trim();
+            if (key && !out.includes(key)) out.push(key);
+        };
+        push(stored[scoped]);
+        const prefix = `alt:${scoped}:`;
+        for (const [name, value] of Object.entries(stored || {})) {
+            if (name.startsWith(prefix)) push(value);
+        }
+        return out;
+    }
+
+    async fetchCanonicalKeyIds(scopes = []) {
+        const list = Array.from(new Set(
+            (Array.isArray(scopes) ? scopes : [scopes])
+                .map(scope => String(scope || '').trim())
+                .filter(Boolean)
+        )).slice(0, 200);
+        if (!list.length || !this.S.session?.token) return new Map();
+        try {
+            const res = await this.apiFetch(this.apiRoutes.conversationKeys.lookup(list.join(',')), { includeDeviceId: true });
+            if (!res.ok) throw new Error(await res.text().catch(() => 'lookup failed'));
+            const rows = await res.json();
+            const cache = this.canonicalKeyIdCache();
+            if (Array.isArray(rows)) {
+                for (const row of rows) {
+                    const scope = String(row?.scope || '').trim();
+                    const keyId = String(row?.keyId || '').trim();
+                    if (scope && keyId) cache.set(scope, keyId);
+                }
+            }
+            return cache;
+        } catch (e) {
+            // A failed lookup must never be read as "no canonical key exists" —
+            // that is exactly the mistake that made clients invent keys. Callers
+            // check `has(scope)`, and an absent entry means "unknown", not "none".
+            this.trace(`fetchCanonicalKeyIds failed error=${e?.message || e}`);
+            return this.canonicalKeyIdCache();
+        }
+    }
+
+    // Returns { keyId, mine, claimedBy } or null when the claim could not be made.
+    // `mine === false` means another device already owns this scope's key and the
+    // caller is holding a fork.
+    async claimConversationKey(scope, key, { force = false, reason = 'auto' } = {}) {
+        const scoped = String(scope || '').trim();
+        const secret = String(key || '').trim();
+        if (!scoped || !secret || !this.S.session?.token) return null;
+        try {
+            const keyId = await this.conversationKeyId(secret);
+            const res = await this.apiFetch(this.apiRoutes.conversationKeys.claim, {
+                method: 'POST',
+                includeDeviceId: true,
+                body: JSON.stringify({ scope: scoped, keyId, force: !!force }),
+            });
+            if (!res.ok) throw new Error(await res.text().catch(() => 'claim failed'));
+            const data = await res.json();
+            const winner = String(data?.keyId || '').trim();
+            if (winner) this.canonicalKeyIdCache().set(scoped, winner);
+            this.trace(`claimConversationKey reason=${reason} scope=${scoped} mine=${!!data?.mine} claimedBy=${data?.claimedBy || ''}`);
+            return { keyId: winner, mine: !!data?.mine, claimedBy: String(data?.claimedBy || '') };
+        } catch (e) {
+            this.trace(`claimConversationKey failed reason=${reason} scope=${scoped} error=${e?.message || e}`);
+            return null;
+        }
+    }
+
+    async requestKeyRepublish(scope, { reason = 'auto' } = {}) {
+        const scoped = String(scope || '').trim();
+        if (!scoped || !this.S.session?.token) return false;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.conversationKeys.republish, {
+                method: 'POST',
+                includeDeviceId: true,
+                body: JSON.stringify({ scope: scoped }),
+            });
+            if (!res.ok) throw new Error(await res.text().catch(() => 'republish request failed'));
+            this.trace(`requestKeyRepublish reason=${reason} scope=${scoped}`);
+            return true;
+        } catch (e) {
+            this.trace(`requestKeyRepublish failed reason=${reason} scope=${scoped} error=${e?.message || e}`);
+            return false;
+        }
+    }
+
+    // If one of the keys this device already holds for `scope` matches the
+    // canonical key id, make it the active (sending) key. Returns the promoted
+    // key, or '' when none of the local candidates is the canonical one.
+    async promoteCanonicalConversationKey(scope, canonicalKeyId, { reason = 'auto' } = {}) {
+        const scoped = String(scope || '').trim();
+        const wanted = String(canonicalKeyId || '').trim();
+        if (!scoped || !wanted) return '';
+        // See withConversationKeysWriteLock: this fires unawaited from several
+        // places at once, so its load-mutate-save must not race a concurrent call
+        // for a different scope.
+        return this.withConversationKeysWriteLock(async () => {
+            const stored = this.loadStoredConversationKeys();
+            const active = String(stored[scoped] || '').trim();
+            if (active && await this.conversationKeyId(active) === wanted) return active;
+            for (const candidate of this.conversationKeyCandidates(stored, scoped)) {
+                if (await this.conversationKeyId(candidate) !== wanted) continue;
+                if (active) this.addAltConversationKey(stored, scoped, active);
+                stored[scoped] = candidate;
+                this.saveStoredConversationKeys(stored);
+                this.trace(`promoteCanonicalConversationKey reason=${reason} scope=${scoped} promoted=true`);
+                return candidate;
+            }
+            return '';
+        });
+    }
+
+    // Reconcile the local active key for a scope with the server registry.
+    // Returns the key that should be used for sending.
+    async reconcileConversationKey(scope, localKey, { reason = 'auto' } = {}) {
+        const scoped = String(scope || '').trim();
+        const local = String(localKey || '').trim();
+        if (!scoped || !local) return local;
+        // A scope queued by resetEncryptionKeys takes the registry over by force —
+        // the user explicitly asked for new keys, so the old claim must not win.
+        const force = !!this._forceClaimScopes?.has(scoped);
+        const claim = await this.claimConversationKey(scoped, local, { reason, force });
+        if (force) this._forceClaimScopes.delete(scoped);
+        if (!claim || claim.mine) return local;
+
+        // Someone else claimed this scope first. Prefer a key we already hold
+        // that matches, otherwise ask the holders to republish an envelope for
+        // this device and pick it up on the next sync.
+        const promoted = await this.promoteCanonicalConversationKey(scoped, claim.keyId, { reason });
+        if (promoted) {
+            this.setKey(promoted);
+            this.updateCryptoKeyDisplay({ key: promoted });
+            return promoted;
+        }
+        await this.requestKeyRepublish(scoped, { reason });
+        await this.syncIncomingKeyEnvelopes({ reason: `reconcile:${reason}`, triggerRefresh: false });
+        const afterSync = await this.promoteCanonicalConversationKey(scoped, claim.keyId, { reason: `${reason}:afterSync` });
+        if (afterSync) {
+            this.setKey(afterSync);
+            this.updateCryptoKeyDisplay({ key: afterSync });
+            return afterSync;
+        }
+        // Still missing. Keep sending with the local key rather than blocking the
+        // user — the peer stores every incoming envelope key as a decryption
+        // candidate, so these messages stay readable on their side — and keep the
+        // scope marked so a later sync can still promote the canonical key.
+        this.addLogEntry({
+            type: 'WARN',
+            msg: `Канонический ключ диалога ещё не получен (scope=${scoped}), запрошена повторная публикация`,
+            ts: new Date().toLocaleTimeString(),
+        });
+        return local;
+    }
+
     keyEnvelopeOverridesLocal(scope, payload) {
         // Only the canonical owner's envelope may replace an existing local key.
         // The owner always keeps its own key; the non-owner adopts the owner's,
@@ -11641,16 +12359,36 @@ class ZaliInterface {
             // the comment in loadStoredMessageCache() for why: this one is the most
             // severe case, since it would hand a brand-new account every per-DM E2E key
             // a previous, unrelated account on this browser ever had.
-            let raw = sessionStorage.getItem(this.conversationKeysStorageKey()) || localStorage.getItem(this.conversationKeysStorageKey());
+            // Both stores are read AND merged, never one-or-the-other. Conversation
+            // keys used to live in sessionStorage with localStorage actively deleted
+            // on every save, which meant every browser/PWA restart (and every native
+            // shell without a key-injection bridge — iOS and Android have none) came
+            // up with an empty key map. An empty map is indistinguishable from "this
+            // conversation has no key yet", so the client invented a fresh random key
+            // and encrypted real messages with it. Losing key material is strictly
+            // worse than storing it at rest in a store the same origin already owns.
+            const readStore = (store) => {
+                try {
+                    const raw = store.getItem(this.conversationKeysStorageKey());
+                    if (!raw) return null;
+                    const parsed = JSON.parse(raw);
+                    return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch (e) {
+                    return null;
+                }
+            };
             const injected = window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
                 : {};
-            if (!raw) return { ...injected };
-            const parsed = JSON.parse(raw);
-            const merged = { ...injected, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+            const persisted = readStore(localStorage);
+            const session = readStore(sessionStorage);
+            if (!persisted && !session) return { ...injected };
+            // sessionStorage last: within one session it is the freshest writer.
+            const merged = { ...injected, ...(persisted || {}), ...(session || {}) };
             try {
-                sessionStorage.setItem(this.conversationKeysStorageKey(), JSON.stringify(merged || {}));
-                localStorage.removeItem(this.conversationKeysStorageKey());
+                const encoded = JSON.stringify(merged || {});
+                sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                localStorage.setItem(this.conversationKeysStorageKey(), encoded);
             } catch (e) {}
             return merged && typeof merged === 'object' ? merged : {};
         } catch (e) {
@@ -11699,8 +12437,11 @@ class ZaliInterface {
 
     saveStoredConversationKeys(keys) {
         try {
-            sessionStorage.setItem(this.conversationKeysStorageKey(), JSON.stringify(keys || {}));
-            localStorage.removeItem(this.conversationKeysStorageKey());
+            const encoded = JSON.stringify(keys || {});
+            sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
+            // Durable copy — see loadStoredConversationKeys() for why dropping this
+            // was the single largest source of "сообщение зашифровано не тем ключом".
+            localStorage.setItem(this.conversationKeysStorageKey(), encoded);
             this.syncNativeConversationKeys(keys || {});
             if (this.S.session?.token && this.S.auth?.vaultPassphrase && !this.cloudVaultSyncInFlight) {
                 this.scheduleCloudVaultSync(300);
@@ -11918,6 +12659,11 @@ class ZaliInterface {
                 serverId,
                 channelId,
             });
+            // Reconcile with the server registry in the background: a key that is
+            // present locally can still be a fork invented by this device before
+            // the real one arrived. Not awaited — a stale-but-working key must not
+            // delay opening the chat.
+            void this.reconcileConversationKey(scope, existing, { reason: `existing:${reason}` });
             return existing;
         }
 
@@ -11944,6 +12690,16 @@ class ZaliInterface {
             // orphaning the real key (and all history encrypted under it) that a slower
             // network round-trip would have found. So retry a couple of times with backoff
             // before giving up, instead of inventing on the very first empty result.
+            // Does a canonical key already exist for this scope? If so, inventing
+            // one here would be strictly wrong — the answer is to make the holders
+            // republish an envelope for this device, not to fork the conversation.
+            await this.fetchCanonicalKeyIds([scope]);
+            const knownCanonical = this.canonicalKeyIdCache().get(scope) || '';
+            if (knownCanonical) {
+                const promoted = await this.promoteCanonicalConversationKey(scope, knownCanonical, { reason });
+                if (!promoted) await this.requestKeyRepublish(scope, { reason });
+            }
+
             for (let attempt = 0; attempt < 2 && !this.getStoredConversationKey(scope); attempt += 1) {
                 this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} retry=${attempt}`);
                 await new Promise(resolve => setTimeout(resolve, 1500 + attempt * 1500));
@@ -11951,6 +12707,9 @@ class ZaliInterface {
                     await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}:retry${attempt}` });
                 }
                 await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}:retry${attempt}`, triggerRefresh: false });
+                if (knownCanonical && !this.getStoredConversationKey(scope)) {
+                    await this.promoteCanonicalConversationKey(scope, knownCanonical, { reason: `${reason}:retry${attempt}` });
+                }
             }
         }
 
@@ -11963,15 +12722,34 @@ class ZaliInterface {
                 serverId,
                 channelId,
             });
+            void this.reconcileConversationKey(scope, restored, { reason: `restored:${reason}` });
             return restored;
         }
 
         const localKey = this.randomBase64(32).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-        const stored = this.loadStoredConversationKeys();
-        stored[scope] = localKey;
-        this.saveStoredConversationKeys(stored);
+        // Through the same write lock promoteCanonicalConversationKey uses below —
+        // this scope's first write must not race a concurrent background
+        // reconcile/promote running for a different scope at the same time.
+        await this.withConversationKeysWriteLock(() => {
+            const stored = this.loadStoredConversationKeys();
+            stored[scope] = localKey;
+            this.saveStoredConversationKeys(stored);
+        });
         this.setKey(localKey);
         this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} generated=true`);
+
+        // Register the new key as this scope's canonical one. First-write-wins, so
+        // if another device already claimed the scope while we were generating,
+        // reconcileConversationKey adopts the winner (from a candidate we already
+        // hold, or by asking the holders to republish) instead of leaving two live
+        // keys behind. This is the step that makes divergence self-correcting
+        // rather than permanent.
+        const reconciled = await this.reconcileConversationKey(scope, localKey, { reason: `generated:${reason}` });
+        if (reconciled && reconciled !== localKey) {
+            this.updateCryptoKeyDisplay({ key: reconciled, peer, serverId, channelId });
+            return reconciled;
+        }
+
         const owner = this.dmScopeOwner(scope);
         const meName = String(this.myName() || '').trim();
         const isChannelScope = !!(serverId && channelId);
@@ -12381,23 +13159,25 @@ class ZaliInterface {
 
     buildVaultPlainPayload(targetDeviceId = '') {
         const stored = this.loadStoredConversationKeys();
-        const me = String(this.myName() || '').trim();
-        const isCloudBroadcast = !String(targetDeviceId || '').trim();
         const scopedKeys = {};
         for (const [scope, value] of Object.entries(stored)) {
             const key = String(value || '').trim();
             if (!key) continue;
-            if (isCloudBroadcast) {
-                // В общий (неадресный) cloud-пакет не включаем DM-ключи, которыми
-                // владеет собеседник: их канонично доставляют конверты владельца.
-                // Иначе временный ключ, сгенерированный до прихода конверта, разошёлся
-                // бы по устройствам и мог затереть настоящий (старые клиенты мержат
-                // vault поверх локальных ключей без сохранения кандидатов).
-                const owner = this.dmScopeOwner(scope);
-                if (owner && me && owner !== me) continue;
-            }
             scopedKeys[scope] = key;
         }
+        // Every scope goes into the cloud package, including DM keys whose
+        // lexicographic "owner" is the peer.
+        //
+        // Those used to be excluded, on the theory that the owner's envelopes
+        // deliver them canonically and a locally invented temporary key must not
+        // spread. In practice that made the cloud vault useless exactly where it
+        // was needed most: for an account whose username sorts late (`zalikus` vs
+        // `GRIBOED`/`Pivovarca`/`test67`), the peer owns *every* DM, so a second
+        // device of that account could never recover a single conversation key and
+        // invented a fresh one for each chat instead. Spreading a provisional key
+        // is now harmless: applyVaultPlainPayload keeps the previous key as a
+        // decryption candidate, and the server registry — not whoever wrote last —
+        // decides which key is canonical.
         return {
             version: 2,
             keyEpoch: 2,
@@ -12444,7 +13224,33 @@ class ZaliInterface {
         const displayKey = String(Object.values(nextKeys)[0] || '').trim();
         this.updateCryptoKeyDisplay({ key: displayKey });
         this.refreshAfterKey();
+        // The vault merge above is last-writer-wins on the active key (the previous
+        // one is kept as a decryption candidate, so nothing becomes unreadable).
+        // That is fine as an interim state, but the registry has the final say —
+        // reconcile in the background so the active/sending key converges on the
+        // canonical one instead of on whichever device synced most recently.
+        void this.reconcileVaultScopes(Object.keys(incomingKeys));
         return Object.keys(nextKeys).length;
+    }
+
+    // Align the active key of each freshly merged vault scope with the server
+    // registry. Runs off the critical path; a failure just leaves the interim
+    // (still decryptable) state in place until the next sync.
+    async reconcileVaultScopes(scopes = []) {
+        const list = (Array.isArray(scopes) ? scopes : [])
+            .map(scope => String(scope || '').trim())
+            .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
+            .slice(0, 200);
+        if (!list.length || !this.S.session?.token) return 0;
+        const canonical = await this.fetchCanonicalKeyIds(list);
+        let promoted = 0;
+        for (const scope of list) {
+            const wanted = String(canonical.get(scope) || '').trim();
+            if (!wanted) continue;
+            if (await this.promoteCanonicalConversationKey(scope, wanted, { reason: 'vault' })) promoted += 1;
+        }
+        if (promoted) this.trace(`reconcileVaultScopes promoted=${promoted}`);
+        return promoted;
     }
 
     scheduleCloudVaultSync(delayMs = 300) {
@@ -12592,15 +13398,19 @@ class ZaliInterface {
             const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(recipient));
             if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
             const devices = await res.json();
-            // Only publish the real conversation key to devices the peer has already
-            // approved. An unapproved device gets its keys via the peer's own
-            // approveDeviceAndExport() vault export once trusted — broadcasting to it
-            // here means every brand-new (often throwaway/incognito) device registration
-            // triggers a full re-publish to all of the peer's devices, which is most of
-            // the envelope churn observed in prod (see conversation_key_envelopes: same
-            // scope re-published by 3 distinct sender devices in one day).
+            // Publish to every non-revoked device of the peer that has a usable
+            // public key — NOT only approved ones.
+            //
+            // The `approved` filter used to be here to limit envelope churn, but
+            // device approval is a manual step almost nobody performs: production
+            // showed one account with 11 registered devices and exactly 1 approved.
+            // The other 10 received zero envelopes, so each of them invented its own
+            // conversation key and encrypted real messages with it. Starving a
+            // legitimately logged-in device of key material does not make anything
+            // safer — the envelope is sealed to that device's own ECDH public key
+            // and only that device can open it — it just breaks the conversation.
             const usable = Array.isArray(devices)
-                ? devices.filter(device => device?.approved && !device?.revoked && this.devicePublicJwk(device))
+                ? devices.filter(device => !device?.revoked && this.devicePublicJwk(device))
                 : [];
             if (!usable.length) {
                 this.trace(`publishConversationKeyToPeer skipped reason=${reason} peer=${recipient} devices=0`);
@@ -12688,6 +13498,37 @@ class ZaliInterface {
         return published;
     }
 
+    // Someone in a conversation we share told the server they cannot decrypt it.
+    // If we hold that scope's key, push it straight back to them — this is the
+    // targeted counterpart of retryPublishConversationKeys' full sweep and is what
+    // lets a brand-new device become readable in seconds instead of at next login.
+    async handleKeyRepublishRequest(payload) {
+        const scope = String(payload?.scope || '').trim();
+        const requester = String(payload?.requester || '').trim();
+        if (!scope || !this.S.session?.token) return false;
+        const key = this.getStoredConversationKey(scope);
+        if (!key) {
+            this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=true`);
+            return false;
+        }
+        const channel = this.channelFromConversationScope(scope);
+        if (channel) {
+            await this.publishConversationKeyToServerMembers({
+                serverId: channel.serverId,
+                channelId: channel.channelId,
+                scope,
+                key,
+                reason: 'republish_request',
+            });
+            return true;
+        }
+        const peer = requester || this.peerFromConversationScope(scope);
+        if (!peer || peer === this.myName()) return false;
+        const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: 'republish_request' });
+        this.trace(`handleKeyRepublishRequest scope=${scope} peer=${peer} result=${result}`);
+        return result === true;
+    }
+
     async retryPublishConversationKeys({ reason = 'auto', limit = 200 } = {}) {
         if (!this.S.session?.token) return 0;
         const stored = this.loadStoredConversationKeys();
@@ -12749,40 +13590,70 @@ class ZaliInterface {
                 this.addLogEntry({ type: 'INFO', msg: `Ключи: на сервере нет конвертов для этого устройства (${String(identity.deviceId || '').slice(0, 12)})`, ts: new Date().toLocaleTimeString() });
                 return 0;
             }
-            const stored = this.loadStoredConversationKeys();
-            let imported = 0;
-            let decryptFailed = 0;
-            let skippedSame = 0;
-            for (const record of envelopes) {
-                try {
-                    const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
-                    if (!payload.scope || !payload.key) continue;
-                    const scope = String(payload.scope);
-                    const current = String(stored[scope] || '').trim();
-                    if (!current) {
-                        stored[scope] = payload.key;
-                        imported += 1;
-                    } else if (current !== payload.key && this.keyEnvelopeOverridesLocal(scope, payload)) {
-                        // The canonical owner's key becomes the active (sending) key so
-                        // both peers converge. Preserve the previous key as a decryption
-                        // candidate so messages already encrypted with it stay readable.
-                        this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
-                        this.addAltConversationKey(stored, scope, current);
-                        stored[scope] = payload.key;
-                        imported += 1;
-                    } else if (current !== payload.key) {
-                        // Not the canonical key, but keep it as a decryption candidate:
-                        // the peer may have encrypted messages with it before convergence.
-                        if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
-                        else skippedSame += 1;
-                    } else {
-                        skippedSame += 1;
+            // One batched lookup of the canonical key id per scope in this batch.
+            // With it, adoption is a fact ("this envelope carries the registered
+            // key") instead of the old lexicographic-owner guess, which had no rule
+            // at all for `server:` channel scopes — every channel member kept their
+            // own key forever and only ever converged by luck.
+            const batchScopes = Array.from(new Set(
+                envelopes.map(record => String(record?.scope || '').trim()).filter(Boolean)
+            ));
+            const canonical = await this.fetchCanonicalKeyIds(batchScopes);
+            // The load-mutate-save below must not race promoteCanonicalConversationKey
+            // or the "generate a new key" write in _resolveConversationCryptoKeyImpl —
+            // both can run concurrently in the background for a different scope while
+            // this sync (itself deduped against concurrent *calls to itself* by
+            // syncIncomingKeyEnvelopes, but not against other writers) is still
+            // awaiting per-envelope decryption. See withConversationKeysWriteLock.
+            const { imported, decryptFailed, skippedSame } = await this.withConversationKeysWriteLock(async () => {
+                const stored = this.loadStoredConversationKeys();
+                let imported = 0;
+                let decryptFailed = 0;
+                let skippedSame = 0;
+                for (const record of envelopes) {
+                    try {
+                        const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
+                        if (!payload.scope || !payload.key) continue;
+                        const scope = String(payload.scope);
+                        const current = String(stored[scope] || '').trim();
+                        const wantedKeyId = String(canonical.get(scope) || '').trim();
+                        const isCanonical = wantedKeyId
+                            ? (await this.conversationKeyId(payload.key)) === wantedKeyId
+                            : false;
+                        if (!current) {
+                            stored[scope] = payload.key;
+                            imported += 1;
+                        } else if (current !== payload.key && isCanonical) {
+                            this.trace(`syncIncomingKeyEnvelopes adopt canonical key scope=${scope} sender=${payload.sender}`);
+                            this.addAltConversationKey(stored, scope, current);
+                            stored[scope] = payload.key;
+                            imported += 1;
+                        } else if (current !== payload.key && !wantedKeyId && this.keyEnvelopeOverridesLocal(scope, payload)) {
+                            // The canonical owner's key becomes the active (sending) key so
+                            // both peers converge. Preserve the previous key as a decryption
+                            // candidate so messages already encrypted with it stay readable.
+                            this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
+                            this.addAltConversationKey(stored, scope, current);
+                            stored[scope] = payload.key;
+                            imported += 1;
+                        } else if (current !== payload.key) {
+                            // Not the canonical key, but keep it as a decryption candidate:
+                            // the peer may have encrypted messages with it before convergence.
+                            if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
+                            else skippedSame += 1;
+                        } else {
+                            skippedSame += 1;
+                        }
+                    } catch (e) {
+                        decryptFailed += 1;
+                        this.trace(`syncIncomingKeyEnvelopes decrypt failed reason=${reason} error=${e?.message || e}`);
                     }
-                } catch (e) {
-                    decryptFailed += 1;
-                    this.trace(`syncIncomingKeyEnvelopes decrypt failed reason=${reason} error=${e?.message || e}`);
                 }
-            }
+                if (imported > 0) {
+                    this.saveStoredConversationKeys(stored);
+                }
+                return { imported, decryptFailed, skippedSame };
+            });
             // Surface the outcome in the in-app log panel. decryptFailed>0 means the
             // envelope was encrypted to a device key this client cannot open (device
             // identity mismatch) — that is why a delivered message stays unreadable.
@@ -12792,7 +13663,6 @@ class ZaliInterface {
                 ts: new Date().toLocaleTimeString()
             });
             if (imported > 0) {
-                this.saveStoredConversationKeys(stored);
                 this.trace(`syncIncomingKeyEnvelopes reason=${reason} imported=${imported}`);
                 if (triggerRefresh) this.refreshAfterKey();
             }
@@ -12843,6 +13713,15 @@ class ZaliInterface {
         // 1. Clear local AES conversation keys
         this._publishedKeyScopes = new Set();
         this._vaultSnapshotApplied = false;
+        // Remember which scopes are being reset. Without this the registry would
+        // defeat the reset: every regenerated key would lose the (non-forced)
+        // claim to the pre-reset row and the client would keep asking the peer to
+        // republish a key the user just deliberately threw away.
+        this._forceClaimScopes = new Set(
+            Object.keys(this.loadStoredConversationKeys())
+                .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
+        );
+        this.canonicalKeyIdCache().clear();
         this.saveStoredConversationKeys({});
         try { sessionStorage.removeItem(this.cryptoKeyStorageKey()); } catch (e) {}
         try { localStorage.removeItem(this.cryptoKeyStorageKey()); } catch (e) {}
@@ -16436,8 +17315,18 @@ class ZaliInterface {
         const other = String(peer || '').trim();
         if (!me || !other) return false;
         if (this.voice.roomType === 'dm') {
+            if (this.voice.status !== 'connected') return false;
             const direction = String(this.voice.callTrack?.direction || '').trim();
-            return direction === 'outgoing' && this.voice.status === 'connected';
+            if (direction) return direction === 'outgoing';
+            // callTrack is not guaranteed to still be here: recordVoiceCallHistory
+            // nulls it, and a reset racing the accept drops it too. Keying the offerer
+            // purely off it meant both sides could conclude "not me" and sit in a
+            // connected call that nobody ever negotiates. voice.inviter is echoed to
+            // both peers by the server (voice_call_accepted / voice_room_state), so it
+            // still yields exactly one offerer; the name tie-break is the last resort.
+            const inviter = String(this.voice.inviter || '').trim();
+            if (inviter) return inviter === me;
+            return me.localeCompare(other) < 0;
         }
         return me.localeCompare(other) < 0;
     }
@@ -16545,6 +17434,18 @@ class ZaliInterface {
         }, delay);
     }
 
+    // Sends an immediate app-level ping so the half-open watchdog in the socket's
+    // ping interval has fresh evidence to judge by. Safe to call at any time.
+    probeVoiceSocketLiveness() {
+        if (this.nativeSupports('voice')) return;
+        const socket = this.voice.socket;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        try {
+            this.voiceSocketLastPingAt = Date.now();
+            socket.send(JSON.stringify({ type: 'ping' }));
+        } catch (e) {}
+    }
+
     async fetchBrowserVoiceSocketTicket() {
         if (!this.S.session?.token) return '';
         const res = await this.apiFetch(this.apiRoutes.auth.wsTicket, { method: 'POST' });
@@ -16604,10 +17505,31 @@ class ZaliInterface {
                     clearInterval(this.voiceSocketPingTimer);
                     this.voiceSocketPingTimer = null;
                 }
+                this.voiceSocketLastInboundAt = Date.now();
+                this.voiceSocketLastPingAt = 0;
                 this.voiceSocketPingTimer = setInterval(() => {
                     if (generation !== this.voiceSocketGeneration) return;
                     if (!this.voice.socket || this.voice.socket.readyState !== WebSocket.OPEN) return;
+                    // Half-open detection. A network path that dies without a FIN
+                    // (Wi-Fi drop, VPN re-key, NAT eviction) leaves readyState stuck
+                    // at OPEN until TCP finally gives up — minutes during which the
+                    // client believes it is in the call, sendVoiceEvent reports
+                    // success, and nothing reconnects. The server answers our ping
+                    // with a pong, so an unanswered ping is proof the link is gone.
+                    // Keyed off ping-vs-reply rather than plain idle time, because a
+                    // quiet call legitimately has no traffic for minutes and a
+                    // background tab's timers are throttled.
+                    const lastPing = this.voiceSocketLastPingAt || 0;
+                    if (lastPing > (this.voiceSocketLastInboundAt || 0) && Date.now() - lastPing > 15000) {
+                        this.voiceTrace('socket-ping-unanswered', {
+                            generation,
+                            silentMs: Date.now() - lastPing,
+                        }, 'WARN');
+                        try { this.voice.socket.close(); } catch (e) {}
+                        return; // onclose schedules the reconnect
+                    }
                     try {
+                        this.voiceSocketLastPingAt = Date.now();
                         this.voice.socket.send(JSON.stringify({ type: 'ping' }));
                     } catch (e) {}
                 }, 25000);
@@ -16622,6 +17544,11 @@ class ZaliInterface {
 
             socket.onmessage = (event) => {
                 if (generation !== this.voiceSocketGeneration) return;
+                // Liveness evidence for the half-open watchdog above. Counts ANY
+                // inbound frame, including the server's {"type":"pong"} — which had
+                // no branch below and was silently dropped, so nothing ever noticed
+                // whether the server was still answering.
+                this.voiceSocketLastInboundAt = Date.now();
                 let payload = null;
                 try {
                     payload = JSON.parse(event.data);
@@ -16644,9 +17571,15 @@ class ZaliInterface {
                 } else if (payload && typeof payload === 'object' && payload.type === 'device_approved') {
                     // Pushed when one of our peers approves a new device — republish our
                     // side of any DM/channel keys we've already shared with them instead of
-                    // waiting for our own next login (retryPublishConversationKeys already
-                    // only targets approved devices, so this is safe to fire eagerly).
+                    // waiting for our own next login. Also pushed when a peer (or one of
+                    // our own accounts) simply *registers* a device — approval is a manual
+                    // step almost nobody performs, and a keyless device is what makes
+                    // messages end up encrypted with a key nobody else has.
                     void this.retryPublishConversationKeys({ reason: 'device_approved_push' });
+                } else if (payload && typeof payload === 'object' && payload.type === 'key_republish_request') {
+                    // A participant of a specific scope is telling us it holds the wrong
+                    // key (or none). Republish just that scope straight away.
+                    void this.handleKeyRepublishRequest(payload);
                 } else if (payload && typeof payload === 'object' && !payload.type && payload.id && payload.sender && payload.receiver) {
                     // No `type` field = a raw `Message` row pushed by deliver_to_user/
                     // deliver_server_message (server/src/realtime.rs), not a voice/avatar
@@ -16700,6 +17633,13 @@ class ZaliInterface {
 
     resetVoiceState({ preserveInvite = false } = {}) {
         this.voiceTrace('reset-state', { preserveInvite, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', status: this.voice.status || '' });
+        if (this.voice.negotiationRetryTimer) {
+            clearTimeout(this.voice.negotiationRetryTimer);
+            this.voice.negotiationRetryTimer = null;
+        }
+        this.voice.negotiationRetries = 0;
+        this.voice.peerRosterKey = '';
+        this.stopVoicePresenceKeepalive();
         for (const entry of this.voice.peerConnections.values()) {
             if (entry.reconnectTimer) {
                 clearTimeout(entry.reconnectTimer);
@@ -16716,6 +17656,7 @@ class ZaliInterface {
             try { entry.pc?.close(); } catch (e) {}
         }
         this.voice.peerConnections.clear();
+        this.voice.signalChains?.clear();
         for (const audio of this.voice.remoteAudios.values()) {
             try {
                 audio.pause?.();
@@ -16745,6 +17686,9 @@ class ZaliInterface {
             }
         }
         this.voice.localStream = null;
+        // A capture still in flight when the session is torn down must not be
+        // handed to the *next* call as its local stream.
+        this.voice.localStreamInFlight = null;
         if (this.voice.localScreenStream) {
             for (const track of this.voice.localScreenStream.getTracks()) {
                 try { track.stop(); } catch (e) {}
@@ -16755,6 +17699,8 @@ class ZaliInterface {
             try { this.voice.audioContext.close?.(); } catch (e) {}
         }
         this.voice.audioContext = null;
+        this.voice.audioResumePending = false;
+        this.voice.masterGainNode = null;
         this.voice.playbackUnlocked = false;
         this.voice.meterUiRenderedOnce = false;
         this.voice.meterLevels = { local: 0, remote: 0 };
@@ -16763,7 +17709,6 @@ class ZaliInterface {
         if (this.voice.remotePlaybackNodes) {
             for (const node of this.voice.remotePlaybackNodes.values()) {
                 try { node?.source?.disconnect?.(); } catch (e) {}
-                try { node?.splitter?.disconnect?.(); } catch (e) {}
                 try { node?.gain?.disconnect?.(); } catch (e) {}
             }
             this.voice.remotePlaybackNodes.clear();
@@ -16788,16 +17733,54 @@ class ZaliInterface {
         this.scheduleRenderMessages();
     }
 
+    // Dedupes concurrent capture requests. In a group call every incoming offer
+    // handler (and every voice_room_state) calls this, and handleVoiceEvent is
+    // dispatched fire-and-forget — so with 3+ participants two or three offers
+    // land while localStream is still null and each used to fire its own
+    // getUserMedia(). Best case that opened several independent mic captures
+    // (mute via track.enabled then only reached some peers, and the surplus
+    // captures were never stopped); worst case the 2nd/3rd capture failed with
+    // NotReadableError/AbortError because the device was already claimed, so
+    // attachLocalVoiceTracks() no-oped for that peer and it answered recvonly —
+    // exactly the "некоторые не слышат некоторых" symptom.
     async ensureVoiceLocalStream() {
+        if (this.voice.localStream) return this.voice.localStream;
+        if (this.voice.localStreamInFlight) return this.voice.localStreamInFlight;
+        const pending = this.captureVoiceLocalStream();
+        this.voice.localStreamInFlight = pending;
+        try {
+            return await pending;
+        } finally {
+            if (this.voice.localStreamInFlight === pending) {
+                this.voice.localStreamInFlight = null;
+            }
+        }
+    }
+
+    async captureVoiceLocalStream() {
         if (this.voice.localStream) return this.voice.localStream;
         if (!this.voice.supported) {
             throw new Error('Голосовые звонки не поддерживаются в этом окружении');
         }
+        const micConstraint = this.audioPrefs?.micDeviceId
+            ? { deviceId: { exact: this.audioPrefs.micDeviceId } }
+            : true;
+        const getAudioOnlyStream = async () => {
+            try {
+                return await navigator.mediaDevices.getUserMedia({ audio: micConstraint, video: false });
+            } catch (error) {
+                // Saved device id may no longer exist (unplugged/removed) — fall
+                // back to the system default rather than failing the whole call.
+                if (micConstraint === true) throw error;
+                this.voiceTrace('mic-fallback-default', { error: error?.message || String(error) }, 'WARN');
+                return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            }
+        };
         let stream;
         if (this.voice.videoEnabled) {
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
-                    audio: true,
+                    audio: micConstraint,
                     video: { width: { ideal: 1280 }, height: { ideal: 720 } },
                 });
                 this.voice.cameraOn = true;
@@ -16805,10 +17788,10 @@ class ZaliInterface {
                 this.voiceTrace('camera-request-failed', { error: error?.message || String(error) }, 'WARN');
                 this.addLogEntry({ type: 'WARN', msg: 'Камера недоступна — продолжаем аудиозвонком', ts: new Date().toLocaleTimeString() });
                 this.voice.videoEnabled = false;
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                stream = await getAudioOnlyStream();
             }
         } else {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            stream = await getAudioOnlyStream();
         }
         this.voice.localStream = stream;
         this.voice.muted = false;
@@ -17242,17 +18225,16 @@ class ZaliInterface {
     async unlockVoicePlayback() {
         if (this.voice.playbackUnlocked) return true;
         try {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            if (AudioCtx) {
-                if (!this.voice.audioContext) {
-                    this.voice.audioContext = new AudioCtx();
-                }
-            if (this.voice.audioContext.state === 'suspended') {
-                await this.voice.audioContext.resume();
-            }
+            // Goes through ensureVoiceAudioContext rather than constructing the context
+            // inline, so the state-change watcher that re-routes remote audio when the
+            // context stalls is always installed.
+            const ctx = this.ensureVoiceAudioContext();
+            if (ctx && ctx.state === 'suspended') {
+                await ctx.resume();
             }
             this.voice.playbackUnlocked = true;
             this.ensureVoiceMeterLoop();
+            this.syncRemoteAudioPlaybackMode();
             this.voiceTrace('audio-unlock', {
                 contextState: this.voice.audioContext?.state || 'none',
             }, 'SUCCESS');
@@ -17500,7 +18482,13 @@ class ZaliInterface {
                     const isDmCall = this.voice.roomType === 'dm';
                     const allowAutoRestart = true;
                     if (allowAutoRestart) {
-                        const delay = state === 'failed' ? 8000 : 10000;
+                        // Both ends of the pair see the same failure and both used to
+                        // fire an ICE restart at the same moment — permanent glare on
+                        // exactly the link that was already broken. The side that owns
+                        // the offer for this pair (deterministic, both agree) retries
+                        // first; the other only steps in later, if that didn't take.
+                        const stagger = this.shouldInitiateVoiceOffer(name) ? 0 : 5000;
+                        const delay = (state === 'failed' ? 8000 : 10000) + stagger;
                         entry.reconnectTimer = setTimeout(async () => {
                             entry.reconnectTimer = null;
                             if (!this.voice.roomId) return;
@@ -17612,8 +18600,59 @@ class ZaliInterface {
         if (!AudioCtx) return null;
         if (!this.voice.audioContext) {
             this.voice.audioContext = new AudioCtx();
+            // Remote audio is rendered through this graph only (the <audio> elements
+            // are muted so nothing is heard twice), so a context that is 'suspended'
+            // — created outside a user gesture, or interrupted by the OS/WebView
+            // mid-call — means a call that connects and carries RTP but plays nothing.
+            // Nothing re-checked it after creation before.
+            this.voice.audioContext.onstatechange = () => {
+                this.voiceTrace('audio-context-state', { state: this.voice.audioContext?.state || '' });
+                this.syncRemoteAudioPlaybackMode();
+            };
+        }
+        // Throttled with a pending flag: this helper runs on every meter tick (125 ms),
+        // and firing a fresh resume() each time would pile up promises while the
+        // context stays suspended.
+        if (this.voice.audioContext.state === 'suspended' && !this.voice.audioResumePending) {
+            this.voice.audioResumePending = true;
+            Promise.resolve(this.voice.audioContext.resume?.()).then(() => {
+                this.voice.audioResumePending = false;
+                this.syncRemoteAudioPlaybackMode();
+            }).catch(error => {
+                this.voice.audioResumePending = false;
+                this.voiceTrace('audio-context-resume-failed', { error: error?.message || String(error) }, 'WARN');
+            });
         }
         return this.voice.audioContext;
+    }
+
+    // Chooses where remote audio is actually heard. Normally the WebAudio graph
+    // (per-peer nodes also drive the level meters) with the element muted; but if the
+    // context isn't running — or a peer has no node because createMediaStreamSource
+    // failed — the plain <audio> element is unmuted instead, so the call is audible
+    // rather than silently routed into a stopped graph.
+    syncRemoteAudioPlaybackMode() {
+        const ctx = this.voice.audioContext;
+        const webAudioRunning = !!ctx && ctx.state === 'running';
+        for (const [peer, audio] of this.voice.remoteAudios) {
+            if (!audio) continue;
+            const hasNode = !!this.voice.remotePlaybackNodes?.get(peer);
+            const useElement = !webAudioRunning || !hasNode;
+            const nextMuted = !useElement;
+            if (audio.muted !== nextMuted || audio.volume !== (useElement ? 1 : 0)) {
+                this.voiceTrace('remote-audio-route', {
+                    peer,
+                    route: useElement ? 'element' : 'webaudio',
+                    contextState: ctx?.state || 'none',
+                }, useElement ? 'WARN' : 'INFO');
+            }
+            audio.muted = nextMuted;
+            audio.defaultMuted = nextMuted;
+            audio.volume = useElement ? 1 : 0;
+            if (useElement && audio.paused) {
+                audio.play?.().catch(error => this.voiceTrace('remote-audio-play-failed', { peer, error: error?.message || String(error) }, 'WARN'));
+            }
+        }
     }
 
     ensureVoiceMeterLoop() {
@@ -17720,22 +18759,22 @@ class ZaliInterface {
         if (existing && existing.streamId === currentId) return existing;
         try {
             if (existing?.source) existing.source.disconnect?.();
-            if (existing?.splitter) existing.splitter.disconnect?.();
             if (existing?.gain) existing.gain.disconnect?.();
         } catch (e) {}
         try {
             const source = ctx.createMediaStreamSource(stream);
-            const splitter = ctx.createGain();
             const gain = ctx.createGain();
-            splitter.gain.value = 1;
-            gain.gain.value = 1;
-            source.connect(splitter);
+            gain.gain.value = this.getPeerVolumePercent(name) / 100;
+            const masterGain = this.ensureVoiceMasterGain();
             source.connect(gain);
-            splitter.connect(ctx.destination);
+            if (masterGain) {
+                gain.connect(masterGain);
+            } else {
+                gain.connect(ctx.destination);
+            }
             const next = {
                 streamId: currentId,
                 source,
-                splitter,
                 gain,
             };
             this.voice.remotePlaybackNodes.set(name, next);
@@ -17803,15 +18842,33 @@ class ZaliInterface {
         }
     }
 
+    // Returns true when tracks were actually added on this call, so callers can tell
+    // "already attached" from "just attached" — an attach that happens after the
+    // connection is established needs a renegotiation or the peer never receives it.
+    async applyVoiceAudioBitrateLimit(sender) {
+        if (!sender) return;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+            params.encodings[0].maxBitrate = 512000;
+            await sender.setParameters(params);
+        } catch (error) {
+            this.voiceTrace('audio-bitrate-limit-failed', { error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
     async attachLocalVoiceTracks(peer) {
         const entry = this.getVoicePeerEntry(peer);
-        if (!entry || !this.voice.localStream || entry.localTracksAttached) return;
+        if (!entry || !this.voice.localStream || entry.localTracksAttached) return false;
         const tracks = this.voice.localStream.getTracks();
         this.voiceTrace('attach-local-tracks', { peer, tracks: tracks.length, roomId: this.voice.roomId || '' });
         for (const track of tracks) {
             const senderField = track.kind === 'video' ? 'videoSender' : 'audioSender';
             const sender = entry.pc.addTrack(track, this.voice.localStream);
             entry[senderField] = sender;
+            if (track.kind === 'audio') {
+                await this.applyVoiceAudioBitrateLimit(sender);
+            }
             this.voiceTrace('attach-local-track-added', {
                 peer,
                 track: `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`,
@@ -17821,6 +18878,7 @@ class ZaliInterface {
         entry.localTracksAttached = true;
         this.ensureMeterEntry('local', this.voice.localStream);
         this.ensureVoiceMeterLoop();
+        return true;
     }
 
     attachRemoteVoiceStream(peer, stream) {
@@ -17848,6 +18906,12 @@ class ZaliInterface {
         audio.srcObject = stream;
         this.ensureMeterEntry(name, stream);
         this.ensureRemotePlaybackNode(name, stream);
+        if (this.audioPrefs?.speakerDeviceId && typeof audio.setSinkId === 'function') {
+            audio.setSinkId(this.audioPrefs.speakerDeviceId).catch(error => {
+                this.voiceTrace?.('speaker-sink-failed', { peer: name, error: error?.message || String(error) }, 'WARN');
+            });
+        }
+        this.syncRemoteAudioPlaybackMode();
         this.ensureVoiceMeterLoop();
         this.attachRemoteVideoStream(name, stream);
         this.voiceTrace('remote-audio-attach', {
@@ -17957,6 +19021,11 @@ class ZaliInterface {
             try { entry.pc.close(); } catch (e) {}
             this.voice.peerConnections.delete(name);
         }
+        // The signal chain is deliberately NOT dropped here: closeVoicePeer can be
+        // called from inside that peer's own chain (rebuilding a dead connection),
+        // and deleting the entry there would let the next signal from this peer
+        // start a second, concurrent chain. handleVoiceSignal already removes the
+        // entry once it is the last queued signal, and resetVoiceState clears all.
         const audio = this.voice.remoteAudios.get(name);
         if (audio) {
             try {
@@ -17979,7 +19048,6 @@ class ZaliInterface {
         const playbackNode = this.voice.remotePlaybackNodes?.get(name);
         if (playbackNode) {
             try { playbackNode.source?.disconnect?.(); } catch (e) {}
-            try { playbackNode.splitter?.disconnect?.(); } catch (e) {}
             try { playbackNode.gain?.disconnect?.(); } catch (e) {}
             this.voice.remotePlaybackNodes.delete(name);
         }
@@ -17998,6 +19066,26 @@ class ZaliInterface {
         const entry = this.getVoicePeerEntry(peer);
         if (!entry || !this.voice.localStream) return;
         if (entry.offerSent) return;
+        // `negotiating` is checked and set synchronously, before any await. Every
+        // room-state broadcast re-runs syncVoicePeers, and a group call produces one
+        // per join/leave — two overlapping runs both saw offerSent=false and
+        // signalingState='stable' (neither flips until setLocalDescription resolves)
+        // and both offered the same peer. The peer answers both; the second answer
+        // arrives in 'stable' and is discarded, so whichever offer it belonged to
+        // stays half-negotiated and that link carries no audio.
+        if (entry.negotiating || entry.pc.signalingState !== 'stable') {
+            this.voiceTrace('send-offer-skipped', { peer, state: entry.pc.signalingState, negotiating: !!entry.negotiating }, 'WARN');
+            return;
+        }
+        entry.negotiating = true;
+        try {
+            await this.sendVoiceOfferInner(entry, peer);
+        } finally {
+            entry.negotiating = false;
+        }
+    }
+
+    async sendVoiceOfferInner(entry, peer) {
         this.voiceTrace('send-offer', { peer, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '' });
         await this.attachLocalVoiceTracks(peer);
         const offer = await entry.pc.createOffer();
@@ -18009,7 +19097,7 @@ class ZaliInterface {
             sdpType: entry.pc.localDescription?.type || 'offer',
             sdpLength: entry.pc.localDescription?.sdp?.length || 0,
         });
-        this.sendVoiceEvent({
+        const delivered = this.sendVoiceEvent({
             type: 'voice_signal',
             roomId: this.voice.roomId,
             roomType: this.voice.roomType,
@@ -18024,6 +19112,45 @@ class ZaliInterface {
                 },
             },
         });
+        // offerSent used to latch true even when the signal never left the client
+        // (socket reconnecting, native bridge refused) — nothing ever retried, so the
+        // call sat there reporting "connected" with no media in either direction.
+        if (!delivered) {
+            entry.offerSent = false;
+            this.voiceTrace('offer-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
+            this.scheduleVoiceNegotiationRetry('offer-send-failed');
+        }
+    }
+
+    // Bounded re-run of the "get a mic, offer to whoever we owe an offer to" path.
+    // Every step of call setup that can fail silently (mic denied while the peer is
+    // already connected, a signal dropped by a reconnecting socket, an answer that
+    // couldn't be applied) ends up here instead of leaving a live-looking call that
+    // never carries audio.
+    scheduleVoiceNegotiationRetry(reason = 'retry') {
+        if (this.voice.negotiationRetryTimer) return;
+        const attempt = Number(this.voice.negotiationRetries || 0) + 1;
+        if (attempt > 8) {
+            this.voiceTrace('negotiation-retry-exhausted', { reason, attempt }, 'WARN');
+            return;
+        }
+        this.voice.negotiationRetries = attempt;
+        this.voiceTrace('negotiation-retry-scheduled', { reason, attempt });
+        this.voice.negotiationRetryTimer = setTimeout(async () => {
+            this.voice.negotiationRetryTimer = null;
+            if (!String(this.voice.roomId || '').trim()) return;
+            if (!this.isInActiveCall()) return;
+            try {
+                await this.ensureVoiceLocalStream();
+            } catch (error) {
+                this.voiceTrace('negotiation-retry-mic-failed', { error: error?.message || String(error) }, 'WARN');
+            }
+            try {
+                await this.syncVoicePeers();
+            } catch (error) {
+                this.voiceTrace('negotiation-retry-failed', { error: error?.message || String(error) }, 'WARN');
+            }
+        }, Math.min(1500 * attempt, 6000));
     }
 
     async restartVoicePeer(peer) {
@@ -18031,6 +19158,15 @@ class ZaliInterface {
         if (!name || !this.voice.roomId) return;
         const entry = this.getVoicePeerEntry(name);
         if (!entry || !this.voice.localStream) return;
+        // createOffer({iceRestart}) + setLocalDescription throws outside 'stable'.
+        // Both ends of a pair arm their own reconnect/health timers, so in a group
+        // call restarts land on top of an in-flight (re)negotiation routinely —
+        // queue instead of throwing and leaving the pair broken.
+        if (entry.negotiating || entry.pc.signalingState !== 'stable') {
+            entry.renegotiationPending = true;
+            this.voiceTrace('restart-queued', { peer: name, state: entry.pc.signalingState, negotiating: !!entry.negotiating }, 'WARN');
+            return;
+        }
         if (entry.healthTimer) {
             clearTimeout(entry.healthTimer);
             entry.healthTimer = null;
@@ -18063,6 +19199,62 @@ class ZaliInterface {
         });
     }
 
+    // Re-asserts room membership. The server evicts a user from their voice room
+    // 12 s after their WebSocket closes (the delayed cleanup in realtime.rs), and
+    // nothing ever re-joined afterwards: the browser voice socket's onopen doesn't
+    // re-join, and on native shells the voice transport reconnects entirely inside
+    // Swift/Rust (NetworkService.connectVoiceWebSocket / run_voice_transport) — JS
+    // never even learns it happened. So any blip past 12 s (Wi-Fi roam, VPN re-key,
+    // sleep) turned that one participant into a ghost: their UI still showed a live
+    // call, but the server no longer routed signals to them (route_voice_signal
+    // rejects a non-participant sender) and everyone else got a roster without them
+    // and tore down the peer. voice_join is idempotent, so re-sending it is enough.
+    sendVoiceRoomPresence() {
+        const roomId = String(this.voice.roomId || '').trim();
+        if (!roomId) return false;
+        const status = String(this.voice.status || '');
+        // Not while a DM invite is still ringing — the room is 'ringing' then and
+        // joining it would make us a participant before the call is even accepted.
+        if (status !== 'connecting' && status !== 'connected') return false;
+        const roomType = String(this.voice.roomType || '').trim();
+        if (roomType !== 'channel' && roomType !== 'dm') return false;
+        return this.sendVoiceEvent({
+            type: 'voice_join',
+            roomId,
+            roomType,
+            serverId: this.voice.serverId,
+            channelId: this.voice.channelId,
+            // Marks this as a membership re-assert rather than a real join, so the
+            // server treats it as non-destructive: it may put us back into a room we
+            // were evicted from, but must never move us out of one we are still in.
+            // Rooms are tracked per ACCOUNT, not per device — without this flag two
+            // devices on the same account in two different rooms would evict each
+            // other every keepalive tick and flap both calls forever.
+            keepalive: true,
+        });
+    }
+
+    ensureVoicePresenceKeepalive() {
+        if (this.voice.presenceTimer) return;
+        // Shorter than the server's 12 s eviction window, so a reconnect that lands
+        // inside it never costs the call; if it lands after, this is what brings the
+        // participant back instead of leaving them silently dropped.
+        this.voice.presenceTimer = setInterval(() => {
+            if (!String(this.voice.roomId || '').trim()) {
+                this.stopVoicePresenceKeepalive();
+                return;
+            }
+            this.sendVoiceRoomPresence();
+        }, 8000);
+    }
+
+    stopVoicePresenceKeepalive() {
+        if (this.voice.presenceTimer) {
+            clearInterval(this.voice.presenceTimer);
+            this.voice.presenceTimer = null;
+        }
+    }
+
     async syncVoicePeers() {
         const participants = Array.isArray(this.voice.participants) ? this.voice.participants : [];
         const peers = participants
@@ -18070,6 +19262,15 @@ class ZaliInterface {
             .filter(Boolean)
             .filter(name => name !== this.myName());
         const nextPeers = new Set(peers);
+        // The retry budget is a single global counter, so in a group call one peer
+        // that keeps failing used to burn all 8 attempts and then nothing — for any
+        // peer — could ever retry again. A changed roster is a genuinely new
+        // situation (someone joined or left), so give it a fresh budget.
+        const rosterKey = peers.slice().sort().join(' ');
+        if (this.voice.peerRosterKey !== rosterKey) {
+            this.voice.peerRosterKey = rosterKey;
+            this.voice.negotiationRetries = 0;
+        }
         this.voiceTrace('sync-peers', {
             roomId: this.voice.roomId || '',
             roomType: this.voice.roomType || '',
@@ -18085,17 +19286,39 @@ class ZaliInterface {
             }
         }
 
+        let offerPending = false;
         for (const peer of peers) {
             const entry = this.getVoicePeerEntry(peer);
-            await this.attachLocalVoiceTracks(peer);
-            this.attachLocalScreenTrackToPeer(peer);
-            if (this.shouldInitiateVoiceOffer(peer) && this.voice.localStream && !entry.offerSent) {
-                try {
-                    await this.sendVoiceOffer(peer);
-                } catch (e) {
-                    this.addLogEntry({ type: 'ERROR', msg: `Не удалось начать голосовой обмен с ${peer}`, ts: new Date().toLocaleTimeString() });
-                }
+            const attachedNow = await this.attachLocalVoiceTracks(peer);
+            // A peer whose offer we answered before the microphone was ready got a
+            // recvonly answer, and nothing renegotiated once the mic did arrive — so
+            // that side of the call stayed permanently silent. Adding tracks to an
+            // already-negotiated connection has no effect without a fresh offer.
+            if (attachedNow && entry.pc.remoteDescription) {
+                this.voiceTrace('late-local-tracks-renegotiate', { peer, roomId: this.voice.roomId || '' }, 'WARN');
+                await this.renegotiateVoicePeer(peer);
             }
+            this.attachLocalScreenTrackToPeer(peer);
+            if (!this.shouldInitiateVoiceOffer(peer)) continue;
+            if (!this.voice.localStream) {
+                // We owe this peer an offer but have no mic yet (permission prompt
+                // still open, device busy). Nothing else re-drove this before, so the
+                // call just stayed silent forever.
+                offerPending = true;
+                continue;
+            }
+            if (entry.offerSent) continue;
+            try {
+                await this.sendVoiceOffer(peer);
+            } catch (e) {
+                this.addLogEntry({ type: 'ERROR', msg: `Не удалось начать голосовой обмен с ${peer}`, ts: new Date().toLocaleTimeString() });
+            }
+            if (!entry.offerSent) offerPending = true;
+        }
+        if (offerPending) {
+            this.scheduleVoiceNegotiationRetry('offer-pending');
+        } else if (peers.length) {
+            this.voice.negotiationRetries = 0;
         }
         this.renderVoicePanel();
     }
@@ -18110,6 +19333,24 @@ class ZaliInterface {
             return;
         }
         const roomId = this.voiceRoomKeyForChannel(sid, cid);
+        if (!roomId) return;
+        // Joining a voice channel used to overwrite live call state exactly the way
+        // startDirectCall did: an in-progress DM call (or another voice channel) was
+        // never left, so the server kept us in the old room while the UI showed the
+        // new one. Same room = idempotent no-op instead of a redundant re-join.
+        const activeRoomId = String(this.voice.roomId || '').trim();
+        if (activeRoomId === roomId && this.isInActiveCall()) {
+            this.renderVoicePanel();
+            return;
+        }
+        if (activeRoomId && this.isInActiveCall()) {
+            await this.endCurrentVoiceSession({ reason: 'join-voice-channel' });
+        }
+        // Channel joins never unlocked playback, so the AudioContext could stay
+        // suspended for the whole session — this is a click handler, i.e. the one
+        // moment the browser lets us resume it.
+        await this.unlockVoicePlayback();
+        this.voice.negotiationRetries = 0;
         this.voice.roomId = roomId;
         this.voice.roomType = 'channel';
         this.voice.serverId = sid;
@@ -18123,6 +19364,7 @@ class ZaliInterface {
             serverId: sid,
             channelId: cid,
         });
+        this.ensureVoicePresenceKeepalive();
         this.renderVoicePanel();
     }
 
@@ -18150,58 +19392,150 @@ class ZaliInterface {
         this.resetVoiceState();
     }
 
+    // Tears down whatever voice session is live right now, picking the signal its
+    // state actually requires: a ringing *outgoing* invite must be cancelled, a
+    // ringing *incoming* one rejected, an established room left. Starting a new
+    // call used to just overwrite roomId/callTrack/participants in place, which
+    // left the previous room alive on the server (nobody ever sent voice_leave)
+    // and its RTCPeerConnections running headless — the "звонок поверх звонка"
+    // the user hit by pressing a call button mid-call.
+    async endCurrentVoiceSession({ reason = 'switch' } = {}) {
+        const roomId = String(this.voice.roomId || '').trim();
+        const status = String(this.voice.status || '');
+        const outgoing = this.voice.outgoingInvite;
+        const incoming = this.voice.incomingInvite;
+        this.voiceTrace('end-current-session', { reason, roomId, status });
+        if (status === 'incoming' && incoming?.roomId && incoming?.from) {
+            await this.rejectIncomingCall();
+            return;
+        }
+        if (status === 'calling' && outgoing?.roomId && outgoing?.target) {
+            this.sendVoiceEvent({
+                type: 'voice_call_cancel',
+                roomId: outgoing.roomId,
+                target: outgoing.target,
+            });
+            this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
+            this.resetVoiceState({ preserveInvite: false });
+            return;
+        }
+        if (roomId) {
+            await this.leaveVoiceRoom({ announce: true, outcome: 'completed' });
+            return;
+        }
+        this.resetVoiceState({ preserveInvite: false });
+    }
+
     async startDirectCall(peer, { video = false } = {}) {
         const target = String(peer || '').trim();
         if (!target) return;
-        const me = String(this.myName() || '').trim();
-        const roomId = this.makeDmCallRoomId(target);
-        if (!roomId) return;
-        this.voiceTrace('start-dm-call', { target, me, roomId, video });
-        this.voice.videoEnabled = !!video;
-        await this.unlockVoicePlayback();
-        this.voice.callTrack = {
-            roomId,
-            peer: target,
-            roomType: 'dm',
-            direction: 'outgoing',
-            startedAt: Date.now(),
-            connectedAt: 0,
-            endedAt: 0,
-            outcome: 'calling',
-            recorded: false,
-        };
-        this.voice.outgoingInvite = {
-            roomId,
-            target,
-        };
-        this.voice.roomId = roomId;
-        this.voice.roomType = 'dm';
-        this.voice.targetUser = target;
-        this.voice.inviter = me;
-        this.voice.participants = [me, target].filter(Boolean);
-        this.voice.status = 'calling';
-        this.sendVoiceEvent({
-            type: 'voice_call_invite',
-            roomId,
-            roomType: 'dm',
-            target,
-        });
-        this.renderVoicePanel();
+        // Re-entrancy guard. startDirectCall awaits (playback unlock, getUserMedia),
+        // so a double-click ran it twice before the first pass had any state to test
+        // against — and makeDmCallRoomId stamps a *fresh* roomId each time, so the
+        // server ended up with two ringing rooms for one pair. The callee auto-rejects
+        // the second as busy, the caller's outgoingInvite by then points at that second
+        // room, so the rejection wiped the caller's whole call state; the accept for the
+        // first room then arrived with no callTrack, leaving a call that reports
+        // "connected" while neither side ever sends an offer — a silent call.
+        if (this.voice.callSetupInFlight) {
+            this.voiceTrace('start-dm-call-ignored-busy-setup', { target }, 'WARN');
+            return;
+        }
+        const activeRoomId = String(this.voice.roomId || '').trim();
+        if (activeRoomId && this.isInActiveCall()) {
+            const activePeer = String(this.voice.targetUser || this.voice.inviter || '').trim();
+            if (activePeer === target) {
+                this.voiceTrace('start-dm-call-ignored-same-peer', {
+                    target,
+                    roomId: activeRoomId,
+                    status: this.voice.status || '',
+                }, 'WARN');
+                this.renderVoicePanel();
+                return;
+            }
+        }
+        // Latched before the teardown below, not after it: ending the previous call
+        // awaits, and a second click landing in that window would otherwise sail past
+        // the guard and start a parallel setup.
+        this.voice.callSetupInFlight = true;
         try {
-            await this.ensureVoiceLocalStream();
-            await this.syncVoicePeers();
-        } catch (error) {
-            this.addLogEntry({
-                type: 'WARN',
-                msg: error?.message || 'Не удалось подготовить микрофон для звонка',
-                ts: new Date().toLocaleTimeString(),
+            if (activeRoomId && this.isInActiveCall()) {
+                this.addLogEntry({
+                    type: 'INFO',
+                    msg: `Завершаем текущий звонок перед звонком ${target}`,
+                    ts: new Date().toLocaleTimeString(),
+                });
+                await this.endCurrentVoiceSession({ reason: 'start-other-call' });
+            }
+            const me = String(this.myName() || '').trim();
+            const roomId = this.makeDmCallRoomId(target);
+            if (!roomId) return;
+            this.voiceTrace('start-dm-call', { target, me, roomId, video });
+            this.voice.videoEnabled = !!video;
+            await this.unlockVoicePlayback();
+            this.voice.callTrack = {
+                roomId,
+                peer: target,
+                roomType: 'dm',
+                direction: 'outgoing',
+                startedAt: Date.now(),
+                connectedAt: 0,
+                endedAt: 0,
+                outcome: 'calling',
+                recorded: false,
+            };
+            this.voice.outgoingInvite = {
+                roomId,
+                target,
+            };
+            this.voice.roomId = roomId;
+            this.voice.roomType = 'dm';
+            this.voice.targetUser = target;
+            this.voice.inviter = me;
+            this.voice.participants = [me, target].filter(Boolean);
+            this.voice.status = 'calling';
+            this.voice.negotiationRetries = 0;
+            this.sendVoiceEvent({
+                type: 'voice_call_invite',
+                roomId,
+                roomType: 'dm',
+                target,
             });
+            this.renderVoicePanel();
+            try {
+                await this.ensureVoiceLocalStream();
+                await this.syncVoicePeers();
+            } catch (error) {
+                this.addLogEntry({
+                    type: 'WARN',
+                    msg: error?.message || 'Не удалось подготовить микрофон для звонка',
+                    ts: new Date().toLocaleTimeString(),
+                });
+            }
+        } finally {
+            this.voice.callSetupInFlight = false;
         }
     }
 
     async acceptIncomingCall() {
         const invite = this.voice.incomingInvite;
         if (!invite?.roomId || !invite?.from) return;
+        // Same re-entrancy hazard as startDirectCall: this awaits before it clears
+        // incomingInvite, so a double-tap on «Принять» sent two voice_call_accept
+        // events and restarted the local setup mid-flight.
+        if (this.voice.callSetupInFlight) {
+            this.voiceTrace('accept-incoming-ignored-busy-setup', { roomId: invite.roomId }, 'WARN');
+            return;
+        }
+        this.voice.callSetupInFlight = true;
+        try {
+            await this.performAcceptIncomingCall(invite);
+        } finally {
+            this.voice.callSetupInFlight = false;
+        }
+    }
+
+    async performAcceptIncomingCall(invite) {
         const me = String(this.myName() || '').trim();
         this.voiceTrace('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
         await this.unlockVoicePlayback();
@@ -18211,6 +19545,7 @@ class ZaliInterface {
         this.voice.inviter = String(invite.from || '').trim();
         this.voice.participants = [me, String(invite.from || '').trim()].filter(Boolean);
         this.voice.status = 'connecting';
+        this.voice.negotiationRetries = 0;
         this.voice.callTrack = {
             roomId: invite.roomId,
             peer: invite.from,
@@ -18315,11 +19650,57 @@ class ZaliInterface {
         }
     }
 
+    // handleVoiceEvent is dispatched fire-and-forget from both sockets, so signal
+    // application used to interleave freely across its awaits (ensureVoiceLocalStream,
+    // setRemoteDescription, createAnswer). With one peer that is mostly survivable;
+    // in a group call every extra participant multiplies the traffic and two signals
+    // for the SAME peer routinely overlapped — an ICE candidate reading
+    // `pc.remoteDescription` as null mid-way through the offer handler got queued
+    // into pendingIceCandidates *after* flushPendingVoiceIceCandidates had already
+    // drained it, so those candidates sat there forever and that one pair never
+    // completed ICE. Chain per peer: different peers still negotiate in parallel
+    // (a blocked mic prompt for one must not stall the rest), signals for the same
+    // peer apply strictly in order.
     async handleVoiceSignal(signal = {}) {
+        const peer = String(signal.from || signal.sender || '').trim();
+        if (!peer) return;
+        const chains = this.voice.signalChains || (this.voice.signalChains = new Map());
+        const previous = chains.get(peer) || Promise.resolve();
+        const result = previous.then(() => this.applyVoiceSignal(signal));
+        // The stored tail swallows rejections so one failed signal can't poison
+        // every later signal from that peer; the caller still sees the real result.
+        const tail = result.catch(() => {});
+        chains.set(peer, tail);
+        try {
+            return await result;
+        } finally {
+            // Drop the entry once this was the last queued signal, so a long-lived
+            // room doesn't retain a promise per peer that ever spoke to us.
+            if (chains.get(peer) === tail) chains.delete(peer);
+        }
+    }
+
+    async applyVoiceSignal(signal = {}) {
         const roomId = String(signal.roomId || '').trim();
         const from = String(signal.from || signal.sender || '').trim();
         const signalPayload = signal.signal || signal.payload || signal;
         if (!roomId || !from || !signalPayload) return;
+        // Signals were applied no matter which room they belonged to, and the offer
+        // branch below writes roomId/roomType/targetUser/inviter straight from the
+        // signal — so one late offer/ICE packet from a room we already left (a
+        // cancelled invite, a call the peer restarted) re-pointed the live session at
+        // a dead room and killed the call in progress. Only the room we are actually
+        // in may drive negotiation.
+        const currentRoomId = String(this.voice.roomId || '').trim();
+        if (currentRoomId && roomId !== currentRoomId) {
+            this.voiceTrace('signal-foreign-room', {
+                roomId,
+                currentRoomId,
+                from,
+                signalType: signalPayload.type || '',
+            }, 'WARN');
+            return;
+        }
         this.voiceTrace('signal-recv', {
             roomId,
             from,
@@ -18329,6 +19710,22 @@ class ZaliInterface {
         });
 
         if (signalPayload.type === 'offer') {
+            // A peer that was evicted and re-joined (or simply gave up on this link)
+            // builds a brand-new RTCPeerConnection, so its offer carries new ICE
+            // credentials and a new DTLS fingerprint. Feeding that to a pc whose
+            // transport already died never recovers — the returning participant
+            // stayed silently outside the call while everyone else reconnected fine.
+            // Rebuild instead of trying to revive a terminal connection.
+            const stale = this.voice.peerConnections.get(from);
+            if (stale && (stale.pc.connectionState === 'failed' || stale.pc.signalingState === 'closed')) {
+                this.voiceTrace('offer-on-dead-peer-rebuild', {
+                    roomId,
+                    from,
+                    state: stale.pc.connectionState,
+                    signaling: stale.pc.signalingState,
+                }, 'WARN');
+                this.closeVoicePeer(from);
+            }
             const entry = this.getVoicePeerEntry(from);
             // Mid-call renegotiation (camera/screen-share toggles) means either
             // side can now send an offer at any time, not just once at call
@@ -18360,6 +19757,14 @@ class ZaliInterface {
             if (this.voice.status !== 'connected') {
                 this.voice.status = 'connecting';
             }
+            // Answering is a negotiation too, and it holds the same latch offers use.
+            // Per-peer signal chaining orders incoming signals, but syncVoicePeers is
+            // driven independently by voice_room_state — which in a group call fires
+            // on every join/leave. Without this, a sync landing in the window between
+            // ensureVoiceLocalStream() and setRemoteDescription() still saw 'stable'
+            // and sent its own offer, and the setRemoteDescription that followed threw
+            // InvalidStateError, leaving that one link unnegotiated.
+            entry.negotiating = true;
             try {
                 if (offerCollision) {
                     this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
@@ -18369,6 +19774,9 @@ class ZaliInterface {
                     await this.ensureVoiceLocalStream();
                 } catch (error) {
                     this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось получить доступ к микрофону', ts: new Date().toLocaleTimeString() });
+                    // Answering without local tracks produces a recvonly answer; retry
+                    // so the mic can still join the call once it becomes available.
+                    this.scheduleVoiceNegotiationRetry('offer-without-mic');
                 }
                 await this.attachLocalVoiceTracks(from);
                 this.voiceTrace('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, peer: from });
@@ -18399,9 +19807,26 @@ class ZaliInterface {
                     },
                 });
                 this.voice.participants = Array.from(new Set([this.myName(), from].concat(this.voice.participants || [])));
+                if (offerCollision) {
+                    // Rolling back discarded whatever WE were offering (a freshly
+                    // added camera/screen track, an ICE restart) — the answer we just
+                    // sent describes the peer's offer, not our pending change, so
+                    // without re-offering, that change never reaches this peer.
+                    this.voiceTrace('offer-collision-requeue', { roomId, from }, 'WARN');
+                    entry.renegotiationPending = true;
+                }
             } catch (error) {
                 this.voiceTrace('offer-apply-error', { roomId, from, error: error?.message || String(error) }, 'WARN');
                 this.addLogEntry({ type: 'WARN', msg: error?.message || `Не удалось применить предложение звонка от ${from}`, ts: new Date().toLocaleTimeString() });
+            } finally {
+                entry.negotiating = false;
+                // onsignalingstatechange already fired for the answer while the latch
+                // was still held, so it skipped the drain — do it here instead, or a
+                // requeued renegotiation would sit until some unrelated state change.
+                if (entry.renegotiationPending && entry.pc.signalingState === 'stable') {
+                    entry.renegotiationPending = false;
+                    this.renegotiateVoicePeer(from).catch(() => {});
+                }
             }
             this.renderVoicePanel();
             return;
@@ -18409,6 +19834,21 @@ class ZaliInterface {
 
         const entry = this.getVoicePeerEntry(from);
         if (signalPayload.type === 'answer') {
+            // An answer is only applicable to an offer we still have outstanding.
+            // Applying one in any other signaling state throws InvalidStateError —
+            // and this used to be an unguarded await inside an async handler, so the
+            // rejection aborted the rest of handleVoiceEvent and surfaced as an
+            // unhandled rejection instead of a recoverable call. It happens for real:
+            // a rolled-back offer (glare) or a peer that restarted its connection
+            // leaves us 'stable' while its answer is still in flight.
+            if (entry.pc.signalingState !== 'have-local-offer') {
+                this.voiceTrace('signal-answer-ignored', {
+                    roomId,
+                    from,
+                    state: entry.pc.signalingState,
+                }, 'WARN');
+                return;
+            }
             this.voiceTrace('signal-answer-apply', {
                 roomId,
                 from,
@@ -18417,9 +19857,17 @@ class ZaliInterface {
                 sdpType: signalPayload.sdp?.type || '',
                 sdpLength: signalPayload.sdp?.sdp?.length || 0,
             });
-            await entry.pc.setRemoteDescription(signalPayload.sdp);
-            await this.flushPendingVoiceIceCandidates(entry, from);
-            this.voice.status = 'connected';
+            try {
+                await entry.pc.setRemoteDescription(signalPayload.sdp);
+                await this.flushPendingVoiceIceCandidates(entry, from);
+                this.voice.status = 'connected';
+            } catch (error) {
+                this.voiceTrace('answer-apply-error', { roomId, from, error: error?.message || String(error) }, 'WARN');
+                // The offer is dead — clear the latch so the negotiation retry below
+                // can produce a fresh one instead of leaving a mute call standing.
+                entry.offerSent = false;
+                this.scheduleVoiceNegotiationRetry('answer-apply-failed');
+            }
             this.renderVoicePanel();
             return;
         }
@@ -18784,6 +20232,10 @@ class ZaliInterface {
                 }
             }
             if (amParticipant && roomStatus !== 'ringing' && roomStatus !== 'pending') {
+                // Covers every way into a live room, not just joinVoiceChannel:
+                // accepting a DM call, and a room restored from the server's
+                // reconnect snapshot.
+                this.ensureVoicePresenceKeepalive();
                 try {
                     await this.ensureVoiceLocalStream();
                 } catch (error) {
@@ -21794,6 +23246,10 @@ class ZaliInterface {
         if (overlay) {
             const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;
             overlay.classList.toggle('visible', shouldShow);
+            // The overlay covers whichever view is active underneath, so a
+            // native bottom bar must come back while it is up and re-hide once
+            // it closes onto the chat screen (notifyNativeMobileNav reads it).
+            this.syncNativeMobileNav();
         }
 
         const authTitle = document.getElementById('authTitle');
@@ -24280,6 +25736,71 @@ class ZaliInterface {
         this.renderContacts();
     }
 
+    closeContactContextMenu() {
+        const existing = document.getElementById('contactContextMenu');
+        if (existing) existing.remove();
+        if (this._contactContextMenuOutsideHandler) {
+            document.removeEventListener('click', this._contactContextMenuOutsideHandler);
+            document.removeEventListener('contextmenu', this._contactContextMenuOutsideHandler);
+            this._contactContextMenuOutsideHandler = null;
+        }
+    }
+
+    // Right-click on a contact — notification mute (existing behavior) plus
+    // per-contact call volume, applied live to that peer's WebAudio gain node
+    // (see ensureRemotePlaybackNode/applyPeerVolume) when they're in a call,
+    // and persisted for future calls either way.
+    openContactContextMenu(peer, x, y) {
+        this.closeContactContextMenu();
+        const name = String(peer || '').trim();
+        if (!name) return;
+        const muted = !!(this.S.mutedChats || {})[name];
+        const percent = this.getPeerVolumePercent(name);
+        const menu = document.createElement('div');
+        menu.id = 'contactContextMenu';
+        menu.className = 'peer-context-menu';
+        menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" data-action="mute">
+                <span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
+            </button>
+            <div class="peer-context-menu-volume">
+                <span>Громкость собеседника: <strong id="contactVolumeValue">${percent}%</strong></span>
+                <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange" class="settings-range">
+            </div>
+        `;
+        document.body.appendChild(menu);
+
+        const rect = menu.getBoundingClientRect();
+        const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
+        const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+
+        menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
+            this.toggleMutePeer(name);
+            this.closeContactContextMenu();
+        });
+        const range = menu.querySelector('#contactVolumeRange');
+        const label = menu.querySelector('#contactVolumeValue');
+        range?.addEventListener('input', () => {
+            const value = Number(range.value) || 100;
+            if (label) label.textContent = `${value}%`;
+            this.setPeerVolumePercent(name, value);
+        });
+
+        const outsideHandler = (evt) => {
+            if (menu.contains(evt.target)) return;
+            this.closeContactContextMenu();
+        };
+        this._contactContextMenuOutsideHandler = outsideHandler;
+        // Deferred a tick so the contextmenu event that opened this menu
+        // doesn't immediately bubble into the same listener and close it.
+        setTimeout(() => {
+            document.addEventListener('click', outsideHandler);
+            document.addEventListener('contextmenu', outsideHandler);
+        }, 0);
+    }
+
     toggleMuteChannel(serverId, channelId) {
         const sid = String(serverId || '').trim();
         const cid = String(channelId || '').trim();
@@ -24590,6 +26111,10 @@ class ZaliInterface {
             // waiting out each message's retry backoff (which grows up to 30s). This
             // was the cause of the long send delay after an account switch / blip.
             this.kickPendingOutboxNow('reconnect');
+            // Don't wait out the keepalive tick to get back into the voice room: if
+            // the blip outlasted the server's 12 s eviction window we are already out
+            // of it, and every second here is a second of one-sided silence.
+            if (!wasOn) this.sendVoiceRoomPresence();
             // The server only PUSHES messages in real time; anything that arrived
             // while we were offline is never re-sent. So on (re)connect we must pull
             // the active conversation to catch up — otherwise a message sent while the
@@ -24911,7 +26436,7 @@ class ZaliInterface {
                 const row = e.target.closest('.contact');
                 if (!row || !row.dataset.name) return;
                 e.preventDefault();
-                this.toggleMutePeer(row.dataset.name);
+                this.openContactContextMenu(row.dataset.name, e.clientX, e.clientY);
             });
         }
 
@@ -25408,6 +26933,9 @@ class ZaliInterface {
         const inputVoiceTrace = document.getElementById('inputVoiceTrace');
         const hubSegmentSettings = document.getElementById('hubSegmentSettings');
         const recentAccounts = document.getElementById('recentAccounts');
+        const inputAudioMic = document.getElementById('inputAudioMic');
+        const inputAudioSpeaker = document.getElementById('inputAudioSpeaker');
+        const inputMasterVolume = document.getElementById('inputMasterVolume');
 
         const openAvatarPicker = () => {
             const input = document.createElement('input');
@@ -25463,8 +26991,27 @@ class ZaliInterface {
         if (settingsBtn) settingsBtn.addEventListener('click', () => {
             this.applyNetworkConfigToInputs();
             this.renderUiV2Settings();
+            this.renderAudioDeviceSettings();
             showSettingsView();
         });
+        if (inputAudioMic) {
+            inputAudioMic.addEventListener('change', () => {
+                this.setAudioInputDevice(inputAudioMic.value);
+            });
+        }
+        if (inputAudioSpeaker) {
+            inputAudioSpeaker.addEventListener('change', () => {
+                this.setAudioOutputDevice(inputAudioSpeaker.value);
+            });
+        }
+        if (inputMasterVolume) {
+            inputMasterVolume.addEventListener('input', () => {
+                this.setMasterVolumePercent(inputMasterVolume.value);
+            });
+        }
+        if (navigator.mediaDevices?.addEventListener) {
+            navigator.mediaDevices.addEventListener('devicechange', () => this.refreshAudioDeviceOptions());
+        }
         if (inputUiV2Enabled) {
             inputUiV2Enabled.addEventListener('change', () => {
                 this.saveUiV2Enabled(!!inputUiV2Enabled.checked);
@@ -26255,6 +27802,7 @@ class ZaliInterface {
         this.resizeComposer();
         this.syncMobileChrome();
         this.setupMobileNavGestures();
+        this.setupMobileForwardNavGesture();
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();
         this.applyUiV2Chrome();
