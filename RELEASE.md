@@ -149,11 +149,21 @@ cd core && cargo build --release && cd ..
 ./scripts/build_app.sh
 ```
 
-Результат: `ZaliMessenger.app`. Для публикации его надо упаковать в zip:
+Результат: `ZaliMessenger.app`. Для публикации его надо упаковать в zip — именно
+через `ditto`, потому что `UpdateService.installAndRelaunch` распаковывает архив
+им же и ищет внутри `.app`:
 
 ```bash
-zip -r ZaliMessenger-<версия>.zip ZaliMessenger.app
+ditto -c -k --keepParent ZaliMessenger.app ZaliMessenger-<версия>.zip
 ```
+
+> **Если линковка падает с `ld: Assertion failed: (name.size() <= maxLength)`** —
+> это разросшийся веб-бандл. `bundle_web.py` кладёт HTML+CSS+JS в `Assets.swift`
+> как Swift-литералы; каждый литерал становится одним `__cstring`-атомом, а ld64
+> именует атом его же содержимым и падает на имени больше ~1 МиБ. Ошибка не
+> называет ни файла, ни символа. Генератор режет бандл на куски по 200 000
+> символов, так что само по себе это повториться не должно — но если появится
+> снова, уменьшите `max_chunk_chars` в `scripts/bundle_web.py`.
 
 Windows публикуется как «голый» `.exe`, zip ему не нужен.
 
@@ -172,6 +182,16 @@ Windows публикуется как «голый» `.exe`, zip ему не н�
 
 - Windows — `version` в `apps/windows/Cargo.toml`
 - macOS — `APP_VERSION` в `scripts/build_app.sh`
+
+> **Публикация той же версии, что уже стоит у клиента, не делает ничего — молча.**
+> `checkForAppUpdate()` выходит на `compareVersions(latest, current) <= 0`, без
+> единого сообщения в интерфейсе и без записи в лог. Внешне это неотличимо от
+> «автообновление сломано». Если обновление не предлагается — первым делом
+> сравните опубликованную версию с той, что зашита в клиенте:
+>
+> ```bash
+> curl -s "https://msgs.zalikus.org/api/version?platform=macos" | python3 -m json.tool
+> ```
 
 ### 5.2. Загрузить артефакт
 

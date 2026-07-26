@@ -11,7 +11,7 @@ APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
 # Bump this on every release published via POST /api/version (see CLAUDE.md's
 # "Publishing a client release" section) — the in-app updater compares it
 # against the server's app_releases.version for platform=macos.
-APP_VERSION="1.1.0"
+APP_VERSION="1.1.1"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 
