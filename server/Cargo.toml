@@ -25,6 +25,10 @@ path = "../tests/messages_and_realtime.rs"
 name = "servers_channels_roles"
 path = "../tests/servers_channels_roles.rs"
 
+[[test]]
+name = "conversation_keys"
+path = "../tests/conversation_keys.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }

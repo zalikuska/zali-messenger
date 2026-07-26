@@ -30,6 +30,7 @@
     "DOWNLOAD_UPDATE_REQUEST": { "fields": ["url", "sha256", "requestId"] },
     "INSTALL_UPDATE_REQUEST": { "fields": ["requestId"] },
     "SET_UNREAD_BADGE": { "fields": ["count"] },
+    "MOBILE_NAV_PROGRESS": { "fields": ["progress", "animate"] },
     "START_SCREEN_CAPTURE": { "fields": ["requestId"] },
     "STOP_SCREEN_CAPTURE": { "fields": ["requestId"] }
   }

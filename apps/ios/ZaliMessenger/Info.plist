@@ -29,6 +29,15 @@
     </array>
     <key>UIUserInterfaceStyle</key>
     <string>Dark</string>
+    <!-- ProMotion opt-in. Without this key iOS clamps the app's CoreAnimation
+         frame rate to 60 Hz on 120 Hz iPhones (13 Pro and later) no matter how
+         cheap our frames are — the WKWebView compositor inherits that clamp, so
+         scrolling and every CSS transition ran at half the panel's capability.
+         Setting it lets the display link go up to the device maximum (120 Hz).
+         Purely a frame-pacing ceiling: nothing about what is drawn changes.
+         iPad ProMotion is not gated behind this key and was already unclamped. -->
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
     <key>NSCameraUsageDescription</key>
     <string>Камера нужна для видеозвонков и отправки медиа в Zali Messenger.</string>
     <key>NSMicrophoneUsageDescription</key>

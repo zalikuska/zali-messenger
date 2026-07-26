@@ -1501,6 +1501,16 @@ struct WebView: NSViewRepresentable {
                     // switch exhaustiveness.
                     break
 
+                case .mobileNavProgress:
+                    // Android-only (see MainActivity.kt/NativeBridge.kt): syncs the
+                    // mobile list<->chat push-nav progress into the native Compose
+                    // bottom bar, which sits outside the WebView there and can't see
+                    // interface.js's own transform. macOS has no such native bar —
+                    // `mobileNav` is never advertised as a supported capability here,
+                    // so interface.js never sends this. No-op kept only for switch
+                    // exhaustiveness.
+                    break
+
                 case .minimizeWindow, .maximizeWindow, .closeWindow:
                     // Windows-only (native OS decorations are switched off there in
                     // favor of an in-app titlebar, see apps/windows/src/main.rs). This

@@ -224,13 +224,27 @@ pub(crate) async fn register_device(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    let result: Result<(bool, i64), sqlx::Error> = async {
+    let result: Result<(bool, i64, bool), sqlx::Error> = async {
         let approved_count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
         )
         .bind(&owner)
         .fetch_one(&mut *conn)
         .await?;
+
+        // Every login re-POSTs this device, which lands on the ON CONFLICT branch
+        // below. Only a row that did not exist yet is a genuinely new device worth
+        // waking every peer for — without this check the key-republish nudge would
+        // fire on each login of each user and fan a full republish sweep out to
+        // everyone they have ever messaged.
+        let is_new_device = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND device_id = ?",
+        )
+        .bind(&owner)
+        .bind(&device_id)
+        .fetch_one(&mut *conn)
+        .await?
+            == 0;
 
         let first_device = approved_count == 0;
         let group_epoch = if first_device {
@@ -309,11 +323,11 @@ pub(crate) async fn register_device(
         }
 
         sqlx::query("COMMIT").execute(&mut *conn).await?;
-        Ok((first_device, group_epoch))
+        Ok((first_device, group_epoch, is_new_device))
     }
     .await;
 
-    let (first_device, group_epoch) = match result {
+    let (first_device, group_epoch, is_new_device) = match result {
         Ok(value) => value,
         Err(e) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
@@ -345,6 +359,18 @@ pub(crate) async fn register_device(
         .await;
     }
 
+    // A second (or tenth) device of an existing account starts life with zero
+    // key envelopes addressed to it — get_key_envelopes filters by exact
+    // recipient_device_id — and used to be nudged only once someone approved it.
+    // In production almost nobody ever approves (11 devices on one account, 1
+    // approved), so those devices sat keyless, invented their own conversation
+    // keys and encrypted real messages with them. Nudging on *registration*
+    // closes that gap: every peer that has ever sent this account a key
+    // republishes to the new device right away.
+    if is_new_device && !first_device {
+        notify_key_republish_peers(&state, &owner, "register_device").await;
+    }
+
     match load_device(&state.db, &owner, &device_id).await {
         Ok(Some(device)) => Json(device_record_to_response(device)).into_response(),
         Ok(None) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -353,6 +379,34 @@ pub(crate) async fn register_device(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Ask everyone who has ever published a conversation key to `owner` to publish
+/// it again, so a device that just appeared (registered or approved) gets the
+/// envelopes it missed. Also notifies the owner's own other devices, which is
+/// how a second device of the same account learns to re-export its vault.
+pub(crate) async fn notify_key_republish_peers(state: &Arc<AppState>, owner: &str, label: &str) {
+    let senders = match sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT sender FROM conversation_key_envelopes WHERE owner = ?",
+    )
+    .bind(owner)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Ошибка выборки отправителей ключей для {}: {}", owner, e);
+            return;
+        }
+    };
+    let notify_payload = serde_json::json!({ "type": "device_approved" }).to_string();
+    for sender in senders {
+        send_payload_to_user(state, &sender, notify_payload.clone(), label).await;
+    }
+    // The owner's other sessions re-publish their own conversation keys to the
+    // new device too — for a DM whose canonical key this account holds, no peer
+    // republish can supply it.
+    send_payload_to_user(state, owner, notify_payload, label).await;
 }
 
 pub(crate) async fn approve_device(
@@ -481,18 +535,7 @@ pub(crate) async fn approve_device(
     // republishes on their own next login — unbounded wait for the new device to
     // ever become readable. Reuses the same push primitive as post_key_envelope's
     // key_envelope_available notification, no new table/schema needed.
-    if let Ok(senders) = sqlx::query_scalar::<_, String>(
-        "SELECT DISTINCT sender FROM conversation_key_envelopes WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_all(&state.db)
-    .await
-    {
-        let notify_payload = serde_json::json!({ "type": "device_approved" }).to_string();
-        for sender in senders {
-            send_payload_to_user(&state, &sender, notify_payload.clone(), "approve_device").await;
-        }
-    }
+    notify_key_republish_peers(&state, &owner, "approve_device").await;
 
     match load_device(&state.db, &owner, &target_id).await {
         Ok(Some(device)) => Json(device_record_to_response(device)).into_response(),

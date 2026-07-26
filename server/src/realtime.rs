@@ -164,8 +164,42 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
 
     send_voice_room_snapshot_to_user(&state, &username).await;
 
+    // Server-initiated keepalive. Without it the only thing holding an idle
+    // connection open was the client's own app-level {"type":"ping"} every 25 s —
+    // and in a browser that is a setInterval, which Chrome/Safari throttle in a
+    // hidden tab (down to roughly once a minute under intensive throttling). A
+    // steady voice call generates NO WebSocket traffic of its own (media is P2P),
+    // so whoever had the window in the background drifted past the reverse proxy's
+    // idle timeout and got their socket closed under them — one participant
+    // dropping out of the call at random, over and over. Protocol-level Ping frames
+    // are answered by the browser's own WebSocket stack without ever waking JS, so
+    // they are immune to that throttling; they also give us dead-peer detection,
+    // which nothing had before: a half-open connection used to sit in
+    // user_connections forever, making the user look online (suppressing the voice
+    // room cleanup) while every signal sent to them went nowhere.
+    let mut keepalive = tokio::time::interval(Duration::from_secs(20));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // interval()'s first tick resolves immediately — consume it so a freshly opened
+    // connection isn't pinged before it has been used for anything.
+    keepalive.tick().await;
+    let mut last_seen = std::time::Instant::now();
+
     loop {
         tokio::select! {
+            _ = keepalive.tick() => {
+                if last_seen.elapsed() > Duration::from_secs(70) {
+                    warn!(
+                        "WS idle timeout username={} silent_for={}s",
+                        username,
+                        last_seen.elapsed().as_secs()
+                    );
+                    break;
+                }
+                if socket.send(WsMessage::Ping(Vec::new())).await.is_err() {
+                    warn!("WS keepalive ping failed username={}", username);
+                    break;
+                }
+            }
             Some(msg) = rx.recv() => {
                 trace!("WS outbound username={} bytes={}", username, msg.len());
                 if socket.send(WsMessage::Text(msg)).await.is_err() {
@@ -174,6 +208,11 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                 }
             }
             result = socket.recv() => {
+                // Any inbound frame proves the peer is alive — including the Pong
+                // the browser sends back automatically for our keepalive Ping.
+                if matches!(result, Some(Ok(_))) {
+                    last_seen = std::time::Instant::now();
+                }
                 match result {
                     Some(Ok(WsMessage::Text(text))) => {
                         trace!("WS inbound username={} text_bytes={}", username, text.len());
@@ -261,7 +300,15 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
         let state_for_cleanup = state.clone();
         let username_for_cleanup = username.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(12)).await;
+            // 12 s was shorter than a normal reconnect: the browser voice socket
+            // backs off 1→2→4→8 s and has to fetch a fresh ws-ticket over HTTP
+            // first, and the native shells' voice transports back off on their own
+            // schedules — so an ordinary blip evicted the user from the call before
+            // they were back. This only needs to outlast a reconnect, not a real
+            // departure: an explicit voice_leave / voice_call_end still removes the
+            // participant immediately, and a genuinely gone client is now detected
+            // by the keepalive above rather than by this timer.
+            tokio::time::sleep(Duration::from_secs(45)).await;
             let still_connected = state_for_cleanup
                 .user_connections
                 .get(&username_for_cleanup)

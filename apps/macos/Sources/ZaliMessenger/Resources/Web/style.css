@@ -1,4 +1,18 @@
 :root {
+    /* Safe-area insets, defined ONCE here and consumed everywhere else as
+       var(--m-safe-*) — never as a bare env() — so a native shell can override
+       them by writing an inline custom property on <html> (inline wins over
+       this rule).
+       Why that matters: Android WebView only ever reports display *cutouts*
+       through env(safe-area-inset-*), never the status bar or the navigation
+       bar. With the Activity edge-to-edge (enableEdgeToEdge() in MainActivity),
+       the page really does extend under both, but env() stays 0 — so the chat
+       header rendered under the clock/battery and the message input under the
+       3-button navigation bar. MainActivity pushes the real WindowInsets
+       (system bars ∪ display cutout, in dp == CSS px at initial-scale=1) into
+       these two variables instead. iOS/macOS/browsers keep the env() values. */
+    --m-safe-top: env(safe-area-inset-top, 0px);
+    --m-safe-bottom: env(safe-area-inset-bottom, 0px);
     --lime: #cbff00;
     --lime-dim: rgba(203,255,0,.1);
     --lime-glow: rgba(203,255,0,.25);
@@ -275,7 +289,7 @@ button {
 .mobile-dock {
     position: fixed;
     left: 50%;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + var(--m-safe-bottom));
     z-index: 22;
     display: none;
     align-items: stretch;
@@ -2738,6 +2752,63 @@ body[data-nav-mode="servers"] .contacts {
     gap: 12px;
 }
 
+.settings-field {
+    display: grid;
+    gap: 6px;
+}
+
+.settings-field > span:first-child {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.settings-range {
+    width: 100%;
+    accent-color: var(--lime);
+}
+
+.peer-context-menu {
+    position: fixed;
+    z-index: 500;
+    min-width: 240px;
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--sidebar);
+    box-shadow: 0 18px 40px rgba(0,0,0,.45);
+    display: grid;
+    gap: 6px;
+}
+
+.peer-context-menu-item {
+    display: flex;
+    align-items: center;
+    padding: 9px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.03);
+    cursor: pointer;
+    color: var(--text);
+    font-size: 13px;
+    border: none;
+    text-align: left;
+}
+
+.peer-context-menu-item:hover {
+    background: rgba(var(--accent-rgb), .12);
+}
+
+.peer-context-menu-volume {
+    display: grid;
+    gap: 6px;
+    padding: 8px 10px;
+}
+
+.peer-context-menu-volume span {
+    font-size: 12px;
+    color: var(--text2);
+}
+
 .settings-control-row {
     display: grid;
     grid-template-columns: 88px minmax(0, 1fr) 64px;
@@ -4306,6 +4377,15 @@ body[data-nav-mode="servers"] .contacts {
     align-items: flex-end;
     position: relative;
     margin: 0 0 calc(var(--msg-gap) * 1px);
+    /* Same containment .contact already carries: it caps how far a single row's
+       layout invalidation can propagate, so editing/hydrating one bubble stops
+       costing a relayout of the entire list inside the blurred panel.
+       `paint` is deliberately NOT in the list — .msg.group-start::before sits at
+       top:-7px, outside the row's own box, and paint containment would clip that
+       separator away. layout+style clip nothing, and .msg is already
+       position:relative + a flex container, so neither the containing block for
+       absolute descendants nor the formatting context changes here. */
+    contain: layout style;
 }
 
 .server-msg {
@@ -5993,7 +6073,7 @@ body[data-nav-mode="servers"] .contacts {
     .body {
         grid-template-columns: 1fr;
         gap: 0;
-        padding: 12px 12px calc(152px + env(safe-area-inset-bottom, 0px));
+        padding: 12px 12px calc(152px + var(--m-safe-bottom));
     }
 
     /* Mobile list<->chat push navigation. #viewChat sits ABOVE .sidebar
@@ -6013,7 +6093,7 @@ body[data-nav-mode="servers"] .contacts {
         top: 52px;
         left: 12px;
         right: 12px;
-        bottom: calc(12px + 82px + env(safe-area-inset-bottom, 0px));
+        bottom: calc(12px + 82px + var(--m-safe-bottom));
         z-index: 20;
         width: auto;
         transform: translateY(115%);
@@ -6529,7 +6609,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
    overlaps the top of the viewport instead of pushing it down, so pad it ourselves. */
 @media (display-mode: standalone) {
     .titlebar {
-        padding-top: env(safe-area-inset-top, 0px);
+        padding-top: var(--m-safe-top);
     }
 }
 
@@ -6538,7 +6618,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     position: fixed;
     left: 12px;
     right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + var(--m-safe-bottom));
     z-index: 60;
     display: none;
     align-items: center;
@@ -6829,8 +6909,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
    ========================================================================== */
 @media (max-width: 760px) {
     :root {
-        --m-safe-top: env(safe-area-inset-top, 0px);
-        --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+        /* --m-safe-top / --m-safe-bottom are defined at the top of this file
+           (and may be overridden inline by a native shell) — redefining them
+           here would clobber that override. */
         --m-appbar-h: 54px;
         --m-dock-h: 64px;
         --m-net-h: 26px;
@@ -6857,6 +6938,25 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border-radius: 0;
         border: 0;
         background: transparent;
+        /* MUST drop the desktop glass here, and not only for looks: any
+           backdrop-filter other than `none` turns .main into a *stacking
+           context*, which traps #viewChat's `z-index: 21` inside it. .main
+           itself has `z-index: auto` (paints at 0), so the whole chat subtree
+           was painted BELOW the fixed `.sidebar` (z-index: 20) no matter how
+           high #viewChat's own z-index went. That is what made the back-swipe
+           look wrong: instead of the chat sliding right off a list that is
+           already sitting underneath it, the list — unparked instantly, by
+           design, with `transition: none` — slammed on top of everything the
+           moment the drag/tap started, reading as "popping up from the
+           bottom and covering the chat". Verified live via elementFromPoint:
+           with the blur on, the topmost element over the still-visible half
+           of the translated #viewChat was .sidebar's #contacts; with it off,
+           it is #viewChat, and only the uncovered strip hits the sidebar.
+           .main's background is already transparent on mobile, so there is
+           nothing left for the blur to do anyway. */
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        box-shadow: none;
     }
 
     /* ── LIST SCREEN: sidebar becomes a full-bleed panel with a sticky
@@ -6950,10 +7050,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         padding: 0;
         gap: 0;
         background: var(--bg);
-        /* Base rule makes .view.active a 3-row grid (auto auto 1fr); with the
-           voice-panel hidden the message list lands in the 2nd auto row and an
-           empty 1fr track eats the space below it (dead gap + a seam line).
-           A flex column lets .msgs stretch to fill the whole chat area. */
+    }
+    /* MUST stay scoped to .active. `.view { display: none }` is a class
+       selector (0,1,0), so an *unconditional* `#viewChat { display: flex }`
+       (1,0,0) outranks it and pins the chat visible even when it isn't the
+       active view — and since #viewChat is `position: absolute; inset: 0`
+       with z-index 21, it then permanently covers #viewSettings/#viewHub,
+       which is why the Settings and Hub screens could never be seen on
+       mobile (confirmed live via DevTools: both #viewChat and #viewSettings
+       reported a non-none display at the same time).
+
+       Why flex at all: the base rule makes .view.active a 3-row grid
+       (auto auto 1fr); with the voice-panel hidden the message list lands in
+       the 2nd auto row and an empty 1fr track eats the space below it (dead
+       gap + a seam line). A flex column lets .msgs stretch to fill the whole
+       chat area. */
+    #viewChat.active {
         display: flex;
         flex-direction: column;
     }
@@ -7005,6 +7117,18 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         backdrop-filter: blur(18px) saturate(160%);
     }
     #viewChat .input-area::before { display: none; }
+
+    /* The other full-screen sections have no sticky app-bar of their own to
+       absorb the top inset the way .sidebar-head / .chat-hdr do, and the bottom
+       bar (the web dock, or a native shell's own bar) floats over their content
+       — so they reserve both insets themselves. Without this the Settings
+       heading rendered under the clock and its last card under the bar. */
+    #viewSettings,
+    #viewHub,
+    #viewZaliCoin {
+        padding-top: calc(var(--m-safe-top) + 12px);
+        padding-bottom: calc(var(--m-dock-h) + var(--m-safe-bottom) + 16px);
+    }
 
     /* ── Bottom dock: keep the existing glass pill, only widen touch area
        and let it hug the safe-area. Transform stays JS-driven. ──────────── */
@@ -7232,8 +7356,16 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         color: #05210b;
     }
 
-    /* The per-row delete button is replaced by swipe-to-reveal on mobile. */
-    .contact .contact-remove { display: none; }
+    /* Deleting a dialog is this button, not a gesture: swipe-to-reveal-Delete
+       used to hide it here, but the left-swipe now belongs to the forward
+       navigation gesture (list → last open chat), so the button is back — and
+       sized for a finger. */
+    .contact .contact-remove {
+        /* Sizing/touch target already come from the earlier mobile blocks
+           (inline-grid, 36×36); this only undoes the old `display: none`. */
+        display: inline-grid;
+        opacity: .55;
+    }
 
     /* Row separators like a native list (indented past the avatar). */
     .contacts .contact + .contact::before {
@@ -7269,37 +7401,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ============================================================================
-   MOBILE REDESIGN 2026 — Phase D: gestures (swipe-to-delete, long-press)
+   MOBILE REDESIGN 2026 — Phase D: gestures (long-press)
+   Horizontal row gestures were removed here: a left-swipe on the list screen
+   now navigates forward to the last open chat (setupMobileForwardNavGesture in
+   interface.js), so a row can no longer claim the same drag for a destructive
+   reveal-Delete action.
    ========================================================================== */
 @media (max-width: 760px) {
-    /* Keep the revealed delete panel clipped to the list. */
     .contacts { overflow-x: hidden; }
-
-    /* The delete action lives just off the row's right edge; swiping the row
-       left (JS writes the transform) slides it into view. */
-    .contacts .contact::after {
-        content: "Удалить";
-        position: absolute;
-        left: 100%;
-        top: 0;
-        bottom: 0;
-        width: 96px;
-        display: grid;
-        place-items: center;
-        background: var(--red);
-        color: #fff;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: .01em;
-        pointer-events: none;
-    }
-    /* Opaque while sliding so rows underneath never show through. */
-    .contacts .contact.swiping,
-    .contacts .contact.swipe-open {
-        background: var(--bg);
-        z-index: 1;
-    }
-    .contacts .contact.swiping { transition: none; }
 
     /* Long-press feedback on a message before the reaction menu opens. */
     .msg.press-hold .bubble {

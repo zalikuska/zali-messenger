@@ -828,8 +828,14 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             return
         }
 
-        if let eventType = raw["type"] as? String, eventType == "device_approved" {
-            trace("handleWebSocketMessage device_approved")
+        // `key_republish_request` is scope-targeted on the server side, but the JS
+        // republish sweep it triggers is idempotent, so both event types share one
+        // callback rather than adding a payload-carrying bridge event to every
+        // platform. A peer that cannot decrypt a conversation is exactly the case
+        // where doing slightly more work than strictly needed is the right trade.
+        if let eventType = raw["type"] as? String,
+           eventType == "device_approved" || eventType == "key_republish_request" {
+            trace("handleWebSocketMessage \(eventType)")
             DispatchQueue.main.async {
                 self.onDeviceApproved?()
             }
