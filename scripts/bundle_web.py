@@ -175,15 +175,25 @@ def main():
             turn_cfg["relayOnly"] = turn_relay_only
         zali_config["turn"] = turn_cfg
     zali_config = {k: v for k, v in zali_config.items() if v}
+    # indent=2 is load-bearing, not cosmetic. Compact json.dumps() put the whole
+    # bridge protocol on ONE line, and that line lands in Assets.swift as a single
+    # Swift string literal. Swift emits it as one __cstring atom whose *name* is its
+    # own contents, and ld64 asserts on names past a fixed cap
+    # (`name.size() <= maxLength` in makeSymbolStringInPlace/SymbolString.cpp) —
+    # so the macOS app silently stopped linking once the protocol grew past roughly
+    # 1.8 KB, which it did when START_SCREEN_CAPTURE/STOP_SCREEN_CAPTURE were added.
+    # Pretty-printing spreads it over many short lines, which is equally valid JS
+    # inside a <script> tag and keeps every literal well under the cap no matter how
+    # many bridge messages get added later.
     config_loader = f"""
     <script>
-    window.__ZALI_CONFIG = {json.dumps(zali_config, ensure_ascii=False)};
+    window.__ZALI_CONFIG = {json.dumps(zali_config, ensure_ascii=False, indent=2)};
     </script>"""
     inline_html = inline_html.replace('</head>', config_loader + '\n</head>')
 
     protocol_loader = f"""
     <script>
-    window.__ZALI_BRIDGE_PROTOCOL__ = {json.dumps(bridge_protocol, ensure_ascii=False)};
+    window.__ZALI_BRIDGE_PROTOCOL__ = {json.dumps(bridge_protocol, ensure_ascii=False, indent=2)};
     </script>"""
     inline_html = inline_html.replace('</head>', protocol_loader + '\n</head>')
 
@@ -202,16 +212,53 @@ def main():
         )
 
     # 5. Формирование содержимого Assets.swift
-    # Using raw string literals (#""" ... """#) so JS/CSS content with backslashes is safe
+    # Using raw string literals (#""" ... """#) so JS/CSS content with backslashes is safe.
+    #
+    # The bundle is split across several literals instead of one. Swift compiles a
+    # multi-line literal into a single __cstring atom, and ld64 names each such atom
+    # by its own contents — `makeNamedAtom` -> `makeSymbolStringInPlace` asserts on
+    # `name.size() <= maxLength` (SymbolString.cpp), with the cap around 1 MiB. The
+    # whole HTML+CSS+JS bundle sailed past that as it grew (1 098 746 bytes still
+    # linked, 1 185 134 did not) and the macOS app simply stopped linking, with an
+    # ld assertion that names neither the file nor the symbol. Splitting on line
+    # boundaries keeps every atom far below the cap however large the bundle gets.
+    #
+    # Exactness matters here: "\n".join(lines) reconstructs the input byte for byte,
+    # so chunks carry no trailing newline of their own and are rejoined with "\n" at
+    # runtime. That also sidesteps multi-line literals dropping the newline that sits
+    # right before the closing delimiter.
+    html_lines = inline_html.split('\n')
+    max_chunk_chars = 200_000
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in html_lines:
+        # +1 for the "\n" that rejoining will put back between lines.
+        if current and current_len + len(line) + 1 > max_chunk_chars:
+            chunks.append('\n'.join(current))
+            current, current_len = [], 0
+        current.append(line)
+        current_len += len(line) + 1
+    if current:
+        chunks.append('\n'.join(current))
+
+    # The closing delimiter must sit at column 0: Swift strips exactly as much
+    # indentation from every content line as the closing delimiter carries, and the
+    # bundle's own lines start at column 0.
+    literals = ''.join(f'    #"""\n{chunk}\n"""#,\n' for chunk in chunks)
     assets_swift_content = (
         'import Foundation\n\n'
         'struct WebAssets {\n\n'
         '    // MARK: - Inline HTML (with embedded CSS + JS)\n\n'
-        '    static let html = #"""\n'
-        + inline_html + '\n'
-        '"""#\n'
+        '    static let html: String = htmlChunks.joined(separator: "\\n")\n\n'
+        '    // Split so no single string literal becomes a >1 MiB __cstring atom,\n'
+        '    // which trips an ld64 assertion at link time. See bundle_web.py.\n'
+        '    private static let htmlChunks: [String] = [\n'
+        + literals +
+        '    ]\n'
         '}\n'
     )
+    print(f"   HTML разбит на литералов: {len(chunks)}")
 
     # Paths where Assets.swift lives
     dest_paths = [

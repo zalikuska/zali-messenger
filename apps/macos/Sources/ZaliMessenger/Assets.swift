@@ -4,7 +4,12 @@ struct WebAssets {
 
     // MARK: - Inline HTML (with embedded CSS + JS)
 
-    static let html = #"""
+    static let html: String = htmlChunks.joined(separator: "\n")
+
+    // Split so no single string literal becomes a >1 MiB __cstring atom,
+    // which trips an ld64 assertion at link time. See bundle_web.py.
+    private static let htmlChunks: [String] = [
+    #"""
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -7488,7 +7493,199 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     </script>
 
     <script>
-    window.__ZALI_BRIDGE_PROTOCOL__ = {"version": 1, "messages": {"SEND_MESSAGE": {"fields": ["text", "recipient", "key", "clientId", "attachments"]}, "SET_SESSION": {"fields": ["username", "token", "deviceId"]}, "REFRESH_HISTORY": {"fields": ["key", "peer"]}, "LOAD_SERVER_HISTORY": {"fields": ["serverId", "channelId", "key"]}, "SAVE_STYLE": {"fields": ["css"]}, "SAVE_MESSAGE_CACHE": {"fields": ["cache"]}, "SAVE_PENDING_OUTBOX": {"fields": ["items"]}, "DOWNLOAD_ATTACHMENT": {"fields": ["dataUrl", "filename"]}, "START_DRAG": {"fields": []}, "MINIMIZE_WINDOW": {"fields": []}, "MAXIMIZE_WINDOW": {"fields": []}, "CLOSE_WINDOW": {"fields": []}, "RESOLVE_TENOR": {"fields": ["url", "requestId"]}, "SET_KEY": {"fields": ["key"]}, "SET_MESSAGE_REACTION": {"fields": ["messageId", "emoji"]}, "NETWORK_CONFIG": {"fields": ["apiBaseUrl", "wsBaseUrl", "iceServers"]}, "VOICE_EVENT": {"fields": ["payload"]}, "AUTH_REQUEST": {"fields": ["mode", "username", "password", "requestId"]}, "API_REQUEST": {"fields": ["method", "path", "headers", "body", "includeDeviceId", "requestId"]}, "ADD_CONTACT_REQUEST": {"fields": ["username", "requestId"]}, "REMOVE_CONTACT_REQUEST": {"fields": ["username", "requestId"]}, "UPLOAD_AVATAR_REQUEST": {"fields": ["dataUrl", "mimeType", "filename", "requestId"]}, "DELETE_AVATAR_REQUEST": {"fields": ["requestId"]}, "LOAD_AVATAR_REQUEST": {"fields": ["username", "requestId"]}, "SHOW_NOTIFICATION": {"fields": ["sender", "text", "attachmentCount", "serverId", "channelId"]}, "PERSIST_DEVICE_IDENTITY": {"fields": ["username", "identity"]}, "DOWNLOAD_UPDATE_REQUEST": {"fields": ["url", "sha256", "requestId"]}, "INSTALL_UPDATE_REQUEST": {"fields": ["requestId"]}, "SET_UNREAD_BADGE": {"fields": ["count"]}, "MOBILE_NAV_PROGRESS": {"fields": ["progress", "animate"]}, "START_SCREEN_CAPTURE": {"fields": ["requestId"]}, "STOP_SCREEN_CAPTURE": {"fields": ["requestId"]}}};
+    window.__ZALI_BRIDGE_PROTOCOL__ = {
+  "version": 1,
+  "messages": {
+    "SEND_MESSAGE": {
+      "fields": [
+        "text",
+        "recipient",
+        "key",
+        "clientId",
+        "attachments"
+      ]
+    },
+    "SET_SESSION": {
+      "fields": [
+        "username",
+        "token",
+        "deviceId"
+      ]
+    },
+    "REFRESH_HISTORY": {
+      "fields": [
+        "key",
+        "peer"
+      ]
+    },
+    "LOAD_SERVER_HISTORY": {
+      "fields": [
+        "serverId",
+        "channelId",
+        "key"
+      ]
+    },
+    "SAVE_STYLE": {
+      "fields": [
+        "css"
+      ]
+    },
+    "SAVE_MESSAGE_CACHE": {
+      "fields": [
+        "cache"
+      ]
+    },
+    "SAVE_PENDING_OUTBOX": {
+      "fields": [
+        "items"
+      ]
+    },
+    "DOWNLOAD_ATTACHMENT": {
+      "fields": [
+        "dataUrl",
+        "filename"
+      ]
+    },
+    "START_DRAG": {
+      "fields": []
+    },
+    "MINIMIZE_WINDOW": {
+      "fields": []
+    },
+    "MAXIMIZE_WINDOW": {
+      "fields": []
+    },
+    "CLOSE_WINDOW": {
+      "fields": []
+    },
+    "RESOLVE_TENOR": {
+      "fields": [
+        "url",
+        "requestId"
+      ]
+    },
+    "SET_KEY": {
+      "fields": [
+        "key"
+      ]
+    },
+    "SET_MESSAGE_REACTION": {
+      "fields": [
+        "messageId",
+        "emoji"
+      ]
+    },
+    "NETWORK_CONFIG": {
+      "fields": [
+        "apiBaseUrl",
+        "wsBaseUrl",
+        "iceServers"
+      ]
+    },
+    "VOICE_EVENT": {
+      "fields": [
+        "payload"
+      ]
+    },
+    "AUTH_REQUEST": {
+      "fields": [
+        "mode",
+        "username",
+        "password",
+        "requestId"
+      ]
+    },
+    "API_REQUEST": {
+      "fields": [
+        "method",
+        "path",
+        "headers",
+        "body",
+        "includeDeviceId",
+        "requestId"
+      ]
+    },
+    "ADD_CONTACT_REQUEST": {
+      "fields": [
+        "username",
+        "requestId"
+      ]
+    },
+    "REMOVE_CONTACT_REQUEST": {
+      "fields": [
+        "username",
+        "requestId"
+      ]
+    },
+    "UPLOAD_AVATAR_REQUEST": {
+      "fields": [
+        "dataUrl",
+        "mimeType",
+        "filename",
+        "requestId"
+      ]
+    },
+    "DELETE_AVATAR_REQUEST": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "LOAD_AVATAR_REQUEST": {
+      "fields": [
+        "username",
+        "requestId"
+      ]
+    },
+    "SHOW_NOTIFICATION": {
+      "fields": [
+        "sender",
+        "text",
+        "attachmentCount",
+        "serverId",
+        "channelId"
+      ]
+    },
+    "PERSIST_DEVICE_IDENTITY": {
+      "fields": [
+        "username",
+        "identity"
+      ]
+    },
+    "DOWNLOAD_UPDATE_REQUEST": {
+      "fields": [
+        "url",
+        "sha256",
+        "requestId"
+      ]
+    },
+    "INSTALL_UPDATE_REQUEST": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "SET_UNREAD_BADGE": {
+      "fields": [
+        "count"
+      ]
+    },
+    "MOBILE_NAV_PROGRESS": {
+      "fields": [
+        "progress",
+        "animate"
+      ]
+    },
+    "START_SCREEN_CAPTURE": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "STOP_SCREEN_CAPTURE": {
+      "fields": [
+        "requestId"
+      ]
+    }
+  }
+};
     </script>
 </head>
 <body>
@@ -7834,6 +8031,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                         </span>
                                     </label>
                                 </div>
+"""#,
+    #"""
                             </section>
 
                             <div class="settings-grid">
@@ -12012,6 +12211,8 @@ class ZaliInterface {
         return `zali_vault_reset_pending_v2${this._userSuffix()}`;
     }
 
+"""#,
+    #"""
     vaultCloudSyncEnabledStorageKey() {
         return `zali_vault_cloud_sync_enabled_v1${this._userSuffix()}`;
     }
@@ -16208,6 +16409,8 @@ class ZaliInterface {
         if (colorInput) colorInput.value = normalizedColor;
         const colorHexInput = document.getElementById('serverColorHexInput');
         if (colorHexInput) colorHexInput.value = normalizedColor;
+"""#,
+    #"""
         const serverColorPickerPreview = document.querySelector('[data-color-picker-key="server-basics"] .color-picker-preview');
         if (serverColorPickerPreview) serverColorPickerPreview.style.background = normalizedColor;
         this.applyColorWheelValue({
@@ -20270,6 +20473,8 @@ class ZaliInterface {
     voiceIcon(kind) {
         const phone = '<path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>';
         const mic = '<rect x="9" y="3" width="6" height="10" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 18v3M9 21h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+"""#,
+    #"""
         const cam = '<rect x="3.5" y="6.5" width="12" height="11" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 10.4 20 7.6a.6.6 0 0 1 .92.51v7.78a.6.6 0 0 1-.92.51l-4.5-2.8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
         const screen = '<rect x="3" y="4.5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 6.5v6M9.5 10 12 7.5 14.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
@@ -24678,6 +24883,8 @@ class ZaliInterface {
                 <div class="server-meta">
                     <div class="server-name">Войти по коду</div>
                     <div class="server-prev">Введите код или ссылку сервера</div>
+"""#,
+    #"""
                 </div>
             </button>
         `;
@@ -28038,5 +28245,6 @@ window.ZaliInterface = ZaliInterface;
 </body>
 </html>
 
-"""#
+"""#,
+    ]
 }
