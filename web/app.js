@@ -8968,14 +8968,37 @@ class ZaliInterface {
         return me.localeCompare(other) < 0;
     }
 
-    // Deterministic per-pair role for resolving offer/offer glare during
-    // mid-call renegotiation — independent of who happens to click a
-    // camera/screen-share toggle first, both sides agree on who yields.
+    // Deterministic per-pair role for resolving offer/offer glare. Polite means
+    // "does not own the offer for this pair": on a collision this side rolls its own
+    // offer back and answers the incoming one, while the offer owner keeps its offer
+    // and waits to be answered.
+    //
+    // This MUST be the inverse of shouldInitiateVoiceOffer. Both used to return the
+    // same `me.localeCompare(other) < 0`, which made the offer owner *polite*. When
+    // both sides offered at once the result was that neither ever answered: the
+    // impolite side dropped the incoming offer on the floor by design, and the
+    // polite side — the one holding the offer the peer was waiting on — rolled it
+    // back. Confirmed against the server's signal log for a dead call: two offers
+    // one way, one the other, 30 ICE candidates, and zero answers in either
+    // direction. ICE flows in that state, so the call looks connected while no
+    // session is ever agreed and nobody hears anybody.
     isPoliteVoicePeer(peer) {
         const me = String(this.myName() || '').trim();
         const other = String(peer || '').trim();
         if (!me || !other) return false;
-        return me.localeCompare(other) < 0;
+        if (this.voice.roomType === 'dm') {
+            // Mirrors shouldInitiateVoiceOffer's ladder, negated at every rung.
+            // Deliberately does NOT consult voice.status: that gates *when* to
+            // offer, and folding it in here would make both sides polite during
+            // setup, so a rollback could be attempted from a state that has no
+            // local offer to roll back.
+            const direction = String(this.voice.callTrack?.direction || '').trim();
+            if (direction) return direction !== 'outgoing';
+            const inviter = String(this.voice.inviter || '').trim();
+            if (inviter) return inviter !== me;
+            return me.localeCompare(other) > 0;
+        }
+        return me.localeCompare(other) > 0;
     }
 
     voiceEventPayload(payload = {}) {
@@ -11375,7 +11398,12 @@ class ZaliInterface {
             // for its own outgoing offer to be answered instead.
             const offerCollision = entry.pc.signalingState !== 'stable';
             if (offerCollision && !this.isPoliteVoicePeer(from)) {
+                // We own the offer for this pair, so we keep it and let the peer
+                // answer. Re-drive negotiation anyway: dropping an offer is only
+                // safe while ours is genuinely still in flight, and if the answer
+                // never arrives nothing else would ever notice.
                 this.voiceTrace('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                this.scheduleVoiceNegotiationRetry('offer-collision-ignored');
                 return;
             }
             this.voice.roomId = roomId;
@@ -11403,9 +11431,15 @@ class ZaliInterface {
             // InvalidStateError, leaving that one link unnegotiated.
             entry.negotiating = true;
             try {
-                if (offerCollision) {
+                // 'have-local-offer' is the only state a rollback is legal from.
+                // Attempting it from any other non-stable state throws, and that
+                // exception used to abort the whole block — so the answer this peer
+                // was waiting for was never created or sent.
+                if (offerCollision && entry.pc.signalingState === 'have-local-offer') {
                     this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                     await entry.pc.setLocalDescription({ type: 'rollback' });
+                } else if (offerCollision) {
+                    this.voiceTrace('offer-collision-no-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                 }
                 try {
                     await this.ensureVoiceLocalStream();

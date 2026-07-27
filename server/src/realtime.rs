@@ -164,37 +164,28 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
 
     send_voice_room_snapshot_to_user(&state, &username).await;
 
-    // Server-initiated keepalive. Without it the only thing holding an idle
-    // connection open was the client's own app-level {"type":"ping"} every 25 s —
-    // and in a browser that is a setInterval, which Chrome/Safari throttle in a
-    // hidden tab (down to roughly once a minute under intensive throttling). A
-    // steady voice call generates NO WebSocket traffic of its own (media is P2P),
-    // so whoever had the window in the background drifted past the reverse proxy's
-    // idle timeout and got their socket closed under them — one participant
-    // dropping out of the call at random, over and over. Protocol-level Ping frames
-    // are answered by the browser's own WebSocket stack without ever waking JS, so
-    // they are immune to that throttling; they also give us dead-peer detection,
-    // which nothing had before: a half-open connection used to sit in
-    // user_connections forever, making the user look online (suppressing the voice
-    // room cleanup) while every signal sent to them went nowhere.
+    // Server-initiated keepalive: a steady voice call generates no WebSocket
+    // traffic of its own (media is P2P), and the client's own app-level ping is a
+    // setInterval that browsers throttle in a hidden tab, so connections used to
+    // drift past the reverse proxy's idle timeout. Protocol-level Ping frames are
+    // answered by the browser's own stack without waking JS, so they survive that
+    // throttling.
+    //
+    // The Ping stays; the 70s idle-timeout disconnect that used to sit alongside it
+    // is gone. Judging liveness purely from inbound silence killed 27 healthy
+    // connections in its first day, because not every client in the fleet answers a
+    // Ping (a tokio-tungstenite read half queues Pong replies and never flushes them
+    // unless the write half is polled). Dead connections are detected by the send
+    // failing instead, which is what the `rx.recv()` arm below already does.
     let mut keepalive = tokio::time::interval(Duration::from_secs(20));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // interval()'s first tick resolves immediately — consume it so a freshly opened
     // connection isn't pinged before it has been used for anything.
     keepalive.tick().await;
-    let mut last_seen = std::time::Instant::now();
 
     loop {
         tokio::select! {
             _ = keepalive.tick() => {
-                if last_seen.elapsed() > Duration::from_secs(70) {
-                    warn!(
-                        "WS idle timeout username={} silent_for={}s",
-                        username,
-                        last_seen.elapsed().as_secs()
-                    );
-                    break;
-                }
                 if socket.send(WsMessage::Ping(Vec::new())).await.is_err() {
                     warn!("WS keepalive ping failed username={}", username);
                     break;
@@ -208,11 +199,6 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                 }
             }
             result = socket.recv() => {
-                // Any inbound frame proves the peer is alive — including the Pong
-                // the browser sends back automatically for our keepalive Ping.
-                if matches!(result, Some(Ok(_))) {
-                    last_seen = std::time::Instant::now();
-                }
                 match result {
                     Some(Ok(WsMessage::Text(text))) => {
                         trace!("WS inbound username={} text_bytes={}", username, text.len());
