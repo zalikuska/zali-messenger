@@ -123,18 +123,39 @@ final class UpdateService: NSObject {
         let currentAppPath = Bundle.main.bundlePath
         let stagedAppPath = currentAppPath + ".update-staged"
         let scriptPath = dir.appendingPathComponent("relaunch-\(UUID().uuidString).sh")
+        // The swap keeps the old bundle until the new one is actually in place.
+        // It used to `rm -rf` the installed app and only then `mv` the staged copy
+        // over it, with no check on the mv — so a failure there (no write access to
+        // /Applications, a cross-device rename) deleted the user's installation and
+        // left nothing behind. Now the old bundle is moved aside, restored if
+        // anything goes wrong, and *something* is always relaunched, with the reason
+        // recorded in install.log next to this script.
+        let backupPath = currentAppPath + ".update-backup"
+        let logPath = dir.appendingPathComponent("install.log").path
         let script = """
         #!/bin/sh
+        log() { echo "[$(date -u +%FT%TZ)] $*" >> "\(logPath)"; }
         while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do
             sleep 0.3
         done
-        rm -rf "\(stagedAppPath)"
-        if ditto "\(newAppPath.path)" "\(stagedAppPath)"; then
-            rm -rf "\(currentAppPath)"
-            mv "\(stagedAppPath)" "\(currentAppPath)"
+        rm -rf "\(stagedAppPath)" "\(backupPath)"
+        if ! ditto "\(newAppPath.path)" "\(stagedAppPath)"; then
+            log "staging failed, keeping current version"
+            rm -rf "\(stagedAppPath)"
+            open "\(currentAppPath)"
+        elif ! mv "\(currentAppPath)" "\(backupPath)"; then
+            log "could not move current app aside, keeping current version"
+            rm -rf "\(stagedAppPath)"
+            open "\(currentAppPath)"
+        elif mv "\(stagedAppPath)" "\(currentAppPath)"; then
+            log "updated"
+            rm -rf "\(backupPath)"
             open "\(currentAppPath)"
         else
+            log "swap failed, restoring previous version"
+            mv "\(backupPath)" "\(currentAppPath)"
             rm -rf "\(stagedAppPath)"
+            open "\(currentAppPath)"
         fi
         rm -rf "\(extractDir.path)"
         rm -f "\(archivePath.path)"

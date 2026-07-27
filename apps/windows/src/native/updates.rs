@@ -119,34 +119,69 @@ pub(crate) async fn download_update(
 #[cfg(target_os = "windows")]
 pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<AppEvent>) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW only. It used to be OR'd with DETACHED_PROCESS, but Windows
+    // *ignores* CREATE_NO_WINDOW when DETACHED_PROCESS is also set, and a detached
+    // process has no console at all — so every console program the script ran
+    // (tasklist, find, timeout) was given a brand new console of its own, each one
+    // a visible window titled after its command line. That is the `find "<number>"`
+    // window users saw, the number being this process's PID. With CREATE_NO_WINDOW
+    // alone cmd gets a console that has no window, and children inherit it.
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const DETACHED_PROCESS: u32 = 0x00000008;
 
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let pid = std::process::id();
     let dir = updates_dir();
     let script_path = dir.join(format!("relaunch-{}.cmd", uuid::Uuid::new_v4()));
+    let log_path = dir.join("install.log");
+    // No tasklist/find polling any more: Windows keeps a running image locked, so
+    // retrying the copy IS the wait, and it tests the thing we actually care about
+    // instead of a PID. That also drops `timeout`, which needs console input and
+    // failed instantly here ("Input redirection is not supported"), turning the
+    // supposed one-second wait into a spin loop.
+    //
+    // Failure is no longer silent. The old script hid the copy behind >NUL and
+    // relaunched nothing, so an install into a directory this user cannot write —
+    // Program Files, when the Inno Setup installer put it there and the app runs
+    // unelevated — looked exactly like "nothing happens". Now the previous version
+    // is started back up and the reason is left in install.log.
     let script = format!(
         "@echo off\r\n\
-         :wait\r\n\
-         tasklist /FI \"PID eq {pid}\" 2>NUL | find \"{pid}\" >NUL\r\n\
-         if not errorlevel 1 (\r\n\
-         timeout /T 1 /NOBREAK >NUL\r\n\
-         goto wait\r\n\
-         )\r\n\
-         copy /Y \"{new_exe}\" \"{current_exe}\" >NUL\r\n\
-         start \"\" \"{current_exe}\"\r\n\
-         del \"{new_exe}\" >NUL 2>&1\r\n\
-         del \"%~f0\"\r\n",
-        pid = pid,
+         setlocal\r\n\
+         set \"SRC={new_exe}\"\r\n\
+         set \"DST={current_exe}\"\r\n\
+         set \"LOG={log}\"\r\n\
+         set /a tries=0\r\n\
+         :retry\r\n\
+         set /a tries+=1\r\n\
+         copy /Y \"%SRC%\" \"%DST%\" >>\"%LOG%\" 2>&1\r\n\
+         if not errorlevel 1 goto launch\r\n\
+         if %tries% GEQ 60 goto failed\r\n\
+         ping -n 2 127.0.0.1 >NUL 2>&1\r\n\
+         goto retry\r\n\
+         :launch\r\n\
+         echo [%DATE% %TIME%] updated to \"%SRC%\">>\"%LOG%\"\r\n\
+         start \"\" \"%DST%\"\r\n\
+         goto cleanup\r\n\
+         :failed\r\n\
+         echo [%DATE% %TIME%] could not replace \"%DST%\" after %tries% tries, restarting old version>>\"%LOG%\"\r\n\
+         start \"\" \"%DST%\"\r\n\
+         :cleanup\r\n\
+         del \"%SRC%\" >NUL 2>&1\r\n\
+         (goto) 2>NUL & del \"%~f0\"\r\n",
         new_exe = new_exe_path.display(),
         current_exe = current_exe.display(),
+        log = log_path.display(),
     );
     std::fs::write(&script_path, script).map_err(|e| e.to_string())?;
 
+    trace(format!(
+        "install_and_relaunch script={} target={}",
+        script_path.display(),
+        current_exe.display()
+    ));
+
     std::process::Command::new("cmd")
         .args(["/C", &script_path.to_string_lossy()])
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| e.to_string())?;
 
