@@ -286,6 +286,14 @@ class ZaliInterface {
             traceLines: [],
         };
         this.audioPrefs = this.loadAudioPrefs();
+        // Independent of this.voice.audioContext (which lives only for the
+        // duration of an active call, see resetVoiceState) — UI sounds (message
+        // chime, ringtone) need a context that survives across calls and can
+        // fire while the window is minimized/unfocused. Created lazily and
+        // unlocked on the first user gesture (see installSoundUnlock) since
+        // AudioContext.resume() silently stays 'suspended' without one.
+        this.sound = { ctx: null, unlocked: false, ringTimer: null, ringing: false };
+        this.installSoundUnlock();
 
         const cachedMessages = this.loadStoredMessageCache();
         this.S.chats = cachedMessages.chats || {};
@@ -11105,6 +11113,15 @@ class ZaliInterface {
     }
 
     renderVoicePanel() {
+        // Every voice-state transition (ringing → answered/declined/missed/ended)
+        // calls renderVoicePanel(), so syncing the ringtone here — rather than at
+        // each individual transition site — guarantees it always stops, including
+        // paths that don't go through resetVoiceState (e.g. the caller cancelling).
+        if (this.voice.status === 'incoming' && this.voice.incomingInvite) {
+            this.startRingtone();
+        } else {
+            this.stopRingtone();
+        }
         const panel = document.getElementById('voicePanel');
         if (!panel) return;
         const isServers = this.S.navMode === 'servers';
@@ -16480,6 +16497,100 @@ class ZaliInterface {
         this.renderContacts();
     }
 
+    // Registers a one-time listener on the very first user gesture (click/key/touch)
+    // to create+resume a persistent AudioContext. Browsers require AudioContext to be
+    // resumed from within a user-gesture call stack at least once per page load —
+    // it doesn't have to be the same gesture that later triggers a sound, so doing
+    // this once up front means playMessageChime/startRingtone can fire later from an
+    // async WS event (no gesture of their own) and still be audible.
+    installSoundUnlock() {
+        const unlock = () => {
+            if (this.sound.unlocked) return;
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            try {
+                this.sound.ctx = this.sound.ctx || new AudioCtx();
+                this.sound.ctx.resume?.().catch(() => {});
+                this.sound.unlocked = true;
+            } catch (e) {}
+            document.removeEventListener('click', unlock, true);
+            document.removeEventListener('keydown', unlock, true);
+            document.removeEventListener('touchstart', unlock, true);
+        };
+        document.addEventListener('click', unlock, true);
+        document.addEventListener('keydown', unlock, true);
+        document.addEventListener('touchstart', unlock, true);
+    }
+
+    ensureSoundContext() {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return null;
+        if (!this.sound.ctx || this.sound.ctx.state === 'closed') {
+            this.sound.ctx = new AudioCtx();
+        }
+        if (this.sound.ctx.state === 'suspended') {
+            this.sound.ctx.resume?.().catch(() => {});
+        }
+        return this.sound.ctx;
+    }
+
+    // One tone burst: short attack + linear decay so it doesn't click.
+    playTone(ctx, { frequency, startTime, duration, gain = 0.18, type = 'sine' }) {
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(frequency, startTime);
+        gainNode.gain.setValueAtTime(0, startTime);
+        gainNode.gain.linearRampToValueAtTime(gain, startTime + 0.015);
+        gainNode.gain.linearRampToValueAtTime(0, Math.max(startTime + duration, startTime + 0.02));
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        osc.start(startTime);
+        osc.stop(startTime + duration + 0.03);
+    }
+
+    // Short two-note chime for an incoming message in a chat that isn't on screen.
+    // Synthesized (no audio asset) so it needs nothing beyond this JS file to ship
+    // to every platform (macOS/Windows/Android/browser) via bundle_web.py.
+    playMessageChime() {
+        const ctx = this.ensureSoundContext();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        this.playTone(ctx, { frequency: 880, startTime: now, duration: 0.1, gain: 0.16 });
+        this.playTone(ctx, { frequency: 1318.5, startTime: now + 0.09, duration: 0.15, gain: 0.14 });
+    }
+
+    // Looping ringtone for an incoming call — started/stopped from the single
+    // choke point renderVoicePanel() based on this.voice.status, so it tracks
+    // every way a call stops ringing (answered, declined, missed, caller hung up)
+    // without needing to be threaded into each of those call sites separately.
+    startRingtone() {
+        if (this.sound.ringing) return;
+        const ctx = this.ensureSoundContext();
+        if (!ctx) return;
+        this.sound.ringing = true;
+        const ringBurst = () => {
+            if (!this.sound.ringing) return;
+            const liveCtx = this.ensureSoundContext();
+            if (!liveCtx) return;
+            const now = liveCtx.currentTime;
+            [0, 0.32].forEach(offset => {
+                this.playTone(liveCtx, { frequency: 987.77, startTime: now + offset, duration: 0.24, gain: 0.2 });
+                this.playTone(liveCtx, { frequency: 1318.5, startTime: now + offset, duration: 0.24, gain: 0.12 });
+            });
+        };
+        ringBurst();
+        this.sound.ringTimer = setInterval(ringBurst, 1600);
+    }
+
+    stopRingtone() {
+        this.sound.ringing = false;
+        if (this.sound.ringTimer) {
+            clearInterval(this.sound.ringTimer);
+            this.sound.ringTimer = null;
+        }
+    }
+
     // Single choke point for "a message arrived in a chat the user isn't currently
     // looking at". Both the live WS push path AND the reconnect / background
     // history-catch-up paths (loadHistory, mergeServerChatMessages) route through
@@ -16501,6 +16612,15 @@ class ZaliInterface {
         }
         this.syncTaskbarBadge();
         if ((this.S.mutedChats || {})[muteKey]) return;
+        // Native OS notifications (UNUserNotificationCenter / toast / Android
+        // channel) already carry their own default sound when granted — but that
+        // depends on OS-level permission the user may never have granted, and the
+        // browser/PWA client (no native bridge at all) gets no sound whatsoever
+        // from postNativeMessage below. This chime is unconditional so a message
+        // is always audible while its chat isn't the one on screen, independent
+        // of native notification permission state, including when the window is
+        // minimized or not frontmost (see playMessageChime).
+        this.playMessageChime();
         this.postNativeMessage({
             type: NativeMessageTypes.SHOW_NOTIFICATION,
             sender: from,

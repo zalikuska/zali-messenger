@@ -15,6 +15,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Сервер**: локальный `server/src/` в этом монорепо ↔ серверный репозиторий (`zali-server`, ветка `zali-server`). Правки хендлеров нужно пушить в серверный репо и деплоить (см. «Deploy process»).
 - **Archiver SDK**: `sdk/Rust/` (сервер+Windows) ↔ `sdk/Swift/` (macOS) — зеркальные реализации формата `.zali`. Изменение формата/крипто нужно в обоих.
 
+> **Исключение — голосовые звонки.** Вся WebRTC-логика (mesh, оффер/ответ, ICE, glare, микрофон)
+> живёт только в `web/src/interface.js` и исполняется в WebView. Нативные шеллы лишь ретранслируют
+> `voice_*` по WS, своей реализации согласования у них нет — дублировать туда правки голоса не надо,
+> достаточно `bundle_web.py`. Сверять с нативным слоем нужно только транспорт (реконнект WS,
+> heartbeat) и разрешения на микрофон.
+
 Правило: **никогда не считай правку завершённой, пока не спросил себя «в каких ещё из этих версий это тоже нужно?» и не сообщил об этом пользователю.**
 
 **ОБЯЗАТЕЛЬНО:** при ЛЮБОМ изменении кода — до того как считать задачу выполненной — явно уточни у пользователя (или проверь сам и сообщи результат), нужно ли продублировать правку в другие версии из списка выше. Это не опционально: даже если кажется, что фикс локальный, назови затронутые параллельные реализации и подтверди по каждой «нужно / не нужно / уже есть».
@@ -38,13 +44,14 @@ Rules:
 - Server repo: https://github.com/zalikuska/zali-messenger-server (branch `zali-server`)
 - Server binary runs at: `/opt/zali-server/server/target/release/zali_server` (moved from `/opt/zali-server/target/release/zali_server` by the 2026-07-12 reorg — that root `Cargo.toml` no longer exists, so the build output now lands under `server/target/`, not `target/`)
 - Env vars: `/etc/zali/zali-server.env` (symlinked to `/opt/zali-server/.env`)
+- **Data dir: `/var/lib/zali`** (from `ZALI_DATA_DIR`) — holds the DB, `uploads/` and `releases/`. **Not** the checkout at `/opt/zali-server`. The `uploads/`/`releases/` directories sitting under `/opt/zali-server` are leftovers from before that variable was set and the server never reads them; a file placed there is simply invisible (confirmed 2026-07-27 when a release artifact 404'd from exactly that mistake). Check with `ssh zms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"`
 - Process management: **systemd unit** `zali-server.service` (`/etc/systemd/system/zali-server.service` on the VPS) — `enabled` (survives reboot) + `Restart=always` (auto-recovers from crashes). Introduced 2026-07-19 after the server was found dead with no panic/OOM in the logs: it had been started via an interactive-SSH `nohup ... &`, and `systemd-logind` killed it along with the login session on disconnect (`nohup`/`disown` don't reliably protect against that). **Do not go back to ad-hoc `nohup`/`pkill` for starting the server** — always use `systemctl` now.
 
 ### Deploy process
 
 ```bash
-# 1. Push server/src/main.rs changes from local monorepo to server repo
-git push serverrepo codex/ui-v2-hub-segments:zali-server
+# 1. Push server changes from local monorepo to server repo (current branch is `main`)
+git push serverrepo main:zali-server
 
 # 2. On VPS: pull, build, restart via systemd
 ssh zms "cd /opt/zali-server && git pull --ff-only origin zali-server"
@@ -70,24 +77,48 @@ If the service ever needs hand-editing: unit file lives at `/etc/systemd/system/
 
 ### Publishing a client release (in-app updater)
 
+> **Полная процедура — в [`RELEASE.md`](RELEASE.md).** Здесь только суть и ловушки, на которых
+> уже спотыкались.
+
 macOS (`apps/macos/`) and Windows (`apps/windows/`) clients check `GET /api/version?platform=macos|windows`
 on login and prompt to update if the server's version is newer (`web/src/interface.js`
-`checkForAppUpdate()`). Declining keeps it available under the Hub's "Обновления" card. To ship a release:
+`checkForAppUpdate()`). Declining keeps it available under the Hub's "Обновления" card. Current
+shipped version on both platforms: **1.1.3**.
 
 1. Bump the version string: `APP_VERSION` in `scripts/build_app.sh` (macOS) and/or `version` in
    `apps/windows/Cargo.toml` (Windows).
-2. Build the client(s) (`./scripts/build_app.sh`, `scripts/build_windows_app.ps1`), zip the macOS
-   `.app` (Windows ships as the raw `.exe`, no zip needed).
-3. Upload the artifact(s) somewhere HTTPS-reachable — e.g. the server's `/uploads/:filename` static
-   route — and compute their SHA-256 (`shasum -a 256 <file>`).
+2. Build the client(s) — `./scripts/build_app.sh`, and for Windows either `scripts/build_windows_app.ps1`
+   on Windows or a cross-build from macOS (see «Windows Build Distribution»). Pack the macOS `.app`
+   with `ditto -c -k --keepParent` — `UpdateService.installAndRelaunch` unpacks with `ditto` and looks
+   for a `.app` inside. Windows ships as the raw `.exe`, no archive.
+3. Upload to **`/var/lib/zali/releases/`** on the VPS and compute SHA-256 (`shasum -a 256 <file>`).
+   The artifact is then served publicly at `https://msgs.zalikus.org/releases/<filename>`.
 4. Publish, once per platform (requires `RELEASE_ADMIN_TOKEN` set in the server's env — see `.env.example`;
-   unset means this route always 403s):
+   unset means this route always 403s). Run the `curl` **on the VPS** so the token never leaves it:
    ```bash
-   curl -X POST https://msgs.zalikus.org/api/version \
+   ssh zms 'set -a; . /etc/zali/zali-server.env; set +a; curl -X POST https://msgs.zalikus.org/api/version \
      -H "Authorization: Bearer $RELEASE_ADMIN_TOKEN" -H "Content-Type: application/json" \
-     -d '{"platform":"macos","version":"1.1.0","notes":"...","downloadUrl":"https://msgs.zalikus.org/uploads/ZaliMessenger-1.1.0.zip","sha256":"<hex>"}'
+     -d "{\"platform\":\"macos\",\"version\":\"1.1.3\",\"notes\":\"...\",\"downloadUrl\":\"https://msgs.zalikus.org/releases/ZaliMessenger-1.1.3.zip\",\"sha256\":\"<hex>\"}"'
    ```
-5. Verify: `curl https://msgs.zalikus.org/api/version?platform=macos` returns the new metadata.
+5. Verify both the metadata **and** that the artifact actually downloads unauthenticated:
+   `curl "https://msgs.zalikus.org/api/version?platform=macos"` and
+   `curl -o /dev/null -w '%{http_code} %{size_download}\n' <downloadUrl>`.
+
+**Ловушки, каждая стоила отдельного разбора:**
+
+- **`/uploads/:filename` не годится для артефактов** (старая версия этого файла советовала именно его).
+  Это роут вложений: `download_upload_file` требует `AuthenticatedUser` **и** строку в `messages` с
+  таким `filename` — `.exe` оттуда отдаёт `401`. А качают артефакт **без** заголовка `Authorization`:
+  и `download_update` (`apps/windows/src/native/updates.rs`), и онлайн-установщик через `WinHttp`.
+  Для этого добавлен публичный роут `GET /releases/:filename` (`server/src/updates.rs`), читающий
+  только из `releases_dir`; имя файла проходит allowlist `[A-Za-z0-9._-]` без ведущей точки, листинга
+  нет. Тесты — `tests/releases.rs` (обход каталога, точкофайлы, изоляция от `uploads/`).
+- **Публикация той же версии, что уже стоит у клиента, не делает ничего — молча.**
+  `checkForAppUpdate()` выходит на `compareVersions(latest, current) <= 0` без сообщения и без записи
+  в лог, что внешне неотличимо от сломанного апдейтера. Именно так «сломалось» автообновление
+  2026-07-27: был опубликован Windows 1.1.0 при клиенте 1.1.0.
+- **Скрипт установки исполняет СТАРАЯ версия.** Любой фикс апдейтера начинает действовать только со
+  следующего обновления — пользователям на сборке с багом нужен один ручной установ.
 
 > Note: after the 2026-07-12 repo reorg there is no root `Cargo.toml` on the VPS checkout — always pass `--manifest-path server/Cargo.toml` to `cargo build`, and restart from `server/target/release/zali_server`, not `target/release/zali_server`. On 2026-07-12 a deploy silently kept running a week-old binary at the old `target/release/zali_server` path (still present from a prior build) while the freshly built binary sat unused at `server/target/release/zali_server` — `pkill`+`nohup` "succeeded" with no errors and the new code never went live. If in doubt, verify with `ssh zms "readlink -f /proc/\$(pidof zali_server)/exe"` after restart. Consider deleting the stale `/opt/zali-server/target/` directory on the VPS once confirmed unused (ask before doing this — it's a production server path).
 
@@ -128,14 +159,18 @@ swift build --package-path apps/macos   # SwiftPM check
 Running tests:
 ```bash
 cd core && cargo test              # Core Rust unit tests
-cd server && cargo test            # server integration tests (top-level tests/)
+cargo test --manifest-path server/Cargo.toml   # server integration tests (51 шт., живут в top-level tests/)
+# Новый файл в tests/ НЕ подхватывается сам — он вне пакета, нужен свой [[test]]
+# с name+path в server/Cargo.toml, иначе `cargo test` его молча не увидит.
+# tests/common/mod.rs::TestApp отдаёт addr, http и data_dir (последний — чтобы
+# класть на диск файлы, которые сервер потом читает, напр. releases/).
 ```
 
 ## Project Structure
 
 | Path | Role |
 |---|---|
-| `server/src/` | Axum server, split into modules: `main.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, plus older `devices.rs`, `voice.rs`. Модули реэкспортируются в корень крейта (`pub(crate) use x::*;` в main.rs), поэтому `use crate::{...}` работает отовсюду |
+| `server/src/` | Axum server, split into modules: `main.rs`/`lib.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, `devices.rs`, `voice.rs`, `push.rs` (Web Push/VAPID), `updates.rs` (`/api/version` + публичный `/releases/:filename`), `conversation_keys.rs` (серверный реестр ключей разговоров). Модули реэкспортируются в корень крейта (`pub(crate) use x::*;`), поэтому `use crate::{...}` работает отовсюду |
 | `web/src/interface.js` | Entire web UI (~13000 lines): runs in both browser and native WebView |
 | `apps/macos/` | SwiftUI app (Swift Package Manager); wraps WKWebView. **Основной macOS-клиент** |
 | `apps/windows/src/native.rs` + `apps/windows/src/native/` | Rust desktop shell (WRY/TAO). `native.rs` держит NativeState/bridges и центральный `handle_ipc_message`; подмодули `native/{http,cache,keyring,util,transport,api,messages}.rs` — HTTP-клиенты, кэш расшифровки, keyring, санитайзеры, WS-транспорты, API-запросы, конвейер сообщений. Кроссплатформенный: собирается для Windows (`scripts/build_windows_app.ps1`, основной путь) и как **экспериментальный** macOS-шелл (`scripts/build_macos_rust_app.sh`, см. ниже) |
@@ -180,7 +215,7 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 - `install_media_capture_policy()` в `main.rs` (macOS only): добавляет `requestMediaCapturePermissionForOrigin:` в UIDelegate wry через objc runtime — Grant только main frame + origin `zali://`/localhost, зеркало инварианта Swift-клиента. Диагностика окружения при старте уходит в trace-лог строкой `DIAG_ENV;...` (подтверждено: `zali://` — secure context, WebCrypto/WebRTC/getUserMedia доступны)
 - Уведомления работают только из .app-бандла (mac-notification-sys). Голосовой звонок end-to-end реальным звонком пока не проверялся — все слои (getUserMedia grant, RTCPeerConnection, нативный WS-транспорт сигналинга) на месте
 - Swift-версия (`apps/macos/`, `./scripts/build_app.sh`) — основная; оба .app могут сосуществовать (разные bundle id: `com.zali.messenger` и `com.zali.messenger.rust`), если понадобится вернуться к Rust-шеллу
-- Кросс-проверка Windows-таргета с macOS (`cargo check --target x86_64-pc-windows-msvc`) может падать на C-коде `ring` (нет заголовков Windows SDK) — это ограничение тулчейна, не регрессия; Windows собирается на Windows
+- Кросс-сборка Windows-таргета с macOS **работает** через `cargo xwin build --target x86_64-pc-windows-msvc` (см. «Windows Build Distribution»). Голый `cargo check --target x86_64-pc-windows-msvc` по-прежнему падает на C-коде `ring` — не хватает заголовков Windows SDK, которые `cargo-xwin` подкладывает сам; это ограничение голого тулчейна, не регрессия
 
 ### Windows client (`apps/windows/src/native.rs`)
 - `handle_ipc_message` is the central native bridge entry point
@@ -195,6 +230,59 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 - `flushPendingOutbox` drops messages after 50 failed attempts (`MAX_OUTBOX_ATTEMPTS`)
 - `renderMessageText` link hrefs unescape `&amp;` → `&` before passing to `this.esc()`
 - Vault envelopes require `v === 1` and `iterations >= 100000` before decryption
+
+### Голосовые звонки (WebRTC full mesh) — инварианты
+
+Вся WebRTC-логика живёт в `web/src/interface.js` и исполняется в WebView; нативные шеллы
+(macOS/Windows/iOS/Android) только ретранслируют `voice_*` по WS. **Правки голоса дублировать в
+нативные клиенты не нужно** — достаточно `bundle_web.py`.
+
+- **`isPoliteVoicePeer` обязана быть строгой инверсией `shouldInitiateVoiceOffer`.** Обе раньше
+  возвращали одинаковое `me.localeCompare(other) < 0`, из-за чего владелец оффера оказывался
+  «вежливым». При встречных офферах это давало звонок, в котором **никто не отправлял `answer`**:
+  невежливая сторона штатно отбрасывала входящий оффер, а вежливая откатывала свой — тот, ответа на
+  который ждал собеседник. ICE при этом продолжает ходить, поэтому звонок выглядит подключённым и
+  молчит. Диагностируется мгновенно по серверному логу: `grep 'VOICE.*ROUTE' | grep -oE 'signalType=[a-z]+' | sort | uniq -c`
+  — если `answer` равен нулю, это оно.
+- Откат оффера (`setLocalDescription({type:'rollback'})`) допустим **только** из состояния
+  `have-local-offer`. Из любого другого он бросает исключение, которое обрывает обработчик, и ответ
+  не создаётся.
+- `handleVoiceSignal` применяет сигналы через **цепочку промисов на каждого пира**. Без неё
+  обработчики переплетались на `await`, и ICE-кандидат мог попасть в `pendingIceCandidates` уже
+  **после** того, как очередь слили, — такая пара никогда не завершала ICE.
+- `ensureVoiceLocalStream()` дедуплицирует одновременные `getUserMedia` через общий in-flight промис.
+  Без этого при 3+ участниках каждый входящий оффер запускал свой захват, лишние падали с
+  `NotReadableError`, и тот пир отвечал `recvonly` — «меня не слышит только он».
+- `sendVoiceOffer` и ветка ответа на оффер берут защёлку `entry.negotiating` **синхронно**, до первого
+  `await`: ни `signalingState`, ни `offerSent` не меняются до резолва `setLocalDescription`, поэтому два
+  наложившихся прохода `syncVoicePeers` иначе оба слали оффер одному пиру.
+- Оффер, пришедший на пира с `connectionState === 'failed'`, **пересоздаёт** соединение: у вернувшегося
+  участника DTLS-транспорт уже мёртв и новым оффером не оживает.
+- ICE-restart разнесён по времени: сторона, не владеющая оффером, ждёт на 5 с дольше, иначе оба конца
+  бьют restart одновременно ровно по сломанному линку.
+- **Presence keepalive:** клиент раз в 8 с переотправляет `voice_join` с `keepalive: true`
+  (`sendVoiceRoomPresence`), пока находится в комнате, и сразу при восстановлении соединения. Сервер
+  выселяет из голосовой комнаты через 45 с после закрытия WS (`realtime.rs`), а клиент сам никогда не
+  перезаходил: браузерный `onopen` этого не делает, а на нативе голосовой WS переподключается внутри
+  Swift/Rust и JS об этом не узнаёт.
+- Флаг `keepalive: true` делает `join_voice_room` **недеструктивным**: он может вернуть в комнату, но
+  никогда не выводит из другой. `user_voice_rooms` — это `DashMap<username, room_id>`, то есть **одна
+  комната на аккаунт**; без флага два устройства одного аккаунта в разных комнатах выбивали бы друг
+  друга каждые 8 с.
+- `join_voice_room` рассылает состояние комнаты всем **только если состав реально изменился**; при
+  идемпотентном перезаходе снапшот уходит только отправителю.
+
+### WebSocket keepalive (`server/src/realtime.rs`)
+
+- Сервер шлёт протокольный `Ping` каждые 20 с. Установившийся звонок не создаёт WS-трафика (медиа
+  идёт P2P), а собственный ping клиента — это `setInterval`, который браузеры душат в фоновой вкладке;
+  реверс-прокси закрывал такие соединения по idle. Ping/Pong обрабатывает сетевой стек браузера **без
+  пробуждения JS**, поэтому троттлинг ему не страшен.
+- **Не возвращать отключение по тишине.** 70-секундный idle-timeout, добавленный вместе с Ping,
+  за первые сутки убил 27 живых соединений: он судит о живости по отсутствию входящих кадров, а не
+  все клиенты отвечают на Ping (у `tokio-tungstenite` при разделённом стриме Pong ставится в очередь
+  и не отправляется, пока не опрашивают write-половину). Мёртвые соединения детектируются по ошибке
+  отправки. Если проблема с фоновыми вкладками вернётся — слать Ping **без** привязанного таймаута.
 
 ### Standalone browser/PWA client (mobile + desktop, no native shell)
 Started 2026-07-12: `web/index.html` + `web/app.js` can now run as a plain browser tab with zero
@@ -307,6 +395,25 @@ zip -r zali-windows-source.zip \
   apps/windows/installer/ZaliMessenger.iss
 ```
 
+### Кросс-сборка с macOS через `cargo-xwin` (работает, проверено 2026-07-26/27)
+
+Отдельная Windows-машина для получения `.exe` **не нужна**: `cargo-xwin` сам скачивает Windows SDK
+и CRT, то есть ровно те заголовки, из-за отсутствия которых раньше падал C-код `ring`. Все релизы
+1.1.0–1.1.3 собраны так, за ~30 с.
+
+```bash
+cargo install cargo-xwin && rustup target add x86_64-pc-windows-msvc
+cargo xwin build --release --manifest-path apps/windows/Cargo.toml --target x86_64-pc-windows-msvc
+# → apps/windows/target/x86_64-pc-windows-msvc/release/zali_messenger_win.exe (~8 МБ)
+```
+
+Не забыть `python3 scripts/bundle_web.py` **до** сборки — `main.rs` вкомпилирует `web/app.js` через
+`include_str!`, и без бандлинга в `.exe` попадёт старый JS.
+
+> Кросс-сборка даёт валидный бинарник, но **ничего не говорит о поведении**: трей, автозапуск,
+> toast-уведомления, AUMID, установщик и сам процесс обновления так не проверяются. Перед публикацией
+> релиза `.exe` надо прогнать на живой Windows.
+
 ### Сборка на Windows-машине
 
 **Предварительные требования:**
@@ -404,13 +511,13 @@ Windows показывает тосты для неупакованных (non-M
 одной маленькой иконки. Замена на нормальный многоразмерный `.ico` — косметическая
 доработка на будущее.
 
-**Ничего из этого не собиралось и не проверялось на реальной Windows-машине** (на
-этом Mac нет Windows и даже кросс-компиляция под `x86_64-pc-windows-msvc` не проходит
-из-за `ring`, см. выше) — код написан по документированному API используемых крейтов
-и по возможности перепроверен компиляцией на macOS с временно снятыми
-`#[cfg(target_os = "windows")]`-гейтами (у `tray-icon`/`muda` идентичный публичный API
-на обеих платформах), но живое поведение трея/автозапуска/установщика/AUMID-фикса
-нужно проверить вручную на Windows.
+**Ничего из этого не проверялось в работе на реальной Windows-машине.** Собирается всё
+это теперь нормально — кросс-сборка через `cargo xwin` проходит (см. выше), так что
+компиляцию можно не гадать, а просто выполнить. Но собранный бинарник ничего не говорит
+о поведении: трей, автозапуск, установщик, AUMID-фикс и процесс обновления нужно
+проверять вручную на Windows. Практика 2026-07-27 показала цену этого: у выпущенного
+апдейтера при установке всплывало окно консоли и обновление не доводилось до конца —
+кросс-сборка такое поймать не могла в принципе.
 
 ## Git Safety — уроки реального инцидента с потерей кода
 
@@ -445,6 +552,28 @@ Windows показывает тосты для неупакованных (non-M
 
 - The server Cargo package is named `zali_server` (underscore), not `zali-server`. Use `cargo check -p zali_server`.
 - `web/src/interface.js` is the canonical source; `bundle_web.py` copies it into macOS and Windows embedded assets. Always edit the source, then bundle.
+- **`bundle_web.py` режет бандл на литералы по 200 000 символов — это не косметика.** `Assets.swift`
+  получает HTML+CSS+JS Swift-литералами, каждый литерал компилируется в один `__cstring`-атом, а ld64
+  именует атом его же содержимым и падает на имени больше ~1 МиБ:
+  `ld: Assertion failed: (name.size() <= maxLength), function makeSymbolStringInPlace`. Ошибка не
+  называет ни файла, ни символа. 2026-07-27 macOS-клиент из-за этого перестал линковаться вообще
+  (1 098 746 байт ещё линковались, 1 185 134 — уже нет). Разбиение идёт по границам строк, склейка —
+  `joined(separator: "\n")`, что точно воспроизводит исходник и обходит проглатывание перевода строки
+  перед закрывающим разделителем; закрывающий `"""#` пишется в нулевую колонку. JSON протокола и
+  конфига печатаются с `indent=2` по той же причине. Если ассерт вернётся — уменьшить
+  `max_chunk_chars`.
+- Апдейтер Windows (`apps/windows/src/native/updates.rs`): скрипт установки запускается **только с
+  `CREATE_NO_WINDOW`**. Вместе с `DETACHED_PROCESS` этот флаг игнорируется, а у отсоединённого
+  процесса нет консоли вообще — каждая консольная утилита внутри скрипта получала собственное окно,
+  и пользователь видел всплывающее `find "<pid>"`. Ожидания через `tasklist`/`find`/`timeout` больше
+  нет: Windows держит запущенный образ заблокированным, поэтому **повтор `copy` и есть ожидание**
+  (`timeout` к тому же требует консольного ввода и падал мгновенно). Сбой не проглатывается: после
+  60 попыток скрипт возвращает уже установленную версию и пишет причину в `updates/install.log` —
+  путь реальный, установщик кладёт приложение в Program Files, куда неэлевированная копия запрещена.
+- Апдейтер macOS (`UpdateService.installAndRelaunch`): старый бандл **сначала отодвигается**, а не
+  удаляется. Раньше был `rm -rf` установленного `.app` и непроверенный `mv` — сбой переименования
+  уничтожал установку и не запускал ничего. Теперь при любом исходе что-то стартует обратно, причина
+  пишется в `updates/install.log`.
 - If SwiftPM reports a stale module cache after moving the project, remove `apps/macos/.build` and rebuild.
 - Runtime artifacts to keep out of version control: `zali_messenger.db`, `uploads/`, `target/`, `apps/macos/.build/`, `dist/`.
 - Server env config: copy `.env.example` (repo root) to `.env`; set a real `JWT_SECRET` for any non-local deployment.
