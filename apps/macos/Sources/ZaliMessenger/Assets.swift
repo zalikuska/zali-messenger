@@ -17534,14 +17534,37 @@ class ZaliInterface {
         return me.localeCompare(other) < 0;
     }
 
-    // Deterministic per-pair role for resolving offer/offer glare during
-    // mid-call renegotiation — independent of who happens to click a
-    // camera/screen-share toggle first, both sides agree on who yields.
+    // Deterministic per-pair role for resolving offer/offer glare. Polite means
+    // "does not own the offer for this pair": on a collision this side rolls its own
+    // offer back and answers the incoming one, while the offer owner keeps its offer
+    // and waits to be answered.
+    //
+    // This MUST be the inverse of shouldInitiateVoiceOffer. Both used to return the
+    // same `me.localeCompare(other) < 0`, which made the offer owner *polite*. When
+    // both sides offered at once the result was that neither ever answered: the
+    // impolite side dropped the incoming offer on the floor by design, and the
+    // polite side — the one holding the offer the peer was waiting on — rolled it
+    // back. Confirmed against the server's signal log for a dead call: two offers
+    // one way, one the other, 30 ICE candidates, and zero answers in either
+    // direction. ICE flows in that state, so the call looks connected while no
+    // session is ever agreed and nobody hears anybody.
     isPoliteVoicePeer(peer) {
         const me = String(this.myName() || '').trim();
         const other = String(peer || '').trim();
         if (!me || !other) return false;
-        return me.localeCompare(other) < 0;
+        if (this.voice.roomType === 'dm') {
+            // Mirrors shouldInitiateVoiceOffer's ladder, negated at every rung.
+            // Deliberately does NOT consult voice.status: that gates *when* to
+            // offer, and folding it in here would make both sides polite during
+            // setup, so a rollback could be attempted from a state that has no
+            // local offer to roll back.
+            const direction = String(this.voice.callTrack?.direction || '').trim();
+            if (direction) return direction !== 'outgoing';
+            const inviter = String(this.voice.inviter || '').trim();
+            if (inviter) return inviter !== me;
+            return me.localeCompare(other) > 0;
+        }
+        return me.localeCompare(other) > 0;
     }
 
     voiceEventPayload(payload = {}) {
@@ -19941,7 +19964,12 @@ class ZaliInterface {
             // for its own outgoing offer to be answered instead.
             const offerCollision = entry.pc.signalingState !== 'stable';
             if (offerCollision && !this.isPoliteVoicePeer(from)) {
+                // We own the offer for this pair, so we keep it and let the peer
+                // answer. Re-drive negotiation anyway: dropping an offer is only
+                // safe while ours is genuinely still in flight, and if the answer
+                // never arrives nothing else would ever notice.
                 this.voiceTrace('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                this.scheduleVoiceNegotiationRetry('offer-collision-ignored');
                 return;
             }
             this.voice.roomId = roomId;
@@ -19969,9 +19997,15 @@ class ZaliInterface {
             // InvalidStateError, leaving that one link unnegotiated.
             entry.negotiating = true;
             try {
-                if (offerCollision) {
+                // 'have-local-offer' is the only state a rollback is legal from.
+                // Attempting it from any other non-stable state throws, and that
+                // exception used to abort the whole block — so the answer this peer
+                // was waiting for was never created or sent.
+                if (offerCollision && entry.pc.signalingState === 'have-local-offer') {
                     this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                     await entry.pc.setLocalDescription({ type: 'rollback' });
+                } else if (offerCollision) {
+                    this.voiceTrace('offer-collision-no-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                 }
                 try {
                     await this.ensureVoiceLocalStream();
@@ -20438,6 +20472,8 @@ class ZaliInterface {
                 // Covers every way into a live room, not just joinVoiceChannel:
                 // accepting a DM call, and a room restored from the server's
                 // reconnect snapshot.
+"""#,
+    #"""
                 this.ensureVoicePresenceKeepalive();
                 try {
                     await this.ensureVoiceLocalStream();
@@ -20473,8 +20509,6 @@ class ZaliInterface {
     voiceIcon(kind) {
         const phone = '<path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>';
         const mic = '<rect x="9" y="3" width="6" height="10" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 18v3M9 21h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
-"""#,
-    #"""
         const cam = '<rect x="3.5" y="6.5" width="12" height="11" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 10.4 20 7.6a.6.6 0 0 1 .92.51v7.78a.6.6 0 0 1-.92.51l-4.5-2.8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
         const screen = '<rect x="3" y="4.5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 6.5v6M9.5 10 12 7.5 14.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
@@ -24838,6 +24872,8 @@ class ZaliInterface {
             },
             {
                 kind: 'settings',
+"""#,
+    #"""
                 title: 'Настройки',
                 value: 'Control',
                 body: 'Профиль, тема, ключи, быстрые аккаунты и журнал событий.',
@@ -24883,8 +24919,6 @@ class ZaliInterface {
                 <div class="server-meta">
                     <div class="server-name">Войти по коду</div>
                     <div class="server-prev">Введите код или ссылку сервера</div>
-"""#,
-    #"""
                 </div>
             </button>
         `;
