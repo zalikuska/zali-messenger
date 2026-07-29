@@ -60,13 +60,25 @@ pub(crate) fn clear_in_flight_send_client_id(client_id: &str) {
     }
 }
 
+/// Mirror of `conversationScopeKey`/`canonicalConversationScope` in
+/// `web/src/interface.js` (and of `ZaliCore.dmConversationScope` in the Swift
+/// client) — these scope strings index the very same conversation-key map the web
+/// layer writes, so all three must agree character for character.
+///
+/// Participants are lowercased: they arrive here from a message record, in whatever
+/// casing the server stores, while the web layer may have filed the key under a
+/// scope built from a contact entry. One differing character used to make the scope
+/// lookup miss silently, leaving decryption to brute-force every known key. Sorting
+/// happens on the lowercased values rather than after sorting the original spelling,
+/// since `Zulu` sorts before `test` but `zulu` sorts after it — otherwise the
+/// participant order would itself depend on casing.
 pub(crate) fn dm_conversation_scope(a: &str, b: &str) -> Option<String> {
-    let first = a.trim();
-    let second = b.trim();
+    let first = a.trim().to_lowercase();
+    let second = b.trim().to_lowercase();
     if first.is_empty() || second.is_empty() {
         return None;
     }
-    let mut names = [first.to_string(), second.to_string()];
+    let mut names = [first, second];
     names.sort();
     Some(format!("dm:{}:{}", names[0], names[1]))
 }
@@ -144,6 +156,27 @@ mod tests {
         assert_eq!(
             dm_conversation_scope("alice", "bob"),
             Some("dm:alice:bob".to_string())
+        );
+    }
+
+    /// The two sides of a conversation reach this with different spellings — the
+    /// server's stored casing on one, a contact entry's on the other — and both must
+    /// land on the scope the web layer filed the key under.
+    #[test]
+    fn dm_conversation_scope_is_case_independent() {
+        assert_eq!(
+            dm_conversation_scope("Alice", "BOB"),
+            Some("dm:alice:bob".to_string())
+        );
+        assert_eq!(
+            dm_conversation_scope("Pivovarca", "zalikus"),
+            dm_conversation_scope("pivovarca", "zalikus")
+        );
+        // Participant order must not flip with casing: `Zulu` sorts before `test`
+        // by byte, `zulu` sorts after it.
+        assert_eq!(
+            dm_conversation_scope("Zulu", "test"),
+            Some("dm:test:zulu".to_string())
         );
     }
 

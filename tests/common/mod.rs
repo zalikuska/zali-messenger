@@ -36,7 +36,15 @@ pub async fn spawn_app() -> TestApp {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let data_dir: PathBuf =
         std::env::temp_dir().join(format!("zali-server-test-{}-{}", std::process::id(), n));
+    spawn_app_with_data_dir(data_dir).await
+}
 
+/// Boots a server against a caller-chosen data directory instead of a fresh
+/// throwaway one. Needed to test anything that runs at startup against
+/// pre-existing rows (the scope-casing migration): boot once to get the real
+/// schema, plant legacy rows, then boot again over the same directory.
+#[allow(dead_code)]
+pub async fn spawn_app_with_data_dir(data_dir: PathBuf) -> TestApp {
     let config = zali_server::Config::from_env();
     let state = zali_server::build_app_state(data_dir.clone(), config).await;
     let app = zali_server::build_router(state);

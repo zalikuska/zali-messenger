@@ -152,6 +152,34 @@ pub(crate) async fn get_devices(
     }
 }
 
+/// Resolve a username to the casing actually stored in `users`.
+///
+/// Conversation scopes are canonically lowercased, so anything a client derives
+/// *from* a scope comes back lowercased too — while `users.username` and every
+/// `owner` column are byte-exact. A client can only undo that from its own
+/// contact list, and `/api/users?query=` returns just five names, so a peer with
+/// an uppercase letter who is not in your contacts (production has `GRIBOED` and
+/// `Pivovarca`) resolved to the lowercase spelling and matched no devices at all
+/// — silently starving exactly the accounts the republish sweep exists to heal.
+/// Resolving here fixes it once for all four clients instead of four times.
+///
+/// Registration rejects usernames differing only by case, so at most one row can
+/// match. Unknown names are returned unchanged: the caller's query then finds
+/// nothing, which is the correct answer for a user that does not exist.
+pub(crate) async fn resolve_username_casing(pool: &sqlx::SqlitePool, username: &str) -> String {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE lower(username) = ?")
+        .bind(trimmed.to_lowercase())
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
 pub(crate) async fn get_user_public_devices(
     AxumPath(username): AxumPath<String>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
@@ -161,6 +189,7 @@ pub(crate) async fn get_user_public_devices(
     if username.is_empty() {
         return (StatusCode::BAD_REQUEST, "Нужен username").into_response();
     }
+    let username = resolve_username_casing(&state.db, &username).await;
     match sqlx::query_as::<_, DeviceRecord>(
         "SELECT device_id, owner, label, public_key, signing_key, key_package, group_epoch,
                 approved, revoked, approved_by, history_days, created_at, approved_at, revoked_at
@@ -827,7 +856,9 @@ pub(crate) async fn post_key_envelope(
     Json(payload): Json<KeyEnvelopePayload>,
 ) -> impl IntoResponse {
     let recipient = trim_limited(payload.recipient, 64);
-    let scope = trim_limited(payload.scope, 256);
+    // Canonical form, so an envelope from a client that predates the fold still
+    // lands in the same bucket its recipient reads from.
+    let scope = crate::conversation_keys::canonical_scope(&trim_limited(payload.scope, 256));
     let encrypted_key = trim_limited(payload.encryptedKey, 262_144);
     // Device id is no longer a real identifier here, just a dedup key for the
     // ON CONFLICT upsert below — "any" groups all envelopes for a given
@@ -848,6 +879,12 @@ pub(crate) async fn post_key_envelope(
     if recipient.is_empty() || scope.is_empty() || encrypted_key.len() < 32 {
         return (StatusCode::BAD_REQUEST, "Некорректный key envelope").into_response();
     }
+    // Same reason the device lookup resolves casing, and it has to happen on the
+    // same request: `owner` is what `get_key_envelopes` filters on with the
+    // recipient's real spelling, so an envelope filed under a lowercased owner is
+    // one its recipient can never see. That failure is silent on both ends — the
+    // sender gets a 200 and the recipient just has no key.
+    let recipient = resolve_username_casing(&state.db, &recipient).await;
 
     let envelope_id = Uuid::new_v4().to_string();
     match sqlx::query(

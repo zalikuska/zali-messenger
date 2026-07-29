@@ -37,6 +37,12 @@ fn trace(message: impl AsRef<str>) {
 
 const MAX_AVATAR_BYTES: u64 = 2 * 1024 * 1024;
 const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.json");
+// The user-facing version, in the app's own MAJOR.MINOR{a|b|r}BUILD scheme
+// (r > b > a — see compareVersions in interface.js). Distinct from Cargo.toml's
+// `version`, which must stay strict SemVer for Cargo itself and no longer tracks
+// this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
+// APP_VERSION — on every release published via POST /api/version.
+const APP_DISPLAY_VERSION: &str = "0.2b11";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -162,6 +168,36 @@ struct PersistedConfig {
     conversation_keys_by_user: HashMap<String, HashMap<String, String>>,
 }
 
+/// Serialize-only mirror of [`PersistedConfig`] that borrows every field instead of
+/// owning it. `persist_config` runs on the UI thread on every message-cache save, and
+/// building an owned `PersistedConfig` meant cloning `message_cache_by_user` — i.e. a
+/// full copy of *every* signed-in account's entire message-cache JSON — plus the outbox
+/// and both key maps, several megabytes of memcpy per received message. Field names,
+/// renames and `skip_serializing_if` must stay byte-identical to `PersistedConfig` or
+/// the file this writes stops round-tripping through the reader.
+#[derive(Serialize)]
+struct PersistedConfigRef<'a> {
+    api_base_url: Option<&'a str>,
+    ws_base_url: Option<&'a str>,
+    #[serde(rename = "crypto_key_v2", skip_serializing_if = "Option::is_none")]
+    crypto_key: Option<&'a str>,
+    session_username: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_token: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_id: Option<&'a str>,
+    #[serde(rename = "conversation_keys_v2")]
+    conversation_keys: &'a HashMap<String, String>,
+    pending_outbox: &'a Vec<Value>,
+    message_cache: Option<&'a str>,
+    pending_outbox_by_user: &'a HashMap<String, Vec<Value>>,
+    message_cache_by_user: &'a HashMap<String, String>,
+    #[serde(rename = "crypto_keys_v2_by_user")]
+    crypto_keys_by_user: &'a HashMap<String, String>,
+    #[serde(rename = "conversation_keys_v2_by_user")]
+    conversation_keys_by_user: &'a HashMap<String, HashMap<String, String>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NativeState {
     pub api_base_url: Option<String>,
@@ -180,6 +216,13 @@ pub struct NativeState {
     pub conversation_keys_by_user: HashMap<String, HashMap<String, String>>,
     config_path: PathBuf,
     css_path: PathBuf,
+    /// What `persist_config` last actually wrote/stored, so repeat saves that produce
+    /// identical bytes skip the disk write and the credential-store round trips
+    /// entirely. Not persisted itself — a fresh process starts with `None` and so
+    /// always performs its first write.
+    last_written_config: Option<String>,
+    last_stored_crypto_key: Option<Option<String>>,
+    last_stored_session_token: Option<Option<String>>,
     /// Raw JSON of the JS-side device identity (ECDH keypair + deviceId) exported by
     /// the Swift client's WKWebView localStorage, if present for this user. macOS only
     /// — lets a first Rust-shell launch on the same Mac reuse the already-approved
@@ -392,7 +435,7 @@ impl NativeState {
                 }
             });
 
-        let state = Self {
+        let mut state = Self {
             api_base_url: persisted.api_base_url,
             ws_base_url: persisted.ws_base_url,
             current_username,
@@ -425,6 +468,9 @@ impl NativeState {
             conversation_keys_by_user: persisted.conversation_keys_by_user,
             config_path,
             css_path,
+            last_written_config: None,
+            last_stored_crypto_key: None,
+            last_stored_session_token: None,
             injected_device_identity,
         };
         trace(format!(
@@ -550,69 +596,104 @@ impl NativeState {
         self.update_scoped_maps_for_current_user();
     }
 
-    fn persist_config(&self) {
+    fn persist_config(&mut self) {
+        // Was: two unconditional credential-store writes per call. Windows Credential
+        // Manager round trips are slow and this runs on the UI thread on every save,
+        // including the message-cache save that fires after each received message —
+        // while the secrets themselves change only at login/logout/key rotation.
         let key_ref = if self.current_key.trim().is_empty() {
             None
         } else {
-            Some(self.current_key.as_str())
+            Some(self.current_key.clone())
         };
-        let keyring_key_ok = store_secret_in_keyring("crypto_key_v2", key_ref);
-        let keyring_token_ok = store_secret_in_keyring("session_token", self.auth_token.as_deref());
-        let user_key = user_storage_key(&self.current_username);
-        let mut pending_outbox_by_user = self.pending_outbox_by_user.clone();
-        let mut message_cache_by_user = self.message_cache_by_user.clone();
-        let mut crypto_keys_by_user = self.crypto_keys_by_user.clone();
-        let mut conversation_keys_by_user = self.conversation_keys_by_user.clone();
-        if !user_key.is_empty() {
-            pending_outbox_by_user.insert(user_key.clone(), self.pending_outbox.clone());
-            message_cache_by_user.insert(user_key.clone(), self.message_cache_json.clone());
-            if self.current_key.trim().is_empty() {
-                crypto_keys_by_user.remove(&user_key);
-            } else {
-                crypto_keys_by_user.insert(user_key.clone(), self.current_key.clone());
-            }
-            conversation_keys_by_user.insert(user_key, self.conversation_keys.clone());
-        }
-        let payload = PersistedConfig {
-            api_base_url: self.api_base_url.clone(),
-            ws_base_url: self.ws_base_url.clone(),
+        let token_ref = self.auth_token.clone();
+        let keyring_key_ok = self.store_secret_if_changed("crypto_key_v2", key_ref.as_deref());
+        let keyring_token_ok = self.store_secret_if_changed("session_token", token_ref.as_deref());
+
+        // The per-user maps used to be cloned wholesale and then have the current
+        // user's entries inserted. That insert is exactly what
+        // update_scoped_maps_for_current_user does in place, so doing it here first
+        // lets the payload borrow the real maps and copy nothing.
+        self.update_scoped_maps_for_current_user();
+
+        let payload = PersistedConfigRef {
+            api_base_url: self.api_base_url.as_deref(),
+            ws_base_url: self.ws_base_url.as_deref(),
             crypto_key: if keyring_key_ok || self.current_key.trim().is_empty() {
                 None
             } else {
-                Some(self.current_key.clone())
+                Some(self.current_key.as_str())
             },
-            session_username: Some(self.current_username.clone()),
+            session_username: Some(self.current_username.as_str()),
             session_token: if keyring_token_ok {
                 None
             } else {
                 self.auth_token
-                    .clone()
+                    .as_deref()
                     .filter(|value| !value.trim().is_empty())
             },
             device_id: if self.current_device_id.trim().is_empty() {
                 None
             } else {
-                Some(self.current_device_id.clone())
+                Some(self.current_device_id.as_str())
             },
-            conversation_keys: self.conversation_keys.clone(),
-            pending_outbox: self.pending_outbox.clone(),
-            message_cache: Some(self.message_cache_json.clone()),
-            pending_outbox_by_user,
-            message_cache_by_user,
-            crypto_keys_by_user,
-            conversation_keys_by_user,
+            conversation_keys: &self.conversation_keys,
+            pending_outbox: &self.pending_outbox,
+            message_cache: Some(self.message_cache_json.as_str()),
+            pending_outbox_by_user: &self.pending_outbox_by_user,
+            message_cache_by_user: &self.message_cache_by_user,
+            crypto_keys_by_user: &self.crypto_keys_by_user,
+            conversation_keys_by_user: &self.conversation_keys_by_user,
         };
-        if let Ok(json) = serde_json::to_string_pretty(&payload) {
-            let _ = fs::write(&self.config_path, json);
-            trace(format!(
-                "persist_config user={} has_token={} key_set={} pending_count={} config={}",
-                self.current_username,
-                self.auth_token.is_some(),
-                !self.current_key.trim().is_empty(),
-                self.pending_outbox.len(),
-                self.config_path.display()
-            ));
+        // Compact rather than pretty: nothing reads this file by eye, and pretty
+        // printing inflates a multi-megabyte payload (the message cache is embedded
+        // twice) with indentation that then has to be written to disk as well.
+        let Ok(json) = serde_json::to_string(&payload) else {
+            return;
+        };
+        if self.last_written_config.as_deref() == Some(json.as_str()) {
+            return;
         }
+        if fs::write(&self.config_path, &json).is_ok() {
+            self.last_written_config = Some(json);
+        } else {
+            self.last_written_config = None;
+        }
+        trace(format!(
+            "persist_config user={} has_token={} key_set={} pending_count={} config={}",
+            self.current_username,
+            self.auth_token.is_some(),
+            !self.current_key.trim().is_empty(),
+            self.pending_outbox.len(),
+            self.config_path.display()
+        ));
+    }
+
+    /// `store_secret_in_keyring`, skipped when the value is already what we stored in
+    /// this process. Returns the same "did the keyring take it" answer as a real write
+    /// would, so the caller's decision to leave the secret out of the plaintext config
+    /// file is unchanged.
+    fn store_secret_if_changed(&mut self, name: &str, value: Option<&str>) -> bool {
+        let normalized = value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let slot = match name {
+            "crypto_key_v2" => &mut self.last_stored_crypto_key,
+            "session_token" => &mut self.last_stored_session_token,
+            _ => {
+                return store_secret_in_keyring(name, value);
+            }
+        };
+        if let Some(previous) = slot.as_ref() {
+            if *previous == normalized {
+                // Nothing to write; the earlier write is what made this cache non-None,
+                // and it succeeded (failures are not cached below).
+                return true;
+            }
+        }
+        let ok = store_secret_in_keyring(name, value);
+        *slot = if ok { Some(normalized) } else { None };
+        ok
     }
 
     fn persist_pending_outbox(&mut self, items: Vec<Value>) {
@@ -715,7 +796,7 @@ impl NativeState {
         if let Ok(json) = serde_json::to_string(&self.native_capabilities()) {
             script.push_str(&format!("window.__ZALI_NATIVE_CAPS__ = {};\n", json));
         }
-        if let Ok(version_json) = serde_json::to_string(env!("CARGO_PKG_VERSION")) {
+        if let Ok(version_json) = serde_json::to_string(APP_DISPLAY_VERSION) {
             script.push_str(&format!(
                 "window.__ZALI_NATIVE_APP_VERSION = {}; window.__ZALI_NATIVE_PLATFORM = \"windows\";\n",
                 version_json
@@ -2092,5 +2173,101 @@ pub fn handle_ipc_message(
             // Android-only (drives the system back-gesture progress indicator via
             // MainActivity's OnBackAnimationCallback). No desktop equivalent.
         }
+    }
+}
+
+#[cfg(test)]
+mod persisted_config_tests {
+    use super::*;
+
+    /// `PersistedConfigRef` exists purely so `persist_config` can serialize without
+    /// cloning multi-megabyte per-user maps. It is a second, hand-maintained copy of
+    /// `PersistedConfig`'s serde surface, so the two must produce byte-identical JSON —
+    /// otherwise a saved config silently stops loading fields back on the next launch
+    /// (session token, crypto key, cached messages), which looks like data loss rather
+    /// than a serialization bug.
+    #[test]
+    fn borrowed_config_serializes_exactly_like_the_owned_one() {
+        let mut conversation_keys = HashMap::new();
+        conversation_keys.insert("dm:alice".to_string(), "key-a".to_string());
+        let mut message_cache_by_user = HashMap::new();
+        message_cache_by_user.insert("bob".to_string(), r#"{"chats":{}}"#.to_string());
+        let mut crypto_keys_by_user = HashMap::new();
+        crypto_keys_by_user.insert("bob".to_string(), "secret".to_string());
+        let mut conversation_keys_by_user = HashMap::new();
+        conversation_keys_by_user.insert("bob".to_string(), conversation_keys.clone());
+        let mut pending_outbox_by_user = HashMap::new();
+        pending_outbox_by_user.insert("bob".to_string(), vec![json!({"clientId": "c1"})]);
+        let pending_outbox = vec![json!({"clientId": "c1"})];
+
+        let owned = PersistedConfig {
+            api_base_url: Some("https://example.test".to_string()),
+            ws_base_url: Some("wss://example.test".to_string()),
+            crypto_key: Some("secret".to_string()),
+            session_username: Some("bob".to_string()),
+            session_token: Some("token".to_string()),
+            device_id: Some("dev-1".to_string()),
+            conversation_keys: conversation_keys.clone(),
+            pending_outbox: pending_outbox.clone(),
+            message_cache: Some(r#"{"chats":{}}"#.to_string()),
+            pending_outbox_by_user: pending_outbox_by_user.clone(),
+            message_cache_by_user: message_cache_by_user.clone(),
+            crypto_keys_by_user: crypto_keys_by_user.clone(),
+            conversation_keys_by_user: conversation_keys_by_user.clone(),
+        };
+        let borrowed = PersistedConfigRef {
+            api_base_url: Some("https://example.test"),
+            ws_base_url: Some("wss://example.test"),
+            crypto_key: Some("secret"),
+            session_username: Some("bob"),
+            session_token: Some("token"),
+            device_id: Some("dev-1"),
+            conversation_keys: &conversation_keys,
+            pending_outbox: &pending_outbox,
+            message_cache: Some(r#"{"chats":{}}"#),
+            pending_outbox_by_user: &pending_outbox_by_user,
+            message_cache_by_user: &message_cache_by_user,
+            crypto_keys_by_user: &crypto_keys_by_user,
+            conversation_keys_by_user: &conversation_keys_by_user,
+        };
+
+        let owned_value: Value = serde_json::from_str(&serde_json::to_string(&owned).unwrap()).unwrap();
+        let borrowed_value: Value =
+            serde_json::from_str(&serde_json::to_string(&borrowed).unwrap()).unwrap();
+        assert_eq!(owned_value, borrowed_value);
+    }
+
+    /// The optional secrets are omitted, not written as `null`, when they live in the
+    /// credential store instead of the file — same `skip_serializing_if` behaviour the
+    /// owned struct has.
+    #[test]
+    fn borrowed_config_omits_absent_secrets() {
+        let empty_keys: HashMap<String, String> = HashMap::new();
+        let empty_cache: HashMap<String, String> = HashMap::new();
+        let empty_outbox_by_user: HashMap<String, Vec<Value>> = HashMap::new();
+        let empty_conv_by_user: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let outbox: Vec<Value> = Vec::new();
+        let borrowed = PersistedConfigRef {
+            api_base_url: None,
+            ws_base_url: None,
+            crypto_key: None,
+            session_username: Some("bob"),
+            session_token: None,
+            device_id: None,
+            conversation_keys: &empty_keys,
+            pending_outbox: &outbox,
+            message_cache: None,
+            pending_outbox_by_user: &empty_outbox_by_user,
+            message_cache_by_user: &empty_cache,
+            crypto_keys_by_user: &empty_keys,
+            conversation_keys_by_user: &empty_conv_by_user,
+        };
+        let json = serde_json::to_string(&borrowed).unwrap();
+        assert!(!json.contains("crypto_key_v2"), "{json}");
+        assert!(!json.contains("session_token"), "{json}");
+        assert!(!json.contains("device_id"), "{json}");
+        // Round-trips through the reader the app actually uses.
+        let parsed: PersistedConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.session_username.as_deref(), Some("bob"));
     }
 }

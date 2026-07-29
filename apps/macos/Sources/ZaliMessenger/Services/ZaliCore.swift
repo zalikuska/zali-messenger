@@ -4,9 +4,21 @@ import CoreBridge
 class ZaliCore {
     static let shared = ZaliCore()
 
+    /// Mirror of `conversationScopeKey`/`canonicalConversationScope` in
+    /// `web/src/interface.js` — the scope strings this produces are looked up in the
+    /// very same conversation-key map the web layer writes, so the two must agree
+    /// character for character.
+    ///
+    /// Participants are lowercased. They arrive here from a message record, i.e. in
+    /// whatever casing the server stores, while the web layer may have filed the key
+    /// under a scope built from a contact entry; before this, one differing character
+    /// meant the scope lookup silently missed and decryption fell back to brute-forcing
+    /// every known key. Sorting happens on the lowercased values, not after sorting the
+    /// original spelling: `Zulu` sorts before `test` but `zulu` sorts after it, so the
+    /// participant order would otherwise itself depend on casing.
     static func dmConversationScope(_ a: String, _ b: String) -> String? {
-        let first = a.trimmingCharacters(in: .whitespacesAndNewlines)
-        let second = b.trimmingCharacters(in: .whitespacesAndNewlines)
+        let first = a.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let second = b.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !first.isEmpty, !second.isEmpty else { return nil }
         let sorted = [first, second].sorted()
         return "dm:\(sorted[0]):\(sorted[1])"

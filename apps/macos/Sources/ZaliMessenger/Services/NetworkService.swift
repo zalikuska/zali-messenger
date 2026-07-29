@@ -251,7 +251,35 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         connectionQueue.async { [weak self] in
             guard let self else { return }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.messageCacheJSON = trimmed.isEmpty ? #"{"chats":{},"serverChats":{}}"# : trimmed
+            let normalized = trimmed.isEmpty ? #"{"chats":{},"serverChats":{}}"# : trimmed
+            guard self.messageCacheJSON != normalized else { return }
+            self.messageCacheJSON = normalized
+            UserDefaults.standard.set(self.messageCacheJSON, forKey: self.messageCacheStorageKey)
+            self.trace("messageCache saved bytes=\(self.messageCacheJSON.count)")
+        }
+    }
+
+    /// Same as `saveMessageCacheJSON`, but the JSON encoding itself also happens on
+    /// `connectionQueue`. The caller is the WKScriptMessageHandler bridge, which runs on
+    /// the main thread: serializing the whole message cache there stalled the UI for as
+    /// long as the encode took, once per save, and the save fires after bursts of
+    /// received messages — exactly when the UI is busiest.
+    func saveMessageCacheObject(_ object: Any) {
+        connectionQueue.async { [weak self] in
+            guard let self else { return }
+            let json: String
+            if let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+               let encoded = String(data: data, encoding: .utf8) {
+                json = encoded
+            } else {
+                json = #"{"chats":{},"serverChats":{}}"#
+            }
+            let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = trimmed.isEmpty ? #"{"chats":{},"serverChats":{}}"# : trimmed
+            // Redundant saves (state churn that normalises back to the same shape) would
+            // otherwise re-write UserDefaults with byte-identical content every time.
+            guard self.messageCacheJSON != normalized else { return }
+            self.messageCacheJSON = normalized
             UserDefaults.standard.set(self.messageCacheJSON, forKey: self.messageCacheStorageKey)
             self.trace("messageCache saved bytes=\(self.messageCacheJSON.count)")
         }

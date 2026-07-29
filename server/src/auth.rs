@@ -467,6 +467,31 @@ pub(crate) async fn register(
             .into_response();
     }
 
+    // `users.username` is a case-sensitive PRIMARY KEY, so `Pivovarca` and
+    // `pivovarca` could both be registered as separate accounts. Conversation
+    // scopes name their participants in lowercase (see
+    // conversation_keys::canonical_scope), so two such accounts would share one
+    // scope — and therefore one conversation key. Reject the collision at the only
+    // point where it can be created.
+    match sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE lower(username) = ?")
+        .bind(username.to_lowercase())
+        .fetch_optional(&state.db)
+        .await
+    {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "Такой логин уже занят"})),
+            )
+                .into_response();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            error!("Ошибка проверки занятости логина: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
     info!("Хэширование пароля для нового пользователя '{}'", username);
     let hashed = match hash_password(payload.password.clone()).await {
         Ok(h) => h,

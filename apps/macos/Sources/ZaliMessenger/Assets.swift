@@ -1845,44 +1845,111 @@ body[data-nav-mode="servers"] .contacts {
     display: block;
 }
 
-/* Camera feeds — small floating bubbles rather than full tiles, so they
-   read as a "who's on camera" strip and don't compete with a screen share. */
-.voice-video-grid {
-    display: flex;
-    flex-wrap: wrap;
+/* Participant tiles — the Discord-style call stage. One rectangle per
+   participant; it doubles as the participant list and as the mount point for
+   that participant's camera feed, so there is no separate "who's here" chip row
+   and no separate camera strip competing with it. */
+.voice-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 10px;
 }
 
-.voice-video-grid:empty {
-    display: none;
-}
-
-.voice-video-tile {
+.voice-tile {
     position: relative;
-    width: 130px;
-    aspect-ratio: 4 / 3;
-    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    aspect-ratio: 16 / 10;
+    border-radius: 14px;
     overflow: hidden;
-    background: #000;
-    border: 1px solid rgba(255,255,255,.1);
-    box-shadow: 0 8px 20px rgba(0,0,0,.22);
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.08);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    /* The speaking ring is an inset box-shadow, not a border, so lighting it up
+       never changes the tile's box size and the grid can't reflow on every
+       voice-activity flip. */
+    transition: box-shadow .12s ease, border-color .12s ease;
 }
 
-.voice-video-tile:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 26px rgba(0,0,0,.3);
+.voice-tile.speaking {
+    border-color: rgba(var(--accent-rgb), .55);
+    box-shadow:
+        inset 0 0 0 2px rgba(var(--accent-rgb), .85),
+        0 0 18px rgba(var(--accent-rgb), .18);
 }
 
-.voice-video-tile.voice-video-local {
-    border-color: rgba(var(--accent-rgb), .4);
+.voice-tile-media {
+    position: absolute;
+    inset: 0;
 }
 
-.voice-video-tile video {
+.voice-tile-media video {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+    background: #000;
+}
+
+.voice-tile-avatar {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: rgba(255,255,255,.06);
+    color: var(--text2);
+    font-size: 22px;
+    font-weight: 900;
+}
+
+.voice-tile.has-video .voice-tile-avatar {
+    display: none;
+}
+
+.voice-tile-avatar .avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.voice-tile-footer {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: calc(100% - 16px);
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+
+.voice-tile-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.voice-tile-mic {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: rgba(255, 92, 118, .98);
+}
+
+.voice-tile-mic .call-ctrl-icon {
+    width: 12px;
+    height: 12px;
 }
 
 .voice-video-label {
@@ -2122,11 +2189,6 @@ body[data-nav-mode="servers"] .contacts {
     box-shadow: 0 10px 24px rgba(255,77,109,.28);
 }
 
-.voice-room-participants {
-    display: grid;
-    gap: 8px;
-}
-
 .voice-trace {
     display: grid;
     gap: 8px;
@@ -2181,31 +2243,6 @@ body[data-nav-mode="servers"] .contacts {
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
-}
-
-.voice-participants {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.voice-participant {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: rgba(255,255,255,.03);
-    color: var(--text2);
-    font-size: 11px;
-    font-weight: 800;
-}
-
-.voice-participant.mine {
-    border-color: rgba(var(--accent-rgb), .24);
-    color: var(--text);
 }
 
 .voice-empty {
@@ -6022,6 +6059,18 @@ body[data-nav-mode="servers"] .contacts {
         grid-template-columns: 1fr;
     }
 
+    /* Keep two participants side by side on a phone instead of one giant tile
+       per row — the desktop 190px floor would force a single column here. */
+    .voice-tiles {
+        grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    }
+
+    .voice-tile-avatar {
+        width: 52px;
+        height: 52px;
+        font-size: 18px;
+    }
+
     .sidebar-head,
     .search-wrap,
     .nav-label,
@@ -8010,6 +8059,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                         <span>Громкость собеседников: <span id="masterVolumeValue">100%</span></span>
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
                                     </label>
+"""#,
+    #"""
                                     <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
                                 </div>
                             </section>
@@ -8031,8 +8082,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                         </span>
                                     </label>
                                 </div>
-"""#,
-    #"""
                             </section>
 
                             <div class="settings-grid">
@@ -9862,7 +9911,7 @@ class ZaliInterface {
         // fire while the window is minimized/unfocused. Created lazily and
         // unlocked on the first user gesture (see installSoundUnlock) since
         // AudioContext.resume() silently stays 'suspended' without one.
-        this.sound = { ctx: null, unlocked: false, ringTimer: null, ringing: false };
+        this.sound = { ctx: null, bus: null, unlocked: false, ringTimer: null, ringing: false };
         this.installSoundUnlock();
 
         const cachedMessages = this.loadStoredMessageCache();
@@ -12043,13 +12092,32 @@ class ZaliInterface {
             serverChats: sanitizeMessages(this.S.serverChats),
         };
         const json = JSON.stringify(payload);
+        const storageKey = this.messageCacheStorageKey();
+        // The two expensive halves of a save are the synchronous localStorage write
+        // (disk I/O on the main thread) and the native bridge post, which serialises
+        // the whole store a second time to cross the IPC boundary. Plenty of saves are
+        // scheduled by state churn that leaves the persisted shape byte-identical
+        // (status flips that normalise away, re-merges of already-known history), and
+        // those used to pay both costs for nothing. The storage key is part of the
+        // guard so an account switch never inherits the previous account's "already
+        // saved" verdict.
+        const unchanged = this._lastSavedMessageCacheJson === json
+            && this._lastSavedMessageCacheKey === storageKey;
+        this.saveInjectedMessageCache(json);
+        if (unchanged) return;
+
         try {
-            localStorage.setItem(this.messageCacheStorageKey(), json);
+            localStorage.setItem(storageKey, json);
+            this._lastSavedMessageCacheJson = json;
+            this._lastSavedMessageCacheKey = storageKey;
         } catch (e) {
+            // A failed write must not be remembered as saved, or the retry that the
+            // next scheduled save would have been gets skipped too.
+            this._lastSavedMessageCacheJson = null;
+            this._lastSavedMessageCacheKey = null;
             this.trace(`saveStoredMessageCache localStorage failed reason=${e?.name || e?.message || e}`);
             this.warnStorageFallback('message_cache', `Не удалось сохранить кеш сообщений в localStorage: ${e?.name || e?.message || e}`);
         }
-        this.saveInjectedMessageCache(json);
         if (this.nativeSupports('saveMessageCache')) {
             this.postNativeMessage({
                 type: NativeMessageTypes.SAVE_MESSAGE_CACHE,
@@ -12126,6 +12194,8 @@ class ZaliInterface {
         }
     }
 
+"""#,
+    #"""
     saveStoredCurrentContact(name) {
         try {
             const value = String(name || '').trim();
@@ -12195,8 +12265,6 @@ class ZaliInterface {
             return '';
         } catch (e) {
             this.trace('loadStoredCryptoKey error fallback empty');
-"""#,
-    #"""
             return '';
         }
     }
@@ -12305,6 +12373,54 @@ class ZaliInterface {
         }
     }
 
+    // Canonical form of a conversation scope.
+    //
+    // The scope string used to be built from whatever casing the caller happened
+    // to hold — a contact typed by hand, a username off a message, a roster entry
+    // — while the registry, the envelope table and the server's participant check
+    // all compare it byte-exactly. One differently-cased character therefore
+    // forked a conversation into two scopes that could never converge: separate
+    // registry claims, separate envelope buckets, and a 403 from the server for
+    // whichever side held the mis-cased form (its own username no longer matches
+    // either participant). Production carried both `dm:pivovarca:zalikus` and
+    // `dm:Pivovarca:zalikus` in the registry although only `Pivovarca` exists as
+    // an account, plus scopes naming users that never existed at all.
+    //
+    // `server:` scopes are left alone: their ids come from the server, so every
+    // participant already derives the identical string.
+    canonicalConversationScope(scope) {
+        const value = String(scope || '').trim();
+        if (!value.startsWith('dm:')) return value;
+        const parts = value.split(':');
+        if (parts.length !== 3) return value;
+        const a = parts[1].trim().toLowerCase();
+        const b = parts[2].trim().toLowerCase();
+        if (!a || !b) return value;
+        // Sorted on the lowercased form, not merely lowercased after sorting:
+        // `Zulu` sorts before `test` by UTF-16 code unit but after it once
+        // lowercased, so sorting the original casing would leave the participant
+        // order itself case-dependent.
+        return `dm:${[a, b].sort().join(':')}`;
+    }
+
+    // Scopes are canonically lowercased, but the API addresses users by their real
+    // casing (`users.username` is a case-sensitive primary key), so a name taken
+    // back out of a scope must be mapped to the casing the server knows before it
+    // can be used in a request path.
+    resolveKnownUsernameCasing(username) {
+        const value = String(username || '').trim();
+        if (!value) return '';
+        const lower = value.toLowerCase();
+        const me = String(this.myName() || '').trim();
+        if (me && me.toLowerCase() === lower) return me;
+        for (const pool of [this.S.contacts, this.S.users]) {
+            if (!Array.isArray(pool)) continue;
+            const hit = pool.find(item => String(item || '').trim().toLowerCase() === lower);
+            if (hit) return String(hit).trim();
+        }
+        return value;
+    }
+
     conversationScopeKey(peer = null, serverId = null, channelId = null) {
         const sid = String(serverId || '').trim();
         const cid = String(channelId || '').trim();
@@ -12314,15 +12430,16 @@ class ZaliInterface {
         const me = String(this.myName() || '').trim();
         const other = String(peer || this.S.current || '').trim();
         if (!me || !other) return '';
-        return `dm:${[me, other].sort().join(':')}`;
+        return this.canonicalConversationScope(`dm:${me}:${other}`);
     }
 
     dmScopeOwner(scope) {
         // For a DM scope `dm:a:b` (participants sorted), the lexicographically
         // smaller participant is the canonical owner of the conversation key.
+        // Lowercased, like the scope itself — compare it case-insensitively.
         const parts = String(scope || '').split(':');
         if (parts[0] !== 'dm') return '';
-        return String(parts[1] || '').trim();
+        return String(parts[1] || '').trim().toLowerCase();
     }
 
     addAltConversationKey(stored, scope, key) {
@@ -12557,9 +12674,50 @@ class ZaliInterface {
         // a key first (otherwise each side keeps its own and decryption fails).
         const owner = this.dmScopeOwner(scope);
         if (!owner) return false;
-        const me = String(this.myName() || '').trim();
-        const sender = String(payload?.sender || '').trim();
+        // Both sides lowercased: the owner comes out of a canonical scope, while
+        // myName()/payload.sender carry the account's real casing.
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const sender = String(payload?.sender || '').trim().toLowerCase();
         return sender === owner && me !== owner;
+    }
+
+    // Fold legacy, differently-cased scope strings onto their canonical form.
+    //
+    // Applied on every load rather than once: a legacy-cased scope can arrive at
+    // any time from the cloud vault or from a peer still running a client that
+    // predates canonicalConversationScope, and a key filed under a scope nobody
+    // looks up any more is a key that has been silently lost.
+    canonicalizeConversationKeyScopes(map) {
+        const source = map && typeof map === 'object' ? map : {};
+        const out = {};
+        const demoted = [];
+        for (const [rawScope, rawValue] of Object.entries(source)) {
+            const value = String(rawValue || '').trim();
+            if (!value) continue;
+            const scope = String(rawScope || '');
+            if (scope.startsWith('alt:')) {
+                // `alt:<scope>:<value>`; both scope kinds are exactly 3 segments and
+                // the value is base64url, so it never contributes a colon. The map
+                // key embeds the value, so it is rebuilt rather than renamed.
+                const parts = scope.split(':');
+                const rebuilt = `alt:${this.canonicalConversationScope(parts.slice(1, 4).join(':'))}:${value}`;
+                out[rebuilt] = value;
+                continue;
+            }
+            const canonical = this.canonicalConversationScope(scope);
+            if (!Object.prototype.hasOwnProperty.call(out, canonical)) {
+                out[canonical] = value;
+            } else if (out[canonical] !== value) {
+                // Two casings of one conversation each carried a key. Neither may be
+                // dropped: whichever loses the active slot still decrypts whatever
+                // history was written under it, so it survives as a candidate.
+                demoted.push([canonical, value]);
+            }
+        }
+        for (const [canonical, value] of demoted) {
+            this.addAltConversationKey(out, canonical, value);
+        }
+        return out;
     }
 
     loadStoredConversationKeys() {
@@ -12591,9 +12749,13 @@ class ZaliInterface {
                 : {};
             const persisted = readStore(localStorage);
             const session = readStore(sessionStorage);
-            if (!persisted && !session) return { ...injected };
+            if (!persisted && !session) return this.canonicalizeConversationKeyScopes(injected);
             // sessionStorage last: within one session it is the freshest writer.
-            const merged = { ...injected, ...(persisted || {}), ...(session || {}) };
+            const merged = this.canonicalizeConversationKeyScopes({
+                ...injected,
+                ...(persisted || {}),
+                ...(session || {}),
+            });
             try {
                 const encoded = JSON.stringify(merged || {});
                 sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
@@ -12960,7 +13122,7 @@ class ZaliInterface {
         }
 
         const owner = this.dmScopeOwner(scope);
-        const meName = String(this.myName() || '').trim();
+        const meName = String(this.myName() || '').trim().toLowerCase();
         const isChannelScope = !!(serverId && channelId);
         if (owner && meName && owner !== meName) {
             // Non-owner had to invent a key because the owner's envelope was not
@@ -12973,6 +13135,11 @@ class ZaliInterface {
             this.addLogEntry({ type: 'INFO', msg: `Сгенерирован новый ключ диалога (scope=${scope})`, ts: new Date().toLocaleTimeString() });
         }
         this.updateCryptoKeyDisplay({ key: localKey, peer, serverId, channelId });
+
+        // Own devices first, and for every scope kind: a channel key is just as
+        // unreachable for our other devices as a DM key is, and they have no other
+        // way back to it once the cloud vault lags.
+        void this.publishConversationKeyToOwnDevices({ scope, key: localKey, reason });
 
         const requiresPeerEnvelope = !!(peer && !serverId && !channelId && String(peer).trim() !== this.myName());
         if (requiresPeerEnvelope) {
@@ -13416,7 +13583,9 @@ class ZaliInterface {
         const incomingKeys = payload.conversationKeys && typeof payload.conversationKeys === 'object'
             ? payload.conversationKeys
             : {};
-        for (const [scope, value] of Object.entries(incomingKeys)) {
+        for (const [rawScope, value] of Object.entries(incomingKeys)) {
+            // A vault package written by an older device carries legacy-cased scopes.
+            const scope = this.canonicalConversationScope(String(rawScope || ''));
             const current = String(nextKeys[scope] || '').trim();
             const next = String(value || '').trim();
             if (!next) continue;
@@ -13438,7 +13607,9 @@ class ZaliInterface {
         // That is fine as an interim state, but the registry has the final say —
         // reconcile in the background so the active/sending key converges on the
         // canonical one instead of on whichever device synced most recently.
-        void this.reconcileVaultScopes(Object.keys(incomingKeys));
+        void this.reconcileVaultScopes(
+            Object.keys(incomingKeys).map(scope => this.canonicalConversationScope(scope))
+        );
         return Object.keys(nextKeys).length;
     }
 
@@ -13597,32 +13768,38 @@ class ZaliInterface {
         }
     }
 
-    async publishConversationKeyToPeer({ peer, scope, key, reason = 'auto' } = {}) {
-        const recipient = String(peer || '').trim();
+    // Fan a scope's key out to every non-revoked device of `recipient` that has a
+    // usable public key — NOT only approved ones.
+    //
+    // The `approved` filter used to be here to limit envelope churn, but
+    // device approval is a manual step almost nobody performs: production
+    // showed one account with 11 registered devices and exactly 1 approved.
+    // The other 10 received zero envelopes, so each of them invented its own
+    // conversation key and encrypted real messages with it. Starving a
+    // legitimately logged-in device of key material does not make anything
+    // safer — the envelope is sealed to that device's own ECDH public key
+    // and only that device can open it — it just breaks the conversation.
+    async publishConversationKeyEnvelopes({ recipient, scope, key, reason = 'auto', excludeCurrentDevice = false } = {}) {
+        const target = String(recipient || '').trim();
         const scoped = String(scope || '').trim();
         const secret = String(key || '').trim();
-        if (!this.S.session?.token || !recipient || !scoped || !secret || recipient === this.myName()) return false;
+        if (!this.S.session?.token || !target || !scoped || !secret) return false;
         try {
             await this.ensureDeviceCryptoIdentity();
-            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(recipient));
+            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
             if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
             const devices = await res.json();
-            // Publish to every non-revoked device of the peer that has a usable
-            // public key — NOT only approved ones.
-            //
-            // The `approved` filter used to be here to limit envelope churn, but
-            // device approval is a manual step almost nobody performs: production
-            // showed one account with 11 registered devices and exactly 1 approved.
-            // The other 10 received zero envelopes, so each of them invented its own
-            // conversation key and encrypted real messages with it. Starving a
-            // legitimately logged-in device of key material does not make anything
-            // safer — the envelope is sealed to that device's own ECDH public key
-            // and only that device can open it — it just breaks the conversation.
+            const selfDeviceId = String(this.currentDeviceId() || '');
             const usable = Array.isArray(devices)
-                ? devices.filter(device => !device?.revoked && this.devicePublicJwk(device))
+                ? devices.filter(device => !device?.revoked
+                    && this.devicePublicJwk(device)
+                    // Publishing to ourselves would be a no-op envelope this very
+                    // device would then re-import; skip it when fanning out to the
+                    // account's own devices.
+                    && !(excludeCurrentDevice && String(device?.deviceId || '') === selfDeviceId))
                 : [];
             if (!usable.length) {
-                this.trace(`publishConversationKeyToPeer skipped reason=${reason} peer=${recipient} devices=0`);
+                this.trace(`publishConversationKeyEnvelopes skipped reason=${reason} recipient=${target} devices=0`);
                 return 'no_devices';
             }
             const results = await Promise.allSettled(usable.map(async device => {
@@ -13630,16 +13807,16 @@ class ZaliInterface {
                     scope: scoped,
                     key: secret,
                     recipientDevice: device,
-                    peer: recipient,
+                    peer: target,
                 });
                 const post = await this.apiFetch(this.apiRoutes.keyEnvelopes.base, {
                     method: 'POST',
                     includeDeviceId: true,
                     body: JSON.stringify({
-                        recipient,
+                        recipient: target,
                         scope: scoped,
                         recipientDeviceId: device.deviceId,
-                        senderDeviceId: this.currentDeviceId(),
+                        senderDeviceId: selfDeviceId,
                         encryptedKey,
                     }),
                 });
@@ -13650,21 +13827,58 @@ class ZaliInterface {
                 const firstErr = results.find(r => r.status === 'rejected')?.reason;
                 throw new Error(firstErr?.message || 'Не удалось опубликовать ни один key envelope');
             }
-            this.trace(`publishConversationKeyToPeer reason=${reason} peer=${recipient} devices=${usable.length}`);
+            this.trace(`publishConversationKeyEnvelopes reason=${reason} recipient=${target} devices=${usable.length}`);
             return true;
         } catch (e) {
-            this.trace(`publishConversationKeyToPeer failed reason=${reason} peer=${recipient} error=${e?.message || e}`);
+            this.trace(`publishConversationKeyEnvelopes failed reason=${reason} recipient=${target} error=${e?.message || e}`);
             return false;
         }
+    }
+
+    async publishConversationKeyToPeer({ peer, scope, key, reason = 'auto' } = {}) {
+        const recipient = String(peer || '').trim();
+        // Self is not a peer: own devices go through publishConversationKeyToOwnDevices,
+        // which excludes this device and reports separately.
+        if (!recipient || recipient === this.myName()) return false;
+        return this.publishConversationKeyEnvelopes({ recipient, scope, key, reason });
+    }
+
+    // The account's *other* devices need this key just as much as the peer's do,
+    // and until this existed nothing delivered it to them: publishConversationKeyToPeer
+    // refuses `recipient === myName()` by design, so own-device key sync rode
+    // entirely on the cloud vault. A single device missing that one channel was
+    // enough for it to invent its own key and encrypt real messages with it —
+    // messages no other device of the same account could ever read. Observed in
+    // production: a Mac holding the registry-canonical key for a DM could not
+    // decrypt a message the same account had sent 14 seconds earlier from another
+    // device, after trying all 19 keys it knew.
+    //
+    // This widens nothing: each envelope is sealed to one of our own devices'
+    // ECDH public keys, and the cloud vault already hands every own device the
+    // full key set — this is the same reach over a channel that actually works.
+    async publishConversationKeyToOwnDevices({ scope, key, reason = 'auto' } = {}) {
+        const me = String(this.myName() || '').trim();
+        if (!me) return false;
+        return this.publishConversationKeyEnvelopes({
+            recipient: me,
+            scope,
+            key,
+            reason: `self:${reason}`,
+            excludeCurrentDevice: true,
+        });
     }
 
     peerFromConversationScope(scope) {
         const parts = String(scope || '').trim().split(':');
         if (parts.length !== 3 || parts[0] !== 'dm') return '';
-        const me = String(this.myName() || '').trim();
+        const me = String(this.myName() || '').trim().toLowerCase();
         if (!me) return '';
-        if (parts[1] === me) return parts[2] || '';
-        if (parts[2] === me) return parts[1] || '';
+        const a = String(parts[1] || '').trim().toLowerCase();
+        const b = String(parts[2] || '').trim().toLowerCase();
+        // Back to the casing the server stores — the result goes straight into
+        // request paths (`/api/users/<peer>/devices`), which match exactly.
+        if (a === me) return this.resolveKnownUsernameCasing(b);
+        if (b === me) return this.resolveKnownUsernameCasing(a);
         return '';
     }
 
@@ -13732,7 +13946,15 @@ class ZaliInterface {
             return true;
         }
         const peer = requester || this.peerFromConversationScope(scope);
-        if (!peer || peer === this.myName()) return false;
+        // A request from our own account is another of our devices asking for this
+        // key. That used to be dropped on the floor here, which is precisely the
+        // device that has no other way to obtain it.
+        if (peer === this.myName()) {
+            const selfResult = await this.publishConversationKeyToOwnDevices({ scope, key, reason: 'republish_request' });
+            this.trace(`handleKeyRepublishRequest scope=${scope} self=true result=${selfResult}`);
+            return selfResult === true;
+        }
+        if (!peer) return false;
         const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: 'republish_request' });
         this.trace(`handleKeyRepublishRequest scope=${scope} peer=${peer} result=${result}`);
         return result === true;
@@ -13746,6 +13968,11 @@ class ZaliInterface {
             .slice(0, Math.max(1, Number(limit) || 20));
         let published = 0;
         for (const [scope, key] of entries) {
+            // Unconditional, and before the peer/channel split: this sweep is the
+            // one path that can retroactively hand our other devices the keys they
+            // never received, so it must cover every scope we hold — including
+            // channel scopes and DMs whose peer is momentarily unresolvable.
+            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}` });
             const channel = this.channelFromConversationScope(scope);
             if (channel) {
                 published += await this.publishConversationKeyToServerMembers({
@@ -13805,7 +14032,9 @@ class ZaliInterface {
             // at all for `server:` channel scopes — every channel member kept their
             // own key forever and only ever converged by luck.
             const batchScopes = Array.from(new Set(
-                envelopes.map(record => String(record?.scope || '').trim()).filter(Boolean)
+                envelopes
+                    .map(record => this.canonicalConversationScope(String(record?.scope || '').trim()))
+                    .filter(Boolean)
             ));
             const canonical = await this.fetchCanonicalKeyIds(batchScopes);
             // The load-mutate-save below must not race promoteCanonicalConversationKey
@@ -13823,7 +14052,9 @@ class ZaliInterface {
                     try {
                         const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
                         if (!payload.scope || !payload.key) continue;
-                        const scope = String(payload.scope);
+                        // The sender may predate canonicalConversationScope, so fold
+                        // its scope before it is used as a storage/registry key.
+                        const scope = this.canonicalConversationScope(String(payload.scope));
                         const current = String(stored[scope] || '').trim();
                         const wantedKeyId = String(canonical.get(scope) || '').trim();
                         const isCanonical = wantedKeyId
@@ -16233,6 +16464,8 @@ class ZaliInterface {
             return `<div class="server-member-row ${isOwner ? 'owner' : ''}">
                 <div class="server-member-info">
                     <div class="server-member-name">${this.esc(member.username)}</div>
+"""#,
+    #"""
                     <div class="server-member-meta">${this.esc(this.serverRoleLabel(role))}${joined ? ` · ${this.esc(joined)}` : ''}</div>
                 </div>
                 ${select}
@@ -16411,8 +16644,6 @@ class ZaliInterface {
         if (deleteBtn) deleteBtn.hidden = !isEdit || !canManage || this.normalizeMemberRole(current?.myRole || current?.my_role || '') !== 'owner';
         if (serverModalCancel) serverModalCancel.textContent = isDiscover ? 'Закрыть' : 'Отмена';
         if (nameInput) nameInput.value = isEdit ? (current?.name || '') : (createDraftView?.name || '');
-"""#,
-    #"""
         if (descInput) descInput.value = isEdit ? (current?.description || '') : (createDraftView?.description || '');
         if (iconInput) iconInput.value = isEdit ? (current?.icon || '') : (createDraftView?.icon || '');
         const normalizedColor = this.normalizeColorValue(isEdit ? (current?.color || '#cbff00') : (createDraftView?.color || '#cbff00'));
@@ -18917,17 +19148,23 @@ class ZaliInterface {
         }
     }
 
-    computeAnalyserLevel(analyser) {
+    // `buffer` is the per-meter scratch array allocated once in ensureMeterEntry.
+    // This used to allocate a fresh Uint8Array(512) on every call, and the loop runs
+    // 8×/s for the local mic plus once per remote peer — a steady stream of
+    // short-lived typed arrays whose only visible effect was GC pauses during calls.
+    // The for-of over a typed array also allocated an iterator per call; an index
+    // loop reads the same samples with no allocation at all.
+    computeAnalyserLevel(analyser, buffer = null) {
         if (!analyser) return 0;
         const bufferLength = analyser.fftSize;
-        const data = new Uint8Array(bufferLength);
+        const data = (buffer && buffer.length === bufferLength) ? buffer : new Uint8Array(bufferLength);
         analyser.getByteTimeDomainData(data);
         let sum = 0;
-        for (const value of data) {
-            const normalized = (value - 128) / 128;
+        for (let i = 0; i < bufferLength; i++) {
+            const normalized = (data[i] - 128) / 128;
             sum += normalized * normalized;
         }
-        const rms = Math.sqrt(sum / data.length);
+        const rms = Math.sqrt(sum / bufferLength);
         return Math.max(0, Math.min(1, rms * 2.8));
     }
 
@@ -19056,17 +19293,25 @@ class ZaliInterface {
 
         let localLevel = 0;
         if (localMeter?.analyser) {
-            localLevel = this.computeAnalyserLevel(localMeter.analyser);
+            localLevel = this.computeAnalyserLevel(localMeter.analyser, localMeter.data);
         }
 
         let remoteLevel = 0;
+        // Per-peer levels feed the tiles' speaking ring; the aggregate max still
+        // feeds the single "с сервера" meter below them.
+        const tileLevels = {};
         for (const item of remoteMeters) {
-            const level = this.computeAnalyserLevel(item.meter.analyser);
+            const level = this.computeAnalyserLevel(item.meter.analyser, item.meter.data);
             remoteLevel = Math.max(remoteLevel, level);
+            tileLevels[String(item.peer || '').trim().toLowerCase()] = Math.round(level * 100);
         }
 
         const nextLocal = Math.round(localLevel * 100);
         const nextRemote = Math.round(remoteLevel * 100);
+        // A muted mic still produces analyser output on some platforms (the track
+        // is disabled downstream), so never light our own ring while muted.
+        tileLevels[String(this.myName() || '').trim().toLowerCase()] = this.voice.muted ? 0 : nextLocal;
+        this.applyVoiceSpeakingState(tileLevels);
         const changed = nextLocal !== this.voice.meterLevels.local || nextRemote !== this.voice.meterLevels.remote;
         this.voice.meterLevels = { local: nextLocal, remote: nextRemote };
         if (changed || !this.voice.meterUiRenderedOnce) {
@@ -20219,6 +20464,8 @@ class ZaliInterface {
                     type: 'voice_call_reject',
                     roomId,
                     inviter: from,
+"""#,
+    #"""
                 });
                 this.addLogEntry({ type: 'INFO', msg: `Входящий звонок от ${from} отклонён: уже идёт другой звонок`, ts: new Date().toLocaleTimeString() });
                 return;
@@ -20470,8 +20717,6 @@ class ZaliInterface {
             }
             if (roomStatus !== 'ringing' && roomStatus !== 'pending') {
                 if (String(this.voice.outgoingInvite?.roomId || '').trim() === roomId) {
-"""#,
-    #"""
                     this.voice.outgoingInvite = null;
                 }
                 if (String(this.voice.incomingInvite?.roomId || '').trim() === roomId) {
@@ -20539,14 +20784,51 @@ class ZaliInterface {
         return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(kind)}</button>`;
     }
 
-    renderVoiceParticipants() {
-        const participants = Array.isArray(this.voice.participants) ? this.voice.participants : [];
+    // Discord-style call stage: one rectangular tile per participant, avatar in
+    // the middle, name badge at the bottom — the tile *is* the participant list,
+    // and it's also where that participant's camera feed mounts (see
+    // mountVoiceVideoElements, which fills `.voice-tile-media` by data-peer).
+    // Keyed on the lowercased name because every other voice code path
+    // (participants, remoteVideos, remoteAudios) normalises that way.
+    renderVoiceTiles() {
+        const seen = new Set();
+        const participants = [];
+        const push = name => {
+            const raw = String(name || '').trim();
+            if (!raw) return;
+            const key = raw.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            participants.push(raw);
+        };
+        push(this.myName());
+        for (const name of (Array.isArray(this.voice.participants) ? this.voice.participants : [])) push(name);
+        // Someone whose media arrived before the room-state snapshot listing them
+        // would otherwise have a video element with no tile to mount into.
+        for (const name of this.voice.remoteVideos.keys()) push(name);
+        for (const name of this.voice.remoteAudios.keys()) push(name);
+
         if (!participants.length) {
             return '<div class="voice-empty">Пока никого нет</div>';
         }
-        return `<div class="voice-participants">` + participants.map(name => {
-            const cls = name === this.myName() ? 'mine' : '';
-            return `<span class="voice-participant ${cls}">${this.esc(name)}</span>`;
+        const myName = String(this.myName() || '').trim().toLowerCase();
+        return `<div class="voice-tiles" id="voiceTiles">` + participants.map(name => {
+            const key = name.toLowerCase();
+            const mine = key === myName;
+            // Mute state is only known for ourselves — the protocol carries no
+            // per-peer mic state, so no badge is drawn for remote participants
+            // rather than a badge that would be a guess.
+            const muted = mine && !!this.voice.muted;
+            return `
+                <div class="voice-tile ${mine ? 'mine' : ''}" data-peer="${this.esc(key)}">
+                    <div class="voice-tile-media"></div>
+                    <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    <div class="voice-tile-footer">
+                        ${muted ? `<span class="voice-tile-mic muted" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''}
+                        <span class="voice-tile-name">${this.esc(name)}</span>
+                    </div>
+                </div>
+            `;
         }).join('') + `</div>`;
     }
 
@@ -20620,9 +20902,9 @@ class ZaliInterface {
                     </div>
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
-                <div class="${actionsBarClass}">${actionButtons.join('')}</div>
                 <div class="voice-stage" id="voiceStage"></div>
-                <div class="voice-video-grid" id="voiceVideoGrid"></div>
+                ${this.renderVoiceTiles()}
+                <div class="${actionsBarClass}">${actionButtons.join('')}</div>
                 <div class="voice-meter-grid">
                     <div class="voice-meter" id="voiceMicMeter">
                         <div class="voice-meter-head">
@@ -20657,10 +20939,6 @@ class ZaliInterface {
                         </div>
                     </div>
                 ` : ''}
-                <div class="voice-room-participants">
-                    <div class="voice-room-label">Участники</div>
-                    ${this.renderVoiceParticipants()}
-                </div>
                 ${Array.isArray(this.voice.traceLines) && this.voice.traceLines.length ? `
                     <div class="voice-trace">
                         <div class="voice-room-label">Трассировка</div>
@@ -20743,28 +21021,55 @@ class ZaliInterface {
                 stage.appendChild(wrap);
             }
         }
-        const grid = document.getElementById('voiceVideoGrid');
-        if (!grid) return;
-        grid.replaceChildren();
-        if (this.voice.localVideoEl && this.voice.cameraOn) {
-            const wrap = document.createElement('div');
-            wrap.className = 'voice-video-tile voice-video-local';
-            wrap.appendChild(this.voice.localVideoEl);
-            const label = document.createElement('span');
-            label.className = 'voice-video-label';
-            label.textContent = 'Вы';
-            wrap.appendChild(label);
-            grid.appendChild(wrap);
+        const tiles = document.getElementById('voiceTiles');
+        if (!tiles) {
+            this._voiceTileNodes = null;
+            return;
         }
+        // Index the tiles once per panel render. The meter loop toggles the
+        // speaking ring 8×/s and used to re-run querySelectorAll on every tick;
+        // the tile set only ever changes when this function rebuilds it.
+        const byPeer = new Map();
+        for (const tile of tiles.querySelectorAll('.voice-tile')) {
+            tile.classList.remove('has-video');
+            const media = tile.querySelector('.voice-tile-media');
+            if (media) media.replaceChildren();
+            byPeer.set(tile.dataset.peer || '', tile);
+        }
+        this._voiceTileNodes = byPeer;
+        const mountVideo = (peer, video) => {
+            const key = String(peer || '').trim().toLowerCase();
+            if (!key || !video) return;
+            const tile = byPeer.get(key);
+            const media = tile?.querySelector('.voice-tile-media');
+            if (!media) return;
+            media.appendChild(video);
+            tile.classList.add('has-video');
+        };
+        if (this.voice.cameraOn) mountVideo(this.myName(), this.voice.localVideoEl);
         for (const [peer, video] of this.voice.remoteVideos.entries()) {
-            const wrap = document.createElement('div');
-            wrap.className = 'voice-video-tile';
-            wrap.appendChild(video);
-            const label = document.createElement('span');
-            label.className = 'voice-video-label';
-            label.textContent = peer;
-            wrap.appendChild(label);
-            grid.appendChild(wrap);
+            mountVideo(peer, video);
+        }
+        this.applyVoiceSpeakingState();
+    }
+
+    // Discord's "green ring while talking". Driven straight from the meter loop
+    // (updateVoiceMeters) by toggling a class on existing tiles — never by
+    // re-rendering the panel, which would tear down and remount every <video>
+    // element several times a second.
+    applyVoiceSpeakingState(levels = this._voiceTileLevels) {
+        this._voiceTileLevels = levels || {};
+        const byPeer = this._voiceTileNodes;
+        if (!byPeer || !byPeer.size) return;
+        const SPEAKING_THRESHOLD = 12; // percent, same scale as the meters
+        for (const [peer, tile] of byPeer) {
+            const speaking = Number(this._voiceTileLevels[peer] || 0) >= SPEAKING_THRESHOLD;
+            // classList.toggle with an explicit force flag still writes the
+            // attribute every call, which dirties style on tiles that did not
+            // change. Only touch the ones whose state actually flipped.
+            if (tile.classList.contains('speaking') !== speaking) {
+                tile.classList.toggle('speaking', speaking);
+            }
         }
     }
 
@@ -20798,10 +21103,13 @@ class ZaliInterface {
             return { normalized, identity };
         };
 
-        // Snapshot which identities were already known BEFORE this merge, so any
-        // incoming message that lands under a brand new identity can be told apart
-        // from a status/metadata update to something we already had.
-        const existingIdentities = new Set(existing.map(msg => makeIdentity(msg).identity));
+        // Which identities were already known BEFORE this merge, so an incoming
+        // message under a brand new identity can be told apart from a status/metadata
+        // update to something we already had. Filled during the `existing` pass below
+        // rather than by a separate map(): makeIdentity spreads the message object and
+        // normalises its attachments, so precomputing the set ran that over the whole
+        // channel history a second time — on every single incoming WS message.
+        const existingIdentities = new Set();
         const newlyInserted = [];
 
         const upsert = (msg, { fromIncoming = false } = {}) => {
@@ -20823,8 +21131,12 @@ class ZaliInterface {
                 };
             mergedByKey.set(identity, next);
             if (!prev) merged.push(identity);
-            if (fromIncoming && !existingIdentities.has(identity)) {
-                newlyInserted.push(next);
+            if (fromIncoming) {
+                if (!existingIdentities.has(identity)) newlyInserted.push(next);
+            } else {
+                // The `existing` pass runs to completion before any incoming message
+                // is upserted, so the set is fully populated by the time it is read.
+                existingIdentities.add(identity);
             }
         };
 
@@ -24498,6 +24810,8 @@ class ZaliInterface {
                 <div class="contact-actions">
                     ${timeLabel ? `<span class="contact-time">${this.esc(timeLabel)}</span>` : ''}
                     ${badge}
+"""#,
+    #"""
                     ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
@@ -24680,16 +24994,61 @@ class ZaliInterface {
         return 'zali_update_declined_version';
     }
 
-    compareVersions(a, b) {
-        const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
-        const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
-        const len = Math.max(pa.length, pb.length);
-        for (let i = 0; i < len; i++) {
-            const diff = (pa[i] || 0) - (pb[i] || 0);
-            if (diff !== 0) return diff > 0 ? 1 : -1;
+    // App version scheme: MAJOR.MINOR{a|b|r}BUILD, e.g. "0.2b9" (r=release >
+    // b=beta > a=alpha at the same MAJOR.MINOR). Falls back to plain dotted
+    // numeric versions (e.g. legacy "1.1.3") for compatibility with whatever the
+    // server already has published in app_releases — those are treated as the
+    // top ("release") channel so they compare purely by major.minor.patch.
+    parseAppVersion(v) {
+        const str = String(v || '').trim();
+        const channeled = str.match(/^(\d+)\.(\d+)([abr])(\d+)$/i);
+        if (channeled) {
+            const channelRank = { a: 0, b: 1, r: 2 };
+            return {
+                major: parseInt(channeled[1], 10) || 0,
+                minor: parseInt(channeled[2], 10) || 0,
+                channel: channelRank[channeled[3].toLowerCase()],
+                build: parseInt(channeled[4], 10) || 0,
+            };
         }
+        const parts = str.split('.').map(n => parseInt(n, 10) || 0);
+        return {
+            major: parts[0] || 0,
+            minor: parts[1] || 0,
+            channel: 2,
+            build: parts[2] || 0,
+        };
+    }
+
+    compareVersions(a, b) {
+        const va = this.parseAppVersion(a);
+        const vb = this.parseAppVersion(b);
+        if (va.major !== vb.major) return va.major > vb.major ? 1 : -1;
+        if (va.minor !== vb.minor) return va.minor > vb.minor ? 1 : -1;
+        if (va.channel !== vb.channel) return va.channel > vb.channel ? 1 : -1;
+        if (va.build !== vb.build) return va.build > vb.build ? 1 : -1;
         return 0;
     }
+
+    isNewSchemeVersion(v) {
+        return /^\d+\.\d+[abr]\d+$/i.test(String(v || '').trim());
+    }
+
+    // Unix-seconds cutoff for the one-time version-scheme migration: the
+    // "1.1.4" release (first published 2026-07-27) exists only so pre-migration
+    // clients (running the OLD compareVersions, which just splits on "." and
+    // compares numbers) see a numeric bump and update — its actual bundled code
+    // is build 0.2b9. Once a client is running that new code (and so already
+    // understands MAJOR.MINOR{a|b|r}BUILD), a plain-numeric "latest" published
+    // at or before this cutoff is that same legacy compatibility bump, not a
+    // real newer release — comparing it via major-number alone (1 > 0) would
+    // otherwise look newer than 0.2b9 forever and loop the update prompt.
+    // Deliberately set days out (not pinned to that release's exact
+    // publishedAt) — republishing "1.1.4" to fix e.g. its sha256 bumps
+    // publishedAt each time, which would slip past an exact-timestamp cutoff.
+    // Real post-migration releases (version matching the new scheme, or
+    // published well after this date) are compared normally regardless.
+    static VERSION_SCHEME_MIGRATION_CUTOFF_UNIX = 1785542400; // 2026-08-01T00:00:00Z
 
     async checkForAppUpdate() {
         if (!this.hasNativeBridge() || !this.nativeSupports('appUpdate')) return;
@@ -24701,6 +25060,14 @@ class ZaliInterface {
             if (!res.ok) return;
             const data = await res.json();
             const latestVersion = String(data?.version || '').trim();
+            const publishedAt = Number(data?.publishedAt) || 0;
+            const isLegacyMigrationBump = latestVersion
+                && !this.isNewSchemeVersion(latestVersion)
+                && publishedAt > 0
+                && publishedAt <= ZaliInterface.VERSION_SCHEME_MIGRATION_CUTOFF_UNIX;
+            if (isLegacyMigrationBump && this.isNewSchemeVersion(currentVersion)) {
+                return;
+            }
             if (!latestVersion || this.compareVersions(latestVersion, currentVersion) <= 0) {
                 return;
             }
@@ -24860,8 +25227,6 @@ class ZaliInterface {
                                 : 'Доступна новая версия приложения.'),
                         action: status.readyToInstall ? 'Установить и перезапустить' : 'Скачать',
                         actionId: 'update',
-"""#,
-    #"""
                     };
                 }
                 return {
@@ -25050,12 +25415,51 @@ class ZaliInterface {
         return this.S.chats[this.S.current] || [];
     }
 
+    // Fast negative answer to "is this peer present in the persisted cache?".
+    //
+    // ensureConversationLoaded runs inside the message-render frame, and its
+    // loadStoredMessageCache() call JSON.parses the ENTIRE persisted store — every
+    // conversation, not just this one — rebuilding the whole object graph. For an
+    // account with real history that is a main-thread stall on every render of an
+    // empty chat, and it almost always ends in "peer not found" anyway: the chat is
+    // usually empty because it genuinely has no cached history.
+    //
+    // The raw text is scanned for the peer's own quoted JSON key first. A miss there
+    // is conclusive (the key would have to appear verbatim if it were stored), and
+    // a raw string scan is cheaper than a parse by orders of magnitude. A hit falls
+    // through to the real parse, so nothing that used to be found stops being found.
+    // Misses are additionally memoised against the exact raw string, so repeated
+    // renders of the same empty chat cost nothing at all until the cache is rewritten.
+    persistedCacheMightHavePeer(raw, peer) {
+        if (!raw) return false;
+        if (this._msgCacheMissRaw !== raw) {
+            this._msgCacheMissRaw = raw;
+            this._msgCacheMissPeers = new Set();
+        }
+        if (this._msgCacheMissPeers.has(peer)) return false;
+        if (raw.indexOf(JSON.stringify(peer)) !== -1) return true;
+        this._msgCacheMissPeers.add(peer);
+        return false;
+    }
+
     ensureConversationLoaded(peer = null) {
         const currentPeer = String(peer || this.S.current || '').trim();
         if (!currentPeer) return false;
         const currentMsgs = this.S.chats[currentPeer];
         if (Array.isArray(currentMsgs) && currentMsgs.length > 0) {
             return true;
+        }
+
+        let rawCache = null;
+        try {
+            rawCache = localStorage.getItem(this.messageCacheStorageKey());
+        } catch (e) {
+            rawCache = null;
+        }
+        // No persisted store at all still has to go through the loader below, which
+        // falls back to the native-injected cache (window.__ZALI_MESSAGE_CACHE).
+        if (rawCache && !this.persistedCacheMightHavePeer(rawCache, currentPeer)) {
+            return false;
         }
 
         const cache = this.loadStoredMessageCache();
@@ -26105,6 +26509,7 @@ class ZaliInterface {
         if (!AudioCtx) return null;
         if (!this.sound.ctx || this.sound.ctx.state === 'closed') {
             this.sound.ctx = new AudioCtx();
+            this.sound.bus = null;
         }
         if (this.sound.ctx.state === 'suspended') {
             this.sound.ctx.resume?.().catch(() => {});
@@ -26112,53 +26517,121 @@ class ZaliInterface {
         return this.sound.ctx;
     }
 
-    // One tone burst: short attack + linear decay so it doesn't click.
-    playTone(ctx, { frequency, startTime, duration, gain = 0.18, type = 'sine' }) {
-        const osc = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        osc.type = type;
-        osc.frequency.setValueAtTime(frequency, startTime);
-        gainNode.gain.setValueAtTime(0, startTime);
-        gainNode.gain.linearRampToValueAtTime(gain, startTime + 0.015);
-        gainNode.gain.linearRampToValueAtTime(0, Math.max(startTime + duration, startTime + 0.02));
-        osc.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        osc.start(startTime);
-        osc.stop(startTime + duration + 0.03);
+    // Shared output bus: master gain → compressor → destination. The compressor
+    // is what makes these sounds actually loud — summed partials peak well past
+    // 0 dBFS otherwise, and simply lowering per-voice gain to avoid that (what
+    // the first version did) is exactly why they came out quiet and thin. Here
+    // the peaks get tamed instead, so average level can sit much higher.
+    soundBus(ctx) {
+        if (this.sound.bus && this.sound.bus.ctx === ctx) return this.sound.bus.input;
+        const master = ctx.createGain();
+        master.gain.value = 0.9;
+        const compressor = ctx.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-18, ctx.currentTime);
+        compressor.knee.setValueAtTime(20, ctx.currentTime);
+        compressor.ratio.setValueAtTime(6, ctx.currentTime);
+        compressor.attack.setValueAtTime(0.003, ctx.currentTime);
+        compressor.release.setValueAtTime(0.25, ctx.currentTime);
+        master.connect(compressor);
+        compressor.connect(ctx.destination);
+        this.sound.bus = { ctx, input: master };
+        return master;
     }
 
-    // Short two-note chime for an incoming message in a chat that isn't on screen.
-    // Synthesized (no audio asset) so it needs nothing beyond this JS file to ship
-    // to every platform (macOS/Windows/Android/browser) via bundle_web.py.
+    // One struck-bell/marimba note built additively: a set of partials above the
+    // fundamental, each with its own level and its own (shorter) decay, under a
+    // lowpass that closes as the note rings out. That per-partial decay is what
+    // reads as a real struck instrument — the highs die away first, leaving the
+    // fundamental humming. Envelopes are exponential (not linear) because
+    // amplitude decay is perceived logarithmically; a linear fade sounds like a
+    // synthetic bleep cut short, which was the other half of the "плохие звуки".
+    playBellVoice(ctx, { frequency, startTime, duration, gain = 0.3, partials, brightness = 7 }) {
+        const bus = this.soundBus(ctx);
+        const voice = ctx.createGain();
+        voice.gain.value = gain;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.Q.value = 0.7;
+        filter.frequency.setValueAtTime(Math.min(frequency * brightness, 14000), startTime);
+        filter.frequency.exponentialRampToValueAtTime(
+            Math.max(frequency * 1.6, 300),
+            startTime + duration
+        );
+        voice.connect(filter);
+        filter.connect(bus);
+
+        const voicePartials = partials || [
+            { ratio: 1, gain: 1, decay: 1 },
+            { ratio: 2, gain: 0.42, decay: 0.62 },
+            { ratio: 3, gain: 0.2, decay: 0.42 },
+            { ratio: 4.16, gain: 0.11, decay: 0.28 },
+            { ratio: 5.43, gain: 0.05, decay: 0.19 },
+        ];
+        for (const partial of voicePartials) {
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(frequency * partial.ratio, startTime);
+            const env = ctx.createGain();
+            const partialDuration = Math.max(duration * partial.decay, 0.05);
+            // exponentialRampToValueAtTime can't touch zero, hence the epsilons.
+            env.gain.setValueAtTime(0.0001, startTime);
+            env.gain.exponentialRampToValueAtTime(partial.gain, startTime + 0.006);
+            env.gain.exponentialRampToValueAtTime(0.0001, startTime + partialDuration);
+            osc.connect(env);
+            env.connect(voice);
+            osc.start(startTime);
+            osc.stop(startTime + partialDuration + 0.05);
+        }
+    }
+
+    // Incoming message: a warm two-note rise (B5 → E6, a perfect fourth). Rising
+    // intervals read as "new/arrived"; falling ones read as dismissal or error.
+    // Synthesized (no audio asset) so it ships to every platform — macOS,
+    // Windows, Android, browser — through bundle_web.py with nothing to bundle.
     playMessageChime() {
         const ctx = this.ensureSoundContext();
         if (!ctx) return;
-        const now = ctx.currentTime;
-        this.playTone(ctx, { frequency: 880, startTime: now, duration: 0.1, gain: 0.16 });
-        this.playTone(ctx, { frequency: 1318.5, startTime: now + 0.09, duration: 0.15, gain: 0.14 });
+        const now = ctx.currentTime + 0.02;
+        this.playBellVoice(ctx, { frequency: 987.77, startTime: now, duration: 0.55, gain: 0.38 });
+        this.playBellVoice(ctx, { frequency: 1318.51, startTime: now + 0.11, duration: 0.9, gain: 0.34 });
     }
 
     // Looping ringtone for an incoming call — started/stopped from the single
     // choke point renderVoicePanel() based on this.voice.status, so it tracks
     // every way a call stops ringing (answered, declined, missed, caller hung up)
     // without needing to be threaded into each of those call sites separately.
+    //
+    // Musical phrase (an E-major arpeggio played twice) rather than the usual
+    // two-tone warble: it stays recognizable at low volume and doesn't turn
+    // grating on the tenth repeat, while the silence between phrases is what
+    // actually makes a ringtone read as urgent.
     startRingtone() {
         if (this.sound.ringing) return;
         const ctx = this.ensureSoundContext();
         if (!ctx) return;
         this.sound.ringing = true;
-        const ringBurst = () => {
+        const phrase = () => {
             if (!this.sound.ringing) return;
             const liveCtx = this.ensureSoundContext();
             if (!liveCtx) return;
-            const now = liveCtx.currentTime;
-            [0, 0.32].forEach(offset => {
-                this.playTone(liveCtx, { frequency: 987.77, startTime: now + offset, duration: 0.24, gain: 0.2 });
-                this.playTone(liveCtx, { frequency: 1318.5, startTime: now + offset, duration: 0.24, gain: 0.12 });
-            });
+            const now = liveCtx.currentTime + 0.02;
+            const notes = [659.25, 987.77, 1318.51, 987.77]; // E5 B5 E6 B5
+            for (const passOffset of [0, 0.78]) {
+                notes.forEach((frequency, index) => {
+                    this.playBellVoice(liveCtx, {
+                        frequency,
+                        startTime: now + passOffset + index * 0.15,
+                        duration: 0.7,
+                        gain: 0.4,
+                        brightness: 8,
+                    });
+                });
+            }
         };
-        ringBurst();
-        this.sound.ringTimer = setInterval(ringBurst, 1600);
+        phrase();
+        // Phrase runs ~1.8 s; a 3 s period leaves the ~1.2 s gap that makes it
+        // sound like a phone ringing rather than a continuous alarm.
+        this.sound.ringTimer = setInterval(phrase, 3000);
     }
 
     stopRingtone() {

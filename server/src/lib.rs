@@ -973,6 +973,16 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .await
         .ok();
 
+    // Runs last: it rewrites rows in the two conversation-key tables, so both must
+    // already exist. Idempotent, so a restart is free once everything is folded.
+    match crate::conversation_keys::migrate_scope_casing(&pool).await {
+        Ok(0) => {}
+        Ok(folded) => tracing::info!("Скоупы ключей приведены к каноническому виду: {}", folded),
+        // Not fatal: the clients canonicalise scopes on their side too, so a failed
+        // fold degrades to the pre-migration behaviour rather than a dead server.
+        Err(e) => tracing::error!("Ошибка миграции регистра scope-ключей: {}", e),
+    }
+
     pool
 }
 
