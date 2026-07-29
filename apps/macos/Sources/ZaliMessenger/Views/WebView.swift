@@ -1083,13 +1083,11 @@ struct WebView: NSViewRepresentable {
                 }
 
                 case .saveMessageCache: do {
+                    // Hand the raw object over and let NetworkService encode it on its
+                    // own queue — this handler runs on the main thread, and the message
+                    // cache is the largest payload that crosses the bridge.
                     let cache = dict["cache"] ?? dict["messageCache"] ?? [:]
-                    if let data = try? JSONSerialization.data(withJSONObject: cache, options: []),
-                       let json = String(data: data, encoding: .utf8) {
-                        NetworkService.shared.saveMessageCacheJSON(json)
-                    } else {
-                        NetworkService.shared.saveMessageCacheJSON(#"{"chats":{},"serverChats":{}}"#)
-                    }
+                    NetworkService.shared.saveMessageCacheObject(cache)
                 }
 
                 case .authRequest: do {

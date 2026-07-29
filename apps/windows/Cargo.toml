@@ -1,10 +1,11 @@
 [package]
 name = "zali_messenger_win"
-# Bump this on every release published via POST /api/version (see CLAUDE.md's
-# "Publishing a client release" section) — the in-app updater compares it
-# (via CARGO_PKG_VERSION) against the server's app_releases.version for
-# platform=windows.
-version = "1.1.3"
+# Cargo requires strict SemVer (MAJOR.MINOR.PATCH) here, which can't express the
+# app's actual version scheme (MAJOR.MINOR{a|b|r}BUILD, e.g. "0.2b9" — see
+# APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
+# compares against the server's app_releases.version). This field only needs to
+# keep incrementing for Cargo's own bookkeeping; it is not shown to users.
+version = "0.2.11"
 edition = "2021"
 
 [dependencies]

@@ -82,11 +82,38 @@ If the service ever needs hand-editing: unit file lives at `/etc/systemd/system/
 
 macOS (`apps/macos/`) and Windows (`apps/windows/`) clients check `GET /api/version?platform=macos|windows`
 on login and prompt to update if the server's version is newer (`web/src/interface.js`
-`checkForAppUpdate()`). Declining keeps it available under the Hub's "Обновления" card. Current
-shipped version on both platforms: **1.1.3**.
+`checkForAppUpdate()`/`compareVersions()`). Declining keeps it available under the Hub's "Обновления" card.
 
-1. Bump the version string: `APP_VERSION` in `scripts/build_app.sh` (macOS) and/or `version` in
-   `apps/windows/Cargo.toml` (Windows).
+**Version scheme (since 2026-07-27):** `MAJOR.MINOR{a|b|r}BUILD`, e.g. `0.2b9` — channel letter is
+alpha/beta/release, ranked `r > b > a` at the same `MAJOR.MINOR`. `compareVersions()` in `interface.js`
+also accepts legacy plain dotted versions (e.g. old `1.1.3` releases already in `app_releases`) and
+treats them as release-channel for comparison purposes.
+
+**Состояние миграции (завершена 2026-07-28).** Обе платформы получили «переходный» релиз под
+legacy-номером **1.1.4** — он нужен только для того, чтобы клиенты со СТАРОЙ `compareVersions`
+(она просто делит по точкам) увидели численный бамп и обновились; внутри это сборка `0.2b9`.
+`checkForAppUpdate()` игнорирует такую запись у клиентов, уже понимающих новую схему
+(`VERSION_SCHEME_MIGRATION_CUTOFF_UNIX`, 2026-08-01). Затем Windows ушёл на `0.2b10`, а
+**с 2026-07-28 обе платформы выпускаются в новой схеме — текущая версия `0.2b11`.**
+
+> **Плата за это, принята осознанно:** клиенты, оставшиеся на `1.1.3` и старше, сравнивают `0.2bN`
+> старым кодом (`0 < 1`) и апдейт больше не увидят — их надо доставить руками.
+>
+> **Почему для macOS не было выбора.** Казалось бы, можно было продолжить legacy-нумерацию
+> (`1.1.5`) и никого не бросить. Нельзя: cutoff-логика, уже уехавшая в клиенты вместе с `1.1.4`,
+> заставляет всякий plain-numeric релиз, опубликованный **до** 2026-08-01, считаться тем самым
+> переходным бампом и молча игнорироваться. То есть `1.1.5`, выпущенный сейчас, не увидел бы
+> вообще никто из тех, кто уже перешёл. После 2026-08-01 это ограничение снимается само.
+
+Cargo requires strict SemVer, so it can't hold `0.2b9` directly — `apps/windows/Cargo.toml`'s `version`
+is a separate, boring value bumped independently just to keep `cargo build` happy; the actual display/
+compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`. macOS has no such split:
+`APP_VERSION` in `scripts/build_app.sh` feeds `CFBundleShortVersionString` directly and isn't SemVer-locked.
+
+1. Bump the version string: `APP_VERSION` in `scripts/build_app.sh` (macOS) and `APP_DISPLAY_VERSION` in
+   `apps/windows/src/native.rs` (Windows) — **not** `apps/windows/Cargo.toml`'s `version`, which is unrelated
+   (bump it too, but only so Cargo has something monotonic; nobody compares it). Обе платформы сейчас
+   идут одним номером — `0.2b11` (см. «Состояние миграции» выше).
 2. Build the client(s) — `./scripts/build_app.sh`, and for Windows either `scripts/build_windows_app.ps1`
    on Windows or a cross-build from macOS (see «Windows Build Distribution»). Pack the macOS `.app`
    with `ditto -c -k --keepParent` — `UpdateService.installAndRelaunch` unpacks with `ditto` and looks
@@ -98,7 +125,7 @@ shipped version on both platforms: **1.1.3**.
    ```bash
    ssh zms 'set -a; . /etc/zali/zali-server.env; set +a; curl -X POST https://msgs.zalikus.org/api/version \
      -H "Authorization: Bearer $RELEASE_ADMIN_TOKEN" -H "Content-Type: application/json" \
-     -d "{\"platform\":\"macos\",\"version\":\"1.1.3\",\"notes\":\"...\",\"downloadUrl\":\"https://msgs.zalikus.org/releases/ZaliMessenger-1.1.3.zip\",\"sha256\":\"<hex>\"}"'
+     -d "{\"platform\":\"macos\",\"version\":\"0.2b11\",\"notes\":\"...\",\"downloadUrl\":\"https://msgs.zalikus.org/releases/ZaliMessenger-0.2b11.zip\",\"sha256\":\"<hex>\"}"'
    ```
 5. Verify both the metadata **and** that the artifact actually downloads unauthenticated:
    `curl "https://msgs.zalikus.org/api/version?platform=macos"` and

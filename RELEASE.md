@@ -259,8 +259,13 @@ shasum -a 256 <файл>
 curl -X POST https://msgs.zalikus.org/api/version \
   -H "Authorization: Bearer $RELEASE_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"platform":"windows","version":"1.1.0","notes":"Исправлены групповые звонки","downloadUrl":"https://msgs.zalikus.org/uploads/ZaliMessenger.exe","sha256":"<hex>"}'
+  -d '{"platform":"windows","version":"0.2b11","notes":"Исправлены групповые звонки","downloadUrl":"https://msgs.zalikus.org/releases/ZaliMessenger-0.2b11.exe","sha256":"<hex>"}'
 ```
+
+> ⚠️ `downloadUrl` обязан указывать на **`/releases/`**, а не на `/uploads/`. Второй —
+> роут вложений: он требует `Authorization` и строку в `messages` с таким именем файла,
+> а артефакт качают без заголовков (и апдейтер, и онлайн-установщик), поэтому оттуда
+> приходит `401`. Именно на этом уже спотыкались.
 
 Публикуется **отдельно для каждой платформы** — один POST на `windows`, другой на
 `macos`.

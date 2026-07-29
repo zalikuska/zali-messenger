@@ -1819,44 +1819,111 @@ body[data-nav-mode="servers"] .contacts {
     display: block;
 }
 
-/* Camera feeds — small floating bubbles rather than full tiles, so they
-   read as a "who's on camera" strip and don't compete with a screen share. */
-.voice-video-grid {
-    display: flex;
-    flex-wrap: wrap;
+/* Participant tiles — the Discord-style call stage. One rectangle per
+   participant; it doubles as the participant list and as the mount point for
+   that participant's camera feed, so there is no separate "who's here" chip row
+   and no separate camera strip competing with it. */
+.voice-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 10px;
 }
 
-.voice-video-grid:empty {
-    display: none;
-}
-
-.voice-video-tile {
+.voice-tile {
     position: relative;
-    width: 130px;
-    aspect-ratio: 4 / 3;
-    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    aspect-ratio: 16 / 10;
+    border-radius: 14px;
     overflow: hidden;
-    background: #000;
-    border: 1px solid rgba(255,255,255,.1);
-    box-shadow: 0 8px 20px rgba(0,0,0,.22);
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.08);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    /* The speaking ring is an inset box-shadow, not a border, so lighting it up
+       never changes the tile's box size and the grid can't reflow on every
+       voice-activity flip. */
+    transition: box-shadow .12s ease, border-color .12s ease;
 }
 
-.voice-video-tile:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 26px rgba(0,0,0,.3);
+.voice-tile.speaking {
+    border-color: rgba(var(--accent-rgb), .55);
+    box-shadow:
+        inset 0 0 0 2px rgba(var(--accent-rgb), .85),
+        0 0 18px rgba(var(--accent-rgb), .18);
 }
 
-.voice-video-tile.voice-video-local {
-    border-color: rgba(var(--accent-rgb), .4);
+.voice-tile-media {
+    position: absolute;
+    inset: 0;
 }
 
-.voice-video-tile video {
+.voice-tile-media video {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+    background: #000;
+}
+
+.voice-tile-avatar {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: rgba(255,255,255,.06);
+    color: var(--text2);
+    font-size: 22px;
+    font-weight: 900;
+}
+
+.voice-tile.has-video .voice-tile-avatar {
+    display: none;
+}
+
+.voice-tile-avatar .avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.voice-tile-footer {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: calc(100% - 16px);
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+
+.voice-tile-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.voice-tile-mic {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: rgba(255, 92, 118, .98);
+}
+
+.voice-tile-mic .call-ctrl-icon {
+    width: 12px;
+    height: 12px;
 }
 
 .voice-video-label {
@@ -2096,11 +2163,6 @@ body[data-nav-mode="servers"] .contacts {
     box-shadow: 0 10px 24px rgba(255,77,109,.28);
 }
 
-.voice-room-participants {
-    display: grid;
-    gap: 8px;
-}
-
 .voice-trace {
     display: grid;
     gap: 8px;
@@ -2155,31 +2217,6 @@ body[data-nav-mode="servers"] .contacts {
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
-}
-
-.voice-participants {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.voice-participant {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: rgba(255,255,255,.03);
-    color: var(--text2);
-    font-size: 11px;
-    font-weight: 800;
-}
-
-.voice-participant.mine {
-    border-color: rgba(var(--accent-rgb), .24);
-    color: var(--text);
 }
 
 .voice-empty {
@@ -5994,6 +6031,18 @@ body[data-nav-mode="servers"] .contacts {
     .voice-meter-grid,
     .voice-health-grid {
         grid-template-columns: 1fr;
+    }
+
+    /* Keep two participants side by side on a phone instead of one giant tile
+       per row — the desktop 190px floor would force a single column here. */
+    .voice-tiles {
+        grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    }
+
+    .voice-tile-avatar {
+        width: 52px;
+        height: 52px;
+        font-size: 18px;
     }
 
     .sidebar-head,
