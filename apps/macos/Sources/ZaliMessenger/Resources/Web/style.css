@@ -1727,6 +1727,18 @@ body[data-nav-mode="servers"] .contacts {
     gap: 12px;
     padding: 0 16px;
     margin-top: -2px;
+    /* #viewChat's grid row for this panel is `auto` — sized to its max-content
+       height with no upper bound. A call with several participant tiles plus
+       the meter grid, health cards, and trace log (all rendered unconditionally
+       once the relevant state exists) could grow taller than the viewport,
+       and since neither this element nor #viewChat scrolls, the overflow was
+       simply clipped by the window edge — including the mute/leave buttons
+       when enough content pushed them past the fold. Capping the height and
+       scrolling internally keeps the header and message list intact and makes
+       the rest of the call UI reachable instead of unreachable. */
+    min-height: 0;
+    max-height: 60vh;
+    overflow-y: auto;
 }
 
 .voice-room-card {
@@ -6492,6 +6504,10 @@ body[data-nav-mode="servers"] .contacts {
 
     #viewChat .voice-panel {
         padding: 0 14px 0;
+        /* Tighter than the 60vh desktop cap — a phone's viewport is already
+           shared with the header and the message composer below, so the same
+           fraction would leave barely any room for either. */
+        max-height: 48vh;
     }
 
     #viewChat .msgs {

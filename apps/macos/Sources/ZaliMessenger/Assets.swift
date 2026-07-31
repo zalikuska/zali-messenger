@@ -1753,6 +1753,18 @@ body[data-nav-mode="servers"] .contacts {
     gap: 12px;
     padding: 0 16px;
     margin-top: -2px;
+    /* #viewChat's grid row for this panel is `auto` — sized to its max-content
+       height with no upper bound. A call with several participant tiles plus
+       the meter grid, health cards, and trace log (all rendered unconditionally
+       once the relevant state exists) could grow taller than the viewport,
+       and since neither this element nor #viewChat scrolls, the overflow was
+       simply clipped by the window edge — including the mute/leave buttons
+       when enough content pushed them past the fold. Capping the height and
+       scrolling internally keeps the header and message list intact and makes
+       the rest of the call UI reachable instead of unreachable. */
+    min-height: 0;
+    max-height: 60vh;
+    overflow-y: auto;
 }
 
 .voice-room-card {
@@ -6518,6 +6530,10 @@ body[data-nav-mode="servers"] .contacts {
 
     #viewChat .voice-panel {
         padding: 0 14px 0;
+        /* Tighter than the 60vh desktop cap — a phone's viewport is already
+           shared with the header and the message composer below, so the same
+           fraction would leave barely any room for either. */
+        max-height: 48vh;
     }
 
     #viewChat .msgs {
@@ -8212,6 +8228,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                             <span class="logs-title">Настройки</span>
                             <p class="settings-lead">Кастомизация интерфейса, журнал событий и действия аккаунта в одном месте.</p>
                         </div>
+"""#,
+    #"""
                         <button class="btn-flat" id="closeSettings">Назад</button>
                     </div>
                     <div class="settings-body settings-scroll">
@@ -8225,8 +8243,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 <div class="settings-chips">
                                     <span class="settings-chip">Styler</span>
                                     <span class="settings-chip">Logs</span>
-"""#,
-    #"""
                                     <span class="settings-chip">Crypto</span>
                                     <span class="settings-chip">Account</span>
                                 </div>
@@ -12140,7 +12156,11 @@ class ZaliInterface {
             const draft = input ? input.value : '';
             try {
                 if (input) {
-                    input.value = `💰 Перевёл(а) ${amount} ZaliCoin`;
+                    // Named explicitly: this renders as a centered system pill
+                    // (detectSystemNotice), not a left/right bubble, so there's no
+                    // avatar or sender-side layout to imply who sent it — without
+                    // the name in the text itself it read as anonymous.
+                    input.value = `💰 ${this.myName()} перевёл(а) ${amount} ZaliCoin`;
                     this.updateSendButtonState?.();
                     await this.sendInputMessage();
                 }
@@ -14116,6 +14136,8 @@ class ZaliInterface {
             const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
             return (parsed && typeof parsed === 'object') ? parsed : null;
         } catch (e) {
+"""#,
+    #"""
             return null;
         }
     }
@@ -14127,8 +14149,6 @@ class ZaliInterface {
     async ensureDeviceCryptoIdentity() {
         const identity = this.loadDeviceIdentity();
         const e2ee = identity?.keyPackage?.e2ee;
-"""#,
-    #"""
         if (e2ee?.publicJwk && identity?.privateKeyJwk && e2ee?.alg === 'ECDH-P-256+A256GCM') {
             return identity;
         }
@@ -18245,6 +18265,8 @@ class ZaliInterface {
         input.focus();
     }
 
+"""#,
+    #"""
     extractInviteCode(value) {
         const raw = String(value || '').trim();
         if (!raw) return '';
@@ -18253,8 +18275,6 @@ class ZaliInterface {
     }
 
     rolePayloadFromCreateForm() {
-"""#,
-    #"""
         const nameInput = document.getElementById('serverRoleNameInput');
         const colorInput = document.getElementById('serverRoleColorInput');
         const colorHexInput = document.getElementById('serverRoleColorHexInput');
@@ -22278,6 +22298,8 @@ class ZaliInterface {
             if (this.nativeSupports('sendMessage')) {
                 this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer: this.S.current });
             } else {
+"""#,
+    #"""
                 void this.loadBrowserDmHistory(this.S.current, key);
             }
         }
@@ -22288,8 +22310,6 @@ class ZaliInterface {
         if (!this.S.session?.token) return;
         if (!force && document.hidden) return;
         if (this.S.navMode === 'servers') {
-"""#,
-    #"""
             const serverId = this.S.activeServer;
             const channelId = this.S.activeChannel;
             if (serverId && channelId) {
@@ -25059,7 +25079,11 @@ class ZaliInterface {
     detectSystemNotice(text) {
         const value = String(text || '').trim();
         if (!value) return null;
-        if (/^💰\s*Перевёл\(а\)\s+\d+(?:[.,]\d+)?\s+ZaliCoin$/.test(value)) return 'transfer';
+        // Accepts both the current "💰 <name> перевёл(а) N ZaliCoin" wording and the
+        // older nameless one (submitCoinTransfer used to omit the sender), so a
+        // transfer notice sent before that changed still renders as a pill instead
+        // of reverting to a plain bubble.
+        if (/^💰\s*(?:\S+\s+)?[Пп]еревёл\(а\)\s+\d+(?:[.,]\d+)?\s+ZaliCoin$/.test(value)) return 'transfer';
         if (
             /^🔒\s*Сообщение зашифровано другим ключом$/.test(value) ||
             /^🔑\s*Получение ключа…?$/.test(value) ||
@@ -26700,6 +26724,8 @@ class ZaliInterface {
                 }
                 html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
                     <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
+"""#,
+    #"""
                         <span class="notice-icon" aria-hidden="true">${noticeType === 'transfer' ? '💸' : '🔐'}</span>
                         <span class="notice-text">${this.renderMessageText(msg.text)}</span>
                     </div>
@@ -26711,8 +26737,6 @@ class ZaliInterface {
             // chrome-less and square-bottomed, and the caption sits below it in a
             // separate bubble sized to match — a small gap between the two instead
             // of both crammed into one padded card (the old `bubble media-card`
-"""#,
-    #"""
             // layout, still used below for mixed/file attachments).
             if (isImageCaption) {
                 const attachments = this.normalizeAttachments(msg.attachments);
