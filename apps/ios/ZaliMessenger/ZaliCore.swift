@@ -31,6 +31,43 @@ class ZaliCore {
         keys.append(trimmed)
     }
 
+    /// The conversation scope a message belongs to, or nil when it can't be derived.
+    /// Mirrors the branch order in `candidateMessageKeys` — a server-scoped message is
+    /// never treated as a DM. Ported from the macOS shell's ZaliCore.
+    static func conversationScope(
+        participantA: String?,
+        participantB: String?,
+        serverId: String? = nil,
+        channelId: String? = nil
+    ) -> String? {
+        if let serverId, !serverId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let channelId else { return nil }
+            return serverConversationScope(serverId, channelId)
+        }
+        guard let participantA, let participantB else { return nil }
+        return dmConversationScope(participantA, participantB)
+    }
+
+    /// Whether the conversation key for this message's own scope is already known.
+    /// Distinguishes "the key hasn't reached this device yet" (transient, repairs itself
+    /// once key sync converges) from "we had the key and it didn't work".
+    static func hasConversationScopeKey(
+        conversationKeys: [String: String],
+        participantA: String?,
+        participantB: String?,
+        serverId: String? = nil,
+        channelId: String? = nil
+    ) -> Bool {
+        guard let scope = conversationScope(
+            participantA: participantA,
+            participantB: participantB,
+            serverId: serverId,
+            channelId: channelId
+        ) else { return false }
+        let key = conversationKeys[scope]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !(key ?? "").isEmpty
+    }
+
     static func candidateMessageKeys(
         currentKey: String,
         conversationKeys: [String: String] = [:],

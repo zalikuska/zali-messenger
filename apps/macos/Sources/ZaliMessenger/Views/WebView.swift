@@ -931,7 +931,22 @@ struct WebView: NSViewRepresentable {
             // Return a placeholder so the message is visible rather than silently missing
             let placeholderText: String
             if decryptFailed {
-                placeholderText = "🔒 Сообщение зашифровано другим ключом"
+                // A freshly logged-in device renders history before the conversation key
+                // has arrived over /api/key-envelopes. Until then the only candidate is
+                // currentKey, decryption fails, and the old wording claimed the message
+                // was encrypted under someone else's key — a permanent-sounding verdict
+                // on a state that repairs itself seconds later, once key sync converges
+                // and history re-renders (failed decryptions are deliberately not cached).
+                let hasScopeKey = ZaliCore.hasConversationScopeKey(
+                    conversationKeys: NetworkService.shared.allConversationKeys,
+                    participantA: record.sender,
+                    participantB: record.receiver,
+                    serverId: serverId,
+                    channelId: channelId
+                )
+                placeholderText = hasScopeKey
+                    ? "🔒 Сообщение зашифровано другим ключом"
+                    : "🔑 Получение ключа…"
             } else if lastDownloadError == "413" {
                 placeholderText = "📦 Файл сообщения превышает допустимый размер"
             } else {

@@ -1278,7 +1278,18 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
                 }
 
                 guard let payload = ZaliCore.shared.unpackMessage(archivePath: archivePath, tempDir: tempDir, keys: keys) else {
-                    completion(placeholder("🔒 Сообщение зашифровано другим ключом"))
+                    // Before key sync converges on a freshly logged-in device the only
+                    // candidate is currentE2eKey, so this fails for every message. Saying
+                    // "encrypted with another key" there is a permanent-sounding verdict
+                    // on a state that repairs itself once the envelope arrives.
+                    let hasScopeKey = ZaliCore.hasConversationScopeKey(
+                        conversationKeys: self.conversationKeys,
+                        participantA: sender,
+                        participantB: receiver
+                    )
+                    completion(placeholder(hasScopeKey
+                        ? "🔒 Сообщение зашифровано другим ключом"
+                        : "🔑 Получение ключа…"))
                     return
                 }
 

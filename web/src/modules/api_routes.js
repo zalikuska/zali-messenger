@@ -74,6 +74,9 @@
             distribution: apiRoute('/coins/distribution'),
             transfer: apiRoute('/coins/transfer'),
         },
+        diagnostics: {
+            decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
+        },
     });
 
     window.ZaliApiRoutes = API_ROUTES;

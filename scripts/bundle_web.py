@@ -63,6 +63,9 @@ def main():
         print("ℹ️  apps/macos/ not present, skipping BridgeProtocol.generated.swift")
 
     js_files = [
+        # Vendored third-party player, kept first so window.lottie exists before
+        # anything that might reach for it. Only used by modules/tgs.js.
+        os.path.join(src_dir, "vendor", "lottie_light.min.js"),
         os.path.join(src_dir, "modules", "bus_events.js"),
         os.path.join(src_dir, "modules", "api_routes.js"),
         os.path.join(src_dir, "modules", "native_types.js"),
@@ -72,6 +75,7 @@ def main():
         os.path.join(src_dir, "modules", "servers.js"),
         os.path.join(src_dir, "modules", "voice.js"),
         os.path.join(src_dir, "modules", "wasm_bridge.js"),
+        os.path.join(src_dir, "modules", "tgs.js"),
         os.path.join(src_dir, "bus.js"),
         os.path.join(src_dir, "loader.js"),
         os.path.join(src_dir, "styler.js"),

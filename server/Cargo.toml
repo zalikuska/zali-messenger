@@ -33,6 +33,10 @@ path = "../tests/conversation_keys.rs"
 name = "releases"
 path = "../tests/releases.rs"
 
+[[test]]
+name = "diagnostics"
+path = "../tests/diagnostics.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }

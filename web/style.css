@@ -4706,6 +4706,35 @@ body[data-nav-mode="servers"] .contacts {
     max-width: 100%;
 }
 
+/* Photo/gif/sticker with a caption: bare media on top (square-bottomed, so it
+   visually continues into what's below) and a normal text bubble underneath,
+   separated by a small gap. `align-items: stretch` + the wrap's own
+   `width: fit-content` is what makes the bubble's width track the media's
+   rendered width — the wrap shrinks to its widest child (the media), and the
+   stretched bubble then fills that same width. */
+.bwrap.image-caption-wrap {
+    align-items: stretch;
+    max-width: min(420px, 74%);
+}
+
+.image-caption-media {
+    display: block;
+}
+
+.image-caption-media .discord-media-shell {
+    display: block;
+    width: 100%;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.image-caption-text {
+    margin-top: 4px;
+    width: 100%;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
 .reaction-row {
     display: flex;
     flex-wrap: wrap;
@@ -4882,6 +4911,54 @@ body[data-nav-mode="servers"] .contacts {
     max-height: 360px;
 }
 
+/* Animated .tgs stickers — rendered into .media-sticker-stage by
+   web/src/modules/tgs.js. Square, transparent and deliberately NOT stretched to
+   the bubble width: a sticker is an emoji-sized object, not an attachment card. */
+.media.media-sticker {
+    width: 180px;
+    height: 180px;
+    max-width: 100%;
+    background: transparent;
+    border-radius: 0;
+}
+
+.media.media-sticker.compact {
+    width: 100%;
+    height: 84px;
+    min-height: 84px;
+}
+
+.media-sticker-stage {
+    width: 100%;
+    height: 100%;
+}
+
+/* lottie-web writes inline width/height onto the <svg> it creates, so the only
+   way to keep it inside the stage is to out-specify it. */
+.media-sticker-stage svg {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Reserve the square while the animation is being fetched and inflated, so the
+   message list does not jump once it appears. */
+.media-sticker:not([data-tgs-state="ready"]) .media-sticker-stage {
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+}
+
+/* Decode failed: collapse to the plain download chip that was hidden underneath. */
+.media.media-sticker-failed {
+    width: auto;
+    height: auto;
+    min-height: 0;
+}
+
+.media-sticker-failed .media-sticker-stage {
+    display: none;
+}
+
 .media-tenor {
     overflow: hidden;
     min-height: 220px;
@@ -4924,7 +5001,7 @@ body[data-nav-mode="servers"] .contacts {
     overflow: hidden;
     border-radius: calc(var(--r-msg) - 6px);
     background: #000;
-    border: 1px solid rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.14);
     box-shadow: 0 1px 0 rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.02);
 }
 
@@ -4994,12 +5071,56 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text2);
 }
 
+/* Format-specific icon shown when there's no richer preview for an attachment
+   (a .pdf, .docx, .zip, ...): a sheet-of-paper shape (taller than wide, like
+   an actual page, not a generic square) with a folded top-right corner, so it
+   reads as "a document" even when the extension text is empty (no dot in the
+   filename). One flat neutral fill for every type — no per-category color —
+   and the fill is opaque, so the icon's own (fixed, not inherited) dark text
+   stays legible whether it lands in a dark incoming bubble or a light
+   outgoing one; inheriting the bubble's text color doesn't work once the fill
+   itself stops being translucent. */
+.file-icon {
+    position: relative;
+    display: flex;
+    flex: none;
+    align-items: flex-end;
+    justify-content: center;
+    width: 32px;
+    height: 40px;
+    padding-bottom: 5px;
+    border-radius: 5px;
+    background: rgba(235,236,240,.92);
+    color: rgba(30,32,38,.72);
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: .3px;
+    line-height: 1;
+    overflow: hidden;
+}
+
+.file-icon::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 13px 13px 0;
+    border-color: transparent rgba(30,32,38,.16) transparent transparent;
+}
+
+.file-chip.compact .file-icon,
+.draft-att .file-icon {
+    width: 28px;
+    height: 35px;
+}
+
 .file-chip {
     display: inline-flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 8px;
+    align-items: center;
+    gap: 10px;
     padding: 10px 12px;
     border: 1px solid transparent;
     border-radius: var(--r-msg);
@@ -5022,12 +5143,22 @@ body[data-nav-mode="servers"] .contacts {
     outline: 0;
 }
 
-.file-chip-name {
-    font-weight: 700;
-    line-height: 1.2;
+.file-message-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
 }
 
-.file-chip-size {
+.file-chip-name,
+.file-message-name {
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.file-chip-size,
+.file-message-size {
     color: var(--text2);
     font-size: 11px;
     line-height: 1.2;
@@ -5035,6 +5166,74 @@ body[data-nav-mode="servers"] .contacts {
 
 .file-chip.compact {
     padding: 9px 11px;
+}
+
+/* No box of its own — this sits inside a normal chat `.bubble`, which already
+   supplies the padding/background/border. Wrapping it in a second bordered
+   card on top of that read as a bubble nested inside a bubble. */
+.media-audio {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 200px;
+    max-width: 100%;
+}
+
+.media-audio-player {
+    width: 100%;
+    height: 32px;
+}
+
+.media-audio-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.media-audio-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 0;
+}
+
+.media-audio-size {
+    flex: none;
+    color: var(--text2);
+    font-size: 11px;
+}
+
+/* No box of its own, same reasoning as .media-audio above — this always sits
+   inside a normal chat `.bubble`, so its own border/background just doubled
+   the bubble it was already inside. */
+.file-message {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 100%;
+    color: inherit;
+}
+
+/* Beats `.msg-attachments a { text-decoration: underline }` (interface.js always
+   wraps this in a .msg-attachments block) on specificity — a plain `.file-message`
+   rule alone loses to that two-class-plus-tag selector. */
+.msg-attachments .file-message,
+.msg-attachments .file-message:hover,
+.msg-attachments .file-message:focus-visible {
+    text-decoration: none;
+}
+
+.file-message:hover .file-message-name,
+.file-message:focus-visible .file-message-name {
+    text-decoration: underline;
+}
+
+.file-message:focus-visible {
+    outline: 1px solid rgba(var(--accent-rgb),.5);
+    outline-offset: 2px;
 }
 
 
@@ -5064,6 +5263,54 @@ body[data-nav-mode="servers"] .contacts {
     /* No entry animation: the message list is rebuilt wholesale on every new
        message, so an animation here replayed on every separator each time a
        message arrived — a list-wide flicker rather than a one-off flourish. */
+}
+
+/* System notices (ZaliCoin transfer receipts, decryption/download placeholders):
+   centered pills, deliberately unlike either chat bubble side so they read as
+   "the app said this", not "a person typed this". */
+.msg.notice {
+    display: flex;
+    justify-content: center;
+    margin: 10px 0;
+}
+
+.notice-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: min(560px, 84%);
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px dashed rgba(255,255,255,.14);
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+.notice-icon {
+    flex: none;
+    font-size: 13px;
+    line-height: 1;
+}
+
+.notice-text {
+    min-width: 0;
+}
+
+.msg.notice-transfer .notice-pill {
+    border-color: rgba(var(--accent-rgb),.35);
+    background: rgba(var(--accent-rgb),.10);
+    color: var(--text);
+}
+
+.msg.notice-decrypt-error .notice-pill {
+    border-color: rgba(255,107,107,.35);
+    background: rgba(255,107,107,.08);
+    color: var(--text2);
 }
 
 .input-area {
@@ -5135,11 +5382,27 @@ body[data-nav-mode="servers"] .contacts {
     object-fit: cover;
 }
 
+/* The outer .draft-att square already is the card (border + background) —
+   the .file-chip inside it doesn't need its own on top of that, that was a
+   card nested inside a card. Keep only the icon + size, centered; the
+   filename lives in .draft-att-name below instead. */
 .draft-att .file-chip {
-    display: grid;
-    place-items: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     padding: 10px;
+    gap: 6px;
+    border: 0;
+    background: none;
+    box-shadow: none;
+}
+
+.draft-att .file-chip:hover,
+.draft-att .file-chip:focus-visible {
+    box-shadow: none;
+    outline: 0;
 }
 
 .draft-att-name {

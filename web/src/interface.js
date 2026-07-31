@@ -496,21 +496,36 @@ class ZaliInterface {
         return output;
     }
 
+    // Asks for OS notification permission. Deliberately separate from (and ahead of)
+    // the Web Push subscription: showBrowserNotification() needs only this permission,
+    // so gating it behind a configured VAPID keypair left a server without
+    // VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY with no browser notifications whatsoever —
+    // not even the local ones that work fine with no push service involved.
+    async ensureNotificationPermission() {
+        if (this.hasNativeBridge()) return false;
+        if (typeof Notification === 'undefined') return false;
+        try {
+            if (Notification.permission === 'default') {
+                await Notification.requestPermission();
+            }
+        } catch (e) {
+            this.trace(`ensureNotificationPermission failed: ${e?.message || e}`);
+        }
+        return Notification.permission === 'granted';
+    }
+
     async subscribeWebPush() {
         if (this.hasNativeBridge()) return;
-        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        if (!('serviceWorker' in navigator)) return;
         if (!this.S.session?.token) return;
+        const granted = await this.ensureNotificationPermission();
+        if (!('PushManager' in window)) return;
+        if (!granted) return;
         try {
             const keyRes = await fetch(this.apiUrl('/api/push/vapid-public-key'));
             if (!keyRes.ok) return;
             const { publicKey } = await keyRes.json();
             if (!publicKey) return;
-
-            if (Notification.permission === 'default') {
-                const permission = await Notification.requestPermission();
-                if (permission !== 'granted') return;
-            }
-            if (Notification.permission !== 'granted') return;
 
             const registration = await navigator.serviceWorker.ready;
             let subscription = await registration.pushManager.getSubscription();
@@ -5703,7 +5718,13 @@ class ZaliInterface {
     }
 
     flushPendingOutbox() {
-        if (!this.nativeSupports('sendMessage')) return;
+        // Deliberately NOT gated on nativeSupports('sendMessage') any more. The browser/PWA
+        // client has its own send path (browserSendMessage, WASM-packed .zali over fetch),
+        // but this whole retry queue used to bail out on the first line for it — so a send
+        // that failed in a browser tab was logged once and never retried, and the message
+        // sat in the UI as permanently "sending". The per-item branch below picks the
+        // right transport; everything else (backoff, attempt cap, attachment recovery,
+        // stall detection) is transport-independent and now applies to both.
         if (!this.S.session?.token) return;
         const currentUser = String(this.myName() || '').trim();
         const now = Date.now();
@@ -5787,6 +5808,39 @@ class ZaliInterface {
             inFlightCount += 1;
             this.savePendingOutbox(pending);
             sentAny = true;
+
+            // Browser/PWA has no native shell to hand the send to — pack and upload it
+            // here, the same way sendInputMessage's browser branch does. The item stays
+            // in the queue either way: on success the server's own-device echo comes back
+            // over the WS and finalizePendingMessage() drops it by clientId, exactly like
+            // the native path; on failure it just becomes the next retry.
+            if (!this.nativeSupports('sendMessage')) {
+                const pendingId = String(item.clientId || '').trim();
+                const requeue = () => this.updatePendingOutboxItem(pendingId, {
+                    inFlight: false,
+                    nextRetryAt: Date.now() + 2000,
+                });
+                this.browserSendMessage({
+                    text: item.text,
+                    key: itemKey,
+                    keyVersion: Number(item.keyVersion || 2),
+                    sender: item.sender || this.myName(),
+                    receiver: item.serverId && item.channelId ? item.channelId : item.receiver,
+                    serverId: item.serverId || '',
+                    channelId: item.channelId || '',
+                    clientId: item.clientId,
+                    attachments: outAttachments,
+                }).then(ok => {
+                    if (!ok) {
+                        this.trace(`flushPendingOutbox browserSendMessage failed clientId=${pendingId}`);
+                        requeue();
+                    }
+                }).catch(error => {
+                    this.trace(`flushPendingOutbox browserSendMessage error clientId=${pendingId} error=${error?.message || error}`);
+                    requeue();
+                });
+                continue;
+            }
 
             const sentToNative = this.postNativeMessage({
                 type: NativeMessageTypes.SEND_MESSAGE,
@@ -14240,13 +14294,51 @@ class ZaliInterface {
         this.initChat(name);
     }
 
+    // A .tgs is a gzipped Lottie animation (Telegram animated sticker). Peers and
+    // older builds of this app label it anything from application/gzip to
+    // application/octet-stream, so detection leans on the filename too — see
+    // ZaliTgs.isTgsAttachment in web/src/modules/tgs.js.
+    isStickerAttachment(att) {
+        if (window.ZaliTgs?.isTgsAttachment) return window.ZaliTgs.isTgsAttachment(att);
+        const name = String(att?.name || att?.archivePath || att?.archive_path || '');
+        const mimeType = String(att?.mimeType || att?.mime_type || '').toLowerCase();
+        return att?.kind === 'sticker' || mimeType === 'application/x-tgsticker' || /\.tgs$/i.test(name.trim());
+    }
+
+    attachmentKindFor(att) {
+        if (this.isStickerAttachment(att)) return 'sticker';
+        const mimeType = String(att?.mimeType || att?.mime_type || '');
+        if (mimeType.startsWith('video/')) return 'video';
+        if (mimeType === 'image/gif') return 'gif';
+        if (mimeType.startsWith('image/')) return 'image';
+        if (mimeType.startsWith('audio/')) return 'audio';
+        return '';
+    }
+
+    // The extension shown on the generic file icon when there's no richer preview
+    // for a type (a .docx, .zip, .py, ...). Capped at 4 chars so it still fits the
+    // icon glyph — long "extensions" past that are usually not real extensions
+    // (a dotted version number, a filename with no extension at all) anyway.
+    fileExtensionLabel(name) {
+        const clean = String(name || '').trim();
+        const dot = clean.lastIndexOf('.');
+        if (dot <= 0 || dot === clean.length - 1) return '';
+        return clean.slice(dot + 1).toUpperCase().slice(0, 4);
+    }
+
+    renderFileIcon(name) {
+        const ext = this.fileExtensionLabel(name);
+        return `<span class="file-icon" aria-hidden="true">${ext ? this.esc(ext) : ''}</span>`;
+    }
+
     normalizeAttachment(att = {}) {
         const mimeType = att.mimeType || att.mime_type || '';
-        const kind = att.kind || (
-            mimeType.startsWith('video/') ? 'video' :
-            mimeType === 'image/gif' ? 'gif' :
-            mimeType.startsWith('image/') ? 'image' : 'file'
-        );
+        // Stickers override an incoming `kind` on purpose: a peer that predates
+        // .tgs support labels them 'file', and honouring that would render an
+        // animated sticker as a download chip.
+        const kind = this.isStickerAttachment(att)
+            ? 'sticker'
+            : (att.kind || this.attachmentKindFor(att) || 'file');
         return {
             id: att.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             name: att.name || 'attachment',
@@ -14285,6 +14377,10 @@ class ZaliInterface {
         if (name.endsWith('.gif')) return 'image/gif';
         if (name.endsWith('.mp4')) return 'video/mp4';
         if (name.endsWith('.webm')) return 'video/webm';
+        // The OS has no mapping for .tgs, so `file.type` arrives empty and the
+        // extension is the only signal. Stamping the real type here is what lets
+        // the receiving side recognise the sticker without re-sniffing the name.
+        if (name.endsWith('.tgs')) return window.ZaliTgs?.TGS_MIME || 'application/x-tgsticker';
         return 'application/octet-stream';
     }
 
@@ -14299,7 +14395,7 @@ class ZaliInterface {
 
     async fileToAttachment(file) {
         const mimeType = this.inferMimeType(file);
-        const kind = mimeType.startsWith('video/') ? 'video' : mimeType === 'image/gif' ? 'gif' : mimeType.startsWith('image/') ? 'image' : 'file';
+        const kind = this.attachmentKindFor({ name: file.name, mimeType }) || 'file';
         const dataUrl = await this.fileToDataUrl(file);
         return this.normalizeAttachment({
             name: file.name,
@@ -14332,6 +14428,9 @@ class ZaliInterface {
         if (!this.S.draftAttachments.length) {
             wrap.innerHTML = '';
             wrap.classList.remove('has-items');
+            // Reaps the sticker animation that was just detached, so its rAF loop
+            // stops instead of running against an orphaned node.
+            window.ZaliTgs?.hydrate(wrap);
             return;
         }
 
@@ -14344,6 +14443,8 @@ class ZaliInterface {
                 <div class="draft-att-name">${this.esc(att.name)}</div>
             </div>`;
         }).join('');
+
+        window.ZaliTgs?.hydrate(wrap);
     }
 
     resizeComposer() {
@@ -14466,6 +14567,20 @@ class ZaliInterface {
             return `<div class="media-unknown">${this.esc(attachment.name)}</div>`;
         }
 
+        // Animated stickers are decoded and played by web/src/modules/tgs.js after
+        // the message list is in the DOM — all this renders is the stage plus a
+        // download link that stays hidden unless the animation fails to load.
+        if (attachment.kind === 'sticker') {
+            const sizeLabel = this.formatFileSize(attachment.size);
+            return `<div class="media media-sticker${compact ? ' compact' : ''}" data-tgs-src="${this.esc(src)}">
+                <div class="media-sticker-stage" aria-label="${this.esc(attachment.name)}" role="img"></div>
+                <a class="file-chip media-sticker-fallback${compact ? ' compact' : ''}" href="${this.esc(src)}" download="${this.esc(attachment.name)}" hidden>
+                    <span class="file-chip-name">${this.esc(attachment.name)}</span>
+                    <span class="file-chip-size">${this.esc(sizeLabel)}</span>
+                </a>
+            </div>`;
+        }
+
         if (attachment.kind === 'video' || (attachment.mimeType || '').startsWith('video/')) {
             const shellClass = `discord-media-shell discord-media-shell-video${gifLike ? ' discord-media-shell-gif' : ''}${compact ? ' compact' : ''}`;
             const shellStyle = this.mediaShellStyle(src, { gifLike });
@@ -14483,17 +14598,42 @@ class ZaliInterface {
             </div>`;
         }
 
+        // Audio has no visual frame to preview, but it's the one remaining kind
+        // that can still play inline rather than falling back to a download link.
+        if (attachment.kind === 'audio' || (attachment.mimeType || '').startsWith('audio/')) {
+            const sizeLabel = this.formatFileSize(attachment.size);
+            return `<div class="media-audio${compact ? ' compact' : ''}">
+                <audio class="media-audio-player" controls preload="metadata" src="${this.esc(src)}"></audio>
+                <div class="media-audio-meta">
+                    <span class="media-audio-name">${this.esc(attachment.name)}</span>
+                    <span class="media-audio-size">${this.esc(sizeLabel)}</span>
+                </div>
+            </div>`;
+        }
+
+        // No format-specific preview (a .pdf, .docx, .zip, ...) — a neutral icon
+        // carrying the extension stands in for one, same idea as Telegram/Slack's
+        // file glyphs, so the type is readable at a glance instead of only in the
+        // filename text.
         const sizeLabel = this.formatFileSize(attachment.size);
+        const fileIcon = this.renderFileIcon(attachment.name);
         if (compact) {
+            // No name here: this is only ever used by the draft-attachment
+            // thumbnail, which already prints the filename underneath
+            // (.draft-att-name) — repeating it inside the chip too just wrapped
+            // ugly in the narrow thumbnail.
             return `<a class="file-chip${compact ? ' compact' : ''}" href="${this.esc(src)}" download="${this.esc(attachment.name)}">
-                <span class="file-chip-name">${this.esc(attachment.name)}</span>
+                ${fileIcon}
                 <span class="file-chip-size">${this.esc(sizeLabel)}</span>
             </a>`;
         }
 
         return `<a class="file-message" href="${this.esc(src)}" download="${this.esc(attachment.name)}">
-            <span class="file-message-name">${this.esc(attachment.name)}</span>
-            <span class="file-message-size">${this.esc(sizeLabel)}</span>
+            ${fileIcon}
+            <span class="file-message-info">
+                <span class="file-message-name">${this.esc(attachment.name)}</span>
+                <span class="file-message-size">${this.esc(sizeLabel)}</span>
+            </span>
         </a>`;
     }
 
@@ -14506,7 +14646,122 @@ class ZaliInterface {
         return text;
     }
 
+    // Recognizes the fixed-format strings the app itself generates for a message
+    // body — a ZaliCoin transfer notice (submitCoinTransfer) or a native-layer
+    // decryption/download placeholder (WebView.swift / native.rs) — so they can be
+    // rendered as a distinct system pill instead of a normal chat bubble. This is a
+    // *display-only* affordance, not an authenticity guarantee: it matches on exact
+    // wording, so a peer could type the identical string and see the same styling.
+    // Good enough to tell "the app posted this" apart from an ordinary message at a
+    // glance, not to prove provenance.
+    detectSystemNotice(text) {
+        const value = String(text || '').trim();
+        if (!value) return null;
+        if (/^💰\s*Перевёл\(а\)\s+\d+(?:[.,]\d+)?\s+ZaliCoin$/.test(value)) return 'transfer';
+        if (
+            /^🔒\s*Сообщение зашифровано другим ключом$/.test(value) ||
+            /^🔑\s*Получение ключа…?$/.test(value) ||
+            /^📦\s*Файл сообщения превышает допустимый размер$/.test(value) ||
+            /^⚠️\s*Не удалось загрузить сообщение$/.test(value) ||
+            /^(?:🚨\s*)?\[Ошибка расшифрования:[^\]]*\]$/.test(value)
+        ) return 'decrypt-error';
+        return null;
+    }
+
+    // Maps a decrypt-error placeholder to a short, stable slug for
+    // reportDecryptFailure()'s `reason` field — grouping reports by cause
+    // instead of leaving the server to parse (and re-translate) free text.
+    decryptFailureReasonSlug(text) {
+        const value = String(text || '');
+        if (/зашифровано другим ключом/.test(value)) return 'wrong-key';
+        if (/Получение ключа/.test(value)) return 'awaiting-key';
+        if (/превышает допустимый размер/.test(value)) return 'oversized';
+        if (/Не удалось загрузить/.test(value)) return 'download-failed';
+        if (/Ошибка расшифрования/.test(value)) return 'legacy-decrypt-error';
+        return 'unknown';
+    }
+
+    // Phones home with everything locally available that could explain a
+    // decryption failure — added while chasing "переписки пропадают, растёт
+    // число ошибок расшифровки" (2026-07-31). Deliberately best-effort: never
+    // throws, never blocks rendering, and is skipped entirely while logged
+    // out (the server can't attribute an unauthenticated report to anyone).
+    // Only a SHA-256 fingerprint of any key is ever sent — see
+    // conversationKeyId() — never the key itself.
+    async reportDecryptFailure(details = {}) {
+        if (!this.S.session?.token) return;
+        const key = [
+            details.messageId || details.clientId || '',
+            details.sender || '',
+            details.receiver || '',
+            details.serverId || '',
+            details.channelId || '',
+        ].join('|');
+        if (!this._reportedDecryptFailures) this._reportedDecryptFailures = new Set();
+        if (key && this._reportedDecryptFailures.has(key)) return;
+        if (key) {
+            this._reportedDecryptFailures.add(key);
+            // Bounded so a long-lived tab doesn't grow this forever.
+            if (this._reportedDecryptFailures.size > 500) {
+                this._reportedDecryptFailures.delete(this._reportedDecryptFailures.values().next().value);
+            }
+        }
+        try {
+            const scope = details.scope || this.conversationScopeKey(
+                details.sender === this.myName() ? details.receiver : details.sender,
+                details.serverId,
+                details.channelId,
+            );
+            const localKey = scope ? this.getStoredConversationKey(scope) : '';
+            const localKeyId = localKey ? await this.conversationKeyId(localKey) : '';
+            let canonicalKeyId = '';
+            if (scope) {
+                try {
+                    const canonical = await this.fetchCanonicalKeyIds([scope]);
+                    canonicalKeyId = canonical.get(scope) || '';
+                } catch (e) { /* best-effort — see fetchCanonicalKeyIds's own fallback */ }
+            }
+            const logBody = document.getElementById('logBody');
+            const recentLog = logBody
+                ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
+                : [];
+            const payload = {
+                reason: details.reason || this.decryptFailureReasonSlug(details.placeholderText || ''),
+                placeholderText: String(details.placeholderText || '').slice(0, 200),
+                clientError: String(details.clientError || '').slice(0, 500),
+                messageId: details.messageId || '',
+                clientId: details.clientId || '',
+                sender: details.sender || '',
+                receiver: details.receiver || '',
+                serverId: details.serverId || '',
+                channelId: details.channelId || '',
+                scope,
+                messageTimestamp: details.messageTimestamp || '',
+                hasLocalKey: !!localKey,
+                localKeyId,
+                canonicalKeyId,
+                keyMatches: (localKeyId && canonicalKeyId) ? (localKeyId === canonicalKeyId) : null,
+                deviceId: this.currentDeviceId(),
+                platform: this.hasNativeBridge() ? 'native' : 'browser',
+                userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+                recentLog,
+                reportedAt: new Date().toISOString(),
+            };
+            await this.apiFetch(this.apiRoutes.diagnostics.decryptFailure, {
+                method: 'POST',
+                body: JSON.stringify(payload),
+            });
+        } catch (e) {
+            this.trace(`reportDecryptFailure failed error=${e?.message || e}`);
+        }
+    }
+
     hydrateGifMedia(root = document) {
+        // Animated stickers need the same treatment as GIF-like videos — they can
+        // only be booted once their node is in the document — so they piggyback on
+        // the single post-render hook every message list already calls.
+        window.ZaliTgs?.hydrate(root);
+
         const videos = root.querySelectorAll?.('video.media-gif-like[data-gif-like="1"]') || [];
         videos.forEach(video => {
             if (!(video instanceof HTMLMediaElement)) return;
@@ -14716,7 +14971,7 @@ class ZaliInterface {
 
     messageHasMedia(msg) {
         const attachments = this.normalizeAttachments(msg.attachments);
-        if (attachments.some(att => att.kind === 'image' || att.kind === 'video' || att.kind === 'gif' || (att.mimeType || '').startsWith('image/') || (att.mimeType || '').startsWith('video/'))) {
+        if (attachments.some(att => att.kind === 'image' || att.kind === 'video' || att.kind === 'gif' || att.kind === 'sticker' || (att.mimeType || '').startsWith('image/') || (att.mimeType || '').startsWith('video/'))) {
             return true;
         }
         const urls = this.extractUrls(msg.text);
@@ -14729,8 +14984,11 @@ class ZaliInterface {
 
         const attachments = this.normalizeAttachments(msg.attachments);
         if (attachments.length > 0) {
+            // Stickers ride along here so a lone sticker gets the same
+            // chrome-less `media-only` treatment a lone GIF does.
             return attachments.every(att =>
                 att.kind === 'gif' ||
+                att.kind === 'sticker' ||
                 att.mimeType === 'image/gif' ||
                 (att.mimeType || '').startsWith('image/')
             );
@@ -14748,6 +15006,24 @@ class ZaliInterface {
         return path.endsWith('.gif') || this.isTenorUrl(url);
     }
 
+    // A photo/gif/sticker sent with a caption: same "is every attachment
+    // image-like" test as messageIsGifOnly(), but for the text-present case that
+    // method deliberately excludes. Kept attachment-only (no Tenor/URL-preview
+    // variant) — a caption on a bare pasted link is a rarer, lower-value case not
+    // worth the extra branching.
+    messageIsImageCaption(msg) {
+        const text = (msg.text || '').trim();
+        if (!text) return false;
+        const attachments = this.normalizeAttachments(msg.attachments);
+        if (!attachments.length) return false;
+        return attachments.every(att =>
+            att.kind === 'gif' ||
+            att.kind === 'sticker' ||
+            att.mimeType === 'image/gif' ||
+            (att.mimeType || '').startsWith('image/')
+        );
+    }
+
     messageSummary(msg) {
         if (msg?.kind === 'call') {
             const call = msg.call || {};
@@ -14763,9 +15039,11 @@ class ZaliInterface {
         const attachments = this.normalizeAttachments(msg.attachments);
         if (attachments.length) {
             const first = attachments[0];
+            if (first.kind === 'sticker') return 'Стикер';
             if (first.kind === 'video' || first.mimeType.startsWith('video/')) return 'Видео';
             if (first.kind === 'gif' || first.mimeType === 'image/gif') return 'GIF';
             if (first.mimeType.startsWith('image/')) return 'Фото';
+            if (first.kind === 'audio' || first.mimeType.startsWith('audio/')) return 'Аудио';
             return 'Файл';
         }
 
@@ -15946,7 +16224,7 @@ class ZaliInterface {
 
         let activeGroup = null;
         items.forEach((item) => {
-            const isGroupable = item.msg?.kind !== 'call' && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
@@ -15981,6 +16259,9 @@ class ZaliInterface {
             const msg = item.msg;
             const isOut = this.isOutgoingMessage(msg);
             const isCall = msg.kind === 'call';
+            const noticeType = !isCall ? this.detectSystemNotice(msg.text) : null;
+            const isNotice = !!noticeType;
+            const isImageCaption = !isCall && !isNotice && this.messageIsImageCaption(msg);
             const dateStr = this.fmtDate(msg.timestamp);
             const mediaCard = !isCall && this.messageHasMedia(msg) ? 'media-card' : '';
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
@@ -15989,13 +16270,63 @@ class ZaliInterface {
             const hoverTimeLabel = !isCall ? this.messageHoverTimeLabel(msg) : '';
             const showInlineTime = !isCall && (item.groupPos === 'single' || item.groupPos === 'end');
             const inlineTimeLabel = !isCall ? this.messageInlineTimeLabel(msg) : '';
+            const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
+            const showAvatar = !isCall && !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
             if (dateStr && dateStr !== lastDate) {
                 html += `<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`;
                 lastDate = dateStr;
             }
 
-            const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
-            const showAvatar = !isCall && !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
+            // System notices (a ZaliCoin transfer receipt, a decryption/download
+            // placeholder) are generated by the app itself, not typed by either
+            // party — render them as a centered pill instead of a left/right chat
+            // bubble so they read as distinct from a human-written message with the
+            // same wording. See detectSystemNotice() for the caveat on what this
+            // does and doesn't guarantee.
+            if (isNotice) {
+                if (noticeType === 'decrypt-error') {
+                    void this.reportDecryptFailure({
+                        placeholderText: msg.text,
+                        messageId: msg.id,
+                        clientId: msg.clientId,
+                        sender: msg.sender,
+                        receiver: msg.receiver,
+                        serverId: msg.serverId,
+                        channelId: msg.channelId,
+                        messageTimestamp: msg.timestamp,
+                    });
+                }
+                html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
+                    <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
+                        <span class="notice-icon" aria-hidden="true">${noticeType === 'transfer' ? '💸' : '🔐'}</span>
+                        <span class="notice-text">${this.renderMessageText(msg.text)}</span>
+                    </div>
+                </div>`;
+                return;
+            }
+
+            // A photo (or gif/sticker) with a caption: the image stands on its own,
+            // chrome-less and square-bottomed, and the caption sits below it in a
+            // separate bubble sized to match — a small gap between the two instead
+            // of both crammed into one padded card (the old `bubble media-card`
+            // layout, still used below for mixed/file attachments).
+            if (isImageCaption) {
+                const attachments = this.normalizeAttachments(msg.attachments);
+                const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
+                html += `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                if (!isOut && showAvatar) {
+                    html += `<div class="msg-ava">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                } else if (!isOut) {
+                    html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
+                }
+                html += `<div class="bwrap image-caption-wrap">
+                    <div class="image-caption-media">${mediaHtml}</div>
+                    <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
+                    ${this.renderMessageReactions(msg)}
+                </div></div>`;
+                return;
+            }
+
             const bubbleClass = isCall ? '' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
             html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
@@ -16315,7 +16646,23 @@ class ZaliInterface {
                 this.trace(`sendInputMessage browserSendMessage ok clientId=${clientId}`);
                 this.addLogEntry({ type: 'SUCCESS', msg: 'Отправлено из браузера (WASM)', ts: new Date().toLocaleTimeString() });
             } else {
-                this.addLogEntry({ type: 'WARN', msg: 'Не удалось отправить сообщение из браузера. Сообщение сохранено только в локальном интерфейсе.', ts: new Date().toLocaleTimeString() });
+                // Queue it for retry instead of stranding it. This branch used to just
+                // log and return, so a browser send that failed (offline, server hiccup)
+                // was never attempted again — the bubble stayed on "sending" forever and
+                // the message was silently lost on the next reload. flushPendingOutbox()
+                // now handles browser sends too, so the same backoff/attempt-cap applies.
+                this.cachePendingOutboxAttachments(clientId, payloadAttachments);
+                this.enqueuePendingOutbox({
+                    ...outgoingMessage,
+                    key: effectiveCryptoKey,
+                    keyVersion,
+                    attemptCount: 1,
+                    lastAttemptAt: Date.now(),
+                    nextRetryAt: Date.now() + 2000,
+                    inFlight: false,
+                });
+                this.scheduleFlushPendingOutbox(2000);
+                this.addLogEntry({ type: 'WARN', msg: 'Не удалось отправить сообщение из браузера, оставлено в очереди повтора', ts: new Date().toLocaleTimeString() });
             }
             return;
         }
@@ -16484,14 +16831,31 @@ class ZaliInterface {
                 mimeType: att.mimeType,
                 kind: att.kind,
                 size: att.bytes?.length || 0,
+                // `new Uint8Array(...)` is load-bearing, not defensive tidiness:
+                // wasm-bindgen hands `bytes` back as a plain JS **Array** of numbers,
+                // and the Blob constructor stringifies any array-like that isn't an
+                // ArrayBuffer view. `new Blob([[137,80,78,71,...]])` therefore produced
+                // the ASCII text "137,80,78,71,..." instead of the bytes — every
+                // attachment received in the browser client came out corrupt and
+                // roughly 3x oversized (a 70-byte PNG became 198 bytes of digits).
                 dataUrl: att.bytes?.length
-                    ? URL.createObjectURL(new Blob([att.bytes], { type: att.mimeType || 'application/octet-stream' }))
+                    ? URL.createObjectURL(new Blob(
+                        [att.bytes instanceof Uint8Array ? att.bytes : new Uint8Array(att.bytes)],
+                        { type: att.mimeType || 'application/octet-stream' },
+                    ))
                     : '',
                 archivePath: att.archivePath,
             }));
             this.bus.send('zali_interface:receive_message', {
                 id,
-                clientId: payload?.client_id || '',
+                // Both spellings on purpose: the live WS payload is a serialized
+                // `Message` (snake_case `client_id`), while history rows from
+                // GET /api/messages/:user are `MessageResponse`, which renames the
+                // field to `clientId`. Reading only the snake_case one left every
+                // history row without a clientId, so finalizePendingMessage() never
+                // reconciled the locally-echoed copy — after a reload your own sent
+                // message showed twice, one of them stuck on "sending" forever.
+                clientId: payload?.clientId || payload?.client_id || '',
                 sender: unpacked.sender || sender,
                 receiver,
                 text: unpacked.text,
@@ -16504,6 +16868,21 @@ class ZaliInterface {
             });
         } catch (e) {
             this.trace(`handleIncomingBrowserMessage failed id=${id} error=${e?.message || e}`);
+            // Unlike the native shells, this path fails silently otherwise — there
+            // is no placeholder message for the render-time hook in
+            // detectSystemNotice() to catch, so this is the only place a
+            // browser-client decrypt/unpack failure ever gets reported at all.
+            void this.reportDecryptFailure({
+                reason: 'browser-unpack-failed',
+                clientError: `${e?.name || 'Error'}: ${e?.message || e}`,
+                messageId: id,
+                clientId: payload?.clientId || payload?.client_id || '',
+                sender,
+                receiver,
+                serverId,
+                channelId,
+                messageTimestamp: payload?.timestamp,
+            });
         }
     }
 
@@ -16744,7 +17123,16 @@ class ZaliInterface {
     }
 
     isDmChatVisible(peer) {
-        return !!peer && peer === this.S.current && this.S.navMode !== 'servers';
+        if (!peer || peer !== this.S.current) return false;
+        if (this.S.navMode === 'servers') return false;
+        // The Hub and Settings screens are full-view overlays, not a navMode — so a DM
+        // that is "selected" is still completely off-screen while either is open. Only
+        // the servers view was excluded here, which meant an incoming message for the
+        // selected peer produced no notification AND no unread increment for as long as
+        // the user sat on the Hub. Same class of bug as the servers-view fix above it.
+        if (document.getElementById('viewHub')?.classList.contains('active')) return false;
+        if (document.getElementById('viewSettings')?.classList.contains('active')) return false;
+        return true;
     }
 
     isPeerMuted(peer) {
@@ -17053,6 +17441,70 @@ class ZaliInterface {
             serverId: serverId || null,
             channelId: channelId || null,
         });
+        this.showBrowserNotification({
+            sender: from,
+            text,
+            attachmentCount,
+            serverId,
+            channelId,
+        });
+    }
+
+    // Mirror of the native shells' notification_body (apps/windows/src/native/transport.rs,
+    // and the same precedence on macOS): message text wins, then an attachment count,
+    // then a generic fallback.
+    notificationBodyFor(text, attachmentCount = 0) {
+        const trimmed = String(text || '').trim();
+        if (trimmed) return Array.from(trimmed).slice(0, 180).join('');
+        if (attachmentCount === 1) return 'Вложение';
+        if (attachmentCount > 1) return `Вложения: ${attachmentCount}`;
+        return 'Новое сообщение';
+    }
+
+    // Browser/PWA only — the one notification path nothing else covered.
+    // postNativeMessage(SHOW_NOTIFICATION) above returns false immediately when there
+    // is no native bridge, and the server only sends a Web Push when deliver_to_user
+    // finds ZERO live WS connections. A tab that is merely *hidden* (backgrounded,
+    // minimized, screen locked) has a live WS, so it fell straight through the gap
+    // between the two and produced no notification at all — just the chime, which
+    // browsers throttle in background tabs anyway.
+    //
+    // Only fires while the document is hidden: with the app actually on screen the
+    // in-app unread badges already cover it. Notifications are tagged per conversation
+    // with renotify, so a long-backgrounded tab alerts on each message without piling
+    // up one entry per message in the OS notification centre.
+    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null }) {
+        if (this.hasNativeBridge()) return;
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        if (typeof document !== 'undefined' && document.visibilityState !== 'hidden') return;
+
+        const from = String(sender || '').trim();
+        if (!from) return;
+        const isChannel = !!(serverId && channelId);
+        const title = isChannel ? `${from} в канале` : from;
+        const options = {
+            body: this.notificationBodyFor(text, attachmentCount),
+            icon: './icon-192.png',
+            badge: './icon-192.png',
+            tag: isChannel ? `zali:${serverId}:${channelId}` : `zali:dm:${from}`,
+            renotify: true,
+            data: { sender: from, serverId: serverId || null, channelId: channelId || null },
+        };
+
+        try {
+            // registration.showNotification() rather than `new Notification()`: the
+            // latter throws on Android Chrome, where only the service-worker form is
+            // allowed, and it is also what the installed PWA needs.
+            if (navigator.serviceWorker?.ready) {
+                navigator.serviceWorker.ready
+                    .then(registration => registration.showNotification(title, options))
+                    .catch(e => this.trace(`showBrowserNotification failed: ${e?.message || e}`));
+            } else {
+                new Notification(title, options);
+            }
+        } catch (e) {
+            this.trace(`showBrowserNotification failed: ${e?.message || e}`);
+        }
     }
 
     // Total unread count across DMs and server channels — feeds the Windows
@@ -17373,7 +17825,7 @@ class ZaliInterface {
     }
 
     async catchUpBackgroundContactsAfterReconnect() {
-        if (!this.S.session?.token || !this.nativeSupports('sendMessage')) return;
+        if (!this.S.session?.token) return;
         // this.S.contacts may still be empty here: bootstrapSession's own loadContacts()
         // is an independent async call racing against this reconnect timer, and on a
         // fresh launch/reconnect right after login it hadn't necessarily resolved yet —
@@ -17385,7 +17837,15 @@ class ZaliInterface {
         for (const peer of peers) {
             try {
                 const key = await this.resolveConversationCryptoKey({ peer, reason: 'reconnectCatchUp' });
-                this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer });
+                // Browser/PWA has no native shell to service REFRESH_HISTORY, so this
+                // whole catch-up used to be gated off for it: after a WS drop, chats
+                // other than the open one never re-synced, leaving their sidebar preview
+                // and unread badge stuck on pre-disconnect state until you clicked in.
+                if (this.nativeSupports('sendMessage')) {
+                    this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer });
+                } else {
+                    await this.loadBrowserDmHistory(peer, key);
+                }
             } catch (e) {
                 this.trace(`catchUpBackgroundContactsAfterReconnect failed peer=${peer} error=${e?.message || e}`);
             }
