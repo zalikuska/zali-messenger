@@ -14,7 +14,7 @@ APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
 # MAJOR.MINOR{a|b|r}BUILD (r > b > a, see compareVersions in interface.js);
 # unlike apps/windows/Cargo.toml, CFBundleShortVersionString isn't SemVer-locked
 # so this can hold the display version directly.
-APP_VERSION="0.2b12"
+APP_VERSION="0.2b13"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 

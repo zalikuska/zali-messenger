@@ -42,7 +42,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b12";
+const APP_DISPLAY_VERSION: &str = "0.2b13";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
