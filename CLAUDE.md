@@ -257,6 +257,23 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 - `flushPendingOutbox` drops messages after 50 failed attempts (`MAX_OUTBOX_ATTEMPTS`)
 - `renderMessageText` link hrefs unescape `&amp;` → `&` before passing to `this.esc()`
 - Vault envelopes require `v === 1` and `iterations >= 100000` before decryption
+- **Стикеры `.tgs` живут целиком в вебе.** `.tgs` — это gzip'нутый Lottie JSON, поэтому поддержка
+  сводится к двум файлам: `web/src/vendor/lottie_light.min.js` (вендоренный lottie-web 5.12.2,
+  сборка «light»: SVG-рендерер без expressions, MIT) и `web/src/modules/tgs.js` (`window.ZaliTgs`:
+  gunzip + разбор + жизненный цикл анимаций). Нативным слоям **менять ничего не надо**: и
+  macOS (`WebView.swift`, `SEND_MESSAGE`), и Windows (`native.rs`) кладут в архив `name`/`mimeType`/
+  `kind` ровно такими, какими их отдал JS, а обратно возвращают вложение `data:`-URL'ом — тип
+  файла их не интересует. Достаточно `bundle_web.py`.
+  - Распознавание опирается на **имя файла**, а не только на mime: `.tgs` не имеет
+    зарегистрированного типа, у ОС на него нет маппинга (`file.type` приходит пустым), а старые
+    сборки и чужие клиенты присылают его как `application/gzip`/`application/octet-stream` с
+    `kind: 'file'`. Поэтому `normalizeAttachment` **перебивает** входящий `kind` на `sticker`.
+  - `ZaliTgs.gunzip` сначала пробует `DecompressionStream('gzip')`, и только при его отсутствии —
+    свой inflate на JS. Фолбэк не декоративный: в WKWebView `DecompressionStream` появился лишь в
+    Safari 16.4. Он проверен побайтовой сверкой с zlib (все типы deflate-блоков, уровни 0–9).
+  - Анимацию нельзя просто оставить в DOM: перерисовка списка сообщений заменяет узлы целиком, а
+    осиротевший плеер продолжает крутить свой rAF. `ZaliTgs.hydrate()` вызывается из
+    `hydrateGifMedia()` и на каждом заходе убивает анимации, чьи узлы уже вне документа.
 
 ### Голосовые звонки (WebRTC full mesh) — инварианты
 

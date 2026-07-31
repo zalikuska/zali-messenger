@@ -38,6 +38,48 @@ class ZaliCore {
         keys.append(trimmed)
     }
 
+    /// The conversation scope a message belongs to, or nil when it can't be derived.
+    /// Mirrors the branch order in `candidateMessageKeys` exactly — a server-scoped
+    /// message is never treated as a DM.
+    static func conversationScope(
+        participantA: String?,
+        participantB: String?,
+        serverId: String? = nil,
+        channelId: String? = nil
+    ) -> String? {
+        if let serverId, !serverId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let channelId else { return nil }
+            return serverConversationScope(serverId, channelId)
+        }
+        guard let participantA, let participantB else { return nil }
+        return dmConversationScope(participantA, participantB)
+    }
+
+    /// Whether the conversation key for this message's own scope is already known.
+    ///
+    /// Distinguishes "the key hasn't reached this device yet" from "we had the key and
+    /// it didn't work". Without it, a client that opens history *before* key sync has
+    /// converged (a freshly logged-in device — the key arrives moments later over
+    /// `/api/key-envelopes`) falls back to `currentKey`, fails to decrypt, and paints
+    /// every message with the permanent-sounding "зашифровано другим ключом", which
+    /// then silently repairs itself. The state was transient; only the wording wasn't.
+    static func hasConversationScopeKey(
+        conversationKeys: [String: String],
+        participantA: String?,
+        participantB: String?,
+        serverId: String? = nil,
+        channelId: String? = nil
+    ) -> Bool {
+        guard let scope = conversationScope(
+            participantA: participantA,
+            participantB: participantB,
+            serverId: serverId,
+            channelId: channelId
+        ) else { return false }
+        let key = conversationKeys[scope]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !(key ?? "").isEmpty
+    }
+
     static func candidateMessageKeys(
         currentKey: String,
         conversationKeys: [String: String] = [:],

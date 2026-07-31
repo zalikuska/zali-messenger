@@ -62,6 +62,8 @@ mod coins;
 pub(crate) use coins::*;
 mod updates;
 pub(crate) use updates::*;
+mod diagnostics;
+pub(crate) use diagnostics::*;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -931,6 +933,33 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .ok();
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS decrypt_failure_reports (
+            id TEXT PRIMARY KEY,
+            reported_by TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы decrypt_failure_reports");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_decrypt_failure_reports_reported_by
+         ON decrypt_failure_reports (reported_by)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_decrypt_failure_reports_created_at
+         ON decrypt_failure_reports (created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS app_releases (
             platform TEXT PRIMARY KEY,
             version TEXT NOT NULL,
@@ -1181,6 +1210,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/push/vapid-public-key", get(get_vapid_public_key))
         .route("/api/push/subscribe", post(subscribe_push))
         .route("/api/push/unsubscribe", post(unsubscribe_push))
+        .route(
+            "/api/diagnostics/decrypt-failure",
+            post(report_decrypt_failure),
+        )
         .route("/api/coins/balance", get(get_coin_balance))
         .route("/api/coins/distribution", get(get_coin_distribution))
         .route("/api/coins/transfer", post(transfer_coins))

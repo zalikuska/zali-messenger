@@ -71,6 +71,42 @@ object ZaliCoreBridge {
         keys.add(trimmed)
     }
 
+    /**
+     * The conversation scope a message belongs to, or null when it can't be derived.
+     * Mirrors the branch order in [candidateMessageKeys] — a server-scoped message is
+     * never treated as a DM. Ported from the macOS shell's ZaliCore.
+     */
+    fun conversationScope(
+        participantA: String?,
+        participantB: String?,
+        serverId: String? = null,
+        channelId: String? = null,
+    ): String? {
+        if (!serverId.isNullOrBlank()) {
+            if (channelId == null) return null
+            return serverConversationScope(serverId, channelId)
+        }
+        if (participantA == null || participantB == null) return null
+        return dmConversationScope(participantA, participantB)
+    }
+
+    /**
+     * Whether the conversation key for this message's own scope is already known.
+     * Distinguishes "the key hasn't reached this device yet" (transient — it repairs
+     * itself once key sync converges) from "we had the key and it didn't work".
+     */
+    fun hasConversationScopeKey(
+        conversationKeys: Map<String, String>,
+        participantA: String?,
+        participantB: String?,
+        serverId: String? = null,
+        channelId: String? = null,
+    ): Boolean {
+        val scope = conversationScope(participantA, participantB, serverId, channelId)
+            ?: return false
+        return !conversationKeys[scope].isNullOrBlank()
+    }
+
     fun candidateMessageKeys(
         currentKey: String,
         conversationKeys: Map<String, String> = emptyMap(),

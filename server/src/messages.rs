@@ -1389,6 +1389,89 @@ pub(crate) async fn deliver_server_message(state: &Arc<AppState>, msg: &Message)
             );
         }
     }
+
+    // Web Push for members whose tab/PWA is closed. Fanned out on a background task:
+    // this runs inside the /api/upload request, and awaiting one push-service HTTP
+    // round-trip per offline member would put all of that latency on the sender's send.
+    let state = Arc::clone(state);
+    let server = server.clone();
+    let channel_id = channel_id.to_string();
+    let sender = msg.sender.clone();
+    let message_id = msg.id.clone();
+    tokio::spawn(async move {
+        let targets =
+            match resolve_channel_push_targets(&state, &server, &channel_id, &sender).await {
+                Ok(list) => list,
+                Err(e) => {
+                    error!(
+                        "Ошибка расчёта получателей push для сообщения {} в {}/{}: {}",
+                        message_id, server.id, channel_id, e
+                    );
+                    return;
+                }
+            };
+        if targets.is_empty() {
+            return;
+        }
+        info!(
+            "PUSH deliver_server_message message_id={} channel={} offline_targets={}",
+            message_id,
+            channel_id,
+            targets.len()
+        );
+        for target in targets {
+            send_web_push(
+                &state,
+                &target,
+                "ZaliMessenger",
+                &format!("Новое сообщение в канале от {}", sender),
+            )
+            .await;
+        }
+    });
+}
+
+/// Members of `server` who should get a Web Push for a new message in `channel_id`:
+/// everyone with view access to the channel, minus the sender, minus anyone who still
+/// holds a live WebSocket (they already got the message over it).
+///
+/// Membership comes from the DB rather than `user_connections` on purpose — that is the
+/// whole point. `deliver_server_message`'s WS loop can only ever reach users who are
+/// already connected, so before this existed a channel message was completely invisible
+/// to anyone currently offline, while a DM got a push from `deliver_to_user`.
+///
+/// Non-members are deliberately excluded even on a public server. The WS path lets them
+/// read along (`resolve_server_message_viewers` admits non-members when `is_public != 0`),
+/// but pushing to every account that ever registered is spam, not a notification.
+pub(crate) async fn resolve_channel_push_targets(
+    state: &Arc<AppState>,
+    server: &ServerRecord,
+    channel_id: &str,
+    sender: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let members: Vec<String> =
+        sqlx::query_scalar::<_, String>("SELECT username FROM server_members WHERE server_id = ?")
+            .bind(&server.id)
+            .fetch_all(&state.db)
+            .await?;
+
+    let offline_members: Vec<String> = members
+        .into_iter()
+        .filter(|member| member != sender)
+        .filter(|member| {
+            state
+                .user_connections
+                .get(member)
+                .map(|conns| conns.len())
+                .unwrap_or(0)
+                == 0
+        })
+        .collect();
+    if offline_members.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    resolve_server_message_viewers(state, server, channel_id, &offline_members).await
 }
 
 pub(crate) async fn can_access_message(
@@ -1607,5 +1690,149 @@ pub(crate) async fn delete_message(
             warn!("DELETE_MESSAGE not found id={} err={}", id, e);
             StatusCode::NOT_FOUND.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{build_app_state, Config};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    async fn test_state() -> Arc<AppState> {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "zali-push-targets-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        build_app_state(dir, Config::from_env()).await
+    }
+
+    /// Builds a private server owned by `owner` with one text channel and the given
+    /// members, and returns the record `resolve_channel_push_targets` expects.
+    async fn seed_server(
+        state: &Arc<AppState>,
+        owner: &str,
+        members: &[(&str, &str)],
+    ) -> (ServerRecord, String) {
+        let server_id = format!("srv-{}", uuid::Uuid::new_v4());
+        let channel_id = format!("{}-general", server_id);
+        sqlx::query(
+            "INSERT INTO servers (id, name, description, icon, color, join_link, owner, is_public)
+             VALUES (?, 'PushTest', '', 'P', '#cbff00', '', ?, 0)",
+        )
+        .bind(&server_id)
+        .bind(owner)
+        .execute(&state.db)
+        .await
+        .expect("insert server");
+
+        sqlx::query(
+            "INSERT INTO channels (id, server_id, name, topic, kind, position)
+             VALUES (?, ?, 'general', '', 'text', 0)",
+        )
+        .bind(&channel_id)
+        .bind(&server_id)
+        .execute(&state.db)
+        .await
+        .expect("insert channel");
+
+        for (username, role) in members {
+            sqlx::query(
+                "INSERT INTO server_members (server_id, username, role) VALUES (?, ?, ?)",
+            )
+            .bind(&server_id)
+            .bind(username)
+            .bind(role)
+            .execute(&state.db)
+            .await
+            .expect("insert member");
+        }
+
+        let server = sqlx::query_as::<_, ServerRecord>(
+            "SELECT id, name, description, icon, color, join_link, owner, is_public, created_at
+             FROM servers WHERE id = ?",
+        )
+        .bind(&server_id)
+        .fetch_one(&state.db)
+        .await
+        .expect("load server");
+
+        (server, channel_id)
+    }
+
+    #[tokio::test]
+    async fn channel_push_targets_exclude_the_sender_and_include_other_offline_members() {
+        let state = test_state().await;
+        let (server, channel_id) = seed_server(
+            &state,
+            "owner",
+            &[("owner", "owner"), ("alice", "member"), ("bob", "member")],
+        )
+        .await;
+
+        let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
+            .await
+            .expect("resolve targets");
+
+        assert!(
+            !targets.contains(&"alice".to_string()),
+            "the sender must never be pushed their own message, got {:?}",
+            targets
+        );
+        assert!(targets.contains(&"bob".to_string()), "got {:?}", targets);
+        assert!(targets.contains(&"owner".to_string()), "got {:?}", targets);
+    }
+
+    #[tokio::test]
+    async fn channel_push_targets_skip_members_that_still_hold_a_live_connection() {
+        let state = test_state().await;
+        let (server, channel_id) = seed_server(
+            &state,
+            "owner",
+            &[("owner", "owner"), ("alice", "member"), ("bob", "member")],
+        )
+        .await;
+
+        // bob is online: he already got the message over the WebSocket, so pushing
+        // would be a duplicate notification.
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        state
+            .user_connections
+            .entry("bob".to_string())
+            .or_default()
+            .push(tx);
+
+        let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
+            .await
+            .expect("resolve targets");
+
+        assert!(
+            !targets.contains(&"bob".to_string()),
+            "a member with a live WS must not be pushed, got {:?}",
+            targets
+        );
+        assert!(targets.contains(&"owner".to_string()), "got {:?}", targets);
+    }
+
+    #[tokio::test]
+    async fn channel_push_targets_never_include_non_members() {
+        let state = test_state().await;
+        let (server, channel_id) =
+            seed_server(&state, "owner", &[("owner", "owner"), ("alice", "member")]).await;
+
+        let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
+            .await
+            .expect("resolve targets");
+
+        assert!(
+            !targets.contains(&"stranger".to_string()),
+            "only members of the server may be pushed, got {:?}",
+            targets
+        );
+        assert_eq!(targets, vec!["owner".to_string()]);
     }
 }

@@ -1309,7 +1309,18 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
                         val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
                         if (payload == null) {
-                            completion(placeholder("🔒 Сообщение зашифровано другим ключом"))
+                            // Before key sync converges on a freshly logged-in device the
+                            // only candidate is currentE2eKey, so this fails for every
+                            // message. "Encrypted with another key" is a permanent-sounding
+                            // verdict on a state that repairs itself once the envelope lands.
+                            val hasScopeKey = ZaliCoreBridge.hasConversationScopeKey(
+                                conversationKeys = conversationKeys,
+                                participantA = sender, participantB = receiver,
+                            )
+                            completion(placeholder(
+                                if (hasScopeKey) "🔒 Сообщение зашифровано другим ключом"
+                                else "🔑 Получение ключа…"
+                            ))
                             return
                         }
 
