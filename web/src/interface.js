@@ -1744,7 +1744,11 @@ class ZaliInterface {
             const draft = input ? input.value : '';
             try {
                 if (input) {
-                    input.value = `💰 Перевёл(а) ${amount} ZaliCoin`;
+                    // Named explicitly: this renders as a centered system pill
+                    // (detectSystemNotice), not a left/right bubble, so there's no
+                    // avatar or sender-side layout to imply who sent it — without
+                    // the name in the text itself it read as anonymous.
+                    input.value = `💰 ${this.myName()} перевёл(а) ${amount} ZaliCoin`;
                     this.updateSendButtonState?.();
                     await this.sendInputMessage();
                 }
@@ -14657,7 +14661,11 @@ class ZaliInterface {
     detectSystemNotice(text) {
         const value = String(text || '').trim();
         if (!value) return null;
-        if (/^💰\s*Перевёл\(а\)\s+\d+(?:[.,]\d+)?\s+ZaliCoin$/.test(value)) return 'transfer';
+        // Accepts both the current "💰 <name> перевёл(а) N ZaliCoin" wording and the
+        // older nameless one (submitCoinTransfer used to omit the sender), so a
+        // transfer notice sent before that changed still renders as a pill instead
+        // of reverting to a plain bubble.
+        if (/^💰\s*(?:\S+\s+)?[Пп]еревёл\(а\)\s+\d+(?:[.,]\d+)?\s+ZaliCoin$/.test(value)) return 'transfer';
         if (
             /^🔒\s*Сообщение зашифровано другим ключом$/.test(value) ||
             /^🔑\s*Получение ключа…?$/.test(value) ||
