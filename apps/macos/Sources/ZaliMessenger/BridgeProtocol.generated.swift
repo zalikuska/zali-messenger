@@ -4,6 +4,7 @@ enum BridgeProtocolMessageType: String, CaseIterable {
     case addContactRequest = "ADD_CONTACT_REQUEST"
     case apiRequest = "API_REQUEST"
     case authRequest = "AUTH_REQUEST"
+    case clearLocalData = "CLEAR_LOCAL_DATA"
     case closeWindow = "CLOSE_WINDOW"
     case deleteAvatarRequest = "DELETE_AVATAR_REQUEST"
     case downloadAttachment = "DOWNLOAD_ATTACHMENT"

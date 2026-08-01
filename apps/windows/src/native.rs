@@ -42,7 +42,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b13";
+const APP_DISPLAY_VERSION: &str = "0.2b17";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -485,6 +485,47 @@ impl NativeState {
         state
     }
 
+    /// Mirror of the macOS client's NetworkService.clearAllLocalData +
+    /// removeSharedDeviceIdentities, driven by the same CLEAR_LOCAL_DATA bridge
+    /// message: drops session, crypto keys, conversation keys, pending outbox and
+    /// message cache for EVERY account stored here, the keyring copies of the secrets
+    /// (which are read back at startup and would otherwise resurrect a dead session),
+    /// and the shared_device_identity_*.json exports. Server URLs and custom CSS are
+    /// deliberately kept — they are not tied to the wiped database.
+    pub(crate) fn clear_all_local_data(&mut self) {
+        self.current_username = String::new();
+        self.current_device_id = String::new();
+        self.auth_token = None;
+        self.current_key = String::new();
+        self.conversation_keys = HashMap::new();
+        self.pending_outbox = Vec::new();
+        self.message_cache_json = r#"{"chats":{},"serverChats":{}}"#.to_string();
+        self.pending_outbox_by_user = HashMap::new();
+        self.message_cache_by_user = HashMap::new();
+        self.crypto_keys_by_user = HashMap::new();
+        self.conversation_keys_by_user = HashMap::new();
+        self.injected_device_identity = None;
+
+        // Passing None deletes the entry; the cached "already stored" values must go
+        // too, or store_secret_if_changed would treat a later write as a no-op.
+        let _ = store_secret_in_keyring("crypto_key_v2", None);
+        let _ = store_secret_in_keyring("session_token", None);
+        self.last_stored_crypto_key = None;
+        self.last_stored_session_token = None;
+
+        let root = Self::app_data_dir();
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("shared_device_identity_") && name.ends_with(".json") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+        self.persist_config();
+        trace("clear_all_local_data done");
+    }
+
     pub(crate) fn app_data_dir() -> PathBuf {
         #[cfg(target_os = "windows")]
         {
@@ -909,6 +950,12 @@ pub fn handle_ipc_message(
     };
 
     match kind {
+        BridgeProtocolMessageType::ClearLocalData => {
+            trace("IPC CLEAR_LOCAL_DATA");
+            if let Ok(mut guard) = state.lock() {
+                guard.clear_all_local_data();
+            }
+        }
         BridgeProtocolMessageType::SaveStyle => {
             if let Some(css) = payload.get("css").and_then(Value::as_str) {
                 if let Ok(mut guard) = state.lock() {

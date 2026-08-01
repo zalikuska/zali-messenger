@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>voice-doctor engine probe</title>
+<body>
+<pre id="out">running…</pre>
+<script>
+// Engine-level facts the Node harness cannot know, because they are properties of
+// the browser the client actually runs in. Everything here has bitten this project.
+const t0 = Date.now();
+const findings = [];
+function say(o) {
+  o.t = Date.now() - t0;
+  findings.push(o);
+  document.getElementById('out').textContent += '\n' + JSON.stringify(o);
+  try { window.webkit.messageHandlers.probe.postMessage(JSON.stringify(o)); } catch (e) {}
+  try { console.log('PROBE ' + JSON.stringify(o)); } catch (e) {}
+}
+
+// A hung engine call is a FINDING, not a reason to lose the rest of the report —
+// so every check runs under its own deadline and reports HUNG instead of stalling.
+async function runCheck(name, fn, ms = 8000) {
+  const outcome = await Promise.race([
+    (async () => { try { await fn(); return 'ok'; } catch (e) { return 'threw:' + String(e && e.message || e); } })(),
+    new Promise(r => setTimeout(() => r('HUNG'), ms)),
+  ]);
+  if (outcome !== 'ok') say({ check: name, outcome, verdict: outcome === 'HUNG' ? 'engine call never returned' : 'threw' });
+}
+
+const withTimeout = (p, ms, label) => Promise.race([
+  Promise.resolve(p).then(() => 'settled').catch(e => 'rejected:' + (e && e.name || e)),
+  new Promise(r => setTimeout(() => r('NEVER-SETTLED:' + label), ms)),
+]);
+
+// Each check gets its own PAGE LOAD (?only=N). A stalled AudioContext in WKWebView
+// does not merely leave a pending promise — the next `new AudioContext()` blocks the
+// JS thread outright, so timers stop firing and every later check would be lost.
+// One check per load keeps a hang attributable and the rest of the report intact.
+const only = Number(new URLSearchParams(location.search).get('only') || 0);
+const want = (n) => only === 0 || only === n;
+
+(async () => {
+  say({ check: 'env', only, ua: navigator.userAgent.slice(0, 90),
+        rtc: typeof RTCPeerConnection === 'function',
+        audio: !!(window.AudioContext || window.webkitAudioContext),
+        gum: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+        secureContext: window.isSecureContext });
+
+  const AC = window.AudioContext || window.webkitAudioContext;
+
+  // 1. Does a refused resume() settle? WebKit's answer is "no", and any `await` of
+  //    it on the call-setup path freezes the whole call.
+  if (want(1)) await runCheck('audiocontext-resume', async () => {
+    const ctx = new AC();
+    const outcome = await withTimeout(ctx.resume(), 2000, 'resume');
+    say({ check: 'audiocontext-resume-settles',
+          outcome, state: ctx.state,
+          verdict: outcome.startsWith('NEVER-SETTLED')
+            ? 'resume() hangs — never await it on the call path'
+            : 'resume() settles' });
+    // Never awaited: close() on a context with a pending resume hangs in WebKit too.
+    try { ctx.close(); } catch (e) {}
+  });
+
+  // 2. Can a muted <audio> element still be the fallback sink? (autoplay policy)
+  if (want(2)) await runCheck('audio-element', async () => {
+    const el = document.createElement('audio');
+    el.autoplay = true; el.muted = false; el.playsInline = true;
+    let played = 'no-source';
+    try {
+      const ctx2 = new AC();
+      const dst = ctx2.createMediaStreamDestination();
+      const osc = ctx2.createOscillator(); osc.connect(dst); osc.start();
+      el.srcObject = dst.stream;
+      document.body.appendChild(el);
+      played = await withTimeout(el.play(), 2000, 'audio.play');
+      say({ check: 'audio-element-playback', played, paused: el.paused,
+            verdict: el.paused ? 'element playback blocked without a gesture' : 'element plays' });
+      try { ctx2.close(); } catch (e) {}
+    } catch (error) {
+      say({ check: 'audio-element-playback', error: String(error && error.name || error) });
+    }
+  });
+
+  // 3. Does getUserMedia need a user gesture here? (Safari/iOS say yes.)
+  if (want(3)) await runCheck('getusermedia', async () => {
+    const outcome = await withTimeout(
+      navigator.mediaDevices?.getUserMedia?.({ audio: true }) ?? Promise.reject(new Error('no gUM')),
+      3000, 'getUserMedia');
+    say({ check: 'getusermedia-without-gesture', outcome,
+          verdict: outcome === 'settled' ? 'granted' : 'blocked/prompting — capture must sit in a click handler' });
+  }, 5000);
+
+  // 4. A remote peer-connection stream through WebAudio: the app's primary
+  //    playback route. If this is silent the fallback element route must exist.
+  if (want(4)) await runCheck('remote-stream', async () => {
+    try {
+      const ctx = new AC();
+      const src = new AC();
+      const osc = src.createOscillator(); const dst = src.createMediaStreamDestination();
+      osc.connect(dst); osc.start();
+      const a = new RTCPeerConnection(); const b = new RTCPeerConnection();
+      a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate);
+      b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
+      dst.stream.getAudioTracks().forEach(t => a.addTrack(t, dst.stream));
+      const remote = await Promise.race([
+        new Promise(res => { b.ontrack = e => res(e.streams[0] || new MediaStream([e.track])); }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('ontrack timeout')), 8000)),
+        (async () => {
+          const o = await a.createOffer(); await a.setLocalDescription(o);
+          await b.setRemoteDescription(o);
+          const ans = await b.createAnswer(); await b.setLocalDescription(ans);
+          await a.setRemoteDescription(ans);
+          return new Promise(() => {});
+        })(),
+      ]);
+      say({ check: 'remote-stream-ontrack', tracks: remote.getAudioTracks().length });
+      const node = ctx.createMediaStreamSource(remote);
+      const an = ctx.createAnalyser(); an.fftSize = 512; node.connect(an);
+      say({ check: 'remote-stream-into-webaudio', constructed: true,
+            contextState: ctx.state,
+            note: ctx.state === 'running' ? 'measurable' : 'context suspended — cannot measure without a gesture' });
+    } catch (error) {
+      say({ check: 'remote-stream-into-webaudio', error: String(error && error.message || error) });
+    }
+  }, 12000);
+
+  say({ check: 'done', count: findings.length });
+})();
+</script>
+</body>

@@ -1,37 +1,196 @@
 {
   "version": 1,
   "messages": {
-    "SEND_MESSAGE": { "fields": ["text", "recipient", "key", "clientId", "attachments"] },
-    "SET_SESSION": { "fields": ["username", "token", "deviceId"] },
-    "REFRESH_HISTORY": { "fields": ["key", "peer"] },
-    "LOAD_SERVER_HISTORY": { "fields": ["serverId", "channelId", "key"] },
-    "SAVE_STYLE": { "fields": ["css"] },
-    "SAVE_MESSAGE_CACHE": { "fields": ["cache"] },
-    "SAVE_PENDING_OUTBOX": { "fields": ["items"] },
-    "DOWNLOAD_ATTACHMENT": { "fields": ["dataUrl", "filename"] },
-    "START_DRAG": { "fields": [] },
-    "MINIMIZE_WINDOW": { "fields": [] },
-    "MAXIMIZE_WINDOW": { "fields": [] },
-    "CLOSE_WINDOW": { "fields": [] },
-    "RESOLVE_TENOR": { "fields": ["url", "requestId"] },
-    "SET_KEY": { "fields": ["key"] },
-    "SET_MESSAGE_REACTION": { "fields": ["messageId", "emoji"] },
-    "NETWORK_CONFIG": { "fields": ["apiBaseUrl", "wsBaseUrl", "iceServers"] },
-    "VOICE_EVENT": { "fields": ["payload"] },
-    "AUTH_REQUEST": { "fields": ["mode", "username", "password", "requestId"] },
-    "API_REQUEST": { "fields": ["method", "path", "headers", "body", "includeDeviceId", "requestId"] },
-    "ADD_CONTACT_REQUEST": { "fields": ["username", "requestId"] },
-    "REMOVE_CONTACT_REQUEST": { "fields": ["username", "requestId"] },
-    "UPLOAD_AVATAR_REQUEST": { "fields": ["dataUrl", "mimeType", "filename", "requestId"] },
-    "DELETE_AVATAR_REQUEST": { "fields": ["requestId"] },
-    "LOAD_AVATAR_REQUEST": { "fields": ["username", "requestId"] },
-    "SHOW_NOTIFICATION": { "fields": ["sender", "text", "attachmentCount", "serverId", "channelId"] },
-    "PERSIST_DEVICE_IDENTITY": { "fields": ["username", "identity"] },
-    "DOWNLOAD_UPDATE_REQUEST": { "fields": ["url", "sha256", "requestId"] },
-    "INSTALL_UPDATE_REQUEST": { "fields": ["requestId"] },
-    "SET_UNREAD_BADGE": { "fields": ["count"] },
-    "MOBILE_NAV_PROGRESS": { "fields": ["progress", "animate"] },
-    "START_SCREEN_CAPTURE": { "fields": ["requestId"] },
-    "STOP_SCREEN_CAPTURE": { "fields": ["requestId"] }
+    "SEND_MESSAGE": {
+      "fields": [
+        "text",
+        "recipient",
+        "key",
+        "clientId",
+        "attachments"
+      ]
+    },
+    "SET_SESSION": {
+      "fields": [
+        "username",
+        "token",
+        "deviceId"
+      ]
+    },
+    "REFRESH_HISTORY": {
+      "fields": [
+        "key",
+        "peer"
+      ]
+    },
+    "LOAD_SERVER_HISTORY": {
+      "fields": [
+        "serverId",
+        "channelId",
+        "key"
+      ]
+    },
+    "SAVE_STYLE": {
+      "fields": [
+        "css"
+      ]
+    },
+    "SAVE_MESSAGE_CACHE": {
+      "fields": [
+        "cache"
+      ]
+    },
+    "SAVE_PENDING_OUTBOX": {
+      "fields": [
+        "items"
+      ]
+    },
+    "DOWNLOAD_ATTACHMENT": {
+      "fields": [
+        "dataUrl",
+        "filename"
+      ]
+    },
+    "START_DRAG": {
+      "fields": []
+    },
+    "MINIMIZE_WINDOW": {
+      "fields": []
+    },
+    "MAXIMIZE_WINDOW": {
+      "fields": []
+    },
+    "CLOSE_WINDOW": {
+      "fields": []
+    },
+    "RESOLVE_TENOR": {
+      "fields": [
+        "url",
+        "requestId"
+      ]
+    },
+    "SET_KEY": {
+      "fields": [
+        "key"
+      ]
+    },
+    "SET_MESSAGE_REACTION": {
+      "fields": [
+        "messageId",
+        "emoji"
+      ]
+    },
+    "NETWORK_CONFIG": {
+      "fields": [
+        "apiBaseUrl",
+        "wsBaseUrl",
+        "iceServers"
+      ]
+    },
+    "VOICE_EVENT": {
+      "fields": [
+        "payload"
+      ]
+    },
+    "AUTH_REQUEST": {
+      "fields": [
+        "mode",
+        "username",
+        "password",
+        "requestId"
+      ]
+    },
+    "API_REQUEST": {
+      "fields": [
+        "method",
+        "path",
+        "headers",
+        "body",
+        "includeDeviceId",
+        "requestId"
+      ]
+    },
+    "ADD_CONTACT_REQUEST": {
+      "fields": [
+        "username",
+        "requestId"
+      ]
+    },
+    "REMOVE_CONTACT_REQUEST": {
+      "fields": [
+        "username",
+        "requestId"
+      ]
+    },
+    "UPLOAD_AVATAR_REQUEST": {
+      "fields": [
+        "dataUrl",
+        "mimeType",
+        "filename",
+        "requestId"
+      ]
+    },
+    "DELETE_AVATAR_REQUEST": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "LOAD_AVATAR_REQUEST": {
+      "fields": [
+        "username",
+        "requestId"
+      ]
+    },
+    "SHOW_NOTIFICATION": {
+      "fields": [
+        "sender",
+        "text",
+        "attachmentCount",
+        "serverId",
+        "channelId"
+      ]
+    },
+    "PERSIST_DEVICE_IDENTITY": {
+      "fields": [
+        "username",
+        "identity"
+      ]
+    },
+    "DOWNLOAD_UPDATE_REQUEST": {
+      "fields": [
+        "url",
+        "sha256",
+        "requestId"
+      ]
+    },
+    "INSTALL_UPDATE_REQUEST": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "SET_UNREAD_BADGE": {
+      "fields": [
+        "count"
+      ]
+    },
+    "MOBILE_NAV_PROGRESS": {
+      "fields": [
+        "progress",
+        "animate"
+      ]
+    },
+    "START_SCREEN_CAPTURE": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "STOP_SCREEN_CAPTURE": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "CLEAR_LOCAL_DATA": {
+      "fields": []
+    }
   }
 }

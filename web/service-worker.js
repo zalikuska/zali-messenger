@@ -2,7 +2,7 @@
 // directory's own static files (HTML/CSS/JS/wasm) so the app shell loads offline;
 // everything under /api and /ws always goes straight to the network — this is a
 // live messenger, not a static site, and stale cached API responses would be wrong.
-const CACHE_NAME = 'zali-shell-v2';
+const CACHE_NAME = 'zali-shell-v3';
 const SHELL_FILES = [
     './',
     './index.html',
@@ -68,18 +68,23 @@ self.addEventListener('fetch', (event) => {
     if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/uploads')) return;
     if (event.request.method !== 'GET') return;
 
+    // Network-first, cache only as an offline fallback. This used to be
+    // `return cached || network`: the cached copy was served immediately and the
+    // network copy only refreshed the cache, so every browser/PWA user ran the
+    // PREVIOUS deploy's app.js until they reloaded a second time — client fixes
+    // (voice among them) silently didn't reach the web client the day they shipped,
+    // while the native shells, which embed the bundle at build time, did get them.
+    // The shell is a handful of files off the same origin; paying one conditional
+    // request for it is cheaper than debugging a version skew nobody can see.
     event.respondWith(
-        caches.match(event.request).then((cached) => {
-            const network = fetch(event.request)
-                .then((response) => {
-                    if (response.ok) {
-                        const clone = response.clone();
-                        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-                    }
-                    return response;
-                })
-                .catch(() => cached);
-            return cached || network;
-        })
+        fetch(event.request)
+            .then((response) => {
+                if (response.ok) {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                }
+                return response;
+            })
+            .catch(() => caches.match(event.request).then((cached) => cached || Promise.reject(new Error('offline'))))
     );
 });

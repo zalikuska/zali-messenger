@@ -1737,8 +1737,19 @@ body[data-nav-mode="servers"] .contacts {
        scrolling internally keeps the header and message list intact and makes
        the rest of the call UI reachable instead of unreachable. */
     min-height: 0;
-    max-height: 60vh;
+    /* Normal (embedded) call: at most half the screen, so there's always room
+       left below it for the actual chat/message list — not the whole viewport. */
+    max-height: 50vh;
     overflow-y: auto;
+}
+
+/* Screen share in progress: the stage genuinely needs more room than a half-
+   screen card can give it, so it's allowed to grow up to (almost) one full
+   screen instead — never more, and still scrollable if even that isn't
+   enough (many participants + an active share). Applied by renderVoicePanel()
+   via voice.screenSharing / a nonempty voice.remoteScreens. */
+.voice-panel.has-stage {
+    max-height: 94vh;
 }
 
 .voice-room-card {
@@ -1778,6 +1789,17 @@ body[data-nav-mode="servers"] .contacts {
     margin-top: 4px;
     color: var(--text2);
     font-size: 12px;
+}
+
+.voice-room-alert {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 138, 128, .45);
+    background: rgba(255, 138, 128, .10);
+    color: #ffb4ab;
+    font-size: 12px;
+    line-height: 1.4;
 }
 
 .voice-room-state {
@@ -2234,6 +2256,19 @@ body[data-nav-mode="servers"] .contacts {
 .voice-empty {
     color: var(--text3);
     font-size: 12px;
+}
+
+/* Sits alone in the (otherwise message-list) box for a voice channel, which
+   has no text chat of its own — centered in the available space instead of
+   the default top-left fragment .voice-empty reads fine as inline text. */
+.voice-channel-no-chat {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 120px;
+    text-align: center;
+    padding: 24px;
 }
 
 #viewChat .chat-hdr,
@@ -6504,10 +6539,14 @@ body[data-nav-mode="servers"] .contacts {
 
     #viewChat .voice-panel {
         padding: 0 14px 0;
-        /* Tighter than the 60vh desktop cap — a phone's viewport is already
+        /* Tighter than the 50vh desktop cap — a phone's viewport is already
            shared with the header and the message composer below, so the same
            fraction would leave barely any room for either. */
-        max-height: 48vh;
+        max-height: 44vh;
+    }
+
+    #viewChat .voice-panel.has-stage {
+        max-height: 90vh;
     }
 
     #viewChat .msgs {

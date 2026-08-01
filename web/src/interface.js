@@ -195,6 +195,11 @@ const DefaultApiRoutes = Object.freeze({
 class ZaliInterface {
     constructor() {
         this.name = 'zali_interface';
+        // Must run before ANY stored state is read below (message cache, conversation
+        // keys, session, device identity) — the server database was reset at this
+        // instant, so everything written before it refers to accounts, message ids and
+        // key envelopes that no longer exist.
+        this.localResetApplied = this.applyLocalDataResetIfNeeded();
 
         const stateSlices = window.ZaliStateSlices || {};
         /** @type {ZaliInterfaceState} */
@@ -264,6 +269,7 @@ class ZaliInterface {
             muted: false,
             localStream: null,
             localStreamInFlight: null,
+            micError: '',
             peerConnections: new Map(),
             remoteAudios: new Map(),
             participants: [],
@@ -2371,6 +2377,80 @@ class ZaliInterface {
         return `zali_muted_chats_v1${this._userSuffix()}`;
     }
 
+    // Server-side reset boundary: the production database, uploads and assets were
+    // wiped at this moment, so every locally cached account, message, attachment
+    // reference and E2E key from before it is dangling. Bumping this string performs
+    // exactly one purge per client; clients that already purged carry the same value
+    // in `zali_local_reset_v1` and skip it forever after.
+    localResetEpoch() {
+        return '2026-07-31T19:00:00Z';
+    }
+
+    localResetMarkerKey() {
+        return 'zali_local_reset_v1';
+    }
+
+    // Wipes every local trace of the pre-reset world: localStorage/sessionStorage,
+    // the values the native shells inject at document-start (they come from native
+    // storage, not from localStorage, so clearing localStorage alone would leave the
+    // old crypto key and message cache live for this session), and the native copies
+    // themselves via CLEAR_LOCAL_DATA. Network settings survive on purpose — a client
+    // pointed at a non-default server must not silently jump back to the default.
+    applyLocalDataResetIfNeeded() {
+        const epoch = this.localResetEpoch();
+        const marker = this.localResetMarkerKey();
+        let stored = null;
+        try {
+            stored = localStorage.getItem(marker);
+        } catch (e) {
+            return false;
+        }
+        if (stored === epoch) return false;
+
+        const preserved = new Map();
+        const keepKeys = ['zali_network_config_v1'];
+        for (const key of keepKeys) {
+            try {
+                const value = localStorage.getItem(key);
+                if (value !== null) preserved.set(key, value);
+            } catch (e) {}
+        }
+        for (const store of [localStorage, sessionStorage]) {
+            try {
+                const doomed = [];
+                for (let i = 0; i < store.length; i += 1) {
+                    const key = store.key(i);
+                    if (key && key.startsWith('zali_')) doomed.push(key);
+                }
+                doomed.forEach(key => { try { store.removeItem(key); } catch (e) {} });
+            } catch (e) {}
+        }
+        for (const [key, value] of preserved) {
+            try { localStorage.setItem(key, value); } catch (e) {}
+        }
+        try { localStorage.setItem(marker, epoch); } catch (e) {}
+
+        // Injected at document-start from native storage — already in memory by now.
+        try { window.__ZALI_SAVED_KEY = ''; } catch (e) {}
+        try { window.__ZALI_MESSAGE_CACHE = { chats: {}, serverChats: {} }; } catch (e) {}
+        try { window.__ZALI_CONVERSATION_KEYS = {}; } catch (e) {}
+        try { window.__ZALI_PENDING_OUTBOX = []; } catch (e) {}
+        try { window.__ZALI_INJECTED_DEVICE_IDENTITY = null; } catch (e) {}
+        try { window.__ZALI_SAVED_SESSION = null; } catch (e) {}
+        try { window.__ZALI_ACTIVE_CONVERSATION_SCOPE = null; } catch (e) {}
+
+        try {
+            if (window.__ZALI_NATIVE?.available) {
+                this.postNativeMessage({ type: NativeMessageTypes.CLEAR_LOCAL_DATA, payload: {} });
+            }
+        } catch (e) {}
+
+        try {
+            console.log('[ZALI] local data reset applied for epoch', epoch);
+        } catch (e) {}
+        return true;
+    }
+
     messageCacheStorageKey() {
         return `zali_message_cache_v1${this._userSuffix()}`;
     }
@@ -2854,6 +2934,29 @@ class ZaliInterface {
         return true;
     }
 
+    // Switches the active (sending) key for a scope while keeping the outgoing one
+    // in the candidate pool.
+    //
+    // Every adoption site used to do this by hand as
+    //     addAltConversationKey(stored, scope, current); stored[scope] = next;
+    // which silently dropped `current` every single time: at that moment
+    // stored[scope] IS current, so addAltConversationKey's "already the active key"
+    // guard returned false without storing anything, and the next line overwrote it.
+    // The device then could not decrypt its own already-sent messages — the exact
+    // «перебрано ключей N (ни один не подошёл)» symptom, produced by the very code
+    // meant to prevent it. Doing the demotion in one place makes the order
+    // impossible to get wrong again.
+    setActiveConversationKey(stored, scope, nextKey) {
+        const scoped = String(scope || '').trim();
+        const next = String(nextKey || '').trim();
+        if (!scoped || !next) return false;
+        const current = String(stored[scoped] || '').trim();
+        if (current === next) return false;
+        stored[scoped] = next;
+        if (current) this.addAltConversationKey(stored, scoped, current);
+        return true;
+    }
+
     // ---------------------------------------------------------------------
     // Canonical conversation-key registry (server-backed, see
     // server/src/conversation_keys.rs).
@@ -3013,8 +3116,7 @@ class ZaliInterface {
             if (active && await this.conversationKeyId(active) === wanted) return active;
             for (const candidate of this.conversationKeyCandidates(stored, scoped)) {
                 if (await this.conversationKeyId(candidate) !== wanted) continue;
-                if (active) this.addAltConversationKey(stored, scoped, active);
-                stored[scoped] = candidate;
+                this.setActiveConversationKey(stored, scoped, candidate);
                 this.saveStoredConversationKeys(stored);
                 this.trace(`promoteCanonicalConversationKey reason=${reason} scope=${scoped} promoted=true`);
                 return candidate;
@@ -4327,20 +4429,28 @@ class ZaliInterface {
         const scope = String(payload?.scope || '').trim();
         const requester = String(payload?.requester || '').trim();
         if (!scope || !this.S.session?.token) return false;
-        const key = this.getStoredConversationKey(scope);
-        if (!key) {
+        // EVERY key we hold for this scope, not just the active one. The requester
+        // is asking because something is unreadable for it, and the active key is
+        // the one it is most likely to already have — the messages it cannot read
+        // are exactly the ones encrypted under a key we have since demoted to an
+        // `alt:` candidate. Sending only the active key answered the request with
+        // the one key that could not possibly help.
+        const candidates = this.conversationKeyCandidates(this.loadStoredConversationKeys(), scope);
+        if (!candidates.length) {
             this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=true`);
             return false;
         }
         const channel = this.channelFromConversationScope(scope);
         if (channel) {
-            await this.publishConversationKeyToServerMembers({
-                serverId: channel.serverId,
-                channelId: channel.channelId,
-                scope,
-                key,
-                reason: 'republish_request',
-            });
+            for (const key of candidates) {
+                await this.publishConversationKeyToServerMembers({
+                    serverId: channel.serverId,
+                    channelId: channel.channelId,
+                    scope,
+                    key,
+                    reason: 'republish_request',
+                });
+            }
             return true;
         }
         const peer = requester || this.peerFromConversationScope(scope);
@@ -4348,22 +4458,45 @@ class ZaliInterface {
         // key. That used to be dropped on the floor here, which is precisely the
         // device that has no other way to obtain it.
         if (peer === this.myName()) {
-            const selfResult = await this.publishConversationKeyToOwnDevices({ scope, key, reason: 'republish_request' });
-            this.trace(`handleKeyRepublishRequest scope=${scope} self=true result=${selfResult}`);
-            return selfResult === true;
+            let selfResult = false;
+            for (const key of candidates) {
+                const one = await this.publishConversationKeyToOwnDevices({ scope, key, reason: 'republish_request' });
+                selfResult = selfResult || one === true;
+            }
+            this.trace(`handleKeyRepublishRequest scope=${scope} self=true keys=${candidates.length} result=${selfResult}`);
+            return selfResult;
         }
         if (!peer) return false;
-        const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: 'republish_request' });
-        this.trace(`handleKeyRepublishRequest scope=${scope} peer=${peer} result=${result}`);
-        return result === true;
+        let result = false;
+        for (const key of candidates) {
+            const one = await this.publishConversationKeyToPeer({ peer, scope, key, reason: 'republish_request' });
+            result = result || one === true;
+        }
+        this.trace(`handleKeyRepublishRequest scope=${scope} peer=${peer} keys=${candidates.length} result=${result}`);
+        return result;
     }
 
     async retryPublishConversationKeys({ reason = 'auto', limit = 200 } = {}) {
         if (!this.S.session?.token) return 0;
         const stored = this.loadStoredConversationKeys();
-        const entries = Object.entries(stored)
-            .filter(([scope, key]) => (String(scope || '').startsWith('dm:') || String(scope || '').startsWith('server:')) && String(key || '').trim())
+        const scopes = Object.keys(stored)
+            .filter(scope => (String(scope || '').startsWith('dm:') || String(scope || '').startsWith('server:'))
+                && String(stored[scope] || '').trim())
             .slice(0, Math.max(1, Number(limit) || 20));
+        // Every candidate for the scope, not just the active key. A device that
+        // sent messages under its own key and then adopted the canonical one keeps
+        // the old key only as an `alt:` entry — and `alt:` entries are not scopes,
+        // so the old sweep skipped them entirely. If the original publish of that
+        // key had failed (a flaky moment is enough), nothing would ever offer it
+        // again and every message sent under it stayed permanently unreadable for
+        // the peer. Republishing candidates costs one extra envelope per stale key
+        // and reaches only participants who are already entitled to the scope.
+        const entries = [];
+        for (const scope of scopes) {
+            for (const key of this.conversationKeyCandidates(stored, scope)) {
+                entries.push([scope, key]);
+            }
+        }
         let published = 0;
         for (const [scope, key] of entries) {
             // Unconditional, and before the peer/channel split: this sweep is the
@@ -4463,16 +4596,14 @@ class ZaliInterface {
                             imported += 1;
                         } else if (current !== payload.key && isCanonical) {
                             this.trace(`syncIncomingKeyEnvelopes adopt canonical key scope=${scope} sender=${payload.sender}`);
-                            this.addAltConversationKey(stored, scope, current);
-                            stored[scope] = payload.key;
+                            this.setActiveConversationKey(stored, scope, payload.key);
                             imported += 1;
                         } else if (current !== payload.key && !wantedKeyId && this.keyEnvelopeOverridesLocal(scope, payload)) {
                             // The canonical owner's key becomes the active (sending) key so
                             // both peers converge. Preserve the previous key as a decryption
                             // candidate so messages already encrypted with it stay readable.
                             this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
-                            this.addAltConversationKey(stored, scope, current);
-                            stored[scope] = payload.key;
+                            this.setActiveConversationKey(stored, scope, payload.key);
                             imported += 1;
                         } else if (current !== payload.key) {
                             // Not the canonical key, but keep it as a decryption candidate:
@@ -8203,9 +8334,24 @@ class ZaliInterface {
             // still yields exactly one offerer; the name tie-break is the last resort.
             const inviter = String(this.voice.inviter || '').trim();
             if (inviter) return inviter === me;
-            return me.localeCompare(other) < 0;
+            return this.compareVoicePeerNames(me, other) < 0;
         }
-        return me.localeCompare(other) < 0;
+        return this.compareVoicePeerNames(me, other) < 0;
+    }
+
+    // The tie-break has to produce the SAME winner on both machines, and the two
+    // machines are usually different engines. localeCompare cannot do that: with full
+    // ICU 'apple' < 'Zebra' (letters first, case as a tiebreak), while an engine
+    // without it falls back to code units, where 'Zebra' < 'apple' ('Z'=90 < 'a'=97).
+    // Two peers disagreeing means both offer and both are impolite — each drops the
+    // other's offer, no answer is ever sent, and the call is connected and silent.
+    // Code-unit order is identical on every engine, which is the only property that
+    // matters here; it is never shown to the user.
+    compareVoicePeerNames(a, b) {
+        const x = String(a || '');
+        const y = String(b || '');
+        if (x === y) return 0;
+        return x < y ? -1 : 1;
     }
 
     // Deterministic per-pair role for resolving offer/offer glare. Polite means
@@ -8236,9 +8382,9 @@ class ZaliInterface {
             if (direction) return direction !== 'outgoing';
             const inviter = String(this.voice.inviter || '').trim();
             if (inviter) return inviter !== me;
-            return me.localeCompare(other) > 0;
+            return this.compareVoicePeerNames(me, other) > 0;
         }
-        return me.localeCompare(other) > 0;
+        return this.compareVoicePeerNames(me, other) > 0;
     }
 
     voiceEventPayload(payload = {}) {
@@ -8553,6 +8699,7 @@ class ZaliInterface {
                 clearInterval(entry.statsTimer);
                 entry.statsTimer = null;
             }
+            this.clearVoiceAnswerWatchdog(entry);
             try { entry.pc?.close(); } catch (e) {}
         }
         this.voice.peerConnections.clear();
@@ -8589,6 +8736,7 @@ class ZaliInterface {
         // A capture still in flight when the session is torn down must not be
         // handed to the *next* call as its local stream.
         this.voice.localStreamInFlight = null;
+        this.voice.micError = '';
         if (this.voice.localScreenStream) {
             for (const track of this.voice.localScreenStream.getTracks()) {
                 try { track.stop(); } catch (e) {}
@@ -8600,6 +8748,7 @@ class ZaliInterface {
         }
         this.voice.audioContext = null;
         this.voice.audioResumePending = false;
+        this.voice.audioResumeNextAttemptAt = 0;
         this.voice.masterGainNode = null;
         this.voice.playbackUnlocked = false;
         this.voice.meterUiRenderedOnce = false;
@@ -8650,11 +8799,36 @@ class ZaliInterface {
         this.voice.localStreamInFlight = pending;
         try {
             return await pending;
+        } catch (error) {
+            // Without local tracks syncVoicePeers never sends an offer, so the call
+            // stays in the room and silent forever. Keep the reason so the panel can
+            // say why instead of leaving the user with a mute "connected" call.
+            this.voice.micError = this.describeMicError(error);
+            this.voiceTrace('local-stream-failed', { error: error?.message || String(error), name: error?.name || '' }, 'ERROR');
+            this.renderVoicePanel();
+            throw error;
         } finally {
             if (this.voice.localStreamInFlight === pending) {
                 this.voice.localStreamInFlight = null;
             }
         }
+    }
+
+    // getUserMedia's DOMException names are the only reliable signal here (messages
+    // differ per browser and are usually empty), and each one needs a different
+    // action from the user, so they must not collapse into one generic string.
+    describeMicError(error) {
+        const name = String(error?.name || '').trim();
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            return 'Доступ к микрофону запрещён. Разрешите его в настройках сайта и переподключитесь к звонку.';
+        }
+        if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+            return 'Микрофон не найден. Подключите устройство ввода и переподключитесь к звонку.';
+        }
+        if (name === 'NotReadableError' || name === 'AbortError') {
+            return 'Микрофон занят другим приложением. Освободите его и переподключитесь к звонку.';
+        }
+        return error?.message ? `Микрофон недоступен: ${error.message}` : 'Микрофон недоступен.';
     }
 
     async captureVoiceLocalStream() {
@@ -8694,6 +8868,7 @@ class ZaliInterface {
             stream = await getAudioOnlyStream();
         }
         this.voice.localStream = stream;
+        this.voice.micError = '';
         this.voice.muted = false;
         this.voiceTrace('local-stream-ready', {
             tracks: stream.getTracks().map(track => `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`),
@@ -9122,6 +9297,18 @@ class ZaliInterface {
         this.voiceTrace('screen-share-failed', { error: message || 'native-capture-cancelled' }, 'WARN');
     }
 
+    // Never awaits a raw ctx.resume(). Callers run this on the critical path of
+    // starting, accepting and joining a call, and in WebKit a refused resume() is a
+    // promise that never settles (see resumeVoiceAudioContext) — so `await ctx.resume()`
+    // here did not merely fail to unlock audio, it stopped call setup dead: no
+    // voice_call_invite, no voice_call_accept, no mic, no offer. What the user sees is
+    // a call that is "in the room" and silent forever, and in acceptIncomingCall the
+    // callSetupInFlight latch is never released either, so every later attempt to
+    // answer is dropped as "busy" until the app is restarted. That is exactly what the
+    // server log shows for the last sessions: voice_join and not a single voice_signal.
+    //
+    // Audio unlocking is best-effort by nature (it only ever succeeds when the browser
+    // feels the call is user-initiated), so it must never be able to block the call.
     async unlockVoicePlayback() {
         if (this.voice.playbackUnlocked) return true;
         try {
@@ -9129,16 +9316,23 @@ class ZaliInterface {
             // inline, so the state-change watcher that re-routes remote audio when the
             // context stalls is always installed.
             const ctx = this.ensureVoiceAudioContext();
+            let resumed = true;
             if (ctx && ctx.state === 'suspended') {
-                await ctx.resume();
+                resumed = await this.resumeVoiceAudioContext(ctx);
             }
+            // 'Unlocked' means "we spent our user-gesture credit here", not "the
+            // context is running" — retrying on every later call would re-enter the
+            // same deadline wait. The meter loop keeps retrying the resume in the
+            // background, and syncRemoteAudioPlaybackMode routes remote audio through
+            // the plain <audio> elements for as long as the graph is not running.
             this.voice.playbackUnlocked = true;
             this.ensureVoiceMeterLoop();
             this.syncRemoteAudioPlaybackMode();
             this.voiceTrace('audio-unlock', {
                 contextState: this.voice.audioContext?.state || 'none',
-            }, 'SUCCESS');
-            return true;
+                resumed,
+            }, resumed ? 'SUCCESS' : 'WARN');
+            return resumed;
         } catch (error) {
             this.voiceTrace('audio-unlock-failed', { error: error?.message || String(error) }, 'WARN');
             return false;
@@ -9163,6 +9357,7 @@ class ZaliInterface {
                 pendingIceCandidates: [],
                 statsTimer: null,
                 healthTimer: null,
+                answerWatchdog: null,
                 audioSender: null,
                 videoSender: null,
                 screenSender: null,
@@ -9185,6 +9380,12 @@ class ZaliInterface {
             entry.pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     entry.generatedIceCandidates = (entry.generatedIceCandidates || 0) + 1;
+                    // Which candidate *types* we managed to gather is the one fact that
+                    // separates "TURN is unreachable/misconfigured" from "TURN is fine
+                    // and the pairing failed" — no relay candidate here means the call
+                    // can only ever work between NAT-friendly peers.
+                    (entry.gatheredCandidateTypes || (entry.gatheredCandidateTypes = new Set()))
+                        .add(this.describeIceCandidate(event.candidate.candidate).type || '?');
                     this.voiceTrace('ice-candidate', {
                         peer: name,
                         index: entry.generatedIceCandidates,
@@ -9198,11 +9399,12 @@ class ZaliInterface {
                     // panel re-render per candidate is wasted work — coalesce them.
                     this.scheduleRenderVoicePanel();
                 } else {
-                    this.voiceTrace('ice-candidate-end', {
+                    this.voiceDiag('ice-candidate-end', {
                         peer: name,
                         count: entry.generatedIceCandidates || 0,
+                        types: entry.gatheredCandidateTypes ? Array.from(entry.gatheredCandidateTypes).join('/') : 'none',
                         state: entry.pc.iceGatheringState,
-                    });
+                    }, entry.gatheredCandidateTypes?.has('relay') ? 'INFO' : 'WARN');
                 }
                 if (!event.candidate || !this.voice.roomId) return;
                 this.sendVoiceEvent({
@@ -9224,7 +9426,9 @@ class ZaliInterface {
                 });
             };
             entry.pc.onicecandidateerror = (event) => {
-                this.voiceTrace('ice-candidate-error', {
+                // 401/403 from the TURN server, an unresolvable host, or a blocked port
+                // all surface only here — and only as a warning nobody sees.
+                this.voiceDiag('ice-candidate-error', {
                     peer: name,
                     errorCode: event?.errorCode || '',
                     errorText: event?.errorText || '',
@@ -9297,7 +9501,15 @@ class ZaliInterface {
             entry.pc.onconnectionstatechange = () => {
                 const state = entry.pc.connectionState;
                 if (entry.lastConnectionState !== state) {
-                    this.voiceTrace('pc-state', { peer: name, from: entry.lastConnectionState || '', to: state, roomId: this.voice.roomId || '' });
+                    this.voiceDiag('pc-state', {
+                        peer: name,
+                        from: entry.lastConnectionState || '',
+                        to: state,
+                        ice: entry.pc.iceConnectionState || '',
+                        gathering: entry.pc.iceGatheringState || '',
+                        localCand: entry.gatheredCandidateTypes ? Array.from(entry.gatheredCandidateTypes).join('/') : '',
+                        remoteCand: entry.receivedIceCandidates || 0,
+                    }, state === 'failed' ? 'ERROR' : 'INFO');
                     entry.lastConnectionState = state;
                 }
                 if (state === 'connected' || state === 'completed') {
@@ -9312,6 +9524,7 @@ class ZaliInterface {
                     if (!entry.statsTimer) {
                         entry.statsTimer = setInterval(() => this.sampleVoicePeerStats(name), 10000);
                     }
+                    void this.reportVoiceSelectedPair(name);
                     this.voice.status = 'connected';
                     if (this.voice.callTrack && !this.voice.callTrack.connectedAt) {
                         this.voice.callTrack.connectedAt = Date.now();
@@ -9495,6 +9708,43 @@ class ZaliInterface {
         }
     }
 
+    // WebKit (WKWebView — the macOS client, and every browser on iOS) does not
+    // reject AudioContext.resume() when it refuses: it returns a promise that is
+    // NEVER settled. Measured directly in a bare WKWebView: `new AudioContext()` →
+    // state 'suspended', `resume()` still pending after 45 s, no rejection, no
+    // state change. Every await of it therefore hangs its caller forever, and every
+    // `.then()` chain that clears a latch leaves the latch stuck.
+    //
+    // resumeVoiceAudioContext returns a promise that ALWAYS settles: the real
+    // resume if it ever lands, `false` once the deadline passes. Nothing on the
+    // call-setup path may await the raw resume().
+    resumeVoiceAudioContext(ctx, timeoutMs = 1500) {
+        if (!ctx || typeof ctx.resume !== 'function') return Promise.resolve(false);
+        let settled = false;
+        return new Promise(resolve => {
+            const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                resolve(value);
+            };
+            const timer = setTimeout(() => {
+                this.voiceTrace('audio-context-resume-timeout', {
+                    state: ctx.state || '',
+                    timeoutMs,
+                }, 'WARN');
+                finish(false);
+            }, timeoutMs);
+            Promise.resolve(ctx.resume()).then(() => {
+                clearTimeout(timer);
+                finish(true);
+            }).catch(error => {
+                clearTimeout(timer);
+                this.voiceTrace('audio-context-resume-failed', { error: error?.message || String(error) }, 'WARN');
+                finish(false);
+            });
+        });
+    }
+
     ensureVoiceAudioContext() {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtx) return null;
@@ -9504,7 +9754,6 @@ class ZaliInterface {
             // are muted so nothing is heard twice), so a context that is 'suspended'
             // — created outside a user gesture, or interrupted by the OS/WebView
             // mid-call — means a call that connects and carries RTP but plays nothing.
-            // Nothing re-checked it after creation before.
             this.voice.audioContext.onstatechange = () => {
                 this.voiceTrace('audio-context-state', { state: this.voice.audioContext?.state || '' });
                 this.syncRemoteAudioPlaybackMode();
@@ -9512,15 +9761,21 @@ class ZaliInterface {
         }
         // Throttled with a pending flag: this helper runs on every meter tick (125 ms),
         // and firing a fresh resume() each time would pile up promises while the
-        // context stays suspended.
-        if (this.voice.audioContext.state === 'suspended' && !this.voice.audioResumePending) {
+        // context stays suspended. The flag is cleared by resumeVoiceAudioContext's
+        // deadline even when WebKit never answers — otherwise one refused resume
+        // latches it forever and no later user gesture is ever able to retry.
+        const now = Date.now();
+        if (this.voice.audioContext.state === 'suspended'
+            && !this.voice.audioResumePending
+            && now >= Number(this.voice.audioResumeNextAttemptAt || 0)) {
             this.voice.audioResumePending = true;
-            Promise.resolve(this.voice.audioContext.resume?.()).then(() => {
+            this.resumeVoiceAudioContext(this.voice.audioContext).then(resumed => {
                 this.voice.audioResumePending = false;
+                // Each refused attempt abandons a promise WebKit will never settle, and
+                // this runs on the 125 ms meter tick — back off so a context that stays
+                // suspended for a whole call doesn't accumulate hundreds of them.
+                this.voice.audioResumeNextAttemptAt = resumed ? 0 : Date.now() + 5000;
                 this.syncRemoteAudioPlaybackMode();
-            }).catch(error => {
-                this.voice.audioResumePending = false;
-                this.voiceTrace('audio-context-resume-failed', { error: error?.message || String(error) }, 'WARN');
             });
         }
         return this.voice.audioContext;
@@ -9928,6 +10183,7 @@ class ZaliInterface {
                 clearInterval(entry.statsTimer);
                 entry.statsTimer = null;
             }
+            this.clearVoiceAnswerWatchdog(entry);
             entry.audioSender = null;
             entry.videoSender = null;
             entry.screenSender = null;
@@ -10033,6 +10289,53 @@ class ZaliInterface {
             entry.offerSent = false;
             this.voiceTrace('offer-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
             this.scheduleVoiceNegotiationRetry('offer-send-failed');
+            return;
+        }
+        this.armVoiceAnswerWatchdog(entry, peer);
+    }
+
+    // An offer that leaves the client but whose ANSWER never comes back leaves this
+    // side in 'have-local-offer' with offerSent latched — syncVoicePeers then skips
+    // the peer forever, and no other watchdog covers it: the reconnect/ICE-restart
+    // path is driven by onconnectionstatechange, and a connection that never got a
+    // remote description never starts ICE, so it never reaches 'disconnected' or
+    // 'failed' to trigger anything. The peer that did answer sees a healthy call.
+    // A single dropped answer frame is enough — the voice socket reconnects mid-call
+    // routinely — and the result is a call that looks connected to both sides and is
+    // silent for both. Found by scripts/voice_doctor with a 20 % signal drop rate.
+    armVoiceAnswerWatchdog(entry, peer) {
+        if (!entry) return;
+        this.clearVoiceAnswerWatchdog(entry);
+        entry.answerWatchdog = setTimeout(() => {
+            entry.answerWatchdog = null;
+            if (!this.voice.roomId) return;
+            if (!this.voice.peerConnections.has(peer)) return;
+            if (entry.pc.signalingState !== 'have-local-offer') return;
+            this.voiceDiag('answer-never-arrived', {
+                peer,
+                roomId: this.voice.roomId || '',
+                state: entry.pc.signalingState,
+            }, 'WARN');
+            // Roll back to 'stable' so the retry can build a fresh offer; without the
+            // rollback sendVoiceOffer would refuse (it requires 'stable') and the peer
+            // would stay stuck exactly as before.
+            Promise.resolve()
+                .then(() => entry.pc.setLocalDescription({ type: 'rollback' }))
+                .catch(error => this.voiceTrace('answer-watchdog-rollback-failed', {
+                    peer, error: error?.message || String(error),
+                }, 'WARN'))
+                .then(() => {
+                    entry.offerSent = false;
+                    entry.negotiating = false;
+                    this.scheduleVoiceNegotiationRetry('answer-never-arrived');
+                });
+        }, 8000);
+    }
+
+    clearVoiceAnswerWatchdog(entry) {
+        if (entry?.answerWatchdog) {
+            clearTimeout(entry.answerWatchdog);
+            entry.answerWatchdog = null;
         }
     }
 
@@ -10262,8 +10565,26 @@ class ZaliInterface {
         }
         // Channel joins never unlocked playback, so the AudioContext could stay
         // suspended for the whole session — this is a click handler, i.e. the one
-        // moment the browser lets us resume it.
-        await this.unlockVoicePlayback();
+        // moment the browser lets us resume it. Not awaited: see unlockVoicePlayback.
+        void this.unlockVoicePlayback();
+        // Capture the mic HERE, in the click handler, not only from the voice_room_state
+        // that comes back over the WS. Both DM paths (startDirectCall /
+        // performAcceptIncomingCall) already do this; the channel path was the one that
+        // asked for the microphone from an async WS event instead — and Safari (desktop
+        // and every iOS browser, including the installed PWA) rejects a getUserMedia
+        // permission prompt that isn't tied to a user gesture. The result was a call
+        // that joined the room, rendered as «В эфире», and never sent a single offer,
+        // because syncVoicePeers has no tracks to offer with. Failure is non-fatal: the
+        // room is still joined (the peer may be audible one way), micError explains why.
+        try {
+            await this.ensureVoiceLocalStream();
+        } catch (error) {
+            this.addLogEntry({
+                type: 'WARN',
+                msg: this.voice.micError || error?.message || 'Не удалось получить доступ к микрофону',
+                ts: new Date().toLocaleTimeString(),
+            });
+        }
         this.voice.negotiationRetries = 0;
         this.voice.roomId = roomId;
         this.voice.roomType = 'channel';
@@ -10351,7 +10672,7 @@ class ZaliInterface {
         // room, so the rejection wiped the caller's whole call state; the accept for the
         // first room then arrived with no callTrack, leaving a call that reports
         // "connected" while neither side ever sends an offer — a silent call.
-        if (this.voice.callSetupInFlight) {
+        if (this.isVoiceCallSetupBusy('start-dm-call')) {
             this.voiceTrace('start-dm-call-ignored-busy-setup', { target }, 'WARN');
             return;
         }
@@ -10372,6 +10693,7 @@ class ZaliInterface {
         // awaits, and a second click landing in that window would otherwise sail past
         // the guard and start a parallel setup.
         this.voice.callSetupInFlight = true;
+        this.voice.callSetupStartedAt = Date.now();
         try {
             if (activeRoomId && this.isInActiveCall()) {
                 this.addLogEntry({
@@ -10386,7 +10708,11 @@ class ZaliInterface {
             if (!roomId) return;
             this.voiceTrace('start-dm-call', { target, me, roomId, video });
             this.voice.videoEnabled = !!video;
-            await this.unlockVoicePlayback();
+            // Deliberately not awaited: the synchronous part (creating the context and
+            // calling resume()) is what has to happen inside the user gesture, and the
+            // rest is best-effort. Awaiting it put a promise WebKit may never settle in
+            // front of the invite — see unlockVoicePlayback.
+            void this.unlockVoicePlayback();
             this.voice.callTrack = {
                 roomId,
                 peer: target,
@@ -10428,7 +10754,29 @@ class ZaliInterface {
             }
         } finally {
             this.voice.callSetupInFlight = false;
+            this.voice.callSetupStartedAt = 0;
         }
+    }
+
+    // The re-entrancy latch that guards call setup is released in a `finally`, so any
+    // await inside setup that never settles disables calling entirely — «Позвонить»
+    // and «Принять» just stop responding, with only a trace line to show for it, until
+    // the app is restarted. A latch older than any plausible setup is treated as
+    // abandoned rather than trusted: the worst case of being wrong is one redundant
+    // setup, the worst case of trusting it is a client that can no longer call at all.
+    isVoiceCallSetupBusy(reason = '') {
+        if (!this.voice.callSetupInFlight) return false;
+        const startedAt = Number(this.voice.callSetupStartedAt || 0);
+        if (startedAt && Date.now() - startedAt > 30000) {
+            this.voiceDiag('call-setup-latch-stale', {
+                reason,
+                ageMs: Date.now() - startedAt,
+            }, 'WARN');
+            this.voice.callSetupInFlight = false;
+            this.voice.callSetupStartedAt = 0;
+            return false;
+        }
+        return true;
     }
 
     async acceptIncomingCall() {
@@ -10437,22 +10785,27 @@ class ZaliInterface {
         // Same re-entrancy hazard as startDirectCall: this awaits before it clears
         // incomingInvite, so a double-tap on «Принять» sent two voice_call_accept
         // events and restarted the local setup mid-flight.
-        if (this.voice.callSetupInFlight) {
+        if (this.isVoiceCallSetupBusy('accept-incoming')) {
             this.voiceTrace('accept-incoming-ignored-busy-setup', { roomId: invite.roomId }, 'WARN');
             return;
         }
         this.voice.callSetupInFlight = true;
+        this.voice.callSetupStartedAt = Date.now();
         try {
             await this.performAcceptIncomingCall(invite);
         } finally {
             this.voice.callSetupInFlight = false;
+            this.voice.callSetupStartedAt = 0;
         }
     }
 
     async performAcceptIncomingCall(invite) {
         const me = String(this.myName() || '').trim();
         this.voiceTrace('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
-        await this.unlockVoicePlayback();
+        // Not awaited — see unlockVoicePlayback. Awaited here, a refused resume() left
+        // the callee holding callSetupInFlight forever: the accept was never sent, and
+        // «Принять» silently did nothing on every later call too.
+        void this.unlockVoicePlayback();
         this.voice.roomId = String(invite.roomId || '').trim();
         this.voice.roomType = 'dm';
         this.voice.targetUser = String(invite.from || '').trim();
@@ -10741,7 +11094,7 @@ class ZaliInterface {
                     entry.renegotiationPending = true;
                 }
             } catch (error) {
-                this.voiceTrace('offer-apply-error', { roomId, from, error: error?.message || String(error) }, 'WARN');
+                this.voiceDiag('offer-apply-error', { roomId, from, error: error?.message || String(error) }, 'ERROR');
                 this.addLogEntry({ type: 'WARN', msg: error?.message || `Не удалось применить предложение звонка от ${from}`, ts: new Date().toLocaleTimeString() });
             } finally {
                 entry.negotiating = false;
@@ -10767,7 +11120,7 @@ class ZaliInterface {
             // a rolled-back offer (glare) or a peer that restarted its connection
             // leaves us 'stable' while its answer is still in flight.
             if (entry.pc.signalingState !== 'have-local-offer') {
-                this.voiceTrace('signal-answer-ignored', {
+                this.voiceDiag('signal-answer-ignored', {
                     roomId,
                     from,
                     state: entry.pc.signalingState,
@@ -10784,10 +11137,11 @@ class ZaliInterface {
             });
             try {
                 await entry.pc.setRemoteDescription(signalPayload.sdp);
+                this.clearVoiceAnswerWatchdog(entry);
                 await this.flushPendingVoiceIceCandidates(entry, from);
                 this.voice.status = 'connected';
             } catch (error) {
-                this.voiceTrace('answer-apply-error', { roomId, from, error: error?.message || String(error) }, 'WARN');
+                this.voiceDiag('answer-apply-error', { roomId, from, error: error?.message || String(error) }, 'ERROR');
                 // The offer is dead — clear the latch so the negotiation retry below
                 // can produce a fresh one instead of leaving a mute call standing.
                 entry.offerSent = false;
@@ -11335,6 +11689,7 @@ class ZaliInterface {
                     </div>
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
+                ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
                 <div class="voice-stage" id="voiceStage"></div>
                 ${this.renderVoiceTiles()}
                 <div class="${actionsBarClass}">${actionButtons.join('')}</div>
@@ -11421,6 +11776,11 @@ class ZaliInterface {
             panel.innerHTML = '';
             return;
         }
+        // An active screen share needs more than the normal half-screen cap
+        // (see .voice-panel.has-stage in style.css) — the stage tiles alone can
+        // run well past that at their 16:9 aspect ratio.
+        const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
+        panel.classList.toggle('has-stage', hasStage);
         if (isVoiceChannel || hasDmCall || hasIncoming || this.voice.roomType === 'dm') {
             panel.innerHTML = this.renderVoiceRoomView();
             this.mountVoiceVideoElements();
@@ -14759,9 +15119,42 @@ class ZaliInterface {
                 method: 'POST',
                 body: JSON.stringify(payload),
             });
+            // Telemetry alone changed nothing for the user: this reported that a
+            // message was unreadable and then stopped, while the one mechanism that
+            // could fix it — asking the holders to republish — was only ever
+            // triggered when a scope had NO key at all. A message that fails to
+            // decrypt while we do hold a key for the scope is the exact signal that
+            // we are missing some OTHER key of that scope, so ask.
+            // Explicitly caught: every helper it calls swallows its own errors today,
+            // but this is fire-and-forget from a render path — one future throw in
+            // that chain would surface as an unhandled rejection instead of a trace.
+            if (scope) {
+                this.requestKeyRepublishForDecryptFailure(scope)
+                    .catch(err => this.trace(`requestKeyRepublishForDecryptFailure failed error=${err?.message || err}`));
+            }
         } catch (e) {
             this.trace(`reportDecryptFailure failed error=${e?.message || e}`);
         }
+    }
+
+    // Rate-limited per scope: a screenful of undecryptable history would otherwise
+    // fire one request per message, and every request fans out to every device of
+    // every participant.
+    async requestKeyRepublishForDecryptFailure(scope, { cooldownMs = 60000 } = {}) {
+        const scoped = this.canonicalConversationScope(String(scope || '').trim());
+        if (!scoped) return false;
+        if (!this._republishAskedAt) this._republishAskedAt = new Map();
+        const last = Number(this._republishAskedAt.get(scoped) || 0);
+        if (last && Date.now() - last < cooldownMs) return false;
+        this._republishAskedAt.set(scoped, Date.now());
+        const ok = await this.requestKeyRepublish(scoped, { reason: 'decrypt_failure' });
+        if (ok) {
+            // The answer arrives as envelopes; pick them up without waiting for the
+            // next scheduled sync, then re-render so the message stops being a
+            // placeholder.
+            await this.syncIncomingKeyEnvelopes({ reason: 'decrypt_failure', triggerRefresh: true });
+        }
+        return ok;
     }
 
     hydrateGifMedia(root = document) {
@@ -15653,6 +16046,46 @@ class ZaliInterface {
         return 'zali_update_declined_version';
     }
 
+    updateInstallAttemptsStorageKey() {
+        return 'zali_update_install_attempts_v1';
+    }
+
+    // An install that silently doesn't take (Windows: the new .exe cannot be copied
+    // over an installation in Program Files without elevation — the old binary is
+    // restarted and the reason goes to updates/install.log) leaves the client on the
+    // previous version, so the very next login finds the same "newer" release and
+    // opens the same modal again. That is an unbreakable loop from the user's side:
+    // accepting is what triggers it. Counting attempts per version turns the second
+    // failure into a visible error instead of a third prompt.
+    loadUpdateInstallAttempts() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(this.updateInstallAttemptsStorageKey()) || '{}');
+            return {
+                version: String(parsed?.version || ''),
+                count: Number(parsed?.count) || 0,
+            };
+        } catch (e) {
+            return { version: '', count: 0 };
+        }
+    }
+
+    recordUpdateInstallAttempt(version) {
+        const target = String(version || '').trim();
+        if (!target) return;
+        const previous = this.loadUpdateInstallAttempts();
+        const next = {
+            version: target,
+            count: previous.version === target ? previous.count + 1 : 1,
+        };
+        try {
+            localStorage.setItem(this.updateInstallAttemptsStorageKey(), JSON.stringify(next));
+        } catch (e) {}
+    }
+
+    clearUpdateInstallAttempts() {
+        try { localStorage.removeItem(this.updateInstallAttemptsStorageKey()); } catch (e) {}
+    }
+
     // App version scheme: MAJOR.MINOR{a|b|r}BUILD, e.g. "0.2b9" (r=release >
     // b=beta > a=alpha at the same MAJOR.MINOR). Falls back to plain dotted
     // numeric versions (e.g. legacy "1.1.3") for compatibility with whatever the
@@ -15728,8 +16161,15 @@ class ZaliInterface {
                 return;
             }
             if (!latestVersion || this.compareVersions(latestVersion, currentVersion) <= 0) {
+                // We are running it — any earlier failed-install bookkeeping is stale.
+                this.clearUpdateInstallAttempts();
                 return;
             }
+            // Reaching here after having already installed this exact version means the
+            // install did not take. Keep the update reachable from the Hub, but stop
+            // reopening the modal on every login.
+            const attempts = this.loadUpdateInstallAttempts();
+            const installKeepsFailing = attempts.version === latestVersion && attempts.count >= 2;
             this.S.updateStatus = {
                 available: true,
                 version: latestVersion,
@@ -15740,12 +16180,18 @@ class ZaliInterface {
                 downloading: false,
                 progress: 0,
                 readyToInstall: false,
-                error: '',
+                error: installKeepsFailing
+                    ? `Обновление ${latestVersion} уже устанавливалось, но версия не сменилась. Установите его вручную (на Windows — запустите приложение от имени администратора либо скачайте .exe по ссылке ниже).`
+                    : '',
             };
             this.renderHub();
             const declined = (() => {
                 try { return localStorage.getItem(this.updateDeclinedStorageKey()); } catch (e) { return null; }
             })();
+            if (installKeepsFailing) {
+                this.trace(`checkForAppUpdate install keeps failing version=${latestVersion} attempts=${attempts.count}`);
+                return;
+            }
             if (this.S.updateStatus.mandatory || declined !== latestVersion) {
                 this.openUpdateModal();
             }
@@ -15813,6 +16259,7 @@ class ZaliInterface {
         const status = this.S.updateStatus || {};
         if (!status.available) return;
         if (status.readyToInstall) {
+            this.recordUpdateInstallAttempt(status.version);
             this.requestNativeAction({ type: NativeMessageTypes.INSTALL_UPDATE_REQUEST }, 5000).catch(() => {});
             return;
         }
@@ -16175,9 +16622,14 @@ class ZaliInterface {
 
         if (isServers && channel && this.isVoiceChannel(channel)) {
             this._lastMessagesHTML = null;
-            box.innerHTML = this.renderVoiceRoomView();
-            this.requestMessagesScroll('top');
-            this.applyPendingMessagesScroll(box);
+            // The call UI lives in #voicePanel (renderVoicePanel(), called below) —
+            // this used to ALSO render the identical renderVoiceRoomView() into the
+            // message box, so a voice channel showed two full copies of the same
+            // call card stacked on top of each other, together consuming the whole
+            // screen and then some. Voice channels have no text chat of their own
+            // (sendInputMessage() no-ops for them), so this box just says that
+            // instead of duplicating the call view.
+            box.innerHTML = '<div class="voice-empty voice-channel-no-chat">Голосовые каналы не поддерживают текстовые сообщения</div>';
             if (isServers && server) {
                 const chatHdrAva = document.getElementById('chatHdrAva');
                 const chatHdrName = document.getElementById('chatHdrName');
@@ -18030,6 +18482,65 @@ class ZaliInterface {
             body.appendChild(div);
             body.scrollTop = body.scrollHeight;
             if (body.childElementCount > 300) body.removeChild(body.firstElementChild);
+        }
+    }
+
+    // Always-on counterpart of voiceTrace, for the handful of facts that decide
+    // whether a call carries audio: ICE/connection state, which candidate pair won
+    // (host/srflx/relay), and why a link died. voiceTrace is gated behind a dev
+    // toggle nobody has enabled *before* a call goes wrong, which is exactly when
+    // the data is needed — every failed call so far had to be diagnosed from the
+    // server's signalling log alone, which cannot see ICE at all. A handful of lines
+    // per call; on macOS they land in zali-debug.log via the console mirror.
+    voiceDiag(stage, details = {}, level = 'INFO') {
+        if (this.voiceTraceEnabled) {
+            // Enabled trace already emits everything; don't log each event twice.
+            this.voiceTrace(stage, details, level);
+            return;
+        }
+        this.voiceTrace(stage, details, level);
+        const ts = new Date().toLocaleTimeString();
+        const compact = Object.entries(details)
+            .filter(([, value]) => value !== undefined && value !== null && value !== '')
+            .map(([key, value]) => `${key}=${Array.isArray(value) ? `[${value.join(',')}]` : String(value)}`)
+            .join(' ');
+        const message = compact ? `${stage} ${compact}` : stage;
+        this.addLogEntry({ type: level, msg: `[VOICE] ${message}`, ts });
+        try {
+            const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
+            fn?.('[VOICE]', message);
+        } catch (e) {}
+    }
+
+    // Names the candidate pair actually carrying media, which is the difference
+    // between "ICE said connected" and "audio has a path". Read once per successful
+    // connect, so it costs one getStats() call per peer per call.
+    async reportVoiceSelectedPair(peer) {
+        const entry = this.voice.peerConnections.get(peer);
+        if (!entry?.pc?.getStats) return;
+        try {
+            const stats = await entry.pc.getStats();
+            const byId = new Map();
+            let pair = null;
+            stats.forEach(report => {
+                byId.set(report.id, report);
+                if (report.type === 'candidate-pair' && (report.selected || report.state === 'succeeded' && report.nominated)) {
+                    pair = report;
+                }
+            });
+            if (!pair) return;
+            const local = byId.get(pair.localCandidateId);
+            const remote = byId.get(pair.remoteCandidateId);
+            this.voiceDiag('selected-pair', {
+                peer,
+                local: local ? `${local.candidateType}/${local.protocol}` : '?',
+                remote: remote ? `${remote.candidateType}/${remote.protocol}` : '?',
+                rtt: pair.currentRoundTripTime ?? '',
+                bytesIn: pair.bytesReceived ?? '',
+                bytesOut: pair.bytesSent ?? '',
+            }, 'SUCCESS');
+        } catch (error) {
+            this.voiceDiag('selected-pair-failed', { peer, error: error?.message || String(error) }, 'WARN');
         }
     }
 

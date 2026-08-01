@@ -25,6 +25,10 @@
                 // several parallel mic captures (see ensureVoiceLocalStream).
                 localStreamInFlight: null,
                 localVideoEl: null,
+                // Last getUserMedia() failure, surfaced in the voice panel. A denied
+                // mic is otherwise invisible: the room joins, the panel says «В эфире»,
+                // and the call simply never negotiates (no local tracks → no offer).
+                micError: '',
                 screenSharing: false,
                 screenShareRequestInFlight: false,
                 localScreenStream: null,
@@ -49,6 +53,9 @@
                 // Set while startDirectCall/acceptIncomingCall is mid-flight so a
                 // second click can't open a parallel call setup.
                 callSetupInFlight: false,
+                // When that latch was taken, so an abandoned setup can be detected
+                // instead of blocking every later call (see isVoiceCallSetupBusy).
+                callSetupStartedAt: 0,
                 negotiationRetryTimer: null,
                 negotiationRetries: 0,
                 // Re-asserts voice_join while in a room, so a transport blip longer
@@ -60,6 +67,7 @@
                 signalChains: new Map(),
                 audioContext: null,
                 audioResumePending: false,
+                audioResumeNextAttemptAt: 0,
                 masterGainNode: null,
                 playbackUnlocked: false,
                 meterRaf: 0,

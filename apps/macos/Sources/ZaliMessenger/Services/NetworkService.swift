@@ -149,6 +149,39 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         trace("init user=\(currentUsername) hasToken=\(authToken != nil) keySet=\(!currentKey.isEmpty) pendingBytes=\(pendingOutboxJSON.count)")
     }
 
+    /// Drops every persisted per-account artifact of the pre-reset server: session,
+    /// crypto key, device id, pending outbox, message cache and conversation keys —
+    /// for ALL accounts ever used on this Mac, not just the current one, since the
+    /// per-account keys are suffixed with the username (see the storage keys above)
+    /// and a stale account would otherwise keep its cache waiting for a re-login that
+    /// the wiped server can no longer honour. Network configuration is deliberately
+    /// untouched. Called from the CLEAR_LOCAL_DATA bridge message.
+    func clearAllLocalData() {
+        let defaults = UserDefaults.standard
+        let prefixes = [
+            cryptoKeyStorageKey,
+            sessionUsernameStorageKey,
+            sessionTokenStorageKey,
+            deviceIdStorageKey,
+            pendingOutboxBaseKey,
+            messageCacheBaseKey,
+            conversationKeysBaseKey,
+        ]
+        for (key, _) in defaults.dictionaryRepresentation() {
+            if prefixes.contains(where: { key == $0 || key.hasPrefix("\($0)_") }) {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        authToken = nil
+        currentUsername = ""
+        currentDeviceId = ""
+        currentKey = ""
+        allConversationKeys = [:]
+        pendingOutboxJSON = "[]"
+        messageCacheJSON = #"{"chats":{},"serverChats":{}}"#
+        trace("clearAllLocalData done")
+    }
+
     func persistCurrentKey() {
         let key = currentKey
         connectionQueue.async {

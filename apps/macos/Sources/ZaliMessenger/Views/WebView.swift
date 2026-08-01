@@ -81,6 +81,18 @@ struct WebView: NSViewRepresentable {
             return value.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        /// Drops every `shared_device_identity_*.json` export (all accounts). After a
+        /// server reset the device ids inside them are unknown to the server, and an
+        /// injected unknown identity is worse than none: it keeps the client claiming a
+        /// device nobody ever addressed a key envelope to.
+        static func removeSharedDeviceIdentities() {
+            guard let dir = sharedAppSupportDir else { return }
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in files where name.hasPrefix("shared_device_identity_") && name.hasSuffix(".json") {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+            }
+        }
+
         /// Loads the shared device identity for `username` so it can be injected at
         /// document-start (mirror of `exportDeviceIdentityToSharedFile`, and of the Rust
         /// shell's read at native.rs). Without this, a WebView localStorage wipe (rebuild
@@ -1383,6 +1395,21 @@ struct WebView: NSViewRepresentable {
                 case .resolveTenor: do {
                     let url = dict["url"] as? String ?? ""
                     self.resolveTenor(url: url, requestId: requestId)
+                }
+
+                // Sent once by the JS side when it applies the local-data reset epoch
+                // (see applyLocalDataResetIfNeeded in interface.js). Clearing
+                // localStorage there is not enough: the crypto key, session, message
+                // cache and conversation keys also live in UserDefaults and in plain
+                // files under Application Support, and are injected back into every
+                // fresh WebView at document-start.
+                case .clearLocalData: do {
+                    print("[ZALI][WEBVIEW] CLEAR_LOCAL_DATA received")
+                    NetworkService.shared.clearAllLocalData()
+                    Coordinator.saveLegacyCryptoKey("")
+                    Coordinator.removeSharedDeviceIdentities()
+                    self.decryptedMessageCache.removeAll()
+                    self.consoleLog("Swift: локальные данные очищены (сброс базы)")
                 }
                 
                 case .setKey: do {

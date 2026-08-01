@@ -143,27 +143,48 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
     // Program Files, when the Inno Setup installer put it there and the app runs
     // unelevated — looked exactly like "nothing happens". Now the previous version
     // is started back up and the reason is left in install.log.
+    // The retry loop alone was not enough: when the Inno Setup installer put the app
+    // in Program Files and it runs unelevated, the copy can never succeed — all 60
+    // tries fail, the OLD binary is restarted, and the next login finds the same
+    // newer release and offers it again. That is the update loop users hit: accepting
+    // the update is precisely what restarts it. So an exhausted retry loop now
+    // re-runs this same script elevated (`-Verb RunAs`, i.e. a UAC prompt) and does a
+    // single copy from there, verifying the result with `fc /b` before declaring
+    // success — a declined UAC prompt must not be mistaken for a completed install.
     let script = format!(
         "@echo off\r\n\
          setlocal\r\n\
          set \"SRC={new_exe}\"\r\n\
          set \"DST={current_exe}\"\r\n\
          set \"LOG={log}\"\r\n\
+         if /I \"%~1\"==\"elevated\" goto elevatedcopy\r\n\
          set /a tries=0\r\n\
          :retry\r\n\
          set /a tries+=1\r\n\
          copy /Y \"%SRC%\" \"%DST%\" >>\"%LOG%\" 2>&1\r\n\
          if not errorlevel 1 goto launch\r\n\
-         if %tries% GEQ 60 goto failed\r\n\
+         if %tries% GEQ 60 goto elevate\r\n\
          ping -n 2 127.0.0.1 >NUL 2>&1\r\n\
          goto retry\r\n\
          :launch\r\n\
          echo [%DATE% %TIME%] updated to \"%SRC%\">>\"%LOG%\"\r\n\
          start \"\" \"%DST%\"\r\n\
          goto cleanup\r\n\
-         :failed\r\n\
-         echo [%DATE% %TIME%] could not replace \"%DST%\" after %tries% tries, restarting old version>>\"%LOG%\"\r\n\
+         :elevate\r\n\
+         echo [%DATE% %TIME%] direct copy to \"%DST%\" failed after %tries% tries, asking for elevation>>\"%LOG%\"\r\n\
+         powershell -NoProfile -WindowStyle Hidden -Command \"Start-Process -FilePath '%~f0' -ArgumentList 'elevated' -Verb RunAs -Wait -WindowStyle Hidden\" >>\"%LOG%\" 2>&1\r\n\
+         fc /b \"%SRC%\" \"%DST%\" >NUL 2>&1\r\n\
+         if errorlevel 1 goto failed\r\n\
+         echo [%DATE% %TIME%] updated to \"%SRC%\" via elevation>>\"%LOG%\"\r\n\
          start \"\" \"%DST%\"\r\n\
+         goto cleanup\r\n\
+         :failed\r\n\
+         echo [%DATE% %TIME%] could not replace \"%DST%\" (elevation declined or failed), restarting old version>>\"%LOG%\"\r\n\
+         start \"\" \"%DST%\"\r\n\
+         goto cleanup\r\n\
+         :elevatedcopy\r\n\
+         copy /Y \"%SRC%\" \"%DST%\" >>\"%LOG%\" 2>&1\r\n\
+         exit /b\r\n\
          :cleanup\r\n\
          del \"%SRC%\" >NUL 2>&1\r\n\
          (goto) 2>NUL & del \"%~f0\"\r\n",
