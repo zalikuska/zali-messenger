@@ -68,12 +68,10 @@
                 audioContext: null,
                 audioResumePending: false,
                 audioResumeNextAttemptAt: 0,
-                masterGainNode: null,
                 playbackUnlocked: false,
                 meterRaf: 0,
                 meterLocal: null,
                 meterRemote: new Map(),
-                remotePlaybackNodes: new Map(),
                 meterLevels: {
                     local: 0,
                     remote: 0,

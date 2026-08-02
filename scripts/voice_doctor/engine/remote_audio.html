@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>remote stream -> WebAudio, with a real user gesture</title>
+<style>
+  html,body{margin:0;height:100%}
+  #go{width:100%;height:100%;font-size:40px;background:#cbff00;border:0;cursor:pointer}
+</style>
+<body>
+<button id="go">START</button>
+<pre id="out" style="font:12px monospace"></pre>
+<script>
+// The question this answers: in WKWebView, does a MediaStream coming off an
+// RTCPeerConnection actually produce samples through the WebAudio graph — the
+// client's ONLY playback route for remote audio (the <audio> elements are created
+// muted). It can only be answered with a running AudioContext, and WebKit will not
+// resume one outside a user gesture, so everything below runs inside a real click.
+function say(o) {
+  document.getElementById('out').textContent += '\n' + JSON.stringify(o);
+  try { window.webkit.messageHandlers.probe.postMessage(JSON.stringify(o)); } catch (e) {}
+}
+function rms(analyser, buf) {
+  analyser.getByteTimeDomainData(buf);
+  let s = 0;
+  for (let i = 0; i < buf.length; i++) { const n = (buf[i] - 128) / 128; s += n * n; }
+  return Math.sqrt(s / buf.length);
+}
+const withTimeout = (p, ms, label) => Promise.race([
+  Promise.resolve(p).then(() => 'settled').catch(e => 'rejected:' + (e && e.name || e)),
+  new Promise(r => setTimeout(() => r('NEVER-SETTLED:' + label), ms)),
+]);
+
+document.getElementById('go').addEventListener('click', async () => {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    const resumed = await withTimeout(ctx.resume(), 3000, 'resume');
+    say({ check: 'resume-inside-gesture', resumed, state: ctx.state });
+    if (ctx.state !== 'running') { say({ check: 'done', verdict: 'could not resume even in a gesture' }); return; }
+
+    // A 440 Hz tone as a real track.
+    const src = new AC();
+    await withTimeout(src.resume(), 2000, 'src-resume');
+    const osc = src.createOscillator(); const dst = src.createMediaStreamDestination();
+    const g = src.createGain(); g.gain.value = 0.6;
+    osc.connect(g).connect(dst); osc.start();
+
+    // Control: the SAME graph reading a LOCAL stream. If this is silent the probe
+    // itself is broken, not the remote path.
+    {
+      const s = ctx.createMediaStreamSource(dst.stream);
+      const an = ctx.createAnalyser(); an.fftSize = 512; s.connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      let peak = 0;
+      for (let i = 0; i < 30; i++) { peak = Math.max(peak, rms(an, buf)); await new Promise(r => setTimeout(r, 30)); }
+      say({ check: 'control-local-stream-into-webaudio', rms: +peak.toFixed(4) });
+      s.disconnect();
+    }
+
+    // The real case: same tone, but arriving over an RTCPeerConnection.
+    const a = new RTCPeerConnection(); const b = new RTCPeerConnection();
+    a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate);
+    b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
+    dst.stream.getAudioTracks().forEach(t => a.addTrack(t, dst.stream));
+    const remote = await new Promise(async (res, rej) => {
+      const timer = setTimeout(() => rej(new Error('ontrack timeout')), 8000);
+      b.ontrack = e => { clearTimeout(timer); res(e.streams[0] || new MediaStream([e.track])); };
+      const o = await a.createOffer(); await a.setLocalDescription(o);
+      await b.setRemoteDescription(o);
+      const ans = await b.createAnswer(); await b.setLocalDescription(ans);
+      await a.setRemoteDescription(ans);
+    });
+    // Measuring before RTP actually arrives proves nothing: a zero reading would
+    // only mean "no audio was sent yet". Wait for real inbound packets first, and
+    // say so plainly if they never come.
+    let packets = 0, waited = 0;
+    while (waited < 15000) {
+      await new Promise(r => setTimeout(r, 250)); waited += 250;
+      const st = await b.getStats();
+      packets = 0;
+      st.forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'audio') packets = r.packetsReceived || 0; });
+      if (packets > 0 && b.connectionState === 'connected') break;
+    }
+    say({ check: 'pc', a: a.connectionState, b: b.connectionState, inboundPackets: packets, waitedMs: waited,
+          tracks: remote.getAudioTracks().map(t => t.readyState + (t.muted ? '/muted' : '/unmuted')) });
+    if (!packets) {
+      say({ check: 'done', verdict: 'INCONCLUSIVE: no RTP ever arrived in this harness, nothing to measure' });
+      return;
+    }
+
+    const node = ctx.createMediaStreamSource(remote);
+    const an = ctx.createAnalyser(); an.fftSize = 512; node.connect(an);
+    const buf = new Uint8Array(an.fftSize);
+
+    // (1) exactly what the client does: element muted, WebAudio is the only sink
+    let peakMuted = 0;
+    for (let i = 0; i < 40; i++) { peakMuted = Math.max(peakMuted, rms(an, buf)); await new Promise(r => setTimeout(r, 30)); }
+    say({ check: 'remote-into-webaudio-ELEMENT-MUTED', rms: +peakMuted.toFixed(4) });
+
+    // (2) same, but the stream is also attached to a muted <audio> element
+    const el = document.createElement('audio');
+    el.autoplay = true; el.muted = true; el.playsInline = true; el.srcObject = remote;
+    document.body.appendChild(el);
+    el.play().catch(() => {});
+    let peakAttached = 0;
+    for (let i = 0; i < 40; i++) { peakAttached = Math.max(peakAttached, rms(an, buf)); await new Promise(r => setTimeout(r, 30)); }
+    say({ check: 'remote-into-webaudio-WITH-ATTACHED-ELEMENT', rms: +peakAttached.toFixed(4), paused: el.paused });
+
+    const stats = [];
+    (await b.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'audio') stats.push({ packets: r.packetsReceived, bytes: r.bytesReceived }); });
+    say({ check: 'inbound-rtp', stats });
+
+    say({ check: 'done',
+          verdict: peakMuted > 0.01 ? 'WEBAUDIO PLAYS REMOTE STREAM'
+                 : peakAttached > 0.01 ? 'WEBAUDIO NEEDS AN ATTACHED ELEMENT'
+                 : 'WEBAUDIO IS SILENT FOR REMOTE STREAMS' });
+  } catch (error) {
+    say({ check: 'done', error: String(error && error.message || error) });
+  }
+});
+</script>
+</body>

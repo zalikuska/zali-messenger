@@ -87,9 +87,17 @@ record('call-setup latch has a staleness escape',
     'guards must go through isVoiceCallSetupBusy, not read callSetupInFlight directly');
 
 // Remote audio must have a route even when the WebAudio graph is not running.
-record('remote audio falls back to the <audio> element when the graph is not running',
-    src.includes('syncRemoteAudioPlaybackMode') && /webAudioRunning/.test(src),
-    'syncRemoteAudioPlaybackMode must pick the element route for a non-running context');
+// Remote audio must not depend on a WebAudio graph: that path had no fallback
+// when it was running yet silent, and no detection either.
+record('the <audio> element is the playback sink, never created muted',
+    /audio\.muted = false/.test(src) && !/audio\.muted = true/.test(src),
+    'attachRemoteVoiceStream must create the element unmuted');
+record('no WebAudio graph is wired to the speakers for remote audio',
+    !/remotePlaybackNodes|ensureVoiceMasterGain/.test(src),
+    'playback must not go through gain -> destination');
+record('a connected call reports whether RTP arrives and whether the sink plays',
+    /reportVoiceAudioHealth/.test(src),
+    'audio-health diagnostics must run on connected peers');
 
 console.log(`\n${failures === 0 ? 'OK' : 'FAILURES: ' + failures}\n`);
 process.exit(failures === 0 ? 0 : 1);

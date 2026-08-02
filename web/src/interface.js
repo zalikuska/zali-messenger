@@ -279,12 +279,10 @@ class ZaliInterface {
             socketReady: false,
             callTrack: null,
             audioContext: null,
-            masterGainNode: null,
             playbackUnlocked: false,
             meterRaf: 0,
             meterLocal: null,
             meterRemote: new Map(),
-            remotePlaybackNodes: new Map(),
             meterLevels: {
                 local: 0,
                 remote: 0,
@@ -2023,31 +2021,24 @@ class ZaliInterface {
         if (label) label.textContent = `${clamped}%`;
     }
 
-    // One shared gain node per call, inserted between every per-peer gain node
-    // and ctx.destination — lets the master slider scale everyone at once
-    // without touching each peer's individually-set gain value.
-    ensureVoiceMasterGain() {
-        const ctx = this.voice.audioContext;
-        if (!ctx) return null;
-        if (!this.voice.masterGainNode) {
-            this.voice.masterGainNode = ctx.createGain();
-            this.voice.masterGainNode.gain.value = (this.audioPrefs.masterVolumePercent || 100) / 100;
-            this.voice.masterGainNode.connect(ctx.destination);
-        }
-        return this.voice.masterGainNode;
+    // Both sliders end up as one element volume. HTMLMediaElement.volume saturates
+    // at 1.0, so the >100 % half can no longer boost — only the WebAudio graph could
+    // do that, and that graph was the single unfallback-able playback path. Being
+    // audible beats a boost that depended on it.
+    effectiveRemoteVolume(peer) {
+        const peerPercent = this.getPeerVolumePercent(peer);
+        const masterPercent = this.audioPrefs.masterVolumePercent || 100;
+        return Math.max(0, Math.min(1, (peerPercent / 100) * (masterPercent / 100)));
     }
 
     applyMasterVolume() {
-        if (this.voice.masterGainNode) {
-            this.voice.masterGainNode.gain.value = (this.audioPrefs.masterVolumePercent || 100) / 100;
-        }
+        for (const peer of this.voice.remoteAudios.keys()) this.applyPeerVolume(peer);
     }
 
     applyPeerVolume(peer) {
-        const node = this.voice.remotePlaybackNodes?.get(String(peer || '').trim());
-        if (node?.gain) {
-            node.gain.gain.value = this.getPeerVolumePercent(peer) / 100;
-        }
+        const name = String(peer || '').trim();
+        const audio = this.voice.remoteAudios.get(name);
+        if (audio) audio.volume = this.effectiveRemoteVolume(name);
     }
 
     async refreshAudioDeviceOptions() {
@@ -5094,7 +5085,6 @@ class ZaliInterface {
         const entry = peer ? this.voice.peerConnections.get(peer) : null;
         const stats = entry?.lastStats || {};
         const audio = peer ? this.voice.remoteAudios.get(peer) : null;
-        const playbackNode = peer ? this.voice.remotePlaybackNodes?.get(peer) : null;
         const remoteStream = audio?.srcObject instanceof MediaStream ? audio.srcObject : null;
         const localStream = this.voice.localStream;
         const connectionState = String(entry?.pc?.connectionState || 'idle').trim() || 'idle';
@@ -5106,13 +5096,11 @@ class ZaliInterface {
         const localCandidates = Number(stats.localCandidateCount || entry?.generatedIceCandidates || 0);
         const remoteCandidates = Number(stats.remoteCandidateCount || entry?.receivedIceCandidates || 0);
         const remoteTrackCount = remoteStream ? remoteStream.getAudioTracks().length : 0;
-        const routeValue = playbackNode
-            ? 'WebAudio'
-            : audio
-                ? (audio.paused ? 'audio paused' : 'audio ready')
-                : remoteTrackCount
-                    ? 'stream only'
-                    : 'нет трека';
+        const routeValue = audio
+            ? (audio.muted ? 'audio muted' : audio.paused ? 'audio paused' : 'audio ready')
+            : remoteTrackCount
+                ? 'stream only'
+                : 'нет трека';
         const playbackValue = audio
             ? (audio.paused ? 'paused' : audio.readyState >= 2 ? 'playing' : 'waiting')
             : 'none';
@@ -8749,19 +8737,11 @@ class ZaliInterface {
         this.voice.audioContext = null;
         this.voice.audioResumePending = false;
         this.voice.audioResumeNextAttemptAt = 0;
-        this.voice.masterGainNode = null;
         this.voice.playbackUnlocked = false;
         this.voice.meterUiRenderedOnce = false;
         this.voice.meterLevels = { local: 0, remote: 0 };
         this.voice.meterLocal = null;
         this.voice.meterRemote.clear();
-        if (this.voice.remotePlaybackNodes) {
-            for (const node of this.voice.remotePlaybackNodes.values()) {
-                try { node?.source?.disconnect?.(); } catch (e) {}
-                try { node?.gain?.disconnect?.(); } catch (e) {}
-            }
-            this.voice.remotePlaybackNodes.clear();
-        }
         this.stopVoiceMeterLoop();
         this.voice.traceLines = [];
         this.voice.roomId = '';
@@ -9522,7 +9502,10 @@ class ZaliInterface {
                         entry.healthTimer = null;
                     }
                     if (!entry.statsTimer) {
-                        entry.statsTimer = setInterval(() => this.sampleVoicePeerStats(name), 10000);
+                        entry.statsTimer = setInterval(() => {
+                            this.sampleVoicePeerStats(name);
+                            void this.reportVoiceAudioHealth(name);
+                        }, 10000);
                     }
                     void this.reportVoiceSelectedPair(name);
                     this.voice.status = 'connected';
@@ -9786,26 +9769,23 @@ class ZaliInterface {
     // context isn't running — or a peer has no node because createMediaStreamSource
     // failed — the plain <audio> element is unmuted instead, so the call is audible
     // rather than silently routed into a stopped graph.
+    // Remote audio has exactly one sink: the per-peer <audio> element. This keeps it
+    // unmuted, at the configured volume and actually playing. Called whenever
+    // something could have disturbed it (a user gesture, an AudioContext state
+    // change, a fresh attach) — autoplay policy pauses these elements silently.
     syncRemoteAudioPlaybackMode() {
-        const ctx = this.voice.audioContext;
-        const webAudioRunning = !!ctx && ctx.state === 'running';
         for (const [peer, audio] of this.voice.remoteAudios) {
             if (!audio) continue;
-            const hasNode = !!this.voice.remotePlaybackNodes?.get(peer);
-            const useElement = !webAudioRunning || !hasNode;
-            const nextMuted = !useElement;
-            if (audio.muted !== nextMuted || audio.volume !== (useElement ? 1 : 0)) {
-                this.voiceTrace('remote-audio-route', {
-                    peer,
-                    route: useElement ? 'element' : 'webaudio',
-                    contextState: ctx?.state || 'none',
-                }, useElement ? 'WARN' : 'INFO');
+            if (audio.muted || audio.defaultMuted) {
+                this.voiceDiag('remote-audio-unmute', { peer }, 'WARN');
             }
-            audio.muted = nextMuted;
-            audio.defaultMuted = nextMuted;
-            audio.volume = useElement ? 1 : 0;
-            if (useElement && audio.paused) {
-                audio.play?.().catch(error => this.voiceTrace('remote-audio-play-failed', { peer, error: error?.message || String(error) }, 'WARN'));
+            audio.muted = false;
+            audio.defaultMuted = false;
+            audio.volume = this.effectiveRemoteVolume(peer);
+            if (audio.paused) {
+                audio.play?.().catch(error => this.voiceDiag('remote-audio-play-failed', {
+                    peer, error: error?.message || String(error),
+                }, 'WARN'));
             }
         }
     }
@@ -9909,47 +9889,6 @@ class ZaliInterface {
             return next;
         }
         return existing;
-    }
-
-    ensureRemotePlaybackNode(peer, stream) {
-        const ctx = this.ensureVoiceAudioContext();
-        const name = String(peer || '').trim();
-        if (!ctx || !name || !stream) return null;
-        const currentId = stream.id || '';
-        const existing = this.voice.remotePlaybackNodes?.get(name);
-        if (existing && existing.streamId === currentId) return existing;
-        try {
-            if (existing?.source) existing.source.disconnect?.();
-            if (existing?.gain) existing.gain.disconnect?.();
-        } catch (e) {}
-        try {
-            const source = ctx.createMediaStreamSource(stream);
-            const gain = ctx.createGain();
-            gain.gain.value = this.getPeerVolumePercent(name) / 100;
-            const masterGain = this.ensureVoiceMasterGain();
-            source.connect(gain);
-            if (masterGain) {
-                gain.connect(masterGain);
-            } else {
-                gain.connect(ctx.destination);
-            }
-            const next = {
-                streamId: currentId,
-                source,
-                gain,
-            };
-            this.voice.remotePlaybackNodes.set(name, next);
-            this.voiceTrace('remote-webaudio-ready', {
-                peer: name,
-                streamId: currentId,
-                contextState: ctx.state || '',
-                tracks: stream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled ? 'on' : 'off'}`),
-            }, 'SUCCESS');
-            return next;
-        } catch (error) {
-            this.voiceTrace('remote-webaudio-error', { peer: name, error: error?.message || String(error) }, 'ERROR');
-            return null;
-        }
     }
 
     updateVoiceMeterDom(kind, percent) {
@@ -10060,9 +9999,15 @@ class ZaliInterface {
             audio.playsInline = true;
             audio.hidden = true;
             audio.preload = 'auto';
-            audio.muted = true;
-            audio.defaultMuted = true;
-            audio.volume = 0;
+            // The element is the PRIMARY sink, not a muted decoy. Remote audio used
+            // to be rendered only by the WebAudio graph, and the fallback to the
+            // element fired only when the context was not 'running' — so a graph that
+            // is running but produces no sound had no fallback and no detection at
+            // all. That is a single point of failure for the one thing a call is for.
+            // Metering still runs on the graph; playback no longer depends on it.
+            audio.muted = false;
+            audio.defaultMuted = false;
+            audio.volume = this.effectiveRemoteVolume(name);
             audio.dataset.peer = name;
             audio.addEventListener('play', () => this.voiceTrace('remote-audio-play', { peer: name, muted: audio.muted, volume: audio.volume }, 'INFO'));
             audio.addEventListener('playing', () => this.voiceTrace('remote-audio-playing', { peer: name, muted: audio.muted, volume: audio.volume }, 'SUCCESS'));
@@ -10074,7 +10019,6 @@ class ZaliInterface {
         }
         audio.srcObject = stream;
         this.ensureMeterEntry(name, stream);
-        this.ensureRemotePlaybackNode(name, stream);
         if (this.audioPrefs?.speakerDeviceId && typeof audio.setSinkId === 'function') {
             audio.setSinkId(this.audioPrefs.speakerDeviceId).catch(error => {
                 this.voiceTrace?.('speaker-sink-failed', { peer: name, error: error?.message || String(error) }, 'WARN');
@@ -10215,12 +10159,6 @@ class ZaliInterface {
             this.voice.remoteVideos.delete(name);
         }
         this.detachRemoteScreenStream(name);
-        const playbackNode = this.voice.remotePlaybackNodes?.get(name);
-        if (playbackNode) {
-            try { playbackNode.source?.disconnect?.(); } catch (e) {}
-            try { playbackNode.gain?.disconnect?.(); } catch (e) {}
-            this.voice.remotePlaybackNodes.delete(name);
-        }
         if (this.voice.meterRemote.has(name)) {
             const meter = this.voice.meterRemote.get(name);
             try {
@@ -18578,6 +18516,44 @@ class ZaliInterface {
             const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
             fn?.('[VOICE]', message);
         } catch (e) {}
+    }
+
+    // Answers "connected but silent" without guesswork, on a real call: does RTP
+    // actually arrive, and is the sink able to play it? Every silent call so far had
+    // to be argued about from first principles because nothing recorded these two
+    // facts together. One line per peer every 10 s, always on.
+    async reportVoiceAudioHealth(peer) {
+        const entry = this.voice.peerConnections.get(peer);
+        if (!entry?.pc?.getStats) return;
+        try {
+            const stats = await entry.pc.getStats();
+            let packets = 0;
+            let bytes = 0;
+            let level = null;
+            stats.forEach(report => {
+                if (report.type === 'inbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
+                    packets = report.packetsReceived ?? packets;
+                    bytes = report.bytesReceived ?? bytes;
+                    if (typeof report.audioLevel === 'number') level = report.audioLevel;
+                }
+            });
+            const audio = this.voice.remoteAudios.get(peer);
+            const prev = entry.lastInboundBytes || 0;
+            entry.lastInboundBytes = bytes;
+            const arriving = bytes > prev;
+            this.voiceDiag('audio-health', {
+                peer,
+                rtp: arriving ? 'flowing' : 'STALLED',
+                packets,
+                bytes,
+                level: level === null ? '' : level.toFixed(3),
+                sink: audio ? (audio.muted ? 'MUTED' : audio.paused ? 'PAUSED' : 'playing') : 'NO ELEMENT',
+                volume: audio ? audio.volume : '',
+                ctx: this.voice.audioContext?.state || 'none',
+            }, (arriving && audio && !audio.muted && !audio.paused) ? 'INFO' : 'WARN');
+        } catch (error) {
+            this.voiceDiag('audio-health-failed', { peer, error: error?.message || String(error) }, 'WARN');
+        }
     }
 
     // Names the candidate pair actually carrying media, which is the difference
