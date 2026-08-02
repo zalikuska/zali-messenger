@@ -246,6 +246,8 @@ struct WasmAttachmentOut {
 struct WasmUnpacked {
     sender: String,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call: Option<String>,
     timestamp: u64,
     key_version: u8,
     attachments: Vec<WasmAttachmentOut>,
@@ -262,6 +264,7 @@ pub fn pack_message_wasm(
     key: &str,
     key_version: u8,
     attachments: JsValue,
+    call: Option<String>,
 ) -> Result<Vec<u8>, JsValue> {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
@@ -281,7 +284,7 @@ pub fn pack_message_wasm(
             bytes: a.bytes,
         })
         .collect();
-    net::pack_message_bytes(sender, text, key, key_version, in_memory)
+    net::pack_message_bytes(sender, text, key, key_version, in_memory, call.as_deref())
         .map_err(|e| JsValue::from_str(&e))
 }
 
@@ -296,6 +299,7 @@ pub fn unpack_message_wasm(archive: &[u8], key: &str) -> Result<JsValue, JsValue
     let out = WasmUnpacked {
         sender: unpacked.sender,
         text: unpacked.text,
+        call: unpacked.call,
         timestamp: unpacked.timestamp,
         key_version: unpacked.key_version,
         attachments: unpacked

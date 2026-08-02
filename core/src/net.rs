@@ -27,6 +27,17 @@ pub struct MessageContent {
     pub key_version: u8,
     #[serde(default)]
     pub attachments: Vec<AttachmentContent>,
+    /// Optional structured payload for messages that are not plain chat text —
+    /// currently call records. Deliberately an opaque, encrypted JSON string: only
+    /// the UI interprets it, so restating the same shape in Rust, Swift and JS
+    /// would only create three places for it to drift apart.
+    ///
+    /// `skip_serializing_if` keeps ordinary messages byte-identical to what older
+    /// clients produce, and `default` lets new clients read old archives. An older
+    /// client reading a newer message ignores the unknown field — which is why the
+    /// sender also puts a human-readable summary in `text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
 }
 
 fn default_archive_key_version() -> u8 {
@@ -150,6 +161,10 @@ impl ZaliModule for ZaliNet {
                     timestamp: now_unix_secs(),
                     key_version,
                     attachments: attachment_meta,
+                    call: match args["call"].as_str().map(str::trim).filter(|v| !v.is_empty()) {
+                        Some(value) => Some(crate::crypto::encrypt_message_text(value, key)?),
+                        None => None,
+                    },
                 };
 
                 let json = serde_json::to_string(&content).map_err(|e| e.to_string())?;
@@ -204,10 +219,15 @@ impl ZaliModule for ZaliNet {
                     serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
 
                 let decrypted_text = crate::crypto::decrypt_message_text(&content.text, key)?;
+                let decrypted_call = match content.call.as_deref() {
+                    Some(value) => Some(crate::crypto::decrypt_message_text(value, key)?),
+                    None => None,
+                };
 
                 Ok(json!({
                     "sender": content.sender,
                     "text": decrypted_text,
+                    "call": decrypted_call,
                     "timestamp": content.timestamp,
                     "keyVersion": content.key_version,
                     "attachments": content.attachments,
@@ -238,6 +258,8 @@ pub struct UnpackedMessage {
     pub timestamp: u64,
     pub key_version: u8,
     pub attachments: Vec<InMemoryAttachment>,
+    /// Decrypted structured payload, when the message carried one.
+    pub call: Option<String>,
 }
 
 /// Byte-buffer equivalent of `zali_net:pack_message` — builds a `.zali` archive
@@ -250,12 +272,19 @@ pub fn pack_message_bytes(
     key: &str,
     key_version: u8,
     attachments: Vec<InMemoryAttachment>,
+    call: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     if key.trim().is_empty() {
         return Err("Missing key parameter".to_string());
     }
 
     let encrypted_payload = crate::crypto::encrypt_message_text(text, key)?;
+    // Encrypted with the same routine as the body: it names both participants and
+    // when they talked, which is exactly as sensitive as the message text.
+    let encrypted_call = match call.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => Some(crate::crypto::encrypt_message_text(value, key)?),
+        None => None,
+    };
 
     let attachment_meta: Vec<AttachmentContent> = attachments
         .iter()
@@ -278,6 +307,7 @@ pub fn pack_message_bytes(
             default_pack_key_version()
         },
         attachments: attachment_meta,
+        call: encrypted_call,
     };
 
     let json = serde_json::to_string(&content).map_err(|e| e.to_string())?;
@@ -314,6 +344,10 @@ pub fn unpack_message_bytes(archive: &[u8], key: &str) -> Result<UnpackedMessage
     let content: MessageContent = serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
 
     let decrypted_text = crate::crypto::decrypt_message_text(&content.text, key)?;
+    let decrypted_call = match content.call.as_deref() {
+        Some(value) => Some(crate::crypto::decrypt_message_text(value, key)?),
+        None => None,
+    };
 
     let attachments = content
         .attachments
@@ -336,6 +370,7 @@ pub fn unpack_message_bytes(archive: &[u8], key: &str) -> Result<UnpackedMessage
     Ok(UnpackedMessage {
         sender: content.sender,
         text: decrypted_text,
+        call: decrypted_call,
         timestamp: content.timestamp,
         key_version: content.key_version,
         attachments,
@@ -618,6 +653,7 @@ mod tests {
                 kind: "image".to_string(),
                 bytes: b"fake-image-bytes".to_vec(),
             }],
+            None,
         )
         .unwrap();
 
@@ -631,14 +667,45 @@ mod tests {
     }
 
     #[test]
+    fn call_payload_round_trips_and_is_encrypted() {
+        let call_json = r#"{"roomId":"voice:dm:a:b:1","direction":"outgoing","durationMs":134000}"#;
+        let archive =
+            pack_message_bytes("Zalikus", "Звонок 2:14", "secret", 0, vec![], Some(call_json))
+                .unwrap();
+
+        // The payload names both participants and when they talked — it must not be
+        // readable in the archive without the conversation key.
+        let haystack = String::from_utf8_lossy(&archive);
+        assert!(!haystack.contains("voice:dm:a:b:1"));
+
+        let unpacked = unpack_message_bytes(&archive, "secret").unwrap();
+        assert_eq!(unpacked.call.as_deref(), Some(call_json));
+        assert_eq!(unpacked.text, "Звонок 2:14");
+    }
+
+    #[test]
+    fn message_without_call_payload_stays_backward_compatible() {
+        // Absent `call` must not appear in the JSON at all, so an older client sees
+        // exactly the archive shape it has always seen.
+        let archive = pack_message_bytes("Zalikus", "plain", "secret", 0, vec![], None).unwrap();
+        let unpacked = unpack_message_bytes(&archive, "secret").unwrap();
+        assert!(unpacked.call.is_none());
+
+        // …and an archive written by an older client still parses here.
+        let content: MessageContent =
+            serde_json::from_str(r#"{"sender":"a","text":"x","timestamp":1}"#).unwrap();
+        assert!(content.call.is_none());
+    }
+
+    #[test]
     fn bytes_unpack_message_with_wrong_key_fails() {
-        let archive = pack_message_bytes("Zalikus", "hello", "right-key", 0, vec![]).unwrap();
+        let archive = pack_message_bytes("Zalikus", "hello", "right-key", 0, vec![], None).unwrap();
         assert!(unpack_message_bytes(&archive, "wrong-key").is_err());
     }
 
     #[test]
     fn bytes_pack_message_requires_a_non_empty_key() {
-        assert!(pack_message_bytes("Zalikus", "hi", "", 0, vec![]).is_err());
+        assert!(pack_message_bytes("Zalikus", "hi", "", 0, vec![], None).is_err());
     }
 
     #[test]
@@ -649,7 +716,7 @@ mod tests {
         let archive_path = temp.path().join("message.zali");
         let unpack_dir = temp.path().join("unpacked");
 
-        let archive_bytes = pack_message_bytes("Zalikus", "cross-api", "secret", 3, vec![]).unwrap();
+        let archive_bytes = pack_message_bytes("Zalikus", "cross-api", "secret", 3, vec![], None).unwrap();
         fs::write(&archive_path, &archive_bytes).unwrap();
 
         let loader = test_loader();
