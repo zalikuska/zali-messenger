@@ -357,6 +357,40 @@ console.log('\n== forced key reset ==');
         backend.registry.get(scope).keyId !== await a.api.conversationKeyId(original));
 }
 
+console.log('\n== request budget ==');
+{
+    // Correctness is not enough: every request here is serialized through the
+    // client's API slot pool, so a sweep that is merely "thorough" starves history
+    // loading and envelope fetches behind it. That is what shipped on 2026-08-02 —
+    // publishing every historical candidate for every scope turned login into a
+    // minutes-long POST storm and the chat came up empty. Cost is now a test.
+    const backend = new SimBackend();
+    const me = new Device('alice', backend, { label: 'main' });
+    const other = new Device('alice', backend, { label: 'phone' });
+    const peer = new Device('bob', backend);
+    await me.register(); await other.register(); await peer.register();
+
+    // A realistic account: many scopes, each carrying several historical keys.
+    const SCOPES = 18, ALTS = 3;
+    const store = {};
+    for (let i = 0; i < SCOPES; i++) {
+        const scope = `dm:alice:peer${String(i).padStart(2, '0')}`;
+        store[scope] = `active-key-${i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa`;
+        for (let a = 0; a < ALTS; a++) {
+            me.api.addAltConversationKey(store, scope, `old-key-${i}-${a}-bbbbbbbbbbbbbbbbbbbbbbbb`);
+        }
+    }
+    me.api.saveStoredConversationKeys(store);
+
+    const before = backend.calls.length;
+    await me.api.retryPublishConversationKeys({ reason: 'budget-test' });
+    const spent = backend.calls.length - before;
+    const perScope = spent / SCOPES;
+    record(`a full republish sweep stays proportional to scopes, not to key history`,
+        perScope <= 4,
+        `${spent} requests for ${SCOPES} scopes x ${1 + ALTS} keys = ${perScope.toFixed(1)}/scope (budget 4)`);
+}
+
 console.log('\n== randomized multi-device scenarios ==');
 {
     let bad = 0; const examples = [];

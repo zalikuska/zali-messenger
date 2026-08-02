@@ -14944,20 +14944,22 @@ class ZaliInterface {
             .filter(scope => (String(scope || '').startsWith('dm:') || String(scope || '').startsWith('server:'))
                 && String(stored[scope] || '').trim())
             .slice(0, Math.max(1, Number(limit) || 20));
-        // Every candidate for the scope, not just the active key. A device that
-        // sent messages under its own key and then adopted the canonical one keeps
-        // the old key only as an `alt:` entry — and `alt:` entries are not scopes,
-        // so the old sweep skipped them entirely. If the original publish of that
-        // key had failed (a flaky moment is enough), nothing would ever offer it
-        // again and every message sent under it stayed permanently unreadable for
-        // the peer. Republishing candidates costs one extra envelope per stale key
-        // and reaches only participants who are already entitled to the scope.
-        const entries = [];
-        for (const scope of scopes) {
-            for (const key of this.conversationKeyCandidates(stored, scope)) {
-                entries.push([scope, key]);
-            }
-        }
+        // ACTIVE key per scope only. This sweep briefly published every `alt:`
+        // candidate too, so that a historical key whose first publish failed could
+        // still reach the peer — correct in principle, ruinous in practice: each
+        // (scope, key) pair costs a devices lookup plus one envelope POST per
+        // device, every request is serialized through the API slot pool, and a real
+        // account has ~18 scopes with several candidates each. The client spent
+        // minutes saturating its own pool, `syncIncomingKeyEnvelopes` and history
+        // loads timed out behind it, and the chat came up empty — observed in
+        // production 2026-08-02 as a continuous POST /api/key-envelopes storm with
+        // "The request timed out." on every envelope fetch.
+        //
+        // Historical keys still get out, but only down the targeted path:
+        // handleKeyRepublishRequest answers a specific "I cannot decrypt this scope"
+        // with every candidate. That fires once per affected scope instead of on
+        // every login for every scope.
+        const entries = scopes.map(scope => [scope, String(stored[scope] || '').trim()]);
         let published = 0;
         for (const [scope, key] of entries) {
             // Unconditional, and before the peer/channel split: this sweep is the
@@ -18292,6 +18294,8 @@ class ZaliInterface {
             this.setServerModalState({ error: e?.message || 'Не удалось сохранить сервер' });
             this.renderServerModal();
         } finally {
+"""#,
+    #"""
             this.setServerModalState({ saving: false });
         }
     }
@@ -18299,8 +18303,6 @@ class ZaliInterface {
     async uploadServerAsset(kind, file) {
         const serverId = this.S.serverModal.serverId || this.S.activeServer;
         if (!serverId || !file || this.S.serverModal.mode !== 'edit') return;
-"""#,
-    #"""
         const downscaled = await this.downscaleServerAssetFile(file, kind);
         const dataUrl = await this.readFileAsDataURL(downscaled);
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
@@ -22237,11 +22239,11 @@ class ZaliInterface {
             return;
         }
         // An active screen share needs more than the normal half-screen cap
+"""#,
+    #"""
         // (see .voice-panel.has-stage in style.css) — the stage tiles alone can
         // run well past that at their 16:9 aspect ratio.
         const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
-"""#,
-    #"""
         panel.classList.toggle('has-stage', hasStage);
         if (isVoiceChannel || hasDmCall || hasIncoming || this.voice.roomType === 'dm') {
             panel.innerHTML = this.renderVoiceRoomView();
@@ -26654,6 +26656,8 @@ class ZaliInterface {
                 this.trace(`checkForAppUpdate install keeps failing version=${latestVersion} attempts=${attempts.count}`);
                 return;
             }
+"""#,
+    #"""
             if (this.S.updateStatus.mandatory || declined !== latestVersion) {
                 this.openUpdateModal();
             }
@@ -26663,8 +26667,6 @@ class ZaliInterface {
     }
 
     openUpdateModal() {
-"""#,
-    #"""
         const modal = document.getElementById('updateAvailableModal');
         if (!modal || !this.S.updateStatus?.available) return;
         this.renderUpdateModal();
@@ -30684,6 +30686,8 @@ window.ZaliInterface = ZaliInterface;
                 networkConfig: true,
                 setKey: true,
                 saveStyle: true,
+"""#,
+    #"""
                 saveMessageCache: true,
                 downloadAttachment: false,
                 serverHistory: false,
@@ -30693,8 +30697,6 @@ window.ZaliInterface = ZaliInterface;
                 }
                 : {};
 
-"""#,
-    #"""
         const injectedCaps = window.__ZALI_NATIVE_CAPS__ && typeof window.__ZALI_NATIVE_CAPS__ === 'object'
             ? window.__ZALI_NATIVE_CAPS__
             : {};

@@ -55,9 +55,19 @@ record('setActiveConversationKey exists and preserves the outgoing key',
 record('the republish answer offers every candidate, not just the active key',
     /handleKeyRepublishRequest[\s\S]{0,900}?conversationKeyCandidates/.test(src),
     'handleKeyRepublishRequest must use conversationKeyCandidates');
-record('the retry sweep republishes every candidate',
-    /retryPublishConversationKeys[\s\S]{0,1200}?conversationKeyCandidates/.test(src),
-    'retryPublishConversationKeys must use conversationKeyCandidates');
+// The opposite of the rule that used to be here. Publishing every historical key
+// from the periodic sweep is correct but unaffordable: it is one devices lookup
+// plus an envelope POST per device for EVERY (scope, key), all serialized through
+// the API slot pool. Shipped in 0.2b17/0.2b18, it turned login into a request storm
+// and history never loaded. Historical keys belong to the targeted republish path.
+{
+    const start = src.indexOf('async retryPublishConversationKeys(');
+    const end = start > -1 ? src.indexOf('\n    async ', start + 10) : -1;
+    const body = start > -1 ? src.slice(start, end > -1 ? end : start + 3000) : '';
+    record('the periodic sweep publishes the active key only',
+        !!body && !/conversationKeyCandidates/.test(body),
+        'retryPublishConversationKeys must not fan out over every candidate');
+}
 
 // A failed lookup must never be read as "no canonical key exists".
 record('a failed canonical lookup returns the cache, never an empty answer',
