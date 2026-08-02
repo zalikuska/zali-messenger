@@ -46,6 +46,7 @@ pub(crate) fn pack_message(
     output_path: &Path,
     key_version: u8,
     attachments: &[Value],
+    call: Option<&str>,
 ) -> Result<PathBuf, String> {
     let args = json!({
         "sender": sender,
@@ -54,6 +55,9 @@ pub(crate) fn pack_message(
         "output_path": output_path.to_string_lossy().to_string(),
         "key_version": key_version,
         "attachments": attachments,
+        // Opaque structured payload (call records). The core encrypts it with the
+        // conversation key like the body; this layer only forwards it.
+        "call": call,
     });
 
     let response = dispatch_core_command("zali_net:pack_message", args)?;
@@ -525,6 +529,7 @@ pub(crate) fn build_history_output(
         "sender": sender,
         "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
         "text": text,
+        "call": decrypted.get("call").cloned().unwrap_or(Value::Null),
         "attachments": attachments,
         "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
         "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
@@ -760,6 +765,7 @@ pub(crate) async fn process_history_record(
     let decrypted = json!({
         "sender": unpacked.get("sender").cloned().unwrap_or(Value::Null),
         "text": unpacked.get("text").cloned().unwrap_or(Value::Null),
+        "call": unpacked.get("call").cloned().unwrap_or(Value::Null),
         "attachments": Value::Array(attachments_with_data),
     });
     cache_decrypted_message(&message_id, &decrypted);

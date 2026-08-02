@@ -77,7 +77,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     }
     
     // Callback to notify UI when a message is successfully received and unpacked
-    var onMessageReceived: ((_ id: String, _ clientId: String?, _ sender: String, _ receiver: String, _ text: String, _ attachments: [[String: Any]], _ serverId: String?, _ channelId: String?) -> Void)?
+    var onMessageReceived: ((_ id: String, _ clientId: String?, _ sender: String, _ receiver: String, _ text: String, _ call: String?, _ attachments: [[String: Any]], _ serverId: String?, _ channelId: String?) -> Void)?
     var onMessageDecryptFailed: ((_ id: String, _ sender: String, _ receiver: String, _ serverId: String?, _ channelId: String?) -> Void)?
     var onReactionUpdated: ((_ payload: [String: Any]) -> Void)?
     var onAvatarChanged: ((_ username: String, _ deleted: Bool) -> Void)?
@@ -984,7 +984,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                             // guard itself. Calling showMessageNotification directly here (as
                             // this used to) fired unconditionally for every incoming message
                             // regardless of visibility, duplicating/short-circuiting the JS gate.
-                            self?.onMessageReceived?(wsMsg.id, wsMsg.clientId ?? wsMsg.client_id, unpacked.sender, wsMsg.receiver, unpacked.text, renderedAttachments, serverId, channelId)
+                            self?.onMessageReceived?(wsMsg.id, wsMsg.clientId ?? wsMsg.client_id, unpacked.sender, wsMsg.receiver, unpacked.text, unpacked.call, renderedAttachments, serverId, channelId)
                         }
                     } else {
                         let keyPreview = candidateKeys

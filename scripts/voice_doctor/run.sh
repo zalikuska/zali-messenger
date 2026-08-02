@@ -29,6 +29,8 @@ run() {
 run "source invariants" node scripts/voice_doctor/check_source.mjs
 run "negotiation (real client code, simulated server, virtual time)" \
     node scripts/voice_doctor/check_negotiation.mjs
+run "call records sync to the peer and to own devices" \
+    node scripts/voice_doctor/check_call_records.mjs
 
 if [ "$WITH_TURN" = "1" ]; then
   run "live TURN relay path" python3 scripts/voice_doctor/check_turn.py

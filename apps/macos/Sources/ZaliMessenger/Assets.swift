@@ -7876,6 +7876,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         "recipient",
         "key",
         "clientId",
+        "call",
         "attachments"
       ]
     },
@@ -16059,6 +16060,9 @@ class ZaliInterface {
             serverId: message.serverId ? String(message.serverId).trim() : '',
             channelId: message.channelId ? String(message.channelId).trim() : '',
             text: String(message.text || ''),
+            // Opaque structured payload (call records). Rides the normal outbox so it
+            // inherits retries, dedupe by clientId and offline queueing.
+            call: String(message.call || ''),
             attachments: this.normalizeAttachments(message.attachments).map(att => ({
                 id: att.id,
                 name: att.name,
@@ -16447,6 +16451,7 @@ class ZaliInterface {
                 key: itemKey,
                 keyVersion: Number(item.keyVersion || 2),
                 clientId: item.clientId,
+                call: String(item.call || ''),
                 attachments: outAttachments.map(att => ({
                     name: att.name,
                     mimeType: att.mimeType,
@@ -18288,14 +18293,14 @@ class ZaliInterface {
             this.closeServerOverlay();
             await this.loadServers({ silent: true });
             if (data?.id) {
+"""#,
+    #"""
                 this.setActiveServer(data.id, { persist: true });
             }
         } catch (e) {
             this.setServerModalState({ error: e?.message || 'Не удалось сохранить сервер' });
             this.renderServerModal();
         } finally {
-"""#,
-    #"""
             this.setServerModalState({ saving: false });
         }
     }
@@ -21284,6 +21289,97 @@ class ZaliInterface {
         this.renderVoicePanel();
     }
 
+    callRecordMessageId(roomId) {
+        return `call-${String(roomId || '').trim()}`;
+    }
+
+    // Human-readable summary that also goes into `text`. Older clients (and any
+    // client that does not understand the structured payload) show this instead of
+    // an empty bubble, so the record degrades to a readable line rather than to
+    // nothing.
+    formatCallSummary(callInfo, direction) {
+        const outcome = String(callInfo?.outcome || '').trim();
+        const ms = Number(callInfo?.durationMs || 0);
+        if (outcome === 'missed') return direction === 'outgoing' ? 'Вызов без ответа' : 'Пропущенный звонок';
+        if (outcome === 'rejected') return direction === 'outgoing' ? 'Вызов отклонён' : 'Отклонённый звонок';
+        if (!ms) return direction === 'outgoing' ? 'Исходящий звонок' : 'Входящий звонок';
+        const total = Math.round(ms / 1000);
+        const mm = Math.floor(total / 60);
+        const ss = String(total % 60).padStart(2, '0');
+        const label = direction === 'outgoing' ? 'Исходящий звонок' : 'Входящий звонок';
+        return `${label} · ${mm}:${ss}`;
+    }
+
+    sendCallRecordMessage(message) {
+        const peer = String(message?.call?.peer || '').trim();
+        if (!peer || !message?.call) return;
+        let payload = '';
+        try {
+            payload = JSON.stringify(message.call);
+        } catch (e) {
+            return;
+        }
+        this.enqueuePendingOutbox({
+            clientId: message.id,
+            sender: this.myName(),
+            receiver: peer,
+            text: this.formatCallSummary(message.call, message.call.direction),
+            call: payload,
+            attachments: [],
+            timestamp: message.timestamp,
+        });
+        this.flushPendingOutbox();
+    }
+
+    // Incoming counterpart. Direction is derived locally from who sent it rather
+    // than trusted from the payload: the sender wrote 'outgoing' from its own point
+    // of view, and for the receiver the very same call is incoming.
+    parseCallRecordPayload(payload) {
+        const raw = String(payload?.call || '').trim();
+        if (!raw) return null;
+        let parsed = null;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            this.trace('parseCallRecordPayload invalid json');
+            return null;
+        }
+        if (!parsed || typeof parsed !== 'object' || !String(parsed.roomId || '').trim()) return null;
+        return parsed;
+    }
+
+    applyCallRecordMessage(callInfo, payload) {
+        const me = String(this.myName() || '').trim();
+        const sender = String(payload?.sender || '').trim();
+        const receiver = String(payload?.receiver || '').trim();
+        const peer = sender === me ? receiver : sender;
+        if (!peer) return;
+        const direction = sender === me ? 'outgoing' : 'incoming';
+        const id = this.callRecordMessageId(callInfo.roomId);
+        const message = {
+            id,
+            clientId: id,
+            kind: 'call',
+            sender,
+            receiver,
+            text: '',
+            attachments: [],
+            timestamp: String(payload?.timestamp || callInfo.endedAt || new Date().toISOString()),
+            call: { ...callInfo, peer, direction },
+        };
+        this.initChat(peer);
+        const arr = this.S.chats[peer];
+        const index = arr.findIndex(m => String(m.id || '').trim() === id
+            || String(m.clientId || '').trim() === id);
+        if (index >= 0) arr[index] = { ...arr[index], ...message };
+        else arr.push(message);
+        arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+        this.saveStoredMessageCache();
+        this.trace(`applyCallRecordMessage peer=${peer} direction=${direction} roomId=${callInfo.roomId}`);
+        this.renderContacts();
+        if (this.S.navMode === 'dm' && this.S.current === peer) this.scheduleRenderMessages();
+    }
+
     recordVoiceCallHistory({ outcome = 'completed', endedAt = Date.now() } = {}) {
         const call = this.voice.callTrack;
         if (!call || call.recorded || call.roomType === 'channel') return;
@@ -21294,7 +21390,10 @@ class ZaliInterface {
         const endMs = Number(endedAt || Date.now()) || Date.now();
         const durationMs = Math.max(0, endMs - startMs);
         const message = {
-            id: `call-${call.roomId || peer}-${endMs}`,
+            // Stable across both participants and all their devices: the room id
+            // identifies one call, so the local row and the one that arrives over the
+            // wire collapse into a single entry instead of duplicating.
+            id: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
             kind: 'call',
             sender: direction === 'outgoing' ? this.myName() : peer,
             receiver: direction === 'outgoing' ? peer : this.myName(),
@@ -21315,14 +21414,28 @@ class ZaliInterface {
         const convo = peer;
         this.initChat(convo);
         const arr = this.S.chats[convo];
-        const key = this.messageRenderKey(message);
-        const exists = arr.some(m => this.messageRenderKey(m) === key);
-        if (!exists) {
+        // Dedupe on the room-derived id, not on a rendered-content key: the same call
+        // can be written here locally AND arrive over the wire from the other side,
+        // and those two differ in text and sender casing while being the same call.
+        const existingIndex = arr.findIndex(m => String(m.id || '').trim() === message.id
+            || String(m.clientId || '').trim() === message.id);
+        if (existingIndex >= 0) {
+            arr[existingIndex] = { ...arr[existingIndex], ...message };
+        } else {
             arr.push(message);
             arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
         }
         call.recorded = true;
         this.voice.callTrack = null;
+        this.saveStoredMessageCache();
+        // The caller owns the record and is the one that sends it, so exactly one
+        // copy travels. The callee keeps its local row for instant feedback and lets
+        // the incoming copy upsert onto the same id. Until this existed the record
+        // was never sent anywhere at all: it lived only in this device's cache, so
+        // neither the peer nor the account's own other devices ever saw it.
+        if (direction === 'outgoing') {
+            this.sendCallRecordMessage(message);
+        }
         this.renderContacts();
         if (this.S.navMode === 'dm' && this.S.current === convo) {
             this.scheduleRenderMessages();
@@ -22146,6 +22259,8 @@ class ZaliInterface {
             <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
                 <div class="voice-room-top">
                     <div>
+"""#,
+    #"""
                         <div class="voice-room-title">${this.esc(title)}</div>
                         <div class="voice-room-sub">${this.esc(this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов')}</div>
                     </div>
@@ -22239,8 +22354,6 @@ class ZaliInterface {
             return;
         }
         // An active screen share needs more than the normal half-screen cap
-"""#,
-    #"""
         // (see .voice-panel.has-stage in style.css) — the stage tiles alone can
         // run well past that at their 16:9 aspect ratio.
         const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
@@ -26553,6 +26666,8 @@ class ZaliInterface {
     // App version scheme: MAJOR.MINOR{a|b|r}BUILD, e.g. "0.2b9" (r=release >
     // b=beta > a=alpha at the same MAJOR.MINOR). Falls back to plain dotted
     // numeric versions (e.g. legacy "1.1.3") for compatibility with whatever the
+"""#,
+    #"""
     // server already has published in app_releases — those are treated as the
     // top ("release") channel so they compare purely by major.minor.patch.
     parseAppVersion(v) {
@@ -26656,8 +26771,6 @@ class ZaliInterface {
                 this.trace(`checkForAppUpdate install keeps failing version=${latestVersion} attempts=${attempts.count}`);
                 return;
             }
-"""#,
-    #"""
             if (this.S.updateStatus.mandatory || declined !== latestVersion) {
                 this.openUpdateModal();
             }
@@ -27859,6 +27972,15 @@ class ZaliInterface {
     // --- Bus Command Handlers ---
 
     receiveMessage(payload = {}) {
+        // Call records are not chat text and DM-only, so they take their own path
+        // instead of being threaded through both branches of the logic below.
+        const callRecord = this.parseCallRecordPayload(payload);
+        if (callRecord) {
+            const clientId = String(payload?.clientId || payload?.client_id || '').trim();
+            if (clientId) this.dropPendingOutbox(clientId);
+            this.applyCallRecordMessage(callRecord, payload);
+            return;
+        }
         const {
             id,
             sender,
@@ -30545,6 +30667,8 @@ class ZaliInterface {
             });
         }, { passive: true });
         document.addEventListener('keydown', (e) => {
+"""#,
+    #"""
             if (e.key === 'Escape' && this.isMobileLayout() && document.body?.classList.contains('mobile-sidebar-open')) {
                 this.closeMobileSidebar();
             }
@@ -30686,8 +30810,6 @@ window.ZaliInterface = ZaliInterface;
                 networkConfig: true,
                 setKey: true,
                 saveStyle: true,
-"""#,
-    #"""
                 saveMessageCache: true,
                 downloadAttachment: false,
                 serverHistory: false,

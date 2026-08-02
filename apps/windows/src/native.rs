@@ -42,7 +42,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b19";
+const APP_DISPLAY_VERSION: &str = "0.2b20";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -2067,7 +2067,21 @@ pub fn handle_ipc_message(
                     }
                 }
 
-                let pack_result = pack_message(&sender, &text, &key, &archive_path, key_version, &packed_attachments);
+                let call_payload = request
+                    .get("call")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string());
+                let pack_result = pack_message(
+                    &sender,
+                    &text,
+                    &key,
+                    &archive_path,
+                    key_version,
+                    &packed_attachments,
+                    call_payload.as_deref(),
+                );
                 if let Err(error) = pack_result {
                     trace(format!("SEND_MESSAGE pack_failed clientId={} err={}", client_id, error));
                     dispatch_ui_event(

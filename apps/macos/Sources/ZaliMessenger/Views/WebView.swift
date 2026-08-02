@@ -921,6 +921,7 @@ struct WebView: NSViewRepresentable {
                         "sender": unpacked.sender,
                         "receiver": record.receiver,
                         "text": unpacked.text,
+                        "call": unpacked.call ?? "",
                         "attachments": renderedAttachments,
                         "timestamp": record.timestamp,
                         "reactions": record.reactions ?? [],
@@ -1295,7 +1296,11 @@ struct WebView: NSViewRepresentable {
                         ])
                     }
                     
-                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments) {
+                    // Opaque structured payload (call records) — forwarded to the core,
+                    // which encrypts it with the conversation key like the body.
+                    let callPayload = (dict["call"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments, call: (callPayload?.isEmpty == false) ? callPayload : nil) {
                         DispatchQueue.main.async {
                             self.addLog(level: "SUCCESS", text: "Core: Сообщение успешно упаковано и зашифровано в Rust бэкенде")
                         }
@@ -1756,7 +1761,7 @@ struct WebView: NSViewRepresentable {
         
         webView.loadHTMLString(WebAssets.html, baseURL: URL(string: "http://localhost"))
         
-        NetworkService.shared.onMessageReceived = { id, clientId, sender, receiver, text, attachments, serverId, channelId in
+        NetworkService.shared.onMessageReceived = { id, clientId, sender, receiver, text, call, attachments, serverId, channelId in
             let safeServerId = WebView.javascriptLiteral(serverId as Any)
             let safeChannelId = WebView.javascriptLiteral(channelId as Any)
             let safeId = WebView.javascriptLiteral(id)
@@ -1764,10 +1769,11 @@ struct WebView: NSViewRepresentable {
             let safeSender = WebView.javascriptLiteral(sender)
             let safeReceiver = WebView.javascriptLiteral(receiver)
             let safeText = WebView.javascriptLiteral(text)
+            let safeCall = WebView.javascriptLiteral(call ?? "")
             let safeAttachments = WebView.javascriptLiteral(attachments)
             
             DispatchQueue.main.async {
-                let payload = "{ id: \(safeId), clientId: \(safeClientId), sender: \(safeSender), receiver: \(safeReceiver), text: \(safeText), attachments: \(safeAttachments), serverId: \(safeServerId), channelId: \(safeChannelId) }"
+                let payload = "{ id: \(safeId), clientId: \(safeClientId), sender: \(safeSender), receiver: \(safeReceiver), text: \(safeText), call: \(safeCall), attachments: \(safeAttachments), serverId: \(safeServerId), channelId: \(safeChannelId) }"
                 coordinator.receiveMessage(payload)
             }
         }

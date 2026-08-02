@@ -123,6 +123,8 @@ class ZaliCore {
         let timestamp: UInt64
         let keyVersion: Int?
         let attachments: [AttachmentPayload]?
+        /// Opaque structured payload (call records), decrypted by the core.
+        let call: String?
     }
     
     /// Sends a JSON-serialized command payload to the Rust ZaliBus and returns the result.
@@ -154,7 +156,8 @@ class ZaliCore {
         output: String,
         key: String,
         keyVersion: Int = 2,
-        attachments: [[String: Any]] = []
+        attachments: [[String: Any]] = [],
+        call: String? = nil
     ) -> Bool {
         guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
@@ -169,6 +172,10 @@ class ZaliCore {
             args["attachments"] = attachments
         }
         args["key_version"] = max(1, keyVersion)
+        // Forwarded verbatim; the core encrypts it with the conversation key.
+        if let call, !call.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            args["call"] = call
+        }
         if let result = dispatch(addressCommand: "zali_net:pack_message", args: args),
            let success = result["success"] as? Bool {
             return success
