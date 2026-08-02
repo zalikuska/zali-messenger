@@ -10483,7 +10483,7 @@ class ZaliInterface {
         // that keeps failing used to burn all 8 attempts and then nothing — for any
         // peer — could ever retry again. A changed roster is a genuinely new
         // situation (someone joined or left), so give it a fresh budget.
-        const rosterKey = peers.slice().sort().join(' ');
+        const rosterKey = peers.slice().sort().join(' ');
         if (this.voice.peerRosterKey !== rosterKey) {
             this.voice.peerRosterKey = rosterKey;
             this.voice.negotiationRetries = 0;
@@ -11246,8 +11246,50 @@ class ZaliInterface {
             // Auto-reject instead; the server allows the target of a ringing room
             // to reject it, so the caller gets a normal voice_call_rejected.
             const activeRoomId = String(this.voice.roomId || '').trim();
-            const busy = activeRoomId && activeRoomId !== roomId && this.isInActiveCall();
-            if (busy) {
+            // Mutual invite is GLARE, not "busy". isInActiveCall() counts 'calling'
+            // and 'incoming', so a merely ringing invite made us auto-reject anything
+            // arriving — including the invite from the very person we were calling.
+            // Both sides do it at once, both rooms die, and nobody ever answers: the
+            // production log for 2026-08-02 shows 15 invites, 124 rejects and zero
+            // answers for exactly this. It needs only both people to tap «Позвонить»
+            // in the same few seconds, which is precisely what they do when a call
+            // did not connect the first time.
+            //
+            // Resolve it the same way SDP glare is resolved — one deterministic owner
+            // (compareVoicePeerNames is engine-independent, unlike localeCompare) —
+            // and never reject: rejecting tears down the peer's room too, so the pair
+            // ends up with no call at all instead of one.
+            const activePeer = String(this.voice.targetUser || this.voice.inviter || '').trim();
+            const samePeer = !!from && !!activePeer && from.toLowerCase() === activePeer.toLowerCase();
+            const ringing = this.voice.status === 'calling' || this.voice.status === 'incoming';
+            if (activeRoomId && activeRoomId !== roomId && samePeer && ringing) {
+                const iOwnTheCall = this.compareVoicePeerNames(this.myName(), from) < 0;
+                if (iOwnTheCall && this.voice.status === 'calling') {
+                    // Keep our own invite; the peer drops theirs and answers ours.
+                    this.voiceDiag('invite-glare-keep-ours', {
+                        roomId, from, activeRoomId, status: this.voice.status,
+                    }, 'WARN');
+                    return;
+                }
+                // We do not own it: withdraw our invite and let theirs be the call.
+                this.voiceDiag('invite-glare-adopt-theirs', {
+                    roomId, from, activeRoomId, status: this.voice.status,
+                }, 'WARN');
+                const ourInvite = String(this.voice.outgoingInvite?.roomId || activeRoomId || '').trim();
+                if (ourInvite && ourInvite !== roomId) {
+                    this.sendVoiceEvent({
+                        type: 'voice_call_cancel',
+                        roomId: ourInvite,
+                        target: from,
+                    });
+                    // Our own voice_call_outgoing / room_state for the withdrawn room
+                    // are usually still in flight and would drag us back to 'calling',
+                    // undoing the adoption a moment after it happened.
+                    this.abandonVoiceRoom(ourInvite);
+                }
+                this.voice.outgoingInvite = null;
+                // Fall through: the incoming invite below becomes the live call.
+            } else if (activeRoomId && activeRoomId !== roomId && this.isInActiveCall()) {
                 this.voiceTrace('incoming-invite-busy', { roomId, from, activeRoomId, status: this.voice.status }, 'WARN');
                 this.sendVoiceEvent({
                     type: 'voice_call_reject',
@@ -11282,6 +11324,10 @@ class ZaliInterface {
         }
 
         if (eventType === 'voice_call_outgoing') {
+            if (this.isAbandonedVoiceRoom(payload.roomId)) {
+                this.voiceDiag('outgoing-ring-ignored-abandoned', { roomId: payload.roomId || '' }, 'WARN');
+                return;
+            }
             this.voice.outgoingInvite = {
                 roomId: String(payload.roomId || '').trim(),
                 target: String(payload.target || '').trim(),
@@ -11417,6 +11463,10 @@ class ZaliInterface {
 
         if (eventType === 'voice_room_state') {
             const roomId = String(payload.roomId || '').trim();
+            if (this.isAbandonedVoiceRoom(roomId)) {
+                this.voiceDiag('room-state-ignored-abandoned', { roomId }, 'WARN');
+                return;
+            }
             const roomStatus = String(payload.status || '').trim().toLowerCase();
             const roomInitiator = String(payload.initiator || '').trim();
             const roomTarget = String(payload.target || '').trim();
@@ -13987,7 +14037,7 @@ class ZaliInterface {
         }
     }
 
-    async loadUsers(query = '') {
+    async loadUsers(query = '', { interactive = false } = {}) {
         try {
             this.trace(`loadUsers start user=${this.myName()} tokenSet=${!!this.S.session?.token}`);
             if (!this.S.session?.token) {
@@ -13995,7 +14045,7 @@ class ZaliInterface {
                 return;
             }
             const search = String(query || '').trim();
-            const res = await this.apiFetch(this.apiRoutes.users.search(search));
+            const res = await this.apiFetch(this.apiRoutes.users.search(search), { interactive });
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 this.trace(`loadUsers failed status=${res.status} body=${text.slice(0, 300)}`);
@@ -14469,7 +14519,7 @@ class ZaliInterface {
         let username = this.resolveContactInputUsername(rawUsername);
 
         if (!exactInCache && rawUsername.length >= 3) {
-            await this.loadUsers(rawUsername);
+            await this.loadUsers(rawUsername, { interactive: true });
             const exactAfterLoad = Array.isArray(this.S.users)
                 ? this.S.users.find(user => String(user || '').trim().toLowerCase() === lowerRawUsername)
                 : null;
@@ -17988,6 +18038,24 @@ class ZaliInterface {
     // incoming-invite busy-guard and the foreign-room-state guard key off this exact set;
     // inlining it twice risks one copy going stale and silently re-opening the
     // active-call-clobber bug.
+    // Rooms this client deliberately walked away from (invite glare). Events for
+    // them are already in flight when we leave, and applying those would restore
+    // state for a call that no longer exists. Bounded: a handful per session.
+    abandonVoiceRoom(roomId) {
+        const id = String(roomId || '').trim();
+        if (!id) return;
+        if (!this._abandonedVoiceRooms) this._abandonedVoiceRooms = new Set();
+        this._abandonedVoiceRooms.add(id);
+        if (this._abandonedVoiceRooms.size > 32) {
+            this._abandonedVoiceRooms.delete(this._abandonedVoiceRooms.values().next().value);
+        }
+    }
+
+    isAbandonedVoiceRoom(roomId) {
+        const id = String(roomId || '').trim();
+        return !!id && !!this._abandonedVoiceRooms?.has(id);
+    }
+
     isInActiveCall(status = this.voice?.status) {
         return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
     }
@@ -20027,6 +20095,64 @@ class ZaliInterface {
                 this.closeMobileSidebar();
             }
         });
+        this.setupScrollInertia();
+    }
+
+    // Mouse-wheel scrolling has no native deceleration (unlike trackpad momentum,
+    // which the OS/compositor handles without extra wheel events) — each notch just
+    // jumps and stops dead. This adds a tiny residual glide after the wheel goes
+    // idle, capped and decaying fast on purpose: it should read as "less abrupt",
+    // never as a distinct animation. #msgs is included deliberately — the coast is
+    // a continuation of the user's own gesture, so it must NOT go through
+    // markProgrammaticScroll() (see the comment on that method): onMessagesScroll
+    // needs to see it as real scrolling so _bottomIntent still clears correctly if
+    // the glide carries the view away from the bottom.
+    setupScrollInertia() {
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+        const SELECTOR = '.msgs, .contacts, .sidebar, .server-channel-list, .settings-body, .server-modal-content, .color-picker-body';
+        const FRICTION = 0.72;
+        const MIN_VELOCITY = 0.5;
+        const MAX_VELOCITY = 6;
+        const IDLE_MS = 70;
+        const states = new WeakMap();
+
+        const coast = (el, st) => {
+            st.raf = requestAnimationFrame(() => {
+                st.velocity *= FRICTION;
+                if (Math.abs(st.velocity) < MIN_VELOCITY) {
+                    st.raf = 0;
+                    return;
+                }
+                const max = el.scrollHeight - el.clientHeight;
+                const next = Math.max(0, Math.min(max, el.scrollTop + st.velocity));
+                el.scrollTop = next;
+                if (next <= 0 || next >= max) {
+                    st.raf = 0;
+                    return;
+                }
+                coast(el, st);
+            });
+        };
+
+        document.addEventListener('wheel', (e) => {
+            const el = e.target.closest?.(SELECTOR);
+            if (!el || el.scrollHeight <= el.clientHeight) return;
+            let st = states.get(el);
+            if (!st) {
+                st = { velocity: 0, raf: 0, idleTimer: 0 };
+                states.set(el, st);
+            }
+            if (st.raf) {
+                cancelAnimationFrame(st.raf);
+                st.raf = 0;
+            }
+            const nudge = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, e.deltaY * 0.12));
+            st.velocity = st.velocity * 0.3 + nudge * 0.7;
+            clearTimeout(st.idleTimer);
+            st.idleTimer = setTimeout(() => {
+                if (Math.abs(st.velocity) >= MIN_VELOCITY) coast(el, st);
+            }, IDLE_MS);
+        }, { passive: true });
     }
 }
 window.ZaliInterface = ZaliInterface;

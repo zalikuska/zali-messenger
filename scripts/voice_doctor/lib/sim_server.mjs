@@ -43,7 +43,7 @@ export class SimServer {
     /** Client -> server. Returns whether the client considers it delivered. */
     fromClient(sender, payload) {
         const type = payload.type;
-        this.log.push({ from: sender, type, to: payload.to || '', signalType: payload.signal?.type || '' });
+        this.log.push({ from: sender, type, to: payload.to || '', roomId: payload.roomId || '', signalType: payload.signal?.type || '' });
         if (this.opts.refuseSend) return false;
 
         if (type === 'voice_call_invite') {

@@ -149,6 +149,48 @@ console.log('\n== DM calls ==');
     record('late microphone does not leave a permanently one-way call', twoWay(ctx), describe(ctx));
 }
 
+console.log('\n== simultaneous invites (call glare) ==');
+
+{
+    // Both people tap «Позвонить» within the ringing window — which is exactly what
+    // they do after a call failed to connect once. Each side then has a ringing
+    // outgoing invite, and isInActiveCall() counts 'calling', so the busy guard used
+    // to auto-reject the other's invite. Both rooms died and nobody ever answered.
+    // Production log 2026-08-02: 15 invites, 124 rejects, 0 answers.
+    const clock = new VirtualClock();
+    const server = new SimServer({ clock });
+    const a = new VoicePeer('alice', server, { clock });
+    const b = new VoicePeer('bob', server, { clock });
+    server.register(a); server.register(b);
+
+    await Promise.all([
+        a.api.startDirectCall('bob'),
+        b.api.startDirectCall('alice'),
+    ]);
+    await server.settle();
+
+    const rejects = server.log.filter(r => r.type === 'voice_call_reject').length;
+    record('neither side auto-rejects the person it is calling', rejects === 0,
+        `voice_call_reject sent=${rejects}`);
+
+    // Before an accept the callee deliberately has no voice.roomId (it is set when
+    // answering), so convergence is checked on the invites themselves.
+    const callee = a.api.voice.status === 'incoming' ? a : (b.api.voice.status === 'incoming' ? b : null);
+    const caller = callee === a ? b : a;
+    record('exactly one side ends up as the callee, one as the caller',
+        !!callee && caller.api.voice.status === 'calling',
+        `alice=${a.api.voice.status} bob=${b.api.voice.status}`);
+    if (callee) {
+        record('both sides point at the same surviving room',
+            callee.api.voice.incomingInvite?.roomId === caller.api.voice.outgoingInvite?.roomId
+            && !!caller.api.voice.outgoingInvite?.roomId,
+            `callee=${callee.api.voice.incomingInvite?.roomId || 'none'} caller=${caller.api.voice.outgoingInvite?.roomId || 'none'}`);
+        await callee.api.acceptIncomingCall();
+        await server.settle();
+        record('the surviving call carries audio both ways', twoWay({ a, b }), describe({ a, b, server }));
+    }
+}
+
 console.log('\n== hostile transport ==');
 
 for (const [label, opts] of [

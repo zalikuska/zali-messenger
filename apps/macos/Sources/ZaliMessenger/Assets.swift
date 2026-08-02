@@ -70,6 +70,11 @@ struct WebAssets {
     --footer-line-size: 1px;
     --footer-line-color: var(--border);
     --composer-inline-inset: 6px;
+    /* Same curve already used by every keyframe animation in this file
+       (view-enter, card-rise, row-fade, etc.) — hover/focus transitions used
+       the browser's default "ease" instead, which decelerates less and reads
+       as slightly stiffer next to those. One shared curve everywhere. */
+    --ease-out: cubic-bezier(.2,.8,.2,1);
 }
 
 * {
@@ -106,7 +111,9 @@ body {
 }
 
 button,
-input {
+input,
+textarea,
+select {
     font: inherit;
 }
 
@@ -227,7 +234,7 @@ button {
     background: transparent;
     color: var(--text2);
     cursor: pointer;
-    transition: background .15s ease, color .15s ease;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
 }
 
 .win-btn svg {
@@ -273,7 +280,7 @@ button {
     color: var(--text);
     cursor: pointer;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-    transition: transform .18s ease, border-color .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease;
+    transition: transform .18s var(--ease-out), border-color .18s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
 }
 
 .mobile-menu-btn:hover,
@@ -362,7 +369,7 @@ button {
     text-transform: none;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
-    transition: transform .22s cubic-bezier(.2,1.1,.3,1), background .24s ease, color .22s ease, box-shadow .24s ease;
+    transition: transform .22s cubic-bezier(.2,1.1,.3,1), background .24s var(--ease-out), color .22s var(--ease-out), box-shadow .24s var(--ease-out);
 }
 
 .mobile-dock-ico {
@@ -379,7 +386,7 @@ button {
     stroke-width: 1.9;
     stroke-linecap: round;
     stroke-linejoin: round;
-    transition: transform .22s cubic-bezier(.2,1.2,.24,1), stroke-width .22s ease;
+    transition: transform .22s cubic-bezier(.2,1.2,.24,1), stroke-width .22s var(--ease-out);
 }
 
 .mobile-dock-label {
@@ -514,7 +521,7 @@ body[data-ui-v2="off"] #mobileHubBtn {
         inset 0 1px 0 rgba(255,255,255,.34);
     pointer-events: none;
     transform: translate3d(4px, 0, 0);
-    transition: transform .58s cubic-bezier(.22, .61, .36, 1), width .28s ease, box-shadow .28s ease;
+    transition: transform .58s cubic-bezier(.22, .61, .36, 1), width .28s var(--ease-out), box-shadow .28s var(--ease-out);
 }
 
 body[data-ui-v2="on"] .hub-segment-nav {
@@ -543,7 +550,7 @@ body[data-ui-v2="on"] .mode-switch {
     letter-spacing: .08em;
     text-transform: uppercase;
     cursor: pointer;
-    transition: transform .18s ease, color .22s ease, background .18s ease, box-shadow .18s ease;
+    transition: transform .18s var(--ease-out), color .22s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out);
 }
 
 .hub-segment-btn svg {
@@ -554,7 +561,7 @@ body[data-ui-v2="on"] .mode-switch {
     stroke-width: 1.9;
     stroke-linecap: round;
     stroke-linejoin: round;
-    transition: transform .22s cubic-bezier(.2, 1.2, .24, 1), stroke-width .22s ease;
+    transition: transform .22s cubic-bezier(.2, 1.2, .24, 1), stroke-width .22s var(--ease-out);
 }
 
 .hub-segment-btn:hover {
@@ -594,7 +601,7 @@ body[data-ui-v2="on"] .mode-switch {
     letter-spacing: .08em;
     text-transform: uppercase;
     cursor: pointer;
-    transition: background .18s ease, color .18s ease, box-shadow .18s ease, transform .18s ease;
+    transition: background .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
 }
 
 .mode-btn:hover {
@@ -650,7 +657,7 @@ body[data-ui-v2="on"] .mode-switch {
     background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
     color: var(--text);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.03), 0 8px 18px rgba(0,0,0,.08);
-    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    transition: transform .18s var(--ease-out), border-color .18s var(--ease-out), box-shadow .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .search-input:focus {
@@ -699,7 +706,7 @@ body[data-ui-v2="on"] .mode-switch {
     line-height: 1;
     cursor: pointer;
     box-shadow: 0 8px 18px rgba(var(--accent-rgb),.14), inset 0 1px 0 rgba(255,255,255,.2);
-    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease, opacity .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), filter .18s var(--ease-out), opacity .18s var(--ease-out);
 }
 
 .contact-add-btn:hover {
@@ -780,7 +787,7 @@ body[data-ui-v2="on"] .mode-switch {
     color: var(--text);
     cursor: pointer;
     text-align: left;
-    transition: transform .18s ease, background .18s ease, border-color .18s ease;
+    transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out);
 }
 
 .contact-suggest-item:hover {
@@ -854,7 +861,7 @@ body[data-nav-mode="servers"] .contacts {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     cursor: pointer;
-    transition: color .18s ease, opacity .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease;
+    transition: color .18s var(--ease-out), opacity .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
     /* Deliberately no entry animation. The sidebar is re-rendered as one innerHTML
        write whenever any row's content changes (a new message, an unread count, an
        avatar that finished loading), so a per-row entry animation replayed across
@@ -966,7 +973,7 @@ body[data-nav-mode="servers"] .contacts {
     cursor: pointer;
     font-size: 18px;
     line-height: 1;
-    transition: transform .18s ease, color .18s ease, background .18s ease, box-shadow .18s ease;
+    transition: transform .18s var(--ease-out), color .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out);
 }
 
 .contact-remove:hover {
@@ -1048,7 +1055,7 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text);
     cursor: pointer;
     box-shadow: none;
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, color .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), border-color .18s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out);
     /* No entry animation — same reason as .contact: the list is rebuilt as a whole. */
     content-visibility: auto;
     contain-intrinsic-size: 62px;
@@ -1221,7 +1228,7 @@ body[data-nav-mode="servers"] .contacts {
     cursor: pointer;
     border: 1px solid var(--border);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, color .18s ease, background .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .settings-btn:hover {
@@ -1361,7 +1368,7 @@ body[data-nav-mode="servers"] .contacts {
     text-align: left;
     cursor: pointer;
     box-shadow: 0 18px 42px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.04);
-    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease;
+    transition: transform .2s var(--ease-out), border-color .2s var(--ease-out), box-shadow .2s var(--ease-out), background .2s var(--ease-out);
 }
 
 .hub-card:hover {
@@ -1611,7 +1618,7 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text);
     cursor: pointer;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, color .18s ease, background .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .chat-call-btn {
@@ -1703,7 +1710,7 @@ body[data-nav-mode="servers"] .contacts {
     cursor: pointer;
     flex: 0 0 auto;
     scroll-snap-align: start;
-    transition: transform .18s ease, background .18s ease, border-color .18s ease, color .18s ease, box-shadow .18s ease;
+    transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
     content-visibility: auto;
     contain-intrinsic-size: 44px;
 }
@@ -1902,7 +1909,7 @@ body[data-nav-mode="servers"] .contacts {
     /* The speaking ring is an inset box-shadow, not a border, so lighting it up
        never changes the tile's box size and the grid can't reflow on every
        voice-activity flip. */
-    transition: box-shadow .12s ease, border-color .12s ease;
+    transition: box-shadow .12s var(--ease-out), border-color .12s var(--ease-out);
 }
 
 .voice-tile.speaking {
@@ -2151,7 +2158,7 @@ body[data-nav-mode="servers"] .contacts {
     letter-spacing: .08em;
     text-transform: uppercase;
     cursor: pointer;
-    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease, border-color .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), filter .18s var(--ease-out), border-color .18s var(--ease-out);
 }
 
 .voice-btn:hover {
@@ -2192,7 +2199,7 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(255,255,255,.05);
     color: var(--text);
     cursor: pointer;
-    transition: transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease, color .16s ease;
+    transition: transform .16s var(--ease-out), box-shadow .16s var(--ease-out), background .16s var(--ease-out), border-color .16s var(--ease-out), color .16s var(--ease-out);
 }
 
 .call-ctrl-btn:hover {
@@ -2398,7 +2405,7 @@ body[data-nav-mode="servers"] .contacts {
     cursor: pointer;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 6px 18px rgba(0,0,0,.14);
     line-height: 1;
-    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    transition: transform .18s var(--ease-out), border-color .18s var(--ease-out), box-shadow .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .hdr-btn:hover,
@@ -2570,7 +2577,7 @@ body[data-nav-mode="servers"] .contacts {
     text-transform: uppercase;
     letter-spacing: .08em;
     box-shadow: 0 10px 24px rgba(0,0,0,.18);
-    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease, border-color .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), filter .18s var(--ease-out), border-color .18s var(--ease-out);
     animation: chip-pop .22s cubic-bezier(.2,.9,.18,1) both;
 }
 
@@ -2639,7 +2646,7 @@ body[data-nav-mode="servers"] .contacts {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     opacity: 0;
-    transition: opacity .18s ease;
+    transition: opacity .18s var(--ease-out);
 }
 
 .avatar-crop-overlay[hidden] {
@@ -2661,7 +2668,7 @@ body[data-nav-mode="servers"] .contacts {
     background: linear-gradient(180deg, rgba(22,24,28,.98), rgba(10,12,16,.98));
     box-shadow: 0 30px 90px rgba(0,0,0,.52), 0 0 0 1px rgba(var(--accent-rgb),.06);
     transform: translateY(8px) scale(.98);
-    transition: transform .18s ease;
+    transition: transform .18s var(--ease-out);
 }
 
 .avatar-crop-overlay.visible .avatar-crop-modal {
@@ -2692,7 +2699,7 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text2);
     font-size: 16px;
     cursor: pointer;
-    transition: background .18s ease, color .18s ease;
+    transition: background .18s var(--ease-out), color .18s var(--ease-out);
 }
 
 .avatar-crop-close:hover {
@@ -2825,7 +2832,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 14px;
     background: rgba(255,255,255,.025);
     cursor: pointer;
-    transition: border-color .18s ease, background .18s ease, transform .18s ease;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out), transform .18s var(--ease-out);
 }
 
 .hub-segment-option:hover {
@@ -2968,7 +2975,7 @@ body[data-nav-mode="servers"] .contacts {
     font-family: inherit;
     font-size: 14px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-    transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
 }
 
 .settings-input:focus {
@@ -3187,7 +3194,7 @@ body[data-nav-mode="servers"] .contacts {
     font-family: inherit;
     font-size: 14px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-    transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
 }
 
 .settings-textarea:focus {
@@ -3306,7 +3313,7 @@ body[data-nav-mode="servers"] .contacts {
     font-size: 22px;
     line-height: 1;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-    transition: transform .16s ease, border-color .16s ease, background .16s ease;
+    transition: transform .16s var(--ease-out), border-color .16s var(--ease-out), background .16s var(--ease-out);
 }
 
 .server-modal-close:hover {
@@ -3384,7 +3391,7 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text2);
     text-align: left;
     cursor: pointer;
-    transition: border-color .16s ease, background .16s ease, transform .16s ease, color .16s ease, box-shadow .16s ease;
+    transition: border-color .16s var(--ease-out), background .16s var(--ease-out), transform .16s var(--ease-out), color .16s var(--ease-out), box-shadow .16s var(--ease-out);
 }
 
 .server-modal-nav-btn:hover {
@@ -4449,7 +4456,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 12px;
     background: rgba(255,77,109,.08);
     border-color: rgba(255,77,109,.18);
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, color .18s ease, background .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .settings-logout:hover {
@@ -4603,7 +4610,7 @@ body[data-nav-mode="servers"] .contacts {
     font-variant-numeric: tabular-nums;
     opacity: 0;
     transform: translateY(-50%);
-    transition: opacity .16s ease, color .16s ease;
+    transition: opacity .16s var(--ease-out), color .16s var(--ease-out);
     pointer-events: none;
 }
 
@@ -4936,7 +4943,7 @@ body[data-nav-mode="servers"] .contacts {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0) scale(1);
-    transition: opacity .14s ease, transform .14s ease;
+    transition: opacity .14s var(--ease-out), transform .14s var(--ease-out);
 }
 
 .reaction-menu .reaction-btn {
@@ -5427,7 +5434,7 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(0,0,0,.6);
     color: #fff;
     cursor: pointer;
-    transition: transform .18s ease, background .18s ease, color .18s ease;
+    transition: transform .18s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out);
 }
 
 .draft-att-remove:hover {
@@ -5526,7 +5533,7 @@ body[data-nav-mode="servers"] .contacts {
     display: grid;
     place-items: center;
     cursor: pointer;
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, color .18s ease;
+    transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), border-color .18s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out);
 }
 
 .attach-btn {
@@ -5822,7 +5829,7 @@ body[data-nav-mode="servers"] .contacts {
     visibility: hidden;
     pointer-events: none;
     transition:
-        opacity .24s ease,
+        opacity .24s var(--ease-out),
         visibility 0s linear .24s;
 }
 
@@ -5831,7 +5838,7 @@ body[data-nav-mode="servers"] .contacts {
     visibility: visible;
     pointer-events: auto;
     transition:
-        opacity .24s ease,
+        opacity .24s var(--ease-out),
         visibility 0s linear 0s;
 }
 
@@ -5848,8 +5855,8 @@ body[data-nav-mode="servers"] .contacts {
     opacity: 0;
     transition:
         transform .36s cubic-bezier(.2,.8,.2,1),
-        opacity .24s ease,
-        box-shadow .24s ease;
+        opacity .24s var(--ease-out),
+        box-shadow .24s var(--ease-out);
     position: relative;
     overflow: hidden;
 }
@@ -5923,10 +5930,10 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
     transition:
-        border-color .2s ease,
-        box-shadow .2s ease,
-        transform .2s ease,
-        background .2s ease;
+        border-color .2s var(--ease-out),
+        box-shadow .2s var(--ease-out),
+        transform .2s var(--ease-out),
+        background .2s var(--ease-out);
 }
 
 .auth-input:focus {
@@ -5998,11 +6005,11 @@ body[data-nav-mode="servers"] .contacts {
     cursor: pointer;
     font-weight: 800;
     transition:
-        transform .2s ease,
-        box-shadow .2s ease,
-        background .2s ease,
-        border-color .2s ease,
-        opacity .2s ease;
+        transform .2s var(--ease-out),
+        box-shadow .2s var(--ease-out),
+        background .2s var(--ease-out),
+        border-color .2s var(--ease-out),
+        opacity .2s var(--ease-out);
     position: relative;
     z-index: 1;
 }
@@ -6048,7 +6055,7 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--lime);
     cursor: pointer;
     font-weight: 700;
-    transition: transform .2s ease, opacity .2s ease;
+    transition: transform .2s var(--ease-out), opacity .2s var(--ease-out);
 }
 
 .auth-link:hover {
@@ -6498,7 +6505,7 @@ body[data-nav-mode="servers"] .contacts {
            slide, see further down, is still covering it), this rule's fast
            .12s once parking (once scheduleMobileListPark() confirms the
            chat has fully covered the list again). */
-        transition: transform .12s ease-out, box-shadow .12s ease;
+        transition: transform .12s ease-out, box-shadow .12s var(--ease-out);
         will-change: transform;
     }
 
@@ -6588,7 +6595,7 @@ body[data-nav-mode="servers"] .contacts {
         margin: 0;
         padding: 12px 12px 24px;
         border-radius: 0 0 18px 18px;
-        transition: bottom .18s ease;
+        transition: bottom .18s var(--ease-out);
     }
 
     .input-bar {
@@ -7154,7 +7161,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: filter .15s ease, transform .15s ease;
+    transition: filter .15s var(--ease-out), transform .15s var(--ease-out);
 }
 
 .zc-segment:first-child {
@@ -7489,7 +7496,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         color: var(--text);
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
-        transition: background .18s ease, transform .12s ease;
+        transition: background .18s var(--ease-out), transform .12s var(--ease-out);
     }
     .chat-back-btn svg { width: 24px; height: 24px; }
     .chat-back-btn:active { background: rgba(255,255,255,.06); transform: scale(.92); }
@@ -8214,6 +8221,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 <!-- HUB VIEW -->
                 <div id="viewHub" class="view">
                     <div class="hub-view">
+"""#,
+    #"""
                         <section class="hub-hero">
                             <div>
                                 <span class="settings-kicker">Zali Hub</span>
@@ -8246,8 +8255,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 <span class="zc-balance-unit">ZC</span>
                             </div>
                             <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
-"""#,
-    #"""
                             <button class="btn-flat" id="zaliCoinSendBtn" type="button">Отправить ZaliCoin</button>
                         </section>
 
@@ -20950,7 +20957,7 @@ class ZaliInterface {
         // that keeps failing used to burn all 8 attempts and then nothing — for any
         // peer — could ever retry again. A changed roster is a genuinely new
         // situation (someone joined or left), so give it a fresh budget.
-        const rosterKey = peers.slice().sort().join(' ');
+        const rosterKey = peers.slice().sort().join(' ');
         if (this.voice.peerRosterKey !== rosterKey) {
             this.voice.peerRosterKey = rosterKey;
             this.voice.negotiationRetries = 0;
@@ -21713,8 +21720,50 @@ class ZaliInterface {
             // Auto-reject instead; the server allows the target of a ringing room
             // to reject it, so the caller gets a normal voice_call_rejected.
             const activeRoomId = String(this.voice.roomId || '').trim();
-            const busy = activeRoomId && activeRoomId !== roomId && this.isInActiveCall();
-            if (busy) {
+            // Mutual invite is GLARE, not "busy". isInActiveCall() counts 'calling'
+            // and 'incoming', so a merely ringing invite made us auto-reject anything
+            // arriving — including the invite from the very person we were calling.
+            // Both sides do it at once, both rooms die, and nobody ever answers: the
+            // production log for 2026-08-02 shows 15 invites, 124 rejects and zero
+            // answers for exactly this. It needs only both people to tap «Позвонить»
+            // in the same few seconds, which is precisely what they do when a call
+            // did not connect the first time.
+            //
+            // Resolve it the same way SDP glare is resolved — one deterministic owner
+            // (compareVoicePeerNames is engine-independent, unlike localeCompare) —
+            // and never reject: rejecting tears down the peer's room too, so the pair
+            // ends up with no call at all instead of one.
+            const activePeer = String(this.voice.targetUser || this.voice.inviter || '').trim();
+            const samePeer = !!from && !!activePeer && from.toLowerCase() === activePeer.toLowerCase();
+            const ringing = this.voice.status === 'calling' || this.voice.status === 'incoming';
+            if (activeRoomId && activeRoomId !== roomId && samePeer && ringing) {
+                const iOwnTheCall = this.compareVoicePeerNames(this.myName(), from) < 0;
+                if (iOwnTheCall && this.voice.status === 'calling') {
+                    // Keep our own invite; the peer drops theirs and answers ours.
+                    this.voiceDiag('invite-glare-keep-ours', {
+                        roomId, from, activeRoomId, status: this.voice.status,
+                    }, 'WARN');
+                    return;
+                }
+                // We do not own it: withdraw our invite and let theirs be the call.
+                this.voiceDiag('invite-glare-adopt-theirs', {
+                    roomId, from, activeRoomId, status: this.voice.status,
+                }, 'WARN');
+                const ourInvite = String(this.voice.outgoingInvite?.roomId || activeRoomId || '').trim();
+                if (ourInvite && ourInvite !== roomId) {
+                    this.sendVoiceEvent({
+                        type: 'voice_call_cancel',
+                        roomId: ourInvite,
+                        target: from,
+                    });
+                    // Our own voice_call_outgoing / room_state for the withdrawn room
+                    // are usually still in flight and would drag us back to 'calling',
+                    // undoing the adoption a moment after it happened.
+                    this.abandonVoiceRoom(ourInvite);
+                }
+                this.voice.outgoingInvite = null;
+                // Fall through: the incoming invite below becomes the live call.
+            } else if (activeRoomId && activeRoomId !== roomId && this.isInActiveCall()) {
                 this.voiceTrace('incoming-invite-busy', { roomId, from, activeRoomId, status: this.voice.status }, 'WARN');
                 this.sendVoiceEvent({
                     type: 'voice_call_reject',
@@ -21749,6 +21798,10 @@ class ZaliInterface {
         }
 
         if (eventType === 'voice_call_outgoing') {
+            if (this.isAbandonedVoiceRoom(payload.roomId)) {
+                this.voiceDiag('outgoing-ring-ignored-abandoned', { roomId: payload.roomId || '' }, 'WARN');
+                return;
+            }
             this.voice.outgoingInvite = {
                 roomId: String(payload.roomId || '').trim(),
                 target: String(payload.target || '').trim(),
@@ -21884,6 +21937,10 @@ class ZaliInterface {
 
         if (eventType === 'voice_room_state') {
             const roomId = String(payload.roomId || '').trim();
+            if (this.isAbandonedVoiceRoom(roomId)) {
+                this.voiceDiag('room-state-ignored-abandoned', { roomId }, 'WARN');
+                return;
+            }
             const roomStatus = String(payload.status || '').trim().toLowerCase();
             const roomInitiator = String(payload.initiator || '').trim();
             const roomTarget = String(payload.target || '').trim();
@@ -22200,6 +22257,8 @@ class ZaliInterface {
                         <div class="voice-trace-list">
                             ${this.voice.traceLines.slice(-8).map(line => `
                                 <div class="voice-trace-line voice-trace-${this.esc(line.level.toLowerCase())}">
+"""#,
+    #"""
                                     <span class="voice-trace-ts">[${this.esc(line.ts)}]</span>
                                     <span class="voice-trace-stage">${this.esc(line.stage)}</span>
                                 </div>
@@ -22269,8 +22328,6 @@ class ZaliInterface {
                 label.textContent = 'Ваш экран';
                 wrap.appendChild(label);
                 stage.appendChild(wrap);
-"""#,
-    #"""
             }
             for (const [peer, video] of this.voice.remoteScreens.entries()) {
                 const wrap = document.createElement('div');
@@ -24456,7 +24513,7 @@ class ZaliInterface {
         }
     }
 
-    async loadUsers(query = '') {
+    async loadUsers(query = '', { interactive = false } = {}) {
         try {
             this.trace(`loadUsers start user=${this.myName()} tokenSet=${!!this.S.session?.token}`);
             if (!this.S.session?.token) {
@@ -24464,7 +24521,7 @@ class ZaliInterface {
                 return;
             }
             const search = String(query || '').trim();
-            const res = await this.apiFetch(this.apiRoutes.users.search(search));
+            const res = await this.apiFetch(this.apiRoutes.users.search(search), { interactive });
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 this.trace(`loadUsers failed status=${res.status} body=${text.slice(0, 300)}`);
@@ -24938,7 +24995,7 @@ class ZaliInterface {
         let username = this.resolveContactInputUsername(rawUsername);
 
         if (!exactInCache && rawUsername.length >= 3) {
-            await this.loadUsers(rawUsername);
+            await this.loadUsers(rawUsername, { interactive: true });
             const exactAfterLoad = Array.isArray(this.S.users)
                 ? this.S.users.find(user => String(user || '').trim().toLowerCase() === lowerRawUsername)
                 : null;
@@ -26624,6 +26681,8 @@ class ZaliInterface {
             const publishedAt = Number(data?.publishedAt) || 0;
             const isLegacyMigrationBump = latestVersion
                 && !this.isNewSchemeVersion(latestVersion)
+"""#,
+    #"""
                 && publishedAt > 0
                 && publishedAt <= ZaliInterface.VERSION_SCHEME_MIGRATION_CUTOFF_UNIX;
             if (isLegacyMigrationBump && this.isNewSchemeVersion(currentVersion)) {
@@ -26697,8 +26756,6 @@ class ZaliInterface {
         const titleEl = modal.querySelector('#updateModalVersion');
         const notesEl = modal.querySelector('#updateModalNotes');
         const progressWrap = modal.querySelector('#updateModalProgressWrap');
-"""#,
-    #"""
         const progressBar = modal.querySelector('#updateModalProgressBar');
         const errorEl = modal.querySelector('#updateModalError');
         const acceptBtn = modal.querySelector('#updateModalAcceptBtn');
@@ -28459,6 +28516,24 @@ class ZaliInterface {
     // incoming-invite busy-guard and the foreign-room-state guard key off this exact set;
     // inlining it twice risks one copy going stale and silently re-opening the
     // active-call-clobber bug.
+    // Rooms this client deliberately walked away from (invite glare). Events for
+    // them are already in flight when we leave, and applying those would restore
+    // state for a call that no longer exists. Bounded: a handful per session.
+    abandonVoiceRoom(roomId) {
+        const id = String(roomId || '').trim();
+        if (!id) return;
+        if (!this._abandonedVoiceRooms) this._abandonedVoiceRooms = new Set();
+        this._abandonedVoiceRooms.add(id);
+        if (this._abandonedVoiceRooms.size > 32) {
+            this._abandonedVoiceRooms.delete(this._abandonedVoiceRooms.values().next().value);
+        }
+    }
+
+    isAbandonedVoiceRoom(roomId) {
+        const id = String(roomId || '').trim();
+        return !!id && !!this._abandonedVoiceRooms?.has(id);
+    }
+
     isInActiveCall(status = this.voice?.status) {
         return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
     }
@@ -30498,6 +30573,64 @@ class ZaliInterface {
                 this.closeMobileSidebar();
             }
         });
+        this.setupScrollInertia();
+    }
+
+    // Mouse-wheel scrolling has no native deceleration (unlike trackpad momentum,
+    // which the OS/compositor handles without extra wheel events) — each notch just
+    // jumps and stops dead. This adds a tiny residual glide after the wheel goes
+    // idle, capped and decaying fast on purpose: it should read as "less abrupt",
+    // never as a distinct animation. #msgs is included deliberately — the coast is
+    // a continuation of the user's own gesture, so it must NOT go through
+    // markProgrammaticScroll() (see the comment on that method): onMessagesScroll
+    // needs to see it as real scrolling so _bottomIntent still clears correctly if
+    // the glide carries the view away from the bottom.
+    setupScrollInertia() {
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+        const SELECTOR = '.msgs, .contacts, .sidebar, .server-channel-list, .settings-body, .server-modal-content, .color-picker-body';
+        const FRICTION = 0.72;
+        const MIN_VELOCITY = 0.5;
+        const MAX_VELOCITY = 6;
+        const IDLE_MS = 70;
+        const states = new WeakMap();
+
+        const coast = (el, st) => {
+            st.raf = requestAnimationFrame(() => {
+                st.velocity *= FRICTION;
+                if (Math.abs(st.velocity) < MIN_VELOCITY) {
+                    st.raf = 0;
+                    return;
+                }
+                const max = el.scrollHeight - el.clientHeight;
+                const next = Math.max(0, Math.min(max, el.scrollTop + st.velocity));
+                el.scrollTop = next;
+                if (next <= 0 || next >= max) {
+                    st.raf = 0;
+                    return;
+                }
+                coast(el, st);
+            });
+        };
+
+        document.addEventListener('wheel', (e) => {
+            const el = e.target.closest?.(SELECTOR);
+            if (!el || el.scrollHeight <= el.clientHeight) return;
+            let st = states.get(el);
+            if (!st) {
+                st = { velocity: 0, raf: 0, idleTimer: 0 };
+                states.set(el, st);
+            }
+            if (st.raf) {
+                cancelAnimationFrame(st.raf);
+                st.raf = 0;
+            }
+            const nudge = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, e.deltaY * 0.12));
+            st.velocity = st.velocity * 0.3 + nudge * 0.7;
+            clearTimeout(st.idleTimer);
+            st.idleTimer = setTimeout(() => {
+                if (Math.abs(st.velocity) >= MIN_VELOCITY) coast(el, st);
+            }, IDLE_MS);
+        }, { passive: true });
     }
 }
 window.ZaliInterface = ZaliInterface;
@@ -30573,6 +30706,8 @@ window.ZaliInterface = ZaliInterface;
             : transport
                 ? {
                     sendMessage: true,
+"""#,
+    #"""
                 sessionSync: true,
                 networkConfig: true,
                 setKey: true,

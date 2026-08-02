@@ -370,6 +370,19 @@ fn main() -> wry::Result<()> {
         })
         .build()?;
 
+    // Window focus (window.set_focus()) and WebView2's own child-HWND focus are
+    // tracked separately on Windows — the OS window can be active while the
+    // embedded WebView2 control never receives focus, so keystrokes reach no
+    // DOM element and typing into e.g. the registration fields silently does
+    // nothing. Most launches get WebView2 focus as a side effect of normal
+    // window activation, but it is not guaranteed (seen when the window isn't
+    // created in the foreground, e.g. right after the installer finishes or
+    // via the autostart --start-minimized path once it un-minimizes) — hence
+    // reports from only some users. Not gated on start_minimized: focusing a
+    // hidden webview is a no-op, and TrayShow below re-focuses it anyway.
+    #[cfg(target_os = "windows")]
+    webview.focus();
+
     #[cfg(target_os = "macos")]
     install_media_capture_policy(&webview);
 
@@ -403,6 +416,7 @@ fn main() -> wry::Result<()> {
             Event::UserEvent(AppEvent::TrayShow) => {
                 window.set_visible(true);
                 window.set_focus();
+                webview.focus();
             }
             Event::UserEvent(AppEvent::SetTaskbarBadge(count)) => {
                 #[cfg(target_os = "windows")]
