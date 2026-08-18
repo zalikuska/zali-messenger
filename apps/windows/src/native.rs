@@ -77,11 +77,14 @@ enum UiBusEvent {
     VoiceEvent,
     AddLogEntry,
     ReactionUpdated,
+    MessageDeleted,
     ReceiveMessage,
     RefreshAfterKey,
     RetryPublishKeys,
+    KeyRepublishRequest,
     AuthResponse,
     NativeResponse,
+    MessageEdited,
     TenorResolved,
     SetUsers,
     SetContacts,
@@ -101,9 +104,12 @@ impl UiBusEvent {
             UiBusEvent::VoiceEvent => "voice_event",
             UiBusEvent::AddLogEntry => "add_log_entry",
             UiBusEvent::ReactionUpdated => "reaction_updated",
+            UiBusEvent::MessageDeleted => "message_deleted",
+            UiBusEvent::MessageEdited => "message_edited",
             UiBusEvent::ReceiveMessage => "receive_message",
             UiBusEvent::RefreshAfterKey => "refresh_after_key",
             UiBusEvent::RetryPublishKeys => "retry_publish_keys",
+            UiBusEvent::KeyRepublishRequest => "key_republish_request",
             UiBusEvent::AuthResponse => "auth_response",
             UiBusEvent::NativeResponse => "native_response",
             UiBusEvent::TenorResolved => "tenor_resolved",
@@ -242,6 +248,7 @@ struct NativeCapabilities {
     avatar_fetch: bool,
     save_style: bool,
     download_attachment: bool,
+    open_external_url: bool,
     server_history: bool,
     tenor: bool,
     voice: bool,
@@ -272,6 +279,7 @@ impl Default for NativeCapabilities {
             avatar_fetch: true,
             save_style: true,
             download_attachment: true,
+            open_external_url: true,
             server_history: true,
             tenor: true,
             voice: true,
@@ -998,6 +1006,26 @@ pub fn handle_ipc_message(
                     );
                     let _ = proxy.send_event(AppEvent::EvaluateScript(log));
                 }
+            }
+        }
+        BridgeProtocolMessageType::OpenExternalUrl => {
+            let url = payload
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let lower = url.to_ascii_lowercase();
+            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+                trace(format!("OPEN_EXTERNAL_URL rejected non-http url={}", url));
+                return;
+            }
+            match open_external_url(&url) {
+                Ok(_) => trace(format!("OPEN_EXTERNAL_URL opened url={}", url)),
+                Err(error) => trace(format!(
+                    "OPEN_EXTERNAL_URL failed url={} err={}",
+                    url, error
+                )),
             }
         }
         BridgeProtocolMessageType::AuthRequest => {
@@ -2073,6 +2101,12 @@ pub fn handle_ipc_message(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(|value| value.to_string());
+                let reply_payload = request
+                    .get("reply")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string());
                 let pack_result = pack_message(
                     &sender,
                     &text,
@@ -2081,6 +2115,7 @@ pub fn handle_ipc_message(
                     key_version,
                     &packed_attachments,
                     call_payload.as_deref(),
+                    reply_payload.as_deref(),
                 );
                 if let Err(error) = pack_result {
                     trace(format!("SEND_MESSAGE pack_failed clientId={} err={}", client_id, error));
@@ -2148,6 +2183,188 @@ pub fn handle_ipc_message(
                 }
                 let _ = tokio::fs::remove_file(&archive_path).await;
                 clear_in_flight_send_client_id(&send_guard_client_id);
+            });
+        }
+        BridgeProtocolMessageType::EditMessage => {
+            let request = payload.clone();
+            let state = Arc::clone(&state);
+            let proxy = proxy.clone();
+            runtime.spawn(async move {
+                let request_id = request
+                    .get("requestId")
+                    .or_else(|| request.get("request_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let respond = |ok: bool, error: Option<String>| {
+                    let mut payload = json!({ "requestId": request_id, "ok": ok });
+                    if let Some(error) = error {
+                        payload["error"] = Value::String(error);
+                    }
+                    dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, payload);
+                };
+
+                let snapshot = {
+                    let Some(guard) = state.lock().ok() else {
+                        respond(false, Some("Внутренняя ошибка".to_string()));
+                        return;
+                    };
+                    (
+                        guard.api_base_url(),
+                        guard.auth_token.clone(),
+                        guard.current_username.clone(),
+                        guard.current_device_id.clone(),
+                    )
+                };
+
+                let message_id = request
+                    .get("messageId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let text = request.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+                let key = request
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let key_version = request
+                    .get("keyVersion")
+                    .or_else(|| request.get("key_version"))
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .unwrap_or(2);
+
+                if message_id.is_empty() || key.is_empty() {
+                    trace(format!(
+                        "EDIT_MESSAGE rejected messageId={} keySet={}",
+                        message_id,
+                        !key.is_empty()
+                    ));
+                    respond(
+                        false,
+                        Some(if key.is_empty() {
+                            "Core: E2E-ключ не задан".to_string()
+                        } else {
+                            "Не указано сообщение".to_string()
+                        }),
+                    );
+                    return;
+                }
+
+                // An edit replaces the archive wholesale, so it must carry the whole
+                // message — attachments included, or they are genuinely dropped.
+                let temp_dir = std::env::temp_dir();
+                let archive_path = temp_dir.join(format!("{}.zali", Uuid::new_v4()));
+                let mut packed_attachments = Vec::new();
+                let mut cleanup_paths = Vec::new();
+                if let Some(attachments) = request.get("attachments").and_then(Value::as_array) {
+                    for attachment in attachments {
+                        let Some(data_url) = attachment.get("dataUrl").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let Some((data, mime_type, file_extension)) = decode_data_url(data_url) else {
+                            continue;
+                        };
+                        let name = attachment
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("attachment.bin");
+                        let kind = attachment.get("kind").and_then(Value::as_str).unwrap_or("file");
+                        let safe_name = sanitize_file_name(name, &file_extension);
+                        let attachment_path =
+                            temp_dir.join(format!("{}_{}", Uuid::new_v4(), safe_name));
+                        if tokio::fs::write(&attachment_path, data).await.is_ok() {
+                            let size = if let Some(size) =
+                                attachment.get("size").and_then(Value::as_u64)
+                            {
+                                size
+                            } else {
+                                tokio::fs::metadata(&attachment_path)
+                                    .await
+                                    .map(|meta| meta.len())
+                                    .unwrap_or(0)
+                            };
+                            packed_attachments.push(json!({
+                                "path": attachment_path.to_string_lossy().to_string(),
+                                "archivePath": format!("attachments/{}", safe_name),
+                                "name": name,
+                                "mimeType": attachment.get("mimeType").and_then(Value::as_str).unwrap_or(&mime_type),
+                                "kind": kind,
+                                "size": size,
+                            }));
+                            cleanup_paths.push(attachment_path);
+                        }
+                    }
+                }
+
+                let call_payload = request
+                    .get("call")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string());
+                let reply_payload = request
+                    .get("reply")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string());
+
+                trace(format!(
+                    "EDIT_MESSAGE start messageId={} attachments={} textBytes={}",
+                    message_id,
+                    packed_attachments.len(),
+                    text.len()
+                ));
+
+                let pack_result = pack_message(
+                    &snapshot.2,
+                    &text,
+                    &key,
+                    &archive_path,
+                    key_version,
+                    &packed_attachments,
+                    call_payload.as_deref(),
+                    reply_payload.as_deref(),
+                );
+                for path in &cleanup_paths {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+                if let Err(error) = pack_result {
+                    trace(format!("EDIT_MESSAGE pack_failed messageId={} err={}", message_id, error));
+                    let _ = tokio::fs::remove_file(&archive_path).await;
+                    respond(false, Some(format!("Core: {}", error)));
+                    return;
+                }
+
+                let result = edit_message(
+                    ApiSession {
+                        api_base_url: snapshot.0,
+                        auth_token: snapshot.1,
+                        device_id: snapshot.3,
+                    },
+                    &message_id,
+                    &archive_path,
+                    key_version,
+                )
+                .await;
+                let _ = tokio::fs::remove_file(&archive_path).await;
+
+                match result {
+                    Ok(()) => respond(true, None),
+                    Err(error) => {
+                        trace(format!(
+                            "EDIT_MESSAGE failed messageId={} err={}",
+                            message_id, error.message
+                        ));
+                        respond(false, Some(error.message));
+                    }
+                }
             });
         }
         BridgeProtocolMessageType::StartDrag => {

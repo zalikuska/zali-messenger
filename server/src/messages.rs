@@ -2,12 +2,14 @@
 //! fan-out delivery to DM/server recipients.
 
 use crate::{
-    can_access_channel, can_manage_by_role, dm_conversation_scope, fallback_role_permissions,
-    get_server_access_context, get_server_accessibility, get_server_member_role,
-    history_access_matches, load_channel_permissions, push_history_access_predicate,
-    resolve_history_access, role_permissions_for_view, send_payload_to_user, send_web_push,
-    server_conversation_scope, AppState, AuthenticatedUser, Message, MessagePageQuery,
-    MessageResponse, ReactionPayload, ReactionSummary, ServerRecord,
+    can_access_channel, can_manage_by_role, conversation_scope_for, dm_conversation_scope,
+    fallback_role_permissions, get_server_access_context, get_server_accessibility,
+    get_server_member_role, hash_archive_on_disk, history_access_matches,
+    last_payload_for_message, load_channel_permissions, push_history_access_predicate,
+    record_message_event, record_message_event_best_effort, resolve_history_access,
+    role_permissions_for_view, send_payload_to_user, send_web_push, server_conversation_scope,
+    AppState, AuthenticatedUser, ChainEvent, Message, MessagePageQuery, MessageResponse,
+    PayloadDigest, ReactionPayload, ReactionSummary, ServerRecord,
 };
 use axum::{
     body::Body,
@@ -111,8 +113,13 @@ pub(crate) async fn load_reaction_state_for_viewers(
     Ok((reactions, my_reactions))
 }
 
-pub(crate) async fn broadcast_reaction_event(state: &Arc<AppState>, message: &Message) {
-    let viewers: Vec<String> = if let (Some(server_id), Some(channel_id)) =
+/// Everyone who should see a live update about `message` — the DM pair, or
+/// (for a server/channel message) every currently-connected user who still
+/// has view access to that channel. Shared by the reaction and delete
+/// broadcasters below since "who can see this message change live" is the
+/// same question either way.
+async fn resolve_message_viewers(state: &Arc<AppState>, message: &Message) -> Vec<String> {
+    if let (Some(server_id), Some(channel_id)) =
         (message.server_id.as_deref(), message.channel_id.as_deref())
     {
         let candidates: Vec<String> = state
@@ -127,27 +134,34 @@ pub(crate) async fn broadcast_reaction_event(state: &Arc<AppState>, message: &Me
                     Ok(allowed) => allowed,
                     Err(e) => {
                         error!(
-                            "Ошибка предварительного расчёта зрителей реакции {} в {}/{}: {}",
+                            "Ошибка предварительного расчёта зрителей события по сообщению {} в {}/{}: {}",
                             message.id, server_id, channel_id, e
                         );
-                        return;
+                        Vec::new()
                     }
                 }
             }
-            Ok(None) => return,
+            Ok(None) => Vec::new(),
             Err(e) => {
                 error!(
-                    "Ошибка проверки сервера {} перед доставкой реакции {}: {}",
+                    "Ошибка проверки сервера {} перед доставкой события по сообщению {}: {}",
                     server_id, message.id, e
                 );
-                return;
+                Vec::new()
             }
         }
     } else if message.sender == message.receiver {
         vec![message.sender.clone()]
     } else {
         vec![message.sender.clone(), message.receiver.clone()]
-    };
+    }
+}
+
+pub(crate) async fn broadcast_reaction_event(state: &Arc<AppState>, message: &Message) {
+    let viewers = resolve_message_viewers(state, message).await;
+    if viewers.is_empty() {
+        return;
+    }
 
     let (reactions, my_reactions) =
         match load_reaction_state_for_viewers(state, &message.id, &viewers).await {
@@ -594,6 +608,9 @@ pub(crate) async fn upload_message_with_context(
     let mut file_bytes: u64 = 0;
     let mut file_magic = Vec::with_capacity(8);
     let mut wrote_file = false;
+    // Hashed as it streams past, so the hash-chain entry costs no extra read of
+    // a file we are already writing byte for byte.
+    let mut digest = PayloadDigest::new();
 
     // Parse multipart fields with proper error handling (no unwrap)
     loop {
@@ -647,6 +664,13 @@ pub(crate) async fn upload_message_with_context(
                     },
                     "file" => {
                         let mut field = field;
+                        // `File::create` truncates, so a second `file` field
+                        // restarts the archive — the running hash/size/magic
+                        // have to restart with it or the chain would record a
+                        // digest of bytes that are no longer on disk.
+                        digest = PayloadDigest::new();
+                        file_bytes = 0;
+                        file_magic.clear();
                         let mut out = match fs::File::create(&temp_path).await {
                             Ok(file) => file,
                             Err(e) => {
@@ -667,6 +691,7 @@ pub(crate) async fn upload_message_with_context(
                                             .extend_from_slice(&chunk[..chunk.len().min(need)]);
                                     }
                                     file_bytes = file_bytes.saturating_add(chunk.len() as u64);
+                                    digest.update(&chunk);
                                     if let Err(e) = out.write_all(&chunk).await {
                                         error!(
                                             "Ошибка записи временного файла {}: {}",
@@ -1069,6 +1094,22 @@ pub(crate) async fn upload_message_with_context(
                 server_id: server_id_opt.clone(),
                 channel_id: channel_id_opt.clone(),
             };
+
+            // Journalled after the row is committed and before delivery, so a
+            // message that reaches anyone is already in the chain. The dedup
+            // branches above deliberately skip this: they deliver an existing
+            // message again, which is not a new event.
+            let (payload_sha256, payload_size) = digest.finish();
+            record_message_event_best_effort(
+                &state,
+                &conversation_scope_for(&msg),
+                &msg.id,
+                ChainEvent::Create,
+                &sender,
+                &payload_sha256,
+                payload_size,
+            )
+            .await;
 
             if msg.server_id.is_some() {
                 info!("UPLOAD delivering server message id={}", msg.id);
@@ -1526,6 +1567,26 @@ pub(crate) async fn can_delete_message(
     Ok(false)
 }
 
+/// Pushed after a message row (and its file) are gone from the DB/disk, so
+/// every other client currently looking at that conversation drops the
+/// bubble live instead of only noticing on its next history reload — reload
+/// happens to work today too (the row is simply absent), but that's a much
+/// worse experience for the DM peer or channel viewers who are mid-scroll.
+pub(crate) async fn broadcast_message_deleted_event(state: &Arc<AppState>, message: &Message) {
+    let viewers = resolve_message_viewers(state, message).await;
+    for viewer in viewers {
+        let payload = serde_json::json!({
+            "type": "message_deleted",
+            "messageId": message.id,
+            "sender": message.sender,
+            "receiver": message.receiver,
+            "serverId": message.server_id,
+            "channelId": message.channel_id,
+        });
+        send_payload_to_user(state, &viewer, payload.to_string(), "message_deleted").await;
+    }
+}
+
 pub(crate) async fn download_message(
     AxumPath(id): AxumPath<String>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
@@ -1682,8 +1743,31 @@ pub(crate) async fn delete_message(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
+            // The archive is about to stop existing, so the chain has to be
+            // told what it was *before* the file goes. The chain's own last
+            // entry already knows the digest; hashing the file is the fallback
+            // for messages that predate the chain, whose back-filled `create`
+            // entry would otherwise point at nothing.
+            let scope = conversation_scope_for(&m);
+            let (payload_sha256, payload_size) =
+                match hash_archive_on_disk(&path).await {
+                    Some(hashed) => hashed,
+                    None => last_payload_for_message(&state, &scope, &m.id).await,
+                };
+
             fs::remove_file(&path).await.ok();
+            record_message_event_best_effort(
+                &state,
+                &scope,
+                &m.id,
+                ChainEvent::Delete,
+                &auth_user,
+                &payload_sha256,
+                payload_size,
+            )
+            .await;
             info!("Сообщение удалено: {} (автор: {})", id, auth_user);
+            broadcast_message_deleted_event(&state, &m).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
@@ -1691,6 +1775,241 @@ pub(crate) async fn delete_message(
             StatusCode::NOT_FOUND.into_response()
         }
     }
+}
+
+/// Pushed after a message's archive has been replaced, so viewers swap the
+/// bubble's contents live instead of showing the old text until their next
+/// history reload. Carries no plaintext — clients re-download and decrypt the
+/// new archive themselves, exactly as they do for a freshly received message.
+pub(crate) async fn broadcast_message_edited_event(
+    state: &Arc<AppState>,
+    message: &Message,
+    version: i64,
+) {
+    let viewers = resolve_message_viewers(state, message).await;
+    for viewer in viewers {
+        let payload = serde_json::json!({
+            "type": "message_edited",
+            "messageId": message.id,
+            "sender": message.sender,
+            "receiver": message.receiver,
+            "serverId": message.server_id,
+            "channelId": message.channel_id,
+            "filename": message.filename,
+            "keyVersion": message.key_version,
+            "version": version,
+        });
+        send_payload_to_user(state, &viewer, payload.to_string(), "message_edited").await;
+    }
+}
+
+/// `PUT /api/message/:id` — replaces a message's encrypted archive in place.
+///
+/// Only the author may edit. Channel managers can *delete* other people's
+/// messages (see `can_delete_message`), but letting them rewrite the contents
+/// under the original author's name would be forgery, and the hash chain would
+/// faithfully record it as the author's own revision.
+pub(crate) async fn edit_message(
+    AxumPath(id): AxumPath<String>,
+    AuthenticatedUser(auth_user): AuthenticatedUser,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    info!("EDIT_MESSAGE start id={} auth={}", id, auth_user);
+
+    let existing = match sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("EDIT_MESSAGE not found id={} err={}", id, e);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+
+    if existing.sender != auth_user {
+        warn!("EDIT_MESSAGE forbidden id={} auth={}", id, auth_user);
+        return (StatusCode::FORBIDDEN, "Редактировать может только автор").into_response();
+    }
+
+    // A fresh name rather than an overwrite: a reader that is mid-download of
+    // the old archive keeps reading a complete file instead of one that changes
+    // under it (and would then fail AES-GCM authentication).
+    let new_filename = format!("{}.zali", Uuid::new_v4());
+    let new_path = state.uploads_dir.join(&new_filename);
+    let temp_path = state.uploads_dir.join(format!("{}.tmp", new_filename));
+
+    let mut key_version: Option<i64> = None;
+    let mut file_bytes: u64 = 0;
+    let mut file_magic = Vec::with_capacity(8);
+    let mut wrote_file = false;
+    let mut digest = PayloadDigest::new();
+
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let name = field.name().unwrap_or("").to_string();
+                match name.as_str() {
+                    "key_version" | "keyVersion" => match field.text().await {
+                        Ok(v) => {
+                            key_version = v.trim().parse::<i64>().ok().filter(|value| *value > 0);
+                        }
+                        Err(e) => {
+                            error!("EDIT_MESSAGE bad key_version id={}: {}", id, e);
+                            return StatusCode::BAD_REQUEST.into_response();
+                        }
+                    },
+                    "file" => {
+                        let mut field = field;
+                        digest = PayloadDigest::new();
+                        file_bytes = 0;
+                        file_magic.clear();
+                        let mut out = match fs::File::create(&temp_path).await {
+                            Ok(file) => file,
+                            Err(e) => {
+                                error!("EDIT_MESSAGE temp create failed id={}: {}", id, e);
+                                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                            }
+                        };
+                        loop {
+                            match field.chunk().await {
+                                Ok(Some(chunk)) => {
+                                    if file_magic.len() < 8 {
+                                        let need = 8 - file_magic.len();
+                                        file_magic
+                                            .extend_from_slice(&chunk[..chunk.len().min(need)]);
+                                    }
+                                    file_bytes = file_bytes.saturating_add(chunk.len() as u64);
+                                    digest.update(&chunk);
+                                    if let Err(e) = out.write_all(&chunk).await {
+                                        error!("EDIT_MESSAGE write failed id={}: {}", id, e);
+                                        let _ = fs::remove_file(&temp_path).await;
+                                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                                    }
+                                }
+                                Ok(None) => break,
+                                Err(e) => {
+                                    error!("EDIT_MESSAGE read failed id={}: {}", id, e);
+                                    let _ = fs::remove_file(&temp_path).await;
+                                    return StatusCode::BAD_REQUEST.into_response();
+                                }
+                            }
+                        }
+                        if let Err(e) = out.flush().await {
+                            error!("EDIT_MESSAGE flush failed id={}: {}", id, e);
+                            let _ = fs::remove_file(&temp_path).await;
+                            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        }
+                        wrote_file = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                error!("EDIT_MESSAGE multipart failed id={}: {}", id, e);
+                if wrote_file {
+                    let _ = fs::remove_file(&temp_path).await;
+                }
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+        }
+    }
+
+    if !wrote_file || file_bytes == 0 {
+        if wrote_file {
+            let _ = fs::remove_file(&temp_path).await;
+        }
+        return (StatusCode::BAD_REQUEST, "Поле file обязательно").into_response();
+    }
+
+    if file_magic.len() < 8 || file_magic.as_slice() != b"ZALIMSSG" {
+        warn!("EDIT_MESSAGE bad magic id={} auth={}", id, auth_user);
+        let _ = fs::remove_file(&temp_path).await;
+        return (
+            StatusCode::BAD_REQUEST,
+            "Неверная сигнатура архива (ожидается ZALIMSSG)",
+        )
+            .into_response();
+    }
+
+    if let Err(e) = fs::rename(&temp_path, &new_path).await {
+        error!("EDIT_MESSAGE rename failed id={}: {}", id, e);
+        let _ = fs::remove_file(&temp_path).await;
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let key_version = key_version.or(existing.key_version).unwrap_or(2);
+    // Guarded on `filename` so a lost race between two concurrent edits updates
+    // the row once: the loser sees 0 rows affected and drops its own archive
+    // instead of overwriting the winner's and orphaning it on disk.
+    let updated = sqlx::query("UPDATE messages SET filename = ?, key_version = ? WHERE id = ? AND filename = ?")
+        .bind(&new_filename)
+        .bind(key_version)
+        .bind(&id)
+        .bind(&existing.filename)
+        .execute(&state.db)
+        .await;
+
+    match updated {
+        Ok(result) if result.rows_affected() == 1 => {}
+        Ok(_) => {
+            warn!("EDIT_MESSAGE lost race id={} auth={}", id, auth_user);
+            let _ = fs::remove_file(&new_path).await;
+            return (StatusCode::CONFLICT, "Сообщение изменилось, повторите").into_response();
+        }
+        Err(e) => {
+            error!("EDIT_MESSAGE db update failed id={}: {}", id, e);
+            let _ = fs::remove_file(&new_path).await;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    let _ = fs::remove_file(state.uploads_dir.join(&existing.filename)).await;
+
+    let msg = Message {
+        filename: new_filename.clone(),
+        key_version: Some(key_version),
+        ..existing
+    };
+
+    let (payload_sha256, payload_size) = digest.finish();
+    let version = match record_message_event(
+        &state,
+        &conversation_scope_for(&msg),
+        &msg.id,
+        ChainEvent::Edit,
+        &auth_user,
+        &payload_sha256,
+        payload_size,
+    )
+    .await
+    {
+        Ok(entry) => entry.version,
+        Err(e) => {
+            error!("HASH_CHAIN edit append failed id={}: {}", msg.id, e);
+            -1
+        }
+    };
+
+    info!(
+        "EDIT_MESSAGE complete id={} file={} bytes={} version={}",
+        msg.id, new_filename, file_bytes, version
+    );
+    broadcast_message_edited_event(&state, &msg, version).await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "id": msg.id,
+            "filename": new_filename,
+            "keyVersion": key_version,
+            "version": version,
+        })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -1834,5 +2153,69 @@ mod tests {
             targets
         );
         assert_eq!(targets, vec!["owner".to_string()]);
+    }
+
+    fn make_message(
+        id: &str,
+        sender: &str,
+        receiver: &str,
+        server_id: Option<&str>,
+        channel_id: Option<&str>,
+    ) -> Message {
+        Message {
+            id: id.to_string(),
+            client_id: None,
+            sender: sender.to_string(),
+            receiver: receiver.to_string(),
+            filename: "test.zali".to_string(),
+            timestamp: chrono::Utc::now(),
+            key_version: None,
+            server_id: server_id.map(str::to_string),
+            channel_id: channel_id.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn can_delete_message_allows_sender_denies_others_in_dm() {
+        let state = test_state().await;
+        let msg = make_message("m1", "alice", "bob", None, None);
+
+        assert!(can_delete_message(&state, &msg, "alice").await.unwrap());
+        assert!(!can_delete_message(&state, &msg, "bob").await.unwrap());
+        assert!(!can_delete_message(&state, &msg, "carol").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn can_delete_message_allows_channel_managers_but_not_plain_members() {
+        let state = test_state().await;
+        let (server, channel_id) = seed_server(
+            &state,
+            "owner",
+            &[
+                ("owner", "owner"),
+                ("mod", "admin"),
+                ("alice", "member"),
+                ("bob", "member"),
+            ],
+        )
+        .await;
+        let msg = make_message("m1", "alice", "alice", Some(&server.id), Some(&channel_id));
+
+        assert!(
+            can_delete_message(&state, &msg, "alice").await.unwrap(),
+            "the author can always delete their own message"
+        );
+        assert!(
+            can_delete_message(&state, &msg, "owner").await.unwrap(),
+            "the server owner can delete any channel message"
+        );
+        assert!(
+            can_delete_message(&state, &msg, "mod").await.unwrap(),
+            "an admin-role member can delete any channel message"
+        );
+        assert!(
+            !can_delete_message(&state, &msg, "bob").await.unwrap(),
+            "a plain member cannot delete someone else's message"
+        );
     }
 }

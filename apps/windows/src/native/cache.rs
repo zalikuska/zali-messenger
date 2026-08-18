@@ -43,6 +43,21 @@ pub(crate) fn cache_decrypted_message(message_id: &str, entry: &Value) {
     }
 }
 
+/// Drops one message from the decrypt cache.
+///
+/// Needed because an edit replaces the archive an entry was decrypted from: the
+/// id stays the same while its contents do not, which is the one case this cache
+/// cannot detect on its own. Mirrors macOS `Coordinator.forgetDecryptedMessage`.
+pub(crate) fn forget_decrypted_message(message_id: &str) {
+    let id = message_id.trim();
+    if id.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = decrypted_message_cache().lock() {
+        cache.remove(id);
+    }
+}
+
 pub(crate) fn cached_decrypted_message(message_id: &str) -> Option<Value> {
     decrypted_message_cache()
         .lock()

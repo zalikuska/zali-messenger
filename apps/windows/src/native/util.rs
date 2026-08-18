@@ -202,6 +202,58 @@ pub(crate) fn save_data_url_attachment(data_url: &str, filename: &str) -> Result
     Ok(destination)
 }
 
+/// Opens `url` in the OS's configured default browser — not whichever browser
+/// happens to already be running, and never inside this app's own WebView2/
+/// WKWebView surface (which has no separate "browser" for a link to land in
+/// at all). The http(s)-only check happens at the call site
+/// (BridgeProtocolMessageType::OpenExternalUrl in native.rs); this is the
+/// platform-specific "hand it to the shell" step only.
+#[cfg(target_os = "windows")]
+pub(crate) fn open_external_url(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let verb = wide("open");
+    let file = wide(url);
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecuteW's return value is HINSTANCE-shaped for historical reasons;
+    // > 32 means success, anything else is an SE_ERR_* failure code.
+    if (result as isize) > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW failed with code {}", result as isize))
+    }
+}
+
+// macOS build of this same crate is the experimental, non-primary shell (see
+// CLAUDE.md) — kept working here too since it costs nothing extra.
+#[cfg(target_os = "macos")]
+pub(crate) fn open_external_url(url: &str) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(crate) fn open_external_url(url: &str) -> Result<(), String> {
+    Err(format!(
+        "open_external_url is not supported on this platform (url={})",
+        url
+    ))
+}
+
 pub(crate) fn html_search_lower(haystack: &str, needle: &str, start: usize) -> Option<usize> {
     let lower_haystack = haystack.get(start..)?.to_ascii_lowercase();
     let lower_needle = needle.to_ascii_lowercase();

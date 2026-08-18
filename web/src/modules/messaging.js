@@ -18,6 +18,11 @@
                 navMode: 'dm',
                 serverChats: {},
                 draftAttachments: [],
+                // Message being replied to (quote snapshot) and message being
+                // edited. Mutually exclusive by construction — the composer shows
+                // one context bar, and starting either clears the other.
+                replyDraft: null,
+                editDraft: null,
             };
         },
     };

@@ -64,6 +64,8 @@ mod updates;
 pub(crate) use updates::*;
 mod diagnostics;
 pub(crate) use diagnostics::*;
+mod hash_chain;
+pub(crate) use hash_chain::*;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -106,9 +108,25 @@ pub struct Config {
     // Unset (the default) disables POST /api/version entirely (always 403s) — same
     // opt-in-per-deployment shape as the VAPID keys above.
     release_admin_token: Option<String>,
+    // Encrypts the conversation hash-chain `.zali` exports. Unlike the two
+    // options above this one has no "disabled" state — the chain is written
+    // whether or not an operator configured anything, so leaving it unset must
+    // still produce a real key rather than an unencrypted archive. It is
+    // derived from JWT_SECRET in that case: deterministic across restarts (an
+    // export written yesterday still opens today) and one-way, so holding the
+    // export key does not hand anyone the token-signing secret.
+    hash_chain_key: String,
 }
 
 impl Config {
+    /// The key the conversation hash-chain `.zali` exports are encrypted with.
+    /// Exposed so integration tests can open a real export without re-deriving
+    /// (and drifting from) the derivation rule, and so an operator tool can be
+    /// pointed at the same value the running server resolved.
+    pub fn hash_chain_key(&self) -> &str {
+        &self.hash_chain_key
+    }
+
     pub fn from_env() -> Self {
         let jwt_secret = std::env::var("JWT_SECRET").ok();
         let jwt_secret = match jwt_secret {
@@ -205,6 +223,18 @@ impl Config {
             .ok()
             .filter(|v| !v.trim().is_empty());
 
+        let hash_chain_key = std::env::var("HASH_CHAIN_KEY")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(b"zali.hashchain.export.v1");
+                hasher.update(jwt_secret.as_bytes());
+                hex_encode(&hasher.finalize())
+            });
+
         Self {
             jwt_secret: jwt_secret.into_bytes(),
             allowed_origins,
@@ -218,6 +248,7 @@ impl Config {
             vapid_private_key,
             vapid_subject,
             release_admin_token,
+            hash_chain_key,
         }
     }
 }
@@ -342,6 +373,14 @@ pub struct AppState {
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
     ws_tickets: DashMap<String, WsTicketRecord>,
+    // Coalesces `key_envelope_available` pushes: recipient → when one was last sent.
+    // A republish sweep writes one envelope per device per scope, and each write used
+    // to push a notification, so a single sweep produced hundreds of them — every one
+    // making the recipient re-sync envelopes and re-decrypt its open conversation.
+    // The notification carries no per-envelope detail (the client always fetches all
+    // pending envelopes for its device), so collapsing a burst into one push loses
+    // nothing. See `notify_key_envelope_available`.
+    key_envelope_notified_at: DashMap<String, Instant>,
     // Rate limiting: username/IP → timestamps of recent login attempts
     login_attempts: DashMap<String, VecDeque<Instant>>,
     // Throttles the full-map sweep in login() to once per rate-limit window instead
@@ -633,6 +672,55 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_transparency_log_owner_seq
          ON transparency_log (owner, seq)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    // Append-only hash chain over every message event in a conversation —
+    // creates, edits and deletions alike. See `hash_chain.rs` for the format;
+    // the two unique indexes below are load-bearing, not hygiene: they are what
+    // turns a lost race between two concurrent senders into a failed insert
+    // (logged, chain intact) instead of two entries silently sharing a
+    // position or a "<message>.<version>" label.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS message_hash_chain (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_scope TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            message_number INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            event TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            payload_size INTEGER NOT NULL,
+            prev_hash TEXT NOT NULL,
+            entry_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы message_hash_chain");
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_hash_chain_position
+         ON message_hash_chain (conversation_scope, position)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_hash_chain_label
+         ON message_hash_chain (conversation_scope, message_number, version)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_message_hash_chain_message
+         ON message_hash_chain (conversation_scope, message_id, version)",
     )
     .execute(&pool)
     .await
@@ -1056,6 +1144,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
         ws_tickets: DashMap::new(),
+        key_envelope_notified_at: DashMap::new(),
         login_attempts: DashMap::new(),
         login_attempts_last_swept: std::sync::Mutex::new(Instant::now()),
         config,
@@ -1205,7 +1294,25 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/message/:id/reaction", post(set_message_reaction))
         .route("/api/upload", post(upload_message))
         .route("/api/download/:id", get(download_message))
-        .route("/api/message/:id", axum::routing::delete(delete_message))
+        .route(
+            "/api/message/:id",
+            put(edit_message).delete(delete_message),
+        )
+        // Scope goes in the query string, not the path: `dm:alice:bob` and
+        // `server:<id>:<id>` both contain colons, and a path segment carrying
+        // them has to survive every proxy and client URL encoder on the way in.
+        .route(
+            "/api/conversations/hash-chain",
+            get(get_conversation_hash_chain),
+        )
+        .route(
+            "/api/conversations/hash-chain/verify",
+            get(verify_conversation_hash_chain),
+        )
+        .route(
+            "/api/conversations/hash-chain.zali",
+            get(download_conversation_hash_chain),
+        )
         .route("/ws", get(ws_handler))
         .route("/api/push/vapid-public-key", get(get_vapid_public_key))
         .route("/api/push/subscribe", post(subscribe_push))

@@ -95,22 +95,45 @@ print(f"TURN target {HOST} -> {addr[0]}:{addr[1]}  user={USER}")
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.settimeout(5)
 
+
+def request(sock, packet, tries=4, timeout=2.0):
+    """Sends a STUN/TURN request and waits for a reply, retransmitting on loss.
+
+    UDP loses datagrams, and this probe runs over whatever link the developer is
+    on (a VPN, in practice). Without retransmission a single dropped packet is
+    reported as "TURN is down" — which already happened, and sending someone to
+    debug a production relay that is in fact healthy is worse than no check at
+    all. Real STUN clients retransmit for exactly this reason (RFC 5389 §7.2.1).
+    """
+    previous = sock.gettimeout()
+    sock.settimeout(timeout)
+    try:
+        for attempt in range(tries):
+            sock.sendto(packet, addr)
+            try:
+                return sock.recvfrom(2048)[0]
+            except socket.timeout:
+                if attempt == tries - 1:
+                    return None
+        return None
+    finally:
+        sock.settimeout(previous)
+
+
 # 1) plain STUN Binding, to see our own reflexive address and prove UDP reaches the box
-tid = os.urandom(12)
-s.sendto(msg(BIND_REQ, tid, []), addr)
-try:
-    data, _ = s.recvfrom(2048)
-    _, _, a = parse(data)
-    srflx = xor_addr(a[A_XOR_MAPPED]) if A_XOR_MAPPED in a else None
-    print(f"[1] STUN Binding OK  srflx={srflx}")
-except socket.timeout:
+data = request(s, msg(BIND_REQ, os.urandom(12), []))
+if data is None:
     print("[1] STUN Binding: TIMEOUT (UDP 3478 unreachable)")
     sys.exit(1)
+_, _, a = parse(data)
+srflx = xor_addr(a[A_XOR_MAPPED]) if A_XOR_MAPPED in a else None
+print(f"[1] STUN Binding OK  srflx={srflx}")
 
 # 2) unauthenticated Allocate -> expect 401 with realm+nonce
-tid = os.urandom(12)
-s.sendto(msg(ALLOC_REQ, tid, [(A_REQ_TRANSPORT, b"\x11\x00\x00\x00")]), addr)
-data, _ = s.recvfrom(2048)
+data = request(s, msg(ALLOC_REQ, os.urandom(12), [(A_REQ_TRANSPORT, b"\x11\x00\x00\x00")]))
+if data is None:
+    print("[2] Allocate(unauth): TIMEOUT (STUN answers but TURN does not allocate)")
+    sys.exit(1)
 mt, _, a = parse(data)
 realm = a.get(A_REALM, b"").decode()
 nonce = a.get(A_NONCE, b"")
@@ -127,8 +150,10 @@ pairs = [
     (A_REALM, realm.encode()),
     (A_NONCE, nonce),
 ]
-s.sendto(msg(ALLOC_REQ, tid, pairs, key), addr)
-data, _ = s.recvfrom(2048)
+data = request(s, msg(ALLOC_REQ, tid, pairs, key))
+if data is None:
+    print("[3] Allocate(auth): TIMEOUT")
+    sys.exit(2)
 mt, _, a = parse(data)
 if mt != 0x0103:
     code = (a[A_ERROR][2] * 100 + a[A_ERROR][3]) if A_ERROR in a else "?"
@@ -144,9 +169,10 @@ print(f"[3] Allocate(auth) OK relayed={relayed} mapped={mapped} lifetime={lifeti
 peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 peer.settimeout(5)
 peer.bind(("0.0.0.0", 0))
-tidb = os.urandom(12)
-peer.sendto(msg(BIND_REQ, tidb, []), addr)
-pdata, _ = peer.recvfrom(2048)
+pdata = request(peer, msg(BIND_REQ, os.urandom(12), []))
+if pdata is None:
+    print("[4] peer socket: STUN Binding TIMEOUT")
+    sys.exit(3)
 _, _, pa = parse(pdata)
 peer_srflx = xor_addr(pa[A_XOR_MAPPED])
 print(f"[4] peer socket srflx={peer_srflx}")
@@ -158,21 +184,32 @@ pairs = [
     (A_REALM, realm.encode()),
     (A_NONCE, nonce),
 ]
-s.sendto(msg(PERM_REQ, tid, pairs, key), addr)
-data, _ = s.recvfrom(2048)
+data = request(s, msg(PERM_REQ, tid, pairs, key))
+if data is None:
+    print("[5] CreatePermission: TIMEOUT")
+    sys.exit(4)
 mt, _, a = parse(data)
 print(f"[5] CreatePermission -> type=0x{mt:04x}" + ("  OK" if mt == 0x0108 else "  FAILED"))
 
+# Media is a stream, so one lost datagram here says nothing — resend before
+# concluding the relay drops traffic.
 payload = b"ZALI-RELAY-PROBE"
-peer.sendto(payload, relayed)
-try:
-    data, src = s.recvfrom(2048)
+s.settimeout(2)
+relayed_ok = False
+for attempt in range(4):
+    peer.sendto(payload, relayed)
+    try:
+        data, src = s.recvfrom(2048)
+    except socket.timeout:
+        continue
     mt, _, a = parse(data)
     got = a.get(A_DATA, b"")
     if mt == DATA_IND and got == payload:
         print(f"[6] RELAY DATA OK: {len(got)}B travelled peer -> {relayed} -> client")
-    else:
-        print(f"[6] unexpected message type=0x{mt:04x} data={got!r}")
-except socket.timeout:
+        relayed_ok = True
+        break
+    print(f"[6] unexpected message type=0x{mt:04x} data={got!r}")
+if not relayed_ok:
     print(f"[6] RELAY DATA TIMEOUT: nothing came back through {relayed} "
           "-> relayed media would be silent")
+    sys.exit(5)

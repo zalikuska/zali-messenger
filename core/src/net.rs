@@ -38,6 +38,17 @@ pub struct MessageContent {
     /// sender also puts a human-readable summary in `text`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call: Option<String>,
+    /// Opaque encrypted JSON describing the message this one replies to:
+    /// `{"id","sender","text","attachmentCount"}`. Same treatment as `call`
+    /// above, and for the same reasons — the UI is the only thing that reads
+    /// it, and it is exactly as sensitive as the body, since it *contains* a
+    /// copy of someone's message.
+    ///
+    /// The quoted text is stored here rather than looked up by id at render
+    /// time on purpose: a reply must still show what it was answering after
+    /// the original is deleted or falls out of the loaded history window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
 }
 
 fn default_archive_key_version() -> u8 {
@@ -165,6 +176,10 @@ impl ZaliModule for ZaliNet {
                         Some(value) => Some(crate::crypto::encrypt_message_text(value, key)?),
                         None => None,
                     },
+                    reply: match args["reply"].as_str().map(str::trim).filter(|v| !v.is_empty()) {
+                        Some(value) => Some(crate::crypto::encrypt_message_text(value, key)?),
+                        None => None,
+                    },
                 };
 
                 let json = serde_json::to_string(&content).map_err(|e| e.to_string())?;
@@ -223,11 +238,16 @@ impl ZaliModule for ZaliNet {
                     Some(value) => Some(crate::crypto::decrypt_message_text(value, key)?),
                     None => None,
                 };
+                let decrypted_reply = match content.reply.as_deref() {
+                    Some(value) => Some(crate::crypto::decrypt_message_text(value, key)?),
+                    None => None,
+                };
 
                 Ok(json!({
                     "sender": content.sender,
                     "text": decrypted_text,
                     "call": decrypted_call,
+                    "reply": decrypted_reply,
                     "timestamp": content.timestamp,
                     "keyVersion": content.key_version,
                     "attachments": content.attachments,
@@ -260,6 +280,8 @@ pub struct UnpackedMessage {
     pub attachments: Vec<InMemoryAttachment>,
     /// Decrypted structured payload, when the message carried one.
     pub call: Option<String>,
+    /// Decrypted quote of the message this one replies to, when there is one.
+    pub reply: Option<String>,
 }
 
 /// Byte-buffer equivalent of `zali_net:pack_message` — builds a `.zali` archive
@@ -273,6 +295,7 @@ pub fn pack_message_bytes(
     key_version: u8,
     attachments: Vec<InMemoryAttachment>,
     call: Option<&str>,
+    reply: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     if key.trim().is_empty() {
         return Err("Missing key parameter".to_string());
@@ -282,6 +305,11 @@ pub fn pack_message_bytes(
     // Encrypted with the same routine as the body: it names both participants and
     // when they talked, which is exactly as sensitive as the message text.
     let encrypted_call = match call.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => Some(crate::crypto::encrypt_message_text(value, key)?),
+        None => None,
+    };
+    // Likewise — a reply quote embeds a verbatim copy of another message.
+    let encrypted_reply = match reply.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => Some(crate::crypto::encrypt_message_text(value, key)?),
         None => None,
     };
@@ -308,6 +336,7 @@ pub fn pack_message_bytes(
         },
         attachments: attachment_meta,
         call: encrypted_call,
+        reply: encrypted_reply,
     };
 
     let json = serde_json::to_string(&content).map_err(|e| e.to_string())?;
@@ -348,6 +377,10 @@ pub fn unpack_message_bytes(archive: &[u8], key: &str) -> Result<UnpackedMessage
         Some(value) => Some(crate::crypto::decrypt_message_text(value, key)?),
         None => None,
     };
+    let decrypted_reply = match content.reply.as_deref() {
+        Some(value) => Some(crate::crypto::decrypt_message_text(value, key)?),
+        None => None,
+    };
 
     let attachments = content
         .attachments
@@ -371,6 +404,7 @@ pub fn unpack_message_bytes(archive: &[u8], key: &str) -> Result<UnpackedMessage
         sender: content.sender,
         text: decrypted_text,
         call: decrypted_call,
+        reply: decrypted_reply,
         timestamp: content.timestamp,
         key_version: content.key_version,
         attachments,
@@ -654,6 +688,7 @@ mod tests {
                 bytes: b"fake-image-bytes".to_vec(),
             }],
             None,
+            None,
         )
         .unwrap();
 
@@ -670,7 +705,15 @@ mod tests {
     fn call_payload_round_trips_and_is_encrypted() {
         let call_json = r#"{"roomId":"voice:dm:a:b:1","direction":"outgoing","durationMs":134000}"#;
         let archive =
-            pack_message_bytes("Zalikus", "Звонок 2:14", "secret", 0, vec![], Some(call_json))
+            pack_message_bytes(
+                "Zalikus",
+                "Звонок 2:14",
+                "secret",
+                0,
+                vec![],
+                Some(call_json),
+                None,
+            )
                 .unwrap();
 
         // The payload names both participants and when they talked — it must not be
@@ -687,7 +730,7 @@ mod tests {
     fn message_without_call_payload_stays_backward_compatible() {
         // Absent `call` must not appear in the JSON at all, so an older client sees
         // exactly the archive shape it has always seen.
-        let archive = pack_message_bytes("Zalikus", "plain", "secret", 0, vec![], None).unwrap();
+        let archive = pack_message_bytes("Zalikus", "plain", "secret", 0, vec![], None, None).unwrap();
         let unpacked = unpack_message_bytes(&archive, "secret").unwrap();
         assert!(unpacked.call.is_none());
 
@@ -698,14 +741,126 @@ mod tests {
     }
 
     #[test]
+    fn reply_quote_round_trips_and_is_encrypted() {
+        let reply_json =
+            r#"{"id":"m-1","sender":"Alice","text":"секретная цитата","attachmentCount":0}"#;
+        let archive = pack_message_bytes(
+            "Zalikus",
+            "отвечаю",
+            "secret",
+            0,
+            vec![],
+            None,
+            Some(reply_json),
+        )
+        .unwrap();
+
+        // The quote embeds a verbatim copy of someone else's message — it must be
+        // no more readable in the archive than the body is.
+        let haystack = String::from_utf8_lossy(&archive);
+        assert!(!haystack.contains("секретная цитата"));
+        assert!(!haystack.contains("Alice"));
+
+        let unpacked = unpack_message_bytes(&archive, "secret").unwrap();
+        assert_eq!(unpacked.reply.as_deref(), Some(reply_json));
+        assert_eq!(unpacked.text, "отвечаю");
+        assert!(unpacked.call.is_none());
+    }
+
+    #[test]
+    fn reply_and_call_are_independent_slots() {
+        let call_json = r#"{"outcome":"missed"}"#;
+        let reply_json = r#"{"id":"m-9","sender":"Bob","text":"вопрос"}"#;
+        let archive = pack_message_bytes(
+            "Zalikus",
+            "оба",
+            "secret",
+            0,
+            vec![],
+            Some(call_json),
+            Some(reply_json),
+        )
+        .unwrap();
+
+        let unpacked = unpack_message_bytes(&archive, "secret").unwrap();
+        // Mixing the two up would render a call record as a quote and vice versa.
+        assert_eq!(unpacked.call.as_deref(), Some(call_json));
+        assert_eq!(unpacked.reply.as_deref(), Some(reply_json));
+    }
+
+    #[test]
+    fn message_without_reply_stays_backward_compatible() {
+        // Absent `reply` must not appear in the JSON at all, so an archive this
+        // client writes is byte-identical to what a pre-reply client wrote.
+        let archive =
+            pack_message_bytes("Zalikus", "plain", "secret", 0, vec![], None, None).unwrap();
+        assert!(unpack_message_bytes(&archive, "secret")
+            .unwrap()
+            .reply
+            .is_none());
+
+        // …and an archive written by a pre-reply client still parses here.
+        let content: MessageContent =
+            serde_json::from_str(r#"{"sender":"a","text":"x","timestamp":1}"#).unwrap();
+        assert!(content.reply.is_none());
+    }
+
+    #[test]
+    fn reply_quote_survives_the_path_based_api_too() {
+        // The native shells pack through the bus command, not the byte API —
+        // a quote must cross that boundary as well.
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("message.zali");
+        let unpack_dir = temp.path().join("unpacked");
+        fs::create_dir_all(&unpack_dir).unwrap();
+        let reply_json = r#"{"id":"m-3","sender":"Alice","text":"исходное"}"#;
+
+        let loader = test_loader();
+        loader
+            .bus
+            .send(
+                "zali_net:pack_message",
+                json!({
+                    "sender": "Zalikus",
+                    "text": "ответ",
+                    "key": "secret",
+                    "output_path": archive_path.to_str().unwrap(),
+                    "reply": reply_json,
+                }),
+            )
+            .unwrap();
+
+        let unpacked = loader
+            .bus
+            .send(
+                "zali_net:unpack_message",
+                json!({
+                    "archive_path": archive_path.to_str().unwrap(),
+                    "temp_dir": unpack_dir.to_str().unwrap(),
+                    "key": "secret",
+                }),
+            )
+            .unwrap();
+        assert_eq!(unpacked["reply"], json!(reply_json));
+        assert_eq!(unpacked["text"], json!("ответ"));
+
+        // …and the same archive decodes identically through the byte API.
+        let bytes = fs::read(&archive_path).unwrap();
+        assert_eq!(
+            unpack_message_bytes(&bytes, "secret").unwrap().reply.as_deref(),
+            Some(reply_json)
+        );
+    }
+
+    #[test]
     fn bytes_unpack_message_with_wrong_key_fails() {
-        let archive = pack_message_bytes("Zalikus", "hello", "right-key", 0, vec![], None).unwrap();
+        let archive = pack_message_bytes("Zalikus", "hello", "right-key", 0, vec![], None, None).unwrap();
         assert!(unpack_message_bytes(&archive, "wrong-key").is_err());
     }
 
     #[test]
     fn bytes_pack_message_requires_a_non_empty_key() {
-        assert!(pack_message_bytes("Zalikus", "hi", "", 0, vec![], None).is_err());
+        assert!(pack_message_bytes("Zalikus", "hi", "", 0, vec![], None, None).is_err());
     }
 
     #[test]
@@ -716,7 +871,7 @@ mod tests {
         let archive_path = temp.path().join("message.zali");
         let unpack_dir = temp.path().join("unpacked");
 
-        let archive_bytes = pack_message_bytes("Zalikus", "cross-api", "secret", 3, vec![], None).unwrap();
+        let archive_bytes = pack_message_bytes("Zalikus", "cross-api", "secret", 3, vec![], None, None).unwrap();
         fs::write(&archive_path, &archive_bytes).unwrap();
 
         let loader = test_loader();

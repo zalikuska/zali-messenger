@@ -31,6 +31,15 @@ export class SimServer {
     }
 
     _enqueue(to, event) {
+        // Targeted loss, as opposed to the statistical dropRate: lets a check delete
+        // exactly one frame (say, the answer to an ICE-restart offer) and then watch
+        // whether the client notices. A single lost answer is the historical shape of
+        // a call that reports "connected" and carries nothing.
+        if (this.opts.dropFilter && this.opts.dropFilter(to, event)) {
+            this.dropped += 1;
+            this.log.push({ to, type: event.type, signalType: event.signal?.type || '', dropped: true, targeted: true });
+            return;
+        }
         const drop = this.opts.dropRate ? this.rng() < this.opts.dropRate : false;
         if (drop) { this.dropped += 1; this.log.push({ to, type: event.type, dropped: true }); return; }
         const at = this.opts.jitter ? this.rng() * this.opts.jitter : 0;
@@ -161,6 +170,13 @@ export class SimServer {
     async settle(maxVirtualMs = 180000) {
         const clock = this.clock;
         const deadline = (clock ? clock.now : 0) + maxVirtualMs;
+        // Delivery is dispatched, not awaited — exactly as the client's own socket
+        // does it (`this.handleVoiceEvent(payload)` in interface.js is fire-and-
+        // forget, and ordering per peer is the client's job via its signal chains).
+        // Awaiting it here also deadlocked the harness against itself: a handler
+        // that waits on the microphone waits on a virtual timer, and the only thing
+        // that can advance virtual time is this loop.
+        const inflight = new Set();
         for (let guard = 0; guard < 200000; guard++) {
             await drainMicrotasks();
             if (this.queue.length) {
@@ -173,13 +189,15 @@ export class SimServer {
                 const peer = this.peers.get(item.to);
                 if (peer) {
                     this.delivered += 1;
-                    await peer.deliver(item.event);
+                    const done = Promise.resolve(peer.deliver(item.event)).catch(() => {});
+                    inflight.add(done);
+                    done.then(() => inflight.delete(done));
                 }
                 continue;
             }
-            if (!clock) return true;
-            if (!clock.hasTimers()) return true;
-            if (clock.nextAt() > deadline) return true;
+            if (!clock) return inflight.size === 0;
+            if (!clock.hasTimers()) return inflight.size === 0;
+            if (clock.nextAt() > deadline) return inflight.size === 0;
             clock.fireNext();
         }
         return false;

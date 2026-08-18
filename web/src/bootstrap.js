@@ -60,6 +60,9 @@
                 downloadAttachment: true,
                 serverHistory: true,
                 avatarFetch: true,
+                // The shell that serves this JS is the shell that handles it —
+                // both ship from the same build, so there is no older-native case.
+                editMessage: true,
                 tenor: true,
                 voice: true,
                 windowDrag: true,
@@ -74,6 +77,9 @@
                 saveMessageCache: true,
                 downloadAttachment: false,
                 serverHistory: false,
+                // Mobile shells have no EDIT_MESSAGE handler; those fall back to
+                // the in-browser WASM path (browserEditMessage).
+                editMessage: false,
                 tenor: false,
                 voice: false,
                     windowDrag: false,
@@ -132,6 +138,12 @@
     window.receiveReactionUpdate = function(payload) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.REACTION_UPDATED || 'reaction_updated'}`, payload);
     };
+    window.receiveMessageDeleted = function(payload) {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.MESSAGE_DELETED || 'message_deleted'}`, payload);
+    };
+    window.receiveMessageEdited = function(payload) {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.MESSAGE_EDITED || 'message_edited'}`, payload);
+    };
     window.receiveVoiceEvent = function(payload) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.VOICE_EVENT || 'voice_event'}`, payload);
     };
@@ -152,6 +164,11 @@
     };
     window.retryPublishKeys = function() {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.RETRY_PUBLISH_KEYS || 'retry_publish_keys'}`);
+    };
+    // Carries its payload, unlike retryPublishKeys: the scope decides which keys to
+    // republish, and the answer includes historical candidates the sweep never sends.
+    window.keyRepublishRequest = function(payload) {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.KEY_REPUBLISH_REQUEST || 'key_republish_request'}`, payload);
     };
     window.loadServerHistory = function(serverId, channelId, messages) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.LOAD_SERVER_HISTORY || 'load_server_history'}`, { serverId, channelId, messages });

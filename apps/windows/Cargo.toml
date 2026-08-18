@@ -26,7 +26,7 @@ tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 notify-rust = "4.17"
 keyring = "2.3"
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Needed to read the window's raw HWND for the taskbar-badge overlay (see
 # native/taskbar_badge.rs) — same 0.5.x already resolved transitively via tao's
 # "rwh_05" feature, so this doesn't add a new version to the dependency tree.

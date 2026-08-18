@@ -8,7 +8,20 @@
         "key",
         "clientId",
         "call",
+        "reply",
         "attachments"
+      ]
+    },
+    "EDIT_MESSAGE": {
+      "fields": [
+        "messageId",
+        "text",
+        "key",
+        "keyVersion",
+        "call",
+        "reply",
+        "attachments",
+        "requestId"
       ]
     },
     "SET_SESSION": {
@@ -50,6 +63,11 @@
       "fields": [
         "dataUrl",
         "filename"
+      ]
+    },
+    "OPEN_EXTERNAL_URL": {
+      "fields": [
+        "url"
       ]
     },
     "START_DRAG": {

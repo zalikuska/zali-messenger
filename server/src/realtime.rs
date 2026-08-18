@@ -286,15 +286,22 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
         let state_for_cleanup = state.clone();
         let username_for_cleanup = username.clone();
         tokio::spawn(async move {
-            // 12 s was shorter than a normal reconnect: the browser voice socket
-            // backs off 1→2→4→8 s and has to fetch a fresh ws-ticket over HTTP
-            // first, and the native shells' voice transports back off on their own
-            // schedules — so an ordinary blip evicted the user from the call before
-            // they were back. This only needs to outlast a reconnect, not a real
-            // departure: an explicit voice_leave / voice_call_end still removes the
-            // participant immediately, and a genuinely gone client is now detected
-            // by the keepalive above rather than by this timer.
-            tokio::time::sleep(Duration::from_secs(45)).await;
+            // Must outlast a reconnect, not a real departure: an explicit
+            // voice_leave / voice_call_end still removes the participant
+            // immediately, and a genuinely gone client is detected by the keepalive
+            // above rather than by this timer.
+            //
+            // 12 s was shorter than a single reconnect; 45 s was shorter than a
+            // real outage. What matters is that for a DM room this timer is not a
+            // cleanup at all — leave_voice_room destroys the room and sends
+            // voice_call_ended, which the surviving client treats as a hangup. So
+            // an outage that the media layer would have ridden out (it restarts ICE
+            // and recovers for minutes — see superviseVoiceLinks in interface.js)
+            // was still ending the call from the server side, and neither party
+            // could get it back. The native shells' WS backoff alone tops out at
+            // ~30 s per attempt, so a one-minute network gap routinely lands past
+            // 45 s. This window has to cover several failed attempts, not one.
+            tokio::time::sleep(Duration::from_secs(150)).await;
             let still_connected = state_for_cleanup
                 .user_connections
                 .get(&username_for_cleanup)

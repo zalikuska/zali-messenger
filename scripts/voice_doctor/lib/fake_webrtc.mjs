@@ -86,6 +86,28 @@ export function makeRTCPeerConnectionClass(opts = {}) {
             this._iceTimers = [];
             this._closed = false;
             this._remoteCandidates = 0;
+            this.duplicateAddTrackAttempts = 0;
+            // A transport that has already failed. Modelled separately from
+            // connectionState because the two are not the same thing: the state
+            // is what the client observes, this is whether packets can flow. Only
+            // an ICE RESTART revives it — a plain renegotiation re-agrees the
+            // m-lines over the very transport that is dead. A model that
+            // reconnected on any renegotiation would silently pass a client whose
+            // recovery path lost the iceRestart flag, which is exactly the bug
+            // class this file exists to catch.
+            this._transportBroken = false;
+            // The media layout this connection has already agreed to, and the
+            // layout the negotiation in flight would establish. A connection that
+            // has negotiated once cannot reorder its m-sections, so an offer (or
+            // answer) laying them out differently is refused on those grounds
+            // alone — with a legal signaling state, which is what makes this class
+            // of failure survive every state-based guard. Real and observed:
+            // production 2026-08-03, a channel call where a peer that rebuilt its
+            // RTCPeerConnection offered its sections in a different order.
+            this._mlineOrder = null;
+            this._pendingOfferKinds = null;
+            this._offerHadIceRestart = false;
+            this.iceRestartsSeen = 0;
             // Set by the harness when the two ends are paired.
             this.peerLink = null;
             this.onicecandidate = null;
@@ -113,6 +135,16 @@ export function makeRTCPeerConnectionClass(opts = {}) {
 
         addTrack(track, stream) {
             this._assertOpen();
+            // Per spec: adding a track that already has a sender on this connection
+            // throws InvalidAccessError. Modelled because the client's attach guard
+            // is what has to prevent it, and a permissive addTrack silently absorbs
+            // a broken guard — the duplicate senders just show up in the SDP.
+            if (this._senders.some(s => s.track === track)) {
+                this.duplicateAddTrackAttempts += 1;
+                const error = new Error('track already has a sender on this connection');
+                error.name = 'InvalidAccessError';
+                throw error;
+            }
             const sender = new FakeRTCRtpSender(track, this);
             sender._stream = stream;
             this._senders.push(sender);
@@ -133,6 +165,44 @@ export function makeRTCPeerConnectionClass(opts = {}) {
                     ufrag: `${Math.random().toString(36).slice(2, 8)}${iceRestart ? '-restart' : ''}`,
                 }),
             };
+        }
+
+        // Descriptions the harness crafts by hand (plain 'v=0\r\n...' strings) carry
+        // no layout information — unknown, not empty, so they are never treated as
+        // a conflict.
+        _kindsOf(desc) {
+            try {
+                const parsed = JSON.parse(desc?.sdp);
+                return Array.isArray(parsed?.sends) ? parsed.sends : null;
+            } catch (e) { return null; }
+        }
+
+        // Only reordering is a conflict. Appending a section (a camera turning on)
+        // is exactly how renegotiation is supposed to work, and a section going
+        // quiet shortens the list without moving anything.
+        _layoutConflict(kinds) {
+            if (!this._mlineOrder || !kinds) return false;
+            const shared = Math.min(this._mlineOrder.length, kinds.length);
+            for (let i = 0; i < shared; i += 1) {
+                if (this._mlineOrder[i] !== kinds[i]) return true;
+            }
+            return false;
+        }
+
+        _rejectLayout(kind) {
+            const error = new Error(`Failed to set remote ${kind} sdp: The order of m-lines in subsequent ${kind} doesn't match order from previous offer/answer.`);
+            error.name = 'InvalidAccessError';
+            return error;
+        }
+
+        // The layout becomes binding once the exchange that proposed it completes.
+        _commitLayout() {
+            const kinds = this._pendingOfferKinds;
+            this._pendingOfferKinds = null;
+            if (!kinds) return;
+            if (!this._mlineOrder || kinds.length >= this._mlineOrder.length) {
+                this._mlineOrder = kinds.slice();
+            }
         }
 
         async createOffer(options = {}) {
@@ -168,6 +238,8 @@ export function makeRTCPeerConnectionClass(opts = {}) {
                 }
                 this.localDescription = desc;
                 this.pendingLocalOffer = desc;
+                this._pendingOfferKinds = this._kindsOf(desc);
+                this._noteOfferIceRestart(desc);
                 this._setSignaling('have-local-offer');
                 this._startGathering();
                 return;
@@ -177,6 +249,7 @@ export function makeRTCPeerConnectionClass(opts = {}) {
                     throw new InvalidStateError(`setLocalDescription(answer) in ${this.signalingState}`);
                 }
                 this.localDescription = desc;
+                this._commitLayout();
                 this._setSignaling('stable');
                 this._startGathering();
                 this._maybeConnect();
@@ -192,7 +265,11 @@ export function makeRTCPeerConnectionClass(opts = {}) {
                 if (this.signalingState !== 'stable') {
                     throw new InvalidStateError(`setRemoteDescription(offer) in ${this.signalingState}`);
                 }
+                const offerKinds = this._kindsOf(desc);
+                if (this._layoutConflict(offerKinds)) throw this._rejectLayout('offer');
                 this.remoteDescription = desc;
+                this._pendingOfferKinds = offerKinds;
+                this._noteOfferIceRestart(desc);
                 this._setSignaling('have-remote-offer');
                 this._emitRemoteTracks(desc);
                 return;
@@ -201,8 +278,12 @@ export function makeRTCPeerConnectionClass(opts = {}) {
                 if (this.signalingState !== 'have-local-offer') {
                     throw new InvalidStateError(`setRemoteDescription(answer) in ${this.signalingState}`);
                 }
+                // The answerer does not get to reorder either — an answer must
+                // mirror the offer's layout section for section.
+                if (this._layoutConflict(this._kindsOf(desc))) throw this._rejectLayout('answer');
                 this.remoteDescription = desc;
                 this.pendingLocalOffer = null;
+                this._commitLayout();
                 this._setSignaling('stable');
                 this._emitRemoteTracks(desc);
                 this._maybeConnect();
@@ -265,10 +346,40 @@ export function makeRTCPeerConnectionClass(opts = {}) {
             this._remoteCandidates += 1;
         }
 
+        /** Records whether the offer of the exchange now in flight asks for an ICE restart. */
+        _noteOfferIceRestart(desc) {
+            let ufrag = '';
+            try { ufrag = String(JSON.parse(desc.sdp).ufrag || ''); } catch (e) { ufrag = ''; }
+            this._offerHadIceRestart = ufrag.endsWith('-restart');
+            if (this._offerHadIceRestart) this.iceRestartsSeen += 1;
+        }
+
+        /**
+         * Kills the transport the way a real network event does: the state the
+         * client sees changes exactly once, and then stops changing. That second
+         * half is the important one — a client whose recovery is driven purely by
+         * `onconnectionstatechange` gets one shot and never hears from the
+         * connection again.
+         */
+        breakTransport(state = 'failed') {
+            if (this._closed) return;
+            this._transportBroken = true;
+            this._offerHadIceRestart = false;
+            if (this.iceConnectionState !== state) {
+                this.iceConnectionState = state;
+                this.oniceconnectionstatechange?.();
+            }
+            if (this.connectionState !== state) {
+                this.connectionState = state;
+                this.onconnectionstatechange?.();
+            }
+        }
+
         _maybeConnect() {
             if (this._closed) return;
             if (!this.localDescription || !this.remoteDescription) return;
             if (faults.iceFails) {
+                this._transportBroken = true;
                 later(() => {
                     if (this._closed) return;
                     this.iceConnectionState = 'failed';
@@ -278,6 +389,11 @@ export function makeRTCPeerConnectionClass(opts = {}) {
                 }, 3);
                 return;
             }
+            // Re-agreeing the media over a dead transport changes nothing about the
+            // transport. The connection stays failed AND stays silent about it.
+            if (this._transportBroken && !this._offerHadIceRestart) return;
+            this._transportBroken = false;
+            this._offerHadIceRestart = false;
             later(() => {
                 if (this._closed) return;
                 this.iceConnectionState = 'connected';

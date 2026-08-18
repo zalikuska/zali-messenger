@@ -17,6 +17,7 @@ const ZaliBusEvents = window.ZaliBusEvents || Object.freeze({
     ON_SEND_SUCCESS: 'on_send_success',
     ON_SEND_ERROR: 'on_send_error',
     REACTION_UPDATED: 'reaction_updated',
+    MESSAGE_DELETED: 'message_deleted',
     AVATAR_UPDATED: 'avatar_updated',
     TENOR_RESOLVED: 'tenor_resolved',
     AUTH_RESPONSE: 'auth_response',

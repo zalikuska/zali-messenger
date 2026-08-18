@@ -43,7 +43,7 @@
          * @param {Array<{name:string, archivePath:string, mimeType:string, kind:string, bytes:Uint8Array}>} [attachments]
          * @returns {Promise<Uint8Array>}
          */
-        async packMessage(sender, text, key, keyVersion, attachments) {
+        async packMessage(sender, text, key, keyVersion, attachments, call, reply) {
             const mod = await load();
             const jsAttachments = (attachments || []).map(a => ({
                 name: a.name,
@@ -52,7 +52,18 @@
                 kind: a.kind,
                 bytes: a.bytes instanceof Uint8Array ? a.bytes : new Uint8Array(a.bytes),
             }));
-            return mod.pack_message_wasm(sender, text, key, keyVersion || 0, jsAttachments);
+            // `call`/`reply` are opaque JSON strings; the core encrypts them with
+            // the conversation key exactly like the body. undefined = absent, which
+            // keeps the archive byte-identical to what a pre-reply client wrote.
+            return mod.pack_message_wasm(
+                sender,
+                text,
+                key,
+                keyVersion || 0,
+                jsAttachments,
+                call || undefined,
+                reply || undefined,
+            );
         },
 
         /**

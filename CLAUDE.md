@@ -197,7 +197,7 @@ cargo test --manifest-path server/Cargo.toml   # server integration tests (51 ш
 
 | Path | Role |
 |---|---|
-| `server/src/` | Axum server, split into modules: `main.rs`/`lib.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, `devices.rs`, `voice.rs`, `push.rs` (Web Push/VAPID), `updates.rs` (`/api/version` + публичный `/releases/:filename`), `conversation_keys.rs` (серверный реестр ключей разговоров). Модули реэкспортируются в корень крейта (`pub(crate) use x::*;`), поэтому `use crate::{...}` работает отовсюду |
+| `server/src/` | Axum server, split into modules: `main.rs`/`lib.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, `devices.rs`, `voice.rs`, `push.rs` (Web Push/VAPID), `updates.rs` (`/api/version` + публичный `/releases/:filename`), `conversation_keys.rs` (серверный реестр ключей разговоров), `hash_chain.rs` (append-only цепочка хэшей сообщений переписки + `.zali`-экспорт). Модули реэкспортируются в корень крейта (`pub(crate) use x::*;`), поэтому `use crate::{...}` работает отовсюду |
 | `web/src/interface.js` | Entire web UI (~13000 lines): runs in both browser and native WebView |
 | `apps/macos/` | SwiftUI app (Swift Package Manager); wraps WKWebView. **Основной macOS-клиент** |
 | `apps/windows/src/native.rs` + `apps/windows/src/native/` | Rust desktop shell (WRY/TAO). `native.rs` держит NativeState/bridges и центральный `handle_ipc_message`; подмодули `native/{http,cache,keyring,util,transport,api,messages}.rs` — HTTP-клиенты, кэш расшифровки, keyring, санитайзеры, WS-транспорты, API-запросы, конвейер сообщений. Кроссплатформенный: собирается для Windows (`scripts/build_windows_app.ps1`, основной путь) и как **экспериментальный** macOS-шелл (`scripts/build_macos_rust_app.sh`, см. ниже) |
@@ -226,6 +226,79 @@ Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/rou
 - Passwords are capped at 72 bytes at registration (bcrypt silent truncation prevention)
 - `approve_device` rejects self-approval (`target_id == actor_id`)
 - File deletions in `delete_server` happen **after** transaction commit
+
+### Hash chain переписки (`server/src/hash_chain.rs`)
+
+Append-only журнал **событий** сообщений: на каждое создание/редактирование/удаление
+добавляется запись, связанная SHA-256 с предыдущей. Хранится только хэш **шифротекста**
+`.zali` — ни ключа, ни открытого текста сервер не узнаёт; он лишь получает возможность
+доказать, что сообщение было и что данный архив — тот самый.
+
+- **Метка `"<номер сообщения>.<версия>"`.** Номер — позиция сообщения в переписке,
+  выдаётся один раз и **никогда не переиспользуется** (даже после удаления: иначе
+  удалённое и его замена были бы в журнале неотличимы). Версия: `0` — оригинал,
+  далее каждое редактирование, и **удаление тоже занимает версию**.
+- **Scope** тот же, что у history-тикетов и реестра ключей: `dm:a:b` / `server:sid:cid`.
+- **Хэш записи length-prefixed.** Каждое поле идёт в SHA-256 как `be32(len) || bytes`.
+  Простая конкатенация позволила бы двум разным записям совпасть (`actor="ab",id="c"`
+  и `actor="a",id="bc"` дают один и тот же байтовый поток) — для tamper-evident журнала
+  это недопустимо. В хэш входит и `conversation_scope`, поэтому цепочку нельзя целиком
+  перенести в экспорт другой переписки.
+- **`BEGIN IMMEDIATE` + отдельная задача.** `position` и `message_number` — обе
+  read-then-write выдачи, дефолтная deferred-транзакция дала бы двум одновременным
+  отправителям прочитать одну и ту же голову. Вся транзакция выполняется в собственном
+  `tokio::spawn`: axum роняет future хендлера при разрыве соединения клиентом, и такой
+  drop между `BEGIN IMMEDIATE` и `COMMIT` вернул бы в пул соединение с удерживаемой
+  блокировкой записи sqlite — после чего встали бы **все** переписки.
+- **Сбой журналирования не ломает отправку.** `record_message_event_best_effort` только
+  пишет `error!` (приоритет из раздела «Приоритеты при исправлении багов»: мессенджер,
+  отказывающийся доставить сообщение из-за икоты аудит-лога, хуже, чем пропуск в логе).
+- **`.zali`-экспорт пересобирается при скачивании,** а не переписывается на каждое
+  сообщение: архив — монолитный блоб, синхронное обновление означало бы перешифровку
+  всей цепочки на каждой отправке (квадратичная работа на горячем пути). Файлы лежат в
+  `<data_dir>/hash_chains/<sha256(scope)>.zali` (имя хэшируется — иначе участники
+  переписки были бы видны в именах файлов), magic `ZALIHASH` (не `ZALIMSSG`, чтобы
+  экспорт нельзя было скормить распаковщику сообщений). Внутри `chain.json` (полный лог)
+  и `index.json` (плоская карта `"N.V" → хэш`).
+- **Ключ экспорта** — `HASH_CHAIN_KEY`; пусто ≠ выключено (цепочка пишется всегда),
+  поэтому пустое значение детерминированно выводится из `JWT_SECRET` через SHA-256.
+  Ротация `JWT_SECRET` без явного `HASH_CHAIN_KEY` делает старые экспорты нечитаемыми.
+- **`PUT /api/message/:id`** — редактирование (только автор; менеджеры канала могут
+  *удалять* чужое, но переписывать от чужого имени — подлог, который цепочка честно
+  записала бы на автора). Шлёт WS-событие `message_edited`; **клиенты его пока не
+  обрабатывают и безопасно игнорируют** (web-ветка требует отсутствия `type`, Windows
+  требует `id`+`filename`, macOS не декодирует `WsMessage` без `id`/`timestamp`) —
+  UI редактирования это отдельная задача.
+
+### Редактирование / удаление / ответ на сообщение
+
+- **Цитата ответа лежит ВНУТРИ зашифрованного архива** — поле `MessageContent.reply`
+  (`core/src/net.rs`), непрозрачная JSON-строка `{id, sender, text, attachmentCount}`,
+  шифруется тем же ключом, что и текст (полная копия шаблона `call`). Это **снимок, а не
+  ссылка**: иначе цитата пропадала бы, как только оригинал удалён, отредактирован или просто
+  не попал в загруженное окно истории. Текст обрезается до 280 символов
+  (`ZaliInterface.REPLY_QUOTE_MAX_CHARS`).
+- **Куда пришлось продублировать `reply`** (тот же список, что и для `call`): `core/src/net.rs`
+  (bus-команды + байтовый API), `core/src/lib.rs` (WASM), `web/src/modules/wasm_bridge.js`,
+  macOS `ZaliCore.packMessage`/`MessagePayload`/`WebView.swift`, Windows
+  `native/messages.rs`+`native.rs`. **`receiveMessage()` в `interface.js` собирает сообщение
+  по полям, а не спредом** — забытое там поле теряется при живой доставке и «чинится» только
+  следующей перезагрузкой истории; ровно это и произошло при первой сборке.
+- **Редактирует только автор.** Менеджеры канала могут *удалять* чужое (`can_delete_message`),
+  но переписывать чужие слова от чужого имени — подлог, который hash chain честно записал бы
+  на автора. Сервер (`PUT /api/message/:id`) проверяет это независимо от UI.
+- **Правка заменяет архив целиком**, поэтому клиент обязан переупаковать сообщение вместе с
+  вложениями и цитатой. Пропустить их = молча выбросить их из сообщения.
+- Правка оптимистична и **откатывается при ошибке** (`submitMessageEdit`); правка «в то же
+  самое» не отправляется вообще, чтобы не тратить версию в цепочке.
+- `messageRenderKey` для сохранённого сообщения сворачивается в `id:<id>`, а
+  `messageStableSignature` берёт от текста только **длину** — поэтому у отредактированных
+  сообщений есть счётчик `editRev`, иначе правка, не изменившая длину, не перерисовывалась бы.
+- Кэш расшифровки на нативной стороне (`decryptedMessageCache` / `forget_decrypted_message`)
+  **обязан сбрасываться по id при правке** — он ключуется id, а содержимое под этим id
+  меняется; без сброса история вечно перерисовывала бы текст «до правки».
+- UI: пункты «Ответить»/«Изменить»/«Удалить» живут в том же popup, что и реакции
+  (`ensureReactionMenu`), полоса контекста композера — `#composerContext`.
 
 ### macOS client (`apps/macos/`)
 - IPC: `WKScriptMessageHandler.userContentController` in `WebView.swift`; all handlers guard `message.frameInfo.isMainFrame`

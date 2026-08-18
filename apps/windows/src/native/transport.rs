@@ -18,8 +18,8 @@ use tokio_tungstenite::{
 };
 
 use crate::native::{
-    candidate_message_keys, dispatch_ui_event, process_history_record, trace, ApiSession, AppEvent,
-    MessageConfig, UiBusEvent, VoiceConfig,
+    candidate_message_keys, dispatch_ui_event, forget_decrypted_message, process_history_record,
+    trace, ApiSession, AppEvent, MessageConfig, UiBusEvent, VoiceConfig,
 };
 
 pub(crate) fn websocket_request(
@@ -335,6 +335,8 @@ pub(crate) async fn handle_message_ws_payload(
         .map(|value| {
             value.starts_with("voice_")
                 || value == "reaction_updated"
+                || value == "message_deleted"
+                || value == "message_edited"
                 || value.ends_with("avatar_updated")
                 || value == "avatar_deleted"
                 || value == "key_envelope_available"
@@ -364,17 +366,37 @@ pub(crate) async fn handle_message_ws_payload(
             dispatch_voice_event(&proxy, raw);
         } else if event_type == "key_envelope_available" {
             dispatch_ui_event(&proxy, UiBusEvent::RefreshAfterKey, serde_json::Value::Null);
-        } else if event_type == "device_approved" || event_type == "key_republish_request" {
-            // Pushed when a peer registers or approves a device, or when a
-            // participant reports it cannot decrypt a shared conversation —
-            // republish our side of any DM/channel keys instead of waiting for our
-            // own next login. Mirrors macOS NetworkService.swift's onDeviceApproved
-            // -> WebView.swift's retryPublishKeys(). The sweep is idempotent, so
-            // both event types share it rather than carrying a scope payload
-            // through every platform's bridge.
+        } else if event_type == "key_republish_request" {
+            // Forwarded WITH its payload, and deliberately not folded into the
+            // republish sweep below. Both were routed to RetryPublishKeys on the
+            // theory that the sweep is an idempotent superset — it is not. The sweep
+            // publishes each scope's ACTIVE key only, while a participant sends this
+            // event precisely because the messages it cannot read were encrypted
+            // under a key we have since demoted to an `alt:` candidate. Only
+            // handleKeyRepublishRequest (interface.js) answers with every candidate,
+            // so collapsing the two left the requester permanently stuck reporting
+            // "перебрано ключей N, ни один не подошёл". Mirrors macOS
+            // NetworkService.swift's onKeyRepublishRequest -> WebView.swift's
+            // keyRepublishRequest().
+            dispatch_ui_event(&proxy, UiBusEvent::KeyRepublishRequest, raw);
+        } else if event_type == "device_approved" {
+            // Pushed when a peer registers or approves a device — republish our side
+            // of any DM/channel keys instead of waiting for our own next login.
+            // Mirrors macOS NetworkService.swift's onDeviceApproved ->
+            // WebView.swift's retryPublishKeys().
             dispatch_ui_event(&proxy, UiBusEvent::RetryPublishKeys, serde_json::Value::Null);
         } else if event_type == "reaction_updated" {
             dispatch_ui_event(&proxy, UiBusEvent::ReactionUpdated, raw);
+        } else if event_type == "message_deleted" {
+            dispatch_ui_event(&proxy, UiBusEvent::MessageDeleted, raw);
+        } else if event_type == "message_edited" {
+            // The archive behind this id was replaced, so the cached decryption of
+            // the OLD one must go before the UI asks for history again — otherwise
+            // the refresh is answered from cache with the pre-edit text.
+            if let Some(edited_id) = raw.get("messageId").and_then(Value::as_str) {
+                forget_decrypted_message(edited_id);
+            }
+            dispatch_ui_event(&proxy, UiBusEvent::MessageEdited, raw);
         } else if event_type == "avatar_updated" || event_type == "avatar_deleted" {
             // Mirrors macOS onAvatarChanged (NetworkService.swift) -> avatarUpdated/avatarDeleted
             // (WebView.swift): both funnel into the same web bus event with a `deleted` flag,

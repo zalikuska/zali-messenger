@@ -7,7 +7,7 @@
 // there is a session in which each end can actually be heard.
 import { SimServer } from './lib/sim_server.mjs';
 import { VoicePeer } from './lib/peer.mjs';
-import { VirtualClock } from './lib/clock.mjs';
+import { VirtualClock, drainMicrotasks } from './lib/clock.mjs';
 
 const results = [];
 let failures = 0;
@@ -65,8 +65,14 @@ async function runDmCall({
             await a.api.startDirectCall(callee);
             await server.settle(2000);
             if (beforeAccept) await beforeAccept({ a, b, server });
-            if (autoAccept) await b.api.acceptIncomingCall();
+            // Deliberately not awaited before settling: accepting a call awaits the
+            // microphone, and a microphone that is slow (an open permission dialog)
+            // only resolves once virtual time moves — which is settle()'s job. Await
+            // it before settling and the scenario deadlocks on the harness, not on
+            // the client.
+            const accepting = autoAccept ? b.api.acceptIncomingCall() : null;
             await server.settle();
+            if (accepting) await accepting;
             if (afterConnect) { await afterConnect({ a, b, server }); await server.settle(); }
         })(), `${caller}->${callee}`);
     } catch (error) {
@@ -98,6 +104,14 @@ console.log('\n== DM calls ==');
     const counts = ctx.server.signalCounts();
     record('exactly one offer and one answer on a clean call',
         counts.offer === 1 && counts.answer === 1, JSON.stringify(counts));
+    // voice_call_accepted and voice_call_connected arrive back to back and are both
+    // dispatched fire-and-forget, so two syncVoicePeers passes overlap on every
+    // single call. If the attach guard is not latched synchronously they both add
+    // the same track: a real browser throws InvalidAccessError there, aborting
+    // whichever pass was mid-negotiation.
+    const dupes = ctx.a.duplicateAddTrackAttempts() + ctx.b.duplicateAddTrackAttempts();
+    record('overlapping sync passes never add the same track twice', dupes === 0,
+        `duplicate addTrack attempts=${dupes}`);
 }
 
 {
@@ -219,6 +233,247 @@ console.log('\n== ICE / candidate faults ==');
         twoWay(ctx), describe(ctx));
 }
 
+console.log('\n== the microphone permission dialog ==');
+
+{
+    // The callee leaves the permission dialog open for 30 s. getUserMedia stays
+    // pending that whole time, and answering used to wait on it — so the CALLER was
+    // not heard either, although receiving audio needs no permission at all, and the
+    // caller's answer watchdog gives up after 8 s and starts rolling offers back.
+    const ctx = await runDmCall({ calleeOpts: { micDelayMs: 30000 } });
+    record('a slow microphone does not hold up the answer',
+        ctx.b.tracesOf('answering-before-mic-ready').length === 1,
+        `answered-early=${ctx.b.tracesOf('answering-before-mic-ready').length}`);
+    record('the call is two-way once the slow microphone finally lands',
+        twoWay(ctx), describe(ctx));
+    // A mic that lands late releases several waiters at once (the accept, the
+    // negotiation retry, the room-state pass), so this is where an attach guard
+    // that latches after an await really does add the same track several times.
+    const dupes = ctx.a.duplicateAddTrackAttempts() + ctx.b.duplicateAddTrackAttempts();
+    record('a late microphone is attached exactly once per peer', dupes === 0,
+        `duplicate addTrack attempts=${dupes}`);
+}
+
+console.log('\n== remote playback blocked by autoplay policy ==');
+
+{
+    // Nothing in the WebRTC layer is wrong here: the session is negotiated, RTP
+    // arrives, and the <audio> element is simply not allowed to start. Only a user
+    // gesture lifts that, and a call is not guaranteed to have had one on this
+    // device (answered from a notification, page restored mid-call).
+    const ctx = await runDmCall({ calleeOpts: { autoplayBlocked: true } });
+    const sink = ctx.b.remoteSinkFor('alice');
+    record('the session itself is fine — the sink is what is blocked',
+        twoWay(ctx) && !!sink && sink.paused === true,
+        `sink=${sink ? (sink.paused ? 'paused' : 'playing') : 'none'} ${describe(ctx)}`);
+    record('a call in progress listens for the gesture that could unblock it',
+        ctx.b.doc.listenerCount('pointerdown') > 0,
+        `pointerdown listeners=${ctx.b.doc.listenerCount('pointerdown')}`);
+    // No virtual time passes here, so this proves the gesture did it — not some
+    // timer that would have fixed it anyway.
+    ctx.b.autoplayBlocked = false;
+    ctx.b.gesture('pointerdown');
+    await drainMicrotasks();
+    record('the next user gesture starts it playing, with no reload and no re-dial',
+        ctx.b.remoteSinkFor('alice')?.paused === false,
+        `sink=${ctx.b.remoteSinkFor('alice')?.paused ? 'paused' : 'playing'}`);
+    ctx.a.api.resetVoiceState();
+    record('the listeners are dropped when the call ends',
+        ctx.a.doc.listenerCount('pointerdown') === 0,
+        `pointerdown listeners=${ctx.a.doc.listenerCount('pointerdown')}`);
+}
+
+console.log('\n== a lost answer to a mid-call offer ==');
+
+// The initial offer is covered by armVoiceAnswerWatchdog. The other two ways this
+// client sends an offer — an ICE restart after a failed link, and a renegotiation
+// after a track change — go through their own code paths, and an offer left
+// unanswered there is just as fatal: the connection sits in 'have-local-offer'
+// forever, every later renegotiation queues behind it, and no connection-state
+// event ever fires again to notice (the state it would report has not changed).
+// One dropped frame on a socket that reconnects mid-call is enough.
+// `window` is virtual milliseconds spent with the loss still in place, so a
+// multi-answer loss really spans several 8 s watchdog cycles instead of being
+// undone before the first retry is even sent.
+async function afterConnectWithLostAnswers(action, { lose = 1, window = 4000 } = {}) {
+    return runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            let budget = lose;
+            server.opts.dropFilter = (to, event) => {
+                if (budget > 0 && event.type === 'voice_signal' && event.signal?.type === 'answer') {
+                    budget -= 1;
+                    return true;
+                }
+                return false;
+            };
+            await action({ a, b, server });
+            await server.settle(window);
+            server.opts.dropFilter = null;
+            server.lostAnswers = lose - budget;
+            await server.settle();
+        },
+    });
+}
+
+{
+    const ctx = await afterConnectWithLostAnswers(({ a, b }) => a.api.restartVoicePeer(b.name));
+    record('a lost answer to an ICE-restart offer still recovers', twoWay(ctx), describe(ctx));
+}
+
+{
+    // Driven from the side that does NOT own the offer, which is the harder case:
+    // the negotiation retry runs syncVoicePeers, and syncVoicePeers only offers on
+    // behalf of the offer owner — so recovery here cannot lean on it.
+    const ctx = await afterConnectWithLostAnswers(({ a, b }) => b.api.renegotiateVoicePeer(a.name));
+    record('a lost answer to a renegotiation from the answering side still recovers',
+        twoWay(ctx), describe(ctx));
+}
+
+{
+    const ctx = await afterConnectWithLostAnswers(
+        ({ a, b }) => a.api.renegotiateVoicePeer(b.name),
+        { lose: 3, window: 30000 },
+    );
+    record('three consecutive lost answers still converge',
+        twoWay(ctx) && ctx.server.lostAnswers === 3,
+        `${describe(ctx)} lost=${ctx.server.lostAnswers}`);
+}
+
+{
+    // A peer that answers nothing at all must not be re-offered for the rest of the
+    // call: one dead link would otherwise renegotiate every 8 s forever.
+    const ctx = await afterConnectWithLostAnswers(
+        ({ a, b }) => a.api.renegotiateVoicePeer(b.name),
+        { lose: 50, window: 120000 },
+    );
+    const offersAfter = ctx.server.lostAnswers;
+    record('an unanswerable link gives up instead of re-offering forever',
+        offersAfter <= 6 && ctx.a.tracesOf('answer-watchdog-exhausted').length === 1,
+        `offers spent=${offersAfter} exhausted=${ctx.a.tracesOf('answer-watchdog-exhausted').length}`);
+}
+
+{
+    // The offer never leaves the client at all (socket reconnecting, native bridge
+    // refusing). sendVoiceOfferInner already treats that as a retryable failure;
+    // the restart path must not latch offerSent on a frame that was never sent.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            server.opts.refuseSend = true;
+            await a.api.restartVoicePeer(b.name);
+            await server.settle(1000);
+            server.opts.refuseSend = false;
+            await server.settle();
+        },
+    });
+    record('an ICE-restart offer that never leaves the client is retried',
+        twoWay(ctx), describe(ctx));
+}
+
+console.log('\n== the link dies mid-call ==');
+
+// «Звонок отваливается спустя некоторое время». The drop itself is a network
+// event — a Wi-Fi roam, a NAT rebind, a VPN re-key — and it is not a bug. What
+// makes it a bug is that it is PERMANENT: connectionState reports 'failed' once
+// and then, having nothing left to transition to, never fires again. Every
+// recovery in this client is armed off that one edge, so whatever it hands off
+// to has exactly one chance, and the fallbacks it hands off to (a restart queued
+// behind an in-flight negotiation, an answer watchdog rolling the offer back,
+// syncVoicePeers) all build a PLAIN offer — which re-agrees the media over the
+// same dead transport and changes nothing. The call keeps showing «В эфире».
+//
+// The model is faithful about that on purpose: only an offer carrying iceRestart
+// revives a broken transport, so hasTwoWayAudio stays true across a dead link and
+// hasLiveTwoWayAudio is what actually distinguishes sound from silence.
+{
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            a.breakLinkWith(b.name);
+            b.breakLinkWith(a.name);
+            await server.settle(120000);
+        },
+    });
+    record('a link that dies mid-call comes back',
+        ctx.a.hasLiveTwoWayAudio(ctx.b.name) && ctx.b.hasLiveTwoWayAudio(ctx.a.name),
+        `${ctx.a.name}=${ctx.a.linkStateWith(ctx.b.name)} ${ctx.b.name}=${ctx.b.linkStateWith(ctx.a.name)} ${describe(ctx)}`);
+    record('recovery is an ICE restart, not a plain renegotiation',
+        ctx.a.iceRestartsWith(ctx.b.name) > 0,
+        `iceRestarts=${ctx.a.iceRestartsWith(ctx.b.name)}`);
+}
+
+{
+    // The same failure, but arriving while that peer is already renegotiating —
+    // the ordinary case in a real call, where a camera toggle or a late mic is in
+    // flight. restartVoicePeer refuses to build an offer outside 'stable' and
+    // parks the request on renegotiationPending, which drains as a renegotiation.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            const inFlight = a.api.renegotiateVoicePeer(b.name).catch(() => {});
+            a.breakLinkWith(b.name);
+            b.breakLinkWith(a.name);
+            await inFlight;
+            await server.settle(120000);
+        },
+    });
+    record('a failure landing during a renegotiation still recovers',
+        ctx.a.hasLiveTwoWayAudio(ctx.b.name) && ctx.b.hasLiveTwoWayAudio(ctx.a.name),
+        `${ctx.a.name}=${ctx.a.linkStateWith(ctx.b.name)} ${ctx.b.name}=${ctx.b.linkStateWith(ctx.a.name)}`);
+}
+
+{
+    // The recovery offer itself is lost. Nothing re-arms off connectionState — it
+    // is already 'failed' and stays there — so this is the case where a single
+    // dropped frame used to cost the whole call.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            let budget = 2;
+            server.opts.dropFilter = (to, event) => {
+                if (budget > 0 && event.type === 'voice_signal' && event.signal?.type === 'answer') {
+                    budget -= 1;
+                    return true;
+                }
+                return false;
+            };
+            a.breakLinkWith(b.name);
+            b.breakLinkWith(a.name);
+            await server.settle(60000);
+            server.opts.dropFilter = null;
+            await server.settle(120000);
+        },
+    });
+    record('a lost answer to the recovery offer does not cost the call',
+        ctx.a.hasLiveTwoWayAudio(ctx.b.name) && ctx.b.hasLiveTwoWayAudio(ctx.a.name),
+        `${ctx.a.name}=${ctx.a.linkStateWith(ctx.b.name)} ${ctx.b.name}=${ctx.b.linkStateWith(ctx.a.name)}`);
+}
+
+{
+    // A network that is down for minutes, not seconds: every recovery attempt in
+    // the first two minutes is thrown away. Recovery must still be running when
+    // the network returns — giving up quietly is the same outcome as never trying.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            server.opts.dropFilter = () => true;
+            a.breakLinkWith(b.name);
+            b.breakLinkWith(a.name);
+            await server.settle(150000);
+            server.opts.dropFilter = null;
+            await server.settle(150000);
+        },
+    });
+    record('a two-minute outage is survived, not given up on',
+        ctx.a.hasLiveTwoWayAudio(ctx.b.name) && ctx.b.hasLiveTwoWayAudio(ctx.a.name),
+        `${ctx.a.name}=${ctx.a.linkStateWith(ctx.b.name)} ${ctx.b.name}=${ctx.b.linkStateWith(ctx.a.name)}`);
+}
+
+{
+    // The supervision must not become a permanent timer on a healthy call: a
+    // clean call has nothing to supervise, and an interval that keeps running is
+    // both a battery cost and a source of surprise renegotiations.
+    const ctx = await runDmCall();
+    record('a healthy call leaves no supervision timer running',
+        !ctx.a.api.voice.linkSupervisorTimer && !ctx.b.api.voice.linkSupervisorTimer,
+        `alice=${!!ctx.a.api.voice.linkSupervisorTimer} bob=${!!ctx.b.api.voice.linkSupervisorTimer}`);
+}
+
 console.log('\n== glare (simultaneous offers) ==');
 
 {
@@ -294,6 +549,93 @@ console.log('\n== name tie-break determinism ==');
     }
     record('every name pair yields exactly one offerer and one polite side',
         roleFailures.length === 0, roleFailures.join('; '));
+}
+
+{
+    // Straight from the production log (2026-08-03, three separate calls):
+    //   ERROR [VOICE] offer-apply-error ... error=The object is in an invalid state.
+    //   WARN  [VOICE] answer-never-arrived ... state=have-local-offer attempt=1
+    // An offer arrived while the connection was in a signaling state that cannot
+    // take one — legal to be in, illegal to apply an offer to, and impossible to
+    // roll back out of. setRemoteDescription threw, the throw aborted the handler
+    // before createAnswer(), no answer was ever sent, and the caller sat waiting
+    // until its watchdog gave up. Nothing retried, so one bad apply killed the call.
+    //
+    // Only the polite side reaches the apply path at all (the impolite side keeps
+    // its own offer and returns early), so park whichever peer that is.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            const polite = a.api.isPoliteVoicePeer(b.name) ? a : b;
+            const other = polite === a ? b : a;
+            const entry = polite.api.getVoicePeerEntry(other.name);
+            // have-remote-offer: reachable in production whenever an offer is applied
+            // and the answer has not been produced yet.
+            await entry.pc.setRemoteDescription({ type: 'offer', sdp: 'v=0\r\nparked\r\n' });
+            await polite.deliver({
+                type: 'voice_signal',
+                roomId: polite.api.voice.roomId,
+                from: other.name,
+                to: polite.name,
+                signal: { type: 'offer', sdp: { type: 'offer', sdp: 'v=0\r\nfresh\r\n' } },
+            });
+            await server.settle();
+        },
+    });
+    const applyErrors = ctx.a.tracesOf('offer-apply-error').length
+        + ctx.b.tracesOf('offer-apply-error').length;
+    const rebuilds = ctx.a.tracesOf('offer-unapplicable-rebuild').length
+        + ctx.b.tracesOf('offer-unapplicable-rebuild').length;
+    const answers = ctx.a.tracesOf('signal-answer-send').length
+        + ctx.b.tracesOf('signal-answer-send').length;
+    record('an offer arriving in a state that cannot take one is rebuilt, not thrown away',
+        rebuilds > 0 && applyErrors === 0,
+        `rebuilds=${rebuilds} applyErrors=${applyErrors}`);
+    record('that offer still produces an answer', answers > 0, `answers=${answers}`);
+    record('the call survives an unapplicable offer', twoWay(ctx), describe(ctx));
+}
+
+{
+    // Also straight from the production log (2026-08-03, a channel call), and a
+    // different failure from the one above — the signaling state was legal:
+    //   ERROR [VOICE] offer-apply-error ... error=Failed to set remote offer sdp:
+    //     The order of m-lines in subsequent offer doesn't match order from
+    //     previous offer/answer.
+    //   → pc-state peer=Pivovarca from=connecting to=disconnected
+    // A peer that rebuilds its RTCPeerConnection can lay its m-sections out in a
+    // different order than the session this side already established, and this
+    // side's layout is immutable — so the generic "clear the latch and retry"
+    // recovery replays the identical mismatch forever. It failed twice in three
+    // seconds in the log, then the link went down.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b, server }) => {
+            await b.deliver({
+                type: 'voice_signal',
+                roomId: b.api.voice.roomId,
+                from: a.name,
+                to: b.name,
+                signal: {
+                    type: 'offer',
+                    sdp: {
+                        type: 'offer',
+                        // Same media as the live session, laid out the other way
+                        // round — what a freshly built connection sends when its
+                        // tracks were attached in a different order.
+                        sdp: JSON.stringify({ type: 'offer', sends: ['video', 'audio'], streamIds: [''], ufrag: 'relaid' }),
+                    },
+                },
+            });
+            await server.settle();
+        },
+    });
+    const answersBefore = 1;
+    const rebuilds = ctx.b.tracesOf('offer-sdp-shape-rebuild').length;
+    const applyErrors = ctx.b.tracesOf('offer-apply-error').length;
+    const answers = ctx.b.tracesOf('signal-answer-send').length;
+    record('an offer whose m-lines cannot match this session rebuilds instead of retrying',
+        rebuilds > 0 && applyErrors === 0, `rebuilds=${rebuilds} applyErrors=${applyErrors}`);
+    record('the relaid offer is answered rather than dropped',
+        answers > answersBefore, `answers=${answers}`);
+    record('the call survives an offer with an incompatible layout', twoWay(ctx), describe(ctx));
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,9 @@
 mod common;
 
 use common::{register_user, spawn_app, RegisteredUser, TestApp};
+use futures_util::StreamExt;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 async fn claim(
     app: &TestApp,
@@ -684,5 +687,85 @@ async fn an_envelope_addressed_in_lowercase_reaches_its_recipient() {
         envelopes.as_array().map(|e| e.len()),
         Some(1),
         "GRIBOED must see the envelope addressed to 'griboed'"
+    );
+}
+
+/// A republish sweep writes one envelope per device per scope. Notifying on every
+/// write turned that burst into hundreds of `key_envelope_available` pushes, each
+/// making the recipient re-sync envelopes and re-decrypt its open conversation —
+/// and because a device also publishes to its own account's other devices, the
+/// storm came straight back at the sender. Production log: ~100 envelope POSTs a
+/// minute for hours, with 67% of the envelope *fetches* timing out behind them.
+///
+/// The push carries no per-envelope detail (the client always fetches everything
+/// pending for its device), so one push per burst must deliver as much as one per
+/// write — which is what the second half of this test pins down.
+#[tokio::test]
+async fn a_burst_of_envelopes_produces_one_notification_but_loses_none() {
+    let app = spawn_app().await;
+    let griboed = register_user(&app, "GRIBOED", "hunter22").await;
+    let zalikus = register_user(&app, "zalikus", "hunter22").await;
+    common::register_device(&app, &griboed, "dev_griboed_one").await;
+
+    let mut request = app.ws_url("/ws").into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("Authorization", griboed.auth_header().parse().unwrap());
+    let (mut socket, response) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("ws connect");
+    assert_eq!(response.status(), 101);
+
+    // Eight scopes back-to-back, standing in for a sweep over an account's scopes.
+    for index in 0..8 {
+        let resp = app
+            .http
+            .post(app.url("/api/key-envelopes"))
+            .header("Authorization", zalikus.auth_header())
+            .json(&serde_json::json!({
+                "recipient": "GRIBOED",
+                "scope": format!("dm:griboed:peer{index}"),
+                "recipientDeviceId": "dev_griboed_one",
+                "senderDeviceId": "dev_zalikus_one",
+                "encryptedKey": "x".repeat(64),
+            }))
+            .send()
+            .await
+            .expect("post envelope");
+        assert!(resp.status().is_success(), "envelope {index} POST failed");
+    }
+
+    // Drain whatever the socket has to offer; the burst is over, so anything the
+    // server meant to send has been queued by now.
+    let mut notifications = 0;
+    while let Ok(Some(Ok(message))) =
+        tokio::time::timeout(std::time::Duration::from_millis(600), socket.next()).await
+    {
+        if let WsMessage::Text(text) = message {
+            if text.contains("key_envelope_available") {
+                notifications += 1;
+            }
+        }
+    }
+    assert_eq!(
+        notifications, 1,
+        "a burst of 8 envelopes must collapse into one notification, got {notifications}"
+    );
+
+    // The whole point of coalescing is that it costs nothing: every envelope the
+    // burst wrote is still there to be fetched by the single notification.
+    let resp = app
+        .http
+        .get(app.url("/api/key-envelopes?deviceId=dev_griboed_one"))
+        .header("Authorization", griboed.auth_header())
+        .send()
+        .await
+        .expect("list envelopes");
+    assert!(resp.status().is_success());
+    let envelopes: serde_json::Value = resp.json().await.expect("envelopes json");
+    assert_eq!(
+        envelopes.as_array().map(|e| e.len()),
+        Some(8),
+        "coalescing the notification must not drop any envelope"
     );
 }

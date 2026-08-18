@@ -248,6 +248,8 @@ struct WasmUnpacked {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     call: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply: Option<String>,
     timestamp: u64,
     key_version: u8,
     attachments: Vec<WasmAttachmentOut>,
@@ -265,6 +267,7 @@ pub fn pack_message_wasm(
     key_version: u8,
     attachments: JsValue,
     call: Option<String>,
+    reply: Option<String>,
 ) -> Result<Vec<u8>, JsValue> {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
@@ -284,8 +287,16 @@ pub fn pack_message_wasm(
             bytes: a.bytes,
         })
         .collect();
-    net::pack_message_bytes(sender, text, key, key_version, in_memory, call.as_deref())
-        .map_err(|e| JsValue::from_str(&e))
+    net::pack_message_bytes(
+        sender,
+        text,
+        key,
+        key_version,
+        in_memory,
+        call.as_deref(),
+        reply.as_deref(),
+    )
+    .map_err(|e| JsValue::from_str(&e))
 }
 
 /// Decodes `.zali` archive bytes into `{sender, text, timestamp, keyVersion, attachments}`,
@@ -300,6 +311,7 @@ pub fn unpack_message_wasm(archive: &[u8], key: &str) -> Result<JsValue, JsValue
         sender: unpacked.sender,
         text: unpacked.text,
         call: unpacked.call,
+        reply: unpacked.reply,
         timestamp: unpacked.timestamp,
         key_version: unpacked.key_version,
         attachments: unpacked

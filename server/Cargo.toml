@@ -37,6 +37,10 @@ path = "../tests/releases.rs"
 name = "diagnostics"
 path = "../tests/diagnostics.rs"
 
+[[test]]
+name = "hash_chain"
+path = "../tests/hash_chain.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -54,6 +58,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 rand = "0.8"
+sha2 = "0.10"
+# The conversation hash-chain export is a real `.zali` archive, produced by the
+# same SDK the clients use — so an auditor opens it with the tooling they
+# already have instead of a server-only one-off format.
+zali_sdk = { path = "../sdk/Rust" }
 web-push = { version = "0.11", default-features = false }
 jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
 ct-codecs = "1.1"
@@ -67,5 +76,15 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+# Integration tests build real message archives (message.json + attachments,
+# encrypted with one key) exactly the way a client does, instead of uploading
+# opaque bytes that only look like an archive.
+zali_messenger_core = { path = "../core" }
+# Opens the hash-chain export the same way an auditor would.
+zali_sdk = { path = "../sdk/Rust" }
+# Lets the hash-chain tests tamper with stored rows behind the server's back —
+# the only way to prove the chain actually *detects* tampering rather than
+# merely agreeing with itself.
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 tokio-tungstenite = "0.23"
 futures-util = "0.3"

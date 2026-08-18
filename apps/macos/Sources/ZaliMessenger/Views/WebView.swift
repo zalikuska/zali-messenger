@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import AppKit
 import CoreBridge
 
 class ZaliNativeWebView: WKWebView {
@@ -192,11 +193,14 @@ struct WebView: NSViewRepresentable {
             case loadServerHistory
             case receiveMessage
             case receiveReactionUpdate
+            case receiveMessageDeleted
+            case receiveMessageEdited
             case avatarUpdated
             case avatarDeleted
             case receiveVoiceEvent
             case refreshAfterKey
             case retryPublishKeys
+            case keyRepublishRequest
         }
 
         private struct TenorResolvedPayload: Codable {
@@ -328,6 +332,14 @@ struct WebView: NSViewRepresentable {
             callWindowFunction(.receiveReactionUpdate, arguments: [payload])
         }
 
+        fileprivate func receiveMessageDeleted(_ payload: String) {
+            callWindowFunction(.receiveMessageDeleted, arguments: [payload])
+        }
+
+        fileprivate func receiveMessageEdited(_ payload: String) {
+            callWindowFunction(.receiveMessageEdited, arguments: [payload])
+        }
+
         fileprivate func avatarUpdated(_ username: String) {
             callWindowFunction(.avatarUpdated, arguments: [WebView.javascriptLiteral(username)])
         }
@@ -348,6 +360,13 @@ struct WebView: NSViewRepresentable {
             callWindowFunction(.retryPublishKeys, arguments: [])
         }
 
+        /// Not debounced and not coalesced with retryPublishKeys: each request names a
+        /// scope, and answering it is what hands a peer the historical key it is stuck
+        /// on. Dropping or merging these is how a conversation stays unreadable.
+        fileprivate func keyRepublishRequest(_ payload: [String: Any]) {
+            callWindowFunction(.keyRepublishRequest, arguments: [WebView.javascriptLiteral(payload)])
+        }
+
         /// Coalesces bursts of key_envelope_available notifications (e.g. several pending
         /// envelopes delivered together) into a single refreshAfterKey() call instead of
         /// triggering a redundant JS-side history re-decrypt for each one.
@@ -365,6 +384,12 @@ struct WebView: NSViewRepresentable {
             }
             debounceWorkItems[key] = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        }
+
+        /// Drops one message from the decrypted-render cache. Called whenever the
+        /// archive behind that id is replaced, locally or by the peer.
+        fileprivate func forgetDecryptedMessage(_ messageId: String) {
+            decryptedMessageCache.removeValue(forKey: messageId)
         }
 
         private func sendNativeResponse(_ payload: [String: Any]) {
@@ -922,6 +947,7 @@ struct WebView: NSViewRepresentable {
                         "receiver": record.receiver,
                         "text": unpacked.text,
                         "call": unpacked.call ?? "",
+                        "reply": unpacked.reply ?? "",
                         "attachments": renderedAttachments,
                         "timestamp": record.timestamp,
                         "reactions": record.reactions ?? [],
@@ -984,8 +1010,26 @@ struct WebView: NSViewRepresentable {
             channelId: String?,
             logPrefix: String
         ) async -> [[String: Any]] {
+            // Sliding window instead of "one task per record, all at once".
+            //
+            // Every record that is not already in decryptedMessageCache costs a
+            // download, and this used to start all of them simultaneously. URLSession
+            // only opens httpMaximumConnectionsPerHost sockets, so on a history of any
+            // size most tasks just queued — and a queued task still ages against
+            // timeoutIntervalForRequest, so it expired without ever being sent. Each
+            // expiry burned its three retries into the same jam and then rendered
+            // "⚠️ Не удалось загрузить сообщение", which is why a single screenful mixed
+            // perfectly readable messages with failed ones: the difference between them
+            // was only whether they won a connection, not the key and not the data.
+            //
+            // Kept below the connection cap on purpose, so live message and avatar
+            // downloads sharing httpSession are not starved by a history load.
+            let maxConcurrentRenders = 4
             var renderedMessages = await withTaskGroup(of: [String: Any]?.self) { group -> [[String: Any]] in
-                for record in records {
+                var items: [[String: Any]] = []
+                var next = 0
+
+                func addTask(for record: NetworkService.RemoteMessageRecord) {
                     group.addTask { [weak self] in
                         guard let self = self else { return nil }
                         return await self.renderHistoryRecord(
@@ -996,9 +1040,19 @@ struct WebView: NSViewRepresentable {
                         )
                     }
                 }
-                var items: [[String: Any]] = []
-                for await item in group {
+
+                while next < min(maxConcurrentRenders, records.count) {
+                    addTask(for: records[next])
+                    next += 1
+                }
+                while let item = await group.next() {
                     if let item = item { items.append(item) }
+                    // Refill as each one finishes, so the window stays full without ever
+                    // exceeding it.
+                    if next < records.count {
+                        addTask(for: records[next])
+                        next += 1
+                    }
                 }
                 return items
             }
@@ -1098,6 +1152,23 @@ struct WebView: NSViewRepresentable {
                     let dataUrl = dict["dataUrl"] as? String ?? ""
                     let filename = dict["filename"] as? String ?? "attachment"
                     self.saveAttachment(dataUrl: dataUrl, filename: filename)
+                }
+
+                case .openExternalUrl: do {
+                    let urlString = dict["url"] as? String ?? ""
+                    // The scheme check is defense in depth, not the primary gate — the
+                    // JS side (openExternalLink in interface.js) already only calls
+                    // this for http(s) hrefs it auto-linked itself. Still worth
+                    // enforcing here so a message with a hand-crafted target="_blank"
+                    // anchor (e.g. a future rich-text surface) can't get this to shell
+                    // out to something like file:// or a registered custom scheme.
+                    guard let url = URL(string: urlString),
+                          let scheme = url.scheme?.lowercased(),
+                          scheme == "http" || scheme == "https" else {
+                        print("[ZALI][WEBVIEW] OPEN_EXTERNAL_URL rejected url=\(urlString)")
+                        return
+                    }
+                    NSWorkspace.shared.open(url)
                 }
 
                 case .savePendingOutbox: do {
@@ -1300,7 +1371,11 @@ struct WebView: NSViewRepresentable {
                     // which encrypts it with the conversation key like the body.
                     let callPayload = (dict["call"] as? String)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments, call: (callPayload?.isEmpty == false) ? callPayload : nil) {
+                    // Quote of the message being replied to — opaque here, encrypted
+                    // by the core exactly like the call payload above.
+                    let replyPayload = (dict["reply"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments, call: (callPayload?.isEmpty == false) ? callPayload : nil, reply: (replyPayload?.isEmpty == false) ? replyPayload : nil) {
                         DispatchQueue.main.async {
                             self.addLog(level: "SUCCESS", text: "Core: Сообщение успешно упаковано и зашифровано в Rust бэкенде")
                         }
@@ -1341,6 +1416,108 @@ struct WebView: NSViewRepresentable {
                                 "statusCode": 0,
                                 "responseBody": "Core: Ошибка при упаковке сообщения в Rust бэкенде"
                             ]))
+                        }
+                    }
+                }
+
+                case .editMessage: do {
+                    let requestId = dict["requestId"] as? String ?? dict["request_id"] as? String ?? UUID().uuidString
+                    let messageId = (dict["messageId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let text = dict["text"] as? String ?? ""
+                    let key = (dict["key"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let keyVersion = (dict["keyVersion"] as? NSNumber)?.intValue
+                        ?? (dict["key_version"] as? NSNumber)?.intValue
+                        ?? (dict["keyVersion"] as? Int)
+                        ?? (dict["key_version"] as? Int)
+                        ?? 2
+                    let callPayload = (dict["call"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let replyPayload = (dict["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    guard !messageId.isEmpty, !key.isEmpty else {
+                        print("[ZALI][WEBVIEW] EDIT_MESSAGE missing messageId/key messageId=\(messageId) keySet=\(!key.isEmpty)")
+                        self.sendNativeResponse([
+                            "requestId": requestId,
+                            "ok": false,
+                            "error": key.isEmpty ? "Core: E2E-ключ не задан" : "Не указано сообщение",
+                        ])
+                        return
+                    }
+
+                    // The edit carries the WHOLE message, attachments included: the
+                    // archive is replaced wholesale server-side, so anything omitted
+                    // here is genuinely dropped from the message.
+                    let tempPath = NSTemporaryDirectory() + UUID().uuidString + ".zali"
+                    let attachments = dict["attachments"] as? [[String: Any]] ?? []
+                    var packedAttachments: [[String: Any]] = []
+                    var tempAttachmentURLs: [URL] = []
+                    for attachment in attachments {
+                        guard let dataUrl = attachment["dataUrl"] as? String else { continue }
+                        let name = attachment["name"] as? String ?? "attachment.bin"
+                        let kind = attachment["kind"] as? String ?? "file"
+                        let (data, mimeType, fileExtension) = self.decodedDataURL(dataUrl)
+                        guard !data.isEmpty else { continue }
+
+                        let safeName = self.safeFileName(name, fallbackExtension: fileExtension)
+                        let tempAttachmentURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                            .appendingPathComponent("\(UUID().uuidString)_\(safeName)")
+                        try? data.write(to: tempAttachmentURL)
+                        tempAttachmentURLs.append(tempAttachmentURL)
+                        packedAttachments.append([
+                            "path": tempAttachmentURL.path,
+                            "archivePath": "attachments/\(safeName)",
+                            "name": name,
+                            "mimeType": attachment["mimeType"] as? String ?? mimeType,
+                            "kind": kind,
+                            "size": (attachment["size"] as? NSNumber).map { $0.uint64Value } ?? UInt64(data.count)
+                        ])
+                    }
+
+                    print("[ZALI][WEBVIEW] EDIT_MESSAGE start messageId=\(messageId) attachments=\(packedAttachments.count) textBytes=\(text.count)")
+
+                    guard ZaliCore.shared.packMessage(
+                        sender: NetworkService.shared.currentUser,
+                        text: text,
+                        output: tempPath,
+                        key: key,
+                        keyVersion: keyVersion,
+                        attachments: packedAttachments,
+                        call: (callPayload?.isEmpty == false) ? callPayload : nil,
+                        reply: (replyPayload?.isEmpty == false) ? replyPayload : nil
+                    ) else {
+                        tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+                        self.addLog(level: "ERROR", text: "Core: Ошибка при упаковке отредактированного сообщения")
+                        self.sendNativeResponse([
+                            "requestId": requestId,
+                            "ok": false,
+                            "error": "Core: Ошибка при упаковке сообщения",
+                        ])
+                        return
+                    }
+                    tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+
+                    let fileURL = URL(fileURLWithPath: tempPath)
+                    NetworkService.shared.editMessage(messageId: messageId, fileURL: fileURL, keyVersion: keyVersion) { [weak self] success, statusCode, responseBody in
+                        try? FileManager.default.removeItem(at: fileURL)
+                        DispatchQueue.main.async {
+                            guard let self = self else { return }
+                            if success {
+                                // The cache is keyed by message id and holds the text
+                                // decrypted from the archive we just replaced — leaving
+                                // it would make every later history reload re-render the
+                                // pre-edit message and look like the edit was lost.
+                                self.decryptedMessageCache.removeValue(forKey: messageId)
+                                self.addLog(level: "SUCCESS", text: "Network: Сообщение отредактировано")
+                                self.sendNativeResponse(["requestId": requestId, "ok": true])
+                            } else {
+                                let bodyText = (responseBody ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                let statusLabel = statusCode.map { "HTTP \($0)" } ?? "без статуса"
+                                self.addLog(level: "ERROR", text: "Network: Не удалось отредактировать сообщение \(statusLabel)")
+                                self.sendNativeResponse([
+                                    "requestId": requestId,
+                                    "ok": false,
+                                    "error": bodyText.isEmpty ? "Не удалось отредактировать сообщение (\(statusLabel))" : bodyText,
+                                ])
+                            }
                         }
                     }
                 }
@@ -1699,6 +1876,7 @@ struct WebView: NSViewRepresentable {
             "saveStyle": true,
             "saveMessageCache": true,
             "downloadAttachment": true,
+            "openExternalUrl": true,
             "serverHistory": true,
             "avatarFetch": true,
             "tenor": true,
@@ -1795,6 +1973,27 @@ struct WebView: NSViewRepresentable {
                 coordinator.receiveReactionUpdate(safePayload)
             }
         }
+        NetworkService.shared.onMessageDeleted = { payload in
+            let safePayload = WebView.javascriptLiteral(payload)
+            DispatchQueue.main.async {
+                coordinator.receiveMessageDeleted(safePayload)
+            }
+        }
+        NetworkService.shared.onMessageEdited = { payload in
+            // The stale entry must go before the JS side asks for history again,
+            // otherwise renderHistoryRecord answers that request from the cache and
+            // hands back the pre-edit text.
+            if let editedId = (payload["messageId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !editedId.isEmpty {
+                DispatchQueue.main.async {
+                    coordinator.forgetDecryptedMessage(editedId)
+                }
+            }
+            let safePayload = WebView.javascriptLiteral(payload)
+            DispatchQueue.main.async {
+                coordinator.receiveMessageEdited(safePayload)
+            }
+        }
         NetworkService.shared.onAvatarChanged = { username, deleted in
             DispatchQueue.main.async {
                 if deleted {
@@ -1818,6 +2017,11 @@ struct WebView: NSViewRepresentable {
         NetworkService.shared.onDeviceApproved = {
             DispatchQueue.main.async {
                 coordinator.retryPublishKeys()
+            }
+        }
+        NetworkService.shared.onKeyRepublishRequest = { payload in
+            DispatchQueue.main.async {
+                coordinator.keyRepublishRequest(payload)
             }
         }
         NetworkService.shared.onWebSocketConnected = {

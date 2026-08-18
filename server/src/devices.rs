@@ -20,9 +20,49 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::{sqlite::SqlitePool, QueryBuilder, Sqlite};
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tracing::error;
 use uuid::Uuid;
+
+/// How long one `key_envelope_available` push suppresses the next one for the same
+/// recipient. Sized against a republish sweep, which writes an envelope per device
+/// per scope back-to-back: the whole burst should collapse into a single push.
+const KEY_ENVELOPE_NOTIFY_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Tell `recipient` that new key envelopes are waiting, at most once per cooldown
+/// window.
+///
+/// The push carries no per-envelope information — the client answers it by fetching
+/// *every* envelope pending for its device — so notifying once after a burst delivers
+/// exactly as much as notifying after each write. Notifying per write, which is what
+/// this replaced, was actively harmful: a sweep publishing ~18 scopes to a handful of
+/// devices produced hundreds of pushes, each making the recipient re-sync envelopes
+/// and re-decrypt its open conversation, and the recipient of a device's own-device
+/// envelopes is that same account — so a client's own publishing storm came straight
+/// back at it as a refresh storm.
+///
+/// The suppressed tail is safe rather than merely tolerable: a client that publishes
+/// envelopes after this window still triggers a fresh push, and clients also sync
+/// envelopes on their own schedule (open a chat, reconnect, fail to decrypt).
+async fn notify_key_envelope_available(state: &Arc<AppState>, recipient: &str) {
+    let now = Instant::now();
+    let recently_notified = state
+        .key_envelope_notified_at
+        .get(recipient)
+        .map(|at| now.duration_since(*at.value()) < KEY_ENVELOPE_NOTIFY_COOLDOWN)
+        .unwrap_or(false);
+    if recently_notified {
+        return;
+    }
+    state
+        .key_envelope_notified_at
+        .insert(recipient.to_string(), now);
+    let payload = serde_json::json!({ "type": "key_envelope_available" }).to_string();
+    send_payload_to_user(state, recipient, payload, "post_key_envelope").await;
+}
 
 pub(crate) fn device_record_to_response(record: DeviceRecord) -> DeviceResponse {
     let key_package = serde_json::from_str(&record.key_package).unwrap_or_else(|_| {
@@ -906,9 +946,7 @@ pub(crate) async fn post_key_envelope(
     .await
     {
         Ok(_) => {
-            let notify_payload =
-                serde_json::json!({ "type": "key_envelope_available" }).to_string();
-            send_payload_to_user(&state, &recipient, notify_payload, "post_key_envelope").await;
+            notify_key_envelope_available(&state, &recipient).await;
             Json(serde_json::json!({ "envelopeId": envelope_id })).into_response()
         }
         Err(e) => {

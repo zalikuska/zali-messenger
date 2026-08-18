@@ -15,8 +15,8 @@ use zali_messenger_core::{zali_bus_dispatch, zali_bus_free_string};
 
 use crate::native::{
     cache_decrypted_message, cached_decrypted_message, candidate_message_keys, dispatch_ui_event,
-    http_client, json_string_literal, make_data_url, new_request_id, retry_with_backoff,
-    sanitize_file_name, trace, ApiSession, AppEvent, UiBusEvent, UploadError,
+    forget_decrypted_message, http_client, json_string_literal, make_data_url, new_request_id,
+    retry_with_backoff, sanitize_file_name, trace, ApiSession, AppEvent, UiBusEvent, UploadError,
 };
 
 pub(crate) fn dispatch_core_command(address_command: &str, args: Value) -> Result<Value, String> {
@@ -47,6 +47,7 @@ pub(crate) fn pack_message(
     key_version: u8,
     attachments: &[Value],
     call: Option<&str>,
+    reply: Option<&str>,
 ) -> Result<PathBuf, String> {
     let args = json!({
         "sender": sender,
@@ -58,6 +59,9 @@ pub(crate) fn pack_message(
         // Opaque structured payload (call records). The core encrypts it with the
         // conversation key like the body; this layer only forwards it.
         "call": call,
+        // Quote of the message being replied to — same deal: opaque here,
+        // encrypted by the core with the conversation key.
+        "reply": reply,
     });
 
     let response = dispatch_core_command("zali_net:pack_message", args)?;
@@ -81,6 +85,101 @@ pub(crate) struct OutgoingMessage {
     pub server_id: Option<String>,
     pub channel_id: Option<String>,
     pub key_version: u8,
+}
+
+/// Replaces an already-sent message's encrypted archive (`PUT /api/message/:id`).
+///
+/// Mirrors macOS `NetworkService.editMessage`. Kept separate from `upload_message`
+/// rather than folded in behind a flag: different route, different method, and a
+/// different field set — the message's scope is already fixed server-side, so
+/// re-sending sender/receiver here could only ever disagree with it.
+pub(crate) async fn edit_message(
+    session: ApiSession,
+    message_id: &str,
+    archive_path: &Path,
+    key_version: u8,
+) -> Result<(), UploadError> {
+    let ApiSession {
+        api_base_url,
+        auth_token,
+        device_id,
+    } = session;
+
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err(UploadError::permanent("Не указано сообщение".to_string()));
+    }
+
+    // Built with path_segments_mut, never format!() — the id originates in server
+    // data and must not be able to escape the path (same rule as elsewhere here).
+    let mut url = reqwest::Url::parse(api_base_url.trim_end_matches('/'))
+        .map_err(|e| UploadError::new(e.to_string()))?;
+    url.path_segments_mut()
+        .map_err(|_| UploadError::new("invalid api base url".to_string()))?
+        .push("api")
+        .push("message")
+        .push(message_id);
+
+    let file = tokio::fs::File::open(archive_path)
+        .await
+        .map_err(|e| UploadError::new(e.to_string()))?;
+    let file_body = reqwest::Body::wrap_stream(FramedRead::new(file, BytesCodec::new()));
+
+    let form = multipart::Form::new()
+        .text("key_version", key_version.max(1).to_string())
+        .part(
+            "file",
+            multipart::Part::stream(file_body)
+                .file_name("msg.zali")
+                .mime_str("application/octet-stream")
+                .map_err(|e| UploadError::new(e.to_string()))?,
+        );
+
+    let http_request_id = new_request_id();
+    let mut request = http_client()
+        .put(url)
+        .header("X-Request-ID", &http_request_id)
+        .multipart(form);
+    if let Some(token) = auth_token.filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(token);
+    }
+    if !device_id.trim().is_empty() {
+        request = request.header("X-Zali-Device-ID", device_id);
+    }
+
+    trace(format!(
+        "edit_message start http_request_id={} message_id={}",
+        http_request_id, message_id
+    ));
+
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            trace(format!(
+                "edit_message transport_error http_request_id={} message_id={} err={}",
+                http_request_id, message_id, error
+            ));
+            return Err(UploadError::from_reqwest(error));
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        trace(format!(
+            "edit_message http_fail http_request_id={} message_id={} status={}",
+            http_request_id,
+            message_id,
+            status.as_u16()
+        ));
+        return Err(UploadError::http(status.as_u16(), body));
+    }
+
+    // The archive this cache was filled from no longer exists; keeping the entry
+    // would make every later history render show the pre-edit text.
+    forget_decrypted_message(message_id);
+    trace(format!("edit_message ok message_id={}", message_id));
+    Ok(())
 }
 
 pub(crate) async fn upload_message(
@@ -530,6 +629,7 @@ pub(crate) fn build_history_output(
         "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
         "text": text,
         "call": decrypted.get("call").cloned().unwrap_or(Value::Null),
+        "reply": decrypted.get("reply").cloned().unwrap_or(Value::Null),
         "attachments": attachments,
         "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
         "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
@@ -766,6 +866,7 @@ pub(crate) async fn process_history_record(
         "sender": unpacked.get("sender").cloned().unwrap_or(Value::Null),
         "text": unpacked.get("text").cloned().unwrap_or(Value::Null),
         "call": unpacked.get("call").cloned().unwrap_or(Value::Null),
+        "reply": unpacked.get("reply").cloned().unwrap_or(Value::Null),
         "attachments": Value::Array(attachments_with_data),
     });
     cache_decrypted_message(&message_id, &decrypted);

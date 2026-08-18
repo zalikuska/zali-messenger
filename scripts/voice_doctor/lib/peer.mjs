@@ -28,19 +28,28 @@ export class VoicePeer {
         this.logs = [];
         this.sent = [];
 
-        const PC = makeRTCPeerConnectionClass({ faults: opts.faults || {}, clock: this.clock });
+        this.pcs = [];
+        const PC = makeRTCPeerConnectionClass({
+            faults: opts.faults || {},
+            clock: this.clock,
+            onCreate: (pc) => this.pcs.push(pc),
+        });
         const audioBehaviour = opts.audio || {};
         class BoundAudioContext extends FakeAudioContext {
             constructor() { super(audioBehaviour); }
         }
 
+        // Mutable so a check can lift the block mid-scenario, the way a real user
+        // gesture lifts autoplay policy.
+        this.autoplayBlocked = !!opts.autoplayBlocked;
         const { ZaliInterface, sandbox } = loadZaliInterface({
             RTCPeerConnection: PC,
             AudioContext: BoundAudioContext,
             webkitAudioContext: BoundAudioContext,
             MediaStream: FakeMediaStream,
-        }, this.clock);
+        }, this.clock, { autoplayBlocked: () => this.autoplayBlocked });
         this.sandbox = sandbox;
+        this.doc = sandbox.document;
         sandbox.navigator.mediaDevices.getUserMedia = async () => {
             if (opts.micFails) {
                 const err = new Error('Permission denied');
@@ -99,6 +108,13 @@ export class VoicePeer {
         // The mic itself is faked; ensureVoiceLocalStream (dedupe, micError,
         // renegotiation on late tracks) stays real.
         api.captureVoiceLocalStream = async () => {
+            // Models an open permission dialog: getUserMedia stays pending for as long
+            // as the user takes to answer it, and anything awaiting it waits too.
+            if (opts.micDelayMs) {
+                await new Promise(resolve => (this.clock
+                    ? this.clock.setTimeout(resolve, opts.micDelayMs)
+                    : setTimeout(resolve, opts.micDelayMs)));
+            }
             const stream = await sandbox.navigator.mediaDevices.getUserMedia({ audio: true });
             api.voice.localStream = stream;
             api.voice.micError = '';
@@ -125,6 +141,21 @@ export class VoicePeer {
 
     entryFor(peer) { return this.api.voice.peerConnections.get(peer) || null; }
 
+    /** The <audio> element this side plays `peer` through — the actual sink. */
+    remoteSinkFor(peer) { return this.api.voice.remoteAudios.get(peer) || null; }
+
+    /** Fires a user gesture at the document, the way a real click would. */
+    gesture(type = 'pointerdown') { return this.doc.dispatch(type); }
+
+    /**
+     * How many times this side tried to add a track that already had a sender.
+     * A real browser throws InvalidAccessError there, which aborts whatever was
+     * negotiating — so this must stay at zero even under concurrent sync passes.
+     */
+    duplicateAddTrackAttempts() {
+        return this.pcs.reduce((sum, pc) => sum + (pc.duplicateAddTrackAttempts || 0), 0);
+    }
+
     /**
      * True when this side has a fully negotiated session with `peer` that carries
      * audio in BOTH directions — the actual definition of "the call has sound".
@@ -138,6 +169,35 @@ export class VoicePeer {
         return pc.negotiatedOutgoingKinds().includes('audio')
             && pc.negotiatedIncomingKinds().includes('audio');
     }
+
+    /**
+     * Kills the media transport with `peer` the way a Wi-Fi roam or a NAT rebind
+     * does: connectionState reports the failure once and then never changes again.
+     */
+    breakLinkWith(peer) {
+        const entry = this.entryFor(peer);
+        if (!entry) return false;
+        entry.pc.breakTransport('failed');
+        return true;
+    }
+
+    /** connectionState as the client sees it for this peer. */
+    linkStateWith(peer) { return this.entryFor(peer)?.pc.connectionState || 'none'; }
+
+    /**
+     * The full definition of a working call: a negotiated two-way audio session
+     * AND a transport that can actually carry it. hasTwoWayAudio alone stays true
+     * across a dead link — that is precisely how a call "stays connected" while
+     * carrying nothing.
+     */
+    hasLiveTwoWayAudio(peer) {
+        if (!this.hasTwoWayAudio(peer)) return false;
+        const state = this.linkStateWith(peer);
+        return state === 'connected' || state === 'completed';
+    }
+
+    /** How many ICE restarts this side actually put on the wire for `peer`. */
+    iceRestartsWith(peer) { return this.entryFor(peer)?.pc.iceRestartsSeen || 0; }
 
     tracesOf(stage) { return this.traces.filter(t => t.stage === stage); }
 }

@@ -261,6 +261,44 @@ async fn only_sender_can_delete_a_dm() {
 }
 
 #[tokio::test]
+async fn deleting_a_dm_notifies_the_peer_live_over_websocket() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let resp = upload_dm(&app, &alice, "bob", None).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let message_id = body["id"].as_str().unwrap().to_string();
+
+    // Bob is connected and listening *before* Alice deletes — this is the
+    // live-delivery path (broadcast_message_deleted_event), not a reload
+    // that simply no longer finds the row.
+    let mut bob_ws = connect_ws(&app, &bob).await;
+
+    let deleted = app
+        .http
+        .delete(app.url(&format!("/api/message/{}", message_id)))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 204);
+
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), bob_ws.next())
+        .await
+        .expect("timed out waiting for delete notification")
+        .expect("stream ended")
+        .expect("ws error");
+    let WsMessage::Text(text) = frame else {
+        panic!("expected text frame, got {:?}", frame);
+    };
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["type"], "message_deleted");
+    assert_eq!(value["messageId"], message_id);
+    assert_eq!(value["sender"], "alice");
+    assert_eq!(value["receiver"], "bob");
+}
+
+#[tokio::test]
 async fn websocket_ping_gets_pong() {
     let app = spawn_app().await;
     let alice = register_user(&app, "alice", "hunter22").await;

@@ -80,10 +80,13 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     var onMessageReceived: ((_ id: String, _ clientId: String?, _ sender: String, _ receiver: String, _ text: String, _ call: String?, _ attachments: [[String: Any]], _ serverId: String?, _ channelId: String?) -> Void)?
     var onMessageDecryptFailed: ((_ id: String, _ sender: String, _ receiver: String, _ serverId: String?, _ channelId: String?) -> Void)?
     var onReactionUpdated: ((_ payload: [String: Any]) -> Void)?
+    var onMessageDeleted: ((_ payload: [String: Any]) -> Void)?
+    var onMessageEdited: ((_ payload: [String: Any]) -> Void)?
     var onAvatarChanged: ((_ username: String, _ deleted: Bool) -> Void)?
     var onVoiceEvent: ((_ payload: [String: Any]) -> Void)?
     var onKeyEnvelopeAvailable: (() -> Void)?
     var onDeviceApproved: (() -> Void)?
+    var onKeyRepublishRequest: ((_ payload: [String: Any]) -> Void)?
     var onWebSocketConnected: (() -> Void)?
     var onWebSocketDisconnected: (() -> Void)?
     var currentKey: String = ""
@@ -93,6 +96,15 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         let httpConfig = URLSessionConfiguration.default
         httpConfig.timeoutIntervalForRequest = 60
         httpConfig.timeoutIntervalForResource = 300
+        // Same reason apiSession raises this (see below), for the session that carries
+        // message-archive and avatar downloads. Opening a conversation renders its whole
+        // history, and renderHistoryRecords used to start one download per record at
+        // once; on the system default of 6 connections/host the overflow sat queued,
+        // burned its timeout without ever being sent, and each one of those rendered as
+        // "⚠️ Не удалось загрузить сообщение" next to the few that got a slot.
+        // renderHistoryRecords now also bounds its own fan-out — both halves are needed:
+        // this cap alone would still let a big enough history outrun the pool.
+        httpConfig.httpMaximumConnectionsPerHost = 8
         httpSession = URLSession(configuration: httpConfig)
 
         let apiConfig = URLSessionConfiguration.default
@@ -862,6 +874,26 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             return
         }
 
+        if let eventType = raw["type"] as? String, eventType == "message_deleted" {
+            trace("handleWebSocketMessage message_deleted")
+            DispatchQueue.main.async {
+                self.onMessageDeleted?(raw)
+            }
+            return
+        }
+
+        // Pushed when an author replaces a message's archive. The event carries no
+        // plaintext, so the UI reacts by re-fetching that conversation's history —
+        // the same download+decrypt path a freshly received message takes.
+        if let eventType = raw["type"] as? String, eventType == "message_edited" {
+            let editedId = (raw["messageId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            trace("handleWebSocketMessage message_edited messageId=\(editedId)")
+            DispatchQueue.main.async {
+                self.onMessageEdited?(raw)
+            }
+            return
+        }
+
         // Voice events are normally handled by the dedicated voice WebSocket (see
         // listenVoiceWebSocket) — the server delivers voice_* events to every
         // active connection for this user, including this message socket. This
@@ -889,13 +921,24 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             return
         }
 
-        // `key_republish_request` is scope-targeted on the server side, but the JS
-        // republish sweep it triggers is idempotent, so both event types share one
-        // callback rather than adding a payload-carrying bridge event to every
-        // platform. A peer that cannot decrypt a conversation is exactly the case
-        // where doing slightly more work than strictly needed is the right trade.
-        if let eventType = raw["type"] as? String,
-           eventType == "device_approved" || eventType == "key_republish_request" {
+        // Scope-targeted, and it needs its payload. This used to share the
+        // `device_approved` callback on the theory that the republish sweep is an
+        // idempotent superset of the targeted answer. It is not: the sweep publishes
+        // each scope's ACTIVE key only, whereas a peer sends this event precisely
+        // because the messages it cannot read were encrypted under a key we have
+        // since demoted to an `alt:` candidate. Collapsing the two meant the only
+        // code path that republishes historical keys (handleKeyRepublishRequest)
+        // never ran on this platform, and the requester kept reporting "перебрано
+        // ключей N, ни один не подошёл" no matter how often we answered.
+        if let eventType = raw["type"] as? String, eventType == "key_republish_request" {
+            trace("handleWebSocketMessage key_republish_request scope=\(raw["scope"] as? String ?? "")")
+            DispatchQueue.main.async {
+                self.onKeyRepublishRequest?(raw)
+            }
+            return
+        }
+
+        if let eventType = raw["type"] as? String, eventType == "device_approved" {
             trace("handleWebSocketMessage \(eventType)")
             DispatchQueue.main.async {
                 self.onDeviceApproved?()
@@ -1124,6 +1167,105 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 self.trace("upload rejected http=\(status) body=\(bodyPreview.prefix(300))")
                 try? FileManager.default.removeItem(at: bodyURL)
                 completion(false, nil, status, bodyPreview)
+            }
+        }.resume()
+    }
+
+    /// Replaces an already-sent message's encrypted archive (`PUT /api/message/:id`).
+    ///
+    /// Deliberately a separate method from `uploadMessage` rather than a flag on it:
+    /// the server route, the method, and the accepted multipart fields all differ
+    /// (no sender/receiver/server_id — the message's scope is fixed and re-sending
+    /// it would only invite a mismatch), and only the author may call it.
+    func editMessage(
+        messageId: String,
+        fileURL: URL,
+        keyVersion: Int = 2,
+        completion: @escaping (Bool, Int?, String?) -> Void
+    ) {
+        let trimmedMessageId = messageId.trimmingCharacters(in: .whitespacesAndNewlines)
+        trace("editMessage start messageId=\(trimmedMessageId) file=\(fileURL.lastPathComponent)")
+        guard !trimmedMessageId.isEmpty, let baseURL = URL(string: serverURL) else {
+            completion(false, nil, "invalid message id")
+            return
+        }
+
+        // Built by path components, never string interpolation — the id comes from
+        // server data and must not be able to escape the path.
+        let requestURL = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("message")
+            .appendingPathComponent(trimmedMessageId)
+
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "PUT"
+        if let authToken, !authToken.isEmpty {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+        if !currentDeviceId.isEmpty {
+            request.setValue(currentDeviceId, forHTTPHeaderField: "X-Zali-Device-ID")
+        }
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let bodyURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("edit-\(UUID().uuidString).multipart")
+        guard FileManager.default.createFile(atPath: bodyURL.path, contents: nil) else {
+            completion(false, nil, "failed to create multipart body")
+            return
+        }
+
+        do {
+            let handle = try FileHandle(forWritingTo: bodyURL)
+            defer { try? handle.close() }
+
+            func write(_ string: String) throws {
+                guard let data = string.data(using: .utf8) else { return }
+                try handle.write(contentsOf: data)
+            }
+
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"key_version\"\r\n\r\n")
+            try write(String(max(1, keyVersion)))
+            try write("\r\n")
+
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"file\"; filename=\"msg.zali\"\r\n")
+            try write("Content-Type: application/octet-stream\r\n\r\n")
+
+            let inputHandle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? inputHandle.close() }
+            while true {
+                let chunk = try inputHandle.read(upToCount: 64 * 1024) ?? Data()
+                if chunk.isEmpty { break }
+                try handle.write(contentsOf: chunk)
+            }
+
+            try write("\r\n")
+            try write("--\(boundary)--\r\n")
+        } catch {
+            try? FileManager.default.removeItem(at: bodyURL)
+            completion(false, nil, "failed to build multipart body")
+            return
+        }
+
+        httpSession.uploadTask(with: request, fromFile: bodyURL) { data, response, error in
+            try? FileManager.default.removeItem(at: bodyURL)
+            if let error = error {
+                self.trace("editMessage failed error=\(error)")
+                completion(false, nil, error.localizedDescription)
+                return
+            }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let bodyPreview = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            if status == 200 {
+                self.trace("editMessage success messageId=\(trimmedMessageId) body=\(bodyPreview.prefix(200))")
+                // The edited archive replaced the one this cache is keyed on, so a
+                // stale entry here would keep re-rendering the pre-edit text.
+                completion(true, status, bodyPreview)
+            } else {
+                self.trace("editMessage rejected http=\(status) body=\(bodyPreview.prefix(300))")
+                completion(false, status, bodyPreview)
             }
         }.resume()
     }

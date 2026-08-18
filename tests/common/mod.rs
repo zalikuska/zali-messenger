@@ -16,6 +16,11 @@ pub struct TestApp {
     /// server serves from disk (e.g. `releases/` for `/releases/:filename`).
     #[allow(dead_code)]
     pub data_dir: PathBuf,
+    /// The key this instance encrypts hash-chain `.zali` exports with — taken
+    /// from the very `Config` the server is running on, so a test opens the
+    /// real artifact rather than one built from a re-derived guess.
+    #[allow(dead_code)]
+    pub hash_chain_key: String,
 }
 
 impl TestApp {
@@ -46,6 +51,7 @@ pub async fn spawn_app() -> TestApp {
 #[allow(dead_code)]
 pub async fn spawn_app_with_data_dir(data_dir: PathBuf) -> TestApp {
     let config = zali_server::Config::from_env();
+    let hash_chain_key = config.hash_chain_key().to_string();
     let state = zali_server::build_app_state(data_dir.clone(), config).await;
     let app = zali_server::build_router(state);
 
@@ -69,6 +75,7 @@ pub async fn spawn_app_with_data_dir(data_dir: PathBuf) -> TestApp {
             .build()
             .expect("build reqwest client"),
         data_dir,
+        hash_chain_key,
     }
 }
 
