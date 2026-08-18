@@ -1,0 +1,81 @@
+{
+  "_": [
+    "Единственный источник порядка сборки веб-бандла. Читают: scripts/bundle_web.py,",
+    "харнессы scripts/*_doctor (группа interface) и scripts/bridge_check.sh.",
+    "Добавил модуль — вписал сюда одну строку, и он попадает и в бандл, и в тесты.",
+    "Порядок значим — файлы просто склеиваются в один <script>.",
+    "",
+    "vendor    — сторонний код. lottie_light.min.js идёт первым, чтобы window.lottie",
+    "            существовал раньше всех, кто к нему тянется (только modules/tgs.js).",
+    "modules   — независимые window.Zali* модули. native_types.js генерируется самим",
+    "            bundle_web.py из web/bridge_protocol.json перед склейкой.",
+    "core      — шина, загрузчик, стилизатор.",
+    "interface — ZaliMixin, каркас класса ZaliInterface и его доменные части.",
+    "            Части обязаны идти ПОСЛЕ interface.js: ZaliMixin(ZaliInterface, ...)",
+    "            выполняется на верхнем уровне, класс к тому моменту должен быть объявлен.",
+    "boot      — точка входа, поднимает приложение. Харнессы эту группу не грузят."
+  ],
+  "vendor": [
+    "vendor/lottie_light.min.js"
+  ],
+  "modules": [
+    "modules/bus_events.js",
+    "modules/api_routes.js",
+    "modules/native_types.js",
+    "modules/auth.js",
+    "modules/contacts.js",
+    "modules/messaging.js",
+    "modules/servers.js",
+    "modules/voice.js",
+    "modules/wasm_bridge.js",
+    "modules/tgs.js"
+  ],
+  "core": [
+    "bus.js",
+    "loader.js",
+    "styler.js"
+  ],
+  "interface": [
+    "mixin.js",
+    "interface.js",
+    "interface/format.js",
+    "interface/native_bridge.js",
+    "interface/viewport.js",
+    "interface/mobile.js",
+    "interface/zalicoin.js",
+    "interface/prefs.js",
+    "interface/storage.js",
+    "interface/conversation_keys.js",
+    "interface/key_resolution.js",
+    "interface/key_envelopes.js",
+    "interface/session.js",
+    "interface/outbox.js",
+    "interface/network_config.js",
+    "interface/servers_model.js",
+    "interface/server_modal.js",
+    "interface/voice_transport.js",
+    "interface/voice_media.js",
+    "interface/voice_negotiation.js",
+    "interface/voice_call.js",
+    "interface/voice_signal.js",
+    "interface/voice_ui.js",
+    "interface/server_messages.js",
+    "interface/avatars.js",
+    "interface/api.js",
+    "interface/auth.js",
+    "interface/attachments.js",
+    "interface/message_render.js",
+    "interface/render_shell.js",
+    "interface/updates.js",
+    "interface/message_list.js",
+    "interface/message_send.js",
+    "interface/notifications.js",
+    "interface/state_sync.js",
+    "interface/message_edit.js",
+    "interface/diagnostics.js",
+    "interface/events.js"
+  ],
+  "boot": [
+    "bootstrap.js"
+  ]
+}

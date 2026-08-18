@@ -10,13 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Этот репозиторий содержит **несколько параллельных реализаций одной и той же логики**. Почти любой фикс в одном месте требуется и в других. **Перед завершением любой правки уточни (у пользователя и/или проверкой), не нужно ли продублировать её в:**
 
-- **Web UI** (`web/src/interface.js`) — канонический источник. После правки **всегда** запусти `python3 scripts/bundle_web.py`, иначе изменения не попадут в macOS (`Assets.swift`) и Windows embedded-ассеты.
+- **Web UI** (`web/src/` — канонический источник; класс `ZaliInterface` разложен по `web/src/interface/*.js`, порядок сборки в `web/src/manifest.json`). После правки **всегда** запусти `python3 scripts/bundle_web.py`, иначе изменения не попадут в macOS (`Assets.swift`), Windows embedded-ассеты и Android (`apps/android/app/src/main/assets/web/`, откуда `MainActivity.kt` грузит `file:///android_asset/web/index.html`). Android туда добавлен 2026-08-18: до этого ассеты копировались руками, и на момент починки отставали на две недели — фича ответа/редактирования вышла на десктопе и молча миновала Android.
 - **macOS Swift-клиент** (`apps/macos/Sources/ZaliMessenger/`, основной) ↔ **Windows/Rust-шелл** (`apps/windows/src/native.rs` + `apps/windows/src/native/`) — реализуют один и тот же нативный слой (IPC-бридж, ключи, реконнект WS, HTTP-запросы, голосовой транспорт) **параллельно**. Фикс сетевого/крипто/бридж-поведения в одном почти всегда нужен и в другом — но с адаптацией под платформу (напр. macOS Keychain/файлы vs Windows `keyring`), не 1:1.
 - **Сервер**: локальный `server/src/` в этом монорепо ↔ серверный репозиторий (`zali-server`, ветка `zali-server`). Правки хендлеров нужно пушить в серверный репо и деплоить (см. «Deploy process»).
 - **Archiver SDK**: `sdk/Rust/` (сервер+Windows) ↔ `sdk/Swift/` (macOS) — зеркальные реализации формата `.zali`. Изменение формата/крипто нужно в обоих.
 
 > **Исключение — голосовые звонки.** Вся WebRTC-логика (mesh, оффер/ответ, ICE, glare, микрофон)
-> живёт только в `web/src/interface.js` и исполняется в WebView. Нативные шеллы лишь ретранслируют
+> живёт только в вебе (`web/src/interface/voice_*.js`) и исполняется в WebView. Нативные шеллы лишь ретранслируют
 > `voice_*` по WS, своей реализации согласования у них нет — дублировать туда правки голоса не надо,
 > достаточно `bundle_web.py`. Сверять с нативным слоем нужно только транспорт (реконнект WS,
 > heartbeat) и разрешения на микрофон.
@@ -198,7 +198,7 @@ cargo test --manifest-path server/Cargo.toml   # server integration tests (51 ш
 | Path | Role |
 |---|---|
 | `server/src/` | Axum server, split into modules: `main.rs`/`lib.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, `devices.rs`, `voice.rs`, `push.rs` (Web Push/VAPID), `updates.rs` (`/api/version` + публичный `/releases/:filename`), `conversation_keys.rs` (серверный реестр ключей разговоров), `hash_chain.rs` (append-only цепочка хэшей сообщений переписки + `.zali`-экспорт). Модули реэкспортируются в корень крейта (`pub(crate) use x::*;`), поэтому `use crate::{...}` работает отовсюду |
-| `web/src/interface.js` | Entire web UI (~13000 lines): runs in both browser and native WebView |
+| `web/src/interface.js` + `web/src/interface/` | Entire web UI (~21 500 строк), общий для браузера и нативных WebView. `interface.js` — только каркас класса `ZaliInterface` (конструктор, `init()`) плюс карта частей; тело разложено по 36 доменным файлам в `web/src/interface/`, подключаемым через `ZaliMixin` (`web/src/mixin.js`). Список и порядок файлов — `web/src/manifest.json` |
 | `apps/macos/` | SwiftUI app (Swift Package Manager); wraps WKWebView. **Основной macOS-клиент** |
 | `apps/windows/src/native.rs` + `apps/windows/src/native/` | Rust desktop shell (WRY/TAO). `native.rs` держит NativeState/bridges и центральный `handle_ipc_message`; подмодули `native/{http,cache,keyring,util,transport,api,messages}.rs` — HTTP-клиенты, кэш расшифровки, keyring, санитайзеры, WS-транспорты, API-запросы, конвейер сообщений. Кроссплатформенный: собирается для Windows (`scripts/build_windows_app.ps1`, основной путь) и как **экспериментальный** macOS-шелл (`scripts/build_macos_rust_app.sh`, см. ниже) |
 | `core/` | Rust core library compiled to static `.a` for macOS FFI |
@@ -324,7 +324,23 @@ Append-only журнал **событий** сообщений: на каждо�
 - Avatar and message file downloads use streaming byte counters (100 MB and 512 MB caps respectively)
 - `decode_data_url` has a 100 MB hard cap before any parsing
 
-### Web UI (`web/src/interface.js`)
+### Web UI (`web/src/interface.js` + `web/src/interface/`)
+
+`ZaliInterface` был одним файлом на 21 500 строк; с 2026-08-18 тело класса разложено по
+доменным частям в `web/src/interface/` (`voice_media.js`, `key_envelopes.js`, `message_send.js`,
+…), а `interface.js` держит конструктор, `init()` и карту частей в шапке.
+
+- **Части подключаются `ZaliMixin(ZaliInterface, class { ... })`** (`web/src/mixin.js`), а не
+  объектными литералами: копируются *дескрипторы*, поэтому методы остаются неперечисляемыми,
+  `static get` не вычисляется при переносе, а статические поля едут вместе со своими методами.
+  Из-за этого в частях **нельзя использовать `super`** — `[[HomeObject]]` метода указывает на
+  прототип анонимного class-выражения. Дубликат имени в двух частях побеждает последним (как и
+  в едином class-теле), но `ZaliMixin` пишет об этом `console.error`.
+- **Порядок загрузки — `web/src/manifest.json`, и только он.** Раньше тот же список был
+  продублирован в `bundle_web.py` и в каждом харнессе; новый файл нужно вписать в манифест
+  один раз, после чего он попадает и в бандл, и в `scripts/*_doctor`, и в `bridge_check.sh`.
+- Части грузятся **после** `interface.js`: `ZaliMixin(...)` — обычный вызов на верхнем уровне,
+  класс к этому моменту должен быть объявлен.
 - `randomBase64` throws if `window.crypto.getRandomValues` is unavailable — no Math.random fallback
 - CSS color values from server data pass through `safeCssColor()` before being set in style attributes
 - `flushPendingOutbox` drops messages after 50 failed attempts (`MAX_OUTBOX_ATTEMPTS`)
@@ -350,7 +366,8 @@ Append-only журнал **событий** сообщений: на каждо�
 
 ### Голосовые звонки (WebRTC full mesh) — инварианты
 
-Вся WebRTC-логика живёт в `web/src/interface.js` и исполняется в WebView; нативные шеллы
+Вся WebRTC-логика живёт в `web/src/interface/voice_*.js` (`voice_transport`, `voice_media`,
+`voice_negotiation`, `voice_call`, `voice_signal`, `voice_ui`) и исполняется в WebView; нативные шеллы
 (macOS/Windows/iOS/Android) только ретранслируют `voice_*` по WS. **Правки голоса дублировать в
 нативные клиенты не нужно** — достаточно `bundle_web.py`.
 
@@ -668,7 +685,7 @@ Windows показывает тосты для неупакованных (non-M
 ## Key Development Notes
 
 - The server Cargo package is named `zali_server` (underscore), not `zali-server`. Use `cargo check -p zali_server`.
-- `web/src/interface.js` is the canonical source; `bundle_web.py` copies it into macOS and Windows embedded assets. Always edit the source, then bundle.
+- `web/src/` is the canonical source (`interface.js` + `interface/*.js`, order in `manifest.json`); `bundle_web.py` concatenates it into macOS and Windows embedded assets. Always edit the source, then bundle. `bundle_web.py` теперь **падает** на отсутствующем файле из манифеста — раньше оно молча возвращалось с кодом 0, и сборщики вкомпиливали прошлый `app.js`.
 - **`bundle_web.py` режет бандл на литералы по 200 000 символов — это не косметика.** `Assets.swift`
   получает HTML+CSS+JS Swift-литералами, каждый литерал компилируется в один `__cstring`-атом, а ld64
   именует атом его же содержимым и падает на имени больше ~1 МиБ:

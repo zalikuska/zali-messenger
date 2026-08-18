@@ -62,35 +62,28 @@ def main():
         # nothing there needs the generated Swift file, so skip it instead of failing the build.
         print("ℹ️  apps/macos/ not present, skipping BridgeProtocol.generated.swift")
 
+    # Порядок сборки живёт в web/src/manifest.json — единственном месте, где он
+    # описан. Раньше тот же список был продублирован здесь и в каждом харнессе
+    # (scripts/*_doctor), и новый модуль приходилось вписывать в пять файлов.
+    manifest_path = os.path.join(src_dir, "manifest.json")
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
     js_files = [
-        # Vendored third-party player, kept first so window.lottie exists before
-        # anything that might reach for it. Only used by modules/tgs.js.
-        os.path.join(src_dir, "vendor", "lottie_light.min.js"),
-        os.path.join(src_dir, "modules", "bus_events.js"),
-        os.path.join(src_dir, "modules", "api_routes.js"),
-        os.path.join(src_dir, "modules", "native_types.js"),
-        os.path.join(src_dir, "modules", "auth.js"),
-        os.path.join(src_dir, "modules", "contacts.js"),
-        os.path.join(src_dir, "modules", "messaging.js"),
-        os.path.join(src_dir, "modules", "servers.js"),
-        os.path.join(src_dir, "modules", "voice.js"),
-        os.path.join(src_dir, "modules", "wasm_bridge.js"),
-        os.path.join(src_dir, "modules", "tgs.js"),
-        os.path.join(src_dir, "bus.js"),
-        os.path.join(src_dir, "loader.js"),
-        os.path.join(src_dir, "styler.js"),
-        os.path.join(src_dir, "interface.js"),
-        os.path.join(src_dir, "bootstrap.js"),
+        os.path.join(src_dir, *rel.split("/"))
+        for group in ("vendor", "modules", "core", "interface", "boot")
+        for rel in manifest.get(group, [])
     ]
 
     # 2. Чтение и объединение JS модулей
     bundled_js = ""
     for js_path in js_files:
         if not os.path.exists(js_path):
-            print(f"❌ Ошибка: Файл {js_path} не найден!")
-            return
+            # Раньше здесь был `return`: скрипт завершался с кодом 0, сборщики
+            # (build_app.sh / build_windows_app.ps1) считали бандлинг успешным и
+            # вкомпиливали ПРОШЛЫЙ app.js. Опечатка в манифесте обязана падать.
+            raise SystemExit(f"❌ Ошибка: файл {js_path} из web/src/manifest.json не найден")
 
-        name = os.path.basename(js_path)
+        name = os.path.relpath(js_path, src_dir)
         print(f"  -> Добавление JS модуля: {name}")
         with open(js_path, "r", encoding="utf-8") as f:
             bundled_js += f"// --- MODULE: {name} ---\n"
@@ -285,6 +278,19 @@ def main():
         shutil.copy2(bridge_protocol_path, os.path.join(resources_web_dir, "bridge_protocol.json"))
         shutil.copy2(native_types_path, os.path.join(resources_web_dir, "native_types.js"))
         with open(os.path.join(resources_web_dir, "app.js"), "w", encoding="utf-8") as f:
+            f.write(bundled_js)
+
+    # 6b. Android грузит тот же UI как file:///android_asset/web/index.html
+    # (MainActivity.kt). Раньше эти три файла копировались руками и никем не
+    # проверялись: на 2026-08-18 они отставали на две недели — в них не было ни
+    # composerContext, ни стилей меню ответа/редактирования, то есть фича вышла
+    # на macOS и Windows и молча миновала Android. Копируем здесь же.
+    android_web_dir = os.path.join(project_root, "apps", "android", "app", "src", "main", "assets", "web")
+    if os.path.isdir(android_web_dir):
+        print(f"📂 Копирование файлов в ассеты Android: {android_web_dir}")
+        shutil.copy2(html_path, os.path.join(android_web_dir, "index.html"))
+        shutil.copy2(css_path, os.path.join(android_web_dir, "style.css"))
+        with open(os.path.join(android_web_dir, "app.js"), "w", encoding="utf-8") as f:
             f.write(bundled_js)
 
     # 7. Также сохраняем собранный app.js в папке Web для отладки в браузере

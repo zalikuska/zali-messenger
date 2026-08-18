@@ -41,5 +41,15 @@ PY
 
 cargo check -q --manifest-path "$ROOT/apps/windows/Cargo.toml"
 swift build --package-path "$ROOT/apps/macos" -c debug
-node --check "$ROOT/web/src/interface.js"
+# Каждый файл бандла по отдельности: ZaliInterface разложен по web/src/interface/*.js,
+# и проверка одного interface.js пропустила бы синтаксическую ошибку в любой части.
+while IFS= read -r rel; do
+  node --check "$ROOT/web/src/$rel"
+done < <(python3 -c "
+import json, sys
+m = json.load(open('$ROOT/web/src/manifest.json'))
+for g in ('vendor', 'modules', 'core', 'interface', 'boot'):
+    for rel in m.get(g, []):
+        print(rel)
+")
 node --check "$ROOT/web/app.js"

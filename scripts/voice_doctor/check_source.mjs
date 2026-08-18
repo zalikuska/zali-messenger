@@ -6,9 +6,12 @@
 // pattern that cost this project a broken call before, and the comment says which.
 import fs from 'node:fs';
 import path from 'node:path';
-import { REPO_ROOT } from './lib/load_interface.mjs';
+import { REPO_ROOT, readInterfaceSource } from './lib/load_interface.mjs';
 
-const raw = fs.readFileSync(path.join(REPO_ROOT, 'web/src/interface.js'), 'utf8');
+// Читается вся группа `interface` из web/src/manifest.json: класс разложен по
+// web/src/interface/*.js, и правило, смотрящее в один interface.js, с этого
+// момента проверяло бы пустой класс-каркас и всегда «проходило».
+const raw = readInterfaceSource();
 // Comments discuss these patterns by name on purpose (that is where the reasoning
 // lives), so the rules must look at code only.
 // Conservative on purpose: only whole-line comments are removed. A cleverer
@@ -81,6 +84,68 @@ record('a sent offer arms an answer watchdog',
         'polite ladder must consult direction, inviter and the shared comparator');
 }
 
+// …and EVERY local offer must arm it, not just the first one. An ICE restart and a
+// mid-call renegotiation set a local offer too, and an unanswered one there is worse:
+// it also blocks every later renegotiation for that peer (they queue on a return to
+// 'stable' that can never come).
+{
+    const offers = hits(/setLocalDescription\(offer\)/);
+    const arms = hits(/this\.armVoiceAnswerWatchdog\(/);
+    record('every path that sets a local offer arms the answer watchdog',
+        arms.length >= offers.length && offers.length >= 3,
+        `setLocalDescription(offer)=${offers.length} armVoiceAnswerWatchdog=${arms.length}`);
+}
+
+// Guards that latch after an await do not guard anything: two passes both walk past
+// them. This one adds the same track twice, which a real browser rejects with
+// InvalidAccessError, aborting whatever was negotiating at the time.
+{
+    const start = src.indexOf('async attachLocalVoiceTracks(peer)');
+    const end = src.indexOf('attachRemoteVoiceStream(peer, stream)');
+    const body = start > -1 && end > start ? src.slice(start, end) : '';
+    const latch = body.indexOf('localTracksAttached = true');
+    const firstAwait = body.indexOf('await ');
+    record('the local-track attach latch is taken before the first await',
+        body !== '' && latch > -1 && (firstAwait === -1 || latch < firstAwait),
+        `latch@${latch} firstAwait@${firstAwait}`);
+}
+
+// A failed ICE transport is revived by an ICE restart and by nothing else. If any
+// offer path builds its own createOffer() the flag is lost exactly where it matters:
+// the recovery offer re-agrees the media over the dead transport, negotiation
+// completes, signalingState returns to 'stable', and the call carries nothing.
+{
+    // The helper is the one place allowed to touch createOffer directly.
+    const helperStart = lines.findIndex(l => /createVoiceOfferFor\(entry\)\s*\{/.test(l));
+    const helperEnd = helperStart > -1
+        ? helperStart + lines.slice(helperStart).findIndex((l, i) => i > 0 && /^\s{4}\}/.test(l))
+        : -1;
+    const direct = [];
+    lines.forEach((line, i) => {
+        if (!/\.createOffer\(/.test(line)) return;
+        if (helperStart > -1 && i >= helperStart && i <= helperEnd) return;
+        direct.push(`${i + 1}: ${line.trim()}`);
+    });
+    record('offers are built through createVoiceOfferFor, which owns the iceRestart flag',
+        helperStart > -1 && direct.length === 0,
+        direct.length ? direct.join(' | ') : (helperStart > -1 ? '' : 'createVoiceOfferFor must exist'));
+}
+
+// 'failed' is terminal: onconnectionstatechange fires once on the way in and never
+// again, so anything armed off that edge gets exactly one attempt — and the network
+// coming back is not an edge at all. Recovery has to re-read the state on a timer.
+record('a down link is supervised on a timer, not only on a state transition',
+    /superviseVoiceLinks/.test(src) && /ensureVoiceLinkSupervisor/.test(src)
+    && /stopVoiceLinkSupervisor/.test(src),
+    'a failed peer must be re-examined periodically, not just when it fails');
+
+// Autoplay policy refuses play() until a user gesture, and a call is not guaranteed
+// to have had one on this device. Without a retry the sink stays paused for the whole
+// call while RTP arrives and every WebRTC-level indicator says the call is healthy.
+record('blocked remote playback is retried on a later user gesture',
+    /ensureVoicePlaybackGestureHook/.test(src) && /releaseVoicePlaybackGestureHook/.test(src),
+    'attachRemoteVoiceStream must install a gesture-driven playback retry');
+
 // A latch released only in `finally` is a permanent outage if anything above it hangs.
 record('call-setup latch has a staleness escape',
     src.includes('isVoiceCallSetupBusy'),
@@ -89,9 +154,15 @@ record('call-setup latch has a staleness escape',
 // Remote audio must have a route even when the WebAudio graph is not running.
 // Remote audio must not depend on a WebAudio graph: that path had no fallback
 // when it was running yet silent, and no detection either.
+// Accepts the deafen-derived form as well as a literal `false`. The original regex
+// demanded `audio.muted = false` verbatim and started failing when the sink learned
+// to honour deafen (`audio.muted = !!this.voice.deafened`) — which is what the check
+// is actually protecting, only more correct: unmuted for every normal call, muted
+// only when the user explicitly asked for silence. What must never come back is a
+// sink created unconditionally muted, so that is what is asserted.
 record('the <audio> element is the playback sink, never created muted',
-    /audio\.muted = false/.test(src) && !/audio\.muted = true/.test(src),
-    'attachRemoteVoiceStream must create the element unmuted');
+    /audio\.muted = (?:false|!!this\.voice\.deafened)\b/.test(src) && !/audio\.muted = true/.test(src),
+    'attachRemoteVoiceStream must create the element unmuted (or deafen-derived)');
 record('no WebAudio graph is wired to the speakers for remote audio',
     !/remotePlaybackNodes|ensureVoiceMasterGain/.test(src),
     'playback must not go through gain -> destination');

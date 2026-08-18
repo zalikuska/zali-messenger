@@ -1,4 +1,4 @@
-// --- MODULE: lottie_light.min.js ---
+// --- MODULE: vendor/lottie_light.min.js ---
 // lottie-web 5.12.2 — "light" build (SVG renderer, no expressions).
 // Vendored from npm package lottie-web@5.12.2, build/player/lottie_light.min.js.
 // MIT License, Copyright (c) 2015 Bodymovin. See web/src/vendor/LOTTIE_LICENSE.md.
@@ -8,7 +8,7 @@
 
 
 
-// --- MODULE: bus_events.js ---
+// --- MODULE: modules/bus_events.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -49,7 +49,7 @@
 })();
 
 
-// --- MODULE: api_routes.js ---
+// --- MODULE: modules/api_routes.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -135,7 +135,7 @@
 })();
 
 
-// --- MODULE: native_types.js ---
+// --- MODULE: modules/native_types.js ---
 (function() {
     'use strict';
 
@@ -184,7 +184,7 @@
 })();
 
 
-// --- MODULE: auth.js ---
+// --- MODULE: modules/auth.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -223,7 +223,7 @@
 })();
 
 
-// --- MODULE: contacts.js ---
+// --- MODULE: modules/contacts.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -242,7 +242,7 @@
 })();
 
 
-// --- MODULE: messaging.js ---
+// --- MODULE: modules/messaging.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -274,7 +274,7 @@
 })();
 
 
-// --- MODULE: servers.js ---
+// --- MODULE: modules/servers.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -313,7 +313,7 @@
 })();
 
 
-// --- MODULE: voice.js ---
+// --- MODULE: modules/voice.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -425,7 +425,7 @@
 })();
 
 
-// --- MODULE: wasm_bridge.js ---
+// --- MODULE: modules/wasm_bridge.js ---
 // @ts-check
 // Lazily loads the WASM build of core/ (see scripts/build_web_wasm.sh) and exposes
 // pack/unpack helpers for the .zali archive format to the rest of interface.js.
@@ -508,7 +508,7 @@
 })();
 
 
-// --- MODULE: tgs.js ---
+// --- MODULE: modules/tgs.js ---
 // @ts-check
 // TGS (Telegram animated sticker) support.
 //
@@ -1569,6 +1569,50 @@ class ZaliStyler {
 window.ZaliStyler = ZaliStyler;
 
 
+// --- MODULE: mixin.js ---
+// ZaliMixin — сборка класса ZaliInterface из доменных частей.
+//
+// Класс жил одним файлом на 21 500 строк; теперь его тело разложено по
+// web/src/interface/*.js. Части подключаются не объектными литералами, а
+// class-выражениями — это принципиально:
+//   * тела методов переносятся дословно, без запятых между ними, поэтому
+//     разбиение не редактирует ни одной строки логики;
+//   * копируются дескрипторы, а не значения, поэтому `static get` не
+//     вычисляется при переносе, а методы остаются НЕперечисляемыми — ровно
+//     как у обычного class-тела (Object.assign сделал бы их перечисляемыми
+//     и выполнил бы геттеры);
+//   * статические поля части (например VERSION_SCHEME_MIGRATION_CUTOFF_UNIX)
+//     переезжают вместе со своими методами.
+//
+// `super` в частях использовать нельзя: [[HomeObject]] метода указывает на
+// прототип анонимного class-выражения, а не на ZaliInterface.
+//
+// Объявление намеренно верхнеуровневое, а не window.ZaliMixin внутри IIFE:
+// бандл — обычный script, все файлы делят одну область видимости, а харнессы
+// (scripts/*_doctor) исполняют ту же склейку в vm-контексте, где `window` —
+// просто объект и глобальных биндингов не создаёт.
+function ZaliMixin(target, part) {
+    const STATIC_SKIP = new Set(['length', 'name', 'prototype']);
+
+    const copyMembers = (from, to, label, skip) => {
+        for (const key of Reflect.ownKeys(from)) {
+            if (skip.has(key)) continue;
+            if (Object.prototype.hasOwnProperty.call(to, key)) {
+                // В едином class-теле дубликат молча побеждал бы последним и
+                // отлаживался бы часами. Поведение сохраняем, но кричим в консоль.
+                console.error(`[ZaliMixin] дубликат ${label} "${String(key)}" — побеждает последний`);
+            }
+            Object.defineProperty(to, key, Object.getOwnPropertyDescriptor(from, key));
+        }
+    };
+
+    copyMembers(part.prototype, target.prototype, 'метод', new Set(['constructor']));
+    copyMembers(part, target, 'статик', STATIC_SKIP);
+}
+
+window.ZaliMixin = ZaliMixin;
+
+
 // --- MODULE: interface.js ---
 // @ts-check
 
@@ -1769,6 +1813,54 @@ const DefaultApiRoutes = Object.freeze({
     },
 });
 
+/**
+ * ZaliInterface — весь клиентский UI. Здесь только каркас: конструктор и init().
+ * Тело класса разложено по web/src/interface/ и подключается через ZaliMixin
+ * (см. web/src/mixin.js). Порядок загрузки — web/src/manifest.json, группа
+ * "interface"; тот же список читают харнессы scripts/*_doctor и bridge_check.sh.
+ *
+ * Добавляя функциональность, кладите метод в подходящую часть, а новый файл
+ * впишите в манифест — больше нигде список файлов не продублирован.
+ *
+ * Карта частей (строк / методов — ориентировочно, счётчики не обновляются сами):
+ *
+ *   format.js               104 /  11  Экранирование, иконки, форматирование времени и дат.
+ *   native_bridge.js        300 /  24  Мост к нативной оболочке: доступность, IPC, разрешения, трассировка.
+ *   viewport.js             324 /  17  Окно прокрутки списка сообщений, класс производительности, якоря скролла.
+ *   mobile.js               575 /  20  Мобильная раскладка, жесты навигации, переключение экранов.
+ *   zalicoin.js             270 /  10  Экран ZaliCoin: баланс, распределение, переводы.
+ *   prefs.js                452 /  39  Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба.
+ *   storage.js              405 /  31  Ключи localStorage, кэш сообщений, персист контактов.
+ *   conversation_keys.js    762 /  44  Реестр ключей разговоров и облачный vault-снапшот.
+ *   key_resolution.js       771 /  28  Разрешение ключа разговора, идентичность устройства, крипто-примитивы конвертов и vault.
+ *   key_envelopes.js        749 /  21  Публикация/приём ключевых конвертов, доверие устройств.
+ *   session.js              463 /  23  Сессия и токен, недавние аккаунты, снапшот здоровья звонка.
+ *   outbox.js               632 /  25  Очередь неотправленных сообщений и её досылка.
+ *   network_config.js       515 /  40  Сетевая конфигурация: API/WS адреса, ICE/TURN.
+ *   servers_model.js        391 /  31  Модель серверов и ролей, работа с цветом.
+ *   server_modal.js        1361 /  52  Модалка настроек сервера: роли, каналы, участники, инвайты.
+ *   voice_transport.js      505 /  17  Голосовые комнаты и транспорт сигналинга.
+ *   voice_media.js         1482 /  45  Захват микрофона/камеры/экрана, треки, индикаторы уровня.
+ *   voice_negotiation.js    664 /  18  Жизненный цикл пира: offer/answer, рестарты, супервизор связи.
+ *   voice_call.js           440 /  19  Управление звонком и записи о звонках.
+ *   voice_signal.js         768 /   4  Обработка входящих voice_* сигналов и событий.
+ *   voice_ui.js             396 /  10  Отрисовка голосовой панели, плиток и развёрнутого звонка.
+ *   server_messages.js      700 /  15  Загрузка сообщений серверов/каналов, синхронизация активного разговора.
+ *   avatars.js              771 /  31  Аватары и ассеты серверов: кэш, загрузка, кроппер, даунскейл.
+ *   api.js                  198 /   8  HTTP-конвейер: заголовки, слоты параллелизма, apiFetch.
+ *   auth.js                1157 /  31  Бутстрап сессии, вход/регистрация, контакты.
+ *   attachments.js          349 /  24  Вложения, Tenor, предпросмотр медиа.
+ *   message_render.js       861 /  29  Отрисовка тела сообщения, реакции, статусы.
+ *   render_shell.js         460 /   9  Отрисовка списков контактов, хаба и серверов.
+ *   updates.js              261 /  16  Встроенный апдейтер клиента.
+ *   message_list.js         466 /   7  Окно сообщений, рендер списка, переключение чата.
+ *   message_send.js         719 /  10  Отправка сообщений и приём в браузерном режиме.
+ *   notifications.js        455 /  24  Мьюты, звуки, уведомления, бейдж непрочитанного.
+ *   state_sync.js           529 /  15  Приём состояния от нативного слоя: пользователи, история, статус связи.
+ *   message_edit.js         376 /  15  Ответы, редактирование и удаление сообщений.
+ *   diagnostics.js          157 /   5  Журнал диагностики и голосовая телеметрия.
+ *   events.js              1651 /  16  Привязка DOM-событий и инерция прокрутки.
+ */
 class ZaliInterface {
     constructor() {
         this.name = 'zali_interface';
@@ -1959,6 +2051,16 @@ class ZaliInterface {
         this.perfTier();
         this.probeDisplayRefreshRate();
     }
+}
+window.ZaliInterface = ZaliInterface;
+
+
+// --- MODULE: interface/format.js ---
+// --- ZaliInterface: Экранирование, иконки, форматирование времени и дат. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // --- HTML Helper Utilities ---
     esc(s) {
@@ -2057,6 +2159,15 @@ class ZaliInterface {
             return messageDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
         } catch(e) { return ''; }
     }
+});
+
+
+// --- MODULE: interface/native_bridge.js ---
+// --- ZaliInterface: Мост к нативной оболочке: доступность, IPC, разрешения, трассировка. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     nativeBridge() {
         return window.__ZALI_NATIVE || null;
@@ -2351,6 +2462,15 @@ class ZaliInterface {
     myName() {
         return this.S.session?.username || '';
     }
+});
+
+
+// --- MODULE: interface/viewport.js ---
+// --- ZaliInterface: Окно прокрутки списка сообщений, класс производительности, якоря скролла. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     requestMessagesScroll(position = 'bottom') {
         this.pendingMessagesScroll = position === 'top' ? 'top' : 'bottom';
@@ -2669,6 +2789,15 @@ class ZaliInterface {
         if (!box) return true;
         return (box.scrollHeight - (box.scrollTop + box.clientHeight)) <= threshold;
     }
+});
+
+
+// --- MODULE: interface/mobile.js ---
+// --- ZaliInterface: Мобильная раскладка, жесты навигации, переключение экранов. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // Drives .sidebar's parked/unparked position as a plain inline style —
     // mirroring setMobileNavProgress()'s #viewChat/.mobile-dock handling —
@@ -3238,6 +3367,15 @@ class ZaliInterface {
         this.syncMobileChrome();
         this.refreshZaliCoinView();
     }
+});
+
+
+// --- MODULE: interface/zalicoin.js ---
+// --- ZaliInterface: Экран ZaliCoin: баланс, распределение, переводы. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // ============================================================
     // ZALICOIN — fixed-supply (100 000) in-app currency. Balance/distribution
@@ -3502,6 +3640,15 @@ class ZaliInterface {
             return await this.apiFetch(this.apiRoutes.coins.transfer, { method: 'POST', body });
         }
     }
+});
+
+
+// --- MODULE: interface/prefs.js ---
+// --- ZaliInterface: Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     navModeStorageKey() {
         return 'zali_nav_mode_v1';
@@ -3948,6 +4095,15 @@ class ZaliInterface {
         this.renderUiV2Settings();
         this.syncMobileChrome();
     }
+});
+
+
+// --- MODULE: interface/storage.js ---
+// --- ZaliInterface: Ключи localStorage, кэш сообщений, персист контактов. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     _userSuffix() {
         const u = this.S.session?.username;
@@ -4347,6 +4503,15 @@ class ZaliInterface {
             return '';
         }
     }
+});
+
+
+// --- MODULE: interface/conversation_keys.js ---
+// --- ZaliInterface: Реестр ключей разговоров и облачный vault-снапшот. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     conversationKeysStorageKey() {
         return `zali_conversation_keys_v2${this._userSuffix()}`;
@@ -5103,6 +5268,15 @@ class ZaliInterface {
         })();
         return this._restoreVaultInFlight;
     }
+});
+
+
+// --- MODULE: interface/key_resolution.js ---
+// --- ZaliInterface: Разрешение ключа разговора, идентичность устройства, крипто-примитивы конвертов и vault. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     async resolveConversationCryptoKey({ peer = null, serverId = null, channelId = null, reason = 'auto' } = {}) {
         const scope = this.conversationScopeKey(peer, serverId, channelId);
@@ -5868,6 +6042,15 @@ class ZaliInterface {
             this.cloudVaultSyncInFlight = false;
         }
     }
+});
+
+
+// --- MODULE: interface/key_envelopes.js ---
+// --- ZaliInterface: Публикация/приём ключевых конвертов, доверие устройств. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // Fan a scope's key out to every non-revoked device of `recipient` that has a
     // usable public key — NOT only approved ones.
@@ -6611,6 +6794,15 @@ class ZaliInterface {
             }
         } catch (e) {}
     }
+});
+
+
+// --- MODULE: interface/session.js ---
+// --- ZaliInterface: Сессия и токен, недавние аккаунты, снапшот здоровья звонка. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     loadStoredSession(key = null) {
         try {
@@ -7068,6 +7260,15 @@ class ZaliInterface {
             // ignore storage failures
         }
     }
+});
+
+
+// --- MODULE: interface/outbox.js ---
+// --- ZaliInterface: Очередь неотправленных сообщений и её досылка. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     loadPendingOutbox() {
         try {
@@ -7694,6 +7895,15 @@ class ZaliInterface {
             // ignore storage failures
         }
     }
+});
+
+
+// --- MODULE: interface/network_config.js ---
+// --- ZaliInterface: Сетевая конфигурация: API/WS адреса, ICE/TURN. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     loadStoredNavMode() {
         try {
@@ -8203,6 +8413,15 @@ class ZaliInterface {
             });
         }
     }
+});
+
+
+// --- MODULE: interface/servers_model.js ---
+// --- ZaliInterface: Модель серверов и ролей, работа с цветом. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     getDefaultServers() {
         return [];
@@ -8588,6 +8807,15 @@ class ZaliInterface {
         if (hidden && hidden.value !== normalized) hidden.value = normalized;
         if (hexInput && hexInput.value.toLowerCase() !== normalized) hexInput.value = normalized;
     }
+});
+
+
+// --- MODULE: interface/server_modal.js ---
+// --- ZaliInterface: Модалка настроек сервера: роли, каналы, участники, инвайты. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     canManageServer(server = null) {
         const current = server || this.currentServer();
@@ -9943,6 +10171,15 @@ class ZaliInterface {
             this.saveStoredActiveChannel(null);
         }
     }
+});
+
+
+// --- MODULE: interface/voice_transport.js ---
+// --- ZaliInterface: Голосовые комнаты и транспорт сигналинга. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     voiceRoomKeyForDm(peer) {
         const me = String(this.myName() || '').trim();
@@ -10442,6 +10679,15 @@ class ZaliInterface {
         this.renderVoicePanel();
         this.scheduleRenderMessages();
     }
+});
+
+
+// --- MODULE: interface/voice_media.js ---
+// --- ZaliInterface: Захват микрофона/камеры/экрана, треки, индикаторы уровня. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // Dedupes concurrent capture requests. In a group call every incoming offer
     // handler (and every voice_room_state) calls this, and handleVoiceEvent is
@@ -11918,6 +12164,15 @@ class ZaliInterface {
         }
         this.scheduleRenderVoicePanel();
     }
+});
+
+
+// --- MODULE: interface/voice_negotiation.js ---
+// --- ZaliInterface: Жизненный цикл пира: offer/answer, рестарты, супервизор связи. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // Not every rejected offer is a state problem. Once a connection has
     // negotiated a session it owns an immutable media layout, and an offer whose
@@ -12576,6 +12831,15 @@ class ZaliInterface {
         }
         this.resetVoiceState({ preserveInvite: false });
     }
+});
+
+
+// --- MODULE: interface/voice_call.js ---
+// --- ZaliInterface: Управление звонком и записи о звонках. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     async startDirectCall(peer, { video = false } = {}) {
         const target = String(peer || '').trim();
@@ -13010,6 +13274,15 @@ class ZaliInterface {
             this.scheduleRenderMessages();
         }
     }
+});
+
+
+// --- MODULE: interface/voice_signal.js ---
+// --- ZaliInterface: Обработка входящих voice_* сигналов и событий. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // handleVoiceEvent is dispatched fire-and-forget from both sockets, so signal
     // application used to interleave freely across its awaits (ensureVoiceLocalStream,
@@ -13772,6 +14045,15 @@ class ZaliInterface {
             return;
         }
     }
+});
+
+
+// --- MODULE: interface/voice_ui.js ---
+// --- ZaliInterface: Отрисовка голосовой панели, плиток и развёрнутого звонка. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     voiceIcon(kind) {
         const phone = '<path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>';
@@ -14162,6 +14444,15 @@ class ZaliInterface {
             }
         }
     }
+});
+
+
+// --- MODULE: interface/server_messages.js ---
+// --- ZaliInterface: Загрузка сообщений серверов/каналов, синхронизация активного разговора. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     isOutgoingMessage(msg) {
         return String(msg?.sender || '').trim() === this.myName();
@@ -14856,6 +15147,15 @@ class ZaliInterface {
         }
         this.syncMobileChrome();
     }
+});
+
+
+// --- MODULE: interface/avatars.js ---
+// --- ZaliInterface: Аватары и ассеты серверов: кэш, загрузка, кроппер, даунскейл. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     avatarCacheKey(username) {
         return String(username || '').trim().toLowerCase();
@@ -15621,6 +15921,15 @@ class ZaliInterface {
         this.saveStoredAvatar(target, null);
         this.updateAvatarViews();
     }
+});
+
+
+// --- MODULE: interface/api.js ---
+// --- ZaliInterface: HTTP-конвейер: заголовки, слоты параллелизма, apiFetch. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     apiHeaders(extra = {}, { includeDeviceId = false } = {}) {
         const headers = { ...extra };
@@ -15813,6 +16122,15 @@ class ZaliInterface {
             this.sessionInvalidationInProgress = false;
         }, 1000);
     }
+});
+
+
+// --- MODULE: interface/auth.js ---
+// --- ZaliInterface: Бутстрап сессии, вход/регистрация, контакты. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     async bootstrapSession() {
         this.trace('bootstrapSession start');
@@ -16964,6 +17282,15 @@ class ZaliInterface {
         }
         this.initChat(name);
     }
+});
+
+
+// --- MODULE: interface/attachments.js ---
+// --- ZaliInterface: Вложения, Tenor, предпросмотр медиа. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // A .tgs is a gzipped Lottie animation (Telegram animated sticker). Peers and
     // older builds of this app label it anything from application/gzip to
@@ -17307,6 +17634,15 @@ class ZaliInterface {
             </span>
         </a>`;
     }
+});
+
+
+// --- MODULE: interface/message_render.js ---
+// --- ZaliInterface: Отрисовка тела сообщения, реакции, статусы. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     sanitizeDecryptionErrorText(text) {
         const value = String(text || '').trim();
@@ -18162,6 +18498,15 @@ class ZaliInterface {
             this.applyLocalReaction(found, reaction);
         }
     }
+});
+
+
+// --- MODULE: interface/render_shell.js ---
+// --- ZaliInterface: Отрисовка списков контактов, хаба и серверов. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // --- DOM Rendering Methods ---
 
@@ -18616,6 +18961,15 @@ class ZaliInterface {
         this.closeMobileSidebar();
         this.syncMobileChrome();
     }
+});
+
+
+// --- MODULE: interface/updates.js ---
+// --- ZaliInterface: Встроенный апдейтер клиента. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // --- App updates (macOS/Windows native shells only — see nativeSupports('appUpdate')) ---
 
@@ -18871,6 +19225,15 @@ class ZaliInterface {
         if (!status.available) return;
         this.openUpdateModal();
     }
+});
+
+
+// --- MODULE: interface/message_list.js ---
+// --- ZaliInterface: Окно сообщений, рендер списка, переключение чата. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     getCurrentMessages() {
         if (this.S.navMode === 'servers') {
@@ -19331,6 +19694,15 @@ class ZaliInterface {
         this.closeMobileSidebar();
         this.syncMobileChrome();
     }
+});
+
+
+// --- MODULE: interface/message_send.js ---
+// --- ZaliInterface: Отправка сообщений и приём в браузерном режиме. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     async sendInputMessage() {
         // Editing takes over the composer, so the send control saves instead of
@@ -20044,6 +20416,15 @@ class ZaliInterface {
         }
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
+});
+
+
+// --- MODULE: interface/notifications.js ---
+// --- ZaliInterface: Мьюты, звуки, уведомления, бейдж непрочитанного. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     handleAvatarUpdated({ username, deleted = false } = {}) {
         const name = String(username || '').trim();
@@ -20493,6 +20874,15 @@ class ZaliInterface {
     isInActiveCall(status = this.voice?.status) {
         return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
     }
+});
+
+
+// --- MODULE: interface/state_sync.js ---
+// --- ZaliInterface: Приём состояния от нативного слоя: пользователи, история, статус связи. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     setUsers(users) {
         this.S.users = Array.isArray(users) ? users : [];
@@ -21016,6 +21406,15 @@ class ZaliInterface {
         if (!messageId) return;
         this.removeMessageFromState(messageId);
     }
+});
+
+
+// --- MODULE: interface/message_edit.js ---
+// --- ZaliInterface: Ответы, редактирование и удаление сообщений. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     // ---- Reply quotes -------------------------------------------------
     //
@@ -21386,6 +21785,15 @@ class ZaliInterface {
             this.addLogEntry({ type: 'ERROR', msg: `Не удалось удалить сообщение: ${e.message || e}`, ts: new Date().toLocaleTimeString() });
         }
     }
+});
+
+
+// --- MODULE: interface/diagnostics.js ---
+// --- ZaliInterface: Журнал диагностики и голосовая телеметрия. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
 
     addLogEntry({ type, msg, ts }) {
         // Mirror to console so the native console-hook persists the full in-app
@@ -21537,7 +21945,40 @@ class ZaliInterface {
             fn?.('[VOICE]', stage, details);
         } catch (e) {}
     }
+});
+
+
+// --- MODULE: interface/events.js ---
+// --- ZaliInterface: Привязка DOM-событий и инерция прокрутки. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+// поэтому поведение и неперечисляемость методов те же, что у class-тела.
+ZaliMixin(ZaliInterface, class {
+
+    // --- UI Event Binding ---
+
     bindEvents() {
+        // Метод был на 1512 строк. Разложен по назначению; порядок вызовов —
+        // порядок исходных блоков, поэтому очерёдность регистрации слушателей
+        // на одном и том же элементе не изменилась.
+        this.bindContactListEvents();                     // списки контактов и каналов сервера
+        this.bindVoicePanelEvents();                      // голосовая панель и плитки участников
+        this.bindChatHeaderEvents();                      // шапка чата: звонок, видео, кнопка «назад»
+        this.bindMessageListEvents();                     // список сообщений: реакции, ссылки, контекстное меню
+        this.bindContactAddEvents();                      // добавление контакта и подсказки
+        this.bindComposerEvents();                        // композер, вложения, перевод ZaliCoin, модалка обновления
+        this.bindMessageInputEvents();                    // поле ввода: ввод, вставка, drag-and-drop
+        this.bindSearchAndModeEvents();                   // поиск, переключение режима и сегментов хаба
+        this.bindAuthEvents();                            // экран входа: форма, сеть, гость
+        this.bindSettingsEvents();                        // настройки, сетевая конфигурация и модалка сервера
+        this.bindStylerEvents();                          // выбор темы и селекторы стилизатора
+        this.bindStyleSliderEvents();                     // слайдеры оформления
+        this.bindCryptoKeyEvents();                       // ручной ввод ключа шифрования
+        this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
+    }
+
+    /** Списки контактов и каналов сервера. Вызывается только из bindEvents(). */
+    bindContactListEvents() {
         // 1. Click on contacts
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {
@@ -21604,6 +22045,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Голосовая панель и плитки участников. Вызывается только из bindEvents(). */
+    bindVoicePanelEvents() {
         const voicePanel = document.getElementById('voicePanel');
         if (voicePanel) {
             voicePanel.addEventListener('click', async (e) => {
@@ -21694,6 +22139,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Шапка чата: звонок, видео, кнопка «назад». Вызывается только из bindEvents(). */
+    bindChatHeaderEvents() {
         const chatCallBtn = document.getElementById('chatCallBtn');
         if (chatCallBtn) {
             chatCallBtn.addEventListener('click', async () => {
@@ -21717,6 +22166,10 @@ class ZaliInterface {
             chatBackBtn.addEventListener('click', () => this.openChatView({ showList: true }));
         }
 
+    }
+
+    /** Список сообщений: реакции, ссылки, контекстное меню. Вызывается только из bindEvents(). */
+    bindMessageListEvents() {
         const msgsEl = document.getElementById('msgs');
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
@@ -21781,6 +22234,10 @@ class ZaliInterface {
             }
         });
 
+    }
+
+    /** Добавление контакта и подсказки. Вызывается только из bindEvents(). */
+    bindContactAddEvents() {
         const contactAddBtn = document.getElementById('contactAddBtn');
         if (contactAddBtn) {
             contactAddBtn.addEventListener('click', () => {
@@ -21806,6 +22263,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Композер, вложения, перевод ZaliCoin, модалка обновления. Вызывается только из bindEvents(). */
+    bindComposerEvents() {
         // 2. Click send button & keyboard listener
         const sendBtn = document.getElementById('sendBtn');
         if (sendBtn) sendBtn.addEventListener('click', () => this.sendInputMessage());
@@ -21871,6 +22332,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Поле ввода: ввод, вставка, drag-and-drop. Вызывается только из bindEvents(). */
+    bindMessageInputEvents() {
         const msgInput = document.getElementById('msgInput');
         if (msgInput) {
             msgInput.addEventListener('input', () => {
@@ -21928,6 +22393,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Поиск, переключение режима и сегментов хаба. Вызывается только из bindEvents(). */
+    bindSearchAndModeEvents() {
         // 3. Search filter input (doubles as the contact-add input while contactAddMode is on)
         const searchInput = document.getElementById('searchInput');
         if (searchInput) {
@@ -21989,6 +22458,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Экран входа: форма, сеть, гость. Вызывается только из bindEvents(). */
+    bindAuthEvents() {
         const authForm = document.getElementById('authForm');
         const authLoginBtn = document.getElementById('authLoginBtn');
         if (authForm) {
@@ -22100,6 +22573,10 @@ class ZaliInterface {
             this.S.auth.fieldsCleared = true;
         }, 120);
 
+    }
+
+    /** Настройки, сетевая конфигурация и модалка сервера. Вызывается только из bindEvents(). */
+    bindSettingsEvents() {
         const settingsBtn = document.getElementById('settingsBtn');
         const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         const serverOverlay = document.getElementById('serverOverlay');
@@ -22748,6 +23225,10 @@ class ZaliInterface {
             initialValue: '#cbff00',
         });
 
+    }
+
+    /** Выбор темы и селекторы стилизатора. Вызывается только из bindEvents(). */
+    bindStylerEvents() {
         // 6. Dynamic styler selector events
         document.querySelectorAll('.btn-theme').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -22902,6 +23383,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Слайдеры оформления. Вызывается только из bindEvents(). */
+    bindStyleSliderEvents() {
         const sliderSuggestHeight = document.getElementById('sliderSuggestHeight');
         if (sliderSuggestHeight) {
             sliderSuggestHeight.addEventListener('input', (e) => {
@@ -22949,6 +23434,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Ручной ввод ключа шифрования. Вызывается только из bindEvents(). */
+    bindCryptoKeyEvents() {
         // 7. Cryptography setting custom key
         // Routes through zali_styler which proxies to Swift → Rust backend
         const inputCryptoKey = document.getElementById('inputCryptoKey');
@@ -22964,6 +23453,10 @@ class ZaliInterface {
             });
         }
 
+    }
+
+    /** Перетаскивание окна, ресайз, горячие клавиши. Вызывается только из bindEvents(). */
+    bindWindowChromeEvents() {
         // 8. Title bar drag helper
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
@@ -23106,8 +23599,7 @@ class ZaliInterface {
             }, IDLE_MS);
         }, { passive: true });
     }
-}
-window.ZaliInterface = ZaliInterface;
+});
 
 
 // --- MODULE: bootstrap.js ---

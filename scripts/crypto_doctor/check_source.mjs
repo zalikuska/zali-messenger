@@ -1,10 +1,10 @@
 // Source-level guards for the key-sync failure shapes. Each rule marks a pattern
 // that has already produced unreadable messages in this project.
-import fs from 'node:fs';
-import path from 'node:path';
-import { REPO_ROOT } from '../voice_doctor/lib/load_interface.mjs';
+import { readInterfaceSource } from '../voice_doctor/lib/load_interface.mjs';
 
-const raw = fs.readFileSync(path.join(REPO_ROOT, 'web/src/interface.js'), 'utf8');
+// Вся группа `interface` из web/src/manifest.json — класс разложен по частям,
+// и чтение одного interface.js молча проверяло бы пустой каркас.
+const raw = readInterfaceSource();
 // Only whole-line comments are dropped: the reasoning lives in comments and would
 // otherwise trip every rule that names the pattern it forbids.
 const src = raw.split('\n').map(l => (l.trim().startsWith('//') ? '' : l)).join('\n');
