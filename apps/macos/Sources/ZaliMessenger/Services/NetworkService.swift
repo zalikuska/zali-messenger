@@ -87,6 +87,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     var onKeyEnvelopeAvailable: (() -> Void)?
     var onDeviceApproved: (() -> Void)?
     var onKeyRepublishRequest: ((_ payload: [String: Any]) -> Void)?
+    /// Общий проброс: любой типизированный WS-кадр, который этот слой не
+    /// разобрал сам. Существует, чтобы новый тип события с сервера не требовал
+    /// правки в каждой из трёх нативных оболочек — разбор целиком в JS
+    /// (dispatchRealtimeEvent в web/src/interface/state_sync.js).
+    var onRealtimeEvent: ((_ payload: [String: Any]) -> Void)?
     var onWebSocketConnected: (() -> Void)?
     var onWebSocketDisconnected: (() -> Void)?
     var currentKey: String = ""
@@ -942,6 +947,19 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             trace("handleWebSocketMessage \(eventType)")
             DispatchQueue.main.async {
                 self.onDeviceApproved?()
+            }
+            return
+        }
+
+        // Всё, что не разобрано выше, но имеет `type`, — событие, а не сообщение.
+        // Раньше оно молча терялось в ветке ниже ("non-message keys=..."), из-за
+        // чего каждая новая серверная нотификация требовала правки здесь, в
+        // Windows и в Android по отдельности. Теперь кадр уходит в JS как есть.
+        if let eventType = (raw["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !eventType.isEmpty {
+            trace("handleWebSocketMessage realtime passthrough type=\(eventType)")
+            DispatchQueue.main.async {
+                self.onRealtimeEvent?(raw)
             }
             return
         }

@@ -42,7 +42,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b20";
+const APP_DISPLAY_VERSION: &str = "0.2b21";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -96,6 +96,10 @@ enum UiBusEvent {
     AvatarUpdated,
     SyncActiveConversation,
     UpdateEvent,
+    /// Общий проброс WS-кадра, который нативный слой не разобрал сам.
+    /// Разбор целиком в JS (dispatchRealtimeEvent), чтобы новый тип события
+    /// с сервера не требовал правки в каждой из трёх оболочек.
+    RealtimeEvent,
 }
 
 impl UiBusEvent {
@@ -110,6 +114,7 @@ impl UiBusEvent {
             UiBusEvent::RefreshAfterKey => "refresh_after_key",
             UiBusEvent::RetryPublishKeys => "retry_publish_keys",
             UiBusEvent::KeyRepublishRequest => "key_republish_request",
+            UiBusEvent::RealtimeEvent => "realtime_event",
             UiBusEvent::AuthResponse => "auth_response",
             UiBusEvent::NativeResponse => "native_response",
             UiBusEvent::TenorResolved => "tenor_resolved",

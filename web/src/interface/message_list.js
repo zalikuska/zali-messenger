@@ -236,7 +236,10 @@ ZaliMixin(ZaliInterface, class {
             // does and doesn't guarantee.
             if (isNotice) {
                 if (noticeType === 'decrypt-error') {
-                    void this.reportDecryptFailure({
+                    // Queued, not awaited-and-fired here: see
+                    // queueDecryptFailureReport() for why this must not happen
+                    // inside the render frame.
+                    this.queueDecryptFailureReport({
                         placeholderText: msg.text,
                         messageId: msg.id,
                         clientId: msg.clientId,
@@ -266,7 +269,7 @@ ZaliMixin(ZaliInterface, class {
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
                 html += `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
-                    html += `<div class="msg-ava">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                    html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
@@ -282,7 +285,7 @@ ZaliMixin(ZaliInterface, class {
 
             html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (!isCall && !isOut && showAvatar) {
-                html += `<div class="msg-ava">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (!isCall && !isOut) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }

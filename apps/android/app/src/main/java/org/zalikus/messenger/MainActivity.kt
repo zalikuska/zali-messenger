@@ -1,12 +1,16 @@
 package org.zalikus.messenger
 
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
@@ -67,6 +71,8 @@ private enum class Tab(val jsId: String, val title: String, val icon: ImageVecto
     Servers("mobileServersBtn", "Сервера", Icons.Filled.Dns),
     Settings("mobileSettingsBtn", "Настройки", Icons.Filled.Settings),
 }
+
+private const val ASSET_BASE_URL = "file:///android_asset/web/"
 
 private val Accent = Color(0xFFC7FA48)      // brand lime
 private val BarGlass = Color(0xCC0E1014)    // translucent dark glass
@@ -138,6 +144,45 @@ class MainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 preferredRefreshRate = best.refreshRate
             }
+        }
+    }
+
+    /**
+     * The one origin allowed to occupy this WebView — the bundled UI loaded from
+     * `file:///android_asset/web/`. Kept deliberately narrower than "any file://
+     * URL": `settings.allowFileAccess` is on (the asset load needs it), so a
+     * plain `file://` check would still let a `file:///sdcard/...` document into
+     * the frame that owns the `ZaliAndroidBridge` interface.
+     */
+    private fun isBundledOrigin(url: String?): Boolean {
+        val value = url?.trim().orEmpty()
+        if (value.isEmpty()) return false
+        if (value == "about:blank") return true
+        return value.startsWith(ASSET_BASE_URL, ignoreCase = true)
+    }
+
+    /**
+     * Permission-request variant of [isBundledOrigin]. WebView reports the origin
+     * of a `file://` document as the bare scheme (`file://`), with no path, so the
+     * exact-prefix check above can never match one — using it here would deny the
+     * bundled UI its own microphone. The frame is guaranteed to hold the bundled
+     * document anyway (`shouldOverrideUrlLoading` never lets anything else in);
+     * this stays as a second, independent gate.
+     */
+    private fun isBundledPermissionOrigin(origin: String?): Boolean {
+        val value = origin?.trim().orEmpty()
+        if (isBundledOrigin(value)) return true
+        return value.startsWith("file://", ignoreCase = true)
+    }
+
+    /** Hands a link the app itself must not open to the system browser/dialer/mail app. */
+    private fun openExternally(url: Uri) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            // No handler installed for the scheme — dropping the tap is the
+            // correct outcome, and is still strictly better than the previous
+            // behaviour of loading it inside the bridge-bearing WebView.
         }
     }
 
@@ -241,12 +286,52 @@ class MainActivity : ComponentActivity() {
                             }
 
                             webChromeClient = object : WebChromeClient() {
-                                // Grant camera/mic to the local bundled origin for calls.
+                                // Grant camera/mic to the local bundled origin for calls —
+                                // and to nothing else. `request.grant(request.resources)`
+                                // granted whatever was asked for, by whatever document
+                                // happened to be in a frame, which is the same mistake the
+                                // macOS/iOS shells explicitly avoid in
+                                // `requestMediaCapturePermissionFor` (main frame + known
+                                // origin only). Resources are allowlisted too, so a future
+                                // WebView resource id (protected media, MIDI sysex) is not
+                                // granted just because it did not exist when this was
+                                // written.
                                 override fun onPermissionRequest(request: PermissionRequest) {
-                                    request.grant(request.resources)
+                                    if (!isBundledPermissionOrigin(request.origin?.toString())) {
+                                        request.deny()
+                                        return
+                                    }
+                                    val allowed = request.resources.filter {
+                                        it == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                                            it == PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                                    }.toTypedArray()
+                                    if (allowed.isEmpty()) request.deny() else request.grant(allowed)
                                 }
                             }
                             webViewClient = object : WebViewClient() {
+                                // Origin pin. `addJavascriptInterface` above attaches
+                                // `ZaliAndroidBridge` to the WebView, not to the document —
+                                // every page this view ever loads can call it, and through
+                                // it reach the session token, the conversation keys and the
+                                // whole native API. Nothing in this app navigates: the UI is
+                                // one bundled asset document that talks to the server through
+                                // that bridge. Without this override a single link tap in a
+                                // chat message loaded the attacker's page right into that
+                                // frame (the shared UI's `openExternalLink` is a no-op here —
+                                // Android does not advertise the `openExternalUrl` capability
+                                // — so the default in-WebView navigation went through).
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView,
+                                    request: WebResourceRequest,
+                                ): Boolean {
+                                    val url = request.url ?: return true
+                                    if (isBundledOrigin(url.toString())) return false
+                                    when (url.scheme?.lowercase()) {
+                                        "http", "https", "mailto", "tel" -> openExternally(url)
+                                    }
+                                    return true
+                                }
+
                                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                                     if (!NativeBridge.documentStartScriptSupported) {
                                         view.evaluateJavascript(nativeBridge.documentStartScript(), null)
@@ -281,7 +366,7 @@ class MainActivity : ComponentActivity() {
                                     }, 300)
                                 }
                             }
-                            loadUrl("file:///android_asset/web/index.html")
+                            loadUrl(ASSET_BASE_URL + "index.html")
                         }
                     }
                 )

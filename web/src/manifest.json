@@ -72,6 +72,9 @@
     "interface/notifications.js",
     "interface/state_sync.js",
     "interface/message_edit.js",
+    "interface/profiles.js",
+    "interface/profile_ui.js",
+    "interface/autographs.js",
     "interface/diagnostics.js",
     "interface/events.js"
   ],

@@ -82,10 +82,26 @@ ZaliMixin(ZaliInterface, class {
         if (!name) return;
         const muted = !!(this.S.mutedChats || {})[name];
         const percent = this.getPeerVolumePercent(name);
+        const isSelf = name === this.myName();
         const menu = document.createElement('div');
         menu.id = 'contactContextMenu';
         menu.className = 'peer-context-menu';
+        // Подписка и дружба идут первыми: это то, ради чего сюда чаще всего
+        // и жмут ПКМ. Их подписи зависят от текущих отношений, которых мы ещё
+        // не знаем, — они уточняются ниже, когда придёт профиль. До ответа
+        // пункты показывают нейтральное действие, а не мигают пустотой.
         menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" data-action="profile">
+                <span>Открыть профиль</span>
+            </button>
+            ${isSelf ? '' : `
+            <button type="button" class="peer-context-menu-item" data-action="follow">
+                <span id="contactFollowLabel">Отслеживать</span>
+            </button>
+            <button type="button" class="peer-context-menu-item" data-action="friend">
+                <span id="contactFriendLabel">Попроситься в друзья</span>
+            </button>`}
+            <div class="peer-context-menu-sep" aria-hidden="true"></div>
             <button type="button" class="peer-context-menu-item" data-action="mute">
                 <span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
@@ -102,6 +118,26 @@ ZaliMixin(ZaliInterface, class {
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
 
+        menu.querySelector('[data-action="profile"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.openProfile(name);
+        });
+        menu.querySelector('[data-action="follow"]')?.addEventListener('click', () => {
+            const following = menu.dataset.following === '1';
+            this.closeContactContextMenu();
+            void this.followUserDirect(name, following);
+        });
+        menu.querySelector('[data-action="friend"]')?.addEventListener('click', () => {
+            // Уже друзья — вести в профиль: удалять из друзей одним нажатием
+            // в контекстном меню слишком легко промахнуться.
+            if (menu.dataset.friend === '1') {
+                this.closeContactContextMenu();
+                void this.openProfile(name);
+                return;
+            }
+            this.closeContactContextMenu();
+            void this.requestFriendship(name);
+        });
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
@@ -114,6 +150,8 @@ ZaliMixin(ZaliInterface, class {
             this.setPeerVolumePercent(name, value);
         });
 
+        if (!isSelf) void this.decorateContactContextMenu(menu, name);
+
         const outsideHandler = (evt) => {
             if (menu.contains(evt.target)) return;
             this.closeContactContextMenu();
@@ -125,6 +163,37 @@ ZaliMixin(ZaliInterface, class {
             document.addEventListener('click', outsideHandler);
             document.addEventListener('contextmenu', outsideHandler);
         }, 0);
+    }
+
+    /**
+     * Дотягивает в открытое контекстное меню реальное состояние отношений.
+     * Отдельным запросом и после показа меню: тянуть профиль ДО открытия
+     * значило бы задержку между нажатием ПКМ и появлением меню на всю дорогу
+     * до сервера. Если меню успели закрыть — ответ просто выбрасывается.
+     */
+    async decorateContactContextMenu(menu, name) {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+            if (!res.ok) return;
+            if (!menu.isConnected) return;
+            const data = await res.json();
+            menu.dataset.following = data?.isFollowing ? '1' : '0';
+            menu.dataset.friend = data?.isFriend ? '1' : '0';
+            const followLabel = menu.querySelector('#contactFollowLabel');
+            if (followLabel) followLabel.textContent = data?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
+            const friendLabel = menu.querySelector('#contactFriendLabel');
+            if (friendLabel) {
+                if (data?.isFriend) friendLabel.textContent = 'Вы друзья';
+                else if (data?.friendRequest?.direction === 'outgoing') friendLabel.textContent = 'Заявка отправлена';
+                else if (data?.friendRequest?.direction === 'incoming') friendLabel.textContent = 'Принять заявку в друзья';
+                else friendLabel.textContent = 'Попроситься в друзья';
+            }
+            if (data?.friendRequest?.direction === 'incoming') {
+                menu.querySelector('[data-action="friend"]')?.setAttribute('data-request-id', data.friendRequest.id);
+            }
+        } catch (e) {
+            // Подписи останутся нейтральными — меню всё равно рабочее.
+        }
     }
 
     toggleMuteChannel(serverId, channelId) {

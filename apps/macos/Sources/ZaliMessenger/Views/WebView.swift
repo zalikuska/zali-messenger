@@ -201,6 +201,7 @@ struct WebView: NSViewRepresentable {
             case refreshAfterKey
             case retryPublishKeys
             case keyRepublishRequest
+            case receiveRealtimeEvent
         }
 
         private struct TenorResolvedPayload: Codable {
@@ -365,6 +366,14 @@ struct WebView: NSViewRepresentable {
         /// on. Dropping or merging these is how a conversation stays unreadable.
         fileprivate func keyRepublishRequest(_ payload: [String: Any]) {
             callWindowFunction(.keyRepublishRequest, arguments: [WebView.javascriptLiteral(payload)])
+        }
+
+        /// Отдаёт в JS WS-кадр, который нативный слой не разобрал сам. Никакой
+        /// интерпретации здесь нет намеренно: смысл события знает только JS
+        /// (dispatchRealtimeEvent), и держать его знание ещё и тут означало бы
+        /// обновлять три оболочки на каждый новый тип события.
+        fileprivate func receiveRealtimeEvent(_ payload: [String: Any]) {
+            callWindowFunction(.receiveRealtimeEvent, arguments: [WebView.javascriptLiteral(payload)])
         }
 
         /// Coalesces bursts of key_envelope_available notifications (e.g. several pending
@@ -1745,6 +1754,47 @@ struct WebView: NSViewRepresentable {
             }
         }
 
+        /// Origin pin for the app's own web UI.
+        ///
+        /// The whole native API — session token, conversation keys, filesystem
+        /// writes, message sending — is reachable from JS as
+        /// `window.webkit.messageHandlers.*`, and WebKit hands those handlers to
+        /// *whatever* document occupies the frame, not only to the one that was
+        /// loaded at startup. So a single navigation away from `http://localhost`
+        /// (a link the auto-linker missed, a `location.href` from anything
+        /// injected into the 21.5k-line shared UI, a redirect) would put a remote
+        /// page in the main frame holding the full bridge. `isMainFrame` checks in
+        /// `userContentController` do not help there — the attacker page *is* the
+        /// main frame.
+        ///
+        /// Nothing in this app ever needs to navigate: the UI is a single
+        /// `loadHTMLString` document that talks to the server over the native
+        /// HTTP bridge. So the policy is a pin, not a filter — allow the initial
+        /// load and same-document/about: URLs, hand http(s) to the real browser
+        /// (same path `openExternalUrl` already uses), and cancel everything else.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+            if WebView.isAppOriginURL(url) {
+                decisionHandler(.allow)
+                return
+            }
+            let scheme = url.scheme?.lowercased() ?? ""
+            if ["http", "https", "mailto", "tel"].contains(scheme) {
+                print("[ZALI][WEBVIEW] navigation to external origin handed to the OS url=\(url.absoluteString)")
+                NSWorkspace.shared.open(url)
+            } else {
+                print("[ZALI][WEBVIEW] navigation blocked url=\(url.absoluteString)")
+            }
+            decisionHandler(.cancel)
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("[ZALI][WEBVIEW] didFinish currentUser=\(NetworkService.shared.currentUser) keySet=\(!NetworkService.shared.currentKey.isEmpty)")
             self.setLoading(false)
@@ -1806,6 +1856,16 @@ struct WebView: NSViewRepresentable {
     }
     
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// The only origin allowed to occupy the WebView's frames. Must stay in
+    /// sync with the `baseURL` passed to `loadHTMLString` in `makeNSView`.
+    static func isAppOriginURL(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "about" || scheme == "blob" { return true }
+        guard scheme == "http" else { return false }
+        let host = url.host?.lowercased() ?? ""
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
 
     private static func loadBridgeProtocolBootstrap() -> String {
         let candidates = [
@@ -2022,6 +2082,11 @@ struct WebView: NSViewRepresentable {
         NetworkService.shared.onKeyRepublishRequest = { payload in
             DispatchQueue.main.async {
                 coordinator.keyRepublishRequest(payload)
+            }
+        }
+        NetworkService.shared.onRealtimeEvent = { payload in
+            DispatchQueue.main.async {
+                coordinator.receiveRealtimeEvent(payload)
             }
         }
         NetworkService.shared.onWebSocketConnected = {

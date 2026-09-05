@@ -66,6 +66,8 @@ mod diagnostics;
 pub(crate) use diagnostics::*;
 mod hash_chain;
 pub(crate) use hash_chain::*;
+mod profiles;
+pub(crate) use profiles::*;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -98,6 +100,10 @@ pub struct Config {
     auth_cookie_secure: bool,
     rate_limit_window_secs: u64,
     rate_limit_max_attempts: usize,
+    // Failed logins allowed per IP per window, across *all* usernames. The
+    // per-(username, IP) budget above cannot see a password spray at all — see
+    // the comment at its second check in auth.rs::login.
+    rate_limit_max_failed_per_ip: usize,
     ws_channel_capacity: usize,
     // Both unset (the common case until an operator opts in) simply disables Web Push:
     // send_web_push() no-ops and /api/push/vapid-public-key returns 404 so the browser
@@ -150,8 +156,8 @@ impl Config {
             }
         };
 
-        let allowed_origins: Vec<String> = std::env::var("ALLOWED_ORIGINS")
-            .unwrap_or_else(|_| {
+        let allowed_origins: Vec<String> = sanitize_allowed_origins(
+            &std::env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| {
                 // localhost:8090/8092 match .claude/launch.json's "web-static"/"web-static-mobile"
                 // dev previews of web/index.html — without them, testing the browser client
                 // against a local `cargo run` server fails CORS silently (fetch() rejects with a
@@ -167,10 +173,8 @@ impl Config {
                 } else {
                     base.to_string()
                 }
-            })
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+            }),
+        );
 
         let max_upload_bytes = std::env::var("MAX_UPLOAD_BYTES")
             .ok()
@@ -180,6 +184,16 @@ impl Config {
         let allow_guest_mode = std::env::var("ALLOW_GUEST_MODE")
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false);
+        if allow_guest_mode {
+            // Not a lax mode — a switch that turns every unauthenticated request
+            // into the `Zalikus` account: reading its conversations, sending as it,
+            // changing its settings. `.env.example` shipped it as `true` for a long
+            // time, which is exactly how it ends up on a server nobody meant to open
+            // up, so say so on every single start rather than once in a doc.
+            warn!(
+                "⚠️  ALLOW_GUEST_MODE=true — АУТЕНТИФИКАЦИЯ ОТКЛЮЧЕНА: любой запрос без токена выполняется от имени пользователя Zalikus"
+            );
+        }
 
         let auth_cookie_secure = std::env::var("AUTH_COOKIE_SECURE")
             .ok()
@@ -195,10 +209,19 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(60);
 
-        let rate_limit_max_attempts = std::env::var("RATE_LIMIT_MAX_ATTEMPTS")
+        let rate_limit_max_attempts: usize = std::env::var("RATE_LIMIT_MAX_ATTEMPTS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10);
+
+        // Five times the per-account budget: high enough that a household or an
+        // office behind one NAT address never trips it by fat-fingering their own
+        // passwords, low enough that a spray is 50 guesses a minute instead of
+        // unbounded.
+        let rate_limit_max_failed_per_ip = std::env::var("RATE_LIMIT_MAX_FAILED_PER_IP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(rate_limit_max_attempts.saturating_mul(5));
 
         let ws_channel_capacity = std::env::var("WS_CHANNEL_CAPACITY")
             .ok()
@@ -243,6 +266,7 @@ impl Config {
             auth_cookie_secure,
             rate_limit_window_secs,
             rate_limit_max_attempts,
+            rate_limit_max_failed_per_ip,
             ws_channel_capacity,
             vapid_public_key: vapid_public_key.filter(|_| vapid_private_key.is_some()),
             vapid_private_key,
@@ -251,6 +275,33 @@ impl Config {
             hash_chain_key,
         }
     }
+}
+
+/// Parses `ALLOWED_ORIGINS` and drops the entries that must never be in it.
+///
+/// `null` is the `Origin` header a sandboxed iframe, a `data:` document and a
+/// `file:` page all send — precisely what an attacker's page can arrange. The
+/// CORS layer runs with `allow_credentials(true)`, so allowing `null` would let
+/// such a document call this API with the user's cookie and read the answers.
+/// It sat in `.env.example` for a long time, so filtering here rather than only
+/// documenting it is deliberate: a deployment that copied that line must not
+/// keep the hole after an upgrade.
+pub(crate) fn sanitize_allowed_origins(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|origin| origin.trim().to_string())
+        .filter(|origin| {
+            if origin.is_empty() {
+                return false;
+            }
+            if origin.eq_ignore_ascii_case("null") {
+                warn!(
+                    "⚠️  ALLOWED_ORIGINS содержит `null` — источник песочничных iframe/data:/file:. Игнорируется."
+                );
+                return false;
+            }
+            true
+        })
+        .collect()
 }
 
 async fn security_headers(req: axum::http::Request<axum::body::Body>, next: Next) -> Response {
@@ -499,17 +550,32 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .await
     .expect("Ошибка создания таблицы avatars");
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS conversation_keys (
-            scope_key TEXT PRIMARY KEY,
-            key_value TEXT NOT NULL,
-            key_version INTEGER NOT NULL DEFAULT 2,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("Ошибка создания таблицы conversation_keys");
+    // Legacy `conversation_keys` table — dropped, not created.
+    //
+    // Its `key_value` column held the *actual* AES key for a conversation, in
+    // plaintext, on the server. Nothing has read or written it for a long time
+    // (the registry below replaced it and deliberately stores only a
+    // non-secret fingerprint), so the rows were pure liability: a server-side
+    // copy of the keys that make the end-to-end encryption end-to-end, sitting
+    // in the same file as the ciphertext they open, surviving every backup.
+    //
+    // Dropping it is the only way to actually remove that copy — an unused table
+    // is still a readable one. The row count is logged first so a deploy that
+    // finds real rows leaves a record of how many keys had been exposed.
+    if let Ok(count) =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversation_keys").fetch_one(&pool).await
+    {
+        if count > 0 {
+            warn!(
+                "Удаляется устаревшая таблица conversation_keys с {} строк(ами) открытых ключей переписок",
+                count
+            );
+        }
+    }
+    sqlx::query("DROP TABLE IF EXISTS conversation_keys")
+        .execute(&pool)
+        .await
+        .ok();
 
     // Authoritative "which key is canonical for this conversation" registry.
     // Holds only a client-computed SHA-256 fingerprint of the key, never key
@@ -1090,6 +1156,151 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .await
         .ok();
 
+    // ---- Профили, подписки, дружба, комментарии и автографы ----
+    // Строка в user_profiles создаётся лениво, при первом сохранении: до этого
+    // профиль отдаётся дефолтами, чтобы "ничего не заполнил" и "нет такого
+    // пользователя" не выглядели одинаково.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_profiles (
+            username TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL DEFAULT '',
+            bio TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            links TEXT NOT NULL DEFAULT '[]',
+            accent_color TEXT NOT NULL DEFAULT '',
+            comment_policy TEXT NOT NULL DEFAULT 'anyone',
+            autograph_policy TEXT NOT NULL DEFAULT 'anyone',
+            autograph_auto_approve TEXT NOT NULL DEFAULT 'nobody',
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы user_profiles");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_follows (
+            follower TEXT NOT NULL,
+            target TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (follower, target)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы user_follows");
+    // Счётчик подписчиков читается на каждом открытии профиля и идёт по target,
+    // тогда как первичный ключ начинается с follower — без этого индекса это
+    // скан всей таблицы.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_user_follows_target ON user_follows (target)")
+        .execute(&pool)
+        .await
+        .ok();
+
+    // Дружба хранится ОДНОЙ строкой на пару, в лексикографическом порядке.
+    // Две зеркальные строки пришлось бы держать согласованными при каждом
+    // удалении, а рассинхрон дал бы "друг у одного, не друг у другого".
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS friend_links (
+            user_low TEXT NOT NULL,
+            user_high TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_low, user_high)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы friend_links");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_friend_links_high ON friend_links (user_high)")
+        .execute(&pool)
+        .await
+        .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS friend_requests (
+            id TEXT PRIMARY KEY,
+            requester TEXT NOT NULL,
+            target TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            message TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            responded_at DATETIME
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы friend_requests");
+    // Частичный UNIQUE: одна ЖИВАЯ заявка на пару. Полный UNIQUE запретил бы
+    // повторно попроситься после отказа — то есть отказ работал бы как
+    // вечный бан, чего никто не выбирал.
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pending
+         ON friend_requests (requester, target) WHERE status = 'pending'",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_friend_requests_target
+         ON friend_requests (target, status)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS profile_comments (
+            id TEXT PRIMARY KEY,
+            profile_username TEXT NOT NULL,
+            author TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы profile_comments");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_profile_comments_profile
+         ON profile_comments (profile_username, created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
+    // Автографы ВЕКТОРНЫЕ: paths — JSON со штрихами в синтаксисе SVG path,
+    // а x/y/width/height — ДОЛИ стены, а не пиксели. Поэтому стена одинаково
+    // раскладывается на телефоне и на 5K-мониторе, и рисунок масштабируется
+    // без потери качества. Растр здесь не хранится вообще.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS profile_autographs (
+            id TEXT PRIMARY KEY,
+            profile_username TEXT NOT NULL,
+            author TEXT NOT NULL,
+            paths TEXT NOT NULL,
+            view_box TEXT NOT NULL DEFAULT '0 0 100 100',
+            x REAL NOT NULL DEFAULT 0,
+            y REAL NOT NULL DEFAULT 0,
+            width REAL NOT NULL DEFAULT 0.25,
+            height REAL NOT NULL DEFAULT 0.25,
+            rotation REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at DATETIME
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы profile_autographs");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_profile_autographs_profile
+         ON profile_autographs (profile_username, status)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+
     // Runs last: it rewrites rows in the two conversation-key tables, so both must
     // already exist. Idempotent, so a restart is free once everything is folded.
     match crate::conversation_keys::migrate_scope_casing(&pool).await {
@@ -1321,6 +1532,41 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/diagnostics/decrypt-failure",
             post(report_decrypt_failure),
         )
+        // ---- Профили ----
+        // Порядок важен: axum матчит по дереву, и статические сегменты
+        // (`/api/profile/comments/:id`) должны стоять ДО параметрических
+        // (`/api/profile/:username`), иначе имя пользователя "comments"
+        // перехватит удаление комментария.
+        .route(
+            "/api/profile/comments/:comment_id",
+            axum::routing::delete(delete_profile_comment),
+        )
+        .route("/api/profile/autographs/:autograph_id", post(moderate_autograph))
+        .route("/api/profile/:username", get(get_profile))
+        .route(
+            "/api/profile/:username/comments",
+            get(get_profile_comments).post(create_profile_comment),
+        )
+        .route(
+            "/api/profile/:username/autographs",
+            get(get_autographs).post(create_autograph),
+        )
+        .route(
+            "/api/profile/:username/follow",
+            post(follow_user).delete(unfollow_user),
+        )
+        .route("/api/profile/:username/followers", get(get_followers))
+        .route("/api/profile", put(update_profile))
+        .route(
+            "/api/friends",
+            get(get_friends),
+        )
+        .route("/api/friends/:username", axum::routing::delete(remove_friend))
+        .route(
+            "/api/friends/requests",
+            get(get_friend_requests).post(create_friend_request),
+        )
+        .route("/api/friends/requests/:request_id", post(respond_friend_request))
         .route("/api/coins/balance", get(get_coin_balance))
         .route("/api/coins/distribution", get(get_coin_distribution))
         .route("/api/coins/transfer", post(transfer_coins))
@@ -1423,4 +1669,31 @@ pub async fn run() {
     .with_graceful_shutdown(shutdown_signal())
     .await
     .unwrap();
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::sanitize_allowed_origins;
+
+    #[test]
+    fn null_origin_is_dropped() {
+        let origins = sanitize_allowed_origins("https://msgs.zalikus.org, null ,zali://localhost");
+        assert_eq!(origins, vec!["https://msgs.zalikus.org", "zali://localhost"]);
+    }
+
+    #[test]
+    fn null_is_dropped_case_insensitively() {
+        assert!(sanitize_allowed_origins("NULL,Null").is_empty());
+    }
+
+    #[test]
+    fn empty_entries_do_not_become_origins() {
+        // A trailing comma used to produce an empty string that `HeaderValue`
+        // happily parsed, adding an origin nothing could ever match but that
+        // still sat in the allow-list.
+        assert_eq!(
+            sanitize_allowed_origins("https://msgs.zalikus.org,,"),
+            vec!["https://msgs.zalikus.org"]
+        );
+    }
 }

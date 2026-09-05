@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 import UserNotifications
 
@@ -193,6 +194,33 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     /// so `origin.host` is empty — scope the grant to the main frame only, mirroring
     /// macOS's `requestMediaCapturePermissionFor` (which instead allowlists
     /// localhost/127.0.0.1, since macOS serves over local HTTP rather than file://).
+    /// Origin pin for the app's own web UI — same reasoning as the macOS shell's
+    /// `decidePolicyFor` (see `apps/macos/.../WebView.swift`): the `nativeApp`
+    /// script message handler is handed to whatever document sits in the frame,
+    /// not only to the bundled one, so a single navigation away from the bundle
+    /// would put a remote page in the main frame holding the whole native bridge
+    /// (session token, conversation keys, message sending). This app never needs
+    /// to navigate — the UI is one bundled `file://` document talking to the
+    /// server over the native bridge — so anything else is handed to Safari
+    /// (http/https/mailto/tel) or cancelled outright.
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "file" || scheme == "about" || scheme == "blob" {
+            decisionHandler(.allow)
+            return
+        }
+        if ["http", "https", "mailto", "tel"].contains(scheme) {
+            UIApplication.shared.open(url)
+        }
+        decisionHandler(.cancel)
+    }
+
     func webView(_ webView: WKWebView,
                  requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo,

@@ -484,7 +484,22 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Debounced user search for the contact-add field. Typing "alexander" used
+    // to fire nine searches, one per keystroke, none of them cancelled — so the
+    // suggestion list also flickered through stale results whenever an earlier
+    // response overtook a later one. One request per pause in typing, and
+    // loadUsers() below drops any answer that is no longer the newest.
+    scheduleUserSearch(query, { delayMs = 220, onDone = null } = {}) {
+        const value = String(query || '');
+        if (this._userSearchTimer) clearTimeout(this._userSearchTimer);
+        this._userSearchTimer = setTimeout(() => {
+            this._userSearchTimer = 0;
+            void this.loadUsers(value).then(() => { if (onDone) onDone(); });
+        }, Math.max(0, Number(delayMs) || 0));
+    }
+
     async loadUsers(query = '', { interactive = false } = {}) {
+        const seq = (this._loadUsersSeq = (this._loadUsersSeq || 0) + 1);
         try {
             this.trace(`loadUsers start user=${this.myName()} tokenSet=${!!this.S.session?.token}`);
             if (!this.S.session?.token) {
@@ -493,6 +508,8 @@ ZaliMixin(ZaliInterface, class {
             }
             const search = String(query || '').trim();
             const res = await this.apiFetch(this.apiRoutes.users.search(search), { interactive });
+            // A slower earlier query must never overwrite a newer answer.
+            if (seq !== this._loadUsersSeq) return;
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 this.trace(`loadUsers failed status=${res.status} body=${text.slice(0, 300)}`);
@@ -547,6 +564,10 @@ ZaliMixin(ZaliInterface, class {
                     this.timeStage('loadContacts', () => this.loadContacts()),
                     this.timeStage('loadUsers', () => this.loadUsers()),
                     this.timeStage('loadServers', () => this.loadServers({ silent: true })),
+                    // Заявки в друзья нужны здесь, а не при открытии профиля:
+                    // без них бейдж на своей аватарке остался бы пустым до
+                    // первого захода в профиль, то есть о заявке никто бы не узнал.
+                    this.timeStage('loadFriendRequests', () => this.loadFriendRequests()),
                 ]);
                 await this.timeStage('bootstrapDeviceTrust', () => this.bootstrapDeviceTrust());
                 await this.timeStage('restoreCloudVaultSnapshot', () => this.restoreCloudVaultSnapshot({ reason }));

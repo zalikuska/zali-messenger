@@ -369,7 +369,7 @@ ZaliMixin(ZaliInterface, class {
             || String(m.clientId || '').trim() === id);
         if (index >= 0) arr[index] = { ...arr[index], ...message };
         else arr.push(message);
-        arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+        arr.sort((a, b) => this.compareMessagesByTime(a, b));
         this.saveStoredMessageCache();
         this.trace(`applyCallRecordMessage peer=${peer} direction=${direction} roomId=${callInfo.roomId}`);
         this.renderContacts();
@@ -419,7 +419,7 @@ ZaliMixin(ZaliInterface, class {
             arr[existingIndex] = { ...arr[existingIndex], ...message };
         } else {
             arr.push(message);
-            arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+            arr.sort((a, b) => this.compareMessagesByTime(a, b));
         }
         call.recorded = true;
         this.voice.callTrack = null;

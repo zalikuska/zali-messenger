@@ -102,16 +102,22 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Только "по-настоящему мёртвый" адрес — голый IP прод-сервера на :3000,
+    // оставшийся от эпохи до nginx/TLS (сейчас прод только по HTTPS через
+    // msgs.zalikus.org). localhost/127.0.0.1/[::1] здесь раньше тоже считались
+    // "дефолтными" и на каждой загрузке конфига незаметно подменялись обратно
+    // на прод — именно на эти адреса рассчитана normalizeLocalApiAddress()
+    // ниже (сама дописывает :3000, канонизирует localhost -> 127.0.0.1), так
+    // что кнопка «Сохранить» на экране входа не могла сохранить локальный
+    // адрес НИКОГДА: значение переживало один цикл рендера и тут же
+    // откатывалось на прод при следующем applyNetworkConfigToInputs()/
+    // loadNetworkConfig(). Явно сохранённый через форму адрес теперь всегда
+    // уважается — эвристика восстановления актуальна только для мёртвого
+    // IP-адреса ниже.
     isDefaultableNetworkUrl(value) {
         const raw = String(value || '').trim().toLowerCase();
         if (!raw) return true;
         return (
-            raw.startsWith('http://localhost') ||
-            raw.startsWith('https://localhost') ||
-            raw.startsWith('http://127.0.0.1') ||
-            raw.startsWith('https://127.0.0.1') ||
-            raw.startsWith('http://[::1]') ||
-            raw.startsWith('https://[::1]') ||
             raw.startsWith('http://89.108.76.89:3000') ||
             raw.startsWith('https://89.108.76.89:3000')
         );

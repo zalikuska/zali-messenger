@@ -2,14 +2,28 @@
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+const ZALI_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+const ZALI_ESCAPE_PATTERN = /[&<>"']/g;
+const ZALI_ESCAPE_PROBE = /[&<>"']/;
+
 ZaliMixin(ZaliInterface, class {
 
     // --- HTML Helper Utilities ---
+    // One pass, not five. esc() is called several hundred times per render of the
+    // message list and once per rendered character of every attachment URL that
+    // still reaches it; five chained .replace() calls meant five full regex scans
+    // of every string, and for anything without a special character all five
+    // found nothing. Same output, same escapes, one traversal.
     esc(s) {
         if (s == null) return '';
-        return String(s)
-            .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-            .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+        const value = String(s);
+        // Fast path: the overwhelming majority of strings (names, timestamps,
+        // ids, URLs) contain nothing to escape, and this test bails on the first
+        // character that could matter instead of building a new string.
+        // Two regexes on purpose: a /g/ one carries lastIndex across .test()
+        // calls, which would make every second call lie.
+        if (!ZALI_ESCAPE_PROBE.test(value)) return value;
+        return value.replace(ZALI_ESCAPE_PATTERN, (ch) => ZALI_ESCAPE_MAP[ch]);
     }
 
     ruPlural(n, one, few, many) {
@@ -56,9 +70,23 @@ ZaliMixin(ZaliInterface, class {
         catch(e) { return ''; }
     }
 
-    messageTimestampValue(iso) {
-        const ts = Date.parse(iso || '');
+    // Numbers are handled explicitly, not as an afterthought: the browser
+    // receive path stores `unpacked.timestamp * 1000`, i.e. a number of
+    // milliseconds, while history rows carry an ISO string. Date.parse() of a
+    // number is NaN, so a value-based comparator that only parsed strings would
+    // silently sort every browser-delivered message to the epoch.
+    messageTimestampValue(value) {
+        if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+        const ts = Date.parse(value || '');
         return Number.isFinite(ts) ? ts : 0;
+    }
+
+    // Comparator for chronological message order. Exists so the sort sites stop
+    // writing `new Date(a.timestamp) - new Date(b.timestamp)`, which allocated
+    // two Date objects per comparison — tens of thousands of them per history
+    // merge, all thrown away immediately.
+    compareMessagesByTime(a, b) {
+        return this.messageTimestampValue(a?.timestamp) - this.messageTimestampValue(b?.timestamp);
     }
 
     messageHoverTimeLabel(msg) {

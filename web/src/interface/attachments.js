@@ -41,7 +41,57 @@ ZaliMixin(ZaliInterface, class {
         return `<span class="file-icon" aria-hidden="true">${ext ? this.esc(ext) : ''}</span>`;
     }
 
+    // The URL an attachment is RENDERED with. A `data:` URL is swapped for a
+    // `blob:` one once and reused from then on.
+    //
+    // This is not micro-tuning. The native shells hand attachments to the WebView
+    // as `data:` URLs (WebView.swift makeDataURL / native/util.rs make_data_url),
+    // and that value used to go straight into the message-list HTML. Measured on a
+    // 60-message conversation with 6 MB of photos: the rendered string was 10.5 MB
+    // for 1070 characters of text, all of it base64 — scanned five times by esc()
+    // on the way in and held a second time in _lastMessagesHTML. A `blob:` URL is
+    // ~40 characters, and unlike a data: URL rebuilt from scratch on each
+    // innerHTML write, the browser can reuse the image it already decoded behind
+    // it, so media stops flickering on unrelated re-renders. See
+    // scripts/perf_doctor.
+    //
+    // Called from renderAttachmentPreview() and nowhere else, deliberately: doing
+    // it in normalizeAttachment() would also fire from saveStoredMessageCache(),
+    // which walks EVERY attachment of EVERY conversation and would then hold a
+    // Blob copy of an archive most of which is not on screen and may never be.
+    //
+    // Keyed by the payload string rather than by the attachment object: the same
+    // photo appears as several distinct objects (state, a normalised copy, an
+    // outbox entry), and one decoded copy should serve all of them.
+    attachmentDisplayUrl(rawUrl) {
+        const value = String(rawUrl || '');
+        if (!value.startsWith('data:')) return value;
+        if (!this._attachmentBlobUrls) this._attachmentBlobUrls = new Map();
+        if (!this._attachmentBlobPayloads) this._attachmentBlobPayloads = new Map();
+        const cached = this._attachmentBlobUrls.get(value);
+        if (cached) return cached;
+        const blob = this.dataUrlToBlob(value);
+        if (!blob) return value;
+        let url;
+        try {
+            url = URL.createObjectURL(blob);
+        } catch (e) {
+            return value;
+        }
+        this._attachmentBlobUrls.set(value, url);
+        // Reverse lookup: the native download bridge needs the payload back — see
+        // downloadAttachmentFromHref().
+        this._attachmentBlobPayloads.set(url, value);
+        return url;
+    }
+
     normalizeAttachment(att = {}) {
+        // Already normalised — hand it straight back. renderMessageBody() maps an
+        // array that normalizeAttachments() has just produced, and
+        // renderAttachmentPreview() normalises each element again, so every
+        // attachment was rebuilt (and its sticker-detection regex re-run) one
+        // extra time per bubble per frame.
+        if (att && att.__zaliNormalizedShape === true) return att;
         const mimeType = att.mimeType || att.mime_type || '';
         // Stickers override an incoming `kind` on purpose: a peer that predates
         // .tgs support labels them 'file', and honouring that would render an
@@ -49,19 +99,58 @@ ZaliMixin(ZaliInterface, class {
         const kind = this.isStickerAttachment(att)
             ? 'sticker'
             : (att.kind || this.attachmentKindFor(att) || 'file');
-        return {
+        const dataUrl = att.dataUrl || att.data_url || att.url || '';
+        const normalized = {
             id: att.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             name: att.name || 'attachment',
             mimeType,
             kind,
             size: Number(att.size || 0),
-            dataUrl: att.dataUrl || att.data_url || att.url || '',
+            // The payload. Sending, editing, persistence and the renderer all
+            // read this one; the renderer passes it through
+            // attachmentDisplayUrl() first.
+            dataUrl,
             archivePath: att.archivePath || att.archive_path || '',
         };
+        // Non-enumerable: this object is spread into the persisted cache and into
+        // the native bridge payload, and the marker has no business in either.
+        Object.defineProperty(normalized, '__zaliNormalizedShape', { value: true });
+        return normalized;
     }
 
+    // Memoised against the exact array it was given. Rendering one message calls
+    // this three times — messageHasMedia(), messageIsGifOnly()/
+    // messageIsImageCaption() and renderMessageBody() each normalise the same
+    // attachments independently — so every bubble used to rebuild its attachment
+    // objects and re-run the sticker-detection regex three times per frame.
+    //
+    // The cache is validated, not trusted: it is discarded unless every source
+    // object and every payload string is still the identical reference. That
+    // covers the one in-place mutation that exists (restoreAttachmentPayloads
+    // filling `dataUrl` back in at load time) without needing to know about it.
     normalizeAttachments(attachments) {
-        return Array.isArray(attachments) ? attachments.map(att => this.normalizeAttachment(att)) : [];
+        if (!Array.isArray(attachments)) return [];
+        if (!attachments.length) return [];
+        const cached = attachments.__zaliNormalized;
+        if (cached
+            && cached.raw.length === attachments.length
+            && cached.raw.every((att, i) => att === attachments[i] && cached.payloads[i] === (attachments[i]?.dataUrl || attachments[i]?.data_url || attachments[i]?.url || ''))) {
+            return cached.value;
+        }
+        const value = attachments.map(att => this.normalizeAttachment(att));
+        try {
+            Object.defineProperty(attachments, '__zaliNormalized', {
+                value: {
+                    raw: attachments.slice(),
+                    payloads: attachments.map(att => att?.dataUrl || att?.data_url || att?.url || ''),
+                    value,
+                },
+                writable: true,
+                configurable: true,
+                enumerable: false,
+            });
+        } catch (e) { /* frozen array — just skip the memo */ }
+        return value;
     }
 
     formatFileSize(bytes) {
@@ -270,7 +359,10 @@ ZaliMixin(ZaliInterface, class {
 
     renderAttachmentPreview(att, compact = false, options = {}) {
         const attachment = this.normalizeAttachment(att);
-        const src = this.safeAttachmentUrl(attachment.dataUrl || attachment.url || '');
+        // Through attachmentDisplayUrl(): the payload never belongs in the markup.
+        const src = this.safeAttachmentUrl(
+            this.attachmentDisplayUrl(attachment.dataUrl || attachment.url || ''),
+        );
         const gifLike = !!options.gifLike || attachment.kind === 'gif' || attachment.mimeType === 'image/gif';
         const showControls = options.controls !== undefined ? !!options.controls : !gifLike;
         if (!src) {
@@ -294,8 +386,14 @@ ZaliMixin(ZaliInterface, class {
         if (attachment.kind === 'video' || (attachment.mimeType || '').startsWith('video/')) {
             const shellClass = `discord-media-shell discord-media-shell-video${gifLike ? ' discord-media-shell-gif' : ''}${compact ? ' compact' : ''}`;
             const shellStyle = this.mediaShellStyle(src, { gifLike });
+            // autoplay/loop/muted belong to gif-like clips only. They used to be
+            // set unconditionally, so every ordinary video message in the window
+            // decoded and looped at once, forever, whether or not anyone had
+            // asked it to play — and, being muted by default, an actual video
+            // also started silent. A real video now waits for the play button.
+            const gifPlayback = gifLike ? ' autoplay loop muted' : '';
             return `<div class="${shellClass}"${shellStyle}>
-                <video class="media media-video${compact ? ' compact' : ''}${gifLike ? ' media-gif-like' : ''}" data-gif-like="${gifLike ? '1' : '0'}" src="${this.esc(src)}"${showControls ? ' controls' : ''} autoplay loop muted playsinline preload="${gifLike ? 'auto' : 'metadata'}"></video>
+                <video class="media media-video${compact ? ' compact' : ''}${gifLike ? ' media-gif-like' : ''}" data-gif-like="${gifLike ? '1' : '0'}" src="${this.esc(src)}"${showControls ? ' controls' : ''}${gifPlayback} playsinline preload="${gifLike ? 'auto' : 'metadata'}"></video>
             </div>`;
         }
 

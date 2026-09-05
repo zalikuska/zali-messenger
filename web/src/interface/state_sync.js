@@ -4,6 +4,92 @@
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
+    // Fills the attachment bytes back into a locally cached copy of a message you
+    // sent yourself.
+    //
+    // Reconciling your own message (finalizePendingMessage) matches it by
+    // clientId and stops — right for everything except the payload. After a
+    // reload the local copy has the attachment's name, size and type but no
+    // bytes: a browser tab never had anything to persist (a blob: URL dies with
+    // the page), and a native shell can be running the payload-free cache. The
+    // history row being reconciled against was just downloaded, unpacked and
+    // re-blobbed — it IS the repair, and discarding it left your own photos as
+    // name-only chips for good.
+    //
+    // Only ever fills a gap: a local copy that already has its bytes is left
+    // alone, so this can never replace a payload with a different one.
+    adoptAttachmentPayloads(store, { msgId = '', clientId = '', attachments = [] } = {}) {
+        if (!Array.isArray(store) || !store.length) return false;
+        if (!attachments.length || !attachments.some(att => att.dataUrl)) return false;
+        const id = String(msgId || '').trim();
+        const cid = String(clientId || '').trim();
+        const index = store.findIndex(m => (id && String(m.id || '').trim() === id)
+            || (cid && String(m.clientId || '').trim() === cid));
+        if (index < 0) return false;
+        const local = this.normalizeAttachments(store[index].attachments);
+        if (!local.length || local.some(att => att.dataUrl)) return false;
+        store[index] = { ...store[index], attachments };
+        return true;
+    }
+
+    /**
+     * Единый маршрутизатор WS-событий, общий для браузера и нативных оболочек.
+     *
+     * Зачем он вообще: раньше каждый новый тип события с сервера приходилось
+     * вписывать в четыре места — в ветку onmessage браузера и в аллоулисты
+     * macOS/Windows/Android. Пропустить одно из них ничего не стоило, и ровно
+     * так фичи «выходили на десктопе и молча минова́ли Android». Теперь оболочка
+     * отдаёт нераспознанный кадр как есть (window.receiveRealtimeEvent), а
+     * решает, что с ним делать, только этот метод.
+     *
+     * Неизвестный тип молча игнорируется — это и есть требуемое поведение для
+     * старого клиента, которому прилетело событие из более новой версии сервера.
+     *
+     * @returns {boolean} true, если событие распознано и обработано.
+     */
+    dispatchRealtimeEvent(payload) {
+        if (!payload || typeof payload !== 'object') return false;
+        const type = String(payload.type || '').trim();
+        if (!type) return false;
+
+        if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
+            // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
+            // событие в каждое соединение аккаунта. Голосовой сокет пропускает
+            // только voice_*, так что дублей быть не должно — но реконнект с
+            // повтором кадра стоил бы человеку двух одинаковых уведомлений,
+            // поэтому проверка всё равно дешевле, чем разбирательство потом.
+            if (this.isDuplicateRealtimeEvent(type, payload)) return true;
+            this.handleProfileEvent(payload);
+            return true;
+        }
+
+        this.trace(`realtime event ignored type=${type}`);
+        return false;
+    }
+
+    /**
+     * Окно подавления повторов — 10 секунд по (тип + идентификатор события).
+     * У части событий своего id нет (profile_follow), для них ключом служит
+     * отправитель: два разных подписчика за одну секунду — случай, которого в
+     * жизни не бывает, а вот один и тот же кадр дважды — бывает.
+     */
+    isDuplicateRealtimeEvent(type, payload) {
+        const key = `${type}:${payload?.id || ''}:${payload?.from || ''}:${payload?.wall || ''}`;
+        const now = this.nowMs();
+        if (!this._realtimeEventSeen) this._realtimeEventSeen = new Map();
+        const seen = this._realtimeEventSeen;
+        const previous = seen.get(key);
+        if (previous && now - previous < 10000) return true;
+        seen.set(key, now);
+        // Чистка тут же, по месту: без неё Map рос бы всю сессию.
+        if (seen.size > 200) {
+            for (const [oldKey, ts] of seen) {
+                if (now - ts >= 10000) seen.delete(oldKey);
+            }
+        }
+        return false;
+    }
+
     setUsers(users) {
         this.S.users = Array.isArray(users) ? users : [];
         this.S.users.forEach(contact => this.initChat(contact));
@@ -113,6 +199,7 @@ ZaliMixin(ZaliInterface, class {
                 const clientId = String(msg.clientId || msg.client_id || '').trim();
                 if (clientId && this.finalizePendingMessage(clientId, msgId, { render: false })) {
                     this.dropPendingOutbox(clientId);
+                    this.adoptAttachmentPayloads(arr, { msgId, clientId, attachments: normalizedAttachments });
                     this.markMessageSeen(msg);
                     continue;
                 }
@@ -173,7 +260,7 @@ ZaliMixin(ZaliInterface, class {
             touchedPeers.forEach(peer => {
                 const arr = this.S.chats[peer];
                 if (Array.isArray(arr)) {
-                    arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+                    arr.sort((a, b) => this.compareMessagesByTime(a, b));
                 }
             });
             this.normalizeDmChatStore();
@@ -192,7 +279,7 @@ ZaliMixin(ZaliInterface, class {
                     }
                     const populated = Object.entries(this.S.chats)
                         .filter(([, msgs]) => Array.isArray(msgs) && msgs.length > 0)
-                        .sort((a, b) => new Date(b[1][b[1].length - 1]?.timestamp || 0) - new Date(a[1][a[1].length - 1]?.timestamp || 0));
+                        .sort((a, b) => this.messageTimestampValue(b[1][b[1].length - 1]?.timestamp) - this.messageTimestampValue(a[1][a[1].length - 1]?.timestamp));
                     return populated[0]?.[0] || null;
                 })();
 

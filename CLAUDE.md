@@ -39,13 +39,31 @@ Rules:
 
 ## Production Server
 
+> **Мигрировано 2026-09-05 с `zms` (89.108.76.89) на `ms` (202.181.188.72).** Старый хост перестал
+> быть нашим (SSH-ключ хоста внезапно сменился, доступа больше нет) — переезд был на пустое место,
+> **без переноса данных**: БД, uploads и все аккаунты/переписка на старом сервере остались там и
+> недостижимы. Новый сервер стартовал с нуля 2026-09-05, `zms`/89.108.76.89 нигде больше не
+> используется и не должен упоминаться как прод.
+
 - URL: `https://msgs.zalikus.org`
-- SSH access: `ssh zms`
+- SSH access: `ssh ms`
 - Server repo: https://github.com/zalikuska/zali-messenger-server (branch `zali-server`)
-- Server binary runs at: `/opt/zali-server/server/target/release/zali_server` (moved from `/opt/zali-server/target/release/zali_server` by the 2026-07-12 reorg — that root `Cargo.toml` no longer exists, so the build output now lands under `server/target/`, not `target/`)
-- Env vars: `/etc/zali/zali-server.env` (symlinked to `/opt/zali-server/.env`)
-- **Data dir: `/var/lib/zali`** (from `ZALI_DATA_DIR`) — holds the DB, `uploads/` and `releases/`. **Not** the checkout at `/opt/zali-server`. The `uploads/`/`releases/` directories sitting under `/opt/zali-server` are leftovers from before that variable was set and the server never reads them; a file placed there is simply invisible (confirmed 2026-07-27 when a release artifact 404'd from exactly that mistake). Check with `ssh zms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"`
-- Process management: **systemd unit** `zali-server.service` (`/etc/systemd/system/zali-server.service` on the VPS) — `enabled` (survives reboot) + `Restart=always` (auto-recovers from crashes). Introduced 2026-07-19 after the server was found dead with no panic/OOM in the logs: it had been started via an interactive-SSH `nohup ... &`, and `systemd-logind` killed it along with the login session on disconnect (`nohup`/`disown` don't reliably protect against that). **Do not go back to ad-hoc `nohup`/`pkill` for starting the server** — always use `systemctl` now.
+- Server binary runs at: `/opt/zali-server/server/target/release/zali_server`
+- Env vars: `/etc/zali/zali-server.env` (symlinked to `/opt/zali-server/.env`). `JWT_SECRET` и
+  `RELEASE_ADMIN_TOKEN` — новые, сгенерированы при переезде; старые с `zms` не сохранились и нигде
+  не записаны за пределами этого файла на сервере.
+- **`ms` — общая машина, не выделенная под мессенджер.** На ней уже штатно живут: Minecraft-сервер
+  (`zalismp.service`, Java-процесс с `-Xms=-Xmx=5700M` — держит ~5.7 ГБ памяти постоянно),
+  `velocity.service` (прокси), AdGuard Home в Docker (**занимает порт 3000** — поэтому zali_server
+  слушает `127.0.0.1:3001`, см. `BIND_ADDR` ниже, и nginx проксирует `msgs.zalikus.org` на него) и
+  ещё несколько nginx-вхостов (`mc.zalikus.org`, `msg.zalikus.org`, `videl.zalikus.org`), деливших
+  TLS-сертификат `mc.zalikus.org` (мультидоменный, покрывает и `msgs.zalikus.org`). При памяти впритык
+  (обычно <200 МБ свободно) добавлен постоянный своп-файл `/swapfile_build` (4 ГБ, в `/etc/fstab`) —
+  без него сборка Rust на этой машине рискует спровоцировать OOM-killer, который с высокой
+  вероятностью снесёт именно Java-процесс Minecraft, а не сборку. Собирать релиз здесь можно, но
+  **ограничивать параллелизm** (`CARGO_BUILD_JOBS=2` и меньше) и проверять `free -h` по ходу.
+- **Data dir: `/var/lib/zali`** (from `ZALI_DATA_DIR`) — holds the DB, `uploads/` and `releases/`. **Not** the checkout at `/opt/zali-server`. Check with `ssh ms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"`
+- Process management: **systemd unit** `zali-server.service` (`/etc/systemd/system/zali-server.service` on the VPS) — `enabled` (survives reboot) + `Restart=always` (auto-recovers from crashes). **Do not go back to ad-hoc `nohup`/`pkill` for starting the server** — always use `systemctl`.
 
 ### Deploy process
 
@@ -54,13 +72,13 @@ Rules:
 git push serverrepo main:zali-server
 
 # 2. On VPS: pull, build, restart via systemd
-ssh zms "cd /opt/zali-server && git pull --ff-only origin zali-server"
-ssh zms "cd /opt/zali-server && cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -3"
-ssh zms "systemctl restart zali-server.service"
+ssh ms "cd /opt/zali-server && git pull --ff-only origin zali-server"
+ssh ms "cd /opt/zali-server && env CARGO_BUILD_JOBS=2 cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -3"
+ssh ms "systemctl restart zali-server.service"
 
 # 3. Verify
-ssh zms "sleep 2 && systemctl status zali-server.service --no-pager | head -10"
-ssh zms "readlink -f /proc/\$(pidof zali_server)/exe"   # confirm it's server/target/release/zali_server, not a stale path
+ssh ms "sleep 2 && systemctl status zali-server.service --no-pager | head -10"
+ssh ms "readlink -f /proc/\$(pidof zali_server)/exe"   # confirm it's server/target/release/zali_server, not a stale path
 ```
 
 Logs still land in `/root/zali-server.log` (the unit's `StandardOutput`/`StandardError` append there); `journalctl -u zali-server` also works for systemd-level events (start/stop/restart), but app-level tracing output is only in the log file.
@@ -123,7 +141,7 @@ compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`.
 4. Publish, once per platform (requires `RELEASE_ADMIN_TOKEN` set in the server's env — see `.env.example`;
    unset means this route always 403s). Run the `curl` **on the VPS** so the token never leaves it:
    ```bash
-   ssh zms 'set -a; . /etc/zali/zali-server.env; set +a; curl -X POST https://msgs.zalikus.org/api/version \
+   ssh ms 'set -a; . /etc/zali/zali-server.env; set +a; curl -X POST https://msgs.zalikus.org/api/version \
      -H "Authorization: Bearer $RELEASE_ADMIN_TOKEN" -H "Content-Type: application/json" \
      -d "{\"platform\":\"macos\",\"version\":\"0.2b11\",\"notes\":\"...\",\"downloadUrl\":\"https://msgs.zalikus.org/releases/ZaliMessenger-0.2b11.zip\",\"sha256\":\"<hex>\"}"'
    ```
@@ -147,7 +165,7 @@ compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`.
 - **Скрипт установки исполняет СТАРАЯ версия.** Любой фикс апдейтера начинает действовать только со
   следующего обновления — пользователям на сборке с багом нужен один ручной установ.
 
-> Note: after the 2026-07-12 repo reorg there is no root `Cargo.toml` on the VPS checkout — always pass `--manifest-path server/Cargo.toml` to `cargo build`, and restart from `server/target/release/zali_server`, not `target/release/zali_server`. On 2026-07-12 a deploy silently kept running a week-old binary at the old `target/release/zali_server` path (still present from a prior build) while the freshly built binary sat unused at `server/target/release/zali_server` — `pkill`+`nohup` "succeeded" with no errors and the new code never went live. If in doubt, verify with `ssh zms "readlink -f /proc/\$(pidof zali_server)/exe"` after restart. Consider deleting the stale `/opt/zali-server/target/` directory on the VPS once confirmed unused (ask before doing this — it's a production server path).
+> Note: after the 2026-07-12 repo reorg there is no root `Cargo.toml` on the VPS checkout — always pass `--manifest-path server/Cargo.toml` to `cargo build`, and restart from `server/target/release/zali_server`, not `target/release/zali_server`. On 2026-07-12 a deploy silently kept running a week-old binary at the old `target/release/zali_server` path (still present from a prior build) while the freshly built binary sat unused at `server/target/release/zali_server` — `pkill`+`nohup` "succeeded" with no errors and the new code never went live. If in doubt, verify with `ssh ms "readlink -f /proc/\$(pidof zali_server)/exe"` after restart. Consider deleting the stale `/opt/zali-server/target/` directory on the VPS once confirmed unused (ask before doing this — it's a production server path).
 
 ## Build Commands
 
@@ -491,6 +509,158 @@ native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachme
   (actual OS notification popping) was not observed live — the sandboxed dev browser's
   `Notification.requestPermission()` always resolves `"denied"` with no way to grant it
   programmatically; that's a tooling limitation of this environment, not exercised code.
+
+## Производительность — инварианты, которые нельзя терять
+
+`./scripts/perf_doctor/run.sh` (см. `scripts/perf_doctor/README.md`) проверяет их
+на боевом `ZaliInterface`. Запускать после правок в отрисовке списка сообщений,
+во вложениях, в аватарах и в персисте кэша.
+
+Общий принцип: **цена действия пропорциональна действию, а не размеру всего,
+что уже накоплено в переписке.**
+
+### Двоичные данные не попадают в текстовые пути
+
+Нативные шеллы отдают вложения и аватары в вебвью как `data:`-URL
+(`WebView.swift::makeDataURL`, `native/util.rs::make_data_url`). Такой payload
+обязан быть переведён в `blob:`-ссылку до того, как попадёт в разметку:
+
+- вложения — `attachmentDisplayUrl()`, **только** из `renderAttachmentPreview()`.
+  Не переносить вызов в `normalizeAttachment()`: её зовёт ещё и
+  `saveStoredMessageCache()`, который обходит вложения **всех** переписок, и
+  тогда клиент держал бы декодированную копию архива, которого никто не видел;
+- аватары — `saveStoredAvatar()`, единственная точка входа в `avatarCache`.
+
+До 2026-09-05 этого не было: кадр списка на диалоге из 60 сообщений с 6 МБ фото
+занимал 10,5 МБ строки при 1070 символах текста, из них 2,5 МБ — тридцать копий
+одного аватара; вся эта строка проходила через `esc()` (пять regex-проходов =
+52 МБ сканирования) и оседала второй копией в `_lastMessagesHTML`.
+
+**Ссылка в разметке больше не является полезной нагрузкой.** Нативному мосту
+сохранения (`DOWNLOAD_ATTACHMENT`) нужен именно payload — обратный поиск живёт
+в `_attachmentBlobPayloads` и используется в `downloadAttachmentFromHref()`.
+Сломать его = молча свалиться в браузерный путь `<a download>`, который
+WKWebView и WebView2 не исполняют.
+
+### Персист кэша сообщений
+
+- **Детектор изменений — сериализация БЕЗ payload-ов.** Байты вложения
+  неизменны: сообщение с другим набором вложений — это другое сообщение, с
+  другими id и размерами, а они в этой строке есть. Полный `JSON.stringify`
+  архива ради сравнения стоил ~9 мс на каждое сохранение, включая те, что
+  ничего не меняют.
+- **В `localStorage` payload-ы пишутся только там, где их больше негде
+  хранить.** `messageCachePayloadsHeldElsewhere()`: на macOS есть нативный
+  кэш-файл (`saveMessageCache`), в браузере `blob:`-ссылка всё равно мертва
+  после перезагрузки. Windows/iOS/Android нативного кэша **не имеют** —
+  там payload-ы хранятся, пока влезают в квоту.
+- **Отказ по квоте фиксируется против той строки, на которой произошёл.**
+  Раньше `catch` сбрасывал `_lastSavedMessageCacheJson = null`, и каждое
+  следующее сообщение заново пересобирало весь архив, заново падало и заново
+  копировало всё в мост: 80 МБ за десять сообщений, до конца сессии. Это и
+  выглядело как «со временем начинает тормозить».
+- **`saveInjectedMessageCache()` кладёт объект, а не строку.**
+  `loadInjectedMessageCache()` принимает оба вида, а `JSON.stringify` здесь был
+  второй полной сериализацией архива на каждое сохранение.
+- **`adoptAttachmentPayloads()`** — единственное, что берётся из входящей копии
+  при сверке собственного отправленного сообщения. Без него после перезагрузки
+  свои же фотографии навсегда оставались чипом с именем файла.
+
+### Путь отправки
+
+Между Enter и появлением пузырька не должно быть ни одного `await`, когда ключ
+разговора уже есть на устройстве: `getStoredConversationKey()` синхронный,
+`resolveConversationCryptoKey()` вызывается без ожидания ради своих побочных
+эффектов. Сохранение кэша на этом пути — только `scheduleSaveStoredMessageCache()`.
+
+### Отрисовка
+
+- `esc()` — один проход по строке, а не пять. Проверяется поведением в
+  `security_doctor` (`check_web.mjs`), не формой записи.
+- `normalizeAttachments()` мемоизируется на массиве-источнике и инвалидируется
+  по идентичности объектов и payload-строк; `normalizeAttachment()` возвращает
+  уже нормализованный объект как есть.
+- Видео: `autoplay loop muted` — только для гифкоподобных вложений, и
+  `IntersectionObserver` обязан **симметрично** ставить на паузу за экраном
+  (эталон — `modules/tgs.js`).
+- Отчёты о неудачной расшифровке уходят из кадра отрисовки через
+  `queueDecryptFailureReport()`; вся пачка делит один запрос
+  `fetchCanonicalKeyIds(..., { allowCached: true })`.
+- Мобильный `backdrop-filter` вынесен в токен `--m-glass` и снимается на время
+  жеста (`body.mobile-nav-dragging`); `will-change: transform` ставится только
+  на время жеста, а не навсегда.
+
+## Безопасность — инварианты, которые нельзя терять
+
+`./scripts/security_doctor/run.sh` (см. `scripts/security_doctor/README.md`) проверяет их
+статически, `tests/security.rs` — поведением. Запускать после правок в нативных шеллах,
+в `server/src/auth.rs` и в рендеринге веб-UI.
+
+### Origin pin: чужая страница не должна попасть на нативный мост
+
+Нативный мост привязан к **вебвью, а не к документу**: `window.webkit.messageHandlers`
+(macOS/iOS), `window.ipc` (WebView2/WRY) и `addJavascriptInterface` (Android) достаются
+любой странице, оказавшейся во фрейме. Через мост доступны токен сессии, ключи
+разговоров, отправка сообщений и запись на диск. Поэтому в каждом шелле навигация
+ограничена собственным документом, а всё остальное уходит в ОС:
+
+| Шелл | Где | Что разрешено во фрейме |
+|---|---|---|
+| macOS | `WebView.swift` → `decidePolicyFor` + `isAppOriginURL` | `http://localhost`, `about:`, `blob:` |
+| iOS | `WebView.swift` → `decidePolicyFor` | `file:` (бандл), `about:`, `blob:` |
+| Android | `MainActivity.kt` → `shouldOverrideUrlLoading` + `isBundledOrigin` | `file:///android_asset/web/` |
+| Windows/Rust | `main.rs` → `with_navigation_handler` + `with_new_window_req_handler` | `zali://localhost`, `https://zali.localhost` |
+
+**Политика запрещает по умолчанию.** Правило, которое перечисляет плохое и падает в
+`allow`, не пинит ничего. `http/https/mailto/tel` отдаются системному браузеру
+(`NSWorkspace` / `UIApplication` / `Intent.ACTION_VIEW` / `open_external_url`),
+остальное отменяется.
+
+> До 2026-08-22 навигация не была ограничена нигде. На Android хватало обычной ссылки
+> в сообщении: `openExternalLink` там no-op (нет capability `openExternalUrl`), поэтому
+> тап уводил вебвью на страницу атакующего вместе с `ZaliAndroidBridge`.
+
+Там же: доступ к камере/микрофону выдаётся только главному фрейму известного origin, а
+на Android — ещё и по списку ресурсов (`request.grant(request.resources)` выдавал что
+попросят и кому попросят).
+
+### Учётные данные
+
+- **JWT не принимается из query-строки.** Query попадает в логи обратного прокси,
+  историю браузера и `Referer`, а токен живёт 7 дней. Для WS есть одноразовый тикет
+  (`/api/auth/ws-ticket`, 30 секунд, сгорает при первом использовании) — он существует
+  ровно потому, что браузер не может поставить `Authorization` на WS-хендшейк.
+- **Два независимых бюджета логина.** По (логин, IP) — против подбора пароля к одному
+  аккаунту. По IP отдельно и **только по неудачам** — против password spray по списку
+  логинов, который первый бюджет не видит вообще (каждая попытка в своей корзине), а
+  список аккаунтов и так отдаётся любому залогиненному через `/api/users`.
+- **Длина пароля не логируется.**
+- `ALLOW_GUEST_MODE=true` — это не «упрощённый вход», а отключение аутентификации:
+  любой запрос без токена выполняется от имени `Zalikus`. Сервер пишет об этом
+  предупреждение при каждом старте. В `.env.example` значение по умолчанию было `true`
+  до 2026-08-22 — проверьте `/etc/zali/zali-server.env` на боевом сервере.
+- `null` в `ALLOWED_ORIGINS` отфильтровывается на старте: это origin песочничного
+  iframe, `data:`- и `file:`-документа, а CORS работает с `allow_credentials(true)`.
+  В `.env.example` он тоже стоял.
+
+### Секреты на сервере
+
+Сервер **не хранит ключей переписок**. Реестр (`conversation_key_registry`) держит
+SHA-256-отпечаток, а не ключ. Легаси-таблица `conversation_keys` с колонкой `key_value`
+(настоящий AES-ключ, открытым текстом, рядом с шифротекстом, который он открывает)
+теперь **удаляется** при старте, а не просто не используется: неиспользуемая таблица
+всё равно читаемая.
+
+### Что остаётся незакрытым (осознанно)
+
+- **Релизы не подписаны.** Клиент проверяет SHA-256, но сумма приходит из того же
+  ответа `/api/version`, что и ссылка: компрометация сервера = RCE на всех десктопах.
+  Лечится подписью манифеста офлайн-ключом, вшитым в клиенты.
+- **Нет аутентичности отправителя.** `sender` проставляет сервер из JWT, подписи
+  сообщений ключом устройства нет — скомпрометированный сервер может подменить автора
+  (прочитать текст по-прежнему не может).
+- **CSP для standalone-веба.** `msg.zalikus.org` раздаёт nginx, `security_headers` из
+  этого репозитория к нему не применяются.
 
 ## Приоритеты при исправлении багов
 

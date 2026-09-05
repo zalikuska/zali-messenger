@@ -100,6 +100,22 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
             }
         }
 
+        // 3. Single-use WS ticket in the query string.
+        //
+        // Only the ticket is accepted here, never the JWT itself. A query string
+        // is the one place a credential must not be: it is written verbatim into
+        // the reverse proxy's access log, kept in browser history, and forwarded
+        // in `Referer` — and this JWT is a 7-day full-account bearer credential,
+        // so one log line is a week of account takeover. The ticket exists
+        // precisely because a browser cannot set `Authorization` on a WebSocket
+        // handshake: it is single-use, expires in 30 seconds, and is consumed
+        // by `take_valid_ws_ticket` on first sight.
+        //
+        // `token`/`auth`/`access_token` used to be accepted here too. No client in
+        // this repo has ever sent them (macOS, Windows, Android, iOS and the
+        // browser build all use the header, the cookie or a ticket), so this is
+        // removal of an unused path, not a behaviour change — see
+        // tests/security.rs::jwt_in_query_string_is_rejected.
         if let Some(query) = parts.uri.query() {
             for pair in query.split('&') {
                 if let Some((key, value)) = pair.split_once('=') {
@@ -109,16 +125,6 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
                         }
                         warn!("Получен невалидный ws-ticket");
                         return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
-                    }
-                    if matches!(key, "token" | "auth" | "access_token") && !value.trim().is_empty()
-                    {
-                        match validate_token(value, state).await {
-                            Ok(username) => return Ok(AuthenticatedUser(username)),
-                            Err(_) => {
-                                warn!("Получен невалидный JWT-token из query");
-                                return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
-                            }
-                        }
                     }
                 }
             }
@@ -405,11 +411,12 @@ pub(crate) async fn register(
         attempts.push_back(now);
     }
 
-    info!(
-        "Попытка регистрации: username='{}', password_len={}",
-        payload.username,
-        payload.password.len()
-    );
+    // Deliberately no password_len here (nor in the rejection branches below).
+    // The exact length of a rejected-then-corrected password, sitting next to the
+    // username in a log file that is read casually while debugging, is a real
+    // narrowing of that account's search space and buys nothing diagnostically —
+    // "too short" is already conveyed by the response.
+    info!("Попытка регистрации: username='{}'", payload.username);
 
     if payload.username.trim().is_empty() || payload.password.is_empty() {
         warn!("Регистрация отклонена: пустой логин или пароль");
@@ -448,9 +455,8 @@ pub(crate) async fn register(
 
     if payload.password.len() < 6 {
         warn!(
-            "Регистрация отклонена: username '{}' использует слишком короткий пароль ({} символов)",
-            username,
-            payload.password.len()
+            "Регистрация отклонена: username '{}' использует слишком короткий пароль",
+            username
         );
         return (
             StatusCode::BAD_REQUEST,
@@ -546,6 +552,7 @@ pub(crate) async fn login(
     let rate_key = login_rate_key(client_ip, &payload.username);
     let window = Duration::from_secs(state.config.rate_limit_window_secs);
     let max_attempts = state.config.rate_limit_max_attempts;
+    let max_failed_per_ip = state.config.rate_limit_max_failed_per_ip;
     let now = Instant::now();
     // Sweeping every key in the map on every single login request is pure overhead —
     // the per-key retain() just below already keeps this request's own rate-limit
@@ -584,6 +591,44 @@ pub(crate) async fn login(
         attempts.push_back(now);
     }
 
+    // Second, independent budget keyed on the IP alone.
+    //
+    // The bucket above is keyed on (username, IP), which throttles guessing *one*
+    // account's password and nothing else: an attacker walking one common password
+    // across every username lands in a different bucket on every request and is
+    // never slowed down. `/api/users` hands out the account list to any logged-in
+    // user, so that list is not a secret either. This bucket counts only *failed*
+    // attempts, so someone signing in to their own accounts is unaffected no
+    // matter how often, while a spray run stops after `max_failed_per_ip` misses.
+    let ip_rate_key = failed_login_ip_rate_key(client_ip);
+    {
+        let mut failures = state.login_attempts.entry(ip_rate_key.clone()).or_default();
+        failures.retain(|t| now.duration_since(*t) < window);
+        if failures.len() >= max_failed_per_ip {
+            warn!(
+                "Rate limit exceeded: слишком много неудачных входов с ip={}",
+                client_ip
+            );
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Слишком много неудачных попыток. Повторите через {} секунд.",
+                    state.config.rate_limit_window_secs
+                ),
+            )
+                .into_response();
+        }
+    }
+
+    // Records one miss against the per-IP budget. Called on every path that
+    // answers "неверный логин или пароль", including the unknown-username one —
+    // otherwise enumerating names would be the free way around the budget.
+    let note_failure = || {
+        let mut failures = state.login_attempts.entry(ip_rate_key.clone()).or_default();
+        failures.retain(|t| now.duration_since(*t) < window);
+        failures.push_back(now);
+    };
+
     let row =
         sqlx::query(
             "SELECT username, password_hash, token_version, cloud_vault_sync_enabled FROM users WHERE username = ?",
@@ -607,6 +652,7 @@ pub(crate) async fn login(
                 }
             };
             if !valid {
+                note_failure();
                 warn!("Неверный пароль для пользователя '{}'", payload.username);
                 return (StatusCode::UNAUTHORIZED, "Неверный логин или пароль").into_response();
             }
@@ -636,6 +682,7 @@ pub(crate) async fn login(
         }
         Ok(None) => {
             let _ = verify_password(payload.password.clone(), DUMMY_BCRYPT_HASH.to_string()).await;
+            note_failure();
             (StatusCode::UNAUTHORIZED, "Неверный логин или пароль").into_response()
         }
         Err(e) => {
@@ -677,4 +724,11 @@ pub(crate) fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) ->
 pub(crate) fn login_rate_key(ip: std::net::IpAddr, username: &str) -> String {
     let username = username.trim().to_lowercase();
     format!("{}|{}", username, ip)
+}
+
+/// Key for the per-IP failed-login budget. Prefixed so it can never collide with
+/// a `login_rate_key` — a username of `"failed-ip"` would otherwise share a
+/// bucket with every failure from the same address.
+pub(crate) fn failed_login_ip_rate_key(ip: std::net::IpAddr) -> String {
+    format!("failed-ip:{}", ip)
 }

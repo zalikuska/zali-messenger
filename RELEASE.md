@@ -10,7 +10,7 @@
 
 | Что | Где |
 |---|---|
-| Прод-сервер | `https://msgs.zalikus.org`, SSH-алиас `zms` |
+| Прод-сервер | `https://msgs.zalikus.org`, SSH-алиас `ms` |
 | Репозиторий кода | `origin` → `git@github.com:zalikuska/zali-messenger.git` |
 | Репозиторий сервера | `serverrepo` → `git@github.com:zalikuska/zali-messenger-server.git`, ветка `zali-server` |
 | Чекаут на VPS | `/opt/zali-server` |
@@ -32,21 +32,21 @@ git push serverrepo main:zali-server
 ```
 
 ```bash
-ssh zms "cd /opt/zali-server && git pull --ff-only origin zali-server"
+ssh ms "cd /opt/zali-server && git pull --ff-only origin zali-server"
 ```
 
 ```bash
-ssh zms "cd /opt/zali-server && cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -5"
+ssh ms "cd /opt/zali-server && cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -5"
 ```
 
 ```bash
-ssh zms "systemctl restart zali-server.service"
+ssh ms "systemctl restart zali-server.service"
 ```
 
 Проверка — обязательно смотреть на реальный путь бинарника, а не только на статус:
 
 ```bash
-ssh zms "sleep 3 && systemctl status zali-server.service --no-pager | head -8 && readlink -f /proc/\$(pidof zali_server)/exe"
+ssh ms "sleep 3 && systemctl status zali-server.service --no-pager | head -8 && readlink -f /proc/\$(pidof zali_server)/exe"
 ```
 
 Должно вывести `/opt/zali-server/server/target/release/zali_server`. Если путь
@@ -198,7 +198,7 @@ Windows публикуется как «голый» `.exe`, zip ему не н�
 Штатное место — публичный роут `/releases/:filename`:
 
 ```bash
-scp <файл> zms:/var/lib/zali/releases/
+scp <файл> ms:/var/lib/zali/releases/
 ```
 
 Каталог создаётся сервером при старте. Ссылка для `downloadUrl` будет вида
@@ -211,7 +211,7 @@ scp <файл> zms:/var/lib/zali/releases/
 > Проверить актуальное значение:
 >
 > ```bash
-> ssh zms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"
+> ssh ms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"
 > ```
 
 > **Не используйте `/uploads/:filename`**, вопреки тому что написано в

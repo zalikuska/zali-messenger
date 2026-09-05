@@ -147,6 +147,13 @@
     window.receiveVoiceEvent = function(payload) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.VOICE_EVENT || 'voice_event'}`, payload);
     };
+    // Общий приёмник WS-кадров от нативной оболочки. Оболочка зовёт его для
+    // всего, что не разобрала сама, и передаёт кадр как есть — разбор целиком
+    // на стороне JS (dispatchRealtimeEvent). Так новый тип события с сервера
+    // не требует правок в macOS/Windows/Android по отдельности.
+    window.receiveRealtimeEvent = function(payload) {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.REALTIME_EVENT || 'realtime_event'}`, payload);
+    };
     window.setUsers = function(users) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.SET_USERS || 'set_users'}`, users);
     };

@@ -284,13 +284,22 @@ ZaliMixin(ZaliInterface, class {
         return out;
     }
 
-    async fetchCanonicalKeyIds(scopes = []) {
+    // `allowCached` is opt-in and deliberately off by default: every other caller
+    // uses this to decide whether a local key is a fork, and a stale answer there
+    // is worse than a request. It exists for the decrypt-failure reporter, which
+    // asks about the same scope once per undecryptable message on screen — one
+    // batched lookup up front, then cache hits for the rest of the batch.
+    async fetchCanonicalKeyIds(scopes = [], { allowCached = false } = {}) {
         const list = Array.from(new Set(
             (Array.isArray(scopes) ? scopes : [scopes])
                 .map(scope => String(scope || '').trim())
                 .filter(Boolean)
         )).slice(0, 200);
         if (!list.length || !this.S.session?.token) return new Map();
+        if (allowCached) {
+            const cache = this.canonicalKeyIdCache();
+            if (list.every(scope => cache.has(scope))) return cache;
+        }
         try {
             const res = await this.apiFetch(this.apiRoutes.conversationKeys.lookup(list.join(',')), { includeDeviceId: true });
             if (!res.ok) throw new Error(await res.text().catch(() => 'lookup failed'));

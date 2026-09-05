@@ -190,6 +190,22 @@ const DefaultApiRoutes = Object.freeze({
         invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
         permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
     },
+    profiles: {
+        byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
+        update: apiRoute('/profile'),
+        comments: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/comments`),
+        comment: (id) => apiRoute(`/profile/comments/${encodeURIComponent(id)}`),
+        autographs: (username, status = 'approved') => apiRoute(`/profile/${encodeURIComponent(username)}/autographs?status=${encodeURIComponent(status)}`),
+        autographModeration: (id) => apiRoute(`/profile/autographs/${encodeURIComponent(id)}`),
+        follow: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/follow`),
+        followers: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/followers`),
+    },
+    friends: {
+        list: apiRoute('/friends'),
+        byUsername: (username) => apiRoute(`/friends/${encodeURIComponent(username)}`),
+        requests: apiRoute('/friends/requests'),
+        request: (id) => apiRoute(`/friends/requests/${encodeURIComponent(id)}`),
+    },
     coins: {
         balance: apiRoute('/coins/balance'),
         distribution: apiRoute('/coins/distribution'),
@@ -242,6 +258,9 @@ const DefaultApiRoutes = Object.freeze({
  *   notifications.js        455 /  24  Мьюты, звуки, уведомления, бейдж непрочитанного.
  *   state_sync.js           529 /  15  Приём состояния от нативного слоя: пользователи, история, статус связи.
  *   message_edit.js         376 /  15  Ответы, редактирование и удаление сообщений.
+ *   profiles.js             470 /  25  Профили людей: состояние, подписки, дружба, комментарии.
+ *   profile_ui.js           520 /  20  Отрисовка профиля: шапка, вкладки, редактор, модерация.
+ *   autographs.js           420 /  20  Векторная стена автографов: рисование, публикация, модерация.
  *   diagnostics.js          157 /   5  Журнал диагностики и голосовая телеметрия.
  *   events.js              1651 /  16  Привязка DOM-событий и инерция прокрутки.
  */
@@ -263,6 +282,8 @@ class ZaliInterface {
             stateSlices.messaging?.createState?.() || {},
             stateSlices.servers?.createState?.() || {},
         );
+        // Профиль лежит отдельным срезом состояния — см. interface/profiles.js.
+        this.S.profile = ZaliInterface.emptyProfileState;
         this.tenorCache = new Map();
         this.tenorPending = new Set();
         this.nativeAuthRequests = new Map();
@@ -370,7 +391,8 @@ class ZaliInterface {
         this._historyPrimedChannels = new Set();
         this.uiV2Enabled = this.loadUiV2Enabled();
         this.uiV2Segments = this.loadUiV2Segments();
-        this.experimentalDesign = this.loadExperimentalDesign();
+        this.designMode = this.loadDesignMode();
+        this.experimentalDesign = this.designMode === 'flat';
         this.voiceTraceEnabled = this.loadVoiceTraceEnabled();
     }
 
@@ -410,6 +432,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.MESSAGE_DELETED || 'message_deleted', (data) => this.onMessageDeleted(data));
         this.bus.registerCommand('zali_interface', E.MESSAGE_EDITED || 'message_edited', (data) => this.onMessageEdited(data));
         this.bus.registerCommand('zali_interface', E.AVATAR_UPDATED || 'avatar_updated', (data) => this.handleAvatarUpdated(data));
+        this.bus.registerCommand('zali_interface', E.REALTIME_EVENT || 'realtime_event', (data) => this.dispatchRealtimeEvent(data));
         this.bus.registerCommand('zali_interface', E.TENOR_RESOLVED || 'tenor_resolved', (payload) => this.onTenorResolved(payload));
         this.bus.registerCommand('zali_interface', E.AUTH_RESPONSE || 'auth_response', (payload) => this.onNativeAuthResponse(payload));
         this.bus.registerCommand('zali_interface', E.NATIVE_RESPONSE || 'native_response', (payload) => this.onNativeResponse(payload));

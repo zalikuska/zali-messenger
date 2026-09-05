@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260726-rev15">
+    <link rel="stylesheet" href="style.css?v=20260822-rev16">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -86,7 +86,10 @@
                     </div>
                 </div>
                 <div class="me">
-                    <div class="ava me-ava" id="meAva">Z</div>
+                    <button class="me-ava-btn" id="meAvaBtn" type="button" title="Мой профиль: редактирование и приглашения в друзья" aria-label="Мой профиль">
+                        <div class="ava me-ava" id="meAva">Z</div>
+                        <span class="me-friend-badge" id="meFriendBadge" hidden>0</span>
+                    </button>
                     <div class="me-info">
                         <div class="me-name" id="meName">Не вошли</div>
                         <div class="me-sub" id="meSub"><span class="online-dot"></span> В сети</div>
@@ -303,18 +306,13 @@
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Тема интерфейса</span>
-                                        <h3 class="settings-card-title">Плоский режим</h3>
+                                        <h3 class="settings-card-title">Стиль оформления</h3>
                                     </div>
-                                    <span class="settings-card-note">flat</span>
+                                    <span class="settings-card-note">design</span>
                                 </div>
                                 <div class="settings-stack">
-                                    <label class="server-toggle settings-toggle">
-                                        <input id="inputExperimentalDesign" type="checkbox">
-                                        <span>
-                                            <strong>Включить плоский режим</strong>
-                                            <small>Тот же интерфейс, но без градиентов и свечений — матовые поверхности</small>
-                                        </span>
-                                    </label>
+                                    <div class="design-mode-options" id="designModeOptions"></div>
+                                    <p class="settings-help">Цветовая схема, шрифты и вся логика приложения не меняются — переключается только оформление. Выбор сохраняется на этом устройстве.</p>
                                 </div>
                             </section>
 
@@ -523,6 +521,15 @@
                 <button class="btn-flat" id="updateModalDeclineBtn" type="button">Позже</button>
                 <button class="auth-btn primary" id="updateModalAcceptBtn" type="button">Обновить</button>
             </div>
+        </div>
+    </div>
+
+    <div class="profile-overlay" id="profileOverlay" hidden>
+        <div class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalName">
+            <button class="profile-close" id="profileCloseBtn" type="button" aria-label="Закрыть профиль">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            </button>
+            <div class="profile-body" id="profileBody"></div>
         </div>
     </div>
 
@@ -843,9 +850,11 @@
 
             <div class="server-modal-error" id="serverModalError"></div>
             <div class="server-modal-actions">
-                <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
                 <button class="btn-flat server-delete-btn" id="serverDeleteBtn" type="button" hidden>Удалить сервер</button>
-                <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
+                <div class="server-modal-actions-right">
+                    <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
+                    <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
+                </div>
             </div>
         </div>
     </div>
@@ -886,6 +895,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260726-rev15"></script>
+    <script src="app.js?v=20260822-rev16"></script>
 </body>
 </html>

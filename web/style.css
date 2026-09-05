@@ -2529,6 +2529,15 @@ body[data-nav-mode="servers"] .contacts {
     pointer-events: none;
 }
 
+#viewChat .input-bar {
+    width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
 .settings-topbar {
     justify-content: space-between;
     align-items: flex-start;
@@ -2565,22 +2574,23 @@ body[data-nav-mode="servers"] .contacts {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: var(--control-h-sm);
-    padding: 0 12px;
+    min-height: 40px;
+    padding: 0 16px;
     border: 1px solid var(--border);
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    border-radius: 10px;
+    background: rgba(255,255,255,.05);
     color: var(--text);
     cursor: pointer;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 6px 18px rgba(0,0,0,.14);
+    box-shadow: none;
     line-height: 1;
-    transition: transform .18s var(--ease-out), border-color .18s var(--ease-out), box-shadow .18s var(--ease-out), background .18s var(--ease-out);
+    font-weight: 700;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .hdr-btn:hover,
 .btn-flat:hover {
     border-color: var(--lime);
-    box-shadow: 0 0 0 2px rgba(var(--accent-rgb),.08);
+    background: rgba(255,255,255,.08);
 }
 
 .settings-body {
@@ -4401,7 +4411,7 @@ body[data-nav-mode="servers"] .contacts {
 .server-modal-actions {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 10px;
     padding: 12px 0 0;
     margin-top: auto;
@@ -4417,8 +4427,17 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 40px;
 }
 
+.server-modal-actions-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .server-delete-btn {
     color: var(--red);
+    background: transparent;
+    border: 0;
+    box-shadow: none;
 }
 
 .settings-help {
@@ -6411,57 +6430,45 @@ body[data-nav-mode="servers"] .contacts {
 .auth-overlay.visible .auth-form > *:nth-child(6) { animation-delay: .25s; }
 .auth-overlay.visible .auth-form > *:nth-child(7) { animation-delay: .29s; }
 
-.contacts .contact:nth-child(1),
-.msgs .msg:nth-child(1),
 .settings-shell > .settings-card:nth-child(1),
 .settings-theme-grid .btn-theme:nth-child(1),
 .draft-attachments .draft-att:nth-child(1) { animation-delay: .02s; }
 
-.contacts .contact:nth-child(2),
-.msgs .msg:nth-child(2),
 .settings-shell > .settings-card:nth-child(2),
 .settings-theme-grid .btn-theme:nth-child(2),
 .draft-attachments .draft-att:nth-child(2) { animation-delay: .05s; }
 
-.contacts .contact:nth-child(3),
-.msgs .msg:nth-child(3),
 .settings-shell > .settings-card:nth-child(3),
 .settings-theme-grid .btn-theme:nth-child(3),
 .draft-attachments .draft-att:nth-child(3) { animation-delay: .08s; }
 
-.contacts .contact:nth-child(4),
-.msgs .msg:nth-child(4),
 .settings-shell > .settings-card:nth-child(4),
 .settings-theme-grid .btn-theme:nth-child(4),
 .draft-attachments .draft-att:nth-child(4) { animation-delay: .11s; }
 
-.contacts .contact:nth-child(5),
-.msgs .msg:nth-child(5),
 .settings-shell > .settings-card:nth-child(5),
 .settings-theme-grid .btn-theme:nth-child(5),
 .draft-attachments .draft-att:nth-child(5) { animation-delay: .14s; }
 
-.contacts .contact:nth-child(6),
-.msgs .msg:nth-child(6),
 .settings-shell > .settings-card:nth-child(6),
 .settings-theme-grid .btn-theme:nth-child(6),
 .draft-attachments .draft-att:nth-child(6) { animation-delay: .17s; }
 
-.contacts .contact:nth-child(7),
-.msgs .msg:nth-child(7),
 .settings-shell > .settings-card:nth-child(7),
 .settings-theme-grid .btn-theme:nth-child(7),
 .draft-attachments .draft-att:nth-child(7) { animation-delay: .20s; }
 
-.contacts .contact:nth-child(8),
-.msgs .msg:nth-child(8),
 .settings-shell > .settings-card:nth-child(8),
 .settings-theme-grid .btn-theme:nth-child(8),
 .draft-attachments .draft-att:nth-child(8) { animation-delay: .23s; }
 
-.contacts .contact {
-    animation-delay: 0s;
-}
+/* NB: .contact and .msg deliberately carry no entrance animation — both lists
+   are rebuilt wholesale with innerHTML, so a per-item entrance would re-fire on
+   every row each time anything changed. The staggered animation-delay rules
+   above therefore list only the elements that actually animate; .msg/.contact
+   were still in that selector list long after their animation was removed,
+   which cost a :nth-child match against every bubble on every style recalc for
+   nothing. */
 
 @keyframes shimmer {
     to {
@@ -6835,7 +6842,7 @@ body[data-nav-mode="servers"] .contacts {
            .12s once parking (once scheduleMobileListPark() confirms the
            chat has fully covered the list again). */
         transition: transform .12s ease-out, box-shadow .12s var(--ease-out);
-        will-change: transform;
+        /* See #viewChat below: promoted per gesture, not permanently. */
     }
 
     body.mobile-list-visible .sidebar {
@@ -6848,6 +6855,12 @@ body[data-nav-mode="servers"] .contacts {
     body.mobile-nav-instant .mobile-dock,
     body.mobile-nav-dragging .mobile-dock {
         transition: none;
+    }
+
+    body.mobile-nav-dragging #viewChat,
+    body.mobile-nav-dragging .mobile-dock,
+    body.mobile-nav-dragging .sidebar {
+        will-change: transform;
     }
 
     .main {
@@ -6871,7 +6884,12 @@ body[data-nav-mode="servers"] .contacts {
            for why this isn't calc(var(--mnav)) driven. */
         transform: translateX(0);
         transition: transform .24s cubic-bezier(.2,.8,.2,1);
-        will-change: transform;
+        /* Promoted only while a gesture is actually driving the transform.
+           A permanent will-change keeps a full-screen composited layer alive
+           for the whole session — two of them, with .sidebar below — which on
+           a phone is GPU memory spent on something that moves for a quarter of
+           a second at a time. The running .24s transition promotes the element
+           by itself. */
     }
 
     .mobile-backdrop {
@@ -7648,6 +7666,28 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         --m-surface: #0c0f14;
         --m-surface-2: #12161d;
         --m-hairline: rgba(255,255,255,.07);
+        /* The frosted material behind the sticky app-bar and the docked input.
+           A token, not four copies of a literal, because it has to be switched
+           off in one place while the push-nav gesture runs — see below.
+
+           Was blur(18px) saturate(160%). Both halves cost per frame, and unlike
+           the desktop panels these two sit over a list that is *moving*: a
+           backdrop filter is recomputed whenever what is behind it changes, so
+           on mobile that is twice per scroll frame, full screen width. The
+           saturate() pass is dropped outright (it is composited on top of the
+           app's own near-monochrome background, where it reads as almost
+           nothing) and the radius is trimmed; the material still reads as
+           frosted glass. */
+        --m-glass: blur(12px);
+    }
+
+    /* During the back-swipe #viewChat is being translated with both frosted
+       surfaces inside it, so every frame of the drag re-blurs a full-width
+       strip against content that is itself moving — the single most expensive
+       thing the client does on a phone. The gesture is the one moment the
+       material is not being looked at, so drop it for the duration. */
+    body.mobile-nav-dragging {
+        --m-glass: none;
     }
 
     /* ── Kill desktop chrome: the global titlebar is replaced by per-screen
@@ -7716,8 +7756,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         padding: calc(var(--m-safe-top) + 8px) 16px 8px;
         margin: 0;
         background: color-mix(in srgb, var(--bg) 88%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
         border-bottom: 1px solid var(--m-hairline);
     }
     .sidebar-brand-stack { width: 100%; }
@@ -7743,8 +7783,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         padding: 10px 16px 8px;
         margin: 0;
         background: color-mix(in srgb, var(--bg) 88%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
         position: sticky;
         top: calc(var(--m-safe-top) + 46px);
         z-index: 4;
@@ -7808,8 +7848,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border: 0;
         border-bottom: 1px solid var(--m-hairline);
         background: color-mix(in srgb, var(--bg) 86%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
         gap: 8px;
         align-items: center;
     }
@@ -7842,8 +7882,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border-radius: 0;
         border-top: 1px solid var(--m-hairline);
         background: color-mix(in srgb, var(--bg) 92%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
     }
     #viewChat .input-area::before { display: none; }
 
@@ -8173,5 +8213,635 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     /* App-bars settle in when a screen becomes visible. */
     .sidebar-head,
     #viewChat .chat-hdr { transition: padding-top .2s var(--m-spring); }
+}
+
+
+/* ============================================================
+   ПРОФИЛИ ЛЮДЕЙ
+   Оверлей профиля, вкладки, комментарии, друзья и векторная
+   стена автографов.
+   ============================================================ */
+
+.me-ava-btn {
+    position: relative;
+    display: block;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    line-height: 0;
+}
+
+.me-friend-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--lime);
+    color: #0b0d10;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.profile-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 620;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(4,6,9,.72);
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    transition: opacity .18s var(--ease, ease);
+}
+
+.profile-overlay.visible { opacity: 1; }
+
+.profile-modal {
+    position: relative;
+    width: min(920px, 100%);
+    max-height: min(88vh, 900px);
+    overflow: auto;
+    border-radius: 22px;
+    border: 1px solid var(--border);
+    background: var(--sidebar);
+    box-shadow: 0 28px 70px rgba(0,0,0,.55);
+    transform: translateY(8px);
+    transition: transform .18s var(--ease, ease);
+}
+
+.profile-overlay.visible .profile-modal { transform: translateY(0); }
+
+.profile-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 2;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    cursor: pointer;
+}
+
+.profile-close:hover { color: var(--text); background: rgba(255,255,255,.09); }
+.profile-close svg { width: 18px; height: 18px; }
+
+.profile-body { padding: 26px; display: grid; gap: 18px; }
+.profile-loading { display: grid; gap: 10px; }
+.profile-error { color: var(--red); font-size: 13px; margin: 0; }
+.profile-help { color: var(--text2); font-size: 12px; margin: 0; }
+
+/* --- Шапка --- */
+
+.profile-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+    padding-right: 44px;
+    --profile-accent: var(--lime);
+}
+
+.profile-head-ava {
+    width: 86px;
+    height: 86px;
+    border-radius: 26px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+    border: 2px solid var(--profile-accent);
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--profile-accent);
+}
+
+.profile-head-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.profile-name { margin: 0; font-size: 24px; line-height: 1.2; }
+.profile-handle { color: var(--text2); font-size: 13px; margin-top: 2px; }
+.profile-status { margin-top: 8px; font-size: 14px; color: var(--text); }
+
+.profile-counters { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
+.profile-counter { display: flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--text2); }
+.profile-counter strong { font-size: 17px; color: var(--text); }
+
+.profile-head-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.profile-follow-btn.following { background: transparent; color: var(--lime); border: 1px solid var(--lime); }
+.profile-friend-btn.is-friend { color: var(--lime); }
+
+/* --- Вкладки --- */
+
+.profile-tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+}
+
+.profile-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: var(--text2);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.profile-tab:hover { background: rgba(255,255,255,.04); color: var(--text); }
+.profile-tab.active { background: var(--lime-dim); color: var(--lime); }
+
+.profile-tab-badge {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--lime);
+    color: #0b0d10;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+}
+
+.profile-tab-body { min-height: 200px; }
+
+/* --- «О себе» --- */
+
+.profile-about { display: grid; gap: 14px; }
+.profile-bio { margin: 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+.profile-bio.muted { color: var(--text2); }
+
+.profile-facts { display: grid; gap: 6px; margin: 0; }
+.profile-fact { display: flex; gap: 8px; font-size: 13px; }
+.profile-fact dt { color: var(--text2); }
+.profile-fact dd { margin: 0; }
+
+.profile-links { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-links a {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--lime);
+    font-size: 12px;
+    text-decoration: none;
+}
+.profile-links a:hover { background: var(--lime-soft); }
+
+.profile-policy-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-policy-chip {
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text2);
+}
+.profile-policy-chip strong { color: var(--text); }
+
+/* --- Редактор --- */
+
+.profile-editor { display: grid; gap: 14px; }
+.profile-field { display: grid; gap: 6px; font-size: 13px; }
+.profile-field > span { color: var(--text2); font-size: 12px; }
+
+.profile-field input[type="text"],
+.profile-field input[type="url"],
+.profile-field textarea,
+.profile-select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+
+.profile-field textarea { resize: vertical; min-height: 80px; }
+.profile-field input:focus, .profile-field textarea:focus, .profile-select:focus {
+    outline: none;
+    border-color: var(--lime);
+}
+
+.profile-field-color input[type="color"] {
+    width: 56px;
+    height: 34px;
+    padding: 2px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    cursor: pointer;
+}
+
+.profile-avatar-editor { display: flex; align-items: center; gap: 12px; }
+.profile-avatar-preview {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+}
+.profile-avatar-preview .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.profile-links-editor { display: grid; gap: 8px; }
+.profile-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
+.profile-link-row input {
+    padding: 9px 11px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+}
+
+.profile-link-remove {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    border: none;
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+.profile-link-remove:hover { color: var(--red); background: rgba(255,77,109,.12); }
+.profile-link-remove .ui-icon { width: 14px; height: 14px; }
+
+.profile-policies { display: grid; gap: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+
+/* --- Комментарии --- */
+
+.profile-comments { display: grid; gap: 16px; }
+.profile-comment-composer { display: grid; gap: 8px; }
+.profile-comment-composer textarea {
+    width: 100%;
+    min-height: 74px;
+    padding: 11px 13px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    resize: vertical;
+}
+.profile-comment-composer textarea:focus { outline: none; border-color: var(--lime); }
+.profile-comment-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.profile-comment-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.profile-comment { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; }
+
+.profile-comment-ava {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--lime);
+    cursor: pointer;
+}
+.profile-comment-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.profile-comment-body {
+    padding: 10px 13px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+}
+.profile-comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.profile-comment-author { font-size: 13px; font-weight: 600; cursor: pointer; }
+.profile-comment-author:hover { color: var(--lime); }
+.profile-comment-date { font-size: 11px; color: var(--text3); margin-right: auto; }
+.profile-comment-text { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+
+/* --- Люди (друзья и заявки) --- */
+
+.profile-friends { display: grid; gap: 22px; }
+.profile-friends-block { display: grid; gap: 10px; }
+.profile-friends-block h3 { margin: 0; font-size: 14px; color: var(--text2); font-weight: 600; }
+
+.profile-invite { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.profile-invite input {
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+.profile-invite input:focus { outline: none; border-color: var(--lime); }
+
+.profile-people { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.profile-person {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+}
+.profile-person-ava {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--lime);
+    cursor: pointer;
+}
+.profile-person-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.profile-person-copy { display: grid; gap: 2px; min-width: 0; }
+.profile-person-name { font-size: 13px; font-weight: 600; cursor: pointer; }
+.profile-person-name:hover { color: var(--lime); }
+.profile-person-note { font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-person-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* --- Стена автографов (полностью векторная) --- */
+
+.profile-wall { display: grid; gap: 12px; }
+
+.autograph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.autograph-toolbar > .profile-error, .autograph-toolbar > .profile-help { flex-basis: 100%; }
+
+.autograph-colors { display: flex; gap: 6px; }
+.autograph-color {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    background: var(--swatch, #cbff00);
+    cursor: pointer;
+    padding: 0;
+}
+.autograph-color.active { border-color: var(--text); transform: scale(1.12); }
+
+.autograph-width { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.autograph-width .settings-range { width: 110px; }
+.autograph-tool-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+
+/* Соотношение сторон обязано совпадать с viewBox стены (WALL_W×WALL_H в
+   autographs.js): вместе с preserveAspectRatio="none" это даёт точное и
+   обратимое соответствие «пиксель указателя ↔ единица стены», без чего
+   штрих ложился бы не туда, куда ведут рукой. */
+.autograph-wall {
+    position: relative;
+    aspect-ratio: 1000 / 600;
+    width: 100%;
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background:
+        radial-gradient(120% 100% at 50% 0%, rgba(203,255,0,.06), transparent 60%),
+        rgba(255,255,255,.02);
+}
+
+.autograph-wall-svg { display: block; width: 100%; height: 100%; color: var(--text3); }
+.autograph-wall.drawing { border-color: var(--lime); }
+/* touch-action обязателен: без него первый же росчерк пальцем прокручивает
+   страницу вместо рисования, а pointermove перестаёт приходить. */
+.autograph-wall.drawing .autograph-wall-svg { cursor: crosshair; touch-action: none; }
+
+.autograph-wall-empty-text { fill: var(--text3); font-size: 26px; }
+
+.autograph-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.autograph-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+    font-size: 11px;
+}
+.autograph-legend-author { color: var(--text); font-weight: 600; }
+.autograph-legend-date { color: var(--text3); }
+
+/* --- Модерация --- */
+
+.profile-moderation { display: grid; gap: 12px; }
+.moderation-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.moderation-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+}
+.moderation-preview {
+    height: 120px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.02);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+}
+.autograph-preview-svg { width: 100%; height: 100%; }
+.moderation-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.moderation-author { font-weight: 600; }
+.moderation-date { color: var(--text3); }
+.moderation-actions { display: flex; gap: 6px; }
+.moderation-actions button { flex: 1; }
+
+.peer-context-menu-sep { height: 1px; background: var(--border); margin: 2px 0; }
+
+@media (max-width: 720px) {
+    .profile-overlay { padding: 0; }
+    .profile-modal { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
+    .profile-body { padding: 20px 16px 32px; }
+    .profile-head { grid-template-columns: 1fr; justify-items: center; text-align: center; padding-right: 0; }
+    .profile-head-copy { text-align: center; }
+    .profile-counters { justify-content: center; }
+    .profile-head-actions { justify-content: center; }
+    .profile-link-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .profile-link-row input[type="url"] { grid-column: 1 / -1; }
+    .autograph-tool-actions { margin-left: 0; width: 100%; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   DESIGN MODE PICKER (Settings → «Стиль оформления»)
+   The three modes are mutually exclusive, so this is a radio group rendered
+   as buttons (renderDesignModeSettings() in web/src/interface/prefs.js), not
+   the checkbox the flat mode used to be.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.design-mode-options {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 10px;
+}
+
+.design-mode-option {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: rgba(255,255,255,.025);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
+}
+
+.design-mode-option:hover {
+    background: rgba(255,255,255,.045);
+    border-color: rgba(255,255,255,.16);
+}
+
+.design-mode-option:active {
+    transform: translateY(1px);
+}
+
+.design-mode-option.active {
+    border-color: rgba(var(--accent-rgb), .55);
+    background: rgba(var(--accent-rgb), .09);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
+}
+
+/* Tiny abstract mock of each mode: a top bar, a neutral row and an accent
+   row — enough to read the difference (glow / matte / soft) at a glance
+   without shipping three screenshots. */
+.design-mode-preview {
+    display: grid;
+    align-content: center;
+    gap: 4px;
+    width: 56px;
+    height: 42px;
+    padding: 6px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0b0d11;
+}
+
+.design-mode-preview-bar,
+.design-mode-preview-row {
+    display: block;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.16);
+}
+
+.design-mode-preview-bar {
+    width: 100%;
+    height: 5px;
+}
+
+.design-mode-preview-row {
+    width: 78%;
+}
+
+.design-mode-preview-row--accent {
+    width: 58%;
+    justify-self: end;
+    background: rgb(var(--accent-rgb));
+}
+
+.design-mode-preview--classic {
+    background:
+        radial-gradient(circle at 18% 12%, rgba(var(--accent-rgb),.35), transparent 52%),
+        linear-gradient(180deg, #12151b, #08090c);
+}
+
+.design-mode-preview--classic .design-mode-preview-row--accent {
+    box-shadow: 0 0 8px rgba(var(--accent-rgb), .7);
+}
+
+.design-mode-preview--flat {
+    background: #0c0e12;
+}
+
+.design-mode-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+
+.design-mode-copy strong {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.design-mode-copy small {
+    color: var(--text2);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.design-mode-note {
+    flex: none;
+    align-self: start;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.design-mode-option.active .design-mode-note {
+    color: var(--lime);
+}
+
+@media (max-width: 760px) {
+    .design-mode-option {
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 12px;
+    }
+
+    .design-mode-preview {
+        width: 44px;
+        height: 36px;
+    }
+
+    .design-mode-note {
+        display: none;
+    }
 }
 

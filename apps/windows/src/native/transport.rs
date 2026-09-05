@@ -329,20 +329,17 @@ pub(crate) async fn handle_message_ws_payload(
     current: MessageConfig,
     proxy: EventLoopProxy<AppEvent>,
 ) {
+    // Любой кадр с непустым `type` — событие, а не сообщение. Раньше здесь стоял
+    // аллоулист известных типов, и всё остальное молча выпадало в разбор
+    // сообщения (где отсеивалось по отсутствию id/filename). Из-за этого каждая
+    // новая серверная нотификация требовала правки в трёх нативных оболочках по
+    // отдельности — и хотя бы одну из них регулярно забывали. Теперь известные
+    // типы по-прежнему обрабатываются тут (им нужна нативная работа: сброс кэша
+    // расшифровки, ретрансляция голоса), а всё прочее уходит в JS как есть.
     if raw
         .get("type")
         .and_then(Value::as_str)
-        .map(|value| {
-            value.starts_with("voice_")
-                || value == "reaction_updated"
-                || value == "message_deleted"
-                || value == "message_edited"
-                || value.ends_with("avatar_updated")
-                || value == "avatar_deleted"
-                || value == "key_envelope_available"
-                || value == "device_approved"
-                || value == "key_republish_request"
-        })
+        .map(|value| !value.trim().is_empty())
         .unwrap_or(false)
     {
         let event_type = raw.get("type").and_then(Value::as_str).unwrap_or("");
@@ -417,6 +414,12 @@ pub(crate) async fn handle_message_ws_payload(
                     json!({ "username": username, "deleted": deleted }),
                 );
             }
+        } else {
+            // Ничего не интерпретируем: смысл события знает только JS
+            // (dispatchRealtimeEvent в web/src/interface/state_sync.js), и
+            // дублировать это знание сюда значило бы вернуть тот самый аллоулист.
+            trace(format!("message ws realtime passthrough type={}", event_type));
+            dispatch_ui_event(&proxy, UiBusEvent::RealtimeEvent, raw);
         }
         return;
     }

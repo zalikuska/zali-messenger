@@ -69,6 +69,22 @@
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
             permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
         },
+        profiles: {
+            byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
+            update: apiRoute('/profile'),
+            comments: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/comments`),
+            comment: (id) => apiRoute(`/profile/comments/${encodeURIComponent(id)}`),
+            autographs: (username, status = 'approved') => apiRoute(`/profile/${encodeURIComponent(username)}/autographs?status=${encodeURIComponent(status)}`),
+            autographModeration: (id) => apiRoute(`/profile/autographs/${encodeURIComponent(id)}`),
+            follow: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/follow`),
+            followers: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/followers`),
+        },
+        friends: {
+            list: apiRoute('/friends'),
+            byUsername: (username) => apiRoute(`/friends/${encodeURIComponent(username)}`),
+            requests: apiRoute('/friends/requests'),
+            request: (id) => apiRoute(`/friends/requests/${encodeURIComponent(id)}`),
+        },
         coins: {
             balance: apiRoute('/coins/balance'),
             distribution: apiRoute('/coins/distribution'),

@@ -1128,6 +1128,24 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     downloadAndDecryptMessage(id, sender, receiver, serverId, channelId)
                 }
             }
+            else -> {
+                // Общий проброс: кадр уходит в JS как есть, смысл события знает
+                // только он (dispatchRealtimeEvent в web/src/interface/state_sync.js).
+                // До этого `when` просто не имел ветки else, и каждая новая
+                // серверная нотификация молча терялась на Android до тех пор,
+                // пока сюда не впишут её тип руками — ровно так фичи и «выходили
+                // на десктопе, минуя телефон».
+                //
+                // voice_* исключены намеренно: голосовой сигналинг в вебе идёт по
+                // собственному сокету JS, а ICE-кандидаты летят десятками в секунду —
+                // гнать их ещё и через evaluateJavascript значит греть телефон впустую.
+                if (!type.startsWith("voice_")) {
+                    webView.evaluateJavascript(
+                        "window.receiveRealtimeEvent && window.receiveRealtimeEvent($raw);",
+                        null,
+                    )
+                }
+            }
         }
     }
 

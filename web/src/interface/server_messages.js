@@ -76,7 +76,7 @@ ZaliMixin(ZaliInterface, class {
 
         const next = merged
             .map(identity => mergedByKey.get(identity))
-            .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+            .sort((a, b) => this.compareMessagesByTime(a, b));
         this.S.serverChats[key] = next;
         this.saveStoredServerChats();
 

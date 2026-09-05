@@ -25,6 +25,7 @@ server.log
 
 # Generated archives and bundles
 *.zip
+*.exe
 *.app
 dist/
 

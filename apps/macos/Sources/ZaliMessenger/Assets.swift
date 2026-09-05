@@ -2555,6 +2555,15 @@ body[data-nav-mode="servers"] .contacts {
     pointer-events: none;
 }
 
+#viewChat .input-bar {
+    width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
 .settings-topbar {
     justify-content: space-between;
     align-items: flex-start;
@@ -2591,22 +2600,23 @@ body[data-nav-mode="servers"] .contacts {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: var(--control-h-sm);
-    padding: 0 12px;
+    min-height: 40px;
+    padding: 0 16px;
     border: 1px solid var(--border);
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    border-radius: 10px;
+    background: rgba(255,255,255,.05);
     color: var(--text);
     cursor: pointer;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 6px 18px rgba(0,0,0,.14);
+    box-shadow: none;
     line-height: 1;
-    transition: transform .18s var(--ease-out), border-color .18s var(--ease-out), box-shadow .18s var(--ease-out), background .18s var(--ease-out);
+    font-weight: 700;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
 .hdr-btn:hover,
 .btn-flat:hover {
     border-color: var(--lime);
-    box-shadow: 0 0 0 2px rgba(var(--accent-rgb),.08);
+    background: rgba(255,255,255,.08);
 }
 
 .settings-body {
@@ -4427,7 +4437,7 @@ body[data-nav-mode="servers"] .contacts {
 .server-modal-actions {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 10px;
     padding: 12px 0 0;
     margin-top: auto;
@@ -4443,8 +4453,17 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 40px;
 }
 
+.server-modal-actions-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .server-delete-btn {
     color: var(--red);
+    background: transparent;
+    border: 0;
+    box-shadow: none;
 }
 
 .settings-help {
@@ -6437,57 +6456,45 @@ body[data-nav-mode="servers"] .contacts {
 .auth-overlay.visible .auth-form > *:nth-child(6) { animation-delay: .25s; }
 .auth-overlay.visible .auth-form > *:nth-child(7) { animation-delay: .29s; }
 
-.contacts .contact:nth-child(1),
-.msgs .msg:nth-child(1),
 .settings-shell > .settings-card:nth-child(1),
 .settings-theme-grid .btn-theme:nth-child(1),
 .draft-attachments .draft-att:nth-child(1) { animation-delay: .02s; }
 
-.contacts .contact:nth-child(2),
-.msgs .msg:nth-child(2),
 .settings-shell > .settings-card:nth-child(2),
 .settings-theme-grid .btn-theme:nth-child(2),
 .draft-attachments .draft-att:nth-child(2) { animation-delay: .05s; }
 
-.contacts .contact:nth-child(3),
-.msgs .msg:nth-child(3),
 .settings-shell > .settings-card:nth-child(3),
 .settings-theme-grid .btn-theme:nth-child(3),
 .draft-attachments .draft-att:nth-child(3) { animation-delay: .08s; }
 
-.contacts .contact:nth-child(4),
-.msgs .msg:nth-child(4),
 .settings-shell > .settings-card:nth-child(4),
 .settings-theme-grid .btn-theme:nth-child(4),
 .draft-attachments .draft-att:nth-child(4) { animation-delay: .11s; }
 
-.contacts .contact:nth-child(5),
-.msgs .msg:nth-child(5),
 .settings-shell > .settings-card:nth-child(5),
 .settings-theme-grid .btn-theme:nth-child(5),
 .draft-attachments .draft-att:nth-child(5) { animation-delay: .14s; }
 
-.contacts .contact:nth-child(6),
-.msgs .msg:nth-child(6),
 .settings-shell > .settings-card:nth-child(6),
 .settings-theme-grid .btn-theme:nth-child(6),
 .draft-attachments .draft-att:nth-child(6) { animation-delay: .17s; }
 
-.contacts .contact:nth-child(7),
-.msgs .msg:nth-child(7),
 .settings-shell > .settings-card:nth-child(7),
 .settings-theme-grid .btn-theme:nth-child(7),
 .draft-attachments .draft-att:nth-child(7) { animation-delay: .20s; }
 
-.contacts .contact:nth-child(8),
-.msgs .msg:nth-child(8),
 .settings-shell > .settings-card:nth-child(8),
 .settings-theme-grid .btn-theme:nth-child(8),
 .draft-attachments .draft-att:nth-child(8) { animation-delay: .23s; }
 
-.contacts .contact {
-    animation-delay: 0s;
-}
+/* NB: .contact and .msg deliberately carry no entrance animation — both lists
+   are rebuilt wholesale with innerHTML, so a per-item entrance would re-fire on
+   every row each time anything changed. The staggered animation-delay rules
+   above therefore list only the elements that actually animate; .msg/.contact
+   were still in that selector list long after their animation was removed,
+   which cost a :nth-child match against every bubble on every style recalc for
+   nothing. */
 
 @keyframes shimmer {
     to {
@@ -6861,7 +6868,7 @@ body[data-nav-mode="servers"] .contacts {
            .12s once parking (once scheduleMobileListPark() confirms the
            chat has fully covered the list again). */
         transition: transform .12s ease-out, box-shadow .12s var(--ease-out);
-        will-change: transform;
+        /* See #viewChat below: promoted per gesture, not permanently. */
     }
 
     body.mobile-list-visible .sidebar {
@@ -6874,6 +6881,12 @@ body[data-nav-mode="servers"] .contacts {
     body.mobile-nav-instant .mobile-dock,
     body.mobile-nav-dragging .mobile-dock {
         transition: none;
+    }
+
+    body.mobile-nav-dragging #viewChat,
+    body.mobile-nav-dragging .mobile-dock,
+    body.mobile-nav-dragging .sidebar {
+        will-change: transform;
     }
 
     .main {
@@ -6897,7 +6910,12 @@ body[data-nav-mode="servers"] .contacts {
            for why this isn't calc(var(--mnav)) driven. */
         transform: translateX(0);
         transition: transform .24s cubic-bezier(.2,.8,.2,1);
-        will-change: transform;
+        /* Promoted only while a gesture is actually driving the transform.
+           A permanent will-change keeps a full-screen composited layer alive
+           for the whole session — two of them, with .sidebar below — which on
+           a phone is GPU memory spent on something that moves for a quarter of
+           a second at a time. The running .24s transition promotes the element
+           by itself. */
     }
 
     .mobile-backdrop {
@@ -7674,6 +7692,28 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         --m-surface: #0c0f14;
         --m-surface-2: #12161d;
         --m-hairline: rgba(255,255,255,.07);
+        /* The frosted material behind the sticky app-bar and the docked input.
+           A token, not four copies of a literal, because it has to be switched
+           off in one place while the push-nav gesture runs — see below.
+
+           Was blur(18px) saturate(160%). Both halves cost per frame, and unlike
+           the desktop panels these two sit over a list that is *moving*: a
+           backdrop filter is recomputed whenever what is behind it changes, so
+           on mobile that is twice per scroll frame, full screen width. The
+           saturate() pass is dropped outright (it is composited on top of the
+           app's own near-monochrome background, where it reads as almost
+           nothing) and the radius is trimmed; the material still reads as
+           frosted glass. */
+        --m-glass: blur(12px);
+    }
+
+    /* During the back-swipe #viewChat is being translated with both frosted
+       surfaces inside it, so every frame of the drag re-blurs a full-width
+       strip against content that is itself moving — the single most expensive
+       thing the client does on a phone. The gesture is the one moment the
+       material is not being looked at, so drop it for the duration. */
+    body.mobile-nav-dragging {
+        --m-glass: none;
     }
 
     /* ── Kill desktop chrome: the global titlebar is replaced by per-screen
@@ -7742,8 +7782,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         padding: calc(var(--m-safe-top) + 8px) 16px 8px;
         margin: 0;
         background: color-mix(in srgb, var(--bg) 88%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
         border-bottom: 1px solid var(--m-hairline);
     }
     .sidebar-brand-stack { width: 100%; }
@@ -7769,8 +7809,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         padding: 10px 16px 8px;
         margin: 0;
         background: color-mix(in srgb, var(--bg) 88%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
         position: sticky;
         top: calc(var(--m-safe-top) + 46px);
         z-index: 4;
@@ -7834,8 +7874,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border: 0;
         border-bottom: 1px solid var(--m-hairline);
         background: color-mix(in srgb, var(--bg) 86%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
         gap: 8px;
         align-items: center;
     }
@@ -7868,8 +7908,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border-radius: 0;
         border-top: 1px solid var(--m-hairline);
         background: color-mix(in srgb, var(--bg) 92%, transparent);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
-        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
     }
     #viewChat .input-area::before { display: none; }
 
@@ -8202,6 +8242,638 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 
+/* ============================================================
+   ПРОФИЛИ ЛЮДЕЙ
+   Оверлей профиля, вкладки, комментарии, друзья и векторная
+   стена автографов.
+   ============================================================ */
+
+.me-ava-btn {
+    position: relative;
+    display: block;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    line-height: 0;
+}
+
+.me-friend-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--lime);
+    color: #0b0d10;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.profile-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 620;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(4,6,9,.72);
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    transition: opacity .18s var(--ease, ease);
+}
+
+.profile-overlay.visible { opacity: 1; }
+
+.profile-modal {
+    position: relative;
+    width: min(920px, 100%);
+    max-height: min(88vh, 900px);
+    overflow: auto;
+    border-radius: 22px;
+    border: 1px solid var(--border);
+    background: var(--sidebar);
+    box-shadow: 0 28px 70px rgba(0,0,0,.55);
+    transform: translateY(8px);
+    transition: transform .18s var(--ease, ease);
+}
+
+.profile-overlay.visible .profile-modal { transform: translateY(0); }
+
+.profile-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 2;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    cursor: pointer;
+}
+
+.profile-close:hover { color: var(--text); background: rgba(255,255,255,.09); }
+.profile-close svg { width: 18px; height: 18px; }
+
+.profile-body { padding: 26px; display: grid; gap: 18px; }
+.profile-loading { display: grid; gap: 10px; }
+.profile-error { color: var(--red); font-size: 13px; margin: 0; }
+.profile-help { color: var(--text2); font-size: 12px; margin: 0; }
+
+/* --- Шапка --- */
+
+.profile-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+    padding-right: 44px;
+    --profile-accent: var(--lime);
+}
+
+.profile-head-ava {
+    width: 86px;
+    height: 86px;
+    border-radius: 26px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+    border: 2px solid var(--profile-accent);
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--profile-accent);
+}
+
+.profile-head-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.profile-name { margin: 0; font-size: 24px; line-height: 1.2; }
+.profile-handle { color: var(--text2); font-size: 13px; margin-top: 2px; }
+.profile-status { margin-top: 8px; font-size: 14px; color: var(--text); }
+
+.profile-counters { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
+.profile-counter { display: flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--text2); }
+.profile-counter strong { font-size: 17px; color: var(--text); }
+
+.profile-head-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.profile-follow-btn.following { background: transparent; color: var(--lime); border: 1px solid var(--lime); }
+.profile-friend-btn.is-friend { color: var(--lime); }
+
+/* --- Вкладки --- */
+
+.profile-tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+}
+
+.profile-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: var(--text2);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.profile-tab:hover { background: rgba(255,255,255,.04); color: var(--text); }
+.profile-tab.active { background: var(--lime-dim); color: var(--lime); }
+
+.profile-tab-badge {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--lime);
+    color: #0b0d10;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+}
+
+.profile-tab-body { min-height: 200px; }
+
+/* --- «О себе» --- */
+
+.profile-about { display: grid; gap: 14px; }
+.profile-bio { margin: 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+.profile-bio.muted { color: var(--text2); }
+
+.profile-facts { display: grid; gap: 6px; margin: 0; }
+.profile-fact { display: flex; gap: 8px; font-size: 13px; }
+.profile-fact dt { color: var(--text2); }
+.profile-fact dd { margin: 0; }
+
+.profile-links { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-links a {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--lime);
+    font-size: 12px;
+    text-decoration: none;
+}
+.profile-links a:hover { background: var(--lime-soft); }
+
+.profile-policy-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-policy-chip {
+    padding: 5px 10px;
+"""#,
+    #"""
+    border-radius: 999px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text2);
+}
+.profile-policy-chip strong { color: var(--text); }
+
+/* --- Редактор --- */
+
+.profile-editor { display: grid; gap: 14px; }
+.profile-field { display: grid; gap: 6px; font-size: 13px; }
+.profile-field > span { color: var(--text2); font-size: 12px; }
+
+.profile-field input[type="text"],
+.profile-field input[type="url"],
+.profile-field textarea,
+.profile-select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+
+.profile-field textarea { resize: vertical; min-height: 80px; }
+.profile-field input:focus, .profile-field textarea:focus, .profile-select:focus {
+    outline: none;
+    border-color: var(--lime);
+}
+
+.profile-field-color input[type="color"] {
+    width: 56px;
+    height: 34px;
+    padding: 2px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    cursor: pointer;
+}
+
+.profile-avatar-editor { display: flex; align-items: center; gap: 12px; }
+.profile-avatar-preview {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+}
+.profile-avatar-preview .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.profile-links-editor { display: grid; gap: 8px; }
+.profile-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
+.profile-link-row input {
+    padding: 9px 11px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+}
+
+.profile-link-remove {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    border: none;
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+.profile-link-remove:hover { color: var(--red); background: rgba(255,77,109,.12); }
+.profile-link-remove .ui-icon { width: 14px; height: 14px; }
+
+.profile-policies { display: grid; gap: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+
+/* --- Комментарии --- */
+
+.profile-comments { display: grid; gap: 16px; }
+.profile-comment-composer { display: grid; gap: 8px; }
+.profile-comment-composer textarea {
+    width: 100%;
+    min-height: 74px;
+    padding: 11px 13px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    resize: vertical;
+}
+.profile-comment-composer textarea:focus { outline: none; border-color: var(--lime); }
+.profile-comment-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.profile-comment-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.profile-comment { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; }
+
+.profile-comment-ava {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--lime);
+    cursor: pointer;
+}
+.profile-comment-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+
+.profile-comment-body {
+    padding: 10px 13px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+}
+.profile-comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.profile-comment-author { font-size: 13px; font-weight: 600; cursor: pointer; }
+.profile-comment-author:hover { color: var(--lime); }
+.profile-comment-date { font-size: 11px; color: var(--text3); margin-right: auto; }
+.profile-comment-text { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+
+/* --- Люди (друзья и заявки) --- */
+
+.profile-friends { display: grid; gap: 22px; }
+.profile-friends-block { display: grid; gap: 10px; }
+.profile-friends-block h3 { margin: 0; font-size: 14px; color: var(--text2); font-weight: 600; }
+
+.profile-invite { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.profile-invite input {
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+.profile-invite input:focus { outline: none; border-color: var(--lime); }
+
+.profile-people { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.profile-person {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+}
+.profile-person-ava {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.05);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--lime);
+    cursor: pointer;
+}
+.profile-person-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.profile-person-copy { display: grid; gap: 2px; min-width: 0; }
+.profile-person-name { font-size: 13px; font-weight: 600; cursor: pointer; }
+.profile-person-name:hover { color: var(--lime); }
+.profile-person-note { font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-person-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* --- Стена автографов (полностью векторная) --- */
+
+.profile-wall { display: grid; gap: 12px; }
+
+.autograph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.autograph-toolbar > .profile-error, .autograph-toolbar > .profile-help { flex-basis: 100%; }
+
+.autograph-colors { display: flex; gap: 6px; }
+.autograph-color {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    background: var(--swatch, #cbff00);
+    cursor: pointer;
+    padding: 0;
+}
+.autograph-color.active { border-color: var(--text); transform: scale(1.12); }
+
+.autograph-width { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.autograph-width .settings-range { width: 110px; }
+.autograph-tool-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+
+/* Соотношение сторон обязано совпадать с viewBox стены (WALL_W×WALL_H в
+   autographs.js): вместе с preserveAspectRatio="none" это даёт точное и
+   обратимое соответствие «пиксель указателя ↔ единица стены», без чего
+   штрих ложился бы не туда, куда ведут рукой. */
+.autograph-wall {
+    position: relative;
+    aspect-ratio: 1000 / 600;
+    width: 100%;
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background:
+        radial-gradient(120% 100% at 50% 0%, rgba(203,255,0,.06), transparent 60%),
+        rgba(255,255,255,.02);
+}
+
+.autograph-wall-svg { display: block; width: 100%; height: 100%; color: var(--text3); }
+.autograph-wall.drawing { border-color: var(--lime); }
+/* touch-action обязателен: без него первый же росчерк пальцем прокручивает
+   страницу вместо рисования, а pointermove перестаёт приходить. */
+.autograph-wall.drawing .autograph-wall-svg { cursor: crosshair; touch-action: none; }
+
+.autograph-wall-empty-text { fill: var(--text3); font-size: 26px; }
+
+.autograph-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.autograph-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+    font-size: 11px;
+}
+.autograph-legend-author { color: var(--text); font-weight: 600; }
+.autograph-legend-date { color: var(--text3); }
+
+/* --- Модерация --- */
+
+.profile-moderation { display: grid; gap: 12px; }
+.moderation-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.moderation-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+}
+.moderation-preview {
+    height: 120px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.02);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+}
+.autograph-preview-svg { width: 100%; height: 100%; }
+.moderation-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.moderation-author { font-weight: 600; }
+.moderation-date { color: var(--text3); }
+.moderation-actions { display: flex; gap: 6px; }
+.moderation-actions button { flex: 1; }
+
+.peer-context-menu-sep { height: 1px; background: var(--border); margin: 2px 0; }
+
+@media (max-width: 720px) {
+    .profile-overlay { padding: 0; }
+    .profile-modal { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
+    .profile-body { padding: 20px 16px 32px; }
+    .profile-head { grid-template-columns: 1fr; justify-items: center; text-align: center; padding-right: 0; }
+    .profile-head-copy { text-align: center; }
+    .profile-counters { justify-content: center; }
+    .profile-head-actions { justify-content: center; }
+    .profile-link-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .profile-link-row input[type="url"] { grid-column: 1 / -1; }
+    .autograph-tool-actions { margin-left: 0; width: 100%; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   DESIGN MODE PICKER (Settings → «Стиль оформления»)
+   The three modes are mutually exclusive, so this is a radio group rendered
+   as buttons (renderDesignModeSettings() in web/src/interface/prefs.js), not
+   the checkbox the flat mode used to be.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.design-mode-options {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 10px;
+}
+
+.design-mode-option {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: rgba(255,255,255,.025);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
+}
+
+.design-mode-option:hover {
+    background: rgba(255,255,255,.045);
+    border-color: rgba(255,255,255,.16);
+}
+
+.design-mode-option:active {
+    transform: translateY(1px);
+}
+
+.design-mode-option.active {
+    border-color: rgba(var(--accent-rgb), .55);
+    background: rgba(var(--accent-rgb), .09);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
+}
+
+/* Tiny abstract mock of each mode: a top bar, a neutral row and an accent
+   row — enough to read the difference (glow / matte / soft) at a glance
+   without shipping three screenshots. */
+.design-mode-preview {
+    display: grid;
+    align-content: center;
+    gap: 4px;
+    width: 56px;
+    height: 42px;
+    padding: 6px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0b0d11;
+}
+
+.design-mode-preview-bar,
+.design-mode-preview-row {
+    display: block;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.16);
+}
+
+.design-mode-preview-bar {
+    width: 100%;
+    height: 5px;
+}
+
+.design-mode-preview-row {
+    width: 78%;
+}
+
+.design-mode-preview-row--accent {
+    width: 58%;
+    justify-self: end;
+    background: rgb(var(--accent-rgb));
+}
+
+.design-mode-preview--classic {
+    background:
+        radial-gradient(circle at 18% 12%, rgba(var(--accent-rgb),.35), transparent 52%),
+        linear-gradient(180deg, #12151b, #08090c);
+}
+
+.design-mode-preview--classic .design-mode-preview-row--accent {
+    box-shadow: 0 0 8px rgba(var(--accent-rgb), .7);
+}
+
+.design-mode-preview--flat {
+    background: #0c0e12;
+}
+
+.design-mode-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+
+.design-mode-copy strong {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.design-mode-copy small {
+    color: var(--text2);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.design-mode-note {
+    flex: none;
+    align-self: start;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.design-mode-option.active .design-mode-note {
+    color: var(--lime);
+}
+
+@media (max-width: 760px) {
+    .design-mode-option {
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 12px;
+    }
+
+    .design-mode-preview {
+        width: 44px;
+        height: 36px;
+    }
+
+    .design-mode-note {
+        display: none;
+    }
+}
+
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -8483,8 +9155,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             <nav class="sidebar">
                 <div class="sidebar-head">
                     <div class="sidebar-brand-stack">
-"""#,
-    #"""
                         <div class="brand">ZALI <em>MSG</em></div>
                         <div class="hub-segment-nav" id="hubSegmentNav" aria-label="Разделы приложения"></div>
                     </div>
@@ -8513,7 +9183,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     </div>
                 </div>
                 <div class="me">
-                    <div class="ava me-ava" id="meAva">Z</div>
+                    <button class="me-ava-btn" id="meAvaBtn" type="button" title="Мой профиль: редактирование и приглашения в друзья" aria-label="Мой профиль">
+                        <div class="ava me-ava" id="meAva">Z</div>
+                        <span class="me-friend-badge" id="meFriendBadge" hidden>0</span>
+                    </button>
                     <div class="me-info">
                         <div class="me-name" id="meName">Не вошли</div>
                         <div class="me-sub" id="meSub"><span class="online-dot"></span> В сети</div>
@@ -8730,18 +9403,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Тема интерфейса</span>
-                                        <h3 class="settings-card-title">Плоский режим</h3>
+                                        <h3 class="settings-card-title">Стиль оформления</h3>
                                     </div>
-                                    <span class="settings-card-note">flat</span>
+                                    <span class="settings-card-note">design</span>
                                 </div>
                                 <div class="settings-stack">
-                                    <label class="server-toggle settings-toggle">
-                                        <input id="inputExperimentalDesign" type="checkbox">
-                                        <span>
-                                            <strong>Включить плоский режим</strong>
-                                            <small>Тот же интерфейс, но без градиентов и свечений — матовые поверхности</small>
-                                        </span>
-                                    </label>
+                                    <div class="design-mode-options" id="designModeOptions"></div>
+                                    <p class="settings-help">Цветовая схема, шрифты и вся логика приложения не меняются — переключается только оформление. Выбор сохраняется на этом устройстве.</p>
                                 </div>
                             </section>
 
@@ -8950,6 +9618,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 <button class="btn-flat" id="updateModalDeclineBtn" type="button">Позже</button>
                 <button class="auth-btn primary" id="updateModalAcceptBtn" type="button">Обновить</button>
             </div>
+        </div>
+    </div>
+
+    <div class="profile-overlay" id="profileOverlay" hidden>
+        <div class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalName">
+            <button class="profile-close" id="profileCloseBtn" type="button" aria-label="Закрыть профиль">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            </button>
+            <div class="profile-body" id="profileBody"></div>
         </div>
     </div>
 
@@ -9270,9 +9947,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
             <div class="server-modal-error" id="serverModalError"></div>
             <div class="server-modal-actions">
-                <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
                 <button class="btn-flat server-delete-btn" id="serverDeleteBtn" type="button" hidden>Удалить сервер</button>
-                <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
+                <div class="server-modal-actions-right">
+                    <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
+                    <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
+                </div>
             </div>
         </div>
     </div>
@@ -9358,6 +10037,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         NATIVE_RESPONSE: 'native_response',
         ADD_LOG_ENTRY: 'add_log_entry',
         VOICE_EVENT: 'voice_event',
+        // Общий проброс: нативная оболочка отдаёт сюда ЛЮБОЙ типизированный
+        // WS-кадр, который не разобрала сама. Нужен, чтобы новый тип события
+        // с сервера не требовал правок в трёх оболочках — см. dispatchRealtimeEvent.
+        REALTIME_EVENT: 'realtime_event',
         UPDATE_EVENT: 'update_event',
         SCREEN_CAPTURE_FRAME: 'screen_capture_frame',
         SCREEN_CAPTURE_ERROR: 'screen_capture_error',
@@ -9438,6 +10121,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
             permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
+        },
+        profiles: {
+            byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
+            update: apiRoute('/profile'),
+            comments: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/comments`),
+            comment: (id) => apiRoute(`/profile/comments/${encodeURIComponent(id)}`),
+            autographs: (username, status = 'approved') => apiRoute(`/profile/${encodeURIComponent(username)}/autographs?status=${encodeURIComponent(status)}`),
+            autographModeration: (id) => apiRoute(`/profile/autographs/${encodeURIComponent(id)}`),
+            follow: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/follow`),
+            followers: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/followers`),
+        },
+        friends: {
+            list: apiRoute('/friends'),
+            byUsername: (username) => apiRoute(`/friends/${encodeURIComponent(username)}`),
+            requests: apiRoute('/friends/requests'),
+            request: (id) => apiRoute(`/friends/requests/${encodeURIComponent(id)}`),
         },
         coins: {
             balance: apiRoute('/coins/balance'),
@@ -10077,6 +10776,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         return inflateRaw(bytes, pos);
     }
 
+"""#,
+    #"""
     async function gunzip(bytes) {
         if (typeof DecompressionStream === 'function' && typeof Response === 'function') {
             try {
@@ -10106,8 +10807,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         return value === TGS_MIME || value === 'application/x-tgsticker' || value === 'application/tgs';
     }
 
-"""#,
-    #"""
     // Peers (and older builds of this app) may hand a .tgs over as
     // application/gzip or application/octet-stream, so the filename is the
     // authoritative signal and the mime type is only a shortcut.
@@ -10352,6 +11051,10 @@ const ZaliBusEvents = window.ZaliBusEvents || Object.freeze({
     NATIVE_RESPONSE: 'native_response',
     ADD_LOG_ENTRY: 'add_log_entry',
     VOICE_EVENT: 'voice_event',
+    // Общий проброс: нативная оболочка отдаёт сюда ЛЮБОЙ типизированный
+    // WS-кадр, который не разобрала сама. Нужен, чтобы новый тип события
+    // с сервера не требовал правок в трёх оболочках — см. dispatchRealtimeEvent.
+    REALTIME_EVENT: 'realtime_event',
     UPDATE_EVENT: 'update_event',
 });
 
@@ -11126,6 +11829,22 @@ const DefaultApiRoutes = Object.freeze({
         invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
         permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
     },
+    profiles: {
+        byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
+        update: apiRoute('/profile'),
+        comments: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/comments`),
+        comment: (id) => apiRoute(`/profile/comments/${encodeURIComponent(id)}`),
+        autographs: (username, status = 'approved') => apiRoute(`/profile/${encodeURIComponent(username)}/autographs?status=${encodeURIComponent(status)}`),
+        autographModeration: (id) => apiRoute(`/profile/autographs/${encodeURIComponent(id)}`),
+        follow: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/follow`),
+        followers: (username) => apiRoute(`/profile/${encodeURIComponent(username)}/followers`),
+    },
+    friends: {
+        list: apiRoute('/friends'),
+        byUsername: (username) => apiRoute(`/friends/${encodeURIComponent(username)}`),
+        requests: apiRoute('/friends/requests'),
+        request: (id) => apiRoute(`/friends/requests/${encodeURIComponent(id)}`),
+    },
     coins: {
         balance: apiRoute('/coins/balance'),
         distribution: apiRoute('/coins/distribution'),
@@ -11178,6 +11897,9 @@ const DefaultApiRoutes = Object.freeze({
  *   notifications.js        455 /  24  Мьюты, звуки, уведомления, бейдж непрочитанного.
  *   state_sync.js           529 /  15  Приём состояния от нативного слоя: пользователи, история, статус связи.
  *   message_edit.js         376 /  15  Ответы, редактирование и удаление сообщений.
+ *   profiles.js             470 /  25  Профили людей: состояние, подписки, дружба, комментарии.
+ *   profile_ui.js           520 /  20  Отрисовка профиля: шапка, вкладки, редактор, модерация.
+ *   autographs.js           420 /  20  Векторная стена автографов: рисование, публикация, модерация.
  *   diagnostics.js          157 /   5  Журнал диагностики и голосовая телеметрия.
  *   events.js              1651 /  16  Привязка DOM-событий и инерция прокрутки.
  */
@@ -11199,6 +11921,8 @@ class ZaliInterface {
             stateSlices.messaging?.createState?.() || {},
             stateSlices.servers?.createState?.() || {},
         );
+        // Профиль лежит отдельным срезом состояния — см. interface/profiles.js.
+        this.S.profile = ZaliInterface.emptyProfileState;
         this.tenorCache = new Map();
         this.tenorPending = new Set();
         this.nativeAuthRequests = new Map();
@@ -11306,7 +12030,8 @@ class ZaliInterface {
         this._historyPrimedChannels = new Set();
         this.uiV2Enabled = this.loadUiV2Enabled();
         this.uiV2Segments = this.loadUiV2Segments();
-        this.experimentalDesign = this.loadExperimentalDesign();
+        this.designMode = this.loadDesignMode();
+        this.experimentalDesign = this.designMode === 'flat';
         this.voiceTraceEnabled = this.loadVoiceTraceEnabled();
     }
 
@@ -11346,6 +12071,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.MESSAGE_DELETED || 'message_deleted', (data) => this.onMessageDeleted(data));
         this.bus.registerCommand('zali_interface', E.MESSAGE_EDITED || 'message_edited', (data) => this.onMessageEdited(data));
         this.bus.registerCommand('zali_interface', E.AVATAR_UPDATED || 'avatar_updated', (data) => this.handleAvatarUpdated(data));
+        this.bus.registerCommand('zali_interface', E.REALTIME_EVENT || 'realtime_event', (data) => this.dispatchRealtimeEvent(data));
         this.bus.registerCommand('zali_interface', E.TENOR_RESOLVED || 'tenor_resolved', (payload) => this.onTenorResolved(payload));
         this.bus.registerCommand('zali_interface', E.AUTH_RESPONSE || 'auth_response', (payload) => this.onNativeAuthResponse(payload));
         this.bus.registerCommand('zali_interface', E.NATIVE_RESPONSE || 'native_response', (payload) => this.onNativeResponse(payload));
@@ -11380,14 +12106,28 @@ window.ZaliInterface = ZaliInterface;
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+const ZALI_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+const ZALI_ESCAPE_PATTERN = /[&<>"']/g;
+const ZALI_ESCAPE_PROBE = /[&<>"']/;
+
 ZaliMixin(ZaliInterface, class {
 
     // --- HTML Helper Utilities ---
+    // One pass, not five. esc() is called several hundred times per render of the
+    // message list and once per rendered character of every attachment URL that
+    // still reaches it; five chained .replace() calls meant five full regex scans
+    // of every string, and for anything without a special character all five
+    // found nothing. Same output, same escapes, one traversal.
     esc(s) {
         if (s == null) return '';
-        return String(s)
-            .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-            .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+        const value = String(s);
+        // Fast path: the overwhelming majority of strings (names, timestamps,
+        // ids, URLs) contain nothing to escape, and this test bails on the first
+        // character that could matter instead of building a new string.
+        // Two regexes on purpose: a /g/ one carries lastIndex across .test()
+        // calls, which would make every second call lie.
+        if (!ZALI_ESCAPE_PROBE.test(value)) return value;
+        return value.replace(ZALI_ESCAPE_PATTERN, (ch) => ZALI_ESCAPE_MAP[ch]);
     }
 
     ruPlural(n, one, few, many) {
@@ -11434,9 +12174,23 @@ ZaliMixin(ZaliInterface, class {
         catch(e) { return ''; }
     }
 
-    messageTimestampValue(iso) {
-        const ts = Date.parse(iso || '');
+    // Numbers are handled explicitly, not as an afterthought: the browser
+    // receive path stores `unpacked.timestamp * 1000`, i.e. a number of
+    // milliseconds, while history rows carry an ISO string. Date.parse() of a
+    // number is NaN, so a value-based comparator that only parsed strings would
+    // silently sort every browser-delivered message to the epoch.
+    messageTimestampValue(value) {
+        if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+        const ts = Date.parse(value || '');
         return Number.isFinite(ts) ? ts : 0;
+    }
+
+    // Comparator for chronological message order. Exists so the sort sites stop
+    // writing `new Date(a.timestamp) - new Date(b.timestamp)`, which allocated
+    // two Date objects per comparison — tens of thousands of them per history
+    // merge, all thrown away immediately.
+    compareMessagesByTime(a, b) {
+        return this.messageTimestampValue(a?.timestamp) - this.messageTimestampValue(b?.timestamp);
     }
 
     messageHoverTimeLabel(msg) {
@@ -12986,26 +13740,104 @@ ZaliMixin(ZaliInterface, class {
         return 'zali_experimental_design_v1';
     }
 
-    loadExperimentalDesign() {
+    // ============================================================
+    // DESIGN MODE — оформление интерфейса целиком: classic | flat.
+    //
+    // Раньше это был одиночный чекбокс «плоский режим»
+    // (`zali_experimental_design_v1`, атрибут `data-experimental-design`).
+    // Режимов стало три, и они взаимоисключающие, поэтому источник правды —
+    // `zali_design_mode_v1`, а старый ключ остаётся ЗЕРКАЛОМ: его продолжают
+    // читать CSS-правила плоской темы (`body[data-experimental-design="on"]`,
+    // ~66 селекторов) и старые сборки нативных шеллов, у которых в
+    // localStorage уже лежит выбор пользователя. Поэтому saveDesignMode()
+    // пишет оба ключа, а loadDesignMode() умеет поднять старый выбор.
+    // ============================================================
+
+    designModeStorageKey() {
+        return 'zali_design_mode_v1';
+    }
+
+    designModeCatalog() {
+        return [
+            { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
+            { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+        ];
+    }
+
+    normalizeDesignMode(value) {
+        const id = String(value || '').trim().toLowerCase();
+        return this.designModeCatalog().some(m => m.id === id) ? id : 'classic';
+    }
+
+    loadDesignMode() {
         try {
-            return localStorage.getItem(this.experimentalDesignStorageKey()) === '1';
+            const stored = localStorage.getItem(this.designModeStorageKey());
+            if (stored) return this.normalizeDesignMode(stored);
+            // Миграция с одиночного чекбокса: включённый плоский режим —
+            // это ровно режим 'flat', всё остальное — 'classic'.
+            return localStorage.getItem(this.experimentalDesignStorageKey()) === '1' ? 'flat' : 'classic';
         } catch (e) {
-            return false;
+            return 'classic';
         }
     }
 
-    saveExperimentalDesign(enabled) {
-        this.experimentalDesign = !!enabled;
+    saveDesignMode(mode) {
+        this.designMode = this.normalizeDesignMode(mode);
+        this.experimentalDesign = this.designMode === 'flat';
         try {
+            localStorage.setItem(this.designModeStorageKey(), this.designMode);
             localStorage.setItem(this.experimentalDesignStorageKey(), this.experimentalDesign ? '1' : '0');
         } catch (e) {}
-        this.applyExperimentalDesign();
+        this.applyDesignMode();
+    }
+
+    applyDesignMode() {
+        this.designMode = this.normalizeDesignMode(this.designMode || this.loadDesignMode());
+        this.experimentalDesign = this.designMode === 'flat';
+        const body = document.body;
+        if (body) {
+            body.setAttribute('data-design-mode', this.designMode);
+            body.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
+        }
+        // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
+        const legacyToggle = document.getElementById('inputExperimentalDesign');
+        if (legacyToggle) legacyToggle.checked = !!this.experimentalDesign;
+        this.renderDesignModeSettings();
+    }
+
+    renderDesignModeSettings() {
+        const host = document.getElementById('designModeOptions');
+        if (!host) return;
+        const active = this.normalizeDesignMode(this.designMode);
+        const html = this.designModeCatalog().map(mode => `
+            <button type="button" class="design-mode-option${mode.id === active ? ' active' : ''}" data-design-mode="${this.esc(mode.id)}" aria-pressed="${mode.id === active}">
+                <span class="design-mode-preview design-mode-preview--${this.esc(mode.id)}" aria-hidden="true">
+                    <span class="design-mode-preview-bar"></span>
+                    <span class="design-mode-preview-row"></span>
+                    <span class="design-mode-preview-row design-mode-preview-row--accent"></span>
+                </span>
+                <span class="design-mode-copy">
+                    <strong>${this.esc(mode.label)}</strong>
+                    <small>${this.esc(mode.hint)}</small>
+                </span>
+                <span class="design-mode-note">${this.esc(mode.note)}</span>
+            </button>
+        `).join('');
+        if (host.innerHTML !== html) host.innerHTML = html;
+    }
+
+    // Обратная совместимость: старый API продолжает работать, но теперь это
+    // просто «переключить между classic и flat» поверх designMode.
+    loadExperimentalDesign() {
+        return this.loadDesignMode() === 'flat';
+    }
+
+    saveExperimentalDesign(enabled) {
+        this.saveDesignMode(enabled ? 'flat' : 'classic');
     }
 
     applyExperimentalDesign() {
-        document.body?.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
-        const toggle = document.getElementById('inputExperimentalDesign');
-        if (toggle) toggle.checked = !!this.experimentalDesign;
+        this.applyDesignMode();
     }
 
     voiceTraceStorageKey() {
@@ -13459,8 +14291,11 @@ ZaliMixin(ZaliInterface, class {
     // reference and E2E key from before it is dangling. Bumping this string performs
     // exactly one purge per client; clients that already purged carry the same value
     // in `zali_local_reset_v1` and skip it forever after.
+    //
+    // 2026-09-05: production migrated from `zms` to `ms` with no data carried over
+    // (old host lost/inaccessible) — a second, unrelated reset boundary, same purge.
     localResetEpoch() {
-        return '2026-07-31T19:00:00Z';
+        return '2026-09-05T21:00:00Z';
     }
 
     localResetMarkerKey() {
@@ -13580,13 +14415,71 @@ ZaliMixin(ZaliInterface, class {
             if (!Object.keys(chats).length && !Object.keys(serverChats).length) {
                 return this.loadInjectedMessageCache();
             }
-            return {
+            return this.restoreAttachmentPayloads({
                 chats: Object.fromEntries(Object.entries(chats).filter(([, msgs]) => Array.isArray(msgs)).map(([peer, msgs]) => [peer, msgs.filter(msg => msg && typeof msg === 'object')])),
                 serverChats: Object.fromEntries(Object.entries(serverChats).filter(([, msgs]) => Array.isArray(msgs)).map(([peer, msgs]) => [peer, msgs.filter(msg => msg && typeof msg === 'object')])),
-            };
+            });
         } catch (e) {
             return this.loadInjectedMessageCache();
         }
+    }
+
+    // localStorage wins over the native-injected cache, so once an archive stops
+    // fitting the quota and the payload-free copy takes over (see
+    // writeMessageCacheToStorage), the winning copy is the one WITHOUT the
+    // attachment bytes — that would silently turn every photo in history into a
+    // name-only placeholder on the next native launch. The native cache file has
+    // no quota and still holds the payloads: fold them back in, by message id.
+    //
+    // No-op in a plain browser tab (nothing is injected) and no-op when nothing
+    // is missing, which is the normal case — the probe below stops at the first
+    // attachment that already has its payload.
+    restoreAttachmentPayloads(cache) {
+        const needsPayload = (store) => Object.values(store || {}).some(msgs => (msgs || []).some(
+            msg => (msg?.attachments || []).some(att => att && !att.dataUrl && !att.data_url),
+        ));
+        if (!needsPayload(cache.chats) && !needsPayload(cache.serverChats)) return cache;
+
+        let injected;
+        try {
+            injected = this.loadInjectedMessageCache();
+        } catch (e) {
+            return cache;
+        }
+        const byId = new Map();
+        for (const store of [injected.chats, injected.serverChats]) {
+            for (const msgs of Object.values(store || {})) {
+                for (const msg of msgs || []) {
+                    const id = String(msg?.id || msg?.clientId || '').trim();
+                    if (id && (msg.attachments || []).length) byId.set(id, msg.attachments);
+                }
+            }
+        }
+        if (!byId.size) return cache;
+
+        let restored = 0;
+        for (const store of [cache.chats, cache.serverChats]) {
+            for (const msgs of Object.values(store || {})) {
+                for (const msg of msgs || []) {
+                    const attachments = msg?.attachments || [];
+                    if (!attachments.length) continue;
+                    const source = byId.get(String(msg.id || msg.clientId || '').trim());
+                    if (!source) continue;
+                    attachments.forEach((att, index) => {
+                        if (!att || att.dataUrl || att.data_url) return;
+                        const from = source[index];
+                        // Position AND name must agree: a message edited on
+                        // another device can carry a different attachment set
+                        // under the same id.
+                        if (!from || from.name !== att.name) return;
+                        const payload = from.dataUrl || from.data_url || '';
+                        if (payload) { att.dataUrl = payload; restored += 1; }
+                    });
+                }
+            }
+        }
+        if (restored) this.trace(`restoreAttachmentPayloads restored=${restored}`);
+        return cache;
     }
 
     loadInjectedMessageCache() {
@@ -13628,53 +14521,86 @@ ZaliMixin(ZaliInterface, class {
         this.saveStoredMessageCache();
     }
 
+    // The persisted shape of an attachment. Deliberately NOT the render shape:
+    // normalizeAttachment() also returns `src`, a blob: URL that is dead the
+    // moment the page reloads, and writing it to disk would both waste space and
+    // leave a dangling reference in the cache.
+    persistableAttachment(att) {
+        return {
+            id: att.id,
+            name: att.name,
+            mimeType: att.mimeType,
+            kind: att.kind,
+            size: att.size,
+            dataUrl: att.dataUrl,
+            archivePath: att.archivePath,
+        };
+    }
+
+    // The same store with every attachment payload removed. This — not the full
+    // copy — is what localStorage normally receives, and it is also the change
+    // detector for the whole save. See saveStoredMessageCache().
+    stripMessageCachePayloads(payload) {
+        const strip = (store) => Object.fromEntries(Object.entries(store || {}).map(([key, msgs]) => [
+            key,
+            (msgs || []).map(msg => (
+                (msg.attachments || []).length
+                    ? { ...msg, attachments: msg.attachments.map(att => ({ ...att, dataUrl: '' })) }
+                    : msg
+            )),
+        ]));
+        return { chats: strip(payload.chats), serverChats: strip(payload.serverChats) };
+    }
+
+    // True when the attachment payloads are safe to leave out of the localStorage
+    // copy, because something else on this platform is keeping them.
+    //
+    //   macOS  — declares saveMessageCache, so the full payload goes to the
+    //            native cache file (no quota) and loadStoredMessageCache() folds
+    //            it back in.
+    //   browser— the payload is a blob: URL that is already dead on the next page
+    //            load, so persisting it never achieved anything; history is
+    //            repaired by the network resync instead.
+    //   Windows/iOS/Android — no native cache file, so localStorage is the only
+    //            copy there is. Payloads are kept until they stop fitting, and
+    //            writeMessageCacheToStorage() drops them at that point.
+    messageCachePayloadsHeldElsewhere() {
+        if (this.nativeSupports('saveMessageCache')) return true;
+        return !this.hasNativeBridge();
+    }
+
     saveStoredMessageCache() {
-        // Keeps dataUrl (native: self-contained data: URL, survives reload; browser: a
-        // blob: URL, already dead on the next page load regardless of what's cached —
-        // that case is repaired by the network resync in loadBrowserDmHistory/
-        // syncActiveConversation, not by this cache). Dropping dataUrl here used to mean
-        // every attachment permanently degraded to a name-only, undownloadable placeholder
-        // on the next native launch, since archivePath was never wired to any re-fetch.
-        // localStorage quota overflow (large attachments) already falls back gracefully
-        // via warnStorageFallback below.
         const sanitizeMessages = (store) => Object.fromEntries(Object.entries(store || {}).map(([key, msgs]) => [
             key,
             Array.isArray(msgs) ? msgs.map(msg => ({
                 ...msg,
-                attachments: this.normalizeAttachments(msg.attachments),
+                attachments: this.normalizeAttachments(msg.attachments).map(att => this.persistableAttachment(att)),
             })) : [],
         ]));
         const payload = {
             chats: sanitizeMessages(this.S.chats),
             serverChats: sanitizeMessages(this.S.serverChats),
         };
-        const json = JSON.stringify(payload);
         const storageKey = this.messageCacheStorageKey();
-        // The two expensive halves of a save are the synchronous localStorage write
-        // (disk I/O on the main thread) and the native bridge post, which serialises
-        // the whole store a second time to cross the IPC boundary. Plenty of saves are
-        // scheduled by state churn that leaves the persisted shape byte-identical
-        // (status flips that normalise away, re-merges of already-known history), and
-        // those used to pay both costs for nothing. The storage key is part of the
-        // guard so an account switch never inherits the previous account's "already
-        // saved" verdict.
+
+        // The change detector is the PAYLOAD-FREE serialisation, not the full one.
+        //
+        // This used to be JSON.stringify() of the entire store, attachment base64
+        // and all: ~9 ms of main-thread work on a modest conversation with photos,
+        // paid on every save including the many that change nothing (a status flip
+        // that normalises away, a re-merge of already-known history). Attachment
+        // bytes are immutable once received — a message whose attachments change
+        // is a different message, with different ids and sizes, and those ARE in
+        // this string — so the payload adds nothing a change detector can use.
+        const json = JSON.stringify(this.stripMessageCachePayloads(payload));
         const unchanged = this._lastSavedMessageCacheJson === json
             && this._lastSavedMessageCacheKey === storageKey;
-        this.saveInjectedMessageCache(json);
+        // The object, not a string: loadInjectedMessageCache() accepts either, and
+        // handing it the object skips a second full serialisation of the archive.
+        this.saveInjectedMessageCache(payload);
         if (unchanged) return;
 
-        try {
-            localStorage.setItem(storageKey, json);
-            this._lastSavedMessageCacheJson = json;
-            this._lastSavedMessageCacheKey = storageKey;
-        } catch (e) {
-            // A failed write must not be remembered as saved, or the retry that the
-            // next scheduled save would have been gets skipped too.
-            this._lastSavedMessageCacheJson = null;
-            this._lastSavedMessageCacheKey = null;
-            this.trace(`saveStoredMessageCache localStorage failed reason=${e?.name || e?.message || e}`);
-            this.warnStorageFallback('message_cache', `Не удалось сохранить кеш сообщений в localStorage: ${e?.name || e?.message || e}`);
-        }
+        this.writeMessageCacheToStorage(storageKey, json, payload);
         if (this.nativeSupports('saveMessageCache')) {
             this.postNativeMessage({
                 type: NativeMessageTypes.SAVE_MESSAGE_CACHE,
@@ -13683,9 +14609,71 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Writes the cache, and — this is the point — never gets stuck retrying a
+    // write that cannot succeed.
+    //
+    // An archive with photos in it passes the localStorage quota (5–10 MB
+    // everywhere) long before the account gets big. The write then throws, and
+    // the old code answered that by clearing the "already saved" latch, so the
+    // very next message rebuilt the entire archive, threw again, and copied the
+    // whole thing over the native bridge again. Measured: ten consecutive
+    // messages cost 80 MB of bridge traffic, ~8 MB each, permanently, for the
+    // rest of the session. That is the shape of "it gets slower the longer you
+    // use it".
+    //
+    // Two changes. Once a full write fails the client switches to a payload-free
+    // copy for localStorage (text and history survive a reload; the attachment
+    // bytes live on in the native cache file, and loadStoredMessageCache() folds
+    // them back in). And a failed attempt is still recorded against the JSON it
+    // failed on, so an unchanged store is not retried — a genuinely new message
+    // produces different JSON and is always attempted.
+    writeMessageCacheToStorage(storageKey, liteJson, payload) {
+        // Platforms that keep the payloads elsewhere write the payload-free copy
+        // outright — nothing is lost, and the write stays proportional to the
+        // text of the conversation instead of to the photos in it.
+        if (this._messageCacheLiteMode || this.messageCachePayloadsHeldElsewhere()) {
+            try {
+                localStorage.setItem(storageKey, liteJson);
+            } catch (e) {
+                this.trace(`saveStoredMessageCache localStorage failed reason=${e?.name || e?.message || e}`);
+            }
+            this._lastSavedMessageCacheJson = liteJson;
+            this._lastSavedMessageCacheKey = storageKey;
+            return;
+        }
+
+        // Windows, iOS and Android have no native cache file, so localStorage is
+        // the only copy of an attachment there is — keep the payloads for as long
+        // as they fit, then stop trying.
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(payload));
+        } catch (e) {
+            this._messageCacheLiteMode = true;
+            this.trace(`saveStoredMessageCache localStorage full, dropping attachment payloads reason=${e?.name || e?.message || e}`);
+            this.warnStorageFallback('message_cache', 'Вложения не помещаются в локальный кеш — сохраняются только тексты сообщений.');
+            try {
+                localStorage.setItem(storageKey, liteJson);
+            } catch (inner) {
+                this.trace(`saveStoredMessageCache localStorage failed even without payloads reason=${inner?.name || inner?.message || inner}`);
+            }
+        }
+        // Recorded whatever happened. The old code cleared this latch on failure
+        // so the "retry" would not be skipped — but the retry was byte-identical
+        // and failed identically, so every subsequent message re-serialised and
+        // re-copied the entire archive for nothing: measured at 80 MB of bridge
+        // traffic across ten messages, permanently, for the rest of the session.
+        // A genuinely new message produces a different string and is always tried.
+        this._lastSavedMessageCacheJson = liteJson;
+        this._lastSavedMessageCacheKey = storageKey;
+    }
+
+    // Stored as the object it already is. loadInjectedMessageCache() accepts
+    // either shape, and stringifying here meant a second full serialisation of
+    // every attachment in the archive on every save, purely to hand the result
+    // back to a JSON.parse() later in the same page.
     saveInjectedMessageCache(value) {
         try {
-            window.__ZALI_MESSAGE_CACHE = typeof value === 'string' ? value : JSON.stringify(value || { chats: {}, serverChats: {} });
+            window.__ZALI_MESSAGE_CACHE = value || { chats: {}, serverChats: {} };
         } catch (e) {}
     }
 
@@ -13725,7 +14713,7 @@ ZaliMixin(ZaliInterface, class {
         });
 
         Object.keys(normalized).forEach(peer => {
-            normalized[peer].sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+            normalized[peer].sort((a, b) => this.compareMessagesByTime(a, b));
         });
 
         const before = JSON.stringify(this.S.chats || {});
@@ -14113,13 +15101,22 @@ ZaliMixin(ZaliInterface, class {
         return out;
     }
 
-    async fetchCanonicalKeyIds(scopes = []) {
+    // `allowCached` is opt-in and deliberately off by default: every other caller
+    // uses this to decide whether a local key is a fork, and a stale answer there
+    // is worse than a request. It exists for the decrypt-failure reporter, which
+    // asks about the same scope once per undecryptable message on screen — one
+    // batched lookup up front, then cache hits for the rest of the batch.
+    async fetchCanonicalKeyIds(scopes = [], { allowCached = false } = {}) {
         const list = Array.from(new Set(
             (Array.isArray(scopes) ? scopes : [scopes])
                 .map(scope => String(scope || '').trim())
                 .filter(Boolean)
         )).slice(0, 200);
         if (!list.length || !this.S.session?.token) return new Map();
+        if (allowCached) {
+            const cache = this.canonicalKeyIdCache();
+            if (list.every(scope => cache.has(scope))) return cache;
+        }
         try {
             const res = await this.apiFetch(this.apiRoutes.conversationKeys.lookup(list.join(',')), { includeDeviceId: true });
             if (!res.ok) throw new Error(await res.text().catch(() => 'lookup failed'));
@@ -14181,6 +15178,8 @@ ZaliMixin(ZaliInterface, class {
             this.trace(`requestKeyRepublish reason=${reason} scope=${scoped}`);
             return true;
         } catch (e) {
+"""#,
+    #"""
             this.trace(`requestKeyRepublish failed reason=${reason} scope=${scoped} error=${e?.message || e}`);
             return false;
         }
@@ -14535,8 +15534,6 @@ ZaliMixin(ZaliInterface, class {
 
     async saveVaultUnlockSecret(secret, token = null) {
         const passphrase = String(secret || '').trim();
-"""#,
-    #"""
         const guard = String(token || this.S.session?.token || '').trim();
         try {
             if (!passphrase || !guard) {
@@ -17325,16 +18322,22 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Только "по-настоящему мёртвый" адрес — голый IP прод-сервера на :3000,
+    // оставшийся от эпохи до nginx/TLS (сейчас прод только по HTTPS через
+    // msgs.zalikus.org). localhost/127.0.0.1/[::1] здесь раньше тоже считались
+    // "дефолтными" и на каждой загрузке конфига незаметно подменялись обратно
+    // на прод — именно на эти адреса рассчитана normalizeLocalApiAddress()
+    // ниже (сама дописывает :3000, канонизирует localhost -> 127.0.0.1), так
+    // что кнопка «Сохранить» на экране входа не могла сохранить локальный
+    // адрес НИКОГДА: значение переживало один цикл рендера и тут же
+    // откатывалось на прод при следующем applyNetworkConfigToInputs()/
+    // loadNetworkConfig(). Явно сохранённый через форму адрес теперь всегда
+    // уважается — эвристика восстановления актуальна только для мёртвого
+    // IP-адреса ниже.
     isDefaultableNetworkUrl(value) {
         const raw = String(value || '').trim().toLowerCase();
         if (!raw) return true;
         return (
-            raw.startsWith('http://localhost') ||
-            raw.startsWith('https://localhost') ||
-            raw.startsWith('http://127.0.0.1') ||
-            raw.startsWith('https://127.0.0.1') ||
-            raw.startsWith('http://[::1]') ||
-            raw.startsWith('https://[::1]') ||
             raw.startsWith('http://89.108.76.89:3000') ||
             raw.startsWith('https://89.108.76.89:3000')
         );
@@ -18340,6 +19343,8 @@ ZaliMixin(ZaliInterface, class {
         const serverChannelKindInput = document.getElementById('serverChannelKindInput');
         const serverAvatarUploadBtn = document.getElementById('serverAvatarUploadBtn');
         const serverAvatarRemoveBtn = document.getElementById('serverAvatarRemoveBtn');
+"""#,
+    #"""
         const serverBannerUploadBtn = document.getElementById('serverBannerUploadBtn');
         const serverBannerRemoveBtn = document.getElementById('serverBannerRemoveBtn');
         const serverRoleNameInput = document.getElementById('serverRoleNameInput');
@@ -18647,8 +19652,6 @@ ZaliMixin(ZaliInterface, class {
             icon: String(iconInput?.value ?? current.icon ?? ''),
             color: this.normalizeColorValue(colorInput?.value || current.color || '#cbff00'),
             joinLink: String(joinLinkInput?.value ?? current.joinLink ?? ''),
-"""#,
-    #"""
             isPublic: publicInput ? !!publicInput.checked : !!current.isPublic,
         };
         this.setServerModalState({
@@ -19846,6 +20849,12 @@ ZaliMixin(ZaliInterface, class {
                     // step almost nobody performs, and a keyless device is what makes
                     // messages end up encrypted with a key nobody else has.
                     void this.retryPublishConversationKeys({ reason: 'device_approved_push' });
+                } else if (payload && typeof payload === 'object' && payload.type && this.dispatchRealtimeEvent(payload)) {
+                    // Общий маршрутизатор (state_sync.js) — ТОТ ЖЕ, в который
+                    // нативные оболочки отдают нераспознанные кадры. Ветка стоит
+                    // до key_republish_request, но вреда нет: она возвращает false
+                    // для всего, что разбирают ветки ниже, и цепочка идёт дальше.
+                    // Так у браузера и у нативы одна и та же логика на новые типы.
                 } else if (payload && typeof payload === 'object' && payload.type === 'key_republish_request') {
                     // A participant of a specific scope is telling us it holds the wrong
                     // key (or none). Republish just that scope straight away.
@@ -22308,6 +23317,8 @@ ZaliMixin(ZaliInterface, class {
         this.voiceTrace('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
         // Not awaited — see unlockVoicePlayback. Awaited here, a refused resume() left
         // the callee holding callSetupInFlight forever: the accept was never sent, and
+"""#,
+    #"""
         // «Принять» silently did nothing on every later call too.
         void this.unlockVoicePlayback();
         this.voice.roomId = String(invite.roomId || '').trim();
@@ -22530,7 +23541,7 @@ ZaliMixin(ZaliInterface, class {
             || String(m.clientId || '').trim() === id);
         if (index >= 0) arr[index] = { ...arr[index], ...message };
         else arr.push(message);
-        arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+        arr.sort((a, b) => this.compareMessagesByTime(a, b));
         this.saveStoredMessageCache();
         this.trace(`applyCallRecordMessage peer=${peer} direction=${direction} roomId=${callInfo.roomId}`);
         this.renderContacts();
@@ -22580,7 +23591,7 @@ ZaliMixin(ZaliInterface, class {
             arr[existingIndex] = { ...arr[existingIndex], ...message };
         } else {
             arr.push(message);
-            arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+            arr.sort((a, b) => this.compareMessagesByTime(a, b));
         }
         call.recorded = true;
         this.voice.callTrack = null;
@@ -22704,8 +23715,6 @@ ZaliMixin(ZaliInterface, class {
                 this.scheduleVoiceNegotiationRetry('offer-collision-ignored');
                 return;
             }
-"""#,
-    #"""
             // We are going to accept this offer, so the connection has to be in a
             // state that can actually take one. 'stable' can; 'have-local-offer' can
             // once we roll our own offer back. Every other non-stable state
@@ -23852,7 +24861,7 @@ ZaliMixin(ZaliInterface, class {
 
         const next = merged
             .map(identity => mergedByKey.get(identity))
-            .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+            .sort((a, b) => this.compareMessagesByTime(a, b));
         this.S.serverChats[key] = next;
         this.saveStoredServerChats();
 
@@ -24492,14 +25501,40 @@ ZaliMixin(ZaliInterface, class {
         return this.avatarCache.has(key) ? this.avatarCache.get(key) : undefined;
     }
 
+    // The single place an avatar enters the cache, and therefore the single
+    // place that decides what shape it is kept in.
+    //
+    // Whatever arrives here is normalised to a blob: URL, because this value is
+    // inlined into the markup of every contact row and of every incoming message
+    // that opens or closes a group. The native bridge hands avatars over as
+    // data: URLs, and one 64 KB avatar measured 30 copies of its own base64 —
+    // 2.5 MB — inside a single render of a 60-message conversation. A blob: URL
+    // is ~40 characters and, unlike a data: URL rebuilt on each innerHTML write,
+    // lets the browser reuse the image it already decoded, so avatars stop
+    // blinking on unrelated re-renders. The network branch of
+    // ensureAvatarLoaded() has always produced a blob: URL; this makes the
+    // native branch agree instead of each caller deciding for itself.
     saveStoredAvatar(username, dataUrl) {
         const key = this.avatarCacheKey(username);
+        const next = this.toAvatarObjectUrl(dataUrl);
         const prev = this.avatarCache.get(key);
-        if (prev && typeof prev === 'string' && prev.startsWith('blob:') && prev !== dataUrl) {
+        if (prev && typeof prev === 'string' && prev.startsWith('blob:') && prev !== next) {
             try { URL.revokeObjectURL(prev); } catch (e) {}
         }
         this.avatarFetchSeq.set(key, (this.avatarFetchSeq.get(key) || 0) + 1);
-        this.avatarCache.set(key, dataUrl || null);
+        this.avatarCache.set(key, next || null);
+    }
+
+    toAvatarObjectUrl(value) {
+        const source = String(value || '');
+        if (!source.startsWith('data:')) return value;
+        const blob = this.dataUrlToBlob(source);
+        if (!blob) return value;
+        try {
+            return URL.createObjectURL(blob);
+        } catch (e) {
+            return value;
+        }
     }
 
     clearStoredAvatar(username) {
@@ -24757,10 +25792,18 @@ ZaliMixin(ZaliInterface, class {
         const safeName = String(filename || 'attachment').trim() || 'attachment';
         if (!source) return false;
 
-        if (this.nativeSupports('downloadAttachment') && source.startsWith('data:')) {
+        // Attachments are rendered through a blob: URL (attachmentDisplayUrl), so
+        // the href on the link is no longer the payload. The native save bridge
+        // wants the payload — recover it from the same map that minted the URL,
+        // otherwise a native shell would silently fall through to the browser
+        // `<a download>` path, which WKWebView/WebView2 do not honour.
+        const nativePayload = source.startsWith('data:')
+            ? source
+            : (this._attachmentBlobPayloads?.get(source) || '');
+        if (this.nativeSupports('downloadAttachment') && nativePayload) {
             this.postNativeMessage({
                 type: NativeMessageTypes.DOWNLOAD_ATTACHMENT,
-                dataUrl: source,
+                dataUrl: nativePayload,
                 filename: safeName,
             });
             return true;
@@ -24845,9 +25888,13 @@ ZaliMixin(ZaliInterface, class {
                             this.scheduleAvatarRefresh();
                             return null;
                         }
+                        // saveStoredAvatar() converts the bridge's data: URL to a
+                        // blob: one and returns it through the cache — see the
+                        // comment there for why the payload must not survive
+                        // into the markup.
                         this.saveStoredAvatar(name, dataUrl);
                         this.scheduleAvatarRefresh();
-                        return dataUrl;
+                        return this.loadStoredAvatar(name);
                     } catch (nativeError) {
                         this.trace(`ensureAvatarLoaded native failed username=${name} err=${nativeError?.message || nativeError}`);
                     }
@@ -25938,7 +26985,22 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Debounced user search for the contact-add field. Typing "alexander" used
+    // to fire nine searches, one per keystroke, none of them cancelled — so the
+    // suggestion list also flickered through stale results whenever an earlier
+    // response overtook a later one. One request per pause in typing, and
+    // loadUsers() below drops any answer that is no longer the newest.
+    scheduleUserSearch(query, { delayMs = 220, onDone = null } = {}) {
+        const value = String(query || '');
+        if (this._userSearchTimer) clearTimeout(this._userSearchTimer);
+        this._userSearchTimer = setTimeout(() => {
+            this._userSearchTimer = 0;
+            void this.loadUsers(value).then(() => { if (onDone) onDone(); });
+        }, Math.max(0, Number(delayMs) || 0));
+    }
+
     async loadUsers(query = '', { interactive = false } = {}) {
+        const seq = (this._loadUsersSeq = (this._loadUsersSeq || 0) + 1);
         try {
             this.trace(`loadUsers start user=${this.myName()} tokenSet=${!!this.S.session?.token}`);
             if (!this.S.session?.token) {
@@ -25947,6 +27009,8 @@ ZaliMixin(ZaliInterface, class {
             }
             const search = String(query || '').trim();
             const res = await this.apiFetch(this.apiRoutes.users.search(search), { interactive });
+            // A slower earlier query must never overwrite a newer answer.
+            if (seq !== this._loadUsersSeq) return;
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 this.trace(`loadUsers failed status=${res.status} body=${text.slice(0, 300)}`);
@@ -26001,6 +27065,10 @@ ZaliMixin(ZaliInterface, class {
                     this.timeStage('loadContacts', () => this.loadContacts()),
                     this.timeStage('loadUsers', () => this.loadUsers()),
                     this.timeStage('loadServers', () => this.loadServers({ silent: true })),
+                    // Заявки в друзья нужны здесь, а не при открытии профиля:
+                    // без них бейдж на своей аватарке остался бы пустым до
+                    // первого захода в профиль, то есть о заявке никто бы не узнал.
+                    this.timeStage('loadFriendRequests', () => this.loadFriendRequests()),
                 ]);
                 await this.timeStage('bootstrapDeviceTrust', () => this.bootstrapDeviceTrust());
                 await this.timeStage('restoreCloudVaultSnapshot', () => this.restoreCloudVaultSnapshot({ reason }));
@@ -26330,6 +27398,8 @@ ZaliMixin(ZaliInterface, class {
                 const msg = 'Пароль должен быть не менее 6 символов';
                 this.S.auth.error = msg;
                 if (errorBox) errorBox.textContent = msg;
+"""#,
+    #"""
                 this.addLogEntry({ type: 'WARN', msg: `Регистрация отклонена для ${username}: ${msg}`, ts: new Date().toLocaleTimeString() });
                 return;
             }
@@ -26655,7 +27725,57 @@ ZaliMixin(ZaliInterface, class {
         return `<span class="file-icon" aria-hidden="true">${ext ? this.esc(ext) : ''}</span>`;
     }
 
+    // The URL an attachment is RENDERED with. A `data:` URL is swapped for a
+    // `blob:` one once and reused from then on.
+    //
+    // This is not micro-tuning. The native shells hand attachments to the WebView
+    // as `data:` URLs (WebView.swift makeDataURL / native/util.rs make_data_url),
+    // and that value used to go straight into the message-list HTML. Measured on a
+    // 60-message conversation with 6 MB of photos: the rendered string was 10.5 MB
+    // for 1070 characters of text, all of it base64 — scanned five times by esc()
+    // on the way in and held a second time in _lastMessagesHTML. A `blob:` URL is
+    // ~40 characters, and unlike a data: URL rebuilt from scratch on each
+    // innerHTML write, the browser can reuse the image it already decoded behind
+    // it, so media stops flickering on unrelated re-renders. See
+    // scripts/perf_doctor.
+    //
+    // Called from renderAttachmentPreview() and nowhere else, deliberately: doing
+    // it in normalizeAttachment() would also fire from saveStoredMessageCache(),
+    // which walks EVERY attachment of EVERY conversation and would then hold a
+    // Blob copy of an archive most of which is not on screen and may never be.
+    //
+    // Keyed by the payload string rather than by the attachment object: the same
+    // photo appears as several distinct objects (state, a normalised copy, an
+    // outbox entry), and one decoded copy should serve all of them.
+    attachmentDisplayUrl(rawUrl) {
+        const value = String(rawUrl || '');
+        if (!value.startsWith('data:')) return value;
+        if (!this._attachmentBlobUrls) this._attachmentBlobUrls = new Map();
+        if (!this._attachmentBlobPayloads) this._attachmentBlobPayloads = new Map();
+        const cached = this._attachmentBlobUrls.get(value);
+        if (cached) return cached;
+        const blob = this.dataUrlToBlob(value);
+        if (!blob) return value;
+        let url;
+        try {
+            url = URL.createObjectURL(blob);
+        } catch (e) {
+            return value;
+        }
+        this._attachmentBlobUrls.set(value, url);
+        // Reverse lookup: the native download bridge needs the payload back — see
+        // downloadAttachmentFromHref().
+        this._attachmentBlobPayloads.set(url, value);
+        return url;
+    }
+
     normalizeAttachment(att = {}) {
+        // Already normalised — hand it straight back. renderMessageBody() maps an
+        // array that normalizeAttachments() has just produced, and
+        // renderAttachmentPreview() normalises each element again, so every
+        // attachment was rebuilt (and its sticker-detection regex re-run) one
+        // extra time per bubble per frame.
+        if (att && att.__zaliNormalizedShape === true) return att;
         const mimeType = att.mimeType || att.mime_type || '';
         // Stickers override an incoming `kind` on purpose: a peer that predates
         // .tgs support labels them 'file', and honouring that would render an
@@ -26663,19 +27783,58 @@ ZaliMixin(ZaliInterface, class {
         const kind = this.isStickerAttachment(att)
             ? 'sticker'
             : (att.kind || this.attachmentKindFor(att) || 'file');
-        return {
+        const dataUrl = att.dataUrl || att.data_url || att.url || '';
+        const normalized = {
             id: att.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             name: att.name || 'attachment',
             mimeType,
             kind,
             size: Number(att.size || 0),
-            dataUrl: att.dataUrl || att.data_url || att.url || '',
+            // The payload. Sending, editing, persistence and the renderer all
+            // read this one; the renderer passes it through
+            // attachmentDisplayUrl() first.
+            dataUrl,
             archivePath: att.archivePath || att.archive_path || '',
         };
+        // Non-enumerable: this object is spread into the persisted cache and into
+        // the native bridge payload, and the marker has no business in either.
+        Object.defineProperty(normalized, '__zaliNormalizedShape', { value: true });
+        return normalized;
     }
 
+    // Memoised against the exact array it was given. Rendering one message calls
+    // this three times — messageHasMedia(), messageIsGifOnly()/
+    // messageIsImageCaption() and renderMessageBody() each normalise the same
+    // attachments independently — so every bubble used to rebuild its attachment
+    // objects and re-run the sticker-detection regex three times per frame.
+    //
+    // The cache is validated, not trusted: it is discarded unless every source
+    // object and every payload string is still the identical reference. That
+    // covers the one in-place mutation that exists (restoreAttachmentPayloads
+    // filling `dataUrl` back in at load time) without needing to know about it.
     normalizeAttachments(attachments) {
-        return Array.isArray(attachments) ? attachments.map(att => this.normalizeAttachment(att)) : [];
+        if (!Array.isArray(attachments)) return [];
+        if (!attachments.length) return [];
+        const cached = attachments.__zaliNormalized;
+        if (cached
+            && cached.raw.length === attachments.length
+            && cached.raw.every((att, i) => att === attachments[i] && cached.payloads[i] === (attachments[i]?.dataUrl || attachments[i]?.data_url || attachments[i]?.url || ''))) {
+            return cached.value;
+        }
+        const value = attachments.map(att => this.normalizeAttachment(att));
+        try {
+            Object.defineProperty(attachments, '__zaliNormalized', {
+                value: {
+                    raw: attachments.slice(),
+                    payloads: attachments.map(att => att?.dataUrl || att?.data_url || att?.url || ''),
+                    value,
+                },
+                writable: true,
+                configurable: true,
+                enumerable: false,
+            });
+        } catch (e) { /* frozen array — just skip the memo */ }
+        return value;
     }
 
     formatFileSize(bytes) {
@@ -26856,8 +28015,6 @@ ZaliMixin(ZaliInterface, class {
         const escaped = this.esc(text).replace(/\n/g, '<br>');
         return escaped.replace(/https?:\/\/[^\s<>()"]+/gi, (match) => {
             const rawUrl = match.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
-"""#,
-    #"""
             const safeHref = this.esc(rawUrl);
             return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer">${match}</a>`;
         });
@@ -26886,7 +28043,10 @@ ZaliMixin(ZaliInterface, class {
 
     renderAttachmentPreview(att, compact = false, options = {}) {
         const attachment = this.normalizeAttachment(att);
-        const src = this.safeAttachmentUrl(attachment.dataUrl || attachment.url || '');
+        // Through attachmentDisplayUrl(): the payload never belongs in the markup.
+        const src = this.safeAttachmentUrl(
+            this.attachmentDisplayUrl(attachment.dataUrl || attachment.url || ''),
+        );
         const gifLike = !!options.gifLike || attachment.kind === 'gif' || attachment.mimeType === 'image/gif';
         const showControls = options.controls !== undefined ? !!options.controls : !gifLike;
         if (!src) {
@@ -26910,8 +28070,14 @@ ZaliMixin(ZaliInterface, class {
         if (attachment.kind === 'video' || (attachment.mimeType || '').startsWith('video/')) {
             const shellClass = `discord-media-shell discord-media-shell-video${gifLike ? ' discord-media-shell-gif' : ''}${compact ? ' compact' : ''}`;
             const shellStyle = this.mediaShellStyle(src, { gifLike });
+            // autoplay/loop/muted belong to gif-like clips only. They used to be
+            // set unconditionally, so every ordinary video message in the window
+            // decoded and looped at once, forever, whether or not anyone had
+            // asked it to play — and, being muted by default, an actual video
+            // also started silent. A real video now waits for the play button.
+            const gifPlayback = gifLike ? ' autoplay loop muted' : '';
             return `<div class="${shellClass}"${shellStyle}>
-                <video class="media media-video${compact ? ' compact' : ''}${gifLike ? ' media-gif-like' : ''}" data-gif-like="${gifLike ? '1' : '0'}" src="${this.esc(src)}"${showControls ? ' controls' : ''} autoplay loop muted playsinline preload="${gifLike ? 'auto' : 'metadata'}"></video>
+                <video class="media media-video${compact ? ' compact' : ''}${gifLike ? ' media-gif-like' : ''}" data-gif-like="${gifLike ? '1' : '0'}" src="${this.esc(src)}"${showControls ? ' controls' : ''}${gifPlayback} playsinline preload="${gifLike ? 'auto' : 'metadata'}"></video>
             </div>`;
         }
 
@@ -27027,6 +28193,49 @@ ZaliMixin(ZaliInterface, class {
     // out (the server can't attribute an unauthenticated report to anyone).
     // Only a SHA-256 fingerprint of any key is ever sent — see
     // conversationKeyId() — never the key itself.
+    // Render-loop entry point for a decryption failure.
+    //
+    // _renderMessagesNow() hits one of these per undecryptable message, so a
+    // screenful of unreadable history used to fire, from inside the render
+    // frame, one POST *and* one canonical-key lookup per message — the lookup
+    // has no cache shortcut of its own, so fifty placeholders meant a hundred
+    // requests leaving at once, plus a DOM read of the log panel for each. The
+    // reports are worth keeping; doing them during the frame is not.
+    //
+    // Deferred out of the frame, and the whole batch shares a single canonical
+    // lookup instead of repeating it per message.
+    queueDecryptFailureReport(details = {}) {
+        if (!this._decryptFailureQueue) this._decryptFailureQueue = [];
+        // Bounded: a very long unreadable history should cost a fixed amount of
+        // telemetry, not one request per row.
+        if (this._decryptFailureQueue.length >= 50) return;
+        this._decryptFailureQueue.push(details);
+        if (this._decryptFailureFlushTimer) return;
+        this._decryptFailureFlushTimer = setTimeout(() => {
+            this._decryptFailureFlushTimer = 0;
+            void this.flushDecryptFailureReports();
+        }, 300);
+    }
+
+    async flushDecryptFailureReports() {
+        const batch = this._decryptFailureQueue || [];
+        this._decryptFailureQueue = [];
+        if (!batch.length) return;
+        const scopes = Array.from(new Set(batch
+            .map(details => details.scope || this.conversationScopeKey(
+                details.sender === this.myName() ? details.receiver : details.sender,
+                details.serverId,
+                details.channelId,
+            ))
+            .filter(Boolean)));
+        // One lookup for the whole batch; each report below then reads it from
+        // the cache instead of asking again.
+        try { await this.fetchCanonicalKeyIds(scopes); } catch (e) {}
+        for (const details of batch) {
+            await this.reportDecryptFailure({ ...details, useCachedCanonicalKeyIds: true });
+        }
+    }
+
     async reportDecryptFailure(details = {}) {
         if (!this.S.session?.token) return;
         const key = [
@@ -27056,7 +28265,9 @@ ZaliMixin(ZaliInterface, class {
             let canonicalKeyId = '';
             if (scope) {
                 try {
-                    const canonical = await this.fetchCanonicalKeyIds([scope]);
+                    const canonical = await this.fetchCanonicalKeyIds([scope], {
+                        allowCached: !!details.useCachedCanonicalKeyIds,
+                    });
                     canonicalKeyId = canonical.get(scope) || '';
                 } catch (e) { /* best-effort — see fetchCanonicalKeyIds's own fallback */ }
             }
@@ -27181,7 +28392,16 @@ ZaliMixin(ZaliInterface, class {
                     if (video.dataset.userPaused === '1') return;
                     if (entry.isIntersecting) {
                         ensurePlaying();
+                        return;
                     }
+                    // Symmetric pause. Without it this observer could only ever
+                    // start playback, so a looping clip scrolled out of the
+                    // window kept decoding frames for the rest of the session —
+                    // in a media-heavy chat, several of them at once. Animated
+                    // stickers already do exactly this (modules/tgs.js); a
+                    // paused element keeps its current frame, so nothing about
+                    // the picture changes, only the work behind it.
+                    if (!video.paused) video.pause?.();
                 }, { root: null, threshold: 0.15, rootMargin: '160px' });
                 observer.observe(video);
                 video.dataset.gifObserver = '1';
@@ -27887,7 +29107,7 @@ ZaliMixin(ZaliInterface, class {
                     : this.fmtDate(last.timestamp);
             }
             return `<div class="contact ${active}" data-name="${this.esc(contact)}">
-                <div class="ava">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
+                <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}</div>
                     <div class="contact-prev">${preview}</div>
@@ -28795,7 +30015,10 @@ ZaliMixin(ZaliInterface, class {
             // does and doesn't guarantee.
             if (isNotice) {
                 if (noticeType === 'decrypt-error') {
-                    void this.reportDecryptFailure({
+                    // Queued, not awaited-and-fired here: see
+                    // queueDecryptFailureReport() for why this must not happen
+                    // inside the render frame.
+                    this.queueDecryptFailureReport({
                         placeholderText: msg.text,
                         messageId: msg.id,
                         clientId: msg.clientId,
@@ -28825,7 +30048,7 @@ ZaliMixin(ZaliInterface, class {
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
                 html += `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
-                    html += `<div class="msg-ava">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                    html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
@@ -28841,7 +30064,7 @@ ZaliMixin(ZaliInterface, class {
 
             html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (!isCall && !isOut && showAvatar) {
-                html += `<div class="msg-ava">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (!isCall && !isOut) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
@@ -29062,12 +30285,36 @@ ZaliMixin(ZaliInterface, class {
         if (isServers && this.isVoiceChannel(channel)) return;
         if (!isServers && !this.S.current) return;
         this.trace(`sendInputMessage context mode=${activeMode} navMode=${this.S.navMode} activeType=${String(this.S.activeConversationType || 'nil')} current=${String(this.S.current || 'nil')} activeServer=${String(this.S.activeServer || 'nil')} activeChannel=${String(this.S.activeChannel || 'nil')} rendered=${String(this.lastRenderedConversationKey || 'nil')} serverKey=${String(this.currentServerChatKey() || 'nil')}`);
-        const cryptoKey = await this.resolveConversationCryptoKey({
+        // Fast path, and the whole point of it: when this device already holds the
+        // conversation key — the overwhelmingly common case — nothing between
+        // pressing Enter and the message appearing is allowed to await. The old
+        // code awaited resolveConversationCryptoKey() unconditionally, and since
+        // the composer is only cleared after that point, the typed text sat in the
+        // input box for a network round trip and Enter read as not having worked.
+        //
+        // resolveConversationCryptoKey() returns this exact value on its own fast
+        // path; it is still called, unawaited, for the side effects that path has
+        // (key display, background reconciliation with the server registry).
+        const sendScope = this.conversationScopeKey(
+            isServers ? null : this.S.current,
+            isServers ? server.id : null,
+            isServers ? channel.id : null,
+        );
+        const storedConversationKey = sendScope ? this.getStoredConversationKey(sendScope) : '';
+        const cryptoKey = storedConversationKey || await this.resolveConversationCryptoKey({
             peer: isServers ? null : this.S.current,
             serverId: isServers ? server.id : null,
             channelId: isServers ? channel.id : null,
             reason: 'sendInputMessage'
         });
+        if (storedConversationKey) {
+            void this.resolveConversationCryptoKey({
+                peer: isServers ? null : this.S.current,
+                serverId: isServers ? server.id : null,
+                channelId: isServers ? channel.id : null,
+                reason: 'sendInputMessage:background'
+            });
+        }
         const keyVersion = 2;
         this.trace(`sendInputMessage start clientId=${clientId} mode=${activeMode} sender=${this.myName()} receiver=${isServers ? channel.id : this.S.current} server=${isServers ? server.id : 'dm'} channel=${isServers ? channel.id : 'dm'} attachments=${payloadAttachments.length} textBytes=${text.length} keySet=${!!cryptoKey} tokenSet=${!!this.S.session?.token}`);
 
@@ -29150,7 +30397,7 @@ ZaliMixin(ZaliInterface, class {
                 this.initChat(this.S.current);
                 this.S.chats[this.S.current].push(outgoingMessage);
             }
-            this.saveStoredMessageCache();
+            this.scheduleSaveStoredMessageCache();
             this.scheduleRenderMessages();
             this.renderContacts();
             this.renderServerInterface();
@@ -29215,7 +30462,7 @@ ZaliMixin(ZaliInterface, class {
             this.initChat(this.S.current);
             this.S.chats[this.S.current].push(outgoingMessage);
         }
-        this.saveStoredMessageCache();
+        this.scheduleSaveStoredMessageCache();
 
         this.scheduleRenderMessages();
         this.renderContacts();
@@ -29591,6 +30838,19 @@ ZaliMixin(ZaliInterface, class {
             const reconciled = this.finalizePendingMessage(clientId, id);
             if (reconciled) {
                 this.dropPendingOutbox(clientId);
+                // The one thing reconciliation must still take from the incoming
+                // copy — see adoptAttachmentPayloads().
+                const peer = String(sender || '').trim() === this.myName()
+                    ? String(receiver || '').trim()
+                    : String(sender || '').trim();
+                const store = (serverId && channelId)
+                    ? this.S.serverChats[`${serverId}:${channelId}`]
+                    : this.S.chats[peer];
+                this.adoptAttachmentPayloads(store, {
+                    msgId: id,
+                    clientId,
+                    attachments: this.normalizeAttachments(attachments),
+                });
                 if (serverId && channelId) {
                     this.renderServerInterface();
                 } else {
@@ -29832,10 +31092,26 @@ ZaliMixin(ZaliInterface, class {
         if (!name) return;
         const muted = !!(this.S.mutedChats || {})[name];
         const percent = this.getPeerVolumePercent(name);
+        const isSelf = name === this.myName();
         const menu = document.createElement('div');
         menu.id = 'contactContextMenu';
         menu.className = 'peer-context-menu';
+        // Подписка и дружба идут первыми: это то, ради чего сюда чаще всего
+        // и жмут ПКМ. Их подписи зависят от текущих отношений, которых мы ещё
+        // не знаем, — они уточняются ниже, когда придёт профиль. До ответа
+        // пункты показывают нейтральное действие, а не мигают пустотой.
         menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" data-action="profile">
+                <span>Открыть профиль</span>
+            </button>
+            ${isSelf ? '' : `
+            <button type="button" class="peer-context-menu-item" data-action="follow">
+                <span id="contactFollowLabel">Отслеживать</span>
+            </button>
+            <button type="button" class="peer-context-menu-item" data-action="friend">
+                <span id="contactFriendLabel">Попроситься в друзья</span>
+            </button>`}
+            <div class="peer-context-menu-sep" aria-hidden="true"></div>
             <button type="button" class="peer-context-menu-item" data-action="mute">
                 <span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
@@ -29852,6 +31128,26 @@ ZaliMixin(ZaliInterface, class {
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
 
+        menu.querySelector('[data-action="profile"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.openProfile(name);
+        });
+        menu.querySelector('[data-action="follow"]')?.addEventListener('click', () => {
+            const following = menu.dataset.following === '1';
+            this.closeContactContextMenu();
+            void this.followUserDirect(name, following);
+        });
+        menu.querySelector('[data-action="friend"]')?.addEventListener('click', () => {
+            // Уже друзья — вести в профиль: удалять из друзей одним нажатием
+            // в контекстном меню слишком легко промахнуться.
+            if (menu.dataset.friend === '1') {
+                this.closeContactContextMenu();
+                void this.openProfile(name);
+                return;
+            }
+            this.closeContactContextMenu();
+            void this.requestFriendship(name);
+        });
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
@@ -29864,6 +31160,8 @@ ZaliMixin(ZaliInterface, class {
             this.setPeerVolumePercent(name, value);
         });
 
+        if (!isSelf) void this.decorateContactContextMenu(menu, name);
+
         const outsideHandler = (evt) => {
             if (menu.contains(evt.target)) return;
             this.closeContactContextMenu();
@@ -29875,6 +31173,37 @@ ZaliMixin(ZaliInterface, class {
             document.addEventListener('click', outsideHandler);
             document.addEventListener('contextmenu', outsideHandler);
         }, 0);
+    }
+
+    /**
+     * Дотягивает в открытое контекстное меню реальное состояние отношений.
+     * Отдельным запросом и после показа меню: тянуть профиль ДО открытия
+     * значило бы задержку между нажатием ПКМ и появлением меню на всю дорогу
+     * до сервера. Если меню успели закрыть — ответ просто выбрасывается.
+     */
+    async decorateContactContextMenu(menu, name) {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+            if (!res.ok) return;
+            if (!menu.isConnected) return;
+            const data = await res.json();
+            menu.dataset.following = data?.isFollowing ? '1' : '0';
+            menu.dataset.friend = data?.isFriend ? '1' : '0';
+            const followLabel = menu.querySelector('#contactFollowLabel');
+            if (followLabel) followLabel.textContent = data?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
+            const friendLabel = menu.querySelector('#contactFriendLabel');
+            if (friendLabel) {
+                if (data?.isFriend) friendLabel.textContent = 'Вы друзья';
+                else if (data?.friendRequest?.direction === 'outgoing') friendLabel.textContent = 'Заявка отправлена';
+                else if (data?.friendRequest?.direction === 'incoming') friendLabel.textContent = 'Принять заявку в друзья';
+                else friendLabel.textContent = 'Попроситься в друзья';
+            }
+            if (data?.friendRequest?.direction === 'incoming') {
+                menu.querySelector('[data-action="friend"]')?.setAttribute('data-request-id', data.friendRequest.id);
+            }
+        } catch (e) {
+            // Подписи останутся нейтральными — меню всё равно рабочее.
+        }
     }
 
     toggleMuteChannel(serverId, channelId) {
@@ -30200,6 +31529,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     isInActiveCall(status = this.voice?.status) {
+"""#,
+    #"""
         return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
     }
 });
@@ -30211,6 +31542,92 @@ ZaliMixin(ZaliInterface, class {
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
+
+    // Fills the attachment bytes back into a locally cached copy of a message you
+    // sent yourself.
+    //
+    // Reconciling your own message (finalizePendingMessage) matches it by
+    // clientId and stops — right for everything except the payload. After a
+    // reload the local copy has the attachment's name, size and type but no
+    // bytes: a browser tab never had anything to persist (a blob: URL dies with
+    // the page), and a native shell can be running the payload-free cache. The
+    // history row being reconciled against was just downloaded, unpacked and
+    // re-blobbed — it IS the repair, and discarding it left your own photos as
+    // name-only chips for good.
+    //
+    // Only ever fills a gap: a local copy that already has its bytes is left
+    // alone, so this can never replace a payload with a different one.
+    adoptAttachmentPayloads(store, { msgId = '', clientId = '', attachments = [] } = {}) {
+        if (!Array.isArray(store) || !store.length) return false;
+        if (!attachments.length || !attachments.some(att => att.dataUrl)) return false;
+        const id = String(msgId || '').trim();
+        const cid = String(clientId || '').trim();
+        const index = store.findIndex(m => (id && String(m.id || '').trim() === id)
+            || (cid && String(m.clientId || '').trim() === cid));
+        if (index < 0) return false;
+        const local = this.normalizeAttachments(store[index].attachments);
+        if (!local.length || local.some(att => att.dataUrl)) return false;
+        store[index] = { ...store[index], attachments };
+        return true;
+    }
+
+    /**
+     * Единый маршрутизатор WS-событий, общий для браузера и нативных оболочек.
+     *
+     * Зачем он вообще: раньше каждый новый тип события с сервера приходилось
+     * вписывать в четыре места — в ветку onmessage браузера и в аллоулисты
+     * macOS/Windows/Android. Пропустить одно из них ничего не стоило, и ровно
+     * так фичи «выходили на десктопе и молча минова́ли Android». Теперь оболочка
+     * отдаёт нераспознанный кадр как есть (window.receiveRealtimeEvent), а
+     * решает, что с ним делать, только этот метод.
+     *
+     * Неизвестный тип молча игнорируется — это и есть требуемое поведение для
+     * старого клиента, которому прилетело событие из более новой версии сервера.
+     *
+     * @returns {boolean} true, если событие распознано и обработано.
+     */
+    dispatchRealtimeEvent(payload) {
+        if (!payload || typeof payload !== 'object') return false;
+        const type = String(payload.type || '').trim();
+        if (!type) return false;
+
+        if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
+            // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
+            // событие в каждое соединение аккаунта. Голосовой сокет пропускает
+            // только voice_*, так что дублей быть не должно — но реконнект с
+            // повтором кадра стоил бы человеку двух одинаковых уведомлений,
+            // поэтому проверка всё равно дешевле, чем разбирательство потом.
+            if (this.isDuplicateRealtimeEvent(type, payload)) return true;
+            this.handleProfileEvent(payload);
+            return true;
+        }
+
+        this.trace(`realtime event ignored type=${type}`);
+        return false;
+    }
+
+    /**
+     * Окно подавления повторов — 10 секунд по (тип + идентификатор события).
+     * У части событий своего id нет (profile_follow), для них ключом служит
+     * отправитель: два разных подписчика за одну секунду — случай, которого в
+     * жизни не бывает, а вот один и тот же кадр дважды — бывает.
+     */
+    isDuplicateRealtimeEvent(type, payload) {
+        const key = `${type}:${payload?.id || ''}:${payload?.from || ''}:${payload?.wall || ''}`;
+        const now = this.nowMs();
+        if (!this._realtimeEventSeen) this._realtimeEventSeen = new Map();
+        const seen = this._realtimeEventSeen;
+        const previous = seen.get(key);
+        if (previous && now - previous < 10000) return true;
+        seen.set(key, now);
+        // Чистка тут же, по месту: без неё Map рос бы всю сессию.
+        if (seen.size > 200) {
+            for (const [oldKey, ts] of seen) {
+                if (now - ts >= 10000) seen.delete(oldKey);
+            }
+        }
+        return false;
+    }
 
     setUsers(users) {
         this.S.users = Array.isArray(users) ? users : [];
@@ -30321,6 +31738,7 @@ ZaliMixin(ZaliInterface, class {
                 const clientId = String(msg.clientId || msg.client_id || '').trim();
                 if (clientId && this.finalizePendingMessage(clientId, msgId, { render: false })) {
                     this.dropPendingOutbox(clientId);
+                    this.adoptAttachmentPayloads(arr, { msgId, clientId, attachments: normalizedAttachments });
                     this.markMessageSeen(msg);
                     continue;
                 }
@@ -30381,7 +31799,7 @@ ZaliMixin(ZaliInterface, class {
             touchedPeers.forEach(peer => {
                 const arr = this.S.chats[peer];
                 if (Array.isArray(arr)) {
-                    arr.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+                    arr.sort((a, b) => this.compareMessagesByTime(a, b));
                 }
             });
             this.normalizeDmChatStore();
@@ -30400,7 +31818,7 @@ ZaliMixin(ZaliInterface, class {
                     }
                     const populated = Object.entries(this.S.chats)
                         .filter(([, msgs]) => Array.isArray(msgs) && msgs.length > 0)
-                        .sort((a, b) => new Date(b[1][b[1].length - 1]?.timestamp || 0) - new Date(a[1][a[1].length - 1]?.timestamp || 0));
+                        .sort((a, b) => this.messageTimestampValue(b[1][b[1].length - 1]?.timestamp) - this.messageTimestampValue(a[1][a[1].length - 1]?.timestamp));
                     return populated[0]?.[0] || null;
                 })();
 
@@ -30930,8 +32348,6 @@ ZaliMixin(ZaliInterface, class {
             wrap.innerHTML = '';
             return;
         }
-"""#,
-    #"""
         const title = edit ? 'Редактирование' : `Ответ ${this.esc(reply.sender)}`;
         const preview = edit
             ? this.replyQuotePreview({ text: edit.originalText })
@@ -31115,6 +32531,1750 @@ ZaliMixin(ZaliInterface, class {
             this.addLogEntry({ type: 'ERROR', msg: `Не удалось удалить сообщение: ${e.message || e}`, ts: new Date().toLocaleTimeString() });
         }
     }
+});
+
+
+// --- MODULE: interface/profiles.js ---
+// --- ZaliInterface: Профили людей: состояние, загрузка, подписки, дружба, комментарии. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Здесь только модель и
+// сетевой слой профиля; отрисовка живёт в profile_ui.js, а векторная стена —
+// в autographs.js.
+//
+// Как это устроено:
+//
+//   - Профиль открывается поверх всего (оверлей), а не как ещё один "view":
+//     на профиль тыкают из списка контактов, из шапки чата и прямо из ленты
+//     сообщений, и в каждом из этих мест возвращаться нужно ровно туда, откуда
+//     пришёл. Оверлей это даёт бесплатно, отдельный экран — нет.
+//
+//   - Всё состояние профиля лежит в S.profile одним объектом. Комментарии,
+//     автографы и очередь модерации грузятся отдельными запросами, но живут
+//     в одном месте, чтобы перерисовка была одна на всех.
+//
+//   - Данные всегда перезапрашиваются при открытии. Кэшировать профиль между
+//     открытиями смысла нет (счётчик подписчиков и статус дружбы меняются
+//     чужими действиями), а показать вчерашнее «вы не друзья» и спрятать
+//     кнопку — хуже, чем моргнуть скелетоном.
+ZaliMixin(ZaliInterface, class {
+
+    /** Пустое состояние. Одна точка правды для конструктора и для закрытия. */
+    static get emptyProfileState() {
+        return {
+            open: false,
+            username: '',
+            loading: false,
+            error: '',
+            data: null,
+            tab: 'about',
+            editing: false,
+            /** Черновик формы редактирования — правки видны сразу, но не уходят на сервер до «Сохранить». */
+            draft: null,
+            saving: false,
+            comments: [],
+            commentsLoading: false,
+            commentDraft: '',
+            commentError: '',
+            autographs: [],
+            pendingAutographs: [],
+            autographsLoading: false,
+            /** Режим рисования: см. autographs.js. */
+            drawing: null,
+            friendRequests: { incoming: [], outgoing: [] },
+            friends: [],
+            inviteDraft: '',
+            inviteStatus: '',
+            busy: '',
+        };
+    }
+
+    /**
+     * Типы WS-событий профиля. Список держится здесь, а разбор — в
+     * handleProfileEvent: транспорт (voice_transport.js) должен уметь отличить
+     * «наше» событие от чужого, не зная, что с ним делать.
+     */
+    static get PROFILE_EVENT_TYPES() {
+        return ['friend_request', 'friend_accepted', 'profile_comment', 'profile_autograph', 'profile_follow', 'autograph_approved'];
+    }
+
+    /** Варианты аудитории — один список для всех трёх селекторов политики. */
+    static get audienceOptions() {
+        return [
+            { value: 'anyone', label: 'Любые' },
+            { value: 'contacts', label: 'Контакты' },
+            { value: 'followers', label: 'Отслеживающие' },
+            { value: 'friends', label: 'Друзья' },
+        ];
+    }
+
+    /** То же плюс «решаю сам» — только для автоодобрения автографов. */
+    static get autoApproveOptions() {
+        return ZaliInterface.audienceOptions.concat([{ value: 'nobody', label: 'Одобряю сам' }]);
+    }
+
+    ensureProfileState() {
+        if (!this.S.profile) this.S.profile = ZaliInterface.emptyProfileState;
+        return this.S.profile;
+    }
+
+    setProfileState(partial = {}) {
+        this.S.profile = { ...this.ensureProfileState(), ...partial };
+        this.renderProfileOverlay();
+    }
+
+    audienceLabel(value) {
+        const found = ZaliInterface.autoApproveOptions.find(option => option.value === value);
+        return found ? found.label : 'Любые';
+    }
+
+    // ------------------------------------------------------------
+    // Открытие / закрытие
+    // ------------------------------------------------------------
+
+    /**
+     * Единственная точка входа в профиль. Все клики по аватаркам ведут сюда.
+     * @param {string} username
+     * @param {{editing?: boolean, tab?: string}} options
+     */
+    async openProfile(username, { editing = false, tab = '' } = {}) {
+        const name = String(username || '').trim();
+        if (!name) return;
+        if (!this.S.session?.token) {
+            this.addLogEntry({ type: 'WARN', msg: 'Профили доступны только после входа', ts: new Date().toLocaleTimeString() });
+            return;
+        }
+
+        const isSelf = name === this.myName();
+        this.setProfileState({
+            ...ZaliInterface.emptyProfileState,
+            open: true,
+            username: name,
+            loading: true,
+            editing: editing && isSelf,
+            tab: tab || 'about',
+        });
+        this.showProfileOverlay();
+        await this.refreshProfile();
+        // Свои заявки в друзья нужны и на чужом профиле: именно там видно
+        // «вам уже написали» и есть чем ответить, не уходя со страницы.
+        if (isSelf) void this.loadFriendRequests();
+        void this.loadProfileComments();
+        void this.loadProfileAutographs();
+    }
+
+    closeProfile() {
+        // Незавершённый рисунок отменяется вместе с оверлеем: держать его в
+        // состоянии до следующего открытия — верный способ показать человеку
+        // чужие штрихи на другой стене.
+        this.cancelAutographDrawing({ silent: true });
+        this.hideProfileOverlay();
+        this.S.profile = ZaliInterface.emptyProfileState;
+    }
+
+    async refreshProfile() {
+        const state = this.ensureProfileState();
+        const name = state.username;
+        if (!name) return;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+            if (this.ensureProfileState().username !== name) return;
+            if (res.status === 404) {
+                this.setProfileState({ loading: false, error: 'Пользователь не найден', data: null });
+                return;
+            }
+            if (!res.ok) {
+                this.setProfileState({ loading: false, error: 'Не удалось загрузить профиль' });
+                return;
+            }
+            const data = await res.json();
+            this.setProfileState({
+                loading: false,
+                error: '',
+                data,
+                // Черновик пересобирается из свежих данных только когда форма не
+                // открыта — иначе ответ сервера затёр бы то, что человек печатает.
+                draft: this.ensureProfileState().editing ? this.ensureProfileState().draft : this.profileDraftFrom(data),
+            });
+            this.ensureAvatarLoaded(name);
+        } catch (e) {
+            this.setProfileState({ loading: false, error: 'Не удалось загрузить профиль' });
+        }
+    }
+
+    profileDraftFrom(data) {
+        return {
+            displayName: data?.displayName || '',
+            bio: data?.bio || '',
+            status: data?.status || '',
+            location: data?.location || '',
+            accentColor: data?.accentColor || '',
+            commentPolicy: data?.commentPolicy || 'anyone',
+            autographPolicy: data?.autographPolicy || 'anyone',
+            autographAutoApprove: data?.autographAutoApprove || 'nobody',
+            links: Array.isArray(data?.links) ? data.links.map(link => ({ ...link })) : [],
+        };
+    }
+
+    setProfileTab(tab) {
+        const next = String(tab || '').trim();
+        if (!next) return;
+        this.setProfileState({ tab: next });
+        if (next === 'moderation') void this.loadPendingAutographs();
+        if (next === 'friends') void this.loadFriendRequests();
+    }
+
+    // ------------------------------------------------------------
+    // Редактирование своего профиля
+    // ------------------------------------------------------------
+
+    startProfileEditing() {
+        const state = this.ensureProfileState();
+        if (!state.data?.isSelf) return;
+        this.setProfileState({ editing: true, tab: 'about', draft: this.profileDraftFrom(state.data) });
+    }
+
+    cancelProfileEditing() {
+        const state = this.ensureProfileState();
+        this.setProfileState({ editing: false, draft: this.profileDraftFrom(state.data) });
+    }
+
+    updateProfileDraft(field, value) {
+        const state = this.ensureProfileState();
+        const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+        draft[field] = value;
+        // Без перерисовки: поле уже содержит то, что напечатали, а повторный
+        // рендер увёл бы каретку в конец строки на каждом символе.
+        this.S.profile = { ...state, draft };
+    }
+
+    updateProfileDraftLink(index, field, value) {
+        const state = this.ensureProfileState();
+        const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+        const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
+        if (!links[index]) return;
+        links[index][field] = value;
+        draft.links = links;
+        this.S.profile = { ...state, draft };
+    }
+
+    addProfileDraftLink() {
+        const state = this.ensureProfileState();
+        const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+        const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
+        if (links.length >= 6) return;
+        links.push({ label: '', url: '' });
+        this.setProfileState({ draft: { ...draft, links } });
+    }
+
+    removeProfileDraftLink(index) {
+        const state = this.ensureProfileState();
+        const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+        const links = (Array.isArray(draft.links) ? draft.links : []).filter((_, i) => i !== index);
+        this.setProfileState({ draft: { ...draft, links } });
+    }
+
+    async saveProfile() {
+        const state = this.ensureProfileState();
+        if (!state.data?.isSelf || state.saving) return;
+        const draft = state.draft || this.profileDraftFrom(state.data);
+        this.setProfileState({ saving: true, error: '' });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.update, {
+                method: 'PUT',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    displayName: draft.displayName || '',
+                    bio: draft.bio || '',
+                    status: draft.status || '',
+                    location: draft.location || '',
+                    accentColor: draft.accentColor || '',
+                    commentPolicy: draft.commentPolicy || 'anyone',
+                    autographPolicy: draft.autographPolicy || 'anyone',
+                    autographAutoApprove: draft.autographAutoApprove || 'nobody',
+                    links: (draft.links || []).filter(link => String(link.url || '').trim()),
+                }),
+            });
+            if (!res.ok) {
+                const message = await res.text().catch(() => '');
+                this.setProfileState({ saving: false, error: message || 'Не удалось сохранить профиль' });
+                return;
+            }
+            const data = await res.json();
+            this.setProfileState({ saving: false, editing: false, data, draft: this.profileDraftFrom(data), error: '' });
+            this.addLogEntry({ type: 'SUCCESS', msg: 'Профиль сохранён', ts: new Date().toLocaleTimeString() });
+        } catch (e) {
+            this.setProfileState({ saving: false, error: 'Не удалось сохранить профиль' });
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Подписки и дружба
+    // ------------------------------------------------------------
+
+    /**
+     * Подписка/отписка. Ответ сервера — уже готовый профиль со свежими
+     * счётчиками, поэтому локально ничего досчитывать не надо (и разъехаться
+     * с сервером на гонке двух кликов тоже не получится).
+     */
+    async toggleFollow(username = '') {
+        const state = this.ensureProfileState();
+        const name = String(username || state.username || '').trim();
+        if (!name || state.busy === 'follow') return;
+        const following = name === state.username ? !!state.data?.isFollowing : false;
+        this.setProfileState({ busy: 'follow' });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.follow(name), {
+                method: following ? 'DELETE' : 'POST',
+                interactive: true,
+            });
+            if (!res.ok) {
+                this.setProfileState({ busy: '', error: 'Не удалось изменить подписку' });
+                return;
+            }
+            const data = await res.json();
+            if (this.ensureProfileState().username === name) {
+                this.setProfileState({ busy: '', data, error: '' });
+            } else {
+                this.setProfileState({ busy: '' });
+            }
+            this.addLogEntry({
+                type: 'INFO',
+                msg: following ? `Вы отписались от ${name}` : `Вы подписались на ${name}`,
+                ts: new Date().toLocaleTimeString(),
+            });
+        } catch (e) {
+            this.setProfileState({ busy: '', error: 'Не удалось изменить подписку' });
+        }
+    }
+
+    /** Подписка из контекстного меню — вне профиля, без его состояния. */
+    async followUserDirect(username, unfollow = false) {
+        const name = String(username || '').trim();
+        if (!name) return;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.follow(name), {
+                method: unfollow ? 'DELETE' : 'POST',
+                interactive: true,
+            });
+            this.addLogEntry({
+                type: res.ok ? 'SUCCESS' : 'ERROR',
+                msg: res.ok
+                    ? (unfollow ? `Вы отписались от ${name}` : `Вы подписались на ${name}`)
+                    : `Не удалось изменить подписку на ${name}`,
+                ts: new Date().toLocaleTimeString(),
+            });
+            if (res.ok && this.ensureProfileState().username === name) await this.refreshProfile();
+        } catch (e) {
+            this.addLogEntry({ type: 'ERROR', msg: `Не удалось изменить подписку на ${name}`, ts: new Date().toLocaleTimeString() });
+        }
+    }
+
+    /**
+     * Отправить заявку в друзья. Сервер сам сводит встречные заявки в дружбу,
+     * поэтому здесь достаточно различить два его ответа.
+     */
+    async requestFriendship(username = '') {
+        const state = this.ensureProfileState();
+        const name = String(username || state.username || '').trim();
+        if (!name || state.busy === 'friend') return;
+        this.setProfileState({ busy: 'friend' });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.friends.requests, {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to: name }),
+            });
+            if (!res.ok) {
+                const message = await res.text().catch(() => '');
+                this.setProfileState({ busy: '', error: message || 'Не удалось отправить заявку' });
+                return;
+            }
+            const body = await res.json().catch(() => ({}));
+            this.addLogEntry({
+                type: 'SUCCESS',
+                msg: body?.status === 'accepted' ? `Теперь вы друзья с ${name}` : `Заявка в друзья отправлена: ${name}`,
+                ts: new Date().toLocaleTimeString(),
+            });
+            this.setProfileState({ busy: '' });
+            if (this.ensureProfileState().username === name) await this.refreshProfile();
+            void this.loadFriendRequests();
+        } catch (e) {
+            this.setProfileState({ busy: '', error: 'Не удалось отправить заявку' });
+        }
+    }
+
+    async respondFriendRequest(requestId, action) {
+        const id = String(requestId || '').trim();
+        if (!id) return;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.friends.request(id), {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
+            if (!res.ok) {
+                this.setProfileState({ error: 'Не удалось обработать заявку' });
+                return;
+            }
+            const body = await res.json().catch(() => ({}));
+            if (body?.status === 'accepted' && body?.friend) {
+                this.addLogEntry({ type: 'SUCCESS', msg: `Теперь вы друзья с ${body.friend}`, ts: new Date().toLocaleTimeString() });
+            }
+            await this.loadFriendRequests();
+            if (this.ensureProfileState().username) await this.refreshProfile();
+        } catch (e) {
+            this.setProfileState({ error: 'Не удалось обработать заявку' });
+        }
+    }
+
+    async removeFriend(username) {
+        const name = String(username || '').trim();
+        if (!name) return;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.friends.byUsername(name), {
+                method: 'DELETE',
+                interactive: true,
+            });
+            if (!res.ok) return;
+            await this.loadFriendRequests();
+            if (this.ensureProfileState().username) await this.refreshProfile();
+        } catch (e) {
+            // Молча: список всё равно перечитается при следующем открытии.
+        }
+    }
+
+    async loadFriendRequests() {
+        try {
+            const [requestsRes, friendsRes] = await Promise.all([
+                this.apiFetch(this.apiRoutes.friends.requests),
+                this.apiFetch(this.apiRoutes.friends.list),
+            ]);
+            const requests = requestsRes.ok ? await requestsRes.json() : { incoming: [], outgoing: [] };
+            const friends = friendsRes.ok ? await friendsRes.json() : { friends: [] };
+            this.setProfileState({
+                friendRequests: {
+                    incoming: Array.isArray(requests?.incoming) ? requests.incoming : [],
+                    outgoing: Array.isArray(requests?.outgoing) ? requests.outgoing : [],
+                },
+                friends: Array.isArray(friends?.friends) ? friends.friends : [],
+            });
+            this.updateFriendRequestBadge();
+        } catch (e) {
+            // Не критично: заявки перечитаются при следующем открытии вкладки.
+        }
+    }
+
+    /** Отправить приглашение в друзья по имени из формы «Пригласить». */
+    async submitFriendInvite() {
+        const state = this.ensureProfileState();
+        const name = String(state.inviteDraft || '').trim();
+        if (!name) return;
+        if (name === this.myName()) {
+            this.setProfileState({ inviteStatus: 'Нельзя пригласить самого себя' });
+            return;
+        }
+        this.setProfileState({ inviteStatus: 'Отправляем...' });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.friends.requests, {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to: name }),
+            });
+            if (!res.ok) {
+                const message = await res.text().catch(() => '');
+                this.setProfileState({ inviteStatus: message || 'Не удалось отправить приглашение' });
+                return;
+            }
+            const body = await res.json().catch(() => ({}));
+            this.setProfileState({
+                inviteDraft: '',
+                inviteStatus: body?.status === 'accepted' ? `Теперь вы друзья с ${name}` : `Приглашение отправлено: ${name}`,
+            });
+            await this.loadFriendRequests();
+        } catch (e) {
+            this.setProfileState({ inviteStatus: 'Не удалось отправить приглашение' });
+        }
+    }
+
+    /**
+     * Бейдж «есть входящие заявки» на кнопке своего профиля. Считается по уже
+     * загруженному списку, отдельного запроса не делает.
+     */
+    updateFriendRequestBadge() {
+        const badge = document.getElementById('meFriendBadge');
+        if (!badge) return;
+        const count = (this.ensureProfileState().friendRequests?.incoming || []).length;
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.hidden = count === 0;
+    }
+
+    // ------------------------------------------------------------
+    // Комментарии
+    // ------------------------------------------------------------
+
+    async loadProfileComments() {
+        const name = this.ensureProfileState().username;
+        if (!name) return;
+        this.setProfileState({ commentsLoading: true });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.comments(name));
+            if (this.ensureProfileState().username !== name) return;
+            if (!res.ok) {
+                this.setProfileState({ commentsLoading: false, comments: [] });
+                return;
+            }
+            const body = await res.json();
+            this.setProfileState({
+                commentsLoading: false,
+                comments: Array.isArray(body?.comments) ? body.comments : [],
+            });
+            (body?.comments || []).forEach(comment => this.ensureAvatarLoaded(comment.author));
+        } catch (e) {
+            this.setProfileState({ commentsLoading: false });
+        }
+    }
+
+    async submitProfileComment() {
+        const state = this.ensureProfileState();
+        const name = state.username;
+        const body = String(state.commentDraft || '').trim();
+        if (!name || !body || state.busy === 'comment') return;
+        this.setProfileState({ busy: 'comment', commentError: '' });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.comments(name), {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ body }),
+            });
+            if (res.status === 403) {
+                this.setProfileState({ busy: '', commentError: 'Владелец закрыл комментарии для вас' });
+                return;
+            }
+            if (!res.ok) {
+                this.setProfileState({ busy: '', commentError: 'Не удалось отправить комментарий' });
+                return;
+            }
+            const payload = await res.json();
+            this.setProfileState({
+                busy: '',
+                commentDraft: '',
+                commentError: '',
+                comments: Array.isArray(payload?.comments) ? payload.comments : state.comments,
+            });
+        } catch (e) {
+            this.setProfileState({ busy: '', commentError: 'Не удалось отправить комментарий' });
+        }
+    }
+
+    async deleteProfileComment(commentId) {
+        const id = String(commentId || '').trim();
+        if (!id) return;
+        const state = this.ensureProfileState();
+        // Оптимистично: строка исчезает сразу, при ошибке список перечитывается.
+        this.setProfileState({ comments: (state.comments || []).filter(comment => comment.id !== id) });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.comment(id), {
+                method: 'DELETE',
+                interactive: true,
+            });
+            if (!res.ok) await this.loadProfileComments();
+        } catch (e) {
+            await this.loadProfileComments();
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Живые события с сервера
+    // ------------------------------------------------------------
+
+    /**
+     * WS-события профиля (заявка в друзья, новый комментарий, новый автограф).
+     * Вызывается из общего разбора входящих событий; неизвестные типы сюда
+     * не доходят.
+     */
+    handleProfileEvent(event = {}) {
+        const type = String(event?.type || '');
+        const from = String(event?.from || '').trim();
+        const state = this.ensureProfileState();
+
+        if (type === 'friend_request') {
+            this.addLogEntry({ type: 'INFO', msg: `Заявка в друзья от ${from}`, ts: new Date().toLocaleTimeString() });
+            void this.loadFriendRequests();
+        } else if (type === 'friend_accepted') {
+            this.addLogEntry({ type: 'SUCCESS', msg: `${from} теперь ваш друг`, ts: new Date().toLocaleTimeString() });
+            void this.loadFriendRequests();
+        } else if (type === 'autograph_approved') {
+            this.addLogEntry({ type: 'SUCCESS', msg: `Ваш автограф одобрен: ${event?.wall || ''}`, ts: new Date().toLocaleTimeString() });
+        }
+
+        if (!state.open) return;
+        // Открыт как раз тот профиль, которого касается событие — обновляем.
+        const mine = state.username === this.myName();
+        if (type === 'profile_comment' && mine) void this.loadProfileComments();
+        if (type === 'profile_autograph' && mine) {
+            void this.refreshProfile();
+            void this.loadPendingAutographs();
+        }
+        if ((type === 'profile_follow' || type === 'friend_accepted' || type === 'friend_request') && mine) {
+            void this.refreshProfile();
+        }
+    }
+
+});
+
+
+// --- MODULE: interface/profile_ui.js ---
+// --- ZaliInterface: Отрисовка профиля: шапка, вкладки, комментарии, друзья, модерация. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Модель и сеть — в
+// profiles.js, векторная стена — в autographs.js.
+//
+// Оверлей перерисовывается целиком, но через setHTMLIfChanged: одинаковая
+// разметка не вызывает записи в DOM. Это важно во время рисования — черновые
+// штрихи живут в отдельном слое и в эту разметку не попадают, поэтому каждый
+// новый штрих НЕ пересоздаёт поверхность рисования и не срывает захват
+// указателя (см. bindAutographSurface).
+//
+// Поля ввода намеренно не перерисовываются на каждый символ: обработчики input
+// пишут в черновик мимо рендера (updateProfileDraft), иначе каретка прыгала бы
+// в конец строки на каждой букве.
+ZaliMixin(ZaliInterface, class {
+
+    showProfileOverlay() {
+        const overlay = document.getElementById('profileOverlay');
+        if (!overlay) return;
+        overlay.hidden = false;
+        requestAnimationFrame(() => overlay.classList.add('visible'));
+        this.renderProfileOverlay();
+    }
+
+    hideProfileOverlay() {
+        const overlay = document.getElementById('profileOverlay');
+        if (!overlay) return;
+        overlay.classList.remove('visible');
+        setTimeout(() => {
+            if (!this.ensureProfileState().open) overlay.hidden = true;
+        }, 180);
+    }
+
+    /**
+     * SQLite отдаёт CURRENT_TIMESTAMP как «YYYY-MM-DD HH:MM:SS» без указания
+     * зоны, а это UTC. Без явного «Z» браузер прочитал бы её как местное время
+     * и сдвинул бы все даты на смещение часового пояса.
+     */
+    profileTimestampLabel(raw) {
+        const value = String(raw || '').trim();
+        if (!value) return '';
+        const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+            ? `${value.replace(' ', 'T')}Z`
+            : value;
+        const date = this.fmtDate(iso);
+        const time = this.fmtTime(iso);
+        if (!date && !time) return '';
+        return date ? `${date}, ${time}` : time;
+    }
+
+    renderProfileOverlay() {
+        const overlay = document.getElementById('profileOverlay');
+        if (!overlay) return;
+        const state = this.ensureProfileState();
+        if (!state.open) {
+            this.hideProfileOverlay();
+            return;
+        }
+        const body = document.getElementById('profileBody');
+        if (!body) return;
+        this.setHTMLIfChanged(body, this.renderProfileBody(state));
+        // Порядок обязателен: сначала черновые штрихи в свежий слой, потом
+        // подписка на указатель — на тот элемент, который сейчас в документе.
+        this.renderAutographDraft();
+        this.bindAutographSurface();
+    }
+
+    renderProfileBody(state) {
+        if (state.loading && !state.data) {
+            return `<div class="profile-loading"><div class="sk sk-contact"></div><div class="sk sk-contact"></div></div>`;
+        }
+        if (state.error && !state.data) {
+            return `<div class="profile-error">${this.esc(state.error)}</div>`;
+        }
+        const data = state.data;
+        if (!data) return '';
+
+        return `
+            ${this.renderProfileHeader(state, data)}
+            ${this.renderProfileTabs(state, data)}
+            <div class="profile-tab-body">${this.renderProfileTabContent(state, data)}</div>
+        `;
+    }
+
+    // ------------------------------------------------------------
+    // Шапка
+    // ------------------------------------------------------------
+
+    renderProfileHeader(state, data) {
+        const username = data.username || '';
+        const accent = this.safeCssColor(data.accentColor) || '';
+        const title = data.displayName || username;
+        const counters = [
+            { key: 'followers', value: data.followers, label: this.ruPlural(data.followers, 'подписчик', 'подписчика', 'подписчиков') },
+            { key: 'following', value: data.following, label: 'подписок' },
+            { key: 'friends', value: data.friends, label: this.ruPlural(data.friends, 'друг', 'друга', 'друзей') },
+        ];
+
+        return `<header class="profile-head"${accent ? ` style="--profile-accent:${this.esc(accent)}"` : ''}>
+            <div class="profile-head-ava">${this.renderAvatarHTML(username, 'avatar-img', username)}</div>
+            <div class="profile-head-copy">
+                <h2 class="profile-name" id="profileModalName">${this.esc(title)}</h2>
+                <div class="profile-handle">@${this.esc(username)}</div>
+                ${data.status ? `<div class="profile-status">${this.esc(data.status)}</div>` : ''}
+                <div class="profile-counters">
+                    ${counters.map(counter => `
+                        <span class="profile-counter">
+                            <strong>${Number(counter.value) || 0}</strong>
+                            <span>${this.esc(counter.label)}</span>
+                        </span>
+                    `).join('')}
+                </div>
+            </div>
+            <div class="profile-head-actions">${this.renderProfileActions(state, data)}</div>
+        </header>`;
+    }
+
+    renderProfileActions(state, data) {
+        if (data.isSelf) {
+            if (state.editing) {
+                return `
+                    <button class="auth-btn primary" type="button" data-profile-action="save"${state.saving ? ' disabled' : ''}>${state.saving ? 'Сохраняем...' : 'Сохранить'}</button>
+                    <button class="btn-flat" type="button" data-profile-action="cancel-edit">Отмена</button>
+                `;
+            }
+            return `<button class="auth-btn primary" type="button" data-profile-action="edit">Редактировать профиль</button>`;
+        }
+
+        const followLabel = data.isFollowing ? 'Вы отслеживаете' : 'Отслеживать';
+        const busy = state.busy;
+
+        // Кнопка дружбы — одна, но с четырьмя разными состояниями. Показывать
+        // «Добавить в друзья» тому, кто уже прислал вам заявку, значило бы
+        // отправить встречную вместо простого «принять».
+        let friendButton;
+        if (data.isFriend) {
+            friendButton = `<button class="btn-flat profile-friend-btn is-friend" type="button" data-profile-action="remove-friend">Вы друзья</button>`;
+        } else if (data.friendRequest?.direction === 'incoming') {
+            friendButton = `
+                <button class="auth-btn primary" type="button" data-profile-action="accept-friend" data-request-id="${this.esc(data.friendRequest.id)}">Принять заявку</button>
+                <button class="btn-flat" type="button" data-profile-action="decline-friend" data-request-id="${this.esc(data.friendRequest.id)}">Отклонить</button>
+            `;
+        } else if (data.friendRequest?.direction === 'outgoing') {
+            friendButton = `<button class="btn-flat" type="button" data-profile-action="cancel-friend" data-request-id="${this.esc(data.friendRequest.id)}">Заявка отправлена</button>`;
+        } else {
+            friendButton = `<button class="btn-flat profile-friend-btn" type="button" data-profile-action="add-friend"${busy === 'friend' ? ' disabled' : ''}>Попроситься в друзья</button>`;
+        }
+
+        return `
+            <button class="auth-btn primary profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
+            ${friendButton}
+            <button class="btn-flat" type="button" data-profile-action="message">Написать</button>
+        `;
+    }
+
+    // ------------------------------------------------------------
+    // Вкладки
+    // ------------------------------------------------------------
+
+    profileTabsFor(state, data) {
+        const tabs = [
+            { key: 'about', label: 'О себе' },
+            { key: 'wall', label: 'Стена' },
+            { key: 'comments', label: 'Комментарии' },
+        ];
+        if (data.isSelf) {
+            const pending = Number(data.pendingAutographs) || 0;
+            tabs.push({ key: 'moderation', label: 'Модерация', badge: pending });
+            tabs.push({ key: 'friends', label: 'Друзья', badge: (state.friendRequests?.incoming || []).length });
+        }
+        return tabs;
+    }
+
+    renderProfileTabs(state, data) {
+        const tabs = this.profileTabsFor(state, data);
+        const active = tabs.some(tab => tab.key === state.tab) ? state.tab : 'about';
+        return `<nav class="profile-tabs" role="tablist">
+            ${tabs.map(tab => `
+                <button class="profile-tab${tab.key === active ? ' active' : ''}" type="button" role="tab" aria-selected="${tab.key === active}" data-profile-tab="${this.esc(tab.key)}">
+                    <span>${this.esc(tab.label)}</span>
+                    ${tab.badge ? `<span class="profile-tab-badge">${Number(tab.badge)}</span>` : ''}
+                </button>
+            `).join('')}
+        </nav>`;
+    }
+
+    renderProfileTabContent(state, data) {
+        const tabs = this.profileTabsFor(state, data).map(tab => tab.key);
+        const active = tabs.includes(state.tab) ? state.tab : 'about';
+        if (active === 'wall') return this.renderProfileWallTab(state, data);
+        if (active === 'comments') return this.renderProfileCommentsTab(state, data);
+        if (active === 'moderation') return this.renderProfileModerationTab(state, data);
+        if (active === 'friends') return this.renderProfileFriendsTab(state, data);
+        return this.renderProfileAboutTab(state, data);
+    }
+
+    // ------------------------------------------------------------
+    // Вкладка «О себе» (просмотр и редактирование)
+    // ------------------------------------------------------------
+
+    renderProfileAboutTab(state, data) {
+        if (state.editing && data.isSelf) return this.renderProfileEditor(state);
+
+        const links = Array.isArray(data.links) ? data.links : [];
+        const rows = [
+            data.location ? { label: 'Где', value: data.location } : null,
+        ].filter(Boolean);
+
+        return `<div class="profile-about">
+            ${data.bio
+                ? `<p class="profile-bio">${this.esc(data.bio)}</p>`
+                : `<p class="profile-bio muted">${data.isSelf ? 'Расскажите о себе — нажмите «Редактировать профиль».' : 'Пользователь пока ничего о себе не написал.'}</p>`}
+            ${rows.length ? `<dl class="profile-facts">${rows.map(row => `
+                <div class="profile-fact"><dt>${this.esc(row.label)}</dt><dd>${this.esc(row.value)}</dd></div>
+            `).join('')}</dl>` : ''}
+            ${links.length ? `<ul class="profile-links">${links.map(link => `
+                <li><a href="${this.esc(link.url)}" target="_blank" rel="noopener noreferrer">${this.esc(link.label || link.url)}</a></li>
+            `).join('')}</ul>` : ''}
+            <div class="profile-policy-summary">
+                <span class="profile-policy-chip">Комментарии: <strong>${this.esc(this.audienceLabel(data.commentPolicy))}</strong></span>
+                <span class="profile-policy-chip">Автографы: <strong>${this.esc(this.audienceLabel(data.autographPolicy))}</strong></span>
+                <span class="profile-policy-chip">Одобрение: <strong>${this.esc(this.audienceLabel(data.autographAutoApprove))}</strong></span>
+            </div>
+        </div>`;
+    }
+
+    renderAudienceSelect(name, value, options) {
+        return `<select class="profile-select" data-profile-field="${this.esc(name)}">
+            ${options.map(option => `<option value="${this.esc(option.value)}"${option.value === value ? ' selected' : ''}>${this.esc(option.label)}</option>`).join('')}
+        </select>`;
+    }
+
+    renderProfileEditor(state) {
+        const draft = state.draft || this.profileDraftFrom(state.data);
+        const links = Array.isArray(draft.links) ? draft.links : [];
+        return `<div class="profile-editor">
+            ${state.error ? `<p class="profile-error">${this.esc(state.error)}</p>` : ''}
+            <label class="profile-field">
+                <span>Отображаемое имя</span>
+                <input type="text" maxlength="64" data-profile-field="displayName" value="${this.esc(draft.displayName || '')}" placeholder="${this.esc(state.username)}">
+            </label>
+            <label class="profile-field">
+                <span>Статус</span>
+                <input type="text" maxlength="120" data-profile-field="status" value="${this.esc(draft.status || '')}" placeholder="Чем занимаетесь">
+            </label>
+            <label class="profile-field">
+                <span>О себе</span>
+                <textarea rows="4" maxlength="600" data-profile-field="bio" placeholder="Пара слов о вас">${this.esc(draft.bio || '')}</textarea>
+            </label>
+            <label class="profile-field">
+                <span>Где вы</span>
+                <input type="text" maxlength="64" data-profile-field="location" value="${this.esc(draft.location || '')}" placeholder="Город">
+            </label>
+            <div class="profile-field">
+                <span>Аватар</span>
+                <div class="profile-avatar-editor">
+                    <div class="ava profile-avatar-preview">${this.renderAvatarHTML(state.username, 'avatar-img', state.username)}</div>
+                    <button class="btn-flat" type="button" data-profile-action="change-avatar">Сменить картинку</button>
+                </div>
+            </div>
+            <label class="profile-field profile-field-color">
+                <span>Акцентный цвет</span>
+                <input type="color" data-profile-field="accentColor" value="${this.esc(this.safeCssColor(draft.accentColor) || '#cbff00')}">
+            </label>
+
+            <div class="profile-field">
+                <span>Ссылки</span>
+                <div class="profile-links-editor">
+                    ${links.map((link, index) => `
+                        <div class="profile-link-row">
+                            <input type="text" maxlength="48" placeholder="Название" data-profile-link-field="label" data-profile-link-index="${index}" value="${this.esc(link.label || '')}">
+                            <input type="url" maxlength="300" placeholder="https://" data-profile-link-field="url" data-profile-link-index="${index}" value="${this.esc(link.url || '')}">
+                            <button class="profile-link-remove" type="button" data-profile-action="remove-link" data-profile-link-index="${index}" aria-label="Удалить ссылку">${this.uiIcon('close')}</button>
+                        </div>
+                    `).join('')}
+                    ${links.length < 6 ? `<button class="btn-flat" type="button" data-profile-action="add-link">Добавить ссылку</button>` : ''}
+                </div>
+                <small class="profile-help">Принимаются только http/https-ссылки.</small>
+            </div>
+
+            <div class="profile-policies">
+                <label class="profile-field">
+                    <span>Кто может комментировать</span>
+                    ${this.renderAudienceSelect('commentPolicy', draft.commentPolicy, ZaliInterface.audienceOptions)}
+                </label>
+                <label class="profile-field">
+                    <span>Кто может оставлять автографы</span>
+                    ${this.renderAudienceSelect('autographPolicy', draft.autographPolicy, ZaliInterface.audienceOptions)}
+                </label>
+                <label class="profile-field">
+                    <span>Чьи автографы публиковать сразу</span>
+                    ${this.renderAudienceSelect('autographAutoApprove', draft.autographAutoApprove, ZaliInterface.autoApproveOptions)}
+                    <small class="profile-help">«Одобряю сам» — каждый автограф ждёт вашего «да» на вкладке «Модерация».</small>
+                </label>
+            </div>
+        </div>`;
+    }
+
+    // ------------------------------------------------------------
+    // Вкладка «Стена»
+    // ------------------------------------------------------------
+
+    renderProfileWallTab(state, data) {
+        const drawing = state.drawing;
+        const canDraw = !!data.canAutograph;
+
+        const toolbar = drawing
+            ? `<div class="autograph-toolbar">
+                <div class="autograph-colors" role="group" aria-label="Цвет">
+                    ${ZaliInterface.autographPalette.map(color => `
+                        <button class="autograph-color${color === drawing.color ? ' active' : ''}" type="button" data-autograph-color="${this.esc(color)}" style="--swatch:${this.esc(color)}" aria-label="Цвет ${this.esc(color)}"></button>
+                    `).join('')}
+                </div>
+                <label class="autograph-width">
+                    <span>Толщина</span>
+                    <input type="range" min="1" max="24" step="1" value="${Number(drawing.width) || 4}" data-autograph-width class="settings-range">
+                </label>
+                <div class="autograph-tool-actions">
+                    <button class="btn-flat" type="button" data-profile-action="undo-stroke">Отменить штрих</button>
+                    <button class="btn-flat" type="button" data-profile-action="clear-strokes">Очистить</button>
+                    <button class="btn-flat" type="button" data-profile-action="cancel-drawing">Выйти</button>
+                    <button class="auth-btn primary" type="button" data-profile-action="submit-autograph"${drawing.submitting ? ' disabled' : ''}>${drawing.submitting ? 'Отправляем...' : 'Оставить автограф'}</button>
+                </div>
+                ${drawing.error ? `<p class="profile-error">${this.esc(drawing.error)}</p>` : ''}
+                <p class="profile-help">Рисуйте прямо на стене в любом месте — автограф сохранится вектором.</p>
+            </div>`
+            : `<div class="autograph-toolbar">
+                ${canDraw
+                    ? `<button class="auth-btn primary" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
+                    : `<p class="profile-help">${this.esc(data.isSelf ? 'Это ваша стена — здесь появляются автографы других людей.' : 'Владелец закрыл автографы для вас.')}</p>`}
+                ${canDraw && !data.isSelf && data.autographAutoApprove === 'nobody'
+                    ? `<span class="profile-policy-chip">Автографы публикуются после одобрения владельца</span>`
+                    : ''}
+            </div>`;
+
+        return `<div class="profile-wall">
+            ${toolbar}
+            ${this.renderAutographWall()}
+            ${this.renderWallLegend(state)}
+        </div>`;
+    }
+
+    /** Подписи под стеной: кто оставил автограф и чем его можно убрать. */
+    renderWallLegend(state) {
+        const list = Array.isArray(state.autographs) ? state.autographs : [];
+        if (!list.length) return '';
+        return `<ul class="autograph-legend">
+            ${list.map(item => `
+                <li>
+                    <span class="autograph-legend-author">${this.esc(item.author || '')}</span>
+                    <span class="autograph-legend-date">${this.esc(this.profileTimestampLabel(item.createdAt))}</span>
+                    ${item.canRemove ? `<button class="profile-link-remove" type="button" data-profile-action="remove-autograph" data-autograph-id="${this.esc(item.id)}" aria-label="Убрать автограф">${this.uiIcon('close')}</button>` : ''}
+                </li>
+            `).join('')}
+        </ul>`;
+    }
+
+    // ------------------------------------------------------------
+    // Вкладка «Комментарии»
+    // ------------------------------------------------------------
+
+    renderProfileCommentsTab(state, data) {
+        const comments = Array.isArray(state.comments) ? state.comments : [];
+        const composer = data.canComment
+            ? `<div class="profile-comment-composer">
+                <textarea rows="3" maxlength="2000" data-profile-field="commentDraft" placeholder="Написать комментарий">${this.esc(state.commentDraft || '')}</textarea>
+                <div class="profile-comment-actions">
+                    ${state.commentError ? `<span class="profile-error">${this.esc(state.commentError)}</span>` : '<span></span>'}
+                    <button class="auth-btn primary" type="button" data-profile-action="submit-comment"${state.busy === 'comment' ? ' disabled' : ''}>Отправить</button>
+                </div>
+            </div>`
+            : `<p class="profile-help">Владелец разрешил комментарии только для группы «${this.esc(this.audienceLabel(data.commentPolicy))}».</p>`;
+
+        return `<div class="profile-comments">
+            ${composer}
+            ${state.commentsLoading && !comments.length ? '<div class="sk sk-contact"></div>' : ''}
+            ${comments.length
+                ? `<ul class="profile-comment-list">${comments.map(comment => `
+                    <li class="profile-comment" data-comment-id="${this.esc(comment.id)}">
+                        <div class="profile-comment-ava" data-profile-open="${this.esc(comment.author)}">${this.renderAvatarHTML(comment.author, 'avatar-img', comment.author)}</div>
+                        <div class="profile-comment-body">
+                            <div class="profile-comment-head">
+                                <span class="profile-comment-author" data-profile-open="${this.esc(comment.author)}">${this.esc(comment.author)}</span>
+                                <span class="profile-comment-date">${this.esc(this.profileTimestampLabel(comment.createdAt))}</span>
+                                ${comment.canDelete ? `<button class="profile-link-remove" type="button" data-profile-action="delete-comment" data-comment-id="${this.esc(comment.id)}" aria-label="Удалить комментарий">${this.uiIcon('close')}</button>` : ''}
+                            </div>
+                            <p class="profile-comment-text">${this.esc(comment.body)}</p>
+                        </div>
+                    </li>
+                `).join('')}</ul>`
+                : (!state.commentsLoading ? '<p class="profile-help">Комментариев пока нет.</p>' : '')}
+        </div>`;
+    }
+
+    // ------------------------------------------------------------
+    // Вкладка «Модерация» (только владелец)
+    // ------------------------------------------------------------
+
+    renderProfileModerationTab(state) {
+        const pending = Array.isArray(state.pendingAutographs) ? state.pendingAutographs : [];
+        if (!pending.length) {
+            return `<p class="profile-help">Неодобренных автографов нет. Всё, что приходит, появится здесь — по одному, с кнопками «да» и «нет».</p>`;
+        }
+        return `<div class="profile-moderation">
+            <p class="profile-help">Ниже — автографы, ждущие вашего решения. Одобренные попадут на стену, отклонённые исчезнут.</p>
+            <ul class="moderation-list">
+                ${pending.map(item => `
+                    <li class="moderation-card">
+                        <div class="moderation-preview">${this.renderAutographPreview(item)}</div>
+                        <div class="moderation-meta">
+                            <span class="moderation-author">${this.esc(item.author || '')}</span>
+                            <span class="moderation-date">${this.esc(this.profileTimestampLabel(item.createdAt))}</span>
+                        </div>
+                        <div class="moderation-actions">
+                            <button class="auth-btn primary" type="button" data-profile-action="approve-autograph" data-autograph-id="${this.esc(item.id)}">Да</button>
+                            <button class="btn-flat" type="button" data-profile-action="reject-autograph" data-autograph-id="${this.esc(item.id)}">Нет</button>
+                        </div>
+                    </li>
+                `).join('')}
+            </ul>
+        </div>`;
+    }
+
+    // ------------------------------------------------------------
+    // Вкладка «Друзья» (только свой профиль)
+    // ------------------------------------------------------------
+
+    renderProfileFriendsTab(state) {
+        const incoming = state.friendRequests?.incoming || [];
+        const outgoing = state.friendRequests?.outgoing || [];
+        const friends = state.friends || [];
+
+        return `<div class="profile-friends">
+            <section class="profile-friends-block">
+                <h3>Пригласить в друзья</h3>
+                <div class="profile-invite">
+                    <input type="text" placeholder="Имя пользователя" data-profile-field="inviteDraft" value="${this.esc(state.inviteDraft || '')}" autocomplete="off">
+                    <button class="auth-btn primary" type="button" data-profile-action="send-invite">Отправить</button>
+                </div>
+                ${state.inviteStatus ? `<p class="profile-help">${this.esc(state.inviteStatus)}</p>` : ''}
+            </section>
+
+            <section class="profile-friends-block">
+                <h3>Входящие заявки${incoming.length ? ` (${incoming.length})` : ''}</h3>
+                ${incoming.length
+                    ? `<ul class="profile-people">${incoming.map(request => `
+                        <li class="profile-person">
+                            <div class="profile-person-ava" data-profile-open="${this.esc(request.requester)}">${this.renderAvatarHTML(request.requester, 'avatar-img', request.requester)}</div>
+                            <div class="profile-person-copy">
+                                <span class="profile-person-name" data-profile-open="${this.esc(request.requester)}">${this.esc(request.requester)}</span>
+                                ${request.message ? `<span class="profile-person-note">${this.esc(request.message)}</span>` : ''}
+                            </div>
+                            <div class="profile-person-actions">
+                                <button class="auth-btn primary" type="button" data-profile-action="accept-friend" data-request-id="${this.esc(request.id)}">Принять</button>
+                                <button class="btn-flat" type="button" data-profile-action="decline-friend" data-request-id="${this.esc(request.id)}">Отклонить</button>
+                            </div>
+                        </li>
+                    `).join('')}</ul>`
+                    : '<p class="profile-help">Новых заявок нет.</p>'}
+            </section>
+
+            <section class="profile-friends-block">
+                <h3>Отправленные заявки${outgoing.length ? ` (${outgoing.length})` : ''}</h3>
+                ${outgoing.length
+                    ? `<ul class="profile-people">${outgoing.map(request => `
+                        <li class="profile-person">
+                            <div class="profile-person-ava" data-profile-open="${this.esc(request.target)}">${this.renderAvatarHTML(request.target, 'avatar-img', request.target)}</div>
+                            <div class="profile-person-copy">
+                                <span class="profile-person-name" data-profile-open="${this.esc(request.target)}">${this.esc(request.target)}</span>
+                                <span class="profile-person-note">Ждём ответа</span>
+                            </div>
+                            <div class="profile-person-actions">
+                                <button class="btn-flat" type="button" data-profile-action="cancel-friend" data-request-id="${this.esc(request.id)}">Отозвать</button>
+                            </div>
+                        </li>
+                    `).join('')}</ul>`
+                    : '<p class="profile-help">Вы никому не отправляли заявок.</p>'}
+            </section>
+
+            <section class="profile-friends-block">
+                <h3>Друзья${friends.length ? ` (${friends.length})` : ''}</h3>
+                ${friends.length
+                    ? `<ul class="profile-people">${friends.map(friend => `
+                        <li class="profile-person">
+                            <div class="profile-person-ava" data-profile-open="${this.esc(friend)}">${this.renderAvatarHTML(friend, 'avatar-img', friend)}</div>
+                            <div class="profile-person-copy">
+                                <span class="profile-person-name" data-profile-open="${this.esc(friend)}">${this.esc(friend)}</span>
+                            </div>
+                            <div class="profile-person-actions">
+                                <button class="btn-flat" type="button" data-profile-action="remove-friend-named" data-username="${this.esc(friend)}">Удалить</button>
+                            </div>
+                        </li>
+                    `).join('')}</ul>`
+                    : '<p class="profile-help">Пока никого.</p>'}
+            </section>
+        </div>`;
+    }
+
+    // ------------------------------------------------------------
+    // События оверлея
+    // ------------------------------------------------------------
+
+    /**
+     * Один делегированный слушатель на весь оверлей — разметка перерисовывается
+     * целиком, и вешать обработчики на кнопки поштучно значило бы перевешивать
+     * их после каждого рендера (и терять при первом же пропущенном вызове).
+     * Вызывается один раз из bindEvents().
+     */
+    bindProfileEvents() {
+        const overlay = document.getElementById('profileOverlay');
+        if (!overlay || overlay.dataset.profileBound === '1') return;
+        overlay.dataset.profileBound = '1';
+
+        overlay.addEventListener('click', (event) => {
+            // Клик по затемнению, а не по карточке — закрыть.
+            if (event.target === overlay) {
+                this.closeProfile();
+                return;
+            }
+            if (event.target.closest('#profileCloseBtn')) {
+                this.closeProfile();
+                return;
+            }
+
+            const openTarget = event.target.closest('[data-profile-open]');
+            if (openTarget) {
+                const name = openTarget.getAttribute('data-profile-open');
+                if (name) void this.openProfile(name);
+                return;
+            }
+
+            const tabBtn = event.target.closest('[data-profile-tab]');
+            if (tabBtn) {
+                this.setProfileTab(tabBtn.getAttribute('data-profile-tab'));
+                return;
+            }
+
+            const colorBtn = event.target.closest('[data-autograph-color]');
+            if (colorBtn) {
+                this.setAutographColor(colorBtn.getAttribute('data-autograph-color'));
+                return;
+            }
+
+            const actionBtn = event.target.closest('[data-profile-action]');
+            if (!actionBtn) return;
+            this.handleProfileAction(actionBtn.getAttribute('data-profile-action'), actionBtn);
+        });
+
+        // input — для текста и ползунков, change — для select и палитры цвета
+        // (в них input тоже приходит, но change гарантирован везде).
+        overlay.addEventListener('input', (event) => this.handleProfileInput(event));
+        overlay.addEventListener('change', (event) => this.handleProfileInput(event));
+
+        overlay.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                this.closeProfile();
+                return;
+            }
+            // Ctrl/Cmd+Enter отправляет комментарий, как и в композере чата.
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                const field = event.target.getAttribute?.('data-profile-field');
+                if (field === 'commentDraft') void this.submitProfileComment();
+            }
+            if (event.key === 'Enter' && event.target.getAttribute?.('data-profile-field') === 'inviteDraft') {
+                event.preventDefault();
+                void this.submitFriendInvite();
+            }
+        });
+    }
+
+    handleProfileInput(event) {
+        const target = event.target;
+        if (!target) return;
+
+        const linkIndex = target.getAttribute?.('data-profile-link-index');
+        const linkField = target.getAttribute?.('data-profile-link-field');
+        if (linkIndex !== null && linkIndex !== undefined && linkField) {
+            this.updateProfileDraftLink(Number(linkIndex), linkField, target.value);
+            return;
+        }
+
+        if (target.hasAttribute?.('data-autograph-width')) {
+            this.setAutographWidth(target.value);
+            return;
+        }
+
+        const field = target.getAttribute?.('data-profile-field');
+        if (!field) return;
+
+        if (field === 'commentDraft') {
+            // Мимо setProfileState: перерисовка увела бы каретку в конец.
+            this.S.profile = { ...this.ensureProfileState(), commentDraft: target.value };
+            return;
+        }
+        if (field === 'inviteDraft') {
+            this.S.profile = { ...this.ensureProfileState(), inviteDraft: target.value };
+            return;
+        }
+        if (field.endsWith('Policy') || field === 'autographAutoApprove') {
+            // Селекты перерисовывать безопасно и нужно: от них зависят подсказки.
+            const state = this.ensureProfileState();
+            const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+            draft[field] = target.value;
+            this.setProfileState({ draft });
+            return;
+        }
+        this.updateProfileDraft(field, target.value);
+    }
+
+    handleProfileAction(action, element) {
+        const state = this.ensureProfileState();
+        const requestId = element?.getAttribute('data-request-id') || '';
+        const autographId = element?.getAttribute('data-autograph-id') || '';
+
+        switch (action) {
+            case 'edit': this.startProfileEditing(); break;
+            // Выбор файла живёт в bindSettingsEvents (там же, где кроппер и
+            // загрузка); здесь мы только зовём его, чтобы не заводить второй
+            // конвейер обработки картинки.
+            case 'change-avatar': this.openAvatarPicker?.(); break;
+            case 'cancel-edit': this.cancelProfileEditing(); break;
+            case 'save': void this.saveProfile(); break;
+            case 'add-link': this.addProfileDraftLink(); break;
+            case 'remove-link':
+                this.removeProfileDraftLink(Number(element?.getAttribute('data-profile-link-index')));
+                break;
+            case 'toggle-follow': void this.toggleFollow(); break;
+            case 'add-friend': void this.requestFriendship(); break;
+            case 'accept-friend': void this.respondFriendRequest(requestId, 'accept'); break;
+            case 'decline-friend': void this.respondFriendRequest(requestId, 'decline'); break;
+            case 'cancel-friend': void this.respondFriendRequest(requestId, 'cancel'); break;
+            case 'remove-friend': void this.removeFriend(state.username); break;
+            case 'remove-friend-named': void this.removeFriend(element?.getAttribute('data-username')); break;
+            case 'send-invite': void this.submitFriendInvite(); break;
+            case 'message':
+                // Переход в диалог — это уход с профиля, оверлей должен закрыться.
+                this.closeProfile();
+                this.switchChat(state.username);
+                break;
+            case 'submit-comment': void this.submitProfileComment(); break;
+            case 'delete-comment': void this.deleteProfileComment(element?.getAttribute('data-comment-id')); break;
+            case 'start-drawing': this.startAutographDrawing(); break;
+            case 'cancel-drawing': this.cancelAutographDrawing(); break;
+            case 'undo-stroke': this.undoAutographStroke(); break;
+            case 'clear-strokes': this.clearAutographStrokes(); break;
+            case 'submit-autograph': void this.submitAutograph(); break;
+            case 'approve-autograph': void this.moderateAutograph(autographId, 'approve'); break;
+            case 'reject-autograph': void this.moderateAutograph(autographId, 'reject'); break;
+            case 'remove-autograph': void this.removeAutograph(autographId); break;
+            default: break;
+        }
+    }
+
+});
+
+
+// --- MODULE: interface/autographs.js ---
+// --- ZaliInterface: Векторная стена автографов: рисование, публикация, модерация. ---
+// Часть класса ZaliInterface (см. web/src/interface.js).
+//
+// Всё здесь — вектор, и это не стилистическое предпочтение, а требование к
+// формату: автограф хранится списком путей SVG (`d`, цвет, толщина) и
+// положением на стене в ДОЛЯХ её ширины/высоты. Ни на одном шаге не возникает
+// растра — ни при рисовании (никакого canvas.toDataURL), ни при хранении, ни
+// при показе. Поэтому стена одинаково раскладывается на телефоне и на 5K,
+// масштабируется без мыла и весит килобайты, а не мегабайты.
+//
+// Система координат
+// -----------------
+// Внутри стены всё меряется в её собственных единицах: WALL_W × WALL_H. Указатель
+// переводится в них линейно (`preserveAspectRatio="none"` + фиксированный
+// aspect-ratio у контейнера дают точное соответствие в обе стороны). При
+// публикации рисунок обрезается по своей bbox: штрихи сдвигаются в начало
+// координат, bbox становится собственным viewBox автографа, а место на стене
+// уезжает в доли. Обратно это собирается вложенным <svg x y width height
+// viewBox>, то есть один в один — без накопления ошибок масштабирования.
+//
+// Производительность
+// ------------------
+// Во время рисования НИЧЕГО не перерисовывается через innerHTML: на pointerdown
+// создаётся один <path>, на pointermove ему меняется атрибут `d`. Полная
+// перерисовка оверлея на каждое движение мыши подвесила бы вкладку и заодно
+// сорвала бы захват указателя.
+ZaliMixin(ZaliInterface, class {
+
+    /** Единицы измерения стены. Отношение фиксировано и совпадает с CSS aspect-ratio. */
+    static get WALL_W() { return 1000; }
+    static get WALL_H() { return 600; }
+
+    /** Палитра рисования. Совпадает по духу с брендовыми цветами интерфейса. */
+    static get autographPalette() {
+        return ['#cbff00', '#ffffff', '#ff5c8a', '#4fc3ff', '#ffb347', '#b48cff', '#4be08a', '#111111'];
+    }
+
+    static get AUTOGRAPH_MIN_POINT_DISTANCE() { return 1.6; }
+    static get AUTOGRAPH_MAX_STROKES() { return 400; }
+    static get AUTOGRAPH_MAX_POINTS_PER_STROKE() { return 1200; }
+
+    // ------------------------------------------------------------
+    // Загрузка
+    // ------------------------------------------------------------
+
+    async loadProfileAutographs() {
+        const name = this.ensureProfileState().username;
+        if (!name) return;
+        this.setProfileState({ autographsLoading: true });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.autographs(name, 'approved'));
+            if (this.ensureProfileState().username !== name) return;
+            if (!res.ok) {
+                this.setProfileState({ autographsLoading: false, autographs: [] });
+                return;
+            }
+            const body = await res.json();
+            this.setProfileState({
+                autographsLoading: false,
+                autographs: Array.isArray(body?.autographs) ? body.autographs : [],
+            });
+        } catch (e) {
+            this.setProfileState({ autographsLoading: false });
+        }
+    }
+
+    /** Очередь модерации. Сервер отдаёт её только владельцу стены. */
+    async loadPendingAutographs() {
+        const state = this.ensureProfileState();
+        const name = state.username;
+        if (!name || !state.data?.isSelf) return;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.autographs(name, 'pending'));
+            if (this.ensureProfileState().username !== name) return;
+            if (!res.ok) return;
+            const body = await res.json();
+            this.setProfileState({
+                pendingAutographs: Array.isArray(body?.autographs) ? body.autographs : [],
+            });
+        } catch (e) {
+            // Не критично: очередь перечитается при следующем заходе на вкладку.
+        }
+    }
+
+    async moderateAutograph(autographId, action) {
+        const id = String(autographId || '').trim();
+        if (!id) return;
+        const state = this.ensureProfileState();
+        // Оптимистично убираем карточку из очереди — ответ «да/нет» должен
+        // ощущаться мгновенным, а список всё равно перечитывается следом.
+        this.setProfileState({
+            pendingAutographs: (state.pendingAutographs || []).filter(item => item.id !== id),
+        });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.autographModeration(id), {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
+            if (!res.ok) {
+                await this.loadPendingAutographs();
+                return;
+            }
+            if (action === 'approve') await this.loadProfileAutographs();
+            await this.refreshProfile();
+        } catch (e) {
+            await this.loadPendingAutographs();
+        }
+    }
+
+    /** Убрать чужой автограф со стены (владелец) или свой (автор). */
+    async removeAutograph(autographId) {
+        const id = String(autographId || '').trim();
+        if (!id) return;
+        const state = this.ensureProfileState();
+        this.setProfileState({ autographs: (state.autographs || []).filter(item => item.id !== id) });
+        try {
+            await this.apiFetch(this.apiRoutes.profiles.autographModeration(id), {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete' }),
+            });
+        } catch (e) {
+            await this.loadProfileAutographs();
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Отрисовка
+    // ------------------------------------------------------------
+
+    /** Округление до 0.1 единицы: экономит байты и не влияет на вид. */
+    autographRound(value) {
+        return Math.round((Number(value) || 0) * 10) / 10;
+    }
+
+    /**
+     * Гладкая кривая по точкам: середины отрезков как опорные точки, сами
+     * точки — как контрольные. Ломаная из `L` на подписи выглядит рублеными
+     * гранями, особенно на медленном движении мыши.
+     * Алфавит — только `M`/`Q`/`L`, числа и разделители, то есть ровно то, что
+     * пропускает валидатор на сервере.
+     */
+    autographPathData(points) {
+        const list = Array.isArray(points) ? points : [];
+        if (!list.length) return '';
+        const r = (n) => this.autographRound(n);
+        if (list.length === 1) {
+            // Точка-клик: нулевой длины путь не рисуется вообще, поэтому даём
+            // ему микроскопическую длину — с круглым linecap это ровная точка.
+            const p = list[0];
+            return `M ${r(p.x)} ${r(p.y)} L ${r(p.x + 0.1)} ${r(p.y)}`;
+        }
+        let d = `M ${r(list[0].x)} ${r(list[0].y)}`;
+        for (let i = 1; i < list.length - 1; i++) {
+            const mx = (list[i].x + list[i + 1].x) / 2;
+            const my = (list[i].y + list[i + 1].y) / 2;
+            d += ` Q ${r(list[i].x)} ${r(list[i].y)} ${r(mx)} ${r(my)}`;
+        }
+        const last = list[list.length - 1];
+        d += ` L ${r(last.x)} ${r(last.y)}`;
+        return d;
+    }
+
+    /** Один автограф как вложенный <svg>: своя система координат внутри бокса на стене. */
+    renderAutographNode(autograph, { interactive = true } = {}) {
+        const W = ZaliInterface.WALL_W;
+        const H = ZaliInterface.WALL_H;
+        const x = this.autographRound((Number(autograph?.x) || 0) * W);
+        const y = this.autographRound((Number(autograph?.y) || 0) * H);
+        const width = Math.max(1, this.autographRound((Number(autograph?.width) || 0) * W));
+        const height = Math.max(1, this.autographRound((Number(autograph?.height) || 0) * H));
+        const rotation = Number(autograph?.rotation) || 0;
+        const viewBox = this.esc(String(autograph?.viewBox || '0 0 100 100'));
+        const author = String(autograph?.author || '');
+        const paths = (Array.isArray(autograph?.strokes) ? autograph.strokes : []).map(stroke => (
+            `<path d="${this.esc(stroke?.d || '')}" fill="none" stroke="${this.esc(this.safeCssColor(stroke?.color) || '#cbff00')}" stroke-width="${Number(stroke?.width) || 2}" stroke-linecap="round" stroke-linejoin="round"></path>`
+        )).join('');
+
+        const inner = `<svg x="${x}" y="${y}" width="${width}" height="${height}" viewBox="${viewBox}" preserveAspectRatio="none" overflow="visible">${paths}</svg>`;
+        const rotated = rotation
+            ? `<g transform="rotate(${this.autographRound(rotation)} ${this.autographRound(x + width / 2)} ${this.autographRound(y + height / 2)})">${inner}</g>`
+            : inner;
+
+        if (!interactive) return rotated;
+        return `<g class="autograph-node" data-autograph-id="${this.esc(autograph?.id || '')}" data-autograph-author="${this.esc(author)}">
+            <title>${this.esc(`Автограф: ${author}`)}</title>
+            ${rotated}
+        </g>`;
+    }
+
+    /** Сетка фона — тоже вектор, паттерном, а не картинкой. */
+    renderAutographWallDefs() {
+        return `<defs>
+            <pattern id="autographGrid" width="50" height="50" patternUnits="userSpaceOnUse">
+                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="currentColor" stroke-width="1" opacity="0.10"></path>
+            </pattern>
+        </defs>`;
+    }
+
+    renderAutographWall() {
+        const state = this.ensureProfileState();
+        const W = ZaliInterface.WALL_W;
+        const H = ZaliInterface.WALL_H;
+        const drawing = state.drawing;
+        const approved = Array.isArray(state.autographs) ? state.autographs : [];
+
+        const nodes = approved.map(item => this.renderAutographNode(item)).join('');
+        const empty = !approved.length && !drawing
+            ? `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" dominant-baseline="middle" class="autograph-wall-empty-text">Стена пуста — оставьте первый автограф</text>`
+            : '';
+
+        return `<div class="autograph-wall${drawing ? ' drawing' : ''}" id="autographWall">
+            <svg class="autograph-wall-svg" id="autographWallSvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Стена автографов">
+                ${this.renderAutographWallDefs()}
+                <rect x="0" y="0" width="${W}" height="${H}" fill="url(#autographGrid)"></rect>
+                <g class="autograph-wall-nodes">${nodes}</g>
+                ${empty}
+                <g class="autograph-draft-layer" id="autographDraftLayer"></g>
+            </svg>
+        </div>`;
+    }
+
+    /** Маленький превью-SVG для карточки в очереди модерации. */
+    renderAutographPreview(autograph) {
+        const viewBox = this.esc(String(autograph?.viewBox || '0 0 100 100'));
+        const paths = (Array.isArray(autograph?.strokes) ? autograph.strokes : []).map(stroke => (
+            `<path d="${this.esc(stroke?.d || '')}" fill="none" stroke="${this.esc(this.safeCssColor(stroke?.color) || '#cbff00')}" stroke-width="${Number(stroke?.width) || 2}" stroke-linecap="round" stroke-linejoin="round"></path>`
+        )).join('');
+        return `<svg class="autograph-preview-svg" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Автограф">${paths}</svg>`;
+    }
+
+    // ------------------------------------------------------------
+    // Рисование
+    // ------------------------------------------------------------
+
+    startAutographDrawing() {
+        const state = this.ensureProfileState();
+        if (!state.data?.canAutograph) return;
+        this.setProfileState({
+            tab: 'wall',
+            drawing: {
+                strokes: [],
+                color: ZaliInterface.autographPalette[0],
+                width: 4,
+                submitting: false,
+                error: '',
+            },
+        });
+    }
+
+    cancelAutographDrawing({ silent = false } = {}) {
+        const state = this.S.profile;
+        if (!state?.drawing) return;
+        this._autographActiveStroke = null;
+        this._autographActivePath = null;
+        if (silent) {
+            // Закрытие оверлея: перерисовывать нечего и незачем.
+            this.S.profile = { ...state, drawing: null };
+            return;
+        }
+        this.setProfileState({ drawing: null });
+    }
+
+    setAutographColor(color) {
+        const state = this.ensureProfileState();
+        if (!state.drawing) return;
+        const safe = this.safeCssColor(color) || ZaliInterface.autographPalette[0];
+        this.setProfileState({ drawing: { ...state.drawing, color: safe } });
+    }
+
+    setAutographWidth(width) {
+        const state = this.ensureProfileState();
+        if (!state.drawing) return;
+        const value = Math.min(40, Math.max(1, Number(width) || 4));
+        this.setProfileState({ drawing: { ...state.drawing, width: value } });
+    }
+
+    undoAutographStroke() {
+        const state = this.ensureProfileState();
+        if (!state.drawing) return;
+        const strokes = (state.drawing.strokes || []).slice(0, -1);
+        this.setProfileState({ drawing: { ...state.drawing, strokes } });
+    }
+
+    clearAutographStrokes() {
+        const state = this.ensureProfileState();
+        if (!state.drawing) return;
+        this.setProfileState({ drawing: { ...state.drawing, strokes: [] } });
+    }
+
+    /**
+     * Клиентские координаты → единицы стены. Внешний svg объявлен с
+     * `preserveAspectRatio="none"`, поэтому отображение линейно по обеим осям
+     * и обратимо без поправок на «letterbox».
+     */
+    autographPointFromEvent(svg, event) {
+        const rect = svg.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        const x = ((event.clientX - rect.left) / rect.width) * ZaliInterface.WALL_W;
+        const y = ((event.clientY - rect.top) / rect.height) * ZaliInterface.WALL_H;
+        return {
+            x: Math.min(ZaliInterface.WALL_W, Math.max(0, x)),
+            y: Math.min(ZaliInterface.WALL_H, Math.max(0, y)),
+        };
+    }
+
+    /**
+     * Навешивает обработчики указателя на свежеотрисованную стену. Вызывается
+     * из рендера профиля: узлы заменяются целиком, поэтому слушатели каждый раз
+     * ставятся заново — на новый элемент, а не на выброшенный старый.
+     */
+    bindAutographSurface() {
+        const svg = document.getElementById('autographWallSvg');
+        if (!svg || svg.dataset.autographBound === '1') return;
+        svg.dataset.autographBound = '1';
+
+        const draftLayer = () => document.getElementById('autographDraftLayer');
+
+        const beginStroke = (event) => {
+            const state = this.ensureProfileState();
+            if (!state.drawing) return;
+            if (event.button !== undefined && event.button !== 0) return;
+            if ((state.drawing.strokes || []).length >= ZaliInterface.AUTOGRAPH_MAX_STROKES) return;
+            const point = this.autographPointFromEvent(svg, event);
+            if (!point) return;
+            event.preventDefault();
+            try { svg.setPointerCapture(event.pointerId); } catch (e) {}
+
+            this._autographActiveStroke = {
+                points: [point],
+                color: state.drawing.color,
+                width: state.drawing.width,
+            };
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('stroke', this._autographActiveStroke.color);
+            path.setAttribute('stroke-width', String(this._autographActiveStroke.width));
+            path.setAttribute('stroke-linecap', 'round');
+            path.setAttribute('stroke-linejoin', 'round');
+            path.setAttribute('d', this.autographPathData(this._autographActiveStroke.points));
+            draftLayer()?.appendChild(path);
+            this._autographActivePath = path;
+        };
+
+        const extendStroke = (event) => {
+            const stroke = this._autographActiveStroke;
+            if (!stroke || !this._autographActivePath) return;
+            const point = this.autographPointFromEvent(svg, event);
+            if (!point) return;
+            const last = stroke.points[stroke.points.length - 1];
+            const dx = point.x - last.x;
+            const dy = point.y - last.y;
+            // Прореживание по расстоянию: указатель сыплет событиями чаще, чем
+            // это различимо глазом, а каждая лишняя точка — байты в базе и
+            // работа при каждом показе стены.
+            if (dx * dx + dy * dy < ZaliInterface.AUTOGRAPH_MIN_POINT_DISTANCE ** 2) return;
+            if (stroke.points.length >= ZaliInterface.AUTOGRAPH_MAX_POINTS_PER_STROKE) return;
+            stroke.points.push(point);
+            this._autographActivePath.setAttribute('d', this.autographPathData(stroke.points));
+        };
+
+        const endStroke = (event) => {
+            const stroke = this._autographActiveStroke;
+            this._autographActiveStroke = null;
+            this._autographActivePath = null;
+            if (event?.pointerId !== undefined) {
+                try { svg.releasePointerCapture(event.pointerId); } catch (e) {}
+            }
+            if (!stroke || !stroke.points.length) return;
+            const state = this.ensureProfileState();
+            if (!state.drawing) return;
+            // Штрих переезжает в состояние, и перерисовка стены показывает его
+            // уже из общего списка — черновой слой при этом очищается.
+            this.setProfileState({
+                drawing: { ...state.drawing, strokes: [...(state.drawing.strokes || []), stroke], error: '' },
+            });
+        };
+
+        svg.addEventListener('pointerdown', beginStroke);
+        svg.addEventListener('pointermove', extendStroke);
+        svg.addEventListener('pointerup', endStroke);
+        svg.addEventListener('pointercancel', endStroke);
+        // Уход указателя за пределы окна без pointerup (частый случай при
+        // быстром росчерке к краю) иначе оставил бы штрих незакрытым навсегда.
+        svg.addEventListener('pointerleave', (event) => {
+            if (this._autographActiveStroke) endStroke(event);
+        });
+    }
+
+    /** Черновые штрихи рисуются из состояния — вызывается после каждой перерисовки стены. */
+    renderAutographDraft() {
+        const layer = document.getElementById('autographDraftLayer');
+        if (!layer) return;
+        const drawing = this.ensureProfileState().drawing;
+        if (!drawing) {
+            layer.innerHTML = '';
+            return;
+        }
+        layer.innerHTML = (drawing.strokes || []).map(stroke => (
+            `<path d="${this.esc(this.autographPathData(stroke.points))}" fill="none" stroke="${this.esc(this.safeCssColor(stroke.color) || '#cbff00')}" stroke-width="${Number(stroke.width) || 4}" stroke-linecap="round" stroke-linejoin="round"></path>`
+        )).join('');
+    }
+
+    /**
+     * Обрезает рисунок по его собственной bbox и отправляет.
+     *
+     * Сдвиг в начало координат — не косметика: без него viewBox автографа был бы
+     * размером со всю стену, и рисунок в углу занимал бы прямоугольник во всю
+     * стену, перекрывая соседей своей (пустой) областью.
+     */
+    async submitAutograph() {
+        const state = this.ensureProfileState();
+        const drawing = state.drawing;
+        const owner = state.username;
+        if (!drawing || !owner || drawing.submitting) return;
+        const strokes = (drawing.strokes || []).filter(stroke => stroke.points?.length);
+        if (!strokes.length) {
+            this.setProfileState({ drawing: { ...drawing, error: 'Сначала нарисуйте что-нибудь' } });
+            return;
+        }
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        strokes.forEach(stroke => {
+            // Половина толщины с каждой стороны: иначе край штриха обрезался бы
+            // границей viewBox, и вся линия выглядела бы «съеденной».
+            const pad = (Number(stroke.width) || 4) / 2 + 1;
+            stroke.points.forEach(point => {
+                minX = Math.min(minX, point.x - pad);
+                minY = Math.min(minY, point.y - pad);
+                maxX = Math.max(maxX, point.x + pad);
+                maxY = Math.max(maxY, point.y + pad);
+            });
+        });
+        const boxWidth = Math.max(1, maxX - minX);
+        const boxHeight = Math.max(1, maxY - minY);
+
+        const payloadStrokes = strokes.map(stroke => ({
+            d: this.autographPathData(stroke.points.map(point => ({ x: point.x - minX, y: point.y - minY }))),
+            color: this.safeCssColor(stroke.color) || '#cbff00',
+            width: Number(stroke.width) || 4,
+        }));
+
+        this.setProfileState({ drawing: { ...drawing, submitting: true, error: '' } });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.profiles.autographs(owner), {
+                method: 'POST',
+                interactive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    strokes: payloadStrokes,
+                    viewBox: `0 0 ${this.autographRound(boxWidth)} ${this.autographRound(boxHeight)}`,
+                    x: minX / ZaliInterface.WALL_W,
+                    y: minY / ZaliInterface.WALL_H,
+                    width: boxWidth / ZaliInterface.WALL_W,
+                    height: boxHeight / ZaliInterface.WALL_H,
+                    rotation: 0,
+                }),
+            });
+            if (res.status === 403) {
+                this.setProfileState({ drawing: { ...this.ensureProfileState().drawing, submitting: false, error: 'Владелец закрыл автографы для вас' } });
+                return;
+            }
+            if (!res.ok) {
+                const message = await res.text().catch(() => '');
+                this.setProfileState({ drawing: { ...this.ensureProfileState().drawing, submitting: false, error: message || 'Не удалось отправить автограф' } });
+                return;
+            }
+            const body = await res.json().catch(() => ({}));
+            this.setProfileState({ drawing: null });
+            this.addLogEntry({
+                type: 'SUCCESS',
+                msg: body?.status === 'approved'
+                    ? 'Автограф добавлен на стену'
+                    : 'Автограф отправлен на одобрение владельцу',
+                ts: new Date().toLocaleTimeString(),
+            });
+            await this.loadProfileAutographs();
+        } catch (e) {
+            const current = this.ensureProfileState().drawing;
+            if (current) {
+                this.setProfileState({ drawing: { ...current, submitting: false, error: 'Не удалось отправить автограф' } });
+            }
+        }
+    }
+
 });
 
 
@@ -31305,6 +34465,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindStyleSliderEvents();                     // слайдеры оформления
         this.bindCryptoKeyEvents();                       // ручной ввод ключа шифрования
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
+        this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
     }
 
     /** Списки контактов и каналов сервера. Вызывается только из bindEvents(). */
@@ -31344,6 +34505,17 @@ ZaliMixin(ZaliInterface, class {
                     if (username) this.removeContact(username);
                     e.stopPropagation();
                     return;
+                }
+                // Аватарка внутри строки — вход в профиль, а не в диалог.
+                // Проверяется ДО строки, иначе клик по ней просто открыл бы чат.
+                const avaTarget = e.target.closest('[data-profile-open]');
+                if (avaTarget) {
+                    const name = avaTarget.getAttribute('data-profile-open');
+                    if (name) {
+                        e.stopPropagation();
+                        void this.openProfile(name);
+                        return;
+                    }
                 }
                 const row = e.target.closest('.contact');
                 if (row && row.dataset.name) this.switchChat(row.dataset.name);
@@ -31489,6 +34661,16 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // Аватарка в шапке — вход в профиль собеседника (в DM) или ничего
+        // (в канале сервера аватарка принадлежит серверу, а не человеку).
+        const chatHdrAva = document.getElementById('chatHdrAva');
+        if (chatHdrAva) {
+            chatHdrAva.addEventListener('click', () => {
+                if (this.S.navMode === 'servers') return;
+                if (this.S.current) void this.openProfile(this.S.current);
+            });
+        }
+
         // Mobile chat app-bar back chevron: returns to the dialog list screen
         // via the same push-nav path a back-swipe uses.
         const chatBackBtn = document.getElementById('chatBackBtn');
@@ -31504,6 +34686,14 @@ ZaliMixin(ZaliInterface, class {
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
             msgsEl.addEventListener('click', (e) => {
+                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
+                if (avaTarget) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const name = avaTarget.getAttribute('data-profile-open');
+                    if (name) void this.openProfile(name);
+                    return;
+                }
                 const fileLink = e.target.closest('a.file-chip, a.file-message');
                 if (fileLink) {
                     e.preventDefault();
@@ -31532,6 +34722,18 @@ ZaliMixin(ZaliInterface, class {
                 this.hideReactionMenu();
             });
             msgsEl.addEventListener('contextmenu', (e) => {
+                // ПКМ по аватарке — меню человека (подписаться, в друзья),
+                // а не меню сообщения: реакция к аватарке отношения не имеет.
+                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
+                if (avaTarget) {
+                    const name = avaTarget.getAttribute('data-profile-open');
+                    if (name) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.openContactContextMenu(name, e.clientX, e.clientY);
+                        return;
+                    }
+                }
                 const msgEl = e.target.closest('.msg[data-message-id]');
                 if (!msgEl) return;
                 const messageId = msgEl.getAttribute('data-message-id');
@@ -31736,7 +34938,7 @@ ZaliMixin(ZaliInterface, class {
                     this.updateContactAddButtonState();
                     this.setContactStatus('');
                     this.renderContactSuggestions(true);
-                    void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
+                    this.scheduleUserSearch(query, { onDone: () => this.renderContactSuggestions(true) });
                     return;
                 }
                 this.S.searchQ = e.target.value;
@@ -31943,6 +35145,7 @@ ZaliMixin(ZaliInterface, class {
         const meAva = document.getElementById('meAva');
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
         const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
+        const designModeOptions = document.getElementById('designModeOptions');
         const inputVoiceTrace = document.getElementById('inputVoiceTrace');
         const hubSegmentSettings = document.getElementById('hubSegmentSettings');
         const recentAccounts = document.getElementById('recentAccounts');
@@ -32033,6 +35236,15 @@ ZaliMixin(ZaliInterface, class {
         if (inputExperimentalDesign) {
             inputExperimentalDesign.addEventListener('change', () => {
                 this.saveExperimentalDesign(!!inputExperimentalDesign.checked);
+            });
+        }
+        if (designModeOptions) {
+            // Делегирование, а не слушатели на кнопках: renderDesignModeSettings()
+            // переписывает контейнер через innerHTML при каждом применении режима.
+            designModeOptions.addEventListener('click', (event) => {
+                const btn = event.target?.closest?.('[data-design-mode]');
+                if (!btn || !designModeOptions.contains(btn)) return;
+                this.saveDesignMode(btn.getAttribute('data-design-mode'));
             });
         }
         if (inputVoiceTrace) {
@@ -32411,12 +35623,25 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        if (meAva) {
-            meAva.title = 'Нажмите, чтобы сменить свой аватар';
-            meAva.addEventListener('click', () => openAvatarPicker());
+        // Клик по своей аватарке слева снизу открывает СВОЙ профиль сразу в
+        // режиме редактирования — оттуда же доступны приглашения в друзья.
+        // Сменить картинку можно кнопкой внутри редактора и здесь же в
+        // настройках, поэтому прежний прямой вызов выбора файла не потерян.
+        const meAvaBtn = document.getElementById('meAvaBtn');
+        if (meAvaBtn) {
+            meAvaBtn.addEventListener('click', () => {
+                void this.openProfile(this.myName(), { editing: true });
+            });
         }
+        // Открывает системный выбор файла для аватара. Замыкание объявлено
+        // внутри этого метода, поэтому вешаем его на экземпляр — иначе
+        // редактор профиля (profile_ui.js) до него не дотянется.
+        this.openAvatarPicker = openAvatarPicker;
+        if (meAva) meAva.title = 'Мой профиль';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
+"""#,
+    #"""
                 const logBody = document.getElementById('logBody');
                 if (logBody) logBody.innerHTML = '';
             });
@@ -32835,7 +36060,7 @@ ZaliMixin(ZaliInterface, class {
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();
         this.applyUiV2Chrome();
-        this.applyExperimentalDesign();
+        this.applyDesignMode();
         this.applyVoiceTraceEnabled();
         const mobileQuery = this.mobileLayoutQuery();
         if (mobileQuery) {
@@ -33081,6 +36306,13 @@ ZaliMixin(ZaliInterface, class {
     };
     window.receiveVoiceEvent = function(payload) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.VOICE_EVENT || 'voice_event'}`, payload);
+    };
+    // Общий приёмник WS-кадров от нативной оболочки. Оболочка зовёт его для
+    // всего, что не разобрала сама, и передаёт кадр как есть — разбор целиком
+    // на стороне JS (dispatchRealtimeEvent). Так новый тип события с сервера
+    // не требует правок в macOS/Windows/Android по отдельности.
+    window.receiveRealtimeEvent = function(payload) {
+        loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.REALTIME_EVENT || 'realtime_event'}`, payload);
     };
     window.setUsers = function(users) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.SET_USERS || 'set_users'}`, users);

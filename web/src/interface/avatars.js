@@ -13,14 +13,40 @@ ZaliMixin(ZaliInterface, class {
         return this.avatarCache.has(key) ? this.avatarCache.get(key) : undefined;
     }
 
+    // The single place an avatar enters the cache, and therefore the single
+    // place that decides what shape it is kept in.
+    //
+    // Whatever arrives here is normalised to a blob: URL, because this value is
+    // inlined into the markup of every contact row and of every incoming message
+    // that opens or closes a group. The native bridge hands avatars over as
+    // data: URLs, and one 64 KB avatar measured 30 copies of its own base64 —
+    // 2.5 MB — inside a single render of a 60-message conversation. A blob: URL
+    // is ~40 characters and, unlike a data: URL rebuilt on each innerHTML write,
+    // lets the browser reuse the image it already decoded, so avatars stop
+    // blinking on unrelated re-renders. The network branch of
+    // ensureAvatarLoaded() has always produced a blob: URL; this makes the
+    // native branch agree instead of each caller deciding for itself.
     saveStoredAvatar(username, dataUrl) {
         const key = this.avatarCacheKey(username);
+        const next = this.toAvatarObjectUrl(dataUrl);
         const prev = this.avatarCache.get(key);
-        if (prev && typeof prev === 'string' && prev.startsWith('blob:') && prev !== dataUrl) {
+        if (prev && typeof prev === 'string' && prev.startsWith('blob:') && prev !== next) {
             try { URL.revokeObjectURL(prev); } catch (e) {}
         }
         this.avatarFetchSeq.set(key, (this.avatarFetchSeq.get(key) || 0) + 1);
-        this.avatarCache.set(key, dataUrl || null);
+        this.avatarCache.set(key, next || null);
+    }
+
+    toAvatarObjectUrl(value) {
+        const source = String(value || '');
+        if (!source.startsWith('data:')) return value;
+        const blob = this.dataUrlToBlob(source);
+        if (!blob) return value;
+        try {
+            return URL.createObjectURL(blob);
+        } catch (e) {
+            return value;
+        }
     }
 
     clearStoredAvatar(username) {
@@ -278,10 +304,18 @@ ZaliMixin(ZaliInterface, class {
         const safeName = String(filename || 'attachment').trim() || 'attachment';
         if (!source) return false;
 
-        if (this.nativeSupports('downloadAttachment') && source.startsWith('data:')) {
+        // Attachments are rendered through a blob: URL (attachmentDisplayUrl), so
+        // the href on the link is no longer the payload. The native save bridge
+        // wants the payload — recover it from the same map that minted the URL,
+        // otherwise a native shell would silently fall through to the browser
+        // `<a download>` path, which WKWebView/WebView2 do not honour.
+        const nativePayload = source.startsWith('data:')
+            ? source
+            : (this._attachmentBlobPayloads?.get(source) || '');
+        if (this.nativeSupports('downloadAttachment') && nativePayload) {
             this.postNativeMessage({
                 type: NativeMessageTypes.DOWNLOAD_ATTACHMENT,
-                dataUrl: source,
+                dataUrl: nativePayload,
                 filename: safeName,
             });
             return true;
@@ -366,9 +400,13 @@ ZaliMixin(ZaliInterface, class {
                             this.scheduleAvatarRefresh();
                             return null;
                         }
+                        // saveStoredAvatar() converts the bridge's data: URL to a
+                        // blob: one and returns it through the cache — see the
+                        // comment there for why the payload must not survive
+                        // into the markup.
                         this.saveStoredAvatar(name, dataUrl);
                         this.scheduleAvatarRefresh();
-                        return dataUrl;
+                        return this.loadStoredAvatar(name);
                     } catch (nativeError) {
                         this.trace(`ensureAvatarLoaded native failed username=${name} err=${nativeError?.message || nativeError}`);
                     }

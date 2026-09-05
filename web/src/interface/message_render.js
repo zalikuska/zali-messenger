@@ -59,6 +59,49 @@ ZaliMixin(ZaliInterface, class {
     // out (the server can't attribute an unauthenticated report to anyone).
     // Only a SHA-256 fingerprint of any key is ever sent — see
     // conversationKeyId() — never the key itself.
+    // Render-loop entry point for a decryption failure.
+    //
+    // _renderMessagesNow() hits one of these per undecryptable message, so a
+    // screenful of unreadable history used to fire, from inside the render
+    // frame, one POST *and* one canonical-key lookup per message — the lookup
+    // has no cache shortcut of its own, so fifty placeholders meant a hundred
+    // requests leaving at once, plus a DOM read of the log panel for each. The
+    // reports are worth keeping; doing them during the frame is not.
+    //
+    // Deferred out of the frame, and the whole batch shares a single canonical
+    // lookup instead of repeating it per message.
+    queueDecryptFailureReport(details = {}) {
+        if (!this._decryptFailureQueue) this._decryptFailureQueue = [];
+        // Bounded: a very long unreadable history should cost a fixed amount of
+        // telemetry, not one request per row.
+        if (this._decryptFailureQueue.length >= 50) return;
+        this._decryptFailureQueue.push(details);
+        if (this._decryptFailureFlushTimer) return;
+        this._decryptFailureFlushTimer = setTimeout(() => {
+            this._decryptFailureFlushTimer = 0;
+            void this.flushDecryptFailureReports();
+        }, 300);
+    }
+
+    async flushDecryptFailureReports() {
+        const batch = this._decryptFailureQueue || [];
+        this._decryptFailureQueue = [];
+        if (!batch.length) return;
+        const scopes = Array.from(new Set(batch
+            .map(details => details.scope || this.conversationScopeKey(
+                details.sender === this.myName() ? details.receiver : details.sender,
+                details.serverId,
+                details.channelId,
+            ))
+            .filter(Boolean)));
+        // One lookup for the whole batch; each report below then reads it from
+        // the cache instead of asking again.
+        try { await this.fetchCanonicalKeyIds(scopes); } catch (e) {}
+        for (const details of batch) {
+            await this.reportDecryptFailure({ ...details, useCachedCanonicalKeyIds: true });
+        }
+    }
+
     async reportDecryptFailure(details = {}) {
         if (!this.S.session?.token) return;
         const key = [
@@ -88,7 +131,9 @@ ZaliMixin(ZaliInterface, class {
             let canonicalKeyId = '';
             if (scope) {
                 try {
-                    const canonical = await this.fetchCanonicalKeyIds([scope]);
+                    const canonical = await this.fetchCanonicalKeyIds([scope], {
+                        allowCached: !!details.useCachedCanonicalKeyIds,
+                    });
                     canonicalKeyId = canonical.get(scope) || '';
                 } catch (e) { /* best-effort — see fetchCanonicalKeyIds's own fallback */ }
             }
@@ -213,7 +258,16 @@ ZaliMixin(ZaliInterface, class {
                     if (video.dataset.userPaused === '1') return;
                     if (entry.isIntersecting) {
                         ensurePlaying();
+                        return;
                     }
+                    // Symmetric pause. Without it this observer could only ever
+                    // start playback, so a looping clip scrolled out of the
+                    // window kept decoding frames for the rest of the session —
+                    // in a media-heavy chat, several of them at once. Animated
+                    // stickers already do exactly this (modules/tgs.js); a
+                    // paused element keeps its current frame, so nothing about
+                    // the picture changes, only the work behind it.
+                    if (!video.paused) video.pause?.();
                 }, { root: null, threshold: 0.15, rootMargin: '160px' });
                 observer.observe(video);
                 video.dataset.gifObserver = '1';

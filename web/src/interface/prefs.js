@@ -20,26 +20,104 @@ ZaliMixin(ZaliInterface, class {
         return 'zali_experimental_design_v1';
     }
 
-    loadExperimentalDesign() {
+    // ============================================================
+    // DESIGN MODE — оформление интерфейса целиком: classic | flat.
+    //
+    // Раньше это был одиночный чекбокс «плоский режим»
+    // (`zali_experimental_design_v1`, атрибут `data-experimental-design`).
+    // Режимов стало три, и они взаимоисключающие, поэтому источник правды —
+    // `zali_design_mode_v1`, а старый ключ остаётся ЗЕРКАЛОМ: его продолжают
+    // читать CSS-правила плоской темы (`body[data-experimental-design="on"]`,
+    // ~66 селекторов) и старые сборки нативных шеллов, у которых в
+    // localStorage уже лежит выбор пользователя. Поэтому saveDesignMode()
+    // пишет оба ключа, а loadDesignMode() умеет поднять старый выбор.
+    // ============================================================
+
+    designModeStorageKey() {
+        return 'zali_design_mode_v1';
+    }
+
+    designModeCatalog() {
+        return [
+            { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
+            { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+        ];
+    }
+
+    normalizeDesignMode(value) {
+        const id = String(value || '').trim().toLowerCase();
+        return this.designModeCatalog().some(m => m.id === id) ? id : 'classic';
+    }
+
+    loadDesignMode() {
         try {
-            return localStorage.getItem(this.experimentalDesignStorageKey()) === '1';
+            const stored = localStorage.getItem(this.designModeStorageKey());
+            if (stored) return this.normalizeDesignMode(stored);
+            // Миграция с одиночного чекбокса: включённый плоский режим —
+            // это ровно режим 'flat', всё остальное — 'classic'.
+            return localStorage.getItem(this.experimentalDesignStorageKey()) === '1' ? 'flat' : 'classic';
         } catch (e) {
-            return false;
+            return 'classic';
         }
     }
 
-    saveExperimentalDesign(enabled) {
-        this.experimentalDesign = !!enabled;
+    saveDesignMode(mode) {
+        this.designMode = this.normalizeDesignMode(mode);
+        this.experimentalDesign = this.designMode === 'flat';
         try {
+            localStorage.setItem(this.designModeStorageKey(), this.designMode);
             localStorage.setItem(this.experimentalDesignStorageKey(), this.experimentalDesign ? '1' : '0');
         } catch (e) {}
-        this.applyExperimentalDesign();
+        this.applyDesignMode();
+    }
+
+    applyDesignMode() {
+        this.designMode = this.normalizeDesignMode(this.designMode || this.loadDesignMode());
+        this.experimentalDesign = this.designMode === 'flat';
+        const body = document.body;
+        if (body) {
+            body.setAttribute('data-design-mode', this.designMode);
+            body.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
+        }
+        // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
+        const legacyToggle = document.getElementById('inputExperimentalDesign');
+        if (legacyToggle) legacyToggle.checked = !!this.experimentalDesign;
+        this.renderDesignModeSettings();
+    }
+
+    renderDesignModeSettings() {
+        const host = document.getElementById('designModeOptions');
+        if (!host) return;
+        const active = this.normalizeDesignMode(this.designMode);
+        const html = this.designModeCatalog().map(mode => `
+            <button type="button" class="design-mode-option${mode.id === active ? ' active' : ''}" data-design-mode="${this.esc(mode.id)}" aria-pressed="${mode.id === active}">
+                <span class="design-mode-preview design-mode-preview--${this.esc(mode.id)}" aria-hidden="true">
+                    <span class="design-mode-preview-bar"></span>
+                    <span class="design-mode-preview-row"></span>
+                    <span class="design-mode-preview-row design-mode-preview-row--accent"></span>
+                </span>
+                <span class="design-mode-copy">
+                    <strong>${this.esc(mode.label)}</strong>
+                    <small>${this.esc(mode.hint)}</small>
+                </span>
+                <span class="design-mode-note">${this.esc(mode.note)}</span>
+            </button>
+        `).join('');
+        if (host.innerHTML !== html) host.innerHTML = html;
+    }
+
+    // Обратная совместимость: старый API продолжает работать, но теперь это
+    // просто «переключить между classic и flat» поверх designMode.
+    loadExperimentalDesign() {
+        return this.loadDesignMode() === 'flat';
+    }
+
+    saveExperimentalDesign(enabled) {
+        this.saveDesignMode(enabled ? 'flat' : 'classic');
     }
 
     applyExperimentalDesign() {
-        document.body?.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
-        const toggle = document.getElementById('inputExperimentalDesign');
-        if (toggle) toggle.checked = !!this.experimentalDesign;
+        this.applyDesignMode();
     }
 
     voiceTraceStorageKey() {

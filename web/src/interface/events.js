@@ -24,6 +24,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindStyleSliderEvents();                     // слайдеры оформления
         this.bindCryptoKeyEvents();                       // ручной ввод ключа шифрования
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
+        this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
     }
 
     /** Списки контактов и каналов сервера. Вызывается только из bindEvents(). */
@@ -63,6 +64,17 @@ ZaliMixin(ZaliInterface, class {
                     if (username) this.removeContact(username);
                     e.stopPropagation();
                     return;
+                }
+                // Аватарка внутри строки — вход в профиль, а не в диалог.
+                // Проверяется ДО строки, иначе клик по ней просто открыл бы чат.
+                const avaTarget = e.target.closest('[data-profile-open]');
+                if (avaTarget) {
+                    const name = avaTarget.getAttribute('data-profile-open');
+                    if (name) {
+                        e.stopPropagation();
+                        void this.openProfile(name);
+                        return;
+                    }
                 }
                 const row = e.target.closest('.contact');
                 if (row && row.dataset.name) this.switchChat(row.dataset.name);
@@ -208,6 +220,16 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // Аватарка в шапке — вход в профиль собеседника (в DM) или ничего
+        // (в канале сервера аватарка принадлежит серверу, а не человеку).
+        const chatHdrAva = document.getElementById('chatHdrAva');
+        if (chatHdrAva) {
+            chatHdrAva.addEventListener('click', () => {
+                if (this.S.navMode === 'servers') return;
+                if (this.S.current) void this.openProfile(this.S.current);
+            });
+        }
+
         // Mobile chat app-bar back chevron: returns to the dialog list screen
         // via the same push-nav path a back-swipe uses.
         const chatBackBtn = document.getElementById('chatBackBtn');
@@ -223,6 +245,14 @@ ZaliMixin(ZaliInterface, class {
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
             msgsEl.addEventListener('click', (e) => {
+                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
+                if (avaTarget) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const name = avaTarget.getAttribute('data-profile-open');
+                    if (name) void this.openProfile(name);
+                    return;
+                }
                 const fileLink = e.target.closest('a.file-chip, a.file-message');
                 if (fileLink) {
                     e.preventDefault();
@@ -251,6 +281,18 @@ ZaliMixin(ZaliInterface, class {
                 this.hideReactionMenu();
             });
             msgsEl.addEventListener('contextmenu', (e) => {
+                // ПКМ по аватарке — меню человека (подписаться, в друзья),
+                // а не меню сообщения: реакция к аватарке отношения не имеет.
+                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
+                if (avaTarget) {
+                    const name = avaTarget.getAttribute('data-profile-open');
+                    if (name) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.openContactContextMenu(name, e.clientX, e.clientY);
+                        return;
+                    }
+                }
                 const msgEl = e.target.closest('.msg[data-message-id]');
                 if (!msgEl) return;
                 const messageId = msgEl.getAttribute('data-message-id');
@@ -455,7 +497,7 @@ ZaliMixin(ZaliInterface, class {
                     this.updateContactAddButtonState();
                     this.setContactStatus('');
                     this.renderContactSuggestions(true);
-                    void this.loadUsers(query).then(() => this.renderContactSuggestions(true));
+                    this.scheduleUserSearch(query, { onDone: () => this.renderContactSuggestions(true) });
                     return;
                 }
                 this.S.searchQ = e.target.value;
@@ -662,6 +704,7 @@ ZaliMixin(ZaliInterface, class {
         const meAva = document.getElementById('meAva');
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
         const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
+        const designModeOptions = document.getElementById('designModeOptions');
         const inputVoiceTrace = document.getElementById('inputVoiceTrace');
         const hubSegmentSettings = document.getElementById('hubSegmentSettings');
         const recentAccounts = document.getElementById('recentAccounts');
@@ -752,6 +795,15 @@ ZaliMixin(ZaliInterface, class {
         if (inputExperimentalDesign) {
             inputExperimentalDesign.addEventListener('change', () => {
                 this.saveExperimentalDesign(!!inputExperimentalDesign.checked);
+            });
+        }
+        if (designModeOptions) {
+            // Делегирование, а не слушатели на кнопках: renderDesignModeSettings()
+            // переписывает контейнер через innerHTML при каждом применении режима.
+            designModeOptions.addEventListener('click', (event) => {
+                const btn = event.target?.closest?.('[data-design-mode]');
+                if (!btn || !designModeOptions.contains(btn)) return;
+                this.saveDesignMode(btn.getAttribute('data-design-mode'));
             });
         }
         if (inputVoiceTrace) {
@@ -1130,10 +1182,21 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        if (meAva) {
-            meAva.title = 'Нажмите, чтобы сменить свой аватар';
-            meAva.addEventListener('click', () => openAvatarPicker());
+        // Клик по своей аватарке слева снизу открывает СВОЙ профиль сразу в
+        // режиме редактирования — оттуда же доступны приглашения в друзья.
+        // Сменить картинку можно кнопкой внутри редактора и здесь же в
+        // настройках, поэтому прежний прямой вызов выбора файла не потерян.
+        const meAvaBtn = document.getElementById('meAvaBtn');
+        if (meAvaBtn) {
+            meAvaBtn.addEventListener('click', () => {
+                void this.openProfile(this.myName(), { editing: true });
+            });
         }
+        // Открывает системный выбор файла для аватара. Замыкание объявлено
+        // внутри этого метода, поэтому вешаем его на экземпляр — иначе
+        // редактор профиля (profile_ui.js) до него не дотянется.
+        this.openAvatarPicker = openAvatarPicker;
+        if (meAva) meAva.title = 'Мой профиль';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
                 const logBody = document.getElementById('logBody');
@@ -1554,7 +1617,7 @@ ZaliMixin(ZaliInterface, class {
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();
         this.applyUiV2Chrome();
-        this.applyExperimentalDesign();
+        this.applyDesignMode();
         this.applyVoiceTraceEnabled();
         const mobileQuery = this.mobileLayoutQuery();
         if (mobileQuery) {

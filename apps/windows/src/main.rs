@@ -230,6 +230,24 @@ const INDEX_HTML: &str = include_str!("../../../web/index.html");
 const STYLE_CSS: &str = include_str!("../../../web/style.css");
 const APP_JS: &str = include_str!("../../../web/app.js");
 
+/// The only origin allowed to occupy the webview, i.e. the bundled UI served by
+/// the `zali://` custom protocol above. `about:` forms are allowed because the
+/// embedder itself uses them; `blob:` because the shared UI's attachment-download
+/// fallback clicks a blob URL. Everything else — including `file:` and `data:` —
+/// is a foreign document and must not reach the frame that owns the IPC bridge.
+///
+/// WebView2 normalises the custom scheme to `https://zali.localhost/...`, while
+/// WKWebView (the macOS build of this same crate) keeps `zali://localhost/...`,
+/// so both spellings have to be accepted here.
+fn is_app_origin_url(url: &str) -> bool {
+    let lowered = url.trim().to_lowercase();
+    lowered.starts_with("zali://localhost")
+        || lowered.starts_with("https://zali.localhost")
+        || lowered.starts_with("http://zali.localhost")
+        || lowered.starts_with("about:")
+        || lowered.starts_with("blob:")
+}
+
 fn response_for_asset(path: &str) -> Response<Cow<'static, [u8]>> {
     let (content_type, body) = match path {
         "" | "index.html" => (
@@ -358,6 +376,38 @@ fn main() -> wry::Result<()> {
             response_for_asset(path)
         })
         .with_url("zali://localhost/index.html")?
+        // Origin pin. `with_ipc_handler` below installs `window.ipc.postMessage`
+        // into whatever document the webview holds — not just the bundled one —
+        // and that IPC is the whole native API (session token, conversation keys,
+        // message sending, file writes). Nothing here ever needs to navigate: the
+        // UI is a single `zali://` document that reaches the server through that
+        // bridge. Without this a link tap that the shared UI's `openExternalLink`
+        // did not intercept loaded a remote page straight into the frame that owns
+        // it. Mirrors `decidePolicyFor` on macOS/iOS and `shouldOverrideUrlLoading`
+        // on Android.
+        .with_navigation_handler(|url| {
+            if is_app_origin_url(&url) {
+                return true;
+            }
+            let lowered = url.trim().to_lowercase();
+            if lowered.starts_with("http://")
+                || lowered.starts_with("https://")
+                || lowered.starts_with("mailto:")
+                || lowered.starts_with("tel:")
+            {
+                let _ = native::open_external_url(url.trim());
+            }
+            false
+        })
+        // Same pin for `window.open` / `target="_blank"`: WebView2 would otherwise
+        // spawn the requested URL in a new webview that inherits the same IPC.
+        .with_new_window_req_handler(|url| {
+            let lowered = url.trim().to_lowercase();
+            if lowered.starts_with("http://") || lowered.starts_with("https://") {
+                let _ = native::open_external_url(url.trim());
+            }
+            false
+        })
         .with_ipc_handler(move |msg| {
             native::handle_ipc_message(
                 msg,

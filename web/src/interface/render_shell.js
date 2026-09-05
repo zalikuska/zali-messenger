@@ -55,7 +55,7 @@ ZaliMixin(ZaliInterface, class {
                     : this.fmtDate(last.timestamp);
             }
             return `<div class="contact ${active}" data-name="${this.esc(contact)}">
-                <div class="ava">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
+                <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}</div>
                     <div class="contact-prev">${preview}</div>

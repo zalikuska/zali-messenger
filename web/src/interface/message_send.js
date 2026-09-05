@@ -34,12 +34,36 @@ ZaliMixin(ZaliInterface, class {
         if (isServers && this.isVoiceChannel(channel)) return;
         if (!isServers && !this.S.current) return;
         this.trace(`sendInputMessage context mode=${activeMode} navMode=${this.S.navMode} activeType=${String(this.S.activeConversationType || 'nil')} current=${String(this.S.current || 'nil')} activeServer=${String(this.S.activeServer || 'nil')} activeChannel=${String(this.S.activeChannel || 'nil')} rendered=${String(this.lastRenderedConversationKey || 'nil')} serverKey=${String(this.currentServerChatKey() || 'nil')}`);
-        const cryptoKey = await this.resolveConversationCryptoKey({
+        // Fast path, and the whole point of it: when this device already holds the
+        // conversation key — the overwhelmingly common case — nothing between
+        // pressing Enter and the message appearing is allowed to await. The old
+        // code awaited resolveConversationCryptoKey() unconditionally, and since
+        // the composer is only cleared after that point, the typed text sat in the
+        // input box for a network round trip and Enter read as not having worked.
+        //
+        // resolveConversationCryptoKey() returns this exact value on its own fast
+        // path; it is still called, unawaited, for the side effects that path has
+        // (key display, background reconciliation with the server registry).
+        const sendScope = this.conversationScopeKey(
+            isServers ? null : this.S.current,
+            isServers ? server.id : null,
+            isServers ? channel.id : null,
+        );
+        const storedConversationKey = sendScope ? this.getStoredConversationKey(sendScope) : '';
+        const cryptoKey = storedConversationKey || await this.resolveConversationCryptoKey({
             peer: isServers ? null : this.S.current,
             serverId: isServers ? server.id : null,
             channelId: isServers ? channel.id : null,
             reason: 'sendInputMessage'
         });
+        if (storedConversationKey) {
+            void this.resolveConversationCryptoKey({
+                peer: isServers ? null : this.S.current,
+                serverId: isServers ? server.id : null,
+                channelId: isServers ? channel.id : null,
+                reason: 'sendInputMessage:background'
+            });
+        }
         const keyVersion = 2;
         this.trace(`sendInputMessage start clientId=${clientId} mode=${activeMode} sender=${this.myName()} receiver=${isServers ? channel.id : this.S.current} server=${isServers ? server.id : 'dm'} channel=${isServers ? channel.id : 'dm'} attachments=${payloadAttachments.length} textBytes=${text.length} keySet=${!!cryptoKey} tokenSet=${!!this.S.session?.token}`);
 
@@ -122,7 +146,7 @@ ZaliMixin(ZaliInterface, class {
                 this.initChat(this.S.current);
                 this.S.chats[this.S.current].push(outgoingMessage);
             }
-            this.saveStoredMessageCache();
+            this.scheduleSaveStoredMessageCache();
             this.scheduleRenderMessages();
             this.renderContacts();
             this.renderServerInterface();
@@ -187,7 +211,7 @@ ZaliMixin(ZaliInterface, class {
             this.initChat(this.S.current);
             this.S.chats[this.S.current].push(outgoingMessage);
         }
-        this.saveStoredMessageCache();
+        this.scheduleSaveStoredMessageCache();
 
         this.scheduleRenderMessages();
         this.renderContacts();
@@ -563,6 +587,19 @@ ZaliMixin(ZaliInterface, class {
             const reconciled = this.finalizePendingMessage(clientId, id);
             if (reconciled) {
                 this.dropPendingOutbox(clientId);
+                // The one thing reconciliation must still take from the incoming
+                // copy — see adoptAttachmentPayloads().
+                const peer = String(sender || '').trim() === this.myName()
+                    ? String(receiver || '').trim()
+                    : String(sender || '').trim();
+                const store = (serverId && channelId)
+                    ? this.S.serverChats[`${serverId}:${channelId}`]
+                    : this.S.chats[peer];
+                this.adoptAttachmentPayloads(store, {
+                    msgId: id,
+                    clientId,
+                    attachments: this.normalizeAttachments(attachments),
+                });
                 if (serverId && channelId) {
                     this.renderServerInterface();
                 } else {

@@ -345,6 +345,12 @@ ZaliMixin(ZaliInterface, class {
                     // step almost nobody performs, and a keyless device is what makes
                     // messages end up encrypted with a key nobody else has.
                     void this.retryPublishConversationKeys({ reason: 'device_approved_push' });
+                } else if (payload && typeof payload === 'object' && payload.type && this.dispatchRealtimeEvent(payload)) {
+                    // Общий маршрутизатор (state_sync.js) — ТОТ ЖЕ, в который
+                    // нативные оболочки отдают нераспознанные кадры. Ветка стоит
+                    // до key_republish_request, но вреда нет: она возвращает false
+                    // для всего, что разбирают ветки ниже, и цепочка идёт дальше.
+                    // Так у браузера и у нативы одна и та же логика на новые типы.
                 } else if (payload && typeof payload === 'object' && payload.type === 'key_republish_request') {
                     // A participant of a specific scope is telling us it holds the wrong
                     // key (or none). Republish just that scope straight away.

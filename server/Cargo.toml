@@ -41,6 +41,14 @@ path = "../tests/diagnostics.rs"
 name = "hash_chain"
 path = "../tests/hash_chain.rs"
 
+[[test]]
+name = "profiles"
+path = "../tests/profiles.rs"
+
+[[test]]
+name = "security"
+path = "../tests/security.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }
