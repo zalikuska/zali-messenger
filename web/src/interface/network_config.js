@@ -248,6 +248,15 @@ ZaliMixin(ZaliInterface, class {
         return [
             `turn:${safeHost}:3478?transport=udp`,
             `turn:${safeHost}:3478?transport=tcp`,
+            // 3478 is the first port a corporate or guest network blocks, and with
+            // only 3478 offered there is no relay at all on such a network — the call
+            // simply fails for anyone who needs one. 5349 is the registered TURN-over-
+            // TLS port; 443 is the one that survives a firewall that allows nothing
+            // but web traffic. A port with nothing listening costs a failed gathering
+            // attempt, which onicecandidateerror now records by name, so adding them
+            // is safe whether or not the deployment answers there.
+            `turns:${safeHost}:5349?transport=tcp`,
+            `turns:${safeHost}:443?transport=tcp`,
         ];
     }
 
@@ -353,7 +362,15 @@ ZaliMixin(ZaliInterface, class {
 
     getVoiceRtcConfig() {
         const config = this.loadNetworkConfig();
-        const defaultTurn = {
+        // Short-lived credentials issued by the server (RFC 5766 REST scheme) when
+        // the deployment has coturn in use-auth-secret mode, otherwise the static
+        // pair below. The static pair is shipped inside every client, so it is a
+        // relay anyone who has ever opened the bundle can use for as long as it
+        // exists, and rotating it means rebuilding every client. Rotating creds fix
+        // that — but only where the TURN server is configured for them, so the
+        // static pair stays as the fallback rather than being removed.
+        const rotating = this.voiceTurnCredentials();
+        const defaultTurn = rotating || {
             urls: this.defaultTurnUrls(),
             username: 'zali',
             credential: 'turnpass',
@@ -378,9 +395,85 @@ ZaliMixin(ZaliInterface, class {
                 const { relayOnly, ...iceServer } = server || {};
                 return iceServer;
             }),
-            iceCandidatePoolSize: 4,
+            // 1, not 4. The pool is pre-gathered per RTCPeerConnection, and a mesh
+            // call builds one connection per participant — so a pool of 4 in an
+            // eight-person room asks the TURN server for dozens of allocations
+            // nobody will use, all against a single credential. One pre-gathered set
+            // still covers the latency the pool exists for.
+            iceCandidatePoolSize: 1,
             iceTransportPolicy: 'all',
         };
+    }
+
+    // Cached in memory only, never persisted: these expire, and a stale credential
+    // read from disk on next launch would be worse than no credential at all (it
+    // fails 401 at the TURN server, which looks exactly like a broken relay).
+    voiceTurnCredentials() {
+        const creds = this._voiceTurnCredentials;
+        if (!creds) return null;
+        if (!creds.urls?.length || !creds.username || !creds.credential) return null;
+        if (Number(creds.expiresAt || 0) <= Date.now()) return null;
+        return { urls: creds.urls, username: creds.username, credential: creds.credential };
+    }
+
+    // Fire-and-forget from the call-setup paths. Deliberately NOT awaited anywhere:
+    // getVoiceRtcConfig is synchronous (it is called from `new RTCPeerConnection`),
+    // so making credentials a precondition would mean putting a network round trip
+    // in front of every call — and failing the call when it times out. If the fetch
+    // lands first the rotating credential is used; if it does not, the static pair
+    // is, and the call proceeds either way.
+    async refreshVoiceTurnCredentials({ force = false } = {}) {
+        if (!this.S?.session?.token) return null;
+        // window.ZaliApiRoutes may come from an older cached bundle that predates
+        // this route; reading through it unguarded would throw inside call setup.
+        const route = this.apiRoutes?.voice?.turnCredentials;
+        if (!route) return null;
+        const existing = this.voiceTurnCredentials();
+        // Refresh once the credential is inside its last quarter, so a call starting
+        // now cannot outlive it by much.
+        if (!force && existing && Number(this._voiceTurnCredentials?.refreshAfter || 0) > Date.now()) {
+            return existing;
+        }
+        if (this._voiceTurnFetchInFlight) return this._voiceTurnFetchInFlight;
+        const pending = (async () => {
+            try {
+                const res = await this.apiFetch(route, { method: 'GET' });
+                if (res.status === 404) {
+                    // Route absent or disabled: this deployment has no rotating
+                    // credentials configured. Not an error, and not worth retrying
+                    // hard — the static pair works.
+                    this._voiceTurnCredentials = null;
+                    this.voiceTrace('turn-credentials-unavailable', { status: res.status });
+                    return null;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json().catch(() => null);
+                const urls = this.normalizeIceServers([{ urls: data?.urls }])[0]?.urls || [];
+                const username = String(data?.username || '').trim();
+                const credential = String(data?.credential || '').trim();
+                const ttl = Math.max(60, Number(data?.ttl || 0) || 3600);
+                if (!urls.length || !username || !credential) {
+                    throw new Error('incomplete turn credentials');
+                }
+                const expiresAt = Date.now() + ttl * 1000;
+                this._voiceTurnCredentials = {
+                    urls,
+                    username,
+                    credential,
+                    expiresAt,
+                    refreshAfter: Date.now() + Math.floor(ttl * 0.75) * 1000,
+                };
+                this.voiceDiag('turn-credentials-refreshed', { urls: urls.length, ttl });
+                return this.voiceTurnCredentials();
+            } catch (error) {
+                this.voiceDiag('turn-credentials-failed', { error: error?.message || String(error) }, 'WARN');
+                return null;
+            } finally {
+                this._voiceTurnFetchInFlight = null;
+            }
+        })();
+        this._voiceTurnFetchInFlight = pending;
+        return pending;
     }
 
     apiUrl(path = '') {

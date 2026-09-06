@@ -4,6 +4,19 @@
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
+    // Full mesh has no server-side mixer: every camera is encoded and uploaded once
+    // per other participant. Past this many peers a consumer uplink cannot carry
+    // video without starving the audio that shares it, and audio is what the call is
+    // for — so video is refused with a reason rather than allowed to break the call.
+    // Audio alone stays fine well past this; see MAX_MESH_AUDIO_PEERS.
+    static get MAX_MESH_VIDEO_PEERS() { return 6; }
+
+    // Not enforced — a mesh audio call this large still works, it just stops being
+    // comfortable, and refusing to connect people who asked to be connected is worse
+    // than a warning in the log. Crossing it is recorded so that "звонок тормозил at
+    // 11 people" is a fact in the journal rather than a recollection.
+    static get MAX_MESH_AUDIO_PEERS() { return 8; }
+
     // Dedupes concurrent capture requests. In a group call every incoming offer
     // handler (and every voice_room_state) calls this, and handleVoiceEvent is
     // dispatched fire-and-forget — so with 3+ participants two or three offers
@@ -112,7 +125,7 @@ ZaliMixin(ZaliInterface, class {
         this.voice.localStream = stream;
         this.voice.micError = '';
         this.voice.muted = false;
-        this.voiceTrace('local-stream-ready', {
+        this.voiceDiag('local-stream-ready', {
             tracks: stream.getTracks().map(track => `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`),
         });
         this.ensureVoiceMeterLoop();
@@ -160,6 +173,20 @@ ZaliMixin(ZaliInterface, class {
         // resolves last would silently overwrite this.voice.localStream's video
         // track, leaking the other's camera lock with no track.stop() ever called.
         if (this.voice.cameraOn || this.voice.cameraRequestInFlight) return;
+        const peerCount = this.voice.peerConnections.size;
+        if (peerCount > ZaliInterface.MAX_MESH_VIDEO_PEERS) {
+            this.voiceDiag('camera-refused-mesh-size', {
+                peers: peerCount,
+                limit: ZaliInterface.MAX_MESH_VIDEO_PEERS,
+                roomId: this.voice.roomId || '',
+            }, 'WARN');
+            this.addLogEntry({
+                type: 'WARN',
+                msg: `Камера недоступна: в звонке ${peerCount} собеседников, видео на всех сразу не поместится в канал`,
+                ts: new Date().toLocaleTimeString(),
+            });
+            return;
+        }
         this.voice.cameraRequestInFlight = true;
         try {
             if (!this.voice.localStream) {
@@ -194,6 +221,7 @@ ZaliMixin(ZaliInterface, class {
                     } else {
                         entry.videoSender = entry.pc.addTrack(track, this.voice.localStream);
                     }
+                    await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera');
                 }
                 await this.renegotiateAllVoicePeers();
                 this.renderVoicePanel();
@@ -249,9 +277,13 @@ ZaliMixin(ZaliInterface, class {
     // function is what keeps every path honest.
     createVoiceOfferFor(entry) {
         if (!entry?.pc) return Promise.reject(new Error('no peer connection'));
-        return entry.needsIceRestart
-            ? entry.pc.createOffer({ iceRestart: true })
-            : entry.pc.createOffer();
+        if (entry.needsIceRestart) {
+            // Counted so the end-of-call summary can say "this link was restarted
+            // nine times" — one restart is a blip, nine is a network worth naming.
+            entry.iceRestartCount = Number(entry.iceRestartCount || 0) + 1;
+            return entry.pc.createOffer({ iceRestart: true });
+        }
+        return entry.pc.createOffer();
     }
 
     async renegotiateVoicePeer(peer) {
@@ -275,7 +307,7 @@ ZaliMixin(ZaliInterface, class {
         try {
             const offer = await this.createVoiceOfferFor(entry);
             await entry.pc.setLocalDescription(offer);
-            this.voiceTrace('renegotiate-offer', { peer, roomId: this.voice.roomId || '', iceRestart: !!entry.needsIceRestart });
+            this.voiceDiag('renegotiate-offer', { peer, roomId: this.voice.roomId || '', iceRestart: !!entry.needsIceRestart });
             const delivered = this.sendVoiceEvent({
                 type: 'voice_signal',
                 roomId: this.voice.roomId,
@@ -292,7 +324,7 @@ ZaliMixin(ZaliInterface, class {
                 },
             });
             if (!delivered) {
-                this.voiceTrace('renegotiate-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
+                this.voiceDiag('renegotiate-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
             }
             // Whether the offer was lost on the way out or its answer never came
             // back, the outcome is identical and equally invisible: this connection
@@ -370,6 +402,7 @@ ZaliMixin(ZaliInterface, class {
         const track = this.voice.localScreenStream.getVideoTracks()[0];
         if (!track) return false;
         entry.screenSender = entry.pc.addTrack(track, this.voice.localScreenStream);
+        void this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
         this.sendScreenShareMeta(peer, 'start');
         this.voiceTrace('screen-track-attached', { peer, streamId: this.voice.localScreenStream.id || '' });
         return true;
@@ -655,7 +688,7 @@ ZaliMixin(ZaliInterface, class {
                     username: server.username ? 'set' : '',
                 })),
             });
-            entry.statsTimer = setInterval(() => this.sampleVoicePeerStats(name), 5000);
+            this.ensureVoicePeerStatsTimer(name, entry, 5000);
             entry.pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     entry.generatedIceCandidates = (entry.generatedIceCandidates || 0) + 1;
@@ -806,12 +839,17 @@ ZaliMixin(ZaliInterface, class {
                         clearTimeout(entry.healthTimer);
                         entry.healthTimer = null;
                     }
-                    if (!entry.statsTimer) {
-                        entry.statsTimer = setInterval(() => {
-                            this.sampleVoicePeerStats(name);
-                            void this.reportVoiceAudioHealth(name);
-                        }, 10000);
-                    }
+                    // Re-armed unconditionally, NOT `if (!entry.statsTimer)`. The
+                    // entry is created with a 5 s sampler that nothing on the healthy
+                    // path ever cleared, so that guard was always false here and the
+                    // health sampler was only ever installed on a link that had
+                    // already failed once (statsTimer is cleared in the failed/
+                    // disconnected branch below). Which is to say: the always-on
+                    // "does RTP flow and can the sink play it" telemetry — written
+                    // precisely for calls that look connected and carry no audio —
+                    // never ran on the calls it was for, and neither did the sink
+                    // self-heal it drives.
+                    this.ensureVoicePeerStatsTimer(name, entry, 10000);
                     void this.reportVoiceSelectedPair(name);
                     this.voice.status = 'connected';
                     if (this.voice.callTrack && !this.voice.callTrack.connectedAt) {
@@ -847,7 +885,7 @@ ZaliMixin(ZaliInterface, class {
                             if (['connected', 'completed'].includes(currentState)) return;
                             if (hasTraffic) return;
                             if (!['new', 'checking', 'connecting'].includes(currentState) && !['new', 'checking'].includes(currentIce)) return;
-                            this.voiceTrace('health-restart', {
+                            this.voiceDiag('health-restart', {
                                 peer: name,
                                 roomId: this.voice.roomId || '',
                                 state: currentState,
@@ -882,10 +920,11 @@ ZaliMixin(ZaliInterface, class {
                         clearTimeout(entry.healthTimer);
                         entry.healthTimer = null;
                     }
-                    if (entry.statsTimer) {
-                        clearInterval(entry.statsTimer);
-                        entry.statsTimer = null;
-                    }
+                    // Slowed, not stopped. Clearing it outright meant that during
+                    // the ~8 minutes the supervisor spends trying to revive a link
+                    // there was no health telemetry at all — precisely the window
+                    // where "did RTP ever come back" is the question being asked.
+                    this.ensureVoicePeerStatsTimer(name, entry, 20000);
                     const isDmCall = this.voice.roomType === 'dm';
                     const allowAutoRestart = true;
                     if (allowAutoRestart) {
@@ -918,6 +957,21 @@ ZaliMixin(ZaliInterface, class {
         return entry;
     }
 
+    // Single owner of the per-peer sampling timer. Every call site used to install
+    // its own interval and guess whether one was already running, which is how the
+    // health sampler ended up unreachable on a healthy call. Idempotent for the same
+    // cadence, so calling it from a state handler that fires repeatedly is free.
+    ensureVoicePeerStatsTimer(peer, entry, intervalMs) {
+        if (!entry) return;
+        if (entry.statsTimer && entry.statsIntervalMs === intervalMs) return;
+        if (entry.statsTimer) clearInterval(entry.statsTimer);
+        entry.statsIntervalMs = intervalMs;
+        entry.statsTimer = setInterval(() => {
+            void this.sampleVoicePeerStats(peer);
+            void this.reportVoiceAudioHealth(peer);
+        }, intervalMs);
+    }
+
     async flushPendingVoiceIceCandidates(entry, peer) {
         if (!entry || !entry.pendingIceCandidates?.length) return;
         const pending = entry.pendingIceCandidates.splice(0, entry.pendingIceCandidates.length);
@@ -946,6 +1000,14 @@ ZaliMixin(ZaliInterface, class {
                 localCandidateCount: entry.generatedIceCandidates || 0,
                 remoteCandidateCount: entry.receivedIceCandidates || 0,
             };
+            // The per-candidate map below is only ever read by the trace line, and
+            // building it means one object plus one summary key for EVERY candidate
+            // the connection knows — on a mesh call that is a few hundred short-lived
+            // objects per peer per sampling tick, all of it thrown away when the dev
+            // trace toggle is off, which it is by default. The compact half of this
+            // summary is what the health timer and the call summary read, so that
+            // part is always built.
+            const verbose = !!this.voiceTraceEnabled;
             const candidatesById = {};
             stats.forEach(report => {
                 if (report.type === 'outbound-rtp' && report.kind === 'audio') {
@@ -984,8 +1046,14 @@ ZaliMixin(ZaliInterface, class {
                         protocol: report.protocol,
                         priority: report.priority,
                     };
+                    // Kept either way: the selected pair is labelled from this map,
+                    // and "host/udp vs relay/tcp" is the first thing anyone asks of a
+                    // bad call. The flat per-candidate summary keys next to it are
+                    // pure trace fodder and cost one more key each.
                     candidatesById[report.id] = candidate;
-                    summary[`${report.type.replace('-', '')}_${report.id || 'unknown'}`] = candidate;
+                    if (verbose) {
+                        summary[`${report.type.replace('-', '')}_${report.id || 'unknown'}`] = candidate;
+                    }
                 }
             });
             if (summary.candidatePair) {
@@ -1292,21 +1360,68 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Returns true when tracks were actually added on this call, so callers can tell
-    // "already attached" from "just attached" — an attach that happens after the
-    // connection is established needs a renegotiation or the peer never receives it.
+    // 512 kbit/s was not a limit, it was a decoration: Opus voice runs at 24–32
+    // kbit/s and would never have reached it. 64 kbit/s is still twice what the
+    // encoder asks for — no quality is given up — while actually bounding a runaway
+    // encoder, which matters because in a mesh this is paid once PER PEER.
     async applyVoiceAudioBitrateLimit(sender) {
         if (!sender) return;
         try {
             const params = sender.getParameters();
             if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-            params.encodings[0].maxBitrate = 512000;
+            params.encodings[0].maxBitrate = 64000;
             await sender.setParameters(params);
         } catch (error) {
             this.voiceTrace('audio-bitrate-limit-failed', { error: error?.message || String(error) }, 'WARN');
         }
     }
 
+    // Mesh means every video track is encoded and uploaded once per peer, and
+    // nothing capped that at all: five people with cameras on asked each machine for
+    // four unconstrained 720p encodes, i.e. 4–10 Mbit/s upstream. The browser's own
+    // congestion control reacts to loss, which on an already-saturated uplink means
+    // it reacts after the audio has started breaking up — and audio is the one thing
+    // a call cannot lose. So the budget is fixed here and divided by the roster.
+    //
+    // degradationPreference is the other half: with a hard cap, something has to
+    // give. Camera gives up resolution and keeps motion smooth; a shared screen is
+    // mostly still and unreadable when downscaled, so it gives up frame rate instead.
+    voiceVideoBudget(kind = 'camera') {
+        const peers = Math.max(1, this.voice.peerConnections.size || 1);
+        const total = kind === 'screen' ? 3000000 : 2500000;
+        const ceiling = kind === 'screen' ? 2000000 : 1200000;
+        const floor = kind === 'screen' ? 250000 : 150000;
+        return Math.max(floor, Math.min(ceiling, Math.floor(total / peers)));
+    }
+
+    async applyVoiceVideoBitrateLimit(sender, kind = 'camera') {
+        if (!sender) return;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+            const maxBitrate = this.voiceVideoBudget(kind);
+            params.encodings[0].maxBitrate = maxBitrate;
+            params.degradationPreference = kind === 'screen' ? 'maintain-resolution' : 'balanced';
+            await sender.setParameters(params);
+            this.voiceTrace('video-bitrate-limit', { kind, maxBitrate, peers: this.voice.peerConnections.size });
+        } catch (error) {
+            this.voiceTrace('video-bitrate-limit-failed', { kind, error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
+    // Re-divides the budget when the roster changes. A limit computed for a
+    // two-person call is four times too generous once four more people join, and the
+    // senders were created long before that happened.
+    async refreshVoiceSenderLimits() {
+        for (const entry of this.voice.peerConnections.values()) {
+            if (entry.videoSender) await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera');
+            if (entry.screenSender) await this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
+        }
+    }
+
+    // Returns true when tracks were actually added on this call, so callers can tell
+    // "already attached" from "just attached" — an attach that happens after the
+    // connection is established needs a renegotiation or the peer never receives it.
     async attachLocalVoiceTracks(peer) {
         const entry = this.getVoicePeerEntry(peer);
         if (!entry || !this.voice.localStream || entry.localTracksAttached) return false;
@@ -1347,6 +1462,8 @@ ZaliMixin(ZaliInterface, class {
         for (const { track, sender } of added) {
             if (track.kind === 'audio') {
                 await this.applyVoiceAudioBitrateLimit(sender);
+            } else if (track.kind === 'video') {
+                await this.applyVoiceVideoBitrateLimit(sender, 'camera');
             }
             this.voiceTrace('attach-local-track-added', {
                 peer,

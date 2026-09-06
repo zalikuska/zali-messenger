@@ -135,11 +135,22 @@ ZaliMixin(ZaliInterface, class {
                 try {
                     this.voice.socket.send(JSON.stringify(event));
                 } catch (error) {
-                    this.voiceTrace('send-event-failed', { type: event.type || '', error: error?.message || String(error) }, 'ERROR');
+                    this.voiceDiag('send-event-failed', { type: event.type || '', to: event.to || '', error: error?.message || String(error) }, 'ERROR');
                     return false;
                 }
                 return true;
             }
+            // Always-on: a signal that never left the client is the single most
+            // common cause of a call that looks connected and carries nothing, and
+            // the socket's readyState at that moment is what says whether it was a
+            // reconnect in progress or a socket that was never opened at all.
+            this.voiceDiag('send-event-no-socket', {
+                type: event.type || '',
+                to: event.to || '',
+                signalType: event.signal?.type || '',
+                readyState: this.voice.socket ? this.voice.socket.readyState : 'no-socket',
+                roomId: this.voice.roomId || '',
+            }, 'WARN');
             this.addLogEntry({
                 type: 'WARN',
                 msg: `Voice signal skipped in browser mode: ${event.type}`,
@@ -185,7 +196,7 @@ ZaliMixin(ZaliInterface, class {
         const jitter = Math.floor(Math.random() * 500);
         const delay = Math.min(baseDelay + jitter, 30000);
         this.voiceSocketReconnectDelayMs = Math.min(baseDelay * 2, 30000);
-        this.voiceTrace('socket-reconnect-scheduled', { generation, reason, delay }, 'WARN');
+        this.voiceDiag('socket-reconnect-scheduled', { generation, reason, delay }, 'WARN');
         if (this.voiceSocketReconnectTimer) {
             clearTimeout(this.voiceSocketReconnectTimer);
             this.voiceSocketReconnectTimer = null;
@@ -222,6 +233,14 @@ ZaliMixin(ZaliInterface, class {
     async connectBrowserVoiceSocket() {
         if (this.nativeSupports('voice')) return;
         if (typeof WebSocket === 'undefined') return;
+        // Without a session there is no ws-ticket to get, so this could only ever
+        // fail — and it failed on a backoff loop, writing a reconnect line into the
+        // journal every few seconds for as long as the login screen was open. Login
+        // calls this again (applySession), and so does saving a server address.
+        if (!this.S?.session?.token) {
+            this.voiceTrace('socket-connect-skipped-no-session', {});
+            return;
+        }
         if (this.voice.socket && (this.voice.socket.readyState === WebSocket.OPEN || this.voice.socket.readyState === WebSocket.CONNECTING)) {
             return;
         }
@@ -284,7 +303,7 @@ ZaliMixin(ZaliInterface, class {
                     // background tab's timers are throttled.
                     const lastPing = this.voiceSocketLastPingAt || 0;
                     if (lastPing > (this.voiceSocketLastInboundAt || 0) && Date.now() - lastPing > 15000) {
-                        this.voiceTrace('socket-ping-unanswered', {
+                        this.voiceDiag('socket-ping-unanswered', {
                             generation,
                             silentMs: Date.now() - lastPing,
                         }, 'WARN');
@@ -296,13 +315,29 @@ ZaliMixin(ZaliInterface, class {
                         this.voice.socket.send(JSON.stringify({ type: 'ping' }));
                     } catch (e) {}
                 }, 25000);
-                this.voiceTrace('socket-open', { generation, url: url.toString() }, 'SUCCESS');
+                this.voiceDiag('socket-open', { generation, url: url.toString() }, 'SUCCESS');
                 this.addLogEntry({ type: 'SUCCESS', msg: 'Browser voice socket connected', ts: new Date().toLocaleTimeString() });
                 // This socket doubles as the pure-browser client's only realtime connection
                 // (messages + voice signaling both ride it — see onmessage below), so its
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
                 this.setConnectionStatus(true);
+                // The browser-side counterpart of the native shells'
+                // voice_transport_state:'up'. iOS and Android both declare
+                // `voice: false` and therefore run on THIS socket, so without it
+                // they were the platforms with no reconnect handling at all: the
+                // server evicts a participant whose socket stayed shut, every signal
+                // sent while it was down is gone, and the only thing that noticed was
+                // the 8-second presence keepalive.
+                if (String(this.voice.roomId || '').trim()) {
+                    this.voiceDiag('socket-reopened-in-call', {
+                        roomId: this.voice.roomId || '',
+                        status: this.voice.status || '',
+                        peers: this.voice.peerConnections.size,
+                    }, 'WARN');
+                    this.sendVoiceRoomPresence();
+                    this.scheduleVoiceNegotiationRetry('voice-socket-reopened');
+                }
             };
 
             socket.onmessage = (event) => {
@@ -372,7 +407,7 @@ ZaliMixin(ZaliInterface, class {
                     clearInterval(this.voiceSocketPingTimer);
                     this.voiceSocketPingTimer = null;
                 }
-                this.voiceTrace('socket-close', { generation, url: url.toString() }, 'WARN');
+                this.voiceDiag('socket-close', { generation, url: url.toString(), roomId: this.voice.roomId || '', status: this.voice.status || '' }, 'WARN');
                 this.setConnectionStatus(false);
                 if (!this.nativeSupports('voice')) {
                     const baseDelay = this.voiceSocketReconnectDelayMs || 1000;
@@ -407,12 +442,17 @@ ZaliMixin(ZaliInterface, class {
     }
 
     resetVoiceState({ preserveInvite = false } = {}) {
-        this.voiceTrace('reset-state', { preserveInvite, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', status: this.voice.status || '' });
+        // Written BEFORE anything is torn down: the per-peer counters, the last
+        // stats sample and the selected candidate pair all live on entries this
+        // method is about to close, and they are exactly what a post-mortem needs.
+        this.logVoiceCallSummary(preserveInvite ? 'reset-keep-invite' : 'reset');
+        this.voiceDiag('reset-state', { preserveInvite, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', status: this.voice.status || '' });
         if (this.voice.negotiationRetryTimer) {
             clearTimeout(this.voice.negotiationRetryTimer);
             this.voice.negotiationRetryTimer = null;
         }
         this.voice.negotiationRetries = 0;
+        this.voice.rebuilds = 0;
         this.voice.peerRosterKey = '';
         this.stopVoicePresenceKeepalive();
         this.stopVoiceLinkSupervisor();

@@ -82,6 +82,13 @@
                 linkSupervisorTimer: null,
                 // Participant roster the current retry budget was granted for.
                 peerRosterKey: '',
+                // How many peer connections this call had to throw away and rebuild.
+                // Kept per CALL rather than per entry for the obvious reason: a
+                // rebuild destroys the entry that would have counted it. One is
+                // routine recovery; several means something upstream keeps producing
+                // offers this side cannot apply, which is what the end-of-call
+                // summary reports.
+                rebuilds: 0,
                 // peer -> tail of that peer's in-order signal application chain.
                 signalChains: new Map(),
                 audioContext: null,

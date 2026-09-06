@@ -170,5 +170,39 @@ record('a connected call reports whether RTP arrives and whether the sink plays'
     /reportVoiceAudioHealth/.test(src),
     'audio-health diagnostics must run on connected peers');
 
+// ...and that it is REACHABLE, which the rule above cannot tell. The health sampler
+// existed for a long time behind `if (!entry.statsTimer)` on the connected path,
+// while the entry was created with a plain stats timer that the healthy path never
+// cleared — so the guard was always false and the sampler only ever started on a
+// link that had already failed once. One owner for that timer, no conditional arming.
+record('the health sampler is armed through one owner, not behind a timer-exists guard',
+    /ensureVoicePeerStatsTimer/.test(src) && !/if\s*\(!entry\.statsTimer\)/.test(src),
+    'arm sampling via ensureVoicePeerStatsTimer(peer, entry, ms)');
+
+// Mesh: every camera is encoded and uploaded once per peer. Unconstrained, four
+// peers ask a consumer uplink for 4-10 Mbit/s and the audio sharing that uplink is
+// what breaks first.
+record('video and screen senders are bitrate-limited, not just audio',
+    /applyVoiceVideoBitrateLimit/.test(src) && /voiceVideoBudget/.test(src),
+    'video senders must get a maxBitrate divided by the roster');
+
+// The offer branch opens the microphone and answers with a sendrecv session. Doing
+// that before the user accepted means the caller hears them before they pick up.
+record('no signal is negotiated while the invite is still ringing',
+    /signal-before-accept-refused/.test(src),
+    "applyVoiceSignal must refuse everything while voice.status === 'incoming'");
+
+// Signals are addressed by username and the server delivers them to every
+// connection of that account, so an account's other device receives offers meant
+// for the device that answered — and used to answer them too.
+record('a client with no room of its own does not negotiate someone else\'s call',
+    /signal-outside-call-refused/.test(src),
+    'applyVoiceSignal must refuse signals when voice.roomId is empty');
+
+// A call whose links have all given up used to stay on screen as «В эфире» forever.
+record('an unrecoverable call reaches a terminal state on its own',
+    /concludeDeadVoiceCallIfNeeded/.test(src) && /concludeVanishedVoiceRoom/.test(src),
+    'exhausted links and a vanished room must both end the call');
+
 console.log(`\n${failures === 0 ? 'OK' : 'FAILURES: ' + failures}\n`);
 process.exit(failures === 0 ? 0 : 1);

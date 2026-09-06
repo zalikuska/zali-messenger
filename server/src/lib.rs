@@ -26,7 +26,10 @@ use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 mod voice;
-use voice::{handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user, VoiceRoom};
+use voice::{
+    get_turn_credentials, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
+    VoiceRoom,
+};
 
 mod devices;
 use devices::*;
@@ -122,6 +125,18 @@ pub struct Config {
     // export written yesterday still opens today) and one-way, so holding the
     // export key does not hand anyone the token-signing secret.
     hash_chain_key: String,
+    // TURN relay credentials handed to clients.
+    //
+    // `turn_static_auth_secret` unset (the default) means this deployment has no
+    // rotating credentials: GET /api/voice/turn-credentials 404s and the client
+    // falls back to the static username/password baked into its bundle — same
+    // opt-in-per-deployment shape as the VAPID keys and the release token above.
+    // Only set it once coturn is actually running with `use-auth-secret` and the
+    // same `static-auth-secret`, or every client that receives a credential from
+    // here will be rejected by the relay, which looks exactly like a broken TURN.
+    turn_static_auth_secret: Option<String>,
+    turn_urls: Vec<String>,
+    turn_credential_ttl_secs: u64,
 }
 
 impl Config {
@@ -258,6 +273,40 @@ impl Config {
                 hex_encode(&hasher.finalize())
             });
 
+        let turn_static_auth_secret = std::env::var("TURN_STATIC_AUTH_SECRET")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let turn_urls: Vec<String> = std::env::var("TURN_URLS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        if turn_static_auth_secret.is_some() && turn_urls.is_empty() {
+            warn!(
+                "⚠️  TURN_STATIC_AUTH_SECRET задан, но TURN_URLS пуст — /api/voice/turn-credentials выключен"
+            );
+        }
+        let turn_credential_ttl_raw = std::env::var("TURN_CREDENTIAL_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
+        if let Some(raw) = turn_credential_ttl_raw {
+            if raw < 300 {
+                warn!(
+                    "⚠️  TURN_CREDENTIAL_TTL_SECS={} слишком мал (минимум 300) — используется 43200",
+                    raw
+                );
+            }
+        }
+        // 12 h: longer than any call, short enough that a leaked credential is not
+        // a permanent one. The floor exists because a credential that expires
+        // mid-call cannot be renewed on an established RTCPeerConnection — the
+        // relay drops the allocation and the call goes silent with nothing to blame.
+        let turn_credential_ttl_secs = turn_credential_ttl_raw
+            .filter(|v| *v >= 300)
+            .unwrap_or(43200);
+
         Self {
             jwt_secret: jwt_secret.into_bytes(),
             allowed_origins,
@@ -273,6 +322,9 @@ impl Config {
             vapid_subject,
             release_admin_token,
             hash_chain_key,
+            turn_static_auth_secret: turn_static_auth_secret.filter(|_| !turn_urls.is_empty()),
+            turn_urls,
+            turn_credential_ttl_secs,
         }
     }
 }
@@ -1525,6 +1577,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(download_conversation_hash_chain),
         )
         .route("/ws", get(ws_handler))
+        .route("/api/voice/turn-credentials", get(get_turn_credentials))
         .route("/api/push/vapid-public-key", get(get_vapid_public_key))
         .route("/api/push/subscribe", post(subscribe_push))
         .route("/api/push/unsubscribe", post(unsubscribe_push))

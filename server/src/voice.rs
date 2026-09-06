@@ -3,11 +3,56 @@
 //! races, signaling routing, call invite/accept/reject/cancel state machine)
 //! can be found and fixed without wading through unrelated HTTP handlers.
 
-use crate::{can_access_channel, contact_exists, send_json_to_user, AppState};
+use crate::{can_access_channel, contact_exists, send_json_to_user, AppState, AuthenticatedUser};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use base64::Engine;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
+
+/// Short-lived TURN credentials, in the scheme coturn implements as
+/// `use-auth-secret` (RFC 5766 §10, "TURN REST API"): the username is
+/// `<unix expiry>:<user>` and the password is the base64 of its HMAC-SHA1 under a
+/// secret shared with the relay — so the relay validates it arithmetically and
+/// needs no per-user account, and a leaked credential stops working by itself.
+///
+/// The alternative, which this replaces where it is configured, is the single
+/// `zali`/`turnpass` pair compiled into every client: readable by anyone who has
+/// ever opened the bundle, usable by them for as long as it exists, and revocable
+/// only by rebuilding and redistributing every client on every platform.
+///
+/// 404 when the deployment has not configured a secret — the client treats that as
+/// "no rotating credentials here" and keeps using the static pair, so a server
+/// without coturn in this mode behaves exactly as it did before.
+pub(crate) async fn get_turn_credentials(
+    AuthenticatedUser(username): AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Some(secret) = state.config.turn_static_auth_secret.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let ttl = state.config.turn_credential_ttl_secs;
+    let expiry = chrono::Utc::now().timestamp().saturating_add(ttl as i64);
+    let turn_username = format!("{}:{}", expiry, username);
+
+    use hmac::{Hmac, Mac};
+    use sha1::Sha1;
+    let Ok(mut mac) = <Hmac<Sha1>>::new_from_slice(secret.as_bytes()) else {
+        error!("[VOICE][TURN] cannot build HMAC from TURN_STATIC_AUTH_SECRET");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    mac.update(turn_username.as_bytes());
+    let credential = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+
+    Json(serde_json::json!({
+        "username": turn_username,
+        "credential": credential,
+        "ttl": ttl,
+        "urls": state.config.turn_urls,
+    }))
+    .into_response()
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct VoiceRoom {
@@ -237,6 +282,103 @@ async fn join_voice_room(
     }
 }
 
+/// Pulls the two participants out of a DM room id. The client builds it as
+/// `voice:dm:<a>:<b>[:<stamp>]` with the pair sorted (voiceRoomKeyForDm /
+/// makeDmCallRoomId in web/src/interface/voice_transport.js), and the server's own
+/// fallback in the invite branch builds the same shape. Anything else is not a DM
+/// room id and must not be treated as one.
+fn dm_room_participants(room_id: &str) -> Option<(String, String)> {
+    let rest = room_id.strip_prefix("voice:dm:")?;
+    let mut parts = rest.split(':');
+    let a = parts.next()?.trim();
+    let b = parts.next()?.trim();
+    if a.is_empty() || b.is_empty() || a.eq_ignore_ascii_case(b) {
+        return None;
+    }
+    Some((a.to_string(), b.to_string()))
+}
+
+/// Whether `sender` may claim membership of this DM room on the strength of the
+/// room id alone — used when the server's own record of the room is gone or does
+/// not list them yet (a restart, or an eviction after a long outage).
+///
+/// Authorised exactly like the invite that would have created the room: the id must
+/// encode this sender as one of the pair, and the two must be contacts. Without
+/// those checks this would be "put me in a room called anything".
+async fn dm_room_claim_authorized(state: &Arc<AppState>, sender: &str, room_id: &str) -> bool {
+    let Some((a, b)) = dm_room_participants(room_id) else {
+        warn!(
+            "[VOICE][RESTORE] reject malformed dm room id sender={} roomId={}",
+            sender, room_id
+        );
+        return false;
+    };
+    let peer = if a.eq_ignore_ascii_case(sender) {
+        b
+    } else if b.eq_ignore_ascii_case(sender) {
+        a
+    } else {
+        warn!(
+            "[VOICE][RESTORE] reject sender not in room id sender={} roomId={}",
+            sender, room_id
+        );
+        return false;
+    };
+    match contact_exists(&state.db, sender, &peer).await {
+        Ok(true) => true,
+        Ok(false) => {
+            warn!(
+                "[VOICE][RESTORE] reject non-contact sender={} peer={} roomId={}",
+                sender, peer, room_id
+            );
+            false
+        }
+        Err(e) => {
+            error!(
+                "[VOICE][RESTORE] contact check failed sender={} peer={} roomId={}: {}",
+                sender, peer, room_id, e
+            );
+            false
+        }
+    }
+}
+
+/// Recreates a DM room the server has forgotten, with `sender` as its only member.
+///
+/// Only the sender, never both: the other side may genuinely have hung up while we
+/// were down, and listing them would tell everyone they are in a call they already
+/// left. Their own keepalive re-adds them within seconds if they are still there,
+/// and if they are not, the surviving client sees a roster of one and its dead-call
+/// detection takes it from there.
+fn restore_dm_room(state: &Arc<AppState>, sender: &str, room_id: &str) {
+    // Re-checked under the entry lock: two keepalives, one from each participant,
+    // can land together, and the second must join the room the first created rather
+    // than replace it — which would drop the first participant straight back out.
+    let mut created = false;
+    state
+        .voice_rooms
+        .entry(room_id.to_string())
+        .or_insert_with(|| {
+            created = true;
+            let mut room = VoiceRoom::new("dm".to_string(), None, None);
+            room.call_state = "active".to_string();
+            room
+        })
+        .participants
+        .insert(sender.to_string());
+    if created {
+        info!(
+            "[VOICE][RESTORE] rebuilt dm room {} for '{}' after it went missing",
+            room_id, sender
+        );
+    } else {
+        info!(
+            "[VOICE][RESTORE] '{}' re-admitted to restored dm room {}",
+            sender, room_id
+        );
+    }
+}
+
 async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde_json::Value) {
     let room_id = payload["roomId"]
         .as_str()
@@ -275,13 +417,34 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
         return;
     }
 
+    // The size of an SDP and the type of an ICE candidate are the two facts that
+    // separate "signalling worked and the media failed" from "the signal itself was
+    // wrong", and neither was recorded: an SDP that arrives truncated or empty, or a
+    // room where nobody ever offers a relay candidate, both showed up here as an
+    // ordinary routed signal.
+    let signal_type = payload["signal"]["type"].as_str().unwrap_or_default();
+    let sdp_len = payload["signal"]["sdp"]["sdp"]
+        .as_str()
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let candidate_kind = payload["signal"]["candidate"]["candidate"]
+        .as_str()
+        .and_then(|c| {
+            c.split_whitespace()
+                .nth(7)
+                .map(|kind| kind.to_string())
+        })
+        .unwrap_or_default();
     info!(
-        "[VOICE][ROUTE] from={} roomId={} roomType={} to={} signalType={}",
+        "[VOICE][ROUTE] from={} roomId={} roomType={} to={} signalType={} sdpLen={} candType={} roster=[{}]",
         sender,
         room_id,
         payload["roomType"].as_str().unwrap_or_default(),
         payload["to"].as_str().unwrap_or_default(),
-        payload["signal"]["type"].as_str().unwrap_or_default()
+        signal_type,
+        sdp_len,
+        candidate_kind,
+        participants.join(",")
     );
 
     let mut signal = payload.clone();
@@ -397,6 +560,7 @@ pub(crate) async fn handle_voice_event(
                                 serde_json::json!({
                                     "type": "voice_error",
                                     "roomId": room_id,
+                                    "code": "channel_forbidden",
                                     "message": "Нет доступа к голосовому каналу"
                                 }),
                             )
@@ -415,6 +579,7 @@ pub(crate) async fn handle_voice_event(
                             serde_json::json!({
                                 "type": "voice_error",
                                 "roomId": room_id,
+                                "code": "bad_request",
                                 "message": "Необходимо указать server_id и channel_id"
                             }),
                         )
@@ -423,37 +588,53 @@ pub(crate) async fn handle_voice_event(
                     }
                 }
             } else if room_type == "dm" {
-                let room = match state.voice_rooms.get(&room_id) {
-                    Some(room) => room,
-                    None => {
-                        send_json_to_user(
-                            state,
-                            sender,
-                            serde_json::json!({
-                                "type": "voice_error",
-                                "roomId": room_id,
-                                "message": "Голосовая комната не найдена"
-                            }),
-                        )
-                        .await;
-                        return;
-                    }
+                // Three situations, and only the first one used to be handled:
+                //   - the room exists and lists us: ordinary re-join;
+                //   - the room is gone entirely: the server restarted (voice_rooms
+                //     lives only in memory), or evicted us after a long outage;
+                //   - the room exists but does not list us: our peer's keepalive
+                //     rebuilt it first, with only themselves in it.
+                //
+                // The last two are the same situation seen a moment apart, and both
+                // used to be answered with an error forever — a DM room is only ever
+                // created by voice_call_invite, so nothing could bring one back. The
+                // media kept flowing (it is peer-to-peer) while signalling was dead:
+                // no ICE restart, no renegotiation, and the call went quiet the first
+                // time the network hiccuped. Channel rooms never had this problem;
+                // join_voice_room recreates them by name.
+                //
+                // Recovery is only ever driven by a keepalive — a plain join asking
+                // for a room that does not exist is asking for a call nobody started.
+                let membership = state.voice_rooms.get(&room_id).map(|room| {
+                    room.participants.contains(sender)
+                        || room.initiator.as_deref() == Some(sender)
+                        || room.target.as_deref() == Some(sender)
+                });
+                let allowed = match membership {
+                    Some(true) => true,
+                    _ => keepalive && dm_room_claim_authorized(state, sender, &room_id).await,
                 };
-                let allowed = room.participants.contains(sender)
-                    || room.initiator.as_deref() == Some(sender)
-                    || room.target.as_deref() == Some(sender);
                 if !allowed {
+                    let (code, message) = if membership.is_none() {
+                        ("room_not_found", "Голосовая комната не найдена")
+                    } else {
+                        ("room_forbidden", "Нет доступа к голосовой переписке")
+                    };
                     send_json_to_user(
                         state,
                         sender,
                         serde_json::json!({
                             "type": "voice_error",
                             "roomId": room_id,
-                            "message": "Нет доступа к голосовой переписке"
+                            "code": code,
+                            "message": message,
                         }),
                     )
                     .await;
                     return;
+                }
+                if membership.is_none() {
+                    restore_dm_room(state, sender, &room_id);
                 }
             }
 
@@ -505,6 +686,7 @@ pub(crate) async fn handle_voice_event(
                         serde_json::json!({
                             "type": "voice_error",
                             "roomId": room_key,
+                            "code": "not_a_contact",
                             "message": "Получатель должен быть в контактах"
                         }),
                     )
@@ -522,6 +704,7 @@ pub(crate) async fn handle_voice_event(
                         serde_json::json!({
                             "type": "voice_error",
                             "roomId": room_key,
+                            "code": "contact_check_failed",
                             "message": "Не удалось проверить контакты"
                         }),
                     )

@@ -639,6 +639,280 @@ console.log('\n== name tie-break determinism ==');
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n== always-on health telemetry ==');
+
+{
+    // The per-peer health sampler is the only thing that reports "RTP is flowing and
+    // the sink can play it" on a live call, and it is what retries a sink the
+    // autoplay policy paused. It used to be installed only on a link that had
+    // ALREADY failed once — the entry was created with a plain 5 s stats timer that
+    // nothing on the healthy path cleared, so the `if (!entry.statsTimer)` guard
+    // that was supposed to install the health sampler on connect never fired. Which
+    // means the telemetry written for calls that connect and stay silent did not run
+    // on precisely those calls.
+    const ctx = await runDmCall();
+    await ctx.server.settle(60000);
+    const aHealth = ctx.a.tracesOf('audio-health');
+    const bHealth = ctx.b.tracesOf('audio-health');
+    record('a call that never fails still reports per-peer audio health',
+        aHealth.length > 0 && bHealth.length > 0,
+        `alice=${aHealth.length} bob=${bHealth.length} lines`);
+    const sample = aHealth[aHealth.length - 1]?.details || {};
+    record('the health line carries both directions, not just what we receive',
+        Object.prototype.hasOwnProperty.call(sample, 'rx')
+        && Object.prototype.hasOwnProperty.call(sample, 'tx'),
+        `keys=${Object.keys(sample).join(',')}`);
+    record('the health line names the connection state it was sampled in',
+        Object.prototype.hasOwnProperty.call(sample, 'pcState')
+        && Object.prototype.hasOwnProperty.call(sample, 'ice'),
+        `pcState=${sample.pcState || ''} ice=${sample.ice || ''}`);
+    // A link that has not connected yet has no RTP by definition. Warning about it
+    // on every call — several times per peer in a group — is how a diagnostic stops
+    // being read; the failure of a link that never connects is reported by the
+    // state and recovery lines instead.
+    // Forced rather than waited for: on this model the link connects too quickly to
+    // catch a sample mid-setup, and a check that passes because it observed nothing
+    // is not a check.
+    ctx.a.breakLinkWith('bob');
+    const beforeForced = ctx.a.tracesOf('audio-health').length;
+    await ctx.a.api.reportVoiceAudioHealth('bob');
+    const forced = ctx.a.tracesOf('audio-health').slice(beforeForced);
+    record('health lines from a link that is not up are not warnings',
+        forced.length === 1 && forced[0].level === 'INFO',
+        `level=${forced[0]?.level} pcState=${forced[0]?.details.pcState}`);
+}
+
+{
+    // The end-of-call summary has to be written while the peer entries still exist:
+    // resetVoiceState closes them, and everything worth reporting lives on them.
+    const ctx = await runDmCall();
+    await ctx.a.api.leaveVoiceRoom({ announce: true, outcome: 'completed' });
+    await ctx.server.settle();
+    const summary = ctx.a.tracesOf('call-summary');
+    const perPeer = ctx.a.tracesOf('call-summary-peer');
+    record('ending a call writes a summary', summary.length === 1, `lines=${summary.length}`);
+    record('the summary reaches the peers before they are torn down',
+        perPeer.length >= 1 && perPeer[0].details.peer === ctx.b.name,
+        `peers=${perPeer.map(l => l.details.peer).join(',')}`);
+}
+
+console.log('\n== nothing negotiates before the call is answered ==');
+
+{
+    // The offer branch captures the microphone and answers with a sendrecv session.
+    // It did so no matter whether the user had accepted, and the server lets an
+    // invite's initiator signal into their own ringing room — so a caller running a
+    // modified client could ring a contact and listen to them before they picked up.
+    let refusedWhileRinging = null;
+    const ctx = await runDmCall({
+        beforeAccept: async ({ b, server }) => {
+            const roomId = b.api.voice.incomingInvite?.roomId || '';
+            await b.deliver({
+                type: 'voice_signal',
+                roomId,
+                roomType: 'dm',
+                from: 'alice',
+                to: b.name,
+                signal: { type: 'offer', sdp: { type: 'offer', sdp: JSON.stringify({ sends: ['audio'] }) } },
+            });
+            await server.settle(1000);
+            refusedWhileRinging = {
+                status: b.api.voice.status,
+                mic: !!b.api.voice.localStream,
+                peer: !!b.entryFor('alice'),
+                refusals: b.tracesOf('signal-before-accept-refused').length,
+            };
+        },
+    });
+    record('an offer arriving before the call is answered does not open the microphone',
+        refusedWhileRinging && refusedWhileRinging.mic === false,
+        `mic=${refusedWhileRinging?.mic}`);
+    record('and does not build a peer connection to answer through',
+        refusedWhileRinging && refusedWhileRinging.peer === false,
+        `peerConnection=${refusedWhileRinging?.peer}`);
+    record('the invite is still ringing rather than half-connected',
+        refusedWhileRinging && refusedWhileRinging.status === 'incoming',
+        `status=${refusedWhileRinging?.status}`);
+    record('the refusal is recorded, not silent',
+        refusedWhileRinging && refusedWhileRinging.refusals === 1,
+        `refusals=${refusedWhileRinging?.refusals}`);
+    // The guard must cost the legitimate flow nothing: the real caller only offers
+    // after voice_call_accepted, by which time this side is 'connecting'.
+    record('accepting afterwards still produces a working call', twoWay(ctx), describe(ctx));
+}
+
+{
+    // Signals are addressed by username and the server fans them out to every
+    // connection of that account, so the second device of the account that answered
+    // receives the same offers. With no room state of its own it used to answer
+    // them: two answers for one offer, only the first applied, and which device won
+    // the call decided by whichever replied first.
+    const clock = new VirtualClock();
+    const server = new SimServer({ clock });
+    const a = new VoicePeer('alice', server, { clock });
+    const b = new VoicePeer('bob', server, { clock });
+    // A second, idle client — the same person's other device, as far as this
+    // handler can tell.
+    const bystander = new VoicePeer('bob', server, { clock });
+    server.register(a); server.register(b);
+
+    await a.api.startDirectCall('bob');
+    await server.settle(2000);
+    const accepting = b.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+
+    const offer = a.sent.find(e => e.type === 'voice_signal' && e.signal?.type === 'offer');
+    await bystander.deliver({ ...offer, from: 'alice' });
+    await server.settle(1000);
+
+    record('a device that is not in the call does not answer offers meant for it',
+        !bystander.api.voice.localStream && !bystander.entryFor('alice')
+        && bystander.api.voice.roomId === '',
+        `mic=${!!bystander.api.voice.localStream} peer=${!!bystander.entryFor('alice')} roomId=${JSON.stringify(bystander.api.voice.roomId)}`);
+    record('and the refusal is recorded',
+        bystander.tracesOf('signal-outside-call-refused').length === 1,
+        `lines=${bystander.tracesOf('signal-outside-call-refused').length}`);
+    record('the device that did answer is unaffected',
+        twoWay({ a, b, deadlocked: '' }), describe({ a, b, server, deadlocked: '' }));
+}
+
+console.log('\n== a call that cannot be recovered ends ==');
+
+{
+    // The supervisor gives a broken link about eight minutes. When that ran out it
+    // simply stopped, and the call stayed on screen as «В эфире» forever: no
+    // participant could be reached, no ICE restart could land, and only the user
+    // pressing the red button ended it — with no call record written either.
+    const clock = new VirtualClock();
+    // Signalling dies along with the media, which is what a real outage looks like:
+    // a restart offer that cannot be delivered can never bring the link back.
+    const server = new SimServer({
+        clock,
+        dropFilter: (to, event) => event.type === 'voice_signal' && server.mediaDead,
+    });
+    server.mediaDead = false;
+    const a = new VoicePeer('alice', server, { clock });
+    const b = new VoicePeer('bob', server, { clock });
+    server.register(a); server.register(b);
+
+    await a.api.startDirectCall('bob');
+    await server.settle(2000);
+    const accepting = b.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+    const connected = twoWay({ a, b, deadlocked: '' });
+    // Captured now: describe() reads live peer state, and by the time this is
+    // reported the call has been torn down and there is nothing left to describe.
+    const connectedDetail = describe({ a, b, server, deadlocked: '' });
+
+    server.mediaDead = true;
+    a.breakLinkWith('bob');
+    b.breakLinkWith('alice');
+    // Long enough to outlast the whole recovery budget (20 attempts, spaced up to
+    // 25 s) — the point is that it gives up rather than trying forever.
+    await server.settle(900000);
+
+    record('the call was live before the network died', connected, connectedDetail);
+    record('an unrecoverable call gives up instead of showing «В эфире» forever',
+        a.api.voice.roomId === '' && a.api.voice.status === 'idle',
+        `roomId=${JSON.stringify(a.api.voice.roomId)} status=${a.api.voice.status}`);
+    record('and says why in the log',
+        a.tracesOf('call-dead-all-links-exhausted').length === 1,
+        `lines=${a.tracesOf('call-dead-all-links-exhausted').length}`);
+}
+
+{
+    // The same conclusion from the other direction: the server says the room we
+    // believe we are in does not exist. Nothing can be signalled into it, so the
+    // call is over whatever the panel says. Matched on the machine-readable code —
+    // the human-readable message is Russian prose a rewording would detach this from.
+    const ctx = await runDmCall();
+    const roomId = ctx.a.api.voice.roomId;
+    await ctx.a.deliver({
+        type: 'voice_error',
+        roomId,
+        code: 'room_not_found',
+        message: 'Голосовая комната не найдена',
+    });
+    await ctx.server.settle();
+    record('a room the server has forgotten ends the call here too',
+        ctx.a.api.voice.roomId === '' && ctx.a.api.voice.status === 'idle',
+        `roomId=${JSON.stringify(ctx.a.api.voice.roomId)} status=${ctx.a.api.voice.status}`);
+}
+
+{
+    // A voice_error for some OTHER room must not touch a live call — a stale error
+    // from a cancelled invite arriving mid-call is ordinary traffic.
+    const ctx = await runDmCall();
+    const roomId = ctx.a.api.voice.roomId;
+    await ctx.a.deliver({
+        type: 'voice_error',
+        roomId: 'voice:dm:alice:carol:stale',
+        code: 'room_not_found',
+        message: 'Голосовая комната не найдена',
+    });
+    await ctx.server.settle();
+    record('an error about a different room leaves the live call alone',
+        ctx.a.api.voice.roomId === roomId, `roomId=${JSON.stringify(ctx.a.api.voice.roomId)}`);
+}
+
+console.log('\n== the signalling transport coming back ==');
+
+{
+    // On native shells the voice socket lives in Swift/Rust and reconnects there;
+    // JS never learned it had happened, so a participant evicted server-side waited
+    // for the 8 s presence keepalive to notice. The shells now report the link, and
+    // membership is re-asserted the moment it is back.
+    const ctx = await runDmCall();
+    const before = ctx.a.sent.filter(e => e.type === 'voice_join').length;
+    await ctx.a.deliver({ type: 'voice_transport_state', state: 'up', reason: 'connected' });
+    await ctx.server.settle(1000);
+    const after = ctx.a.sent.filter(e => e.type === 'voice_join').length;
+    record('a reconnected voice transport re-asserts room membership at once',
+        after === before + 1, `voice_join sent before=${before} after=${after}`);
+    const rejoins = ctx.a.sent.filter(e => e.type === 'voice_join');
+    record('and the re-assert is marked keepalive, so it cannot evict another device',
+        rejoins.length > 0 && rejoins.every(e => e.keepalive === true),
+        `keepalive flags=[${rejoins.map(e => String(e.keepalive)).join(',')}]`);
+}
+
+{
+    // A payload the shell could not deliver: over the native bridge sendVoiceEvent
+    // is fire-and-forget and always reports success, so this event is the only way
+    // a dropped offer ever becomes visible to the negotiation logic.
+    const ctx = await runDmCall();
+    const entry = ctx.a.entryFor('bob');
+    entry.offerSent = true;
+    await ctx.a.deliver({
+        type: 'voice_send_failed',
+        eventType: 'voice_signal',
+        signalType: 'offer',
+        to: 'bob',
+        reason: 'queue-overflow',
+    });
+    await ctx.server.settle(1000);
+    record('a dropped offer unlatches the peer instead of stranding it',
+        ctx.a.entryFor('bob')?.offerSent === false,
+        `offerSent=${ctx.a.entryFor('bob')?.offerSent}`);
+
+    // A dropped ICE candidate is not a dropped offer: the offer is still valid and
+    // still awaiting its answer, and unlatching there only forces a pointless
+    // renegotiation on a link that is still converging.
+    ctx.a.entryFor('bob').offerSent = true;
+    await ctx.a.deliver({
+        type: 'voice_send_failed',
+        eventType: 'voice_signal',
+        signalType: 'ice',
+        to: 'bob',
+        reason: 'queue-overflow',
+    });
+    await ctx.server.settle(1000);
+    record('a dropped ICE candidate does not tear down a valid offer',
+        ctx.a.entryFor('bob')?.offerSent === true,
+        `offerSent=${ctx.a.entryFor('bob')?.offerSent}`);
+}
+
 console.log('\n== randomized scenarios ==');
 {
     let bad = 0; let ran = 0; const examples = [];

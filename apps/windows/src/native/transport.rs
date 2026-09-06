@@ -75,6 +75,60 @@ pub(crate) fn dispatch_voice_event(proxy: &EventLoopProxy<AppEvent>, payload: Va
     dispatch_ui_event(proxy, UiBusEvent::VoiceEvent, payload);
 }
 
+/// Tells the web layer that the voice signalling link went up or down.
+///
+/// The voice WebSocket lives entirely in here — JS never sees it, and never used
+/// to learn that it had dropped and come back. That mattered: the server evicts a
+/// participant whose socket stayed shut, and the only thing that put them back was
+/// the client's 8-second presence keepalive, so every reconnect cost up to a full
+/// keepalive period of being a ghost in the room. It also means every signal sent
+/// while the link was down is simply gone, and nothing re-drove negotiation.
+pub(crate) fn dispatch_voice_transport_state(
+    proxy: &EventLoopProxy<AppEvent>,
+    state: &str,
+    reason: &str,
+    queued: usize,
+) {
+    dispatch_voice_event(
+        proxy,
+        json!({
+            "type": "voice_transport_state",
+            "state": state,
+            "reason": reason,
+            "queued": queued,
+        }),
+    );
+}
+
+/// Reports a payload this transport will never deliver. Over the native bridge the
+/// web layer's sendVoiceEvent is fire-and-forget and always reports success, so
+/// without this an offer dropped here would leave that peer latched as "offered"
+/// for the rest of the call.
+pub(crate) fn dispatch_voice_send_failed(
+    proxy: &EventLoopProxy<AppEvent>,
+    payload: &Value,
+    reason: &str,
+) {
+    dispatch_voice_event(
+        proxy,
+        json!({
+            "type": "voice_send_failed",
+            "eventType": payload.get("type").and_then(Value::as_str).unwrap_or_default(),
+            // Which KIND of signal was lost. Without it the web layer had to treat
+            // every dropped payload as a lost offer and unlatch the peer, forcing a
+            // redundant renegotiation for what was usually one ICE candidate.
+            "signalType": payload
+                .get("signal")
+                .and_then(|signal| signal.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            "to": payload.get("to").and_then(Value::as_str).unwrap_or_default(),
+            "roomId": payload.get("roomId").and_then(Value::as_str).unwrap_or_default(),
+            "reason": reason,
+        }),
+    );
+}
+
 pub(crate) fn dispatch_voice_log(proxy: &EventLoopProxy<AppEvent>, level: &str, msg: String) {
     dispatch_ui_event(
         proxy,
@@ -145,6 +199,17 @@ pub(crate) fn show_message_notification(rendered: &Value, current_username: &str
     }
 }
 
+/// Cap on the offline outbound queue.
+///
+/// It used to be unbounded, which is two problems in one. It grows without limit
+/// while the link is down — every ICE candidate of every peer keeps arriving — and
+/// then, on reconnect, it faithfully delivers signalling that describes a
+/// negotiation the call abandoned minutes ago. A stale offer applied on the far
+/// side is worse than a missing one: the peer answers a session neither side is in.
+/// Keep a short tail of the most recent payloads and tell the web layer about what
+/// is dropped, so it can retry from the state things are actually in.
+const VOICE_PENDING_MAX: usize = 64;
+
 pub(crate) async fn run_voice_transport(
     mut config_rx: watch::Receiver<VoiceConfig>,
     mut outbound_rx: mpsc::UnboundedReceiver<Value>,
@@ -172,7 +237,7 @@ pub(crate) async fn run_voice_transport(
                 }
                 maybe_payload = outbound_rx.recv() => {
                     match maybe_payload {
-                        Some(payload) => pending.push_back(payload),
+                        Some(payload) => queue_voice_payload(&mut pending, payload, &proxy),
                         None => return,
                     }
                 }
@@ -192,13 +257,16 @@ pub(crate) async fn run_voice_transport(
                     "ERROR",
                     format!("Voice connection error: {}", error),
                 );
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
-                    changed = config_rx.changed() => {
-                        if changed.is_err() {
-                            return;
-                        }
-                    }
+                if !backoff_draining_outbound(
+                    reconnect_delay_secs,
+                    &mut config_rx,
+                    &mut outbound_rx,
+                    &mut pending,
+                    &proxy,
+                )
+                .await
+                {
+                    return;
                 }
                 reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(30);
                 continue;
@@ -219,13 +287,16 @@ pub(crate) async fn run_voice_transport(
                     current.ws_url, error
                 ));
                 dispatch_voice_log(&proxy, "WARN", format!("Voice reconnecting: {}", error));
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_delay_secs)) => {}
-                    changed = config_rx.changed() => {
-                        if changed.is_err() {
-                            return;
-                        }
-                    }
+                if !backoff_draining_outbound(
+                    reconnect_delay_secs,
+                    &mut config_rx,
+                    &mut outbound_rx,
+                    &mut pending,
+                    &proxy,
+                )
+                .await
+                {
+                    return;
                 }
                 reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(30);
                 continue;
@@ -235,6 +306,7 @@ pub(crate) async fn run_voice_transport(
         reconnect_delay_secs = 1;
         trace(format!("voice ws connected url={}", current.ws_url));
         let (mut writer, mut reader) = ws_stream.split();
+        dispatch_voice_transport_state(&proxy, "up", "connected", pending.len());
 
         while let Some(payload) = pending.pop_front() {
             if let Err(error) = send_voice_payload(&mut writer, &payload).await {
@@ -251,14 +323,48 @@ pub(crate) async fn run_voice_transport(
         // reconnect. Mirrors the Swift client's scheduleVoiceHeartbeat (25s sendPing).
         let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
         ping_interval.tick().await; // first tick fires immediately; consume it
+        // Half-open detection, which this transport had no form of. Sending a Ping
+        // only proves the local TCP stack accepted the bytes; a path that dies
+        // without a FIN (Wi-Fi drop, VPN re-key, NAT eviction) keeps accepting them
+        // into a buffer for minutes, during which every send here "succeeds", the
+        // call believes it is signalling, and nothing reconnects. Whether a Pong
+        // came back is the only local evidence the far end is still there — the
+        // browser client and the Swift one both judge by it; this one did not.
+        //
+        // Tracked as "when did the OLDEST still-unanswered ping go out", not "when
+        // did the last ping go out". The difference is the whole watchdog: with the
+        // latter, every tick overwrites the timestamp it is about to judge, so on a
+        // 25 s interval the age measured is always ~25 s and a threshold above that
+        // can never be crossed — the check would run forever and never fire. Any
+        // inbound frame clears it (the server pings every 20 s of its own accord, so
+        // a healthy link clears this constantly).
+        let mut unanswered_ping_at: Option<tokio::time::Instant> = None;
+        let mut down_reason = "closed";
 
         loop {
             tokio::select! {
                 _ = ping_interval.tick() => {
+                    if let Some(since) = unanswered_ping_at {
+                        // Three ping intervals with nothing coming back at all.
+                        if since.elapsed() > Duration::from_secs(70) {
+                            trace("voice ws pong missing; assuming half-open");
+                            dispatch_voice_log(
+                                &proxy,
+                                "WARN",
+                                "Voice socket silent (no pong) — reconnecting".to_string(),
+                            );
+                            down_reason = "pong-timeout";
+                            break;
+                        }
+                    }
                     if let Err(error) = writer.send(Message::Ping(Vec::new())).await {
                         trace(format!("voice ws ping failed err={}", error));
                         dispatch_voice_log(&proxy, "WARN", format!("Voice ping failed: {}", error));
+                        down_reason = "ping-failed";
                         break;
+                    }
+                    if unanswered_ping_at.is_none() {
+                        unanswered_ping_at = Some(tokio::time::Instant::now());
                     }
                     trace("voice ws ping ok");
                 }
@@ -267,6 +373,7 @@ pub(crate) async fn run_voice_transport(
                         return;
                     }
                     trace("voice ws config changed; reconnecting");
+                    down_reason = "config-changed";
                     break;
                 }
                 maybe_payload = outbound_rx.recv() => {
@@ -275,6 +382,7 @@ pub(crate) async fn run_voice_transport(
                             if let Err(error) = send_voice_payload(&mut writer, &payload).await {
                                 trace(format!("voice ws send failed err={}", error));
                                 pending.push_front(payload);
+                                down_reason = "send-failed";
                                 break;
                             }
                         }
@@ -284,6 +392,7 @@ pub(crate) async fn run_voice_transport(
                 maybe_msg = reader.next() => {
                     match maybe_msg {
                         Some(Ok(Message::Text(text))) => {
+                            unanswered_ping_at = None;
                             if let Ok(raw) = serde_json::from_str::<Value>(&text) {
                                 if raw.get("type").and_then(Value::as_str).map(|value| value.starts_with("voice_")).unwrap_or(false) {
                                     dispatch_voice_event(&proxy, raw);
@@ -299,29 +408,95 @@ pub(crate) async fn run_voice_transport(
                                 }
                             }
                         }
-                        Some(Ok(Message::Ping(_))) => {}
-                        Some(Ok(Message::Pong(_))) => {}
+                        Some(Ok(Message::Ping(_))) => {
+                            // The server pings every 20 s; tungstenite queues the Pong
+                            // for us. Inbound traffic of any kind is proof of life.
+                            unanswered_ping_at = None;
+                        }
+                        Some(Ok(Message::Pong(_))) => {
+                            unanswered_ping_at = None;
+                        }
                         Some(Ok(Message::Frame(_))) => {}
                         Some(Ok(Message::Close(_))) => {
                             trace("voice ws closed by server");
                             dispatch_voice_log(&proxy, "WARN", "Voice socket closed".to_string());
+                            down_reason = "closed-by-server";
                             break;
                         }
                         Some(Err(error)) => {
                             trace(format!("voice ws receive error={}", error));
                             dispatch_voice_log(&proxy, "WARN", format!("Voice socket error: {}", error));
+                            down_reason = "receive-error";
                             break;
                         }
                         None => {
                             trace("voice ws stream ended");
                             dispatch_voice_log(&proxy, "WARN", "Voice socket disconnected".to_string());
+                            down_reason = "stream-ended";
                             break;
                         }
                     }
                 }
             }
         }
+
+        dispatch_voice_transport_state(&proxy, "down", down_reason, pending.len());
     }
+}
+
+/// Waits out a reconnect backoff while still draining the outbound channel into the
+/// capped queue.
+///
+/// Without this the cap was decorative: during backoff nothing read `outbound_rx`,
+/// so an offline call's signalling piled up in the unbounded mpsc channel instead —
+/// same unbounded growth, same stale-signalling-on-reconnect, just one layer down
+/// where VOICE_PENDING_MAX could not see it.
+///
+/// Returns false when the caller should shut down (config sender or outbound sender
+/// dropped). A config change ends the wait early, since it means reconnecting to a
+/// different place.
+async fn backoff_draining_outbound(
+    delay_secs: u64,
+    config_rx: &mut watch::Receiver<VoiceConfig>,
+    outbound_rx: &mut mpsc::UnboundedReceiver<Value>,
+    pending: &mut VecDeque<Value>,
+    proxy: &EventLoopProxy<AppEvent>,
+) -> bool {
+    let sleep = tokio::time::sleep(Duration::from_secs(delay_secs));
+    tokio::pin!(sleep);
+    loop {
+        tokio::select! {
+            _ = &mut sleep => return true,
+            changed = config_rx.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+                return true;
+            }
+            maybe_payload = outbound_rx.recv() => {
+                match maybe_payload {
+                    Some(payload) => queue_voice_payload(pending, payload, proxy),
+                    None => return false,
+                }
+            }
+        }
+    }
+}
+
+/// Appends to the offline queue, dropping the oldest payload once it is full and
+/// telling the web layer which one went — see VOICE_PENDING_MAX.
+fn queue_voice_payload(
+    pending: &mut VecDeque<Value>,
+    payload: Value,
+    proxy: &EventLoopProxy<AppEvent>,
+) {
+    while pending.len() >= VOICE_PENDING_MAX {
+        if let Some(dropped) = pending.pop_front() {
+            trace("voice ws pending queue full; dropping oldest payload");
+            dispatch_voice_send_failed(proxy, &dropped, "queue-overflow");
+        }
+    }
+    pending.push_back(payload);
 }
 
 pub(crate) async fn handle_message_ws_payload(

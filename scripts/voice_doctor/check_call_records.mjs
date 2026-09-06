@@ -118,6 +118,31 @@ console.log('\n== no duplicates ==');
         `queued=${api.loadPendingOutbox().filter(i => String(i.call || '').trim()).length}`);
 }
 
+console.log('\n== a call the client gave up on ==');
+{
+    // concludeDeadVoiceCallIfNeeded / concludeVanishedVoiceRoom end an unrecoverable
+    // call with outcome 'failed'. Neither renderer knew that value at first, so the
+    // record read as an ordinary completed call whose duration counted the entire
+    // dead stretch — "Исходящий звонок · 8:30" for eight minutes of silence.
+    const api = caller.api;
+    const failedRoom = 'voice:dm:alice:bob:failed-1';
+    api.voice.callTrack = {
+        roomId: failedRoom, peer: 'bob', roomType: 'dm', direction: 'outgoing',
+        startedAt: Date.now() - 500000, connectedAt: Date.now() - 500000,
+        endedAt: 0, outcome: 'connected', recorded: false,
+    };
+    api.recordVoiceCallHistory({ outcome: 'failed', endedAt: Date.now() });
+    const row = (api.S.chats.bob || []).find(m => m.id === api.callRecordMessageId(failedRoom));
+    record('a call that could not be recovered is recorded as such',
+        !!row && row.call?.outcome === 'failed', `outcome=${row?.call?.outcome}`);
+    const summary = api.formatCallSummary(row?.call, 'outgoing');
+    record('and reads as an interrupted call, not a completed one',
+        /прерван/i.test(summary), JSON.stringify(summary));
+    const rendered = api.renderCallMessage(row);
+    record('the call card says so too', /прерван/i.test(rendered),
+        (rendered.match(/call-card-title">([^<]*)/) || [])[1] || '');
+}
+
 console.log('\n== malformed payloads ==');
 {
     const api = callee.api;

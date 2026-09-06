@@ -405,9 +405,14 @@ ZaliMixin(ZaliInterface, class {
                 ? `Звонок отклонён`
                 : outcome === 'cancelled'
                     ? `Звонок отменён`
-                    : direction === 'outgoing'
-                        ? `Исходящий звонок`
-                        : `Входящий звонок`;
+                    // The client gave up on a call it could no longer recover — see
+                    // concludeDeadVoiceCallIfNeeded. Without this it read as an
+                    // ordinary completed call, which is the one thing it was not.
+                    : outcome === 'failed'
+                        ? `Звонок прерван`
+                        : direction === 'outgoing'
+                            ? `Исходящий звонок`
+                            : `Входящий звонок`;
         const subject = direction === 'outgoing'
             ? `К ${peer || 'контакту'}`
             : `От ${peer || 'контакта'}`;

@@ -51,6 +51,10 @@ ZaliMixin(ZaliInterface, class {
             if (!roomId) return;
             this.voiceTrace('start-dm-call', { target, me, roomId, video });
             this.voice.videoEnabled = !!video;
+            // Not awaited on purpose — see refreshVoiceTurnCredentials: a rotating
+            // TURN credential is an optimisation over the static one, never a
+            // precondition, so it must not be able to delay or fail a call.
+            void this.refreshVoiceTurnCredentials();
             // Deliberately not awaited: the synchronous part (creating the context and
             // calling resume()) is what has to happen inside the user gesture, and the
             // rest is best-effort. Awaiting it put a promise WebKit may never settle in
@@ -144,7 +148,8 @@ ZaliMixin(ZaliInterface, class {
 
     async performAcceptIncomingCall(invite) {
         const me = String(this.myName() || '').trim();
-        this.voiceTrace('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
+        this.voiceDiag('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
+        void this.refreshVoiceTurnCredentials();
         // Not awaited — see unlockVoicePlayback. Awaited here, a refused resume() left
         // the callee holding callSetupInFlight forever: the accept was never sent, and
         // «Принять» silently did nothing on every later call too.
@@ -298,6 +303,15 @@ ZaliMixin(ZaliInterface, class {
         const ms = Number(callInfo?.durationMs || 0);
         if (outcome === 'missed') return direction === 'outgoing' ? 'Вызов без ответа' : 'Пропущенный звонок';
         if (outcome === 'rejected') return direction === 'outgoing' ? 'Вызов отклонён' : 'Отклонённый звонок';
+        // Written when the client gives up on a call it can no longer recover (every
+        // link exhausted, or the room gone from the server). Without its own label it
+        // rendered as an ordinary completed call whose duration counted the whole
+        // dead stretch — "Исходящий звонок · 8:30" for eight minutes of silence.
+        if (outcome === 'failed') {
+            if (!ms) return 'Звонок прерван';
+            const totalFailed = Math.round(ms / 1000);
+            return `Звонок прерван · ${Math.floor(totalFailed / 60)}:${String(totalFailed % 60).padStart(2, '0')}`;
+        }
         if (!ms) return direction === 'outgoing' ? 'Исходящий звонок' : 'Входящий звонок';
         const total = Math.round(ms / 1000);
         const mm = Math.floor(total / 60);

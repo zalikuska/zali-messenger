@@ -49,6 +49,10 @@ path = "../tests/profiles.rs"
 name = "security"
 path = "../tests/security.rs"
 
+[[test]]
+name = "voice"
+path = "../tests/voice.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -67,6 +71,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 rand = "0.8"
 sha2 = "0.10"
+# TURN REST credentials (RFC 5766 §10 / coturn `use-auth-secret`): the digest is
+# HMAC-SHA1 and coturn implements no other, so sha2 above cannot stand in here.
+# Both were already in Cargo.lock as transitive dependencies — this only makes the
+# use direct.
+hmac = "0.12"
+sha1 = "0.10"
 # The conversation hash-chain export is a real `.zali` archive, produced by the
 # same SDK the clients use — so an auditor opens it with the tooling they
 # already have instead of a server-only one-off format.

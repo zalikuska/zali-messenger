@@ -10078,6 +10078,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             republish: apiRoute('/conversation-keys/republish'),
         },
         historyTickets: apiRoute('/history-tickets'),
+        voice: {
+            turnCredentials: apiRoute('/voice/turn-credentials'),
+        },
         discover: {
             servers: apiRoute('/discover/servers'),
         },
@@ -10415,6 +10418,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 linkSupervisorTimer: null,
                 // Participant roster the current retry budget was granted for.
                 peerRosterKey: '',
+                // How many peer connections this call had to throw away and rebuild.
+                // Kept per CALL rather than per entry for the obvious reason: a
+                // rebuild destroys the entry that would have counted it. One is
+                // routine recovery; several means something upstream keeps producing
+                // offers this side cannot apply, which is what the end-of-call
+                // summary reports.
+                rebuilds: 0,
                 // peer -> tail of that peer's in-order signal application chain.
                 signalChains: new Map(),
                 audioContext: null,
@@ -10759,6 +10769,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         if (bytes[2] !== 8) throw new Error('tgs: unsupported gzip compression method');
         const flags = bytes[3];
         let pos = 10;
+"""#,
+    #"""
         if (flags & 0x04) {
             const extraLen = bytes[pos] | (bytes[pos + 1] << 8);
             pos += 2 + extraLen;
@@ -10776,8 +10788,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         return inflateRaw(bytes, pos);
     }
 
-"""#,
-    #"""
     async function gunzip(bytes) {
         if (typeof DecompressionStream === 'function' && typeof Response === 'function') {
             try {
@@ -11784,6 +11794,9 @@ const DefaultApiRoutes = Object.freeze({
         republish: apiRoute('/conversation-keys/republish'),
     },
     historyTickets: apiRoute('/history-tickets'),
+    voice: {
+        turnCredentials: apiRoute('/voice/turn-credentials'),
+    },
     discover: {
         servers: apiRoute('/discover/servers'),
     },
@@ -15166,6 +15179,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async requestKeyRepublish(scope, { reason = 'auto' } = {}) {
+"""#,
+    #"""
         const scoped = String(scope || '').trim();
         if (!scoped || !this.S.session?.token) return false;
         try {
@@ -15178,8 +15193,6 @@ ZaliMixin(ZaliInterface, class {
             this.trace(`requestKeyRepublish reason=${reason} scope=${scoped}`);
             return true;
         } catch (e) {
-"""#,
-    #"""
             this.trace(`requestKeyRepublish failed reason=${reason} scope=${scoped} error=${e?.message || e}`);
             return false;
         }
@@ -18468,6 +18481,15 @@ ZaliMixin(ZaliInterface, class {
         return [
             `turn:${safeHost}:3478?transport=udp`,
             `turn:${safeHost}:3478?transport=tcp`,
+            // 3478 is the first port a corporate or guest network blocks, and with
+            // only 3478 offered there is no relay at all on such a network — the call
+            // simply fails for anyone who needs one. 5349 is the registered TURN-over-
+            // TLS port; 443 is the one that survives a firewall that allows nothing
+            // but web traffic. A port with nothing listening costs a failed gathering
+            // attempt, which onicecandidateerror now records by name, so adding them
+            // is safe whether or not the deployment answers there.
+            `turns:${safeHost}:5349?transport=tcp`,
+            `turns:${safeHost}:443?transport=tcp`,
         ];
     }
 
@@ -18573,7 +18595,15 @@ ZaliMixin(ZaliInterface, class {
 
     getVoiceRtcConfig() {
         const config = this.loadNetworkConfig();
-        const defaultTurn = {
+        // Short-lived credentials issued by the server (RFC 5766 REST scheme) when
+        // the deployment has coturn in use-auth-secret mode, otherwise the static
+        // pair below. The static pair is shipped inside every client, so it is a
+        // relay anyone who has ever opened the bundle can use for as long as it
+        // exists, and rotating it means rebuilding every client. Rotating creds fix
+        // that — but only where the TURN server is configured for them, so the
+        // static pair stays as the fallback rather than being removed.
+        const rotating = this.voiceTurnCredentials();
+        const defaultTurn = rotating || {
             urls: this.defaultTurnUrls(),
             username: 'zali',
             credential: 'turnpass',
@@ -18598,9 +18628,85 @@ ZaliMixin(ZaliInterface, class {
                 const { relayOnly, ...iceServer } = server || {};
                 return iceServer;
             }),
-            iceCandidatePoolSize: 4,
+            // 1, not 4. The pool is pre-gathered per RTCPeerConnection, and a mesh
+            // call builds one connection per participant — so a pool of 4 in an
+            // eight-person room asks the TURN server for dozens of allocations
+            // nobody will use, all against a single credential. One pre-gathered set
+            // still covers the latency the pool exists for.
+            iceCandidatePoolSize: 1,
             iceTransportPolicy: 'all',
         };
+    }
+
+    // Cached in memory only, never persisted: these expire, and a stale credential
+    // read from disk on next launch would be worse than no credential at all (it
+    // fails 401 at the TURN server, which looks exactly like a broken relay).
+    voiceTurnCredentials() {
+        const creds = this._voiceTurnCredentials;
+        if (!creds) return null;
+        if (!creds.urls?.length || !creds.username || !creds.credential) return null;
+        if (Number(creds.expiresAt || 0) <= Date.now()) return null;
+        return { urls: creds.urls, username: creds.username, credential: creds.credential };
+    }
+
+    // Fire-and-forget from the call-setup paths. Deliberately NOT awaited anywhere:
+    // getVoiceRtcConfig is synchronous (it is called from `new RTCPeerConnection`),
+    // so making credentials a precondition would mean putting a network round trip
+    // in front of every call — and failing the call when it times out. If the fetch
+    // lands first the rotating credential is used; if it does not, the static pair
+    // is, and the call proceeds either way.
+    async refreshVoiceTurnCredentials({ force = false } = {}) {
+        if (!this.S?.session?.token) return null;
+        // window.ZaliApiRoutes may come from an older cached bundle that predates
+        // this route; reading through it unguarded would throw inside call setup.
+        const route = this.apiRoutes?.voice?.turnCredentials;
+        if (!route) return null;
+        const existing = this.voiceTurnCredentials();
+        // Refresh once the credential is inside its last quarter, so a call starting
+        // now cannot outlive it by much.
+        if (!force && existing && Number(this._voiceTurnCredentials?.refreshAfter || 0) > Date.now()) {
+            return existing;
+        }
+        if (this._voiceTurnFetchInFlight) return this._voiceTurnFetchInFlight;
+        const pending = (async () => {
+            try {
+                const res = await this.apiFetch(route, { method: 'GET' });
+                if (res.status === 404) {
+                    // Route absent or disabled: this deployment has no rotating
+                    // credentials configured. Not an error, and not worth retrying
+                    // hard — the static pair works.
+                    this._voiceTurnCredentials = null;
+                    this.voiceTrace('turn-credentials-unavailable', { status: res.status });
+                    return null;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json().catch(() => null);
+                const urls = this.normalizeIceServers([{ urls: data?.urls }])[0]?.urls || [];
+                const username = String(data?.username || '').trim();
+                const credential = String(data?.credential || '').trim();
+                const ttl = Math.max(60, Number(data?.ttl || 0) || 3600);
+                if (!urls.length || !username || !credential) {
+                    throw new Error('incomplete turn credentials');
+                }
+                const expiresAt = Date.now() + ttl * 1000;
+                this._voiceTurnCredentials = {
+                    urls,
+                    username,
+                    credential,
+                    expiresAt,
+                    refreshAfter: Date.now() + Math.floor(ttl * 0.75) * 1000,
+                };
+                this.voiceDiag('turn-credentials-refreshed', { urls: urls.length, ttl });
+                return this.voiceTurnCredentials();
+            } catch (error) {
+                this.voiceDiag('turn-credentials-failed', { error: error?.message || String(error) }, 'WARN');
+                return null;
+            } finally {
+                this._voiceTurnFetchInFlight = null;
+            }
+        })();
+        this._voiceTurnFetchInFlight = pending;
+        return pending;
     }
 
     apiUrl(path = '') {
@@ -19253,6 +19359,8 @@ ZaliMixin(ZaliInterface, class {
     renderPublicServersModal() {
         const list = document.getElementById('serverDiscoverList');
         const count = document.getElementById('serverDiscoverCount');
+"""#,
+    #"""
         const refreshBtn = document.getElementById('serverDiscoverRefreshBtn');
         const servers = this.renderFilteredPublicServers();
         if (count) count.textContent = String(servers.length || 0);
@@ -19343,8 +19451,6 @@ ZaliMixin(ZaliInterface, class {
         const serverChannelKindInput = document.getElementById('serverChannelKindInput');
         const serverAvatarUploadBtn = document.getElementById('serverAvatarUploadBtn');
         const serverAvatarRemoveBtn = document.getElementById('serverAvatarRemoveBtn');
-"""#,
-    #"""
         const serverBannerUploadBtn = document.getElementById('serverBannerUploadBtn');
         const serverBannerRemoveBtn = document.getElementById('serverBannerRemoveBtn');
         const serverRoleNameInput = document.getElementById('serverRoleNameInput');
@@ -20639,11 +20745,22 @@ ZaliMixin(ZaliInterface, class {
                 try {
                     this.voice.socket.send(JSON.stringify(event));
                 } catch (error) {
-                    this.voiceTrace('send-event-failed', { type: event.type || '', error: error?.message || String(error) }, 'ERROR');
+                    this.voiceDiag('send-event-failed', { type: event.type || '', to: event.to || '', error: error?.message || String(error) }, 'ERROR');
                     return false;
                 }
                 return true;
             }
+            // Always-on: a signal that never left the client is the single most
+            // common cause of a call that looks connected and carries nothing, and
+            // the socket's readyState at that moment is what says whether it was a
+            // reconnect in progress or a socket that was never opened at all.
+            this.voiceDiag('send-event-no-socket', {
+                type: event.type || '',
+                to: event.to || '',
+                signalType: event.signal?.type || '',
+                readyState: this.voice.socket ? this.voice.socket.readyState : 'no-socket',
+                roomId: this.voice.roomId || '',
+            }, 'WARN');
             this.addLogEntry({
                 type: 'WARN',
                 msg: `Voice signal skipped in browser mode: ${event.type}`,
@@ -20689,7 +20806,7 @@ ZaliMixin(ZaliInterface, class {
         const jitter = Math.floor(Math.random() * 500);
         const delay = Math.min(baseDelay + jitter, 30000);
         this.voiceSocketReconnectDelayMs = Math.min(baseDelay * 2, 30000);
-        this.voiceTrace('socket-reconnect-scheduled', { generation, reason, delay }, 'WARN');
+        this.voiceDiag('socket-reconnect-scheduled', { generation, reason, delay }, 'WARN');
         if (this.voiceSocketReconnectTimer) {
             clearTimeout(this.voiceSocketReconnectTimer);
             this.voiceSocketReconnectTimer = null;
@@ -20726,6 +20843,14 @@ ZaliMixin(ZaliInterface, class {
     async connectBrowserVoiceSocket() {
         if (this.nativeSupports('voice')) return;
         if (typeof WebSocket === 'undefined') return;
+        // Without a session there is no ws-ticket to get, so this could only ever
+        // fail — and it failed on a backoff loop, writing a reconnect line into the
+        // journal every few seconds for as long as the login screen was open. Login
+        // calls this again (applySession), and so does saving a server address.
+        if (!this.S?.session?.token) {
+            this.voiceTrace('socket-connect-skipped-no-session', {});
+            return;
+        }
         if (this.voice.socket && (this.voice.socket.readyState === WebSocket.OPEN || this.voice.socket.readyState === WebSocket.CONNECTING)) {
             return;
         }
@@ -20788,7 +20913,7 @@ ZaliMixin(ZaliInterface, class {
                     // background tab's timers are throttled.
                     const lastPing = this.voiceSocketLastPingAt || 0;
                     if (lastPing > (this.voiceSocketLastInboundAt || 0) && Date.now() - lastPing > 15000) {
-                        this.voiceTrace('socket-ping-unanswered', {
+                        this.voiceDiag('socket-ping-unanswered', {
                             generation,
                             silentMs: Date.now() - lastPing,
                         }, 'WARN');
@@ -20800,13 +20925,29 @@ ZaliMixin(ZaliInterface, class {
                         this.voice.socket.send(JSON.stringify({ type: 'ping' }));
                     } catch (e) {}
                 }, 25000);
-                this.voiceTrace('socket-open', { generation, url: url.toString() }, 'SUCCESS');
+                this.voiceDiag('socket-open', { generation, url: url.toString() }, 'SUCCESS');
                 this.addLogEntry({ type: 'SUCCESS', msg: 'Browser voice socket connected', ts: new Date().toLocaleTimeString() });
                 // This socket doubles as the pure-browser client's only realtime connection
                 // (messages + voice signaling both ride it — see onmessage below), so its
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
                 this.setConnectionStatus(true);
+                // The browser-side counterpart of the native shells'
+                // voice_transport_state:'up'. iOS and Android both declare
+                // `voice: false` and therefore run on THIS socket, so without it
+                // they were the platforms with no reconnect handling at all: the
+                // server evicts a participant whose socket stayed shut, every signal
+                // sent while it was down is gone, and the only thing that noticed was
+                // the 8-second presence keepalive.
+                if (String(this.voice.roomId || '').trim()) {
+                    this.voiceDiag('socket-reopened-in-call', {
+                        roomId: this.voice.roomId || '',
+                        status: this.voice.status || '',
+                        peers: this.voice.peerConnections.size,
+                    }, 'WARN');
+                    this.sendVoiceRoomPresence();
+                    this.scheduleVoiceNegotiationRetry('voice-socket-reopened');
+                }
             };
 
             socket.onmessage = (event) => {
@@ -20876,7 +21017,7 @@ ZaliMixin(ZaliInterface, class {
                     clearInterval(this.voiceSocketPingTimer);
                     this.voiceSocketPingTimer = null;
                 }
-                this.voiceTrace('socket-close', { generation, url: url.toString() }, 'WARN');
+                this.voiceDiag('socket-close', { generation, url: url.toString(), roomId: this.voice.roomId || '', status: this.voice.status || '' }, 'WARN');
                 this.setConnectionStatus(false);
                 if (!this.nativeSupports('voice')) {
                     const baseDelay = this.voiceSocketReconnectDelayMs || 1000;
@@ -20911,12 +21052,17 @@ ZaliMixin(ZaliInterface, class {
     }
 
     resetVoiceState({ preserveInvite = false } = {}) {
-        this.voiceTrace('reset-state', { preserveInvite, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', status: this.voice.status || '' });
+        // Written BEFORE anything is torn down: the per-peer counters, the last
+        // stats sample and the selected candidate pair all live on entries this
+        // method is about to close, and they are exactly what a post-mortem needs.
+        this.logVoiceCallSummary(preserveInvite ? 'reset-keep-invite' : 'reset');
+        this.voiceDiag('reset-state', { preserveInvite, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', status: this.voice.status || '' });
         if (this.voice.negotiationRetryTimer) {
             clearTimeout(this.voice.negotiationRetryTimer);
             this.voice.negotiationRetryTimer = null;
         }
         this.voice.negotiationRetries = 0;
+        this.voice.rebuilds = 0;
         this.voice.peerRosterKey = '';
         this.stopVoicePresenceKeepalive();
         this.stopVoiceLinkSupervisor();
@@ -21021,6 +21167,19 @@ ZaliMixin(ZaliInterface, class {
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
+
+    // Full mesh has no server-side mixer: every camera is encoded and uploaded once
+    // per other participant. Past this many peers a consumer uplink cannot carry
+    // video without starving the audio that shares it, and audio is what the call is
+    // for — so video is refused with a reason rather than allowed to break the call.
+    // Audio alone stays fine well past this; see MAX_MESH_AUDIO_PEERS.
+    static get MAX_MESH_VIDEO_PEERS() { return 6; }
+
+    // Not enforced — a mesh audio call this large still works, it just stops being
+    // comfortable, and refusing to connect people who asked to be connected is worse
+    // than a warning in the log. Crossing it is recorded so that "звонок тормозил at
+    // 11 people" is a fact in the journal rather than a recollection.
+    static get MAX_MESH_AUDIO_PEERS() { return 8; }
 
     // Dedupes concurrent capture requests. In a group call every incoming offer
     // handler (and every voice_room_state) calls this, and handleVoiceEvent is
@@ -21130,7 +21289,7 @@ ZaliMixin(ZaliInterface, class {
         this.voice.localStream = stream;
         this.voice.micError = '';
         this.voice.muted = false;
-        this.voiceTrace('local-stream-ready', {
+        this.voiceDiag('local-stream-ready', {
             tracks: stream.getTracks().map(track => `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`),
         });
         this.ensureVoiceMeterLoop();
@@ -21178,6 +21337,20 @@ ZaliMixin(ZaliInterface, class {
         // resolves last would silently overwrite this.voice.localStream's video
         // track, leaking the other's camera lock with no track.stop() ever called.
         if (this.voice.cameraOn || this.voice.cameraRequestInFlight) return;
+        const peerCount = this.voice.peerConnections.size;
+        if (peerCount > ZaliInterface.MAX_MESH_VIDEO_PEERS) {
+            this.voiceDiag('camera-refused-mesh-size', {
+                peers: peerCount,
+                limit: ZaliInterface.MAX_MESH_VIDEO_PEERS,
+                roomId: this.voice.roomId || '',
+            }, 'WARN');
+            this.addLogEntry({
+                type: 'WARN',
+                msg: `Камера недоступна: в звонке ${peerCount} собеседников, видео на всех сразу не поместится в канал`,
+                ts: new Date().toLocaleTimeString(),
+            });
+            return;
+        }
         this.voice.cameraRequestInFlight = true;
         try {
             if (!this.voice.localStream) {
@@ -21212,6 +21385,7 @@ ZaliMixin(ZaliInterface, class {
                     } else {
                         entry.videoSender = entry.pc.addTrack(track, this.voice.localStream);
                     }
+                    await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera');
                 }
                 await this.renegotiateAllVoicePeers();
                 this.renderVoicePanel();
@@ -21267,9 +21441,13 @@ ZaliMixin(ZaliInterface, class {
     // function is what keeps every path honest.
     createVoiceOfferFor(entry) {
         if (!entry?.pc) return Promise.reject(new Error('no peer connection'));
-        return entry.needsIceRestart
-            ? entry.pc.createOffer({ iceRestart: true })
-            : entry.pc.createOffer();
+        if (entry.needsIceRestart) {
+            // Counted so the end-of-call summary can say "this link was restarted
+            // nine times" — one restart is a blip, nine is a network worth naming.
+            entry.iceRestartCount = Number(entry.iceRestartCount || 0) + 1;
+            return entry.pc.createOffer({ iceRestart: true });
+        }
+        return entry.pc.createOffer();
     }
 
     async renegotiateVoicePeer(peer) {
@@ -21293,7 +21471,7 @@ ZaliMixin(ZaliInterface, class {
         try {
             const offer = await this.createVoiceOfferFor(entry);
             await entry.pc.setLocalDescription(offer);
-            this.voiceTrace('renegotiate-offer', { peer, roomId: this.voice.roomId || '', iceRestart: !!entry.needsIceRestart });
+            this.voiceDiag('renegotiate-offer', { peer, roomId: this.voice.roomId || '', iceRestart: !!entry.needsIceRestart });
             const delivered = this.sendVoiceEvent({
                 type: 'voice_signal',
                 roomId: this.voice.roomId,
@@ -21310,7 +21488,7 @@ ZaliMixin(ZaliInterface, class {
                 },
             });
             if (!delivered) {
-                this.voiceTrace('renegotiate-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
+                this.voiceDiag('renegotiate-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
             }
             // Whether the offer was lost on the way out or its answer never came
             // back, the outcome is identical and equally invisible: this connection
@@ -21388,6 +21566,7 @@ ZaliMixin(ZaliInterface, class {
         const track = this.voice.localScreenStream.getVideoTracks()[0];
         if (!track) return false;
         entry.screenSender = entry.pc.addTrack(track, this.voice.localScreenStream);
+        void this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
         this.sendScreenShareMeta(peer, 'start');
         this.voiceTrace('screen-track-attached', { peer, streamId: this.voice.localScreenStream.id || '' });
         return true;
@@ -21673,7 +21852,7 @@ ZaliMixin(ZaliInterface, class {
                     username: server.username ? 'set' : '',
                 })),
             });
-            entry.statsTimer = setInterval(() => this.sampleVoicePeerStats(name), 5000);
+            this.ensureVoicePeerStatsTimer(name, entry, 5000);
             entry.pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     entry.generatedIceCandidates = (entry.generatedIceCandidates || 0) + 1;
@@ -21824,12 +22003,17 @@ ZaliMixin(ZaliInterface, class {
                         clearTimeout(entry.healthTimer);
                         entry.healthTimer = null;
                     }
-                    if (!entry.statsTimer) {
-                        entry.statsTimer = setInterval(() => {
-                            this.sampleVoicePeerStats(name);
-                            void this.reportVoiceAudioHealth(name);
-                        }, 10000);
-                    }
+                    // Re-armed unconditionally, NOT `if (!entry.statsTimer)`. The
+                    // entry is created with a 5 s sampler that nothing on the healthy
+                    // path ever cleared, so that guard was always false here and the
+                    // health sampler was only ever installed on a link that had
+                    // already failed once (statsTimer is cleared in the failed/
+                    // disconnected branch below). Which is to say: the always-on
+                    // "does RTP flow and can the sink play it" telemetry — written
+                    // precisely for calls that look connected and carry no audio —
+                    // never ran on the calls it was for, and neither did the sink
+                    // self-heal it drives.
+                    this.ensureVoicePeerStatsTimer(name, entry, 10000);
                     void this.reportVoiceSelectedPair(name);
                     this.voice.status = 'connected';
                     if (this.voice.callTrack && !this.voice.callTrack.connectedAt) {
@@ -21865,7 +22049,7 @@ ZaliMixin(ZaliInterface, class {
                             if (['connected', 'completed'].includes(currentState)) return;
                             if (hasTraffic) return;
                             if (!['new', 'checking', 'connecting'].includes(currentState) && !['new', 'checking'].includes(currentIce)) return;
-                            this.voiceTrace('health-restart', {
+                            this.voiceDiag('health-restart', {
                                 peer: name,
                                 roomId: this.voice.roomId || '',
                                 state: currentState,
@@ -21900,10 +22084,11 @@ ZaliMixin(ZaliInterface, class {
                         clearTimeout(entry.healthTimer);
                         entry.healthTimer = null;
                     }
-                    if (entry.statsTimer) {
-                        clearInterval(entry.statsTimer);
-                        entry.statsTimer = null;
-                    }
+                    // Slowed, not stopped. Clearing it outright meant that during
+                    // the ~8 minutes the supervisor spends trying to revive a link
+                    // there was no health telemetry at all — precisely the window
+                    // where "did RTP ever come back" is the question being asked.
+                    this.ensureVoicePeerStatsTimer(name, entry, 20000);
                     const isDmCall = this.voice.roomType === 'dm';
                     const allowAutoRestart = true;
                     if (allowAutoRestart) {
@@ -21936,6 +22121,21 @@ ZaliMixin(ZaliInterface, class {
         return entry;
     }
 
+    // Single owner of the per-peer sampling timer. Every call site used to install
+    // its own interval and guess whether one was already running, which is how the
+    // health sampler ended up unreachable on a healthy call. Idempotent for the same
+    // cadence, so calling it from a state handler that fires repeatedly is free.
+    ensureVoicePeerStatsTimer(peer, entry, intervalMs) {
+        if (!entry) return;
+        if (entry.statsTimer && entry.statsIntervalMs === intervalMs) return;
+        if (entry.statsTimer) clearInterval(entry.statsTimer);
+        entry.statsIntervalMs = intervalMs;
+        entry.statsTimer = setInterval(() => {
+            void this.sampleVoicePeerStats(peer);
+            void this.reportVoiceAudioHealth(peer);
+        }, intervalMs);
+    }
+
     async flushPendingVoiceIceCandidates(entry, peer) {
         if (!entry || !entry.pendingIceCandidates?.length) return;
         const pending = entry.pendingIceCandidates.splice(0, entry.pendingIceCandidates.length);
@@ -21964,6 +22164,14 @@ ZaliMixin(ZaliInterface, class {
                 localCandidateCount: entry.generatedIceCandidates || 0,
                 remoteCandidateCount: entry.receivedIceCandidates || 0,
             };
+            // The per-candidate map below is only ever read by the trace line, and
+            // building it means one object plus one summary key for EVERY candidate
+            // the connection knows — on a mesh call that is a few hundred short-lived
+            // objects per peer per sampling tick, all of it thrown away when the dev
+            // trace toggle is off, which it is by default. The compact half of this
+            // summary is what the health timer and the call summary read, so that
+            // part is always built.
+            const verbose = !!this.voiceTraceEnabled;
             const candidatesById = {};
             stats.forEach(report => {
                 if (report.type === 'outbound-rtp' && report.kind === 'audio') {
@@ -22002,8 +22210,14 @@ ZaliMixin(ZaliInterface, class {
                         protocol: report.protocol,
                         priority: report.priority,
                     };
+                    // Kept either way: the selected pair is labelled from this map,
+                    // and "host/udp vs relay/tcp" is the first thing anyone asks of a
+                    // bad call. The flat per-candidate summary keys next to it are
+                    // pure trace fodder and cost one more key each.
                     candidatesById[report.id] = candidate;
-                    summary[`${report.type.replace('-', '')}_${report.id || 'unknown'}`] = candidate;
+                    if (verbose) {
+                        summary[`${report.type.replace('-', '')}_${report.id || 'unknown'}`] = candidate;
+                    }
                 }
             });
             if (summary.candidatePair) {
@@ -22310,21 +22524,68 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Returns true when tracks were actually added on this call, so callers can tell
-    // "already attached" from "just attached" — an attach that happens after the
-    // connection is established needs a renegotiation or the peer never receives it.
+    // 512 kbit/s was not a limit, it was a decoration: Opus voice runs at 24–32
+    // kbit/s and would never have reached it. 64 kbit/s is still twice what the
+    // encoder asks for — no quality is given up — while actually bounding a runaway
+    // encoder, which matters because in a mesh this is paid once PER PEER.
     async applyVoiceAudioBitrateLimit(sender) {
         if (!sender) return;
         try {
             const params = sender.getParameters();
             if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-            params.encodings[0].maxBitrate = 512000;
+            params.encodings[0].maxBitrate = 64000;
             await sender.setParameters(params);
         } catch (error) {
             this.voiceTrace('audio-bitrate-limit-failed', { error: error?.message || String(error) }, 'WARN');
         }
     }
 
+    // Mesh means every video track is encoded and uploaded once per peer, and
+    // nothing capped that at all: five people with cameras on asked each machine for
+    // four unconstrained 720p encodes, i.e. 4–10 Mbit/s upstream. The browser's own
+    // congestion control reacts to loss, which on an already-saturated uplink means
+    // it reacts after the audio has started breaking up — and audio is the one thing
+    // a call cannot lose. So the budget is fixed here and divided by the roster.
+    //
+    // degradationPreference is the other half: with a hard cap, something has to
+    // give. Camera gives up resolution and keeps motion smooth; a shared screen is
+    // mostly still and unreadable when downscaled, so it gives up frame rate instead.
+    voiceVideoBudget(kind = 'camera') {
+        const peers = Math.max(1, this.voice.peerConnections.size || 1);
+        const total = kind === 'screen' ? 3000000 : 2500000;
+        const ceiling = kind === 'screen' ? 2000000 : 1200000;
+        const floor = kind === 'screen' ? 250000 : 150000;
+        return Math.max(floor, Math.min(ceiling, Math.floor(total / peers)));
+    }
+
+    async applyVoiceVideoBitrateLimit(sender, kind = 'camera') {
+        if (!sender) return;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+            const maxBitrate = this.voiceVideoBudget(kind);
+            params.encodings[0].maxBitrate = maxBitrate;
+            params.degradationPreference = kind === 'screen' ? 'maintain-resolution' : 'balanced';
+            await sender.setParameters(params);
+            this.voiceTrace('video-bitrate-limit', { kind, maxBitrate, peers: this.voice.peerConnections.size });
+        } catch (error) {
+            this.voiceTrace('video-bitrate-limit-failed', { kind, error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
+    // Re-divides the budget when the roster changes. A limit computed for a
+    // two-person call is four times too generous once four more people join, and the
+    // senders were created long before that happened.
+    async refreshVoiceSenderLimits() {
+        for (const entry of this.voice.peerConnections.values()) {
+            if (entry.videoSender) await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera');
+            if (entry.screenSender) await this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
+        }
+    }
+
+    // Returns true when tracks were actually added on this call, so callers can tell
+    // "already attached" from "just attached" — an attach that happens after the
+    // connection is established needs a renegotiation or the peer never receives it.
     async attachLocalVoiceTracks(peer) {
         const entry = this.getVoicePeerEntry(peer);
         if (!entry || !this.voice.localStream || entry.localTracksAttached) return false;
@@ -22365,6 +22626,8 @@ ZaliMixin(ZaliInterface, class {
         for (const { track, sender } of added) {
             if (track.kind === 'audio') {
                 await this.applyVoiceAudioBitrateLimit(sender);
+            } else if (track.kind === 'video') {
+                await this.applyVoiceVideoBitrateLimit(sender, 'camera');
             }
             this.voiceTrace('attach-local-track-added', {
                 peer,
@@ -22528,7 +22791,7 @@ ZaliMixin(ZaliInterface, class {
         if (!name) return;
         const entry = this.voice.peerConnections.get(name);
         if (entry) {
-            this.voiceTrace('peer-close', { peer: name, roomId: this.voice.roomId || '' });
+            this.voiceDiag('peer-close', { peer: name, roomId: this.voice.roomId || '', ...this.voicePeerSnapshot(name) });
             if (entry.reconnectTimer) {
                 clearTimeout(entry.reconnectTimer);
                 entry.reconnectTimer = null;
@@ -22608,12 +22871,12 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async sendVoiceOfferInner(entry, peer) {
-        this.voiceTrace('send-offer', { peer, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', iceRestart: !!entry.needsIceRestart });
+        this.voiceDiag('send-offer', { peer, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', iceRestart: !!entry.needsIceRestart });
         await this.attachLocalVoiceTracks(peer);
         const offer = await this.createVoiceOfferFor(entry);
         await entry.pc.setLocalDescription(offer);
         entry.offerSent = true;
-        this.voiceTrace('offer-created', {
+        this.voiceDiag('offer-created', {
             peer,
             roomId: this.voice.roomId || '',
             sdpType: entry.pc.localDescription?.type || 'offer',
@@ -22639,7 +22902,7 @@ ZaliMixin(ZaliInterface, class {
         // call sat there reporting "connected" with no media in either direction.
         if (!delivered) {
             entry.offerSent = false;
-            this.voiceTrace('offer-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
+            this.voiceDiag('offer-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
             this.scheduleVoiceNegotiationRetry('offer-send-failed');
             return;
         }
@@ -22728,11 +22991,11 @@ ZaliMixin(ZaliInterface, class {
         if (this.voice.negotiationRetryTimer) return;
         const attempt = Number(this.voice.negotiationRetries || 0) + 1;
         if (attempt > 8) {
-            this.voiceTrace('negotiation-retry-exhausted', { reason, attempt }, 'WARN');
+            this.voiceDiag('negotiation-retry-exhausted', { reason, attempt, roomId: this.voice.roomId || '' }, 'WARN');
             return;
         }
         this.voice.negotiationRetries = attempt;
-        this.voiceTrace('negotiation-retry-scheduled', { reason, attempt });
+        this.voiceDiag('negotiation-retry-scheduled', { reason, attempt, roomId: this.voice.roomId || '' });
         this.voice.negotiationRetryTimer = setTimeout(async () => {
             this.voice.negotiationRetryTimer = null;
             if (!String(this.voice.roomId || '').trim()) return;
@@ -22772,7 +23035,7 @@ ZaliMixin(ZaliInterface, class {
             clearTimeout(entry.healthTimer);
             entry.healthTimer = null;
         }
-        this.voiceTrace('restart-offer', { peer: name, roomId: this.voice.roomId || '' });
+        this.voiceDiag('restart-offer', { peer: name, roomId: this.voice.roomId || '', ...this.voicePeerSnapshot(name) });
         await this.attachLocalVoiceTracks(name);
         const offer = await this.createVoiceOfferFor(entry);
         await entry.pc.setLocalDescription(offer);
@@ -22805,7 +23068,7 @@ ZaliMixin(ZaliInterface, class {
             // brought us here was cleared by the state change that armed it, so
             // nothing else would ever try again.
             entry.offerSent = false;
-            this.voiceTrace('offer-restart-send-failed', { peer: name, roomId: this.voice.roomId || '' }, 'WARN');
+            this.voiceDiag('offer-restart-send-failed', { peer: name, roomId: this.voice.roomId || '' }, 'WARN');
         }
         // An ICE restart whose answer is lost is the worst case of all: the transport
         // is dead, the connection state does not change (it is already failed), so no
@@ -22859,6 +23122,10 @@ ZaliMixin(ZaliInterface, class {
                 entry.needsIceRestart = false;
                 entry.linkRecoveryAttempts = 0;
                 entry.linkRecoverySkipTicks = 0;
+                // Cleared here too, not only from onconnectionstatechange: the dead-call
+                // detector below treats this flag as "this link is finished", so a link
+                // that came back must not still be carrying it.
+                entry.linkRecoveryExhausted = false;
                 continue;
             }
             if (state !== 'failed' && state !== 'disconnected') continue;
@@ -22882,7 +23149,12 @@ ZaliMixin(ZaliInterface, class {
             if (attempt > 20) {
                 if (!entry.linkRecoveryExhausted) {
                     entry.linkRecoveryExhausted = true;
-                    this.voiceDiag('link-recovery-exhausted', { peer: name, roomId: this.voice.roomId || '', attempts: attempt - 1 }, 'ERROR');
+                    this.voiceDiag('link-recovery-exhausted', {
+                        peer: name,
+                        roomId: this.voice.roomId || '',
+                        attempts: attempt - 1,
+                        ...this.voicePeerSnapshot(name),
+                    }, 'ERROR');
                 }
                 continue;
             }
@@ -22903,10 +23175,71 @@ ZaliMixin(ZaliInterface, class {
             });
         }
         if (!watching) this.stopVoiceLinkSupervisor();
+        this.concludeDeadVoiceCallIfNeeded();
+    }
+
+    // A call whose every link has given up is over, and nothing said so. The
+    // supervisor stopped after ~8 minutes of trying, the panel kept showing «В
+    // эфире» with a participant list frozen at whoever was there when the network
+    // went, and the only way out was for the user to guess that and press the red
+    // button. Worse, no call record was written, so the conversation kept no trace
+    // of a call that really happened.
+    //
+    // Deliberately conservative: it fires only when there IS at least one peer and
+    // EVERY one of them has exhausted its recovery budget. A call still holding one
+    // working link is not dead, and a room we have not managed to negotiate with yet
+    // (no peer entries at all) is handled by the negotiation retry, not here.
+    concludeDeadVoiceCallIfNeeded() {
+        if (!String(this.voice.roomId || '').trim()) return;
+        const entries = Array.from(this.voice.peerConnections.values());
+        if (!entries.length) return;
+        if (!entries.every(entry => entry.linkRecoveryExhausted)) return;
+        this.voiceDiag('call-dead-all-links-exhausted', {
+            roomId: this.voice.roomId || '',
+            roomType: this.voice.roomType || '',
+            peers: entries.length,
+        }, 'ERROR');
+        this.addLogEntry({
+            type: 'ERROR',
+            msg: 'Связь со всеми участниками потеряна — звонок завершён',
+            ts: new Date().toLocaleTimeString(),
+        });
+        void this.leaveVoiceRoom({ announce: true, outcome: 'failed' });
+    }
+
+    // Same conclusion reached from the other direction: the server told us the room
+    // we think we are in does not exist. Nothing can be signalled into a room that is
+    // gone — no ICE restart, no re-offer — so the call is over whatever the panel
+    // says. Before this, voice_error was written to the journal and otherwise
+    // ignored, and the client sat in a room the server had forgotten, re-asserting
+    // presence into the void every 8 s.
+    concludeVanishedVoiceRoom(roomId, message = '') {
+        const current = String(this.voice.roomId || '').trim();
+        const reported = String(roomId || '').trim();
+        if (!current || (reported && reported !== current)) return false;
+        this.voiceDiag('call-dead-room-vanished', {
+            roomId: current,
+            roomType: this.voice.roomType || '',
+            status: this.voice.status || '',
+            message,
+        }, 'ERROR');
+        this.addLogEntry({
+            type: 'ERROR',
+            msg: 'Голосовая комната больше не существует на сервере — звонок завершён',
+            ts: new Date().toLocaleTimeString(),
+        });
+        // announce:false — there is nothing to announce to, and voice_leave for a
+        // missing room only earns another voice_error.
+        void this.leaveVoiceRoom({ announce: false, outcome: 'failed' });
+        return true;
     }
 
     // Re-asserts room membership. The server evicts a user from their voice room
-    // 12 s after their WebSocket closes (the delayed cleanup in realtime.rs), and
+"""#,
+    #"""
+    // 150 s after their WebSocket closes (the delayed cleanup in realtime.rs — the
+    // window has been 12 s and 45 s in the past, and both were shorter than a real
+    // reconnect; check realtime.rs before trusting a number written here), and
     // nothing ever re-joined afterwards: the browser voice socket's onopen doesn't
     // re-join, and on native shells the voice transport reconnects entirely inside
     // Swift/Rust (NetworkService.connectVoiceWebSocket / run_voice_transport) — JS
@@ -22942,9 +23275,11 @@ ZaliMixin(ZaliInterface, class {
 
     ensureVoicePresenceKeepalive() {
         if (this.voice.presenceTimer) return;
-        // Shorter than the server's 12 s eviction window, so a reconnect that lands
+        // Far shorter than the server's eviction window, so a reconnect that lands
         // inside it never costs the call; if it lands after, this is what brings the
-        // participant back instead of leaving them silently dropped.
+        // participant back instead of leaving them silently dropped. Also the first
+        // thing that runs after a transport reconnect (voice_transport_state), so in
+        // practice membership is re-asserted immediately rather than up to 8 s later.
         this.voice.presenceTimer = setInterval(() => {
             if (!String(this.voice.roomId || '').trim()) {
                 this.stopVoicePresenceKeepalive();
@@ -22973,9 +23308,30 @@ ZaliMixin(ZaliInterface, class {
         // peer — could ever retry again. A changed roster is a genuinely new
         // situation (someone joined or left), so give it a fresh budget.
         const rosterKey = peers.slice().sort().join(' ');
-        if (this.voice.peerRosterKey !== rosterKey) {
+        const rosterChanged = this.voice.peerRosterKey !== rosterKey;
+        if (rosterChanged) {
+            const previous = this.voice.peerRosterKey;
             this.voice.peerRosterKey = rosterKey;
             this.voice.negotiationRetries = 0;
+            // Always-on: who is in the room, and when it changed, is the frame every
+            // other voice line has to be read against — a peer that "never got an
+            // offer" usually turns out to have joined after the pass that would have
+            // sent it.
+            this.voiceDiag('roster-changed', {
+                roomId: this.voice.roomId || '',
+                roomType: this.voice.roomType || '',
+                status: this.voice.status || '',
+                peers,
+                count: peers.length,
+                was: previous || '(none)',
+            });
+            if (peers.length > ZaliInterface.MAX_MESH_AUDIO_PEERS) {
+                this.voiceDiag('mesh-size-over-comfort', {
+                    roomId: this.voice.roomId || '',
+                    peers: peers.length,
+                    limit: ZaliInterface.MAX_MESH_AUDIO_PEERS,
+                }, 'WARN');
+            }
         }
         this.voiceTrace('sync-peers', {
             roomId: this.voice.roomId || '',
@@ -23041,6 +23397,13 @@ ZaliMixin(ZaliInterface, class {
         } else if (peers.length) {
             this.voice.negotiationRetries = 0;
         }
+        // The video budget is divided by the roster, and the roster just moved, so
+        // limits computed for a smaller call are now several times too generous.
+        // Done HERE rather than next to the roster-change detection at the top: the
+        // peer connections the budget is divided by are created and closed by the
+        // loop above, so up there the count is still the previous roster's and the
+        // recomputed limit would be one roster behind.
+        if (rosterChanged) void this.refreshVoiceSenderLimits();
         this.renderVoicePanel();
     }
 
@@ -23067,6 +23430,7 @@ ZaliMixin(ZaliInterface, class {
         if (activeRoomId && this.isInActiveCall()) {
             await this.endCurrentVoiceSession({ reason: 'join-voice-channel' });
         }
+        void this.refreshVoiceTurnCredentials();
         // Channel joins never unlocked playback, so the AudioContext could stay
         // suspended for the whole session — this is a click handler, i.e. the one
         // moment the browser lets us resume it. Not awaited: see unlockVoicePlayback.
@@ -23109,7 +23473,7 @@ ZaliMixin(ZaliInterface, class {
 
     async leaveVoiceRoom({ announce = true, outcome = 'completed' } = {}) {
         const roomId = String(this.voice.roomId || '').trim();
-        this.voiceTrace('leave-room', {
+        this.voiceDiag('leave-room', {
             roomId,
             roomType: this.voice.roomType || '',
             announce,
@@ -23221,6 +23585,10 @@ ZaliMixin(ZaliInterface, class {
             if (!roomId) return;
             this.voiceTrace('start-dm-call', { target, me, roomId, video });
             this.voice.videoEnabled = !!video;
+            // Not awaited on purpose — see refreshVoiceTurnCredentials: a rotating
+            // TURN credential is an optimisation over the static one, never a
+            // precondition, so it must not be able to delay or fail a call.
+            void this.refreshVoiceTurnCredentials();
             // Deliberately not awaited: the synchronous part (creating the context and
             // calling resume()) is what has to happen inside the user gesture, and the
             // rest is best-effort. Awaiting it put a promise WebKit may never settle in
@@ -23314,11 +23682,10 @@ ZaliMixin(ZaliInterface, class {
 
     async performAcceptIncomingCall(invite) {
         const me = String(this.myName() || '').trim();
-        this.voiceTrace('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
+        this.voiceDiag('accept-incoming', { roomId: invite.roomId, from: invite.from, me });
+        void this.refreshVoiceTurnCredentials();
         // Not awaited — see unlockVoicePlayback. Awaited here, a refused resume() left
         // the callee holding callSetupInFlight forever: the accept was never sent, and
-"""#,
-    #"""
         // «Принять» silently did nothing on every later call too.
         void this.unlockVoicePlayback();
         this.voice.roomId = String(invite.roomId || '').trim();
@@ -23470,6 +23837,15 @@ ZaliMixin(ZaliInterface, class {
         const ms = Number(callInfo?.durationMs || 0);
         if (outcome === 'missed') return direction === 'outgoing' ? 'Вызов без ответа' : 'Пропущенный звонок';
         if (outcome === 'rejected') return direction === 'outgoing' ? 'Вызов отклонён' : 'Отклонённый звонок';
+        // Written when the client gives up on a call it can no longer recover (every
+        // link exhausted, or the room gone from the server). Without its own label it
+        // rendered as an ordinary completed call whose duration counted the whole
+        // dead stretch — "Исходящий звонок · 8:30" for eight minutes of silence.
+        if (outcome === 'failed') {
+            if (!ms) return 'Звонок прерван';
+            const totalFailed = Math.round(ms / 1000);
+            return `Звонок прерван · ${Math.floor(totalFailed / 60)}:${String(totalFailed % 60).padStart(2, '0')}`;
+        }
         if (!ms) return direction === 'outgoing' ? 'Исходящий звонок' : 'Входящий звонок';
         const total = Math.round(ms / 1000);
         const mm = Math.floor(total / 60);
@@ -23678,6 +24054,60 @@ ZaliMixin(ZaliInterface, class {
             roomType: signal.roomType || this.voice.roomType || '',
         });
 
+        // Nothing may be negotiated into a call that has not been answered yet.
+        //
+        // The offer branch below captures the microphone (awaitVoiceLocalStream →
+        // getUserMedia), attaches the local audio track and replies with a sendrecv
+        // answer. It did that regardless of whether the user had accepted, and the
+        // server permits an invite's initiator to send voice_signal into their own
+        // ringing room — so a caller running a modified client could ring a contact
+        // and be listening to them before the phone was answered, with the panel
+        // flipping from «входящий звонок» to «connecting» as the only tell.
+        //
+        // The legitimate flow never lands here: the caller offers only once
+        // voice_call_accepted has arrived, and by then this side set 'connecting'
+        // inside performAcceptIncomingCall. So refusing outright costs nothing and
+        // needs no queue — after the accept, syncVoicePeers negotiates from scratch.
+        if (String(this.voice.status || '') === 'incoming') {
+            this.voiceDiag('signal-before-accept-refused', {
+                roomId,
+                from,
+                signalType: signalPayload.type || '',
+                status: this.voice.status || '',
+            }, 'WARN');
+            return;
+        }
+
+        // Nor into a call this client is not in at all.
+        //
+        // Voice signals are addressed by USERNAME, and the server delivers every
+        // one of them to all of that account's connections — so the second device
+        // of an account whose first device answered a call receives the same offers.
+        // With no room state of its own it used to sail through this handler,
+        // capture its microphone and answer, and the caller then had two answers for
+        // one offer with only the first applied: whichever device replied first won
+        // the call, non-deterministically, and the other sat in a half-built session.
+        //
+        // Every legitimate path into a call sets roomId before any negotiation can
+        // begin — startDirectCall, performAcceptIncomingCall, joinVoiceChannel and
+        // the room-state snapshot the server sends on every WS connect — so an empty
+        // roomId here means this client is not a participant. Fixing the underlying
+        // ambiguity properly needs a device dimension in the signalling protocol
+        // (see CLAUDE.md); this only stops a bystander device from answering.
+        //
+        // Worst case if a snapshot ever lost a race with the first offer: that offer
+        // is refused once and the peer's answer watchdog re-offers 8 s later, with
+        // this line in the log to say what happened.
+        if (!currentRoomId) {
+            this.voiceDiag('signal-outside-call-refused', {
+                roomId,
+                from,
+                signalType: signalPayload.type || '',
+                status: this.voice.status || '',
+            }, 'WARN');
+            return;
+        }
+
         if (signalPayload.type === 'offer') {
             // A peer that was evicted and re-joined (or simply gave up on this link)
             // builds a brand-new RTCPeerConnection, so its offer carries new ICE
@@ -23687,12 +24117,13 @@ ZaliMixin(ZaliInterface, class {
             // Rebuild instead of trying to revive a terminal connection.
             const stale = this.voice.peerConnections.get(from);
             if (stale && (stale.pc.connectionState === 'failed' || stale.pc.signalingState === 'closed')) {
-                this.voiceTrace('offer-on-dead-peer-rebuild', {
+                this.voiceDiag('offer-on-dead-peer-rebuild', {
                     roomId,
                     from,
                     state: stale.pc.connectionState,
                     signaling: stale.pc.signalingState,
                 }, 'WARN');
+                this.countVoicePeerRebuild(from, 'dead-transport');
                 this.closeVoicePeer(from);
             }
             let entry = this.getVoicePeerEntry(from);
@@ -23711,7 +24142,7 @@ ZaliMixin(ZaliInterface, class {
                 // answer. Re-drive negotiation anyway: dropping an offer is only
                 // safe while ours is genuinely still in flight, and if the answer
                 // never arrives nothing else would ever notice.
-                this.voiceTrace('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                this.voiceDiag('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                 this.scheduleVoiceNegotiationRetry('offer-collision-ignored');
                 return;
             }
@@ -23738,6 +24169,7 @@ ZaliMixin(ZaliInterface, class {
                     from,
                     state: entry.pc.signalingState,
                 }, 'WARN');
+                this.countVoicePeerRebuild(from, 'unapplicable-offer');
                 this.closeVoicePeer(from);
                 entry = this.getVoicePeerEntry(from);
             }
@@ -23774,7 +24206,7 @@ ZaliMixin(ZaliInterface, class {
                 // was rebuilt above, so there is no longer a path that tries to apply
                 // an offer to a connection that cannot take one.
                 if (entry.pc.signalingState === 'have-local-offer') {
-                    this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                    this.voiceDiag('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                     await entry.pc.setLocalDescription({ type: 'rollback' });
                 }
                 try {
@@ -23797,7 +24229,7 @@ ZaliMixin(ZaliInterface, class {
                     this.scheduleVoiceNegotiationRetry('offer-without-mic');
                 }
                 await this.attachLocalVoiceTracks(from);
-                this.voiceTrace('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, peer: from });
+                this.voiceDiag('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, sdpLength: signalPayload.sdp?.sdp?.length || 0, ...this.voicePeerSnapshot(from) });
                 try {
                     await entry.pc.setRemoteDescription(signalPayload.sdp);
                 } catch (error) {
@@ -23813,6 +24245,7 @@ ZaliMixin(ZaliInterface, class {
                         from,
                         error: error?.message || String(error),
                     }, 'WARN');
+                    this.countVoicePeerRebuild(from, 'offer-sdp-shape');
                     this.closeVoicePeer(from);
                     entry = this.getVoicePeerEntry(from);
                     // The fresh entry needs the latch the old one was holding, or a
@@ -23825,7 +24258,7 @@ ZaliMixin(ZaliInterface, class {
                 await this.flushPendingVoiceIceCandidates(entry, from);
                 const answer = await entry.pc.createAnswer();
                 await entry.pc.setLocalDescription(answer);
-                this.voiceTrace('signal-answer-send', {
+                this.voiceDiag('signal-answer-send', {
                     roomId,
                     from,
                     peer: from,
@@ -23899,7 +24332,7 @@ ZaliMixin(ZaliInterface, class {
                 }, 'WARN');
                 return;
             }
-            this.voiceTrace('signal-answer-apply', {
+            this.voiceDiag('signal-answer-apply', {
                 roomId,
                 from,
                 peer: from,
@@ -23924,6 +24357,7 @@ ZaliMixin(ZaliInterface, class {
                     // very layout the peer just refused to match, so the retry
                     // needs a connection that carries no layout at all.
                     this.voiceDiag('answer-sdp-shape-rebuild', { roomId, from }, 'WARN');
+                    this.countVoicePeerRebuild(from, 'answer-sdp-shape');
                     this.closeVoicePeer(from);
                 } else {
                     // The offer is dead — clear the latch so the negotiation retry below
@@ -24238,11 +24672,81 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (eventType === 'voice_error') {
+            const code = String(payload.code || '').trim();
+            const errorRoomId = String(payload.roomId || '').trim();
+            this.voiceDiag('server-error', {
+                code: code || '(none)',
+                roomId: errorRoomId,
+                currentRoomId: this.voice.roomId || '',
+                status: this.voice.status || '',
+                message: String(payload.message || ''),
+            }, 'ERROR');
             this.addLogEntry({
                 type: 'ERROR',
                 msg: String(payload.message || 'Ошибка voice'),
                 ts: new Date().toLocaleTimeString(),
             });
+            // The server has no record of the room we believe we are in. Nothing can
+            // be signalled into it any more — not an ICE restart, not a re-offer — so
+            // the call is finished whatever the panel still shows. Matched on `code`,
+            // never on the human-readable message, which is Russian prose that a
+            // wording change would silently detach this from.
+            if (code === 'room_not_found') {
+                this.concludeVanishedVoiceRoom(errorRoomId, String(payload.message || ''));
+            }
+            return;
+        }
+
+        // Emitted by the native shells (macOS NetworkService, Windows
+        // run_voice_transport), not by the server: the voice WebSocket lives inside
+        // Swift/Rust and reconnects there, and JS never learned that it had happened.
+        // The cost of not knowing was up to 8 s of being a ghost — evicted from the
+        // room server-side, with the presence keepalive the only thing that would
+        // eventually notice. Re-assert membership the instant the link is back, and
+        // re-drive negotiation, since any signal sent while it was down is gone.
+        if (eventType === 'voice_transport_state') {
+            const state = String(payload.state || '').trim();
+            this.voiceDiag('transport-state', {
+                state,
+                reason: String(payload.reason || ''),
+                roomId: this.voice.roomId || '',
+                status: this.voice.status || '',
+                queued: payload.queued ?? '',
+            }, state === 'up' ? 'INFO' : 'WARN');
+            if (state === 'up' && String(this.voice.roomId || '').trim()) {
+                this.sendVoiceRoomPresence();
+                this.scheduleVoiceNegotiationRetry('voice-transport-reconnected');
+            }
+            return;
+        }
+
+        // A payload the shell could not deliver and will not retry (its outbound
+        // queue overflowed, or the payload could not be serialised). On the browser
+        // path sendVoiceEvent returns false and the caller unlatches offerSent
+        // itself; over a native bridge the send is fire-and-forget, so this event is
+        // the only way that failure ever becomes visible here.
+        if (eventType === 'voice_send_failed') {
+            const failedType = String(payload.eventType || '').trim();
+            const failedSignal = String(payload.signalType || '').trim();
+            const target = String(payload.to || '').trim();
+            this.voiceDiag('transport-send-failed', {
+                eventType: failedType,
+                signalType: failedSignal,
+                to: target,
+                reason: String(payload.reason || ''),
+                roomId: this.voice.roomId || '',
+            }, 'WARN');
+            const entry = target ? this.voice.peerConnections.get(target) : null;
+            if (entry && failedType === 'voice_signal' && failedSignal === 'offer') {
+                // Same reasoning as the browser path's `!delivered` branch: an offer
+                // that never left the client must not stay latched as sent, or
+                // syncVoicePeers skips this peer for the rest of the call. Only an
+                // OFFER, though — a dropped ICE candidate leaves the offer perfectly
+                // valid, and unlatching it there just forces a pointless
+                // renegotiation on a link that is still converging.
+                entry.offerSent = false;
+            }
+            this.scheduleVoiceNegotiationRetry('transport-send-failed');
             return;
         }
 
@@ -26696,6 +27200,8 @@ ZaliMixin(ZaliInterface, class {
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))
+"""#,
+    #"""
                 .filter(contact => contact !== username);
             this.S.contacts.forEach(contact => this.initChat(contact));
             this.lastNativeConversationKeySignature = '';
@@ -27398,8 +27904,6 @@ ZaliMixin(ZaliInterface, class {
                 const msg = 'Пароль должен быть не менее 6 символов';
                 this.S.auth.error = msg;
                 if (errorBox) errorBox.textContent = msg;
-"""#,
-    #"""
                 this.addLogEntry({ type: 'WARN', msg: `Регистрация отклонена для ${username}: ${msg}`, ts: new Date().toLocaleTimeString() });
                 return;
             }
@@ -27453,6 +27957,10 @@ ZaliMixin(ZaliInterface, class {
         this.syncTaskbarBadge();
         this.resetVoiceState({ preserveInvite: false });
         this.disconnectBrowserVoiceSocket();
+        // A rotating TURN credential encodes the account it was issued to, so the
+        // next person to sign in on this device must not inherit it.
+        this._voiceTurnCredentials = null;
+        this._voiceTurnFetchInFlight = null;
         this.renderContacts();
         this.scheduleRenderMessages();
         this.updateAuthView();
@@ -28539,9 +29047,14 @@ ZaliMixin(ZaliInterface, class {
                 ? `Звонок отклонён`
                 : outcome === 'cancelled'
                     ? `Звонок отменён`
-                    : direction === 'outgoing'
-                        ? `Исходящий звонок`
-                        : `Входящий звонок`;
+                    // The client gave up on a call it could no longer recover — see
+                    // concludeDeadVoiceCallIfNeeded. Without this it read as an
+                    // ordinary completed call, which is the one thing it was not.
+                    : outcome === 'failed'
+                        ? `Звонок прерван`
+                        : direction === 'outgoing'
+                            ? `Исходящий звонок`
+                            : `Входящий звонок`;
         const subject = direction === 'outgoing'
             ? `К ${peer || 'контакту'}`
             : `От ${peer || 'контакта'}`;
@@ -30903,6 +31416,8 @@ ZaliMixin(ZaliInterface, class {
                     text: incomingText,
                     attachments: incomingAttachments,
                     reactions: incomingReactions,
+"""#,
+    #"""
                     myReactions: this.normalizeMyReactions(myReactions),
                     timestamp: ts,
                     reply,
@@ -31529,8 +32044,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     isInActiveCall(status = this.voice?.status) {
-"""#,
-    #"""
         return ['connected', 'connecting', 'calling', 'incoming'].includes(String(status || ''));
     }
 });
@@ -34308,23 +34821,107 @@ ZaliMixin(ZaliInterface, class {
     // server's signalling log alone, which cannot see ICE at all. A handful of lines
     // per call; on macOS they land in zali-debug.log via the console mirror.
     voiceDiag(stage, details = {}, level = 'INFO') {
+        const ts = new Date().toLocaleTimeString();
+        const compact = this.formatVoiceDetails(details);
+        const message = compact ? `${stage} ${compact}` : stage;
+        // Kept whatever the dev trace toggle says, and kept ACROSS calls: the
+        // question asked after a bad call is always "what happened", and by then
+        // voice.traceLines has been wiped by resetVoiceState and the 14-line window
+        // was long gone anyway. This ring is the record that survives to be read.
+        this.pushVoiceDiagLine({ ts, level, stage, message });
         if (this.voiceTraceEnabled) {
-            // Enabled trace already emits everything; don't log each event twice.
+            // Trace prints the same line with the full detail objects; printing it
+            // twice would only double the journal.
             this.voiceTrace(stage, details, level);
             return;
         }
-        this.voiceTrace(stage, details, level);
-        const ts = new Date().toLocaleTimeString();
-        const compact = Object.entries(details)
-            .filter(([, value]) => value !== undefined && value !== null && value !== '')
-            .map(([key, value]) => `${key}=${Array.isArray(value) ? `[${value.join(',')}]` : String(value)}`)
-            .join(' ');
-        const message = compact ? `${stage} ${compact}` : stage;
         this.addLogEntry({ type: level, msg: `[VOICE] ${message}`, ts });
         try {
             const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
             fn?.('[VOICE]', message);
         } catch (e) {}
+    }
+
+    // One formatter for both voiceDiag and voiceTrace, so a line reads the same
+    // whichever of the two produced it — a log where the same fact is spelled two
+    // ways cannot be grepped, and grepping it is the entire point.
+    formatVoiceDetails(details = {}) {
+        return Object.entries(details)
+            .filter(([, value]) => value !== undefined && value !== null && value !== '')
+            .map(([key, value]) => {
+                if (Array.isArray(value)) {
+                    const hasObjects = value.some(item => item !== null && typeof item === 'object');
+                    if (hasObjects) {
+                        try { return `${key}=${JSON.stringify(value)}`; } catch (e) { return `${key}=[object]`; }
+                    }
+                    return `${key}=[${value.join(',')}]`;
+                }
+                if (typeof value === 'object') {
+                    try { return `${key}=${JSON.stringify(value)}`; } catch (e) { return `${key}=[object]`; }
+                }
+                return `${key}=${String(value)}`;
+            })
+            .join(' ');
+    }
+
+    // Bounded and deliberately NOT part of this.voice: resetVoiceState clears voice
+    // state at the exact moment the interesting call ends, so anything kept there is
+    // erased before anyone can look at it. 400 lines is a couple of full calls with
+    // per-peer health sampling, and each line is a short string — no payloads, no
+    // MediaStream references, nothing that can pin memory (see the perf invariants
+    // in CLAUDE.md).
+    pushVoiceDiagLine(line) {
+        const ring = this._voiceDiagRing || (this._voiceDiagRing = []);
+        ring.push(line);
+        if (ring.length > 400) ring.splice(0, ring.length - 400);
+    }
+
+    // A rebuilt peer connection loses every counter it was carrying, so the tally
+    // lives on the call instead of the entry. Rebuilds are the loudest signal that a
+    // link was fighting the session state rather than the network: one is routine
+    // recovery, five in a call means something upstream keeps producing offers this
+    // side cannot take.
+    countVoicePeerRebuild(peer, reason = '') {
+        this.voice.rebuilds = Number(this.voice.rebuilds || 0) + 1;
+        this.voiceDiag('peer-rebuild', {
+            peer,
+            reason,
+            roomId: this.voice.roomId || '',
+            total: this.voice.rebuilds,
+            ...this.voicePeerSnapshot(peer),
+        }, 'WARN');
+    }
+
+    // The whole ring as text, newest last — what to paste into a bug report. Also
+    // what the "скопировать диагностику" control in the voice panel hands over.
+    dumpVoiceDiagnostics() {
+        const ring = Array.isArray(this._voiceDiagRing) ? this._voiceDiagRing : [];
+        return ring.map(line => `[${line.ts}] ${line.level} ${line.message}`).join('\n');
+    }
+
+    // Compact, always-cheap description of one peer link. Every diagnostic that
+    // names a peer includes it, so a single line answers "in what state did this
+    // happen" without cross-referencing three others.
+    voicePeerSnapshot(peer) {
+        const entry = this.voice.peerConnections.get(String(peer || '').trim());
+        if (!entry?.pc) return {};
+        return {
+            pcState: entry.pc.connectionState || '',
+            ice: entry.pc.iceConnectionState || '',
+            gathering: entry.pc.iceGatheringState || '',
+            signaling: entry.pc.signalingState || '',
+            offerSent: !!entry.offerSent,
+            negotiating: !!entry.negotiating,
+            renegPending: !!entry.renegotiationPending,
+            needsIceRestart: !!entry.needsIceRestart,
+            answerWatchdog: !!entry.answerWatchdog,
+            answerRetries: Number(entry.answerRetries || 0),
+            linkRecovery: Number(entry.linkRecoveryAttempts || 0),
+            candOut: Number(entry.generatedIceCandidates || 0),
+            candIn: Number(entry.receivedIceCandidates || 0),
+            candTypes: entry.gatheredCandidateTypes ? Array.from(entry.gatheredCandidateTypes).join('/') : '',
+            pendingIce: entry.pendingIceCandidates?.length || 0,
+        };
     }
 
     // Answers "connected but silent" without guesswork, on a real call: does RTP
@@ -34336,39 +34933,156 @@ ZaliMixin(ZaliInterface, class {
         if (!entry?.pc?.getStats) return;
         try {
             const stats = await entry.pc.getStats();
-            let packets = 0;
-            let bytes = 0;
+            let inPackets = 0;
+            let inBytes = 0;
+            let inLost = 0;
+            let inJitter = null;
             let level = null;
+            let concealed = null;
+            let outPackets = 0;
+            let outBytes = 0;
+            let outLevel = null;
+            // remote-inbound-rtp is what the PEER reports about OUR stream. It is the
+            // only view of the upstream direction we have: local outbound counters
+            // rise happily while every packet is dropped in the network, so "we are
+            // sending" and "they are receiving" are different questions and only this
+            // report answers the second one.
+            let remoteLost = null;
+            let remoteJitter = null;
+            let rtt = null;
+            let availableOut = null;
             stats.forEach(report => {
-                if (report.type === 'inbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
-                    packets = report.packetsReceived ?? packets;
-                    bytes = report.bytesReceived ?? bytes;
+                const isAudio = report.kind === 'audio' || report.mediaType === 'audio';
+                if (report.type === 'inbound-rtp' && isAudio) {
+                    inPackets = report.packetsReceived ?? inPackets;
+                    inBytes = report.bytesReceived ?? inBytes;
+                    inLost = report.packetsLost ?? inLost;
+                    if (typeof report.jitter === 'number') inJitter = report.jitter;
                     if (typeof report.audioLevel === 'number') level = report.audioLevel;
+                    if (typeof report.concealedSamples === 'number') concealed = report.concealedSamples;
+                }
+                if (report.type === 'outbound-rtp' && isAudio) {
+                    outPackets = report.packetsSent ?? outPackets;
+                    outBytes = report.bytesSent ?? outBytes;
+                }
+                if (report.type === 'media-source' && isAudio && typeof report.audioLevel === 'number') {
+                    outLevel = report.audioLevel;
+                }
+                if (report.type === 'remote-inbound-rtp' && isAudio) {
+                    if (typeof report.packetsLost === 'number') remoteLost = report.packetsLost;
+                    if (typeof report.jitter === 'number') remoteJitter = report.jitter;
+                    if (typeof report.roundTripTime === 'number') rtt = report.roundTripTime;
+                }
+                if (report.type === 'candidate-pair' && (report.selected || (report.state === 'succeeded' && report.nominated))) {
+                    if (typeof report.currentRoundTripTime === 'number') rtt = report.currentRoundTripTime;
+                    if (typeof report.availableOutgoingBitrate === 'number') availableOut = report.availableOutgoingBitrate;
                 }
             });
             const audio = this.voice.remoteAudios.get(peer);
-            const prev = entry.lastInboundBytes || 0;
-            entry.lastInboundBytes = bytes;
-            const arriving = bytes > prev;
+            const prevIn = entry.lastInboundBytes || 0;
+            const prevOut = entry.lastOutboundBytes || 0;
+            entry.lastInboundBytes = inBytes;
+            entry.lastOutboundBytes = outBytes;
+            const arriving = inBytes > prevIn;
+            // A dead upstream is as silent as a dead downstream and used to be
+            // invisible here: the old line reported only what we RECEIVE, so "он меня
+            // не слышит" had no evidence at all. A muted mic legitimately stops the
+            // byte counter, so mute is reported next to it rather than mixed into the
+            // verdict.
+            const sending = outBytes > prevOut;
+            const localTrack = this.voice.localStream?.getAudioTracks?.()[0] || null;
             // This used to only *report* a paused or muted sink. Reporting it is the
             // hard part, but doing nothing about it means the one condition we can
             // actually fix is the one we watch go by every 10 s — retry the playback
             // as well. It costs a play() call and is a no-op when the sink is healthy.
-            if (audio && (audio.paused || audio.muted)) {
+            if (audio && (audio.paused || (audio.muted && !this.voice.deafened))) {
                 this.syncRemoteAudioPlaybackMode();
             }
+            const snapshot = this.voicePeerSnapshot(peer);
+            // "No RTP" is only a fault once the link claims to be up. Before that it
+            // is just a call in the middle of connecting, and a WARN on every single
+            // call — several per peer in a group — is how a diagnostic line stops
+            // being read at all. The failure of a link that never connects is
+            // reported by pc-state and link-recovery, which are about that.
+            const live = snapshot.pcState === 'connected' || snapshot.pcState === 'completed';
+            const healthy = arriving
+                && (sending || this.voice.muted)
+                && !!audio && !audio.paused && (!audio.muted || this.voice.deafened);
             this.voiceDiag('audio-health', {
                 peer,
-                rtp: arriving ? 'flowing' : 'STALLED',
-                packets,
-                bytes,
-                level: level === null ? '' : level.toFixed(3),
+                roomId: this.voice.roomId || '',
+                rx: arriving ? 'flowing' : 'STALLED',
+                tx: sending ? 'flowing' : (this.voice.muted ? 'muted' : 'STALLED'),
+                pcState: snapshot.pcState || '',
+                ice: snapshot.ice || '',
+                signaling: snapshot.signaling || '',
+                inPackets,
+                inBytes,
+                inLost,
+                inJitter: inJitter === null ? '' : inJitter.toFixed(4),
+                concealed: concealed === null ? '' : concealed,
+                outPackets,
+                outBytes,
+                peerLost: remoteLost === null ? '' : remoteLost,
+                peerJitter: remoteJitter === null ? '' : remoteJitter.toFixed(4),
+                rtt: rtt === null ? '' : rtt.toFixed(3),
+                availOutKbps: availableOut === null ? '' : Math.round(availableOut / 1000),
+                rxLevel: level === null ? '' : level.toFixed(3),
+                txLevel: outLevel === null ? '' : outLevel.toFixed(3),
                 sink: audio ? (audio.muted ? 'MUTED' : audio.paused ? 'PAUSED' : 'playing') : 'NO ELEMENT',
                 volume: audio ? audio.volume : '',
                 ctx: this.voice.audioContext?.state || 'none',
-            }, (arriving && audio && !audio.muted && !audio.paused) ? 'INFO' : 'WARN');
+                mic: localTrack ? `${localTrack.readyState}:${localTrack.enabled ? 'on' : 'off'}` : 'none',
+                muted: !!this.voice.muted,
+                deafened: !!this.voice.deafened,
+                candTypes: snapshot.candTypes || '',
+            }, (healthy || !live) ? 'INFO' : 'WARN');
         } catch (error) {
             this.voiceDiag('audio-health-failed', { peer, error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
+    // Written once when a call ends, from resetVoiceState, while the peer entries
+    // still exist. Answers "how did that call actually go" in one line per peer —
+    // without it the only record is a scattering of per-event lines whose totals
+    // nobody reconstructs by hand.
+    logVoiceCallSummary(reason = 'end') {
+        const roomId = String(this.voice.roomId || '').trim();
+        if (!roomId && !this.voice.peerConnections.size) return;
+        const track = this.voice.callTrack || null;
+        const startedAt = Number(track?.startedAt || 0);
+        const connectedAt = Number(track?.connectedAt || 0);
+        this.voiceDiag('call-summary', {
+            reason,
+            roomId,
+            roomType: this.voice.roomType || '',
+            status: this.voice.status || '',
+            peers: this.voice.peerConnections.size,
+            participants: Array.isArray(this.voice.participants) ? this.voice.participants : [],
+            setupMs: startedAt && connectedAt ? connectedAt - startedAt : '',
+            talkMs: connectedAt ? Date.now() - connectedAt : '',
+            outcome: track?.outcome || '',
+            micError: this.voice.micError || '',
+            negotiationRetries: Number(this.voice.negotiationRetries || 0),
+            peerRebuilds: Number(this.voice.rebuilds || 0),
+            ctx: this.voice.audioContext?.state || 'none',
+            playbackUnlocked: !!this.voice.playbackUnlocked,
+        }, 'INFO');
+        for (const [peer, entry] of this.voice.peerConnections) {
+            const stats = entry.lastStats || {};
+            this.voiceDiag('call-summary-peer', {
+                peer,
+                ...this.voicePeerSnapshot(peer),
+                inBytes: stats.inBytes ?? entry.lastInboundBytes ?? '',
+                outBytes: stats.outBytes ?? entry.lastOutboundBytes ?? '',
+                inPackets: stats.inPackets ?? '',
+                outPackets: stats.outPackets ?? '',
+                selectedPair: stats.candidatePair
+                    ? `${stats.candidatePair.localLabel || ''}<->${stats.candidatePair.remoteLabel || ''}`
+                    : '',
+                iceRestarts: Number(entry.iceRestartCount || 0),
+                exhausted: !!entry.linkRecoveryExhausted,
+            }, entry.linkRecoveryExhausted ? 'WARN' : 'INFO');
         }
     }
 
@@ -34407,22 +35121,7 @@ ZaliMixin(ZaliInterface, class {
     voiceTrace(stage, details = {}, level = 'INFO') {
         if (!this.voiceTraceEnabled) return;
         const ts = new Date().toLocaleTimeString();
-        const compact = Object.entries(details)
-            .filter(([, value]) => value !== undefined && value !== null && value !== '')
-            .map(([key, value]) => {
-                if (Array.isArray(value)) {
-                    const hasObjects = value.some(item => item !== null && typeof item === 'object');
-                    if (hasObjects) {
-                        try { return `${key}=${JSON.stringify(value)}`; } catch (e) { return `${key}=[object]`; }
-                    }
-                    return `${key}=[${value.join(',')}]`;
-                }
-                if (typeof value === 'object') {
-                    try { return `${key}=${JSON.stringify(value)}`; } catch (e) { return `${key}=[object]`; }
-                }
-                return `${key}=${String(value)}`;
-            })
-            .join(' ');
+        const compact = this.formatVoiceDetails(details);
         const message = compact ? `${stage} ${compact}` : stage;
         this.voice.traceLines = Array.isArray(this.voice.traceLines) ? this.voice.traceLines : [];
         this.voice.traceLines.push({ ts, level, stage, message });
@@ -34807,6 +35506,8 @@ ZaliMixin(ZaliInterface, class {
         if (composerContext) {
             composerContext.addEventListener('click', (e) => {
                 if (e.target.closest('[data-composer-context-cancel]')) {
+"""#,
+    #"""
                     this.cancelComposerContext();
                 }
             });
@@ -35640,8 +36341,6 @@ ZaliMixin(ZaliInterface, class {
         if (meAva) meAva.title = 'Мой профиль';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
-"""#,
-    #"""
                 const logBody = document.getElementById('logBody');
                 if (logBody) logBody.innerHTML = '';
             });

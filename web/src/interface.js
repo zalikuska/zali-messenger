@@ -145,6 +145,9 @@ const DefaultApiRoutes = Object.freeze({
         republish: apiRoute('/conversation-keys/republish'),
     },
     historyTickets: apiRoute('/history-tickets'),
+    voice: {
+        turnCredentials: apiRoute('/voice/turn-credentials'),
+    },
     discover: {
         servers: apiRoute('/discover/servers'),
     },

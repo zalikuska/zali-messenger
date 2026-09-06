@@ -63,6 +63,60 @@ ZaliMixin(ZaliInterface, class {
             roomType: signal.roomType || this.voice.roomType || '',
         });
 
+        // Nothing may be negotiated into a call that has not been answered yet.
+        //
+        // The offer branch below captures the microphone (awaitVoiceLocalStream →
+        // getUserMedia), attaches the local audio track and replies with a sendrecv
+        // answer. It did that regardless of whether the user had accepted, and the
+        // server permits an invite's initiator to send voice_signal into their own
+        // ringing room — so a caller running a modified client could ring a contact
+        // and be listening to them before the phone was answered, with the panel
+        // flipping from «входящий звонок» to «connecting» as the only tell.
+        //
+        // The legitimate flow never lands here: the caller offers only once
+        // voice_call_accepted has arrived, and by then this side set 'connecting'
+        // inside performAcceptIncomingCall. So refusing outright costs nothing and
+        // needs no queue — after the accept, syncVoicePeers negotiates from scratch.
+        if (String(this.voice.status || '') === 'incoming') {
+            this.voiceDiag('signal-before-accept-refused', {
+                roomId,
+                from,
+                signalType: signalPayload.type || '',
+                status: this.voice.status || '',
+            }, 'WARN');
+            return;
+        }
+
+        // Nor into a call this client is not in at all.
+        //
+        // Voice signals are addressed by USERNAME, and the server delivers every
+        // one of them to all of that account's connections — so the second device
+        // of an account whose first device answered a call receives the same offers.
+        // With no room state of its own it used to sail through this handler,
+        // capture its microphone and answer, and the caller then had two answers for
+        // one offer with only the first applied: whichever device replied first won
+        // the call, non-deterministically, and the other sat in a half-built session.
+        //
+        // Every legitimate path into a call sets roomId before any negotiation can
+        // begin — startDirectCall, performAcceptIncomingCall, joinVoiceChannel and
+        // the room-state snapshot the server sends on every WS connect — so an empty
+        // roomId here means this client is not a participant. Fixing the underlying
+        // ambiguity properly needs a device dimension in the signalling protocol
+        // (see CLAUDE.md); this only stops a bystander device from answering.
+        //
+        // Worst case if a snapshot ever lost a race with the first offer: that offer
+        // is refused once and the peer's answer watchdog re-offers 8 s later, with
+        // this line in the log to say what happened.
+        if (!currentRoomId) {
+            this.voiceDiag('signal-outside-call-refused', {
+                roomId,
+                from,
+                signalType: signalPayload.type || '',
+                status: this.voice.status || '',
+            }, 'WARN');
+            return;
+        }
+
         if (signalPayload.type === 'offer') {
             // A peer that was evicted and re-joined (or simply gave up on this link)
             // builds a brand-new RTCPeerConnection, so its offer carries new ICE
@@ -72,12 +126,13 @@ ZaliMixin(ZaliInterface, class {
             // Rebuild instead of trying to revive a terminal connection.
             const stale = this.voice.peerConnections.get(from);
             if (stale && (stale.pc.connectionState === 'failed' || stale.pc.signalingState === 'closed')) {
-                this.voiceTrace('offer-on-dead-peer-rebuild', {
+                this.voiceDiag('offer-on-dead-peer-rebuild', {
                     roomId,
                     from,
                     state: stale.pc.connectionState,
                     signaling: stale.pc.signalingState,
                 }, 'WARN');
+                this.countVoicePeerRebuild(from, 'dead-transport');
                 this.closeVoicePeer(from);
             }
             let entry = this.getVoicePeerEntry(from);
@@ -96,7 +151,7 @@ ZaliMixin(ZaliInterface, class {
                 // answer. Re-drive negotiation anyway: dropping an offer is only
                 // safe while ours is genuinely still in flight, and if the answer
                 // never arrives nothing else would ever notice.
-                this.voiceTrace('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                this.voiceDiag('offer-collision-ignored', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                 this.scheduleVoiceNegotiationRetry('offer-collision-ignored');
                 return;
             }
@@ -123,6 +178,7 @@ ZaliMixin(ZaliInterface, class {
                     from,
                     state: entry.pc.signalingState,
                 }, 'WARN');
+                this.countVoicePeerRebuild(from, 'unapplicable-offer');
                 this.closeVoicePeer(from);
                 entry = this.getVoicePeerEntry(from);
             }
@@ -159,7 +215,7 @@ ZaliMixin(ZaliInterface, class {
                 // was rebuilt above, so there is no longer a path that tries to apply
                 // an offer to a connection that cannot take one.
                 if (entry.pc.signalingState === 'have-local-offer') {
-                    this.voiceTrace('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
+                    this.voiceDiag('offer-collision-rollback', { roomId, from, state: entry.pc.signalingState }, 'WARN');
                     await entry.pc.setLocalDescription({ type: 'rollback' });
                 }
                 try {
@@ -182,7 +238,7 @@ ZaliMixin(ZaliInterface, class {
                     this.scheduleVoiceNegotiationRetry('offer-without-mic');
                 }
                 await this.attachLocalVoiceTracks(from);
-                this.voiceTrace('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, peer: from });
+                this.voiceDiag('signal-offer-apply', { roomId, from, localStream: !!this.voice.localStream, sdpLength: signalPayload.sdp?.sdp?.length || 0, ...this.voicePeerSnapshot(from) });
                 try {
                     await entry.pc.setRemoteDescription(signalPayload.sdp);
                 } catch (error) {
@@ -198,6 +254,7 @@ ZaliMixin(ZaliInterface, class {
                         from,
                         error: error?.message || String(error),
                     }, 'WARN');
+                    this.countVoicePeerRebuild(from, 'offer-sdp-shape');
                     this.closeVoicePeer(from);
                     entry = this.getVoicePeerEntry(from);
                     // The fresh entry needs the latch the old one was holding, or a
@@ -210,7 +267,7 @@ ZaliMixin(ZaliInterface, class {
                 await this.flushPendingVoiceIceCandidates(entry, from);
                 const answer = await entry.pc.createAnswer();
                 await entry.pc.setLocalDescription(answer);
-                this.voiceTrace('signal-answer-send', {
+                this.voiceDiag('signal-answer-send', {
                     roomId,
                     from,
                     peer: from,
@@ -284,7 +341,7 @@ ZaliMixin(ZaliInterface, class {
                 }, 'WARN');
                 return;
             }
-            this.voiceTrace('signal-answer-apply', {
+            this.voiceDiag('signal-answer-apply', {
                 roomId,
                 from,
                 peer: from,
@@ -309,6 +366,7 @@ ZaliMixin(ZaliInterface, class {
                     // very layout the peer just refused to match, so the retry
                     // needs a connection that carries no layout at all.
                     this.voiceDiag('answer-sdp-shape-rebuild', { roomId, from }, 'WARN');
+                    this.countVoicePeerRebuild(from, 'answer-sdp-shape');
                     this.closeVoicePeer(from);
                 } else {
                     // The offer is dead — clear the latch so the negotiation retry below
@@ -623,11 +681,81 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (eventType === 'voice_error') {
+            const code = String(payload.code || '').trim();
+            const errorRoomId = String(payload.roomId || '').trim();
+            this.voiceDiag('server-error', {
+                code: code || '(none)',
+                roomId: errorRoomId,
+                currentRoomId: this.voice.roomId || '',
+                status: this.voice.status || '',
+                message: String(payload.message || ''),
+            }, 'ERROR');
             this.addLogEntry({
                 type: 'ERROR',
                 msg: String(payload.message || 'Ошибка voice'),
                 ts: new Date().toLocaleTimeString(),
             });
+            // The server has no record of the room we believe we are in. Nothing can
+            // be signalled into it any more — not an ICE restart, not a re-offer — so
+            // the call is finished whatever the panel still shows. Matched on `code`,
+            // never on the human-readable message, which is Russian prose that a
+            // wording change would silently detach this from.
+            if (code === 'room_not_found') {
+                this.concludeVanishedVoiceRoom(errorRoomId, String(payload.message || ''));
+            }
+            return;
+        }
+
+        // Emitted by the native shells (macOS NetworkService, Windows
+        // run_voice_transport), not by the server: the voice WebSocket lives inside
+        // Swift/Rust and reconnects there, and JS never learned that it had happened.
+        // The cost of not knowing was up to 8 s of being a ghost — evicted from the
+        // room server-side, with the presence keepalive the only thing that would
+        // eventually notice. Re-assert membership the instant the link is back, and
+        // re-drive negotiation, since any signal sent while it was down is gone.
+        if (eventType === 'voice_transport_state') {
+            const state = String(payload.state || '').trim();
+            this.voiceDiag('transport-state', {
+                state,
+                reason: String(payload.reason || ''),
+                roomId: this.voice.roomId || '',
+                status: this.voice.status || '',
+                queued: payload.queued ?? '',
+            }, state === 'up' ? 'INFO' : 'WARN');
+            if (state === 'up' && String(this.voice.roomId || '').trim()) {
+                this.sendVoiceRoomPresence();
+                this.scheduleVoiceNegotiationRetry('voice-transport-reconnected');
+            }
+            return;
+        }
+
+        // A payload the shell could not deliver and will not retry (its outbound
+        // queue overflowed, or the payload could not be serialised). On the browser
+        // path sendVoiceEvent returns false and the caller unlatches offerSent
+        // itself; over a native bridge the send is fire-and-forget, so this event is
+        // the only way that failure ever becomes visible here.
+        if (eventType === 'voice_send_failed') {
+            const failedType = String(payload.eventType || '').trim();
+            const failedSignal = String(payload.signalType || '').trim();
+            const target = String(payload.to || '').trim();
+            this.voiceDiag('transport-send-failed', {
+                eventType: failedType,
+                signalType: failedSignal,
+                to: target,
+                reason: String(payload.reason || ''),
+                roomId: this.voice.roomId || '',
+            }, 'WARN');
+            const entry = target ? this.voice.peerConnections.get(target) : null;
+            if (entry && failedType === 'voice_signal' && failedSignal === 'offer') {
+                // Same reasoning as the browser path's `!delivered` branch: an offer
+                // that never left the client must not stay latched as sent, or
+                // syncVoicePeers skips this peer for the rest of the call. Only an
+                // OFFER, though — a dropped ICE candidate leaves the offer perfectly
+                // valid, and unlatching it there just forces a pointless
+                // renegotiation on a link that is still converging.
+                entry.offerSent = false;
+            }
+            this.scheduleVoiceNegotiationRetry('transport-send-failed');
             return;
         }
 

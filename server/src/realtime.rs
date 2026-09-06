@@ -119,7 +119,33 @@ pub(crate) async fn send_json_to_user(
             );
         }
         drop(conns);
-        send_payload_to_user(state, username, json, "send_json_to_user").await;
+        let sent = send_payload_to_user(state, username, json, "send_json_to_user").await;
+        // The count, not just the attempt. "We sent the offer" and "the offer
+        // reached a socket" are different facts, and only the second one explains a
+        // call that never answers: a connection entry can exist while every sender
+        // in it is closed or its buffer is full, in which case this quietly
+        // delivered to nobody. delivered=0 for a voice_signal is the single most
+        // diagnostic line in the whole voice log.
+        if event_type.starts_with("voice_") {
+            if sent == 0 {
+                warn!(
+                    "[VOICE][SEND] to={} type={} delivered=0 roomId={} signalType={}",
+                    username,
+                    event_type,
+                    payload["roomId"].as_str().unwrap_or_default(),
+                    payload["signal"]["type"].as_str().unwrap_or_default()
+                );
+            } else {
+                info!(
+                    "[VOICE][SEND] to={} type={} delivered={} roomId={} signalType={}",
+                    username,
+                    event_type,
+                    sent,
+                    payload["roomId"].as_str().unwrap_or_default(),
+                    payload["signal"]["type"].as_str().unwrap_or_default()
+                );
+            }
+        }
     } else if event_type.starts_with("voice_") {
         warn!(
             "[VOICE][SEND] to={} type={} no_connection_entry roomId={} roomType={}",

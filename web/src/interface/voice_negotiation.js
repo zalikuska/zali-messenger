@@ -25,7 +25,7 @@ ZaliMixin(ZaliInterface, class {
         if (!name) return;
         const entry = this.voice.peerConnections.get(name);
         if (entry) {
-            this.voiceTrace('peer-close', { peer: name, roomId: this.voice.roomId || '' });
+            this.voiceDiag('peer-close', { peer: name, roomId: this.voice.roomId || '', ...this.voicePeerSnapshot(name) });
             if (entry.reconnectTimer) {
                 clearTimeout(entry.reconnectTimer);
                 entry.reconnectTimer = null;
@@ -105,12 +105,12 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async sendVoiceOfferInner(entry, peer) {
-        this.voiceTrace('send-offer', { peer, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', iceRestart: !!entry.needsIceRestart });
+        this.voiceDiag('send-offer', { peer, roomId: this.voice.roomId || '', roomType: this.voice.roomType || '', iceRestart: !!entry.needsIceRestart });
         await this.attachLocalVoiceTracks(peer);
         const offer = await this.createVoiceOfferFor(entry);
         await entry.pc.setLocalDescription(offer);
         entry.offerSent = true;
-        this.voiceTrace('offer-created', {
+        this.voiceDiag('offer-created', {
             peer,
             roomId: this.voice.roomId || '',
             sdpType: entry.pc.localDescription?.type || 'offer',
@@ -136,7 +136,7 @@ ZaliMixin(ZaliInterface, class {
         // call sat there reporting "connected" with no media in either direction.
         if (!delivered) {
             entry.offerSent = false;
-            this.voiceTrace('offer-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
+            this.voiceDiag('offer-send-failed', { peer, roomId: this.voice.roomId || '' }, 'WARN');
             this.scheduleVoiceNegotiationRetry('offer-send-failed');
             return;
         }
@@ -225,11 +225,11 @@ ZaliMixin(ZaliInterface, class {
         if (this.voice.negotiationRetryTimer) return;
         const attempt = Number(this.voice.negotiationRetries || 0) + 1;
         if (attempt > 8) {
-            this.voiceTrace('negotiation-retry-exhausted', { reason, attempt }, 'WARN');
+            this.voiceDiag('negotiation-retry-exhausted', { reason, attempt, roomId: this.voice.roomId || '' }, 'WARN');
             return;
         }
         this.voice.negotiationRetries = attempt;
-        this.voiceTrace('negotiation-retry-scheduled', { reason, attempt });
+        this.voiceDiag('negotiation-retry-scheduled', { reason, attempt, roomId: this.voice.roomId || '' });
         this.voice.negotiationRetryTimer = setTimeout(async () => {
             this.voice.negotiationRetryTimer = null;
             if (!String(this.voice.roomId || '').trim()) return;
@@ -269,7 +269,7 @@ ZaliMixin(ZaliInterface, class {
             clearTimeout(entry.healthTimer);
             entry.healthTimer = null;
         }
-        this.voiceTrace('restart-offer', { peer: name, roomId: this.voice.roomId || '' });
+        this.voiceDiag('restart-offer', { peer: name, roomId: this.voice.roomId || '', ...this.voicePeerSnapshot(name) });
         await this.attachLocalVoiceTracks(name);
         const offer = await this.createVoiceOfferFor(entry);
         await entry.pc.setLocalDescription(offer);
@@ -302,7 +302,7 @@ ZaliMixin(ZaliInterface, class {
             // brought us here was cleared by the state change that armed it, so
             // nothing else would ever try again.
             entry.offerSent = false;
-            this.voiceTrace('offer-restart-send-failed', { peer: name, roomId: this.voice.roomId || '' }, 'WARN');
+            this.voiceDiag('offer-restart-send-failed', { peer: name, roomId: this.voice.roomId || '' }, 'WARN');
         }
         // An ICE restart whose answer is lost is the worst case of all: the transport
         // is dead, the connection state does not change (it is already failed), so no
@@ -356,6 +356,10 @@ ZaliMixin(ZaliInterface, class {
                 entry.needsIceRestart = false;
                 entry.linkRecoveryAttempts = 0;
                 entry.linkRecoverySkipTicks = 0;
+                // Cleared here too, not only from onconnectionstatechange: the dead-call
+                // detector below treats this flag as "this link is finished", so a link
+                // that came back must not still be carrying it.
+                entry.linkRecoveryExhausted = false;
                 continue;
             }
             if (state !== 'failed' && state !== 'disconnected') continue;
@@ -379,7 +383,12 @@ ZaliMixin(ZaliInterface, class {
             if (attempt > 20) {
                 if (!entry.linkRecoveryExhausted) {
                     entry.linkRecoveryExhausted = true;
-                    this.voiceDiag('link-recovery-exhausted', { peer: name, roomId: this.voice.roomId || '', attempts: attempt - 1 }, 'ERROR');
+                    this.voiceDiag('link-recovery-exhausted', {
+                        peer: name,
+                        roomId: this.voice.roomId || '',
+                        attempts: attempt - 1,
+                        ...this.voicePeerSnapshot(name),
+                    }, 'ERROR');
                 }
                 continue;
             }
@@ -400,10 +409,69 @@ ZaliMixin(ZaliInterface, class {
             });
         }
         if (!watching) this.stopVoiceLinkSupervisor();
+        this.concludeDeadVoiceCallIfNeeded();
+    }
+
+    // A call whose every link has given up is over, and nothing said so. The
+    // supervisor stopped after ~8 minutes of trying, the panel kept showing «В
+    // эфире» with a participant list frozen at whoever was there when the network
+    // went, and the only way out was for the user to guess that and press the red
+    // button. Worse, no call record was written, so the conversation kept no trace
+    // of a call that really happened.
+    //
+    // Deliberately conservative: it fires only when there IS at least one peer and
+    // EVERY one of them has exhausted its recovery budget. A call still holding one
+    // working link is not dead, and a room we have not managed to negotiate with yet
+    // (no peer entries at all) is handled by the negotiation retry, not here.
+    concludeDeadVoiceCallIfNeeded() {
+        if (!String(this.voice.roomId || '').trim()) return;
+        const entries = Array.from(this.voice.peerConnections.values());
+        if (!entries.length) return;
+        if (!entries.every(entry => entry.linkRecoveryExhausted)) return;
+        this.voiceDiag('call-dead-all-links-exhausted', {
+            roomId: this.voice.roomId || '',
+            roomType: this.voice.roomType || '',
+            peers: entries.length,
+        }, 'ERROR');
+        this.addLogEntry({
+            type: 'ERROR',
+            msg: 'Связь со всеми участниками потеряна — звонок завершён',
+            ts: new Date().toLocaleTimeString(),
+        });
+        void this.leaveVoiceRoom({ announce: true, outcome: 'failed' });
+    }
+
+    // Same conclusion reached from the other direction: the server told us the room
+    // we think we are in does not exist. Nothing can be signalled into a room that is
+    // gone — no ICE restart, no re-offer — so the call is over whatever the panel
+    // says. Before this, voice_error was written to the journal and otherwise
+    // ignored, and the client sat in a room the server had forgotten, re-asserting
+    // presence into the void every 8 s.
+    concludeVanishedVoiceRoom(roomId, message = '') {
+        const current = String(this.voice.roomId || '').trim();
+        const reported = String(roomId || '').trim();
+        if (!current || (reported && reported !== current)) return false;
+        this.voiceDiag('call-dead-room-vanished', {
+            roomId: current,
+            roomType: this.voice.roomType || '',
+            status: this.voice.status || '',
+            message,
+        }, 'ERROR');
+        this.addLogEntry({
+            type: 'ERROR',
+            msg: 'Голосовая комната больше не существует на сервере — звонок завершён',
+            ts: new Date().toLocaleTimeString(),
+        });
+        // announce:false — there is nothing to announce to, and voice_leave for a
+        // missing room only earns another voice_error.
+        void this.leaveVoiceRoom({ announce: false, outcome: 'failed' });
+        return true;
     }
 
     // Re-asserts room membership. The server evicts a user from their voice room
-    // 12 s after their WebSocket closes (the delayed cleanup in realtime.rs), and
+    // 150 s after their WebSocket closes (the delayed cleanup in realtime.rs — the
+    // window has been 12 s and 45 s in the past, and both were shorter than a real
+    // reconnect; check realtime.rs before trusting a number written here), and
     // nothing ever re-joined afterwards: the browser voice socket's onopen doesn't
     // re-join, and on native shells the voice transport reconnects entirely inside
     // Swift/Rust (NetworkService.connectVoiceWebSocket / run_voice_transport) — JS
@@ -439,9 +507,11 @@ ZaliMixin(ZaliInterface, class {
 
     ensureVoicePresenceKeepalive() {
         if (this.voice.presenceTimer) return;
-        // Shorter than the server's 12 s eviction window, so a reconnect that lands
+        // Far shorter than the server's eviction window, so a reconnect that lands
         // inside it never costs the call; if it lands after, this is what brings the
-        // participant back instead of leaving them silently dropped.
+        // participant back instead of leaving them silently dropped. Also the first
+        // thing that runs after a transport reconnect (voice_transport_state), so in
+        // practice membership is re-asserted immediately rather than up to 8 s later.
         this.voice.presenceTimer = setInterval(() => {
             if (!String(this.voice.roomId || '').trim()) {
                 this.stopVoicePresenceKeepalive();
@@ -470,9 +540,30 @@ ZaliMixin(ZaliInterface, class {
         // peer — could ever retry again. A changed roster is a genuinely new
         // situation (someone joined or left), so give it a fresh budget.
         const rosterKey = peers.slice().sort().join(' ');
-        if (this.voice.peerRosterKey !== rosterKey) {
+        const rosterChanged = this.voice.peerRosterKey !== rosterKey;
+        if (rosterChanged) {
+            const previous = this.voice.peerRosterKey;
             this.voice.peerRosterKey = rosterKey;
             this.voice.negotiationRetries = 0;
+            // Always-on: who is in the room, and when it changed, is the frame every
+            // other voice line has to be read against — a peer that "never got an
+            // offer" usually turns out to have joined after the pass that would have
+            // sent it.
+            this.voiceDiag('roster-changed', {
+                roomId: this.voice.roomId || '',
+                roomType: this.voice.roomType || '',
+                status: this.voice.status || '',
+                peers,
+                count: peers.length,
+                was: previous || '(none)',
+            });
+            if (peers.length > ZaliInterface.MAX_MESH_AUDIO_PEERS) {
+                this.voiceDiag('mesh-size-over-comfort', {
+                    roomId: this.voice.roomId || '',
+                    peers: peers.length,
+                    limit: ZaliInterface.MAX_MESH_AUDIO_PEERS,
+                }, 'WARN');
+            }
         }
         this.voiceTrace('sync-peers', {
             roomId: this.voice.roomId || '',
@@ -538,6 +629,13 @@ ZaliMixin(ZaliInterface, class {
         } else if (peers.length) {
             this.voice.negotiationRetries = 0;
         }
+        // The video budget is divided by the roster, and the roster just moved, so
+        // limits computed for a smaller call are now several times too generous.
+        // Done HERE rather than next to the roster-change detection at the top: the
+        // peer connections the budget is divided by are created and closed by the
+        // loop above, so up there the count is still the previous roster's and the
+        // recomputed limit would be one roster behind.
+        if (rosterChanged) void this.refreshVoiceSenderLimits();
         this.renderVoicePanel();
     }
 
@@ -564,6 +662,7 @@ ZaliMixin(ZaliInterface, class {
         if (activeRoomId && this.isInActiveCall()) {
             await this.endCurrentVoiceSession({ reason: 'join-voice-channel' });
         }
+        void this.refreshVoiceTurnCredentials();
         // Channel joins never unlocked playback, so the AudioContext could stay
         // suspended for the whole session — this is a click handler, i.e. the one
         // moment the browser lets us resume it. Not awaited: see unlockVoicePlayback.
@@ -606,7 +705,7 @@ ZaliMixin(ZaliInterface, class {
 
     async leaveVoiceRoom({ announce = true, outcome = 'completed' } = {}) {
         const roomId = String(this.voice.roomId || '').trim();
-        this.voiceTrace('leave-room', {
+        this.voiceDiag('leave-room', {
             roomId,
             roomType: this.voice.roomType || '',
             announce,

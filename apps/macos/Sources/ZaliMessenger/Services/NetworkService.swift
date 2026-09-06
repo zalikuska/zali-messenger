@@ -63,6 +63,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private var voiceReconnectAttempt: Int = 0
     private var voiceReconnectWorkItem: DispatchWorkItem?
     private var voiceHeartbeatWorkItem: DispatchWorkItem?
+    /// Deadline for the in-flight ping — see scheduleVoiceHeartbeat.
+    private var voicePingTimeoutWorkItem: DispatchWorkItem?
     private var voiceReceiveLoopTask: Task<Void, Never>?
     private var voicePendingQueue: [(payload: [String: Any], completion: ((Bool) -> Void)?)] = []
 
@@ -623,6 +625,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         voiceReconnectWorkItem = nil
         voiceHeartbeatWorkItem?.cancel()
         voiceHeartbeatWorkItem = nil
+        voicePingTimeoutWorkItem?.cancel()
+        voicePingTimeoutWorkItem = nil
         voiceReceiveLoopTask?.cancel()
         voiceReceiveLoopTask = nil
         voiceConnectionGeneration += 1
@@ -645,6 +649,71 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         listenVoiceWebSocket(generation: generation)
     }
 
+    /// Cap on the offline outbound queue.
+    ///
+    /// Unbounded, it grows for as long as the link is down — a call in progress
+    /// produces ICE candidates continuously — and then delivers, on reconnect,
+    /// signalling that describes a negotiation the call gave up on minutes ago. A
+    /// stale offer landing on the far side is worse than a lost one: the peer
+    /// answers a session neither end is in. Keep a short tail of the most recent
+    /// payloads and report what gets dropped.
+    private static let voicePendingQueueMax = 64
+
+    /// Feeds a locally-produced event into the same path server events take, so the
+    /// web layer handles it in handleVoiceEvent with everything else.
+    private func emitLocalVoiceEvent(_ payload: [String: Any]) {
+        DispatchQueue.main.async {
+            self.onVoiceEvent?(payload)
+        }
+    }
+
+    /// Tells the web layer the voice signalling link went up or down.
+    ///
+    /// This socket lives entirely inside NetworkService — JS never sees it, and
+    /// never used to learn that it had dropped and come back. The cost was real:
+    /// the server evicts a participant whose socket stays shut, and the only thing
+    /// that put them back was the client's 8-second presence keepalive, so every
+    /// reconnect risked up to a full keepalive period as a ghost in the room. Every
+    /// signal sent while the link was down is also simply gone, and nothing
+    /// re-drove negotiation afterwards.
+    private func emitVoiceTransportState(_ state: String, reason: String) {
+        emitLocalVoiceEvent([
+            "type": "voice_transport_state",
+            "state": state,
+            "reason": reason,
+            "queued": voicePendingQueue.count,
+        ])
+    }
+
+    /// Reports a payload this transport will never deliver. Over the native bridge
+    /// the web layer's sendVoiceEvent is fire-and-forget and always reports success,
+    /// so without this a dropped offer leaves that peer latched as "offered" for the
+    /// rest of the call.
+    private func emitVoiceSendFailed(_ payload: [String: Any], reason: String) {
+        emitLocalVoiceEvent([
+            "type": "voice_send_failed",
+            "eventType": payload["type"] as? String ?? "",
+            // Which KIND of signal was lost. Without it the web layer had to treat
+            // every dropped payload as a lost offer and unlatch the peer, forcing a
+            // redundant renegotiation for what was usually one ICE candidate.
+            "signalType": (payload["signal"] as? [String: Any])?["type"] as? String ?? "",
+            "to": payload["to"] as? String ?? "",
+            "roomId": payload["roomId"] as? String ?? "",
+            "reason": reason,
+        ])
+    }
+
+    /// Appends to the offline queue, dropping the oldest once it is full.
+    private func enqueueVoicePayload(_ payload: [String: Any], completion: ((Bool) -> Void)?) {
+        while voicePendingQueue.count >= NetworkService.voicePendingQueueMax {
+            let dropped = voicePendingQueue.removeFirst()
+            trace("voice ws pending queue full; dropping oldest payload")
+            dropped.completion?(false)
+            emitVoiceSendFailed(dropped.payload, reason: "queue-overflow")
+        }
+        voicePendingQueue.append((payload, completion))
+    }
+
     func sendVoiceEvent(_ payload: [String: Any], completion: ((Bool) -> Void)? = nil) {
         connectionQueue.async { [weak self] in
             guard let self else {
@@ -653,7 +722,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             }
 
             guard let task = self.voiceWebSocketTask else {
-                self.voicePendingQueue.append((payload, completion))
+                self.enqueueVoicePayload(payload, completion: completion)
                 self.trace("voice ws queued while disconnected queueLen=\(self.voicePendingQueue.count)")
                 self.connectVoiceWebSocketLocked()
                 // Do not report success yet — completion fires later, once flushVoicePendingQueue
@@ -737,7 +806,10 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
 
             self.voiceHeartbeatWorkItem?.cancel()
             self.voiceHeartbeatWorkItem = nil
+            self.voicePingTimeoutWorkItem?.cancel()
+            self.voicePingTimeoutWorkItem = nil
             self.voiceReconnectWorkItem?.cancel()
+            self.emitVoiceTransportState("down", reason: reason)
             self.voiceReconnectAttempt += 1
             let delay = min(pow(2.0, Double(self.voiceReconnectAttempt - 1)), 30.0)
             let workItem = DispatchWorkItem { [weak self] in
@@ -762,10 +834,36 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 guard generation == self.voiceConnectionGeneration else { return }
                 guard let task = self.voiceWebSocketTask else { return }
 
+                // sendPing's completion fires when the pong comes back OR when the
+                // task fails — and on a path that died without a FIN (Wi-Fi drop, VPN
+                // re-key, NAT eviction) neither happens for as long as TCP keeps
+                // retransmitting, which is minutes. This heartbeat only re-arms
+                // itself from that completion, so the effect was that the client
+                // stopped pinging entirely and never noticed the link was gone: it
+                // sat in the call, believing it was signalling, until something else
+                // failed. The deadline below is the only thing that turns a silent
+                // link into a reconnect.
+                var answered = false
+                let timeout = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    guard generation == self.voiceConnectionGeneration else { return }
+                    guard !answered else { return }
+                    answered = true
+                    self.trace("voice ws ping timed out gen=\(generation)")
+                    self.scheduleVoiceReconnect(reason: "ping timeout", generation: generation)
+                }
+                self.voicePingTimeoutWorkItem = timeout
+                self.connectionQueue.asyncAfter(deadline: .now() + 20, execute: timeout)
+
                 task.sendPing { [weak self] error in
                     guard let self else { return }
                     self.connectionQueue.async {
                         guard generation == self.voiceConnectionGeneration else { return }
+                        // The deadline may already have declared this link dead and
+                        // started a reconnect; a late pong must not resurrect it.
+                        guard !answered else { return }
+                        answered = true
+                        timeout.cancel()
                         if let error {
                             self.trace("voice ws ping failed err=\(error)")
                             self.scheduleVoiceReconnect(reason: "ping failure", generation: generation)
@@ -2085,6 +2183,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 self.voiceReconnectAttempt = 0
                 self.trace("voice ws didOpen user=\(self.currentUsername)")
                 let generation = self.voiceConnectionGeneration
+                self.emitVoiceTransportState("up", reason: "connected")
                 self.flushVoicePendingQueue(generation: generation)
                 self.scheduleVoiceHeartbeat(generation: generation)
                 return
