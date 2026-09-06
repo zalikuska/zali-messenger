@@ -65,6 +65,45 @@ Rules:
 - **Data dir: `/var/lib/zali`** (from `ZALI_DATA_DIR`) — holds the DB, `uploads/` and `releases/`. **Not** the checkout at `/opt/zali-server`. Check with `ssh ms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"`
 - Process management: **systemd unit** `zali-server.service` (`/etc/systemd/system/zali-server.service` on the VPS) — `enabled` (survives reboot) + `Restart=always` (auto-recovers from crashes). **Do not go back to ad-hoc `nohup`/`pkill` for starting the server** — always use `systemctl`.
 
+### TURN-релей (coturn)
+
+Поставлен 2026-09-06. **С переезда на `ms` (2026-09-05) до этой даты релея не было
+вообще** — coturn не был даже установлен, `check_turn.py` отвечал `STUN Binding: TIMEOUT`.
+Всё это время звонки держались только на публичном STUN Google, то есть работали лишь там,
+где проходит hole-punching; пара, где обе стороны за симметричным NAT, не соединялась
+никогда. Клиент это фиксировал сам (`ice-candidate-end` пишет WARN, когда среди
+кандидатов нет `relay`), но журнал никто не читал.
+
+- Конфиг: `/etc/turnserver.conf`, служба `coturn.service` (`enabled`).
+- Слушает **только публичный адрес** `202.181.188.72` на 3478 (UDP+TCP) и 5349 (TLS).
+  Без `listening-ip` coturn садится ещё и на docker0/VPN-интерфейсы.
+- **Креды статические (`zali`/`turnpass`), а не REST.** coturn не умеет обе схемы
+  одновременно: `use-auth-secret` игнорирует `user=`. Все установленные клиенты знают
+  только статическую пару, поэтому переход на REST сломал бы TURN сразу у всех.
+  `TURN_STATIC_AUTH_SECRET` намеренно **не задан** — тогда `/api/voice/turn-credentials`
+  отдаёт 404 и новый клиент штатно падает на ту же статическую пару. Переключать можно
+  будет, когда весь парк уедет на 0.2b22+.
+- Плата за это: пара лежит внутри каждой сборки, то есть релеем может пользоваться любой,
+  кто её открывал. Поэтому в конфиге запрещён релей во все приватные и loopback-диапазоны
+  (`denied-peer-ip`) — иначе это открытый прокси **внутрь машины**, где на localhost живут
+  `zali_server:3001`, AdGuard и Minecraft — плюс квоты (`user-quota`, `total-quota`) и
+  `max-bps=3000000` (потолок клиента: камера 1.2, шаринг 2.0 Мбит/с).
+- Диапазон релей-портов сужен до `49160-49260` вместо дефолтных 16 тысяч.
+- **TLS-сертификат копируется, а не читается напрямую.** coturn работает под пользователем
+  `turnserver` и приватный ключ letsencrypt (root, 600) прочитать не может — из-за этого
+  5349 молча не поднимался. `/usr/local/bin/coturn-cert-sync` кладёт копию в `/etc/coturn`
+  с нужным владельцем и перезапускает службу; он же прилинкован в
+  `/etc/letsencrypt/renewal-hooks/deploy/`, иначе TLS отвалился бы через 90 дней.
+- **Логи — в journald** (`journalctl -u coturn`), не в файл: `log-file=/var/log/turnserver.log`
+  даёт `ERROR: Cannot open log file for writing` по тем же правам.
+- Ловушка установки: пакет запускает службу сразу, поэтому `systemctl enable --now` после
+  записи конфига **не перечитывает его** — нужен явный `restart`.
+
+Проверять только живой пробой, а не статусом службы:
+```bash
+python3 scripts/voice_doctor/check_turn.py   # Binding → Allocate → CreatePermission → реальные байты
+```
+
 ### Deploy process
 
 ```bash
