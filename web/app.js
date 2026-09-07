@@ -17098,8 +17098,35 @@ ZaliMixin(ZaliInterface, class {
             this.sessionBootstrapInProgress = false;
             this.rehydratePendingOutbox();
             this.scheduleFlushPendingOutbox(300);
+            // Whatever the outcome (restored / login form / guest), updateAuthView()
+            // above already rendered it — safe to reveal now. `success` mirrors the
+            // same predicate updateAuthView() uses to decide whether the login
+            // overlay shows: a token means we're entering the app, so the splash
+            // gets to say "Готово"; no token means the login form is what's under
+            // it, and "Готово" there would just be a lie.
+            this.hideBootSplash(!!this.S.session?.token);
             this.trace('bootstrapSession done');
         }
+    }
+
+    /**
+     * Resolves #bootSplash's looping "Авторизация..." status (see the inline
+     * script in index.html) once bootstrapSession() has decided what to show.
+     * `success` true scrambles the status into "Готово" before fading; false
+     * just stops the loop and fades. Removed from layout after the fade so it
+     * can't eat clicks or show up in the accessibility tree.
+     */
+    hideBootSplash(success) {
+        if (typeof window.__resolveBootScreen === 'function') {
+            window.__resolveBootScreen(!!success);
+            return;
+        }
+        // Fallback in case the inline boot script didn't run for some reason —
+        // still guarantees the splash doesn't get stuck covering the app.
+        const splash = document.getElementById('bootSplash');
+        if (!splash || splash.hidden) return;
+        splash.classList.add('fade-out');
+        setTimeout(() => { splash.hidden = true; }, 400);
     }
 
     async restoreSession(session) {
@@ -22095,6 +22122,11 @@ ZaliMixin(ZaliInterface, class {
         const type = String(payload.type || '').trim();
         if (!type) return false;
 
+        if (type === 'titlebar_announcement') {
+            this.showTitlebarAnnouncement(payload);
+            return true;
+        }
+
         if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
             // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
             // событие в каждое соединение аккаунта. Голосовой сокет пропускает
@@ -22131,6 +22163,31 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         return false;
+    }
+
+    /**
+     * Показывает объявление сервера в титлбаре вместо бренда/имени чата —
+     * см. server/src/realtime.rs::publish_announcement (POST /api/announcement,
+     * тот же RELEASE_ADMIN_TOKEN, что и у /api/version) и dispatchRealtimeEvent
+     * выше. Живёт только на этом устройстве и только пока открыта вкладка:
+     * сервер не хранит состояние «показано/скрыто по крестику», рассылка
+     * чисто разовая — новый коннект после неё объявления уже не увидит.
+     */
+    showTitlebarAnnouncement(payload) {
+        const text = String(payload?.text || '').trim();
+        if (!text) return;
+        const titlebar = document.getElementById('titlebar');
+        const textEl = document.getElementById('tbAnnounceText');
+        if (!titlebar || !textEl) return;
+        textEl.textContent = text;
+        document.getElementById('tbAnnounce')?.removeAttribute('hidden');
+        titlebar.classList.add('has-announcement');
+    }
+
+    /** Крестик у объявления — прячет его локально, .tb-chat/.tb-brand возвращаются. */
+    hideTitlebarAnnouncement() {
+        document.getElementById('titlebar')?.classList.remove('has-announcement');
+        document.getElementById('tbAnnounce')?.setAttribute('hidden', '');
     }
 
     setUsers(users) {
@@ -23857,10 +23914,13 @@ ZaliMixin(ZaliInterface, class {
         </div>`;
     }
 
-    renderAudienceSelect(name, value, options) {
-        return `<select class="profile-select" data-profile-field="${this.esc(name)}">
-            ${options.map(option => `<option value="${this.esc(option.value)}"${option.value === value ? ' selected' : ''}>${this.esc(option.label)}</option>`).join('')}
-        </select>`;
+    /** Ряд из нескольких кнопок вместо системного `<select>` — активный вариант подсвечен акцентом. */
+    renderAudienceGroup(name, value, options) {
+        return `<div class="profile-audience-group" role="group">
+            ${options.map(option => `
+                <button type="button" class="profile-audience-btn${option.value === value ? ' active' : ''}" data-profile-audience-field="${this.esc(name)}" data-profile-audience-value="${this.esc(option.value)}" aria-pressed="${option.value === value}">${this.esc(option.label)}</button>
+            `).join('')}
+        </div>`;
     }
 
     renderProfileEditor(state) {
@@ -23868,36 +23928,50 @@ ZaliMixin(ZaliInterface, class {
         const links = Array.isArray(draft.links) ? draft.links : [];
         return `<div class="profile-editor">
             ${state.error ? `<p class="profile-error">${this.esc(state.error)}</p>` : ''}
-            <label class="profile-field">
-                <span>Отображаемое имя</span>
-                <input type="text" maxlength="64" data-profile-field="displayName" value="${this.esc(draft.displayName || '')}" placeholder="${this.esc(state.username)}">
-            </label>
-            <label class="profile-field">
-                <span>Статус</span>
-                <input type="text" maxlength="120" data-profile-field="status" value="${this.esc(draft.status || '')}" placeholder="Чем занимаетесь">
-            </label>
-            <label class="profile-field">
-                <span>О себе</span>
-                <textarea rows="4" maxlength="600" data-profile-field="bio" placeholder="Пара слов о вас">${this.esc(draft.bio || '')}</textarea>
-            </label>
-            <label class="profile-field">
-                <span>Где вы</span>
-                <input type="text" maxlength="64" data-profile-field="location" value="${this.esc(draft.location || '')}" placeholder="Город">
-            </label>
-            <div class="profile-field">
-                <span>Аватар</span>
-                <div class="profile-avatar-editor">
-                    <div class="ava profile-avatar-preview">${this.renderAvatarHTML(state.username, 'avatar-img', state.username)}</div>
-                    <button class="btn-flat" type="button" data-profile-action="change-avatar">Сменить картинку</button>
-                </div>
-            </div>
-            <label class="profile-field profile-field-color">
-                <span>Акцентный цвет</span>
-                <input type="color" data-profile-field="accentColor" value="${this.esc(this.safeCssColor(draft.accentColor) || '#cbff00')}">
-            </label>
 
-            <div class="profile-field">
-                <span>Ссылки</span>
+            <section class="profile-editor-section">
+                <div class="profile-editor-section-head">
+                    <span class="profile-editor-kicker">Основное</span>
+                    <h3 class="profile-editor-title">Публичный профиль</h3>
+                </div>
+                <div class="profile-editor-row">
+                    <label class="profile-field">
+                        <span>Отображаемое имя</span>
+                        <input type="text" maxlength="64" data-profile-field="displayName" value="${this.esc(draft.displayName || '')}" placeholder="${this.esc(state.username)}">
+                    </label>
+                    <label class="profile-field">
+                        <span>Статус</span>
+                        <input type="text" maxlength="120" data-profile-field="status" value="${this.esc(draft.status || '')}" placeholder="Чем занимаетесь">
+                    </label>
+                </div>
+                <label class="profile-field">
+                    <span>О себе</span>
+                    <textarea rows="4" maxlength="600" data-profile-field="bio" placeholder="Пара слов о вас">${this.esc(draft.bio || '')}</textarea>
+                </label>
+                <div class="profile-editor-row">
+                    <label class="profile-field">
+                        <span>Где вы</span>
+                        <input type="text" maxlength="64" data-profile-field="location" value="${this.esc(draft.location || '')}" placeholder="Город">
+                    </label>
+                    <label class="profile-field profile-field-color">
+                        <span>Акцентный цвет</span>
+                        <input type="color" data-profile-field="accentColor" value="${this.esc(this.safeCssColor(draft.accentColor) || '#cbff00')}">
+                    </label>
+                </div>
+                <div class="profile-field">
+                    <span>Аватар</span>
+                    <div class="profile-avatar-editor">
+                        <div class="ava profile-avatar-preview">${this.renderAvatarHTML(state.username, 'avatar-img', state.username)}</div>
+                        <button class="btn-flat" type="button" data-profile-action="change-avatar">Сменить картинку</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="profile-editor-section">
+                <div class="profile-editor-section-head">
+                    <span class="profile-editor-kicker">Ссылки</span>
+                    <h3 class="profile-editor-title">Сайты и соцсети</h3>
+                </div>
                 <div class="profile-links-editor">
                     ${links.map((link, index) => `
                         <div class="profile-link-row">
@@ -23909,23 +23983,27 @@ ZaliMixin(ZaliInterface, class {
                     ${links.length < 6 ? `<button class="btn-flat" type="button" data-profile-action="add-link">Добавить ссылку</button>` : ''}
                 </div>
                 <small class="profile-help">Принимаются только http/https-ссылки.</small>
-            </div>
+            </section>
 
-            <div class="profile-policies">
-                <label class="profile-field">
+            <section class="profile-editor-section">
+                <div class="profile-editor-section-head">
+                    <span class="profile-editor-kicker">Приватность</span>
+                    <h3 class="profile-editor-title">Кто что может</h3>
+                </div>
+                <div class="profile-audience-field">
                     <span>Кто может комментировать</span>
-                    ${this.renderAudienceSelect('commentPolicy', draft.commentPolicy, ZaliInterface.audienceOptions)}
-                </label>
-                <label class="profile-field">
+                    ${this.renderAudienceGroup('commentPolicy', draft.commentPolicy, ZaliInterface.audienceOptions)}
+                </div>
+                <div class="profile-audience-field">
                     <span>Кто может оставлять автографы</span>
-                    ${this.renderAudienceSelect('autographPolicy', draft.autographPolicy, ZaliInterface.audienceOptions)}
-                </label>
-                <label class="profile-field">
+                    ${this.renderAudienceGroup('autographPolicy', draft.autographPolicy, ZaliInterface.audienceOptions)}
+                </div>
+                <div class="profile-audience-field">
                     <span>Чьи автографы публиковать сразу</span>
-                    ${this.renderAudienceSelect('autographAutoApprove', draft.autographAutoApprove, ZaliInterface.autoApproveOptions)}
+                    ${this.renderAudienceGroup('autographAutoApprove', draft.autographAutoApprove, ZaliInterface.autoApproveOptions)}
                     <small class="profile-help">«Одобряю сам» — каждый автограф ждёт вашего «да» на вкладке «Модерация».</small>
-                </label>
-            </div>
+                </div>
+            </section>
         </div>`;
     }
 
@@ -24174,6 +24252,21 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
 
+            // Кнопки-сегменты вместо системного <select> для полей аудитории
+            // (кто может комментировать/оставлять автографы/автоодобрение).
+            const audienceBtn = event.target.closest('[data-profile-audience-field]');
+            if (audienceBtn) {
+                const field = audienceBtn.getAttribute('data-profile-audience-field');
+                const value = audienceBtn.getAttribute('data-profile-audience-value');
+                if (field && value) {
+                    const state = this.ensureProfileState();
+                    const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+                    draft[field] = value;
+                    this.setProfileState({ draft });
+                }
+                return;
+            }
+
             const actionBtn = event.target.closest('[data-profile-action]');
             if (!actionBtn) return;
             this.handleProfileAction(actionBtn.getAttribute('data-profile-action'), actionBtn);
@@ -24227,14 +24320,6 @@ ZaliMixin(ZaliInterface, class {
         }
         if (field === 'inviteDraft') {
             this.S.profile = { ...this.ensureProfileState(), inviteDraft: target.value };
-            return;
-        }
-        if (field.endsWith('Policy') || field === 'autographAutoApprove') {
-            // Селекты перерисовывать безопасно и нужно: от них зависят подсказки.
-            const state = this.ensureProfileState();
-            const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
-            draft[field] = target.value;
-            this.setProfileState({ draft });
             return;
         }
         this.updateProfileDraft(field, target.value);
@@ -26704,11 +26789,19 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
         }
+
+        // 8a. Server-pushed titlebar announcement — dismissible locally only
+        // (see showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
+        // state_sync.js). Button is always in the DOM, just hidden, so a
+        // single static listener is enough — no delegation needed.
+        document.getElementById('tbAnnounceClose')?.addEventListener('click', () => {
+            this.hideTitlebarAnnouncement();
+        });
 
         // 8b. In-app window controls (Windows only — native OS decorations are
         // switched off there in favor of this titlebar, see
@@ -26733,7 +26826,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

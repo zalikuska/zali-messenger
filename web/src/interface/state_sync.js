@@ -52,6 +52,11 @@ ZaliMixin(ZaliInterface, class {
         const type = String(payload.type || '').trim();
         if (!type) return false;
 
+        if (type === 'titlebar_announcement') {
+            this.showTitlebarAnnouncement(payload);
+            return true;
+        }
+
         if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
             // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
             // событие в каждое соединение аккаунта. Голосовой сокет пропускает
@@ -88,6 +93,31 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         return false;
+    }
+
+    /**
+     * Показывает объявление сервера в титлбаре вместо бренда/имени чата —
+     * см. server/src/realtime.rs::publish_announcement (POST /api/announcement,
+     * тот же RELEASE_ADMIN_TOKEN, что и у /api/version) и dispatchRealtimeEvent
+     * выше. Живёт только на этом устройстве и только пока открыта вкладка:
+     * сервер не хранит состояние «показано/скрыто по крестику», рассылка
+     * чисто разовая — новый коннект после неё объявления уже не увидит.
+     */
+    showTitlebarAnnouncement(payload) {
+        const text = String(payload?.text || '').trim();
+        if (!text) return;
+        const titlebar = document.getElementById('titlebar');
+        const textEl = document.getElementById('tbAnnounceText');
+        if (!titlebar || !textEl) return;
+        textEl.textContent = text;
+        document.getElementById('tbAnnounce')?.removeAttribute('hidden');
+        titlebar.classList.add('has-announcement');
+    }
+
+    /** Крестик у объявления — прячет его локально, .tb-chat/.tb-brand возвращаются. */
+    hideTitlebarAnnouncement() {
+        document.getElementById('titlebar')?.classList.remove('has-announcement');
+        document.getElementById('tbAnnounce')?.setAttribute('hidden', '');
     }
 
     setUsers(users) {

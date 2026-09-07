@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        maximizeMainWindow()
         UNUserNotificationCenter.current().delegate = self
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             DispatchQueue.main.async {
@@ -28,6 +29,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound, .list])
+    }
+
+    // Fills the screen like clicking the zoom button, without going into native
+    // fullscreen (no Space switch, menu bar/dock stay visible, traffic lights stay put).
+    // Runs on every launch — SwiftUI/AppKit window state restoration would otherwise
+    // reopen whatever size the window was left at.
+    private func maximizeMainWindow() {
+        DispatchQueue.main.async {
+            guard let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first else { return }
+            guard let screen = window.screen ?? NSScreen.main else { return }
+            window.setFrame(screen.visibleFrame, display: true)
+        }
     }
 
     private func showNotificationDeniedAlert() {

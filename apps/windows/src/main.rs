@@ -330,6 +330,7 @@ fn main() -> wry::Result<()> {
     let mut window_builder = WindowBuilder::new()
         .with_title("Zali Messenger")
         .with_inner_size(tao::dpi::LogicalSize::new(900.0, 600.0))
+        .with_maximized(true)
         .with_visible(!start_minimized);
     // Windows only: drop the native title bar in favor of the in-app titlebar
     // (minimize/maximize/close buttons + drag handled via IPC, see native.rs

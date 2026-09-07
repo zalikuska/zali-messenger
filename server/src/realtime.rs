@@ -1,14 +1,20 @@
 //! WebSocket connection lifecycle and JSON broadcast/send helpers.
 
 use crate::{
-    handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user, AppState,
-    AuthenticatedUser,
+    constant_time_eq, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
+    AppState, AuthenticatedUser,
 };
 use axum::{
-    extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+    extract::{
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+        State,
+    },
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
@@ -95,6 +101,61 @@ pub(crate) async fn broadcast_avatar_event(
         "updated_at": updated_at.map(|dt| dt.to_rfc3339()),
     });
     broadcast_json(state, payload.to_string()).await;
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PublishAnnouncementRequest {
+    text: String,
+}
+
+/// Pushes a short banner into every connected client's titlebar (replacing the
+/// brand/chat name there — see `.tb-announce` in style.css and
+/// `dispatchRealtimeEvent`/`showTitlebarAnnouncement` in state_sync.js), until
+/// the viewer dismisses it with the close button. Broadcast-only, not
+/// persisted anywhere — same tradeoff as `broadcast_avatar_event`: a client
+/// that connects (or reconnects) after this fires never sees it.
+///
+/// Gated on the same `RELEASE_ADMIN_TOKEN` as `/api/version` rather than a
+/// second secret — both are the same "operator, not a user" trust level, and
+/// this crate already never has both unset independently in practice (either
+/// releases are being published from this box or they're not).
+///
+/// No native shell changes needed for this: unrecognized WS `type` values are
+/// already forwarded to JS verbatim by macOS/Windows (`onRealtimeEvent`/
+/// `dispatch_ui_event(..., RealtimeEvent, ...)`), which is exactly what that
+/// passthrough exists for.
+pub(crate) async fn publish_announcement(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<PublishAnnouncementRequest>,
+) -> impl IntoResponse {
+    let expected_token = match &state.config.release_admin_token {
+        Some(token) => token,
+        None => return StatusCode::FORBIDDEN.into_response(),
+    };
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let authorized = provided_token
+        .map(|token| constant_time_eq(token.as_bytes(), expected_token.as_bytes()))
+        .unwrap_or(false);
+    if !authorized {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let text = body.text.trim();
+    if text.is_empty() || text.chars().count() > 240 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let payload = serde_json::json!({
+        "type": "titlebar_announcement",
+        "text": text,
+    });
+    broadcast_json(&state, payload.to_string()).await;
+    info!("Разослано объявление в титлбар: {:?}", text);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub(crate) async fn send_json_to_user(

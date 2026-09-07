@@ -98,8 +98,35 @@ ZaliMixin(ZaliInterface, class {
             this.sessionBootstrapInProgress = false;
             this.rehydratePendingOutbox();
             this.scheduleFlushPendingOutbox(300);
+            // Whatever the outcome (restored / login form / guest), updateAuthView()
+            // above already rendered it — safe to reveal now. `success` mirrors the
+            // same predicate updateAuthView() uses to decide whether the login
+            // overlay shows: a token means we're entering the app, so the splash
+            // gets to say "Готово"; no token means the login form is what's under
+            // it, and "Готово" there would just be a lie.
+            this.hideBootSplash(!!this.S.session?.token);
             this.trace('bootstrapSession done');
         }
+    }
+
+    /**
+     * Resolves #bootSplash's looping "Авторизация..." status (see the inline
+     * script in index.html) once bootstrapSession() has decided what to show.
+     * `success` true scrambles the status into "Готово" before fading; false
+     * just stops the loop and fades. Removed from layout after the fade so it
+     * can't eat clicks or show up in the accessibility tree.
+     */
+    hideBootSplash(success) {
+        if (typeof window.__resolveBootScreen === 'function') {
+            window.__resolveBootScreen(!!success);
+            return;
+        }
+        // Fallback in case the inline boot script didn't run for some reason —
+        // still guarantees the splash doesn't get stuck covering the app.
+        const splash = document.getElementById('bootSplash');
+        if (!splash || splash.hidden) return;
+        splash.classList.add('fade-out');
+        setTimeout(() => { splash.hidden = true; }, 400);
     }
 
     async restoreSession(session) {

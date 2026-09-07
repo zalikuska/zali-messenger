@@ -15,6 +15,107 @@
     <title>ZaliMessenger</title>
 </head>
 <body>
+    <!-- BOOT SPLASH: plain HTML/CSS so it paints before any JS runs — covers the
+         window while bootstrapSession() checks a stored token against the server,
+         so the login form never flashes on screen just to be replaced a moment
+         later once the session turns out to still be valid. Hidden by
+         hideBootSplash() in web/src/interface/auth.js, called from
+         bootstrapSession()'s `finally` once the outcome (restored / login /
+         guest) is already decided and rendered underneath. -->
+    <div class="boot-splash" id="bootSplash">
+        <div class="boot-splash-lines" role="text" aria-label="ZaliMessenger. Авторизация.">
+            <div class="boot-splash-brand">ZaliMessenger</div>
+            <div class="boot-splash-status" id="bootStatusText" aria-hidden="true">Авторизация...</div>
+        </div>
+    </div>
+    <script>
+    // Runs inline, before app.js loads, so the status line starts cycling on
+    // the very first paint instead of waiting for the module loader. Loops
+    // "Авторизация..." -- static, scramble, static -- until
+    // hideBootSplash(success) in web/src/interface/auth.js calls
+    // window.__resolveBootScreen from bootstrapSession()'s `finally`: on
+    // success it scrambles once more into "Готово" before fading out, on
+    // failure/guest it just fades (a "Готово" would be a lie -- nobody's in).
+    (function () {
+        var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        var splash = document.getElementById('bootSplash');
+        var statusEl = document.getElementById('bootStatusText');
+        var LOOP_TEXT = 'Авторизация...';
+        var SUCCESS_TEXT = 'Готово';
+        var GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01#*+-/\\<>';
+        var STATIC_MS = 500;
+        var SCRAMBLE_MS = 550;
+
+        var pending = null;
+        var finished = false;
+
+        function clearPending() {
+            if (pending === null) return;
+            clearTimeout(pending);
+            cancelAnimationFrame(pending);
+            pending = null;
+        }
+
+        function scrambleInto(toText, duration, onDone) {
+            var start = null;
+            function frame(now) {
+                if (start === null) start = now;
+                var t = (now - start) / duration;
+                if (t >= 1) {
+                    statusEl.textContent = toText;
+                    onDone();
+                    return;
+                }
+                var out = '';
+                for (var i = 0; i < toText.length; i++) {
+                    out += (i / toText.length < t - 0.15) ? toText[i] : GLYPHS[(Math.random() * GLYPHS.length) | 0];
+                }
+                statusEl.textContent = out;
+                pending = requestAnimationFrame(frame);
+            }
+            pending = requestAnimationFrame(frame);
+        }
+
+        function loopCycle() {
+            if (finished) return;
+            statusEl.textContent = LOOP_TEXT;
+            pending = setTimeout(function () {
+                if (finished) return;
+                scrambleInto(LOOP_TEXT, SCRAMBLE_MS, function () {
+                    if (finished) return;
+                    pending = setTimeout(loopCycle, STATIC_MS);
+                });
+            }, STATIC_MS);
+        }
+
+        if (statusEl) {
+            if (reduceMotion) {
+                statusEl.textContent = LOOP_TEXT;
+            } else {
+                loopCycle();
+            }
+        }
+
+        window.__resolveBootScreen = function (success) {
+            finished = true;
+            clearPending();
+            var fade = function () {
+                if (!splash || splash.hidden) return;
+                splash.classList.add('fade-out');
+                setTimeout(function () { splash.hidden = true; }, 400);
+            };
+            if (!statusEl) { fade(); return; }
+            if (success) statusEl.classList.add('is-success');
+            if (success && !reduceMotion) {
+                scrambleInto(SUCCESS_TEXT, 380, function () { setTimeout(fade, 420); });
+            } else {
+                statusEl.textContent = success ? SUCCESS_TEXT : LOOP_TEXT;
+                setTimeout(fade, success ? 420 : 0);
+            }
+        };
+    })();
+    </script>
+
     <div class="app">
 
         <!-- TITLE BAR -->
@@ -26,6 +127,14 @@
                 <span class="tb-brand">ZaliMessenger</span>
                 <span class="tb-sep">/</span>
                 <span class="tb-chat" id="tbChat">Загрузка...</span>
+                <!-- Server-pushed announcement (titlebar_announcement WS event) —
+                     replaces the brand/chat name above until dismissed. See
+                     showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
+                     web/src/interface/state_sync.js. -->
+                <div class="tb-announce" id="tbAnnounce" hidden>
+                    <span class="tb-announce-text" id="tbAnnounceText"></span>
+                    <button class="tb-announce-close" id="tbAnnounceClose" type="button" aria-label="Закрыть объявление">×</button>
+                </div>
             </div>
             <div class="tb-r">
                 <div class="ws-pill" id="wsPill">

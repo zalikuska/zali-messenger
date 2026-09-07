@@ -1624,6 +1624,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/coins/distribution", get(get_coin_distribution))
         .route("/api/coins/transfer", post(transfer_coins))
         .route("/api/version", get(get_latest_version).post(publish_version))
+        .route("/api/announcement", post(publish_announcement))
         .route("/health", get(health_check))
         .route("/uploads/:filename", get(download_upload_file))
         // Public on purpose: the in-app updater (download_update in the Windows

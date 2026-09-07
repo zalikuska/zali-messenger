@@ -63,6 +63,7 @@ struct WebAssets {
     --contact-suggest-font: 14px;
     --contact-suggest-hint: rgba(255,255,255,.58);
     --msg-gap: 2;
+    --titlebar-h: 40px;
     --control-h: 40px;
     --control-h-sm: 40px;
     --footer-dock-h: 68px;
@@ -134,11 +135,74 @@ button {
     display: none !important;
 }
 
+/* ── Boot splash ──────────────────────────────────────────────────────────
+   Covers the window while bootstrapSession() validates a stored token
+   against the server (see index.html's comment on #bootSplash and
+   hideBootSplash() in web/src/interface/auth.js). Highest z-index in the
+   app — above every modal — since it has to hide literally everything,
+   including a half-decided auth screen, until the outcome is known. */
+.boot-splash {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    opacity: 1;
+    transition: opacity .35s var(--ease-out);
+}
+
+.boot-splash.fade-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Two centered lines: a static wordmark, and a status line that loops
+   "Авторизация..." (static -> scramble -> static, see the inline script in
+   index.html) until bootstrapSession() resolves, then scrambles once more
+   into "Готово" on success. Monospace so the scramble's random glyphs never
+   jitter the line width side to side. */
+.boot-splash-lines {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+.boot-splash-brand {
+    color: var(--text);
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+
+.boot-splash-status {
+    display: inline-block;
+    min-width: 14ch;
+    text-align: center;
+    color: var(--text3);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .03em;
+    white-space: pre;
+    transition: color .3s var(--ease-out);
+}
+
+.boot-splash-status.is-success {
+    color: var(--lime);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .boot-splash-status { transition: none; }
+}
+
 .app {
     width: 100vw;
     height: 100vh;
     display: grid;
-    grid-template-rows: 40px 1fr;
+    grid-template-rows: var(--titlebar-h) 1fr;
     position: relative;
     background:
         radial-gradient(circle at 16% 12%, rgba(var(--accent-rgb),.12), transparent 22%),
@@ -172,6 +236,12 @@ button {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     -webkit-user-select: none;
+    /* Stays on top of every fullscreen overlay (profile, server settings, ...)
+       so it — and the macOS traffic lights sitting over its left column —
+       are never covered by a modal drawn flush to the top edge. z-index alone
+       is enough here: .titlebar is a grid item of .app, and CSS Grid gives
+       z-index'd grid items their own stacking context without `position`. */
+    z-index: 700;
 }
 
 .tb-c {
@@ -194,6 +264,54 @@ button {
 
 .tb-chat {
     color: var(--lime);
+}
+
+/* Server-pushed banner (titlebar_announcement WS event) — swaps in for the
+   brand/chat name above while active. Hidden by default; .titlebar.has-announcement
+   toggles which one shows (see showTitlebarAnnouncement() in state_sync.js). */
+.tb-announce {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.titlebar.has-announcement .tb-brand,
+.titlebar.has-announcement .tb-sep,
+.titlebar.has-announcement .tb-chat {
+    display: none;
+}
+
+.titlebar.has-announcement .tb-announce {
+    display: inline-flex;
+}
+
+.tb-announce-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: none;
+}
+
+.tb-announce-close {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    border: none;
+    background: none;
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    transition: color .15s var(--ease-out);
+}
+
+.tb-announce-close:hover {
+    color: var(--text);
 }
 
 .tb-r {
@@ -3422,12 +3540,18 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-overlay {
     position: fixed;
-    inset: 0;
+    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
+       macOS traffic lights over it — permanently uncovered instead of hidden
+       behind the fullscreen modal. See .titlebar's z-index note. */
+    top: var(--titlebar-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
     z-index: 60;
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding: 12px;
+    padding: 0;
     background: rgba(4, 6, 10, .78);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -3439,18 +3563,18 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .server-modal {
-    width: min(100%, calc(100vw - 24px));
-    height: calc(100vh - 24px);
+    width: 100%;
+    height: 100%;
     max-width: none;
     max-height: none;
-    margin: auto;
+    margin: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     gap: 16px;
     padding: 20px;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 24px;
+    border: none;
+    border-radius: 0;
     background:
         radial-gradient(circle at top left, rgba(var(--accent-rgb),.11), transparent 28%),
         linear-gradient(180deg, rgba(22,24,28,.98), rgba(10,12,16,.98));
@@ -6055,10 +6179,7 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     .server-modal {
-        width: min(100%, calc(100vw - 12px));
-        height: calc(100vh - 12px);
         padding: 14px;
-        border-radius: 18px;
     }
 
     .server-modal-head {
@@ -7720,6 +7841,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
        app-bars (list = .sidebar-head, chat = .chat-hdr). ─────────────────── */
     .titlebar { display: none !important; }
 
+    /* .titlebar is gone here, so the fullscreen overlays' top offset (reserved
+       for it — and the macOS traffic lights over it — on desktop) would just
+       expose whatever per-screen app-bar sits underneath. No desktop window
+       chrome on mobile, so go back to true edge-to-edge. */
+    .profile-overlay,
+    .server-overlay {
+        top: 0;
+    }
+
     /* Full-bleed app frame — no desktop card insets / rounded panels. */
     .body {
         grid-template-columns: 1fr;
@@ -8277,12 +8407,18 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-overlay {
     position: fixed;
-    inset: 0;
+    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
+       macOS traffic lights over it — permanently uncovered instead of hidden
+       behind the fullscreen modal. See .titlebar's z-index note. */
+    top: var(--titlebar-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
     z-index: 620;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding: 0;
     background: rgba(4,6,9,.72);
     backdrop-filter: blur(6px);
     opacity: 0;
@@ -8293,13 +8429,16 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-modal {
     position: relative;
-    width: min(920px, 100%);
-    max-height: min(88vh, 900px);
+    width: 100%;
+    height: 100%;
+    max-height: 100vh;
+"""#,
+    #"""
     overflow: auto;
-    border-radius: 22px;
-    border: 1px solid var(--border);
+    border-radius: 0;
+    border: none;
     background: var(--sidebar);
-    box-shadow: 0 28px 70px rgba(0,0,0,.55);
+    box-shadow: none;
     transform: translateY(8px);
     transition: transform .18s var(--ease, ease);
 }
@@ -8441,8 +8580,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-policy-summary { display: flex; flex-wrap: wrap; gap: 8px; }
 .profile-policy-chip {
     padding: 5px 10px;
-"""#,
-    #"""
     border-radius: 999px;
     background: rgba(255,255,255,.04);
     border: 1px solid var(--border);
@@ -8451,35 +8588,78 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 .profile-policy-chip strong { color: var(--text); }
 
-/* --- Редактор --- */
+/* --- Редактор ---
+   Карточки повторяют язык .settings-card/.server-modal-card (та же рамка,
+   градиентная подложка и тень), чтобы редактор профиля не выглядел отдельным
+   от остального приложения экраном. */
 
-.profile-editor { display: grid; gap: 14px; }
+.profile-editor { display: grid; gap: 16px; }
+
+.profile-editor-section {
+    position: relative;
+    padding: 20px;
+    display: grid;
+    gap: 16px;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015)),
+        rgba(255,255,255,.02);
+    box-shadow: 0 18px 48px rgba(0,0,0,.16);
+}
+
+.profile-editor-section-head { display: grid; gap: 4px; }
+
+.profile-editor-kicker {
+    color: var(--lime);
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+}
+
+.profile-editor-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 900;
+}
+
+.profile-editor-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
 .profile-field { display: grid; gap: 6px; font-size: 13px; }
 .profile-field > span { color: var(--text2); font-size: 12px; }
 
 .profile-field input[type="text"],
 .profile-field input[type="url"],
-.profile-field textarea,
-.profile-select {
+.profile-field textarea {
     width: 100%;
-    padding: 10px 12px;
+    min-height: var(--control-h);
+    padding: 12px 14px;
     border-radius: 12px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.03);
     color: var(--text);
     font: inherit;
     font-size: 13px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out);
 }
 
-.profile-field textarea { resize: vertical; min-height: 80px; }
-.profile-field input:focus, .profile-field textarea:focus, .profile-select:focus {
+.profile-field textarea { resize: vertical; min-height: 90px; }
+.profile-field input:focus, .profile-field textarea:focus {
     outline: none;
     border-color: var(--lime);
+    box-shadow: 0 0 0 3px var(--lime-dim);
 }
 
 .profile-field-color input[type="color"] {
-    width: 56px;
-    height: 34px;
+    width: 100%;
+    height: var(--control-h);
     padding: 2px;
     border-radius: 10px;
     border: 1px solid var(--border);
@@ -8487,7 +8667,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     cursor: pointer;
 }
 
-.profile-avatar-editor { display: flex; align-items: center; gap: 12px; }
+.profile-avatar-editor { display: flex; align-items: center; gap: 14px; }
 .profile-avatar-preview {
     width: 56px;
     height: 56px;
@@ -8499,34 +8679,63 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 .profile-avatar-preview .avatar-img { width: 100%; height: 100%; object-fit: cover; }
 
-.profile-links-editor { display: grid; gap: 8px; }
+.profile-links-editor { display: grid; gap: 10px; }
 .profile-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
 .profile-link-row input {
-    padding: 9px 11px;
+    padding: 11px 13px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.03);
     color: var(--text);
     font: inherit;
     font-size: 12px;
+    transition: border-color .18s var(--ease-out);
 }
+.profile-link-row input:focus { outline: none; border-color: var(--lime); }
 
 .profile-link-remove {
-    width: 28px;
-    height: 28px;
+    width: 34px;
+    height: 34px;
     display: grid;
     place-items: center;
-    border-radius: 8px;
-    border: none;
+    border-radius: 10px;
+    border: 1px solid var(--border);
     background: rgba(255,255,255,.04);
     color: var(--text2);
     cursor: pointer;
     flex: 0 0 auto;
+    transition: border-color .16s var(--ease-out), background .16s var(--ease-out), color .16s var(--ease-out);
 }
-.profile-link-remove:hover { color: var(--red); background: rgba(255,77,109,.12); }
+.profile-link-remove:hover { color: var(--red); border-color: rgba(255,77,109,.3); background: rgba(255,77,109,.12); }
 .profile-link-remove .ui-icon { width: 14px; height: 14px; }
 
-.profile-policies { display: grid; gap: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+/* Ряд кнопок вместо системного <select> — активный вариант подсвечен
+   тем же акцентным тонированием, что и .server-modal-nav-btn.active. */
+.profile-audience-field { display: grid; gap: 9px; font-size: 13px; }
+.profile-audience-field > span { color: var(--text2); font-size: 12px; }
+
+.profile-audience-group { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.profile-audience-btn {
+    min-height: 38px;
+    padding: 0 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(255,255,255,.03);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color .16s var(--ease-out), background .16s var(--ease-out), color .16s var(--ease-out), transform .16s var(--ease-out);
+}
+.profile-audience-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.profile-audience-btn:active { transform: translateY(1px); }
+.profile-audience-btn.active {
+    color: var(--text);
+    border-color: rgba(var(--accent-rgb), .55);
+    background: rgba(var(--accent-rgb), .14);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
+}
 
 /* --- Комментарии --- */
 
@@ -8727,6 +8936,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .profile-link-row { grid-template-columns: minmax(0, 1fr) auto; }
     .profile-link-row input[type="url"] { grid-column: 1 / -1; }
     .autograph-tool-actions { margin-left: 0; width: 100%; }
+    .profile-editor-section { padding: 16px; }
+    .profile-editor-row { grid-template-columns: 1fr; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -9112,6 +9323,107 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     </script>
 </head>
 <body>
+    <!-- BOOT SPLASH: plain HTML/CSS so it paints before any JS runs — covers the
+         window while bootstrapSession() checks a stored token against the server,
+         so the login form never flashes on screen just to be replaced a moment
+         later once the session turns out to still be valid. Hidden by
+         hideBootSplash() in web/src/interface/auth.js, called from
+         bootstrapSession()'s `finally` once the outcome (restored / login /
+         guest) is already decided and rendered underneath. -->
+    <div class="boot-splash" id="bootSplash">
+        <div class="boot-splash-lines" role="text" aria-label="ZaliMessenger. Авторизация.">
+            <div class="boot-splash-brand">ZaliMessenger</div>
+            <div class="boot-splash-status" id="bootStatusText" aria-hidden="true">Авторизация...</div>
+        </div>
+    </div>
+    <script>
+    // Runs inline, before app.js loads, so the status line starts cycling on
+    // the very first paint instead of waiting for the module loader. Loops
+    // "Авторизация..." -- static, scramble, static -- until
+    // hideBootSplash(success) in web/src/interface/auth.js calls
+    // window.__resolveBootScreen from bootstrapSession()'s `finally`: on
+    // success it scrambles once more into "Готово" before fading out, on
+    // failure/guest it just fades (a "Готово" would be a lie -- nobody's in).
+    (function () {
+        var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        var splash = document.getElementById('bootSplash');
+        var statusEl = document.getElementById('bootStatusText');
+        var LOOP_TEXT = 'Авторизация...';
+        var SUCCESS_TEXT = 'Готово';
+        var GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01#*+-/\\<>';
+        var STATIC_MS = 500;
+        var SCRAMBLE_MS = 550;
+
+        var pending = null;
+        var finished = false;
+
+        function clearPending() {
+            if (pending === null) return;
+            clearTimeout(pending);
+            cancelAnimationFrame(pending);
+            pending = null;
+        }
+
+        function scrambleInto(toText, duration, onDone) {
+            var start = null;
+            function frame(now) {
+                if (start === null) start = now;
+                var t = (now - start) / duration;
+                if (t >= 1) {
+                    statusEl.textContent = toText;
+                    onDone();
+                    return;
+                }
+                var out = '';
+                for (var i = 0; i < toText.length; i++) {
+                    out += (i / toText.length < t - 0.15) ? toText[i] : GLYPHS[(Math.random() * GLYPHS.length) | 0];
+                }
+                statusEl.textContent = out;
+                pending = requestAnimationFrame(frame);
+            }
+            pending = requestAnimationFrame(frame);
+        }
+
+        function loopCycle() {
+            if (finished) return;
+            statusEl.textContent = LOOP_TEXT;
+            pending = setTimeout(function () {
+                if (finished) return;
+                scrambleInto(LOOP_TEXT, SCRAMBLE_MS, function () {
+                    if (finished) return;
+                    pending = setTimeout(loopCycle, STATIC_MS);
+                });
+            }, STATIC_MS);
+        }
+
+        if (statusEl) {
+            if (reduceMotion) {
+                statusEl.textContent = LOOP_TEXT;
+            } else {
+                loopCycle();
+            }
+        }
+
+        window.__resolveBootScreen = function (success) {
+            finished = true;
+            clearPending();
+            var fade = function () {
+                if (!splash || splash.hidden) return;
+                splash.classList.add('fade-out');
+                setTimeout(function () { splash.hidden = true; }, 400);
+            };
+            if (!statusEl) { fade(); return; }
+            if (success) statusEl.classList.add('is-success');
+            if (success && !reduceMotion) {
+                scrambleInto(SUCCESS_TEXT, 380, function () { setTimeout(fade, 420); });
+            } else {
+                statusEl.textContent = success ? SUCCESS_TEXT : LOOP_TEXT;
+                setTimeout(fade, success ? 420 : 0);
+            }
+        };
+    })();
+    </script>
+
     <div class="app">
 
         <!-- TITLE BAR -->
@@ -9123,6 +9435,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 <span class="tb-brand">ZaliMessenger</span>
                 <span class="tb-sep">/</span>
                 <span class="tb-chat" id="tbChat">Загрузка...</span>
+                <!-- Server-pushed announcement (titlebar_announcement WS event) —
+                     replaces the brand/chat name above until dismissed. See
+                     showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
+                     web/src/interface/state_sync.js. -->
+                <div class="tb-announce" id="tbAnnounce" hidden>
+                    <span class="tb-announce-text" id="tbAnnounceText"></span>
+                    <button class="tb-announce-close" id="tbAnnounceClose" type="button" aria-label="Закрыть объявление">×</button>
+                </div>
             </div>
             <div class="tb-r">
                 <div class="ws-pill" id="wsPill">
@@ -27103,8 +27423,35 @@ ZaliMixin(ZaliInterface, class {
             this.sessionBootstrapInProgress = false;
             this.rehydratePendingOutbox();
             this.scheduleFlushPendingOutbox(300);
+            // Whatever the outcome (restored / login form / guest), updateAuthView()
+            // above already rendered it — safe to reveal now. `success` mirrors the
+            // same predicate updateAuthView() uses to decide whether the login
+            // overlay shows: a token means we're entering the app, so the splash
+            // gets to say "Готово"; no token means the login form is what's under
+            // it, and "Готово" there would just be a lie.
+            this.hideBootSplash(!!this.S.session?.token);
             this.trace('bootstrapSession done');
         }
+    }
+
+    /**
+     * Resolves #bootSplash's looping "Авторизация..." status (see the inline
+     * script in index.html) once bootstrapSession() has decided what to show.
+     * `success` true scrambles the status into "Готово" before fading; false
+     * just stops the loop and fades. Removed from layout after the fade so it
+     * can't eat clicks or show up in the accessibility tree.
+     */
+    hideBootSplash(success) {
+        if (typeof window.__resolveBootScreen === 'function') {
+            window.__resolveBootScreen(!!success);
+            return;
+        }
+        // Fallback in case the inline boot script didn't run for some reason —
+        // still guarantees the splash doesn't get stuck covering the app.
+        const splash = document.getElementById('bootSplash');
+        if (!splash || splash.hidden) return;
+        splash.classList.add('fade-out');
+        setTimeout(() => { splash.hidden = true; }, 400);
     }
 
     async restoreSession(session) {
@@ -27168,6 +27515,8 @@ ZaliMixin(ZaliInterface, class {
             // the next account logged in during this page session would skip its own
             // on-demand vault fetch and mint a temporary key instead of adopting the
             // real key from its vault (key divergence on the account-switch flow).
+"""#,
+    #"""
             this._cloudVaultResolveFetchDone = false;
             this.S.current = null;
             this.S.activeServer = null;
@@ -27200,8 +27549,6 @@ ZaliMixin(ZaliInterface, class {
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))
-"""#,
-    #"""
                 .filter(contact => contact !== username);
             this.S.contacts.forEach(contact => this.initChat(contact));
             this.lastNativeConversationKeySignature = '';
@@ -31390,6 +31737,8 @@ ZaliMixin(ZaliInterface, class {
                     m.text === incomingText &&
                     this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey
                 );
+"""#,
+    #"""
             if (existingIndex >= 0) {
                 const prev = msgs[existingIndex];
                 msgs[existingIndex] = {
@@ -31416,8 +31765,6 @@ ZaliMixin(ZaliInterface, class {
                     text: incomingText,
                     attachments: incomingAttachments,
                     reactions: incomingReactions,
-"""#,
-    #"""
                     myReactions: this.normalizeMyReactions(myReactions),
                     timestamp: ts,
                     reply,
@@ -32104,6 +32451,11 @@ ZaliMixin(ZaliInterface, class {
         const type = String(payload.type || '').trim();
         if (!type) return false;
 
+        if (type === 'titlebar_announcement') {
+            this.showTitlebarAnnouncement(payload);
+            return true;
+        }
+
         if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
             // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
             // событие в каждое соединение аккаунта. Голосовой сокет пропускает
@@ -32140,6 +32492,31 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         return false;
+    }
+
+    /**
+     * Показывает объявление сервера в титлбаре вместо бренда/имени чата —
+     * см. server/src/realtime.rs::publish_announcement (POST /api/announcement,
+     * тот же RELEASE_ADMIN_TOKEN, что и у /api/version) и dispatchRealtimeEvent
+     * выше. Живёт только на этом устройстве и только пока открыта вкладка:
+     * сервер не хранит состояние «показано/скрыто по крестику», рассылка
+     * чисто разовая — новый коннект после неё объявления уже не увидит.
+     */
+    showTitlebarAnnouncement(payload) {
+        const text = String(payload?.text || '').trim();
+        if (!text) return;
+        const titlebar = document.getElementById('titlebar');
+        const textEl = document.getElementById('tbAnnounceText');
+        if (!titlebar || !textEl) return;
+        textEl.textContent = text;
+        document.getElementById('tbAnnounce')?.removeAttribute('hidden');
+        titlebar.classList.add('has-announcement');
+    }
+
+    /** Крестик у объявления — прячет его локально, .tb-chat/.tb-brand возвращаются. */
+    hideTitlebarAnnouncement() {
+        document.getElementById('titlebar')?.classList.remove('has-announcement');
+        document.getElementById('tbAnnounce')?.setAttribute('hidden', '');
     }
 
     setUsers(users) {
@@ -33866,10 +34243,13 @@ ZaliMixin(ZaliInterface, class {
         </div>`;
     }
 
-    renderAudienceSelect(name, value, options) {
-        return `<select class="profile-select" data-profile-field="${this.esc(name)}">
-            ${options.map(option => `<option value="${this.esc(option.value)}"${option.value === value ? ' selected' : ''}>${this.esc(option.label)}</option>`).join('')}
-        </select>`;
+    /** Ряд из нескольких кнопок вместо системного `<select>` — активный вариант подсвечен акцентом. */
+    renderAudienceGroup(name, value, options) {
+        return `<div class="profile-audience-group" role="group">
+            ${options.map(option => `
+                <button type="button" class="profile-audience-btn${option.value === value ? ' active' : ''}" data-profile-audience-field="${this.esc(name)}" data-profile-audience-value="${this.esc(option.value)}" aria-pressed="${option.value === value}">${this.esc(option.label)}</button>
+            `).join('')}
+        </div>`;
     }
 
     renderProfileEditor(state) {
@@ -33877,36 +34257,50 @@ ZaliMixin(ZaliInterface, class {
         const links = Array.isArray(draft.links) ? draft.links : [];
         return `<div class="profile-editor">
             ${state.error ? `<p class="profile-error">${this.esc(state.error)}</p>` : ''}
-            <label class="profile-field">
-                <span>Отображаемое имя</span>
-                <input type="text" maxlength="64" data-profile-field="displayName" value="${this.esc(draft.displayName || '')}" placeholder="${this.esc(state.username)}">
-            </label>
-            <label class="profile-field">
-                <span>Статус</span>
-                <input type="text" maxlength="120" data-profile-field="status" value="${this.esc(draft.status || '')}" placeholder="Чем занимаетесь">
-            </label>
-            <label class="profile-field">
-                <span>О себе</span>
-                <textarea rows="4" maxlength="600" data-profile-field="bio" placeholder="Пара слов о вас">${this.esc(draft.bio || '')}</textarea>
-            </label>
-            <label class="profile-field">
-                <span>Где вы</span>
-                <input type="text" maxlength="64" data-profile-field="location" value="${this.esc(draft.location || '')}" placeholder="Город">
-            </label>
-            <div class="profile-field">
-                <span>Аватар</span>
-                <div class="profile-avatar-editor">
-                    <div class="ava profile-avatar-preview">${this.renderAvatarHTML(state.username, 'avatar-img', state.username)}</div>
-                    <button class="btn-flat" type="button" data-profile-action="change-avatar">Сменить картинку</button>
-                </div>
-            </div>
-            <label class="profile-field profile-field-color">
-                <span>Акцентный цвет</span>
-                <input type="color" data-profile-field="accentColor" value="${this.esc(this.safeCssColor(draft.accentColor) || '#cbff00')}">
-            </label>
 
-            <div class="profile-field">
-                <span>Ссылки</span>
+            <section class="profile-editor-section">
+                <div class="profile-editor-section-head">
+                    <span class="profile-editor-kicker">Основное</span>
+                    <h3 class="profile-editor-title">Публичный профиль</h3>
+                </div>
+                <div class="profile-editor-row">
+                    <label class="profile-field">
+                        <span>Отображаемое имя</span>
+                        <input type="text" maxlength="64" data-profile-field="displayName" value="${this.esc(draft.displayName || '')}" placeholder="${this.esc(state.username)}">
+                    </label>
+                    <label class="profile-field">
+                        <span>Статус</span>
+                        <input type="text" maxlength="120" data-profile-field="status" value="${this.esc(draft.status || '')}" placeholder="Чем занимаетесь">
+                    </label>
+                </div>
+                <label class="profile-field">
+                    <span>О себе</span>
+                    <textarea rows="4" maxlength="600" data-profile-field="bio" placeholder="Пара слов о вас">${this.esc(draft.bio || '')}</textarea>
+                </label>
+                <div class="profile-editor-row">
+                    <label class="profile-field">
+                        <span>Где вы</span>
+                        <input type="text" maxlength="64" data-profile-field="location" value="${this.esc(draft.location || '')}" placeholder="Город">
+                    </label>
+                    <label class="profile-field profile-field-color">
+                        <span>Акцентный цвет</span>
+                        <input type="color" data-profile-field="accentColor" value="${this.esc(this.safeCssColor(draft.accentColor) || '#cbff00')}">
+                    </label>
+                </div>
+                <div class="profile-field">
+                    <span>Аватар</span>
+                    <div class="profile-avatar-editor">
+                        <div class="ava profile-avatar-preview">${this.renderAvatarHTML(state.username, 'avatar-img', state.username)}</div>
+                        <button class="btn-flat" type="button" data-profile-action="change-avatar">Сменить картинку</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="profile-editor-section">
+                <div class="profile-editor-section-head">
+                    <span class="profile-editor-kicker">Ссылки</span>
+                    <h3 class="profile-editor-title">Сайты и соцсети</h3>
+                </div>
                 <div class="profile-links-editor">
                     ${links.map((link, index) => `
                         <div class="profile-link-row">
@@ -33918,23 +34312,27 @@ ZaliMixin(ZaliInterface, class {
                     ${links.length < 6 ? `<button class="btn-flat" type="button" data-profile-action="add-link">Добавить ссылку</button>` : ''}
                 </div>
                 <small class="profile-help">Принимаются только http/https-ссылки.</small>
-            </div>
+            </section>
 
-            <div class="profile-policies">
-                <label class="profile-field">
+            <section class="profile-editor-section">
+                <div class="profile-editor-section-head">
+                    <span class="profile-editor-kicker">Приватность</span>
+                    <h3 class="profile-editor-title">Кто что может</h3>
+                </div>
+                <div class="profile-audience-field">
                     <span>Кто может комментировать</span>
-                    ${this.renderAudienceSelect('commentPolicy', draft.commentPolicy, ZaliInterface.audienceOptions)}
-                </label>
-                <label class="profile-field">
+                    ${this.renderAudienceGroup('commentPolicy', draft.commentPolicy, ZaliInterface.audienceOptions)}
+                </div>
+                <div class="profile-audience-field">
                     <span>Кто может оставлять автографы</span>
-                    ${this.renderAudienceSelect('autographPolicy', draft.autographPolicy, ZaliInterface.audienceOptions)}
-                </label>
-                <label class="profile-field">
+                    ${this.renderAudienceGroup('autographPolicy', draft.autographPolicy, ZaliInterface.audienceOptions)}
+                </div>
+                <div class="profile-audience-field">
                     <span>Чьи автографы публиковать сразу</span>
-                    ${this.renderAudienceSelect('autographAutoApprove', draft.autographAutoApprove, ZaliInterface.autoApproveOptions)}
+                    ${this.renderAudienceGroup('autographAutoApprove', draft.autographAutoApprove, ZaliInterface.autoApproveOptions)}
                     <small class="profile-help">«Одобряю сам» — каждый автограф ждёт вашего «да» на вкладке «Модерация».</small>
-                </label>
-            </div>
+                </div>
+            </section>
         </div>`;
     }
 
@@ -34183,6 +34581,21 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
 
+            // Кнопки-сегменты вместо системного <select> для полей аудитории
+            // (кто может комментировать/оставлять автографы/автоодобрение).
+            const audienceBtn = event.target.closest('[data-profile-audience-field]');
+            if (audienceBtn) {
+                const field = audienceBtn.getAttribute('data-profile-audience-field');
+                const value = audienceBtn.getAttribute('data-profile-audience-value');
+                if (field && value) {
+                    const state = this.ensureProfileState();
+                    const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+                    draft[field] = value;
+                    this.setProfileState({ draft });
+                }
+                return;
+            }
+
             const actionBtn = event.target.closest('[data-profile-action]');
             if (!actionBtn) return;
             this.handleProfileAction(actionBtn.getAttribute('data-profile-action'), actionBtn);
@@ -34236,14 +34649,6 @@ ZaliMixin(ZaliInterface, class {
         }
         if (field === 'inviteDraft') {
             this.S.profile = { ...this.ensureProfileState(), inviteDraft: target.value };
-            return;
-        }
-        if (field.endsWith('Policy') || field === 'autographAutoApprove') {
-            // Селекты перерисовывать безопасно и нужно: от них зависят подсказки.
-            const state = this.ensureProfileState();
-            const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
-            draft[field] = target.value;
-            this.setProfileState({ draft });
             return;
         }
         this.updateProfileDraft(field, target.value);
@@ -35405,6 +35810,8 @@ ZaliMixin(ZaliInterface, class {
                 const quote = e.target.closest('.msg-quote[data-reply-target]');
                 if (quote) {
                     e.stopPropagation();
+"""#,
+    #"""
                     this.scrollToMessage(quote.getAttribute('data-reply-target'));
                     return;
                 }
@@ -35506,8 +35913,6 @@ ZaliMixin(ZaliInterface, class {
         if (composerContext) {
             composerContext.addEventListener('click', (e) => {
                 if (e.target.closest('[data-composer-context-cancel]')) {
-"""#,
-    #"""
                     this.cancelComposerContext();
                 }
             });
@@ -36715,11 +37120,19 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
         }
+
+        // 8a. Server-pushed titlebar announcement — dismissible locally only
+        // (see showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
+        // state_sync.js). Button is always in the DOM, just hidden, so a
+        // single static listener is enough — no delegation needed.
+        document.getElementById('tbAnnounceClose')?.addEventListener('click', () => {
+            this.hideTitlebarAnnouncement();
+        });
 
         // 8b. In-app window controls (Windows only — native OS decorations are
         // switched off there in favor of this titlebar, see
@@ -36744,7 +37157,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

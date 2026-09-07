@@ -6,7 +6,7 @@
 //! is gated on `RELEASE_ADMIN_TOKEN` — unset (the default) means the route
 //! always 403s, same opt-in shape as the VAPID keys in `push.rs`.
 
-use crate::AppState;
+use crate::{constant_time_eq, AppState};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
@@ -111,15 +111,6 @@ pub(crate) async fn download_release_file(
             StatusCode::NOT_FOUND.into_response()
         }
     }
-}
-
-/// Byte-wise comparison with no early exit, so a wrong RELEASE_ADMIN_TOKEN guess
-/// can't be narrowed down via response-timing measurements the way `!=` allows.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 pub(crate) async fn get_latest_version(

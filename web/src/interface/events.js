@@ -1573,11 +1573,19 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
         }
+
+        // 8a. Server-pushed titlebar announcement — dismissible locally only
+        // (see showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
+        // state_sync.js). Button is always in the DOM, just hidden, so a
+        // single static listener is enough — no delegation needed.
+        document.getElementById('tbAnnounceClose')?.addEventListener('click', () => {
+            this.hideTitlebarAnnouncement();
+        });
 
         // 8b. In-app window controls (Windows only — native OS decorations are
         // switched off there in favor of this titlebar, see
@@ -1602,7 +1610,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

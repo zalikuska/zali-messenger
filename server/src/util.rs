@@ -3,6 +3,16 @@
 
 use base64::Engine;
 
+/// Byte-wise comparison with no early exit, so a wrong admin-token guess can't
+/// be narrowed down via response-timing measurements the way `!=` allows.
+/// Shared by every admin-token-gated route (`/api/version`, `/api/announcement`).
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

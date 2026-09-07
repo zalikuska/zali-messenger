@@ -37,6 +37,7 @@
     --contact-suggest-font: 14px;
     --contact-suggest-hint: rgba(255,255,255,.58);
     --msg-gap: 2;
+    --titlebar-h: 40px;
     --control-h: 40px;
     --control-h-sm: 40px;
     --footer-dock-h: 68px;
@@ -108,11 +109,74 @@ button {
     display: none !important;
 }
 
+/* ── Boot splash ──────────────────────────────────────────────────────────
+   Covers the window while bootstrapSession() validates a stored token
+   against the server (see index.html's comment on #bootSplash and
+   hideBootSplash() in web/src/interface/auth.js). Highest z-index in the
+   app — above every modal — since it has to hide literally everything,
+   including a half-decided auth screen, until the outcome is known. */
+.boot-splash {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    opacity: 1;
+    transition: opacity .35s var(--ease-out);
+}
+
+.boot-splash.fade-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Two centered lines: a static wordmark, and a status line that loops
+   "Авторизация..." (static -> scramble -> static, see the inline script in
+   index.html) until bootstrapSession() resolves, then scrambles once more
+   into "Готово" on success. Monospace so the scramble's random glyphs never
+   jitter the line width side to side. */
+.boot-splash-lines {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+.boot-splash-brand {
+    color: var(--text);
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+
+.boot-splash-status {
+    display: inline-block;
+    min-width: 14ch;
+    text-align: center;
+    color: var(--text3);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .03em;
+    white-space: pre;
+    transition: color .3s var(--ease-out);
+}
+
+.boot-splash-status.is-success {
+    color: var(--lime);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .boot-splash-status { transition: none; }
+}
+
 .app {
     width: 100vw;
     height: 100vh;
     display: grid;
-    grid-template-rows: 40px 1fr;
+    grid-template-rows: var(--titlebar-h) 1fr;
     position: relative;
     background:
         radial-gradient(circle at 16% 12%, rgba(var(--accent-rgb),.12), transparent 22%),
@@ -146,6 +210,12 @@ button {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     -webkit-user-select: none;
+    /* Stays on top of every fullscreen overlay (profile, server settings, ...)
+       so it — and the macOS traffic lights sitting over its left column —
+       are never covered by a modal drawn flush to the top edge. z-index alone
+       is enough here: .titlebar is a grid item of .app, and CSS Grid gives
+       z-index'd grid items their own stacking context without `position`. */
+    z-index: 700;
 }
 
 .tb-c {
@@ -168,6 +238,54 @@ button {
 
 .tb-chat {
     color: var(--lime);
+}
+
+/* Server-pushed banner (titlebar_announcement WS event) — swaps in for the
+   brand/chat name above while active. Hidden by default; .titlebar.has-announcement
+   toggles which one shows (see showTitlebarAnnouncement() in state_sync.js). */
+.tb-announce {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.titlebar.has-announcement .tb-brand,
+.titlebar.has-announcement .tb-sep,
+.titlebar.has-announcement .tb-chat {
+    display: none;
+}
+
+.titlebar.has-announcement .tb-announce {
+    display: inline-flex;
+}
+
+.tb-announce-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: none;
+}
+
+.tb-announce-close {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    border: none;
+    background: none;
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    transition: color .15s var(--ease-out);
+}
+
+.tb-announce-close:hover {
+    color: var(--text);
 }
 
 .tb-r {
@@ -3396,12 +3514,18 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-overlay {
     position: fixed;
-    inset: 0;
+    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
+       macOS traffic lights over it — permanently uncovered instead of hidden
+       behind the fullscreen modal. See .titlebar's z-index note. */
+    top: var(--titlebar-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
     z-index: 60;
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding: 12px;
+    padding: 0;
     background: rgba(4, 6, 10, .78);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -3413,18 +3537,18 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .server-modal {
-    width: min(100%, calc(100vw - 24px));
-    height: calc(100vh - 24px);
+    width: 100%;
+    height: 100%;
     max-width: none;
     max-height: none;
-    margin: auto;
+    margin: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     gap: 16px;
     padding: 20px;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 24px;
+    border: none;
+    border-radius: 0;
     background:
         radial-gradient(circle at top left, rgba(var(--accent-rgb),.11), transparent 28%),
         linear-gradient(180deg, rgba(22,24,28,.98), rgba(10,12,16,.98));
@@ -6029,10 +6153,7 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     .server-modal {
-        width: min(100%, calc(100vw - 12px));
-        height: calc(100vh - 12px);
         padding: 14px;
-        border-radius: 18px;
     }
 
     .server-modal-head {
@@ -7694,6 +7815,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
        app-bars (list = .sidebar-head, chat = .chat-hdr). ─────────────────── */
     .titlebar { display: none !important; }
 
+    /* .titlebar is gone here, so the fullscreen overlays' top offset (reserved
+       for it — and the macOS traffic lights over it — on desktop) would just
+       expose whatever per-screen app-bar sits underneath. No desktop window
+       chrome on mobile, so go back to true edge-to-edge. */
+    .profile-overlay,
+    .server-overlay {
+        top: 0;
+    }
+
     /* Full-bleed app frame — no desktop card insets / rounded panels. */
     .body {
         grid-template-columns: 1fr;
@@ -8251,12 +8381,18 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-overlay {
     position: fixed;
-    inset: 0;
+    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
+       macOS traffic lights over it — permanently uncovered instead of hidden
+       behind the fullscreen modal. See .titlebar's z-index note. */
+    top: var(--titlebar-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
     z-index: 620;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding: 0;
     background: rgba(4,6,9,.72);
     backdrop-filter: blur(6px);
     opacity: 0;
@@ -8267,13 +8403,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-modal {
     position: relative;
-    width: min(920px, 100%);
-    max-height: min(88vh, 900px);
+    width: 100%;
+    height: 100%;
+    max-height: 100vh;
     overflow: auto;
-    border-radius: 22px;
-    border: 1px solid var(--border);
+    border-radius: 0;
+    border: none;
     background: var(--sidebar);
-    box-shadow: 0 28px 70px rgba(0,0,0,.55);
+    box-shadow: none;
     transform: translateY(8px);
     transition: transform .18s var(--ease, ease);
 }
@@ -8423,35 +8560,78 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 .profile-policy-chip strong { color: var(--text); }
 
-/* --- Редактор --- */
+/* --- Редактор ---
+   Карточки повторяют язык .settings-card/.server-modal-card (та же рамка,
+   градиентная подложка и тень), чтобы редактор профиля не выглядел отдельным
+   от остального приложения экраном. */
 
-.profile-editor { display: grid; gap: 14px; }
+.profile-editor { display: grid; gap: 16px; }
+
+.profile-editor-section {
+    position: relative;
+    padding: 20px;
+    display: grid;
+    gap: 16px;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015)),
+        rgba(255,255,255,.02);
+    box-shadow: 0 18px 48px rgba(0,0,0,.16);
+}
+
+.profile-editor-section-head { display: grid; gap: 4px; }
+
+.profile-editor-kicker {
+    color: var(--lime);
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+}
+
+.profile-editor-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 900;
+}
+
+.profile-editor-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
 .profile-field { display: grid; gap: 6px; font-size: 13px; }
 .profile-field > span { color: var(--text2); font-size: 12px; }
 
 .profile-field input[type="text"],
 .profile-field input[type="url"],
-.profile-field textarea,
-.profile-select {
+.profile-field textarea {
     width: 100%;
-    padding: 10px 12px;
+    min-height: var(--control-h);
+    padding: 12px 14px;
     border-radius: 12px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.03);
     color: var(--text);
     font: inherit;
     font-size: 13px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out);
 }
 
-.profile-field textarea { resize: vertical; min-height: 80px; }
-.profile-field input:focus, .profile-field textarea:focus, .profile-select:focus {
+.profile-field textarea { resize: vertical; min-height: 90px; }
+.profile-field input:focus, .profile-field textarea:focus {
     outline: none;
     border-color: var(--lime);
+    box-shadow: 0 0 0 3px var(--lime-dim);
 }
 
 .profile-field-color input[type="color"] {
-    width: 56px;
-    height: 34px;
+    width: 100%;
+    height: var(--control-h);
     padding: 2px;
     border-radius: 10px;
     border: 1px solid var(--border);
@@ -8459,7 +8639,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     cursor: pointer;
 }
 
-.profile-avatar-editor { display: flex; align-items: center; gap: 12px; }
+.profile-avatar-editor { display: flex; align-items: center; gap: 14px; }
 .profile-avatar-preview {
     width: 56px;
     height: 56px;
@@ -8471,34 +8651,63 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 .profile-avatar-preview .avatar-img { width: 100%; height: 100%; object-fit: cover; }
 
-.profile-links-editor { display: grid; gap: 8px; }
+.profile-links-editor { display: grid; gap: 10px; }
 .profile-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
 .profile-link-row input {
-    padding: 9px 11px;
+    padding: 11px 13px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.03);
     color: var(--text);
     font: inherit;
     font-size: 12px;
+    transition: border-color .18s var(--ease-out);
 }
+.profile-link-row input:focus { outline: none; border-color: var(--lime); }
 
 .profile-link-remove {
-    width: 28px;
-    height: 28px;
+    width: 34px;
+    height: 34px;
     display: grid;
     place-items: center;
-    border-radius: 8px;
-    border: none;
+    border-radius: 10px;
+    border: 1px solid var(--border);
     background: rgba(255,255,255,.04);
     color: var(--text2);
     cursor: pointer;
     flex: 0 0 auto;
+    transition: border-color .16s var(--ease-out), background .16s var(--ease-out), color .16s var(--ease-out);
 }
-.profile-link-remove:hover { color: var(--red); background: rgba(255,77,109,.12); }
+.profile-link-remove:hover { color: var(--red); border-color: rgba(255,77,109,.3); background: rgba(255,77,109,.12); }
 .profile-link-remove .ui-icon { width: 14px; height: 14px; }
 
-.profile-policies { display: grid; gap: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+/* Ряд кнопок вместо системного <select> — активный вариант подсвечен
+   тем же акцентным тонированием, что и .server-modal-nav-btn.active. */
+.profile-audience-field { display: grid; gap: 9px; font-size: 13px; }
+.profile-audience-field > span { color: var(--text2); font-size: 12px; }
+
+.profile-audience-group { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.profile-audience-btn {
+    min-height: 38px;
+    padding: 0 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(255,255,255,.03);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color .16s var(--ease-out), background .16s var(--ease-out), color .16s var(--ease-out), transform .16s var(--ease-out);
+}
+.profile-audience-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.profile-audience-btn:active { transform: translateY(1px); }
+.profile-audience-btn.active {
+    color: var(--text);
+    border-color: rgba(var(--accent-rgb), .55);
+    background: rgba(var(--accent-rgb), .14);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
+}
 
 /* --- Комментарии --- */
 
@@ -8699,6 +8908,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .profile-link-row { grid-template-columns: minmax(0, 1fr) auto; }
     .profile-link-row input[type="url"] { grid-column: 1 / -1; }
     .autograph-tool-actions { margin-left: 0; width: 100%; }
+    .profile-editor-section { padding: 16px; }
+    .profile-editor-row { grid-template-columns: 1fr; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
