@@ -65,7 +65,7 @@ const MAX_REQUEST_MESSAGE: usize = 300;
 /// «нарисовал полчаса без отрыва» не должен превращаться в мегабайтный документ,
 /// который повесит вкладку каждому зрителю.
 const MAX_STROKES: usize = 400;
-const MAX_PATH_CHARS: usize = 8000;
+const MAX_PATH_CHARS: usize = 64000;
 const MAX_AUTOGRAPH_CHARS: usize = 200_000;
 const MAX_WALL_AUTOGRAPHS: i64 = 300;
 
