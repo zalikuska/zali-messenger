@@ -2934,7 +2934,18 @@ body[data-nav-mode="servers"] .contacts {
 .avatar-crop-overlay {
     position: fixed;
     inset: 0;
-    z-index: 70;
+    /* Above .profile-overlay's 620, not just the base-layer 70 most fixed
+       overlays use here. "Сменить картинку" in the profile editor is the
+       only way to reach this dialog while .profile-overlay is still open and
+       covering the whole screen — at the old z-index:70 the crop dialog drew
+       BEHIND it, fully obscured by the profile modal's own backdrop and
+       unclickable. The picker's file dialog and the crop step both ran, the
+       upload would have gone through fine — but nothing of it was visible or
+       reachable, so from the profile tab specifically it looked exactly like
+       setting an avatar there just didn't work. Below .titlebar's 700 (which
+       intentionally always stays on top of every fullscreen overlay).
+       Reached only from openAvatarPicker() in events.js. */
+    z-index: 650;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -8411,7 +8422,17 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     width: 100%;
     height: 100%;
     max-height: 100vh;
-    overflow: auto;
+    /* Not the scroll container itself (was `overflow: auto` here) — that made
+       .profile-close, an absolutely-positioned child of THIS box, scroll away
+       with the content: absolute positioning is relative to the padding box,
+       but rendering still follows the scroll offset of whatever box actually
+       has the overflow. Only .profile-body scrolls now (below), so the close
+       button — a flex sibling, not a descendant of the scrolling box — stays
+       pinned at the same spot on screen no matter how far the profile is
+       scrolled. */
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
     border-radius: 0;
     border: none;
     background: var(--sidebar);
@@ -8441,7 +8462,21 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-close:hover { color: var(--text); background: rgba(255,255,255,.09); }
 .profile-close svg { width: 18px; height: 18px; }
 
-.profile-body { padding: 26px; display: grid; gap: 18px; }
+.profile-body {
+    padding: 26px;
+    display: grid;
+    gap: 18px;
+    /* The actual scroll container now (see .profile-modal) — flex:1 to fill
+       whatever space .profile-modal doesn't need for anything else (it needs
+       none, .profile-close is out of flow, but this is what makes the grid
+       take the full height rather than shrinking to its content), and
+       min-height:0 because a flex item's default min-height:auto would
+       otherwise refuse to shrink below its content size and defeat the
+       overflow entirely. */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
 .profile-loading { display: grid; gap: 10px; }
 .profile-error { color: var(--red); font-size: 13px; margin: 0; }
 .profile-help { color: var(--text2); font-size: 12px; margin: 0; }
@@ -8496,6 +8531,27 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-counters { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
 .profile-counter { display: flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--text2); }
 .profile-counter strong { font-size: 17px; color: var(--text); }
+
+/* Sites/socials entered in the editor (.profile-links-editor below) — was
+   saved and returned by the server all along, but never rendered anywhere
+   until now. Same row as bio/counters, on every tab. */
+.profile-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.profile-link-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 220px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    color: var(--lime);
+    font-size: 12px;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.profile-link-chip:hover { background: rgba(255,255,255,.08); border-color: var(--lime); }
 
 .profile-head-actions {
     grid-column: 1 / -1;
@@ -8649,7 +8705,24 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-avatar-preview .avatar-img { width: 100%; height: 100%; object-fit: cover; }
 
 .profile-links-editor { display: grid; gap: 10px; }
-.profile-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
+/* Named areas rather than relying on DOM order + implicit auto-placement:
+   the row mixes a spanning full-width element (url, on its own line on
+   mobile) with narrow fixed-size ones (color swatch, remove button) whose
+   auto-placement interacts with that span in ways that are easy to get
+   wrong and hard to eyeball-verify. Naming each cell makes the desktop and
+   mobile layouts below independently correct by construction instead of by
+   accident of source order. */
+.profile-link-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto auto;
+    grid-template-areas: "label url color remove";
+    gap: 8px;
+    align-items: center;
+}
+.profile-link-row input[type="text"] { grid-area: label; }
+.profile-link-row input[type="url"] { grid-area: url; }
+.profile-link-row .profile-link-color-input { grid-area: color; }
+.profile-link-row .profile-link-remove { grid-area: remove; }
 .profile-link-row input {
     padding: 11px 13px;
     border-radius: 10px;
@@ -8661,6 +8734,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     transition: border-color .18s var(--ease-out);
 }
 .profile-link-row input:focus { outline: none; border-color: var(--lime); }
+
+.profile-link-color-input {
+    width: 34px;
+    height: 34px;
+    padding: 2px;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
 
 .profile-link-remove {
     width: 34px;
@@ -8906,8 +8987,12 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .profile-head-copy { text-align: center; }
     .profile-counters { justify-content: center; }
     .profile-head-actions { justify-content: center; }
-    .profile-link-row { grid-template-columns: minmax(0, 1fr) auto; }
-    .profile-link-row input[type="url"] { grid-column: 1 / -1; }
+    .profile-link-row {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-areas:
+            "label color remove"
+            "url url url";
+    }
     .autograph-tool-actions { margin-left: 0; width: 100%; }
     .profile-editor-section { padding: 16px; }
     .profile-editor-row { grid-template-columns: 1fr; }

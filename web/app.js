@@ -3384,6 +3384,20 @@ ZaliMixin(ZaliInterface, class {
         return this.setMobileSidebarOpen(next);
     }
 
+    // The sidebar (contact list, mode-switch, server/channel list) stays visible
+    // and clickable across every top-level view — Hub, ZaliCoin, Settings — not
+    // just the chat screen. Before this, picking a conversation from there while
+    // one of those was open silently updated S.current/activeServer/activeChannel
+    // and re-rendered #msgs behind the scenes, but #viewChat itself stayed
+    // display:none: the click looked like it did nothing at all. Called by
+    // switchChat/setActiveServer/setActiveChannel; guarded so re-selecting the
+    // already-open conversation from the chat view itself doesn't replay
+    // #viewChat's .24s enter animation on every call.
+    ensureChatViewOpen() {
+        if (document.getElementById('viewChat')?.classList.contains('active')) return;
+        this.openChatView();
+    }
+
     // showList=true lands on the mobile list/picker screen instead of the
     // chat screen — pass it when the caller is about to show the list right
     // after, so we settle on the final state in one step instead of closing
@@ -16450,7 +16464,16 @@ ZaliMixin(ZaliInterface, class {
         if (!server || !next) return;
         const channel = (server.channels || []).find(ch => ch.id === next) || null;
         if (!channel) return;
-        if (this.S.navMode === 'servers' && this.S.activeChannel === next) return;
+        if (this.S.navMode === 'servers' && this.S.activeChannel === next) {
+            // Nothing changes in state, but this may still be a click from
+            // Hub/ZaliCoin/Settings asking to see the already-selected channel —
+            // see ensureChatViewOpen().
+            this.ensureChatViewOpen();
+            return;
+        }
+        // Same reasoning as switchChat: the channel list in the sidebar stays
+        // clickable outside the chat screen.
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         if (this.voice.roomType === 'channel' && this.voice.roomId) {
             const currentChannelId = String(this.voice.channelId || '').trim();
@@ -20628,7 +20651,16 @@ ZaliMixin(ZaliInterface, class {
         const previousVoiceChannel = String(this.voice.channelId || '').trim();
         const current = this.currentServer();
         const currentChannel = this.currentChannel();
-        if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) return;
+        if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) {
+            // Same reasoning as setActiveChannel's identical guard: state is
+            // already correct, but the click may be asking to return to the chat
+            // screen from Hub/ZaliCoin/Settings — see ensureChatViewOpen().
+            this.ensureChatViewOpen();
+            return;
+        }
+        // The server list in the sidebar stays clickable outside the chat screen
+        // too (see switchChat's identical call for the DM list).
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         this.S.activeServer = next;
         this.S.activeConversationType = 'servers';
@@ -21348,6 +21380,11 @@ ZaliMixin(ZaliInterface, class {
         const peer = String(name || '').trim();
         if (!peer) return;
         this.trace(`switchChat peer=${peer}`);
+        // A contact row in the sidebar is clickable from Hub/ZaliCoin/Settings too
+        // (the sidebar never hides) — bring the chat screen back if one of those
+        // was open, otherwise picking a conversation from there looked like a
+        // no-op.
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         this.clearActiveServerSelection();
         // A reply quote and an edit both point at a message in the conversation
@@ -24063,7 +24100,7 @@ ZaliMixin(ZaliInterface, class {
         const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
         const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
         if (links.length >= 6) return;
-        links.push({ label: '', url: '' });
+        links.push({ label: '', url: '', color: '' });
         this.setProfileState({ draft: { ...draft, links } });
     }
 
@@ -24546,9 +24583,42 @@ ZaliMixin(ZaliInterface, class {
                         </span>
                     `).join('')}
                 </div>
+                ${this.renderProfileLinks(data)}
             </div>
             <div class="profile-head-actions">${this.renderProfileActions(state, data)}</div>
         </header>`;
+    }
+
+    // The editor (renderProfileEditor below) has always let you add/edit these,
+    // and the server has always saved and returned them (sanitize_links in
+    // profiles.rs enforces http/https there) — but nothing ever rendered
+    // `data.links` back out anywhere in the read view, so a saved link was
+    // simply invisible to everyone, including the owner looking at their own
+    // profile. Shown in the header (like bio) so it's on every tab, not tied
+    // to one.
+    renderProfileLinks(data) {
+        const links = (Array.isArray(data.links) ? data.links : [])
+            .filter(link => String(link?.url || '').trim());
+        if (!links.length) return '';
+        return `<div class="profile-links">
+            ${links.map(link => {
+                const url = String(link.url || '').trim();
+                // Server-enforced already (sanitize_links), but a link chip is an
+                // <a href> about to be handed to the browser — re-checking the
+                // scheme here means this can't be made to emit a bad href just
+                // because some future write path forgets to sanitize.
+                if (!/^https?:\/\//i.test(url)) return '';
+                const label = String(link.label || '').trim()
+                    || url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                // Same double-check pattern as accentColor in renderProfileHeader:
+                // server-sanitised already (sanitize_links -> sanitize_color), but
+                // this becomes an inline style attribute, so it's re-validated here
+                // too rather than trusted blind.
+                const color = this.safeCssColor(link.color);
+                const styleAttr = color ? ` style="color:${this.esc(color)};border-color:${this.esc(color)}"` : '';
+                return `<a class="profile-link-chip" href="${this.esc(url)}" target="_blank" rel="noopener noreferrer" title="${this.esc(url)}"${styleAttr}>${this.esc(label)}</a>`;
+            }).join('')}
+        </div>`;
     }
 
     renderProfileActions(state, data) {
@@ -24694,12 +24764,13 @@ ZaliMixin(ZaliInterface, class {
                         <div class="profile-link-row">
                             <input type="text" maxlength="48" placeholder="Название" data-profile-link-field="label" data-profile-link-index="${index}" value="${this.esc(link.label || '')}">
                             <input type="url" maxlength="300" placeholder="https://" data-profile-link-field="url" data-profile-link-index="${index}" value="${this.esc(link.url || '')}">
+                            <input type="color" class="profile-link-color-input" title="Цвет ссылки" aria-label="Цвет ссылки" data-profile-link-field="color" data-profile-link-index="${index}" value="${this.esc(this.safeCssColor(link.color) || '#cbff00')}">
                             <button class="profile-link-remove" type="button" data-profile-action="remove-link" data-profile-link-index="${index}" aria-label="Удалить ссылку">${this.uiIcon('close')}</button>
                         </div>
                     `).join('')}
                     ${links.length < 6 ? `<button class="btn-flat" type="button" data-profile-action="add-link">Добавить ссылку</button>` : ''}
                 </div>
-                <small class="profile-help">Принимаются только http/https-ссылки.</small>
+                <small class="profile-help">Принимаются только http/https-ссылки. Цвет — необязательно, без выбора ссылка отображается акцентным цветом.</small>
             </section>
 
             <section class="profile-editor-section">
@@ -27115,14 +27186,15 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        // Клик по своей аватарке слева снизу открывает СВОЙ профиль сразу в
-        // режиме редактирования — оттуда же доступны приглашения в друзья.
+        // Клик по своей аватарке слева снизу открывает СВОЙ профиль как обычный
+        // просмотр — оттуда же доступны приглашения в друзья и кнопка
+        // «Редактировать», если человек действительно хочет что-то поменять.
         // Сменить картинку можно кнопкой внутри редактора и здесь же в
         // настройках, поэтому прежний прямой вызов выбора файла не потерян.
         const meAvaBtn = document.getElementById('meAvaBtn');
         if (meAvaBtn) {
             meAvaBtn.addEventListener('click', () => {
-                void this.openProfile(this.myName(), { editing: true });
+                void this.openProfile(this.myName());
             });
         }
         // Открывает системный выбор файла для аватара. Замыкание объявлено

@@ -419,7 +419,16 @@ ZaliMixin(ZaliInterface, class {
         const previousVoiceChannel = String(this.voice.channelId || '').trim();
         const current = this.currentServer();
         const currentChannel = this.currentChannel();
-        if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) return;
+        if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) {
+            // Same reasoning as setActiveChannel's identical guard: state is
+            // already correct, but the click may be asking to return to the chat
+            // screen from Hub/ZaliCoin/Settings — see ensureChatViewOpen().
+            this.ensureChatViewOpen();
+            return;
+        }
+        // The server list in the sidebar stays clickable outside the chat screen
+        // too (see switchChat's identical call for the DM list).
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         this.S.activeServer = next;
         this.S.activeConversationType = 'servers';

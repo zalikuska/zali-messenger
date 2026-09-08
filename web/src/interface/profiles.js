@@ -224,7 +224,7 @@ ZaliMixin(ZaliInterface, class {
         const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
         const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
         if (links.length >= 6) return;
-        links.push({ label: '', url: '' });
+        links.push({ label: '', url: '', color: '' });
         this.setProfileState({ draft: { ...draft, links } });
     }
 

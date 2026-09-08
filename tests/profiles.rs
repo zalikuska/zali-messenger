@@ -821,3 +821,87 @@ async fn profile_endpoints_require_authentication() {
         .expect("anonymous comment request");
     assert_eq!(resp.status(), 401);
 }
+
+#[tokio::test]
+async fn link_color_is_sanitised_like_accent_color_and_persists() {
+    let app = spawn_app().await;
+    let user = register_user(&app, "linkcolor01", "correct horse battery staple").await;
+
+    let resp = app
+        .http
+        .put(app.url("/api/profile"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({
+            "links": [
+                { "label": "valid", "url": "https://example.org/a", "color": "#FF6B6B" },
+                // Same class of injection sanitize_color already rejects for
+                // accentColor — a link colour is an inline `style="color:...` on
+                // the client, so it must be rejected here too, not just escaped.
+                { "label": "bad color", "url": "https://example.org/b", "color": "red; background:url(javascript:alert(1))" },
+                // No colour at all — must round-trip as "", not fail.
+                { "label": "no color", "url": "https://example.org/c" },
+            ],
+        }))
+        .send()
+        .await
+        .expect("update request");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("update json");
+    let links = body["links"].as_array().expect("links array");
+    assert_eq!(links.len(), 3);
+    // Lowercased, like accentColor.
+    assert_eq!(links[0]["color"], "#ff6b6b");
+    assert_eq!(links[1]["color"], "", "an invalid colour must be dropped, not stored verbatim");
+    assert_eq!(links[2]["color"], "");
+
+    // Re-fetching (a fresh GET, not just the PUT response) must return the same
+    // thing — this is the round trip through parse_links reading the stored
+    // JSON back out, not just the in-memory value from the write path.
+    let profile = get_profile(&app, &user, "linkcolor01").await;
+    let links = profile["links"].as_array().expect("links array");
+    assert_eq!(links[0]["color"], "#ff6b6b");
+    assert_eq!(links[1]["color"], "");
+}
+
+#[tokio::test]
+async fn a_link_row_saved_before_color_existed_still_loads() {
+    // Simulates a profile whose `links` JSON was written by a server build
+    // before the `color` field existed — parse_links must treat a missing key
+    // as "no colour", not fail the whole row (and thus silently drop a link
+    // someone had saved). Needs a real data dir to seed the row directly
+    // against, rather than the HTTP API (which always writes the current
+    // shape) — same pattern as tests/conversation_keys.rs's spawn_with_pool.
+    let data_dir = std::env::temp_dir().join(format!(
+        "zali-legacy-link-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let app = common::spawn_app_with_data_dir(data_dir.clone()).await;
+    let user = register_user(&app, "legacylink01", "correct horse battery staple").await;
+
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite:{}",
+        data_dir.join("zali_messenger.db").to_string_lossy()
+    ))
+    .await
+    .expect("open test db");
+    sqlx::query(
+        "INSERT INTO user_profiles (username, links, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(username) DO UPDATE SET links = excluded.links",
+    )
+    .bind("legacylink01")
+    .bind(r#"[{"label":"old","url":"https://example.org/legacy"}]"#)
+    .execute(&pool)
+    .await
+    .expect("seed legacy link row");
+    drop(pool);
+
+    let profile = get_profile(&app, &user, "legacylink01").await;
+    let links = profile["links"].as_array().expect("links array");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["url"], "https://example.org/legacy");
+    assert_eq!(links[0]["color"], "");
+}

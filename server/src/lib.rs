@@ -1501,7 +1501,14 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         warn!("Миграция asset storage завершилась с ошибкой: {}", e);
     }
 
-    seed_default_servers(&pool).await.ok();
+    // Was seed_default_servers(): it also ran this migration, then went on to
+    // create six demo servers (Zali Hub, Dev Team, Friends, Music, Games,
+    // Study) owned by a synthetic "system" account whenever the servers table
+    // was empty — which on a fresh install is every single first boot. The
+    // seeding itself is gone (see the removal note in storage.rs); this call
+    // is the one part of that function that was a real schema migration and
+    // still has to run on every boot.
+    ensure_message_columns(&pool).await.ok();
     seed_zalicoin(&pool).await.ok();
     sqlx::query(
         "INSERT OR IGNORE INTO server_members (server_id, username, role, joined_at)

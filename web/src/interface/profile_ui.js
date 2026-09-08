@@ -114,9 +114,42 @@ ZaliMixin(ZaliInterface, class {
                         </span>
                     `).join('')}
                 </div>
+                ${this.renderProfileLinks(data)}
             </div>
             <div class="profile-head-actions">${this.renderProfileActions(state, data)}</div>
         </header>`;
+    }
+
+    // The editor (renderProfileEditor below) has always let you add/edit these,
+    // and the server has always saved and returned them (sanitize_links in
+    // profiles.rs enforces http/https there) — but nothing ever rendered
+    // `data.links` back out anywhere in the read view, so a saved link was
+    // simply invisible to everyone, including the owner looking at their own
+    // profile. Shown in the header (like bio) so it's on every tab, not tied
+    // to one.
+    renderProfileLinks(data) {
+        const links = (Array.isArray(data.links) ? data.links : [])
+            .filter(link => String(link?.url || '').trim());
+        if (!links.length) return '';
+        return `<div class="profile-links">
+            ${links.map(link => {
+                const url = String(link.url || '').trim();
+                // Server-enforced already (sanitize_links), but a link chip is an
+                // <a href> about to be handed to the browser — re-checking the
+                // scheme here means this can't be made to emit a bad href just
+                // because some future write path forgets to sanitize.
+                if (!/^https?:\/\//i.test(url)) return '';
+                const label = String(link.label || '').trim()
+                    || url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                // Same double-check pattern as accentColor in renderProfileHeader:
+                // server-sanitised already (sanitize_links -> sanitize_color), but
+                // this becomes an inline style attribute, so it's re-validated here
+                // too rather than trusted blind.
+                const color = this.safeCssColor(link.color);
+                const styleAttr = color ? ` style="color:${this.esc(color)};border-color:${this.esc(color)}"` : '';
+                return `<a class="profile-link-chip" href="${this.esc(url)}" target="_blank" rel="noopener noreferrer" title="${this.esc(url)}"${styleAttr}>${this.esc(label)}</a>`;
+            }).join('')}
+        </div>`;
     }
 
     renderProfileActions(state, data) {
@@ -262,12 +295,13 @@ ZaliMixin(ZaliInterface, class {
                         <div class="profile-link-row">
                             <input type="text" maxlength="48" placeholder="Название" data-profile-link-field="label" data-profile-link-index="${index}" value="${this.esc(link.label || '')}">
                             <input type="url" maxlength="300" placeholder="https://" data-profile-link-field="url" data-profile-link-index="${index}" value="${this.esc(link.url || '')}">
+                            <input type="color" class="profile-link-color-input" title="Цвет ссылки" aria-label="Цвет ссылки" data-profile-link-field="color" data-profile-link-index="${index}" value="${this.esc(this.safeCssColor(link.color) || '#cbff00')}">
                             <button class="profile-link-remove" type="button" data-profile-action="remove-link" data-profile-link-index="${index}" aria-label="Удалить ссылку">${this.uiIcon('close')}</button>
                         </div>
                     `).join('')}
                     ${links.length < 6 ? `<button class="btn-flat" type="button" data-profile-action="add-link">Добавить ссылку</button>` : ''}
                 </div>
-                <small class="profile-help">Принимаются только http/https-ссылки.</small>
+                <small class="profile-help">Принимаются только http/https-ссылки. Цвет — необязательно, без выбора ссылка отображается акцентным цветом.</small>
             </section>
 
             <section class="profile-editor-section">

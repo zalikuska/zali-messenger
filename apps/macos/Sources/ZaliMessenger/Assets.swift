@@ -2960,7 +2960,18 @@ body[data-nav-mode="servers"] .contacts {
 .avatar-crop-overlay {
     position: fixed;
     inset: 0;
-    z-index: 70;
+    /* Above .profile-overlay's 620, not just the base-layer 70 most fixed
+       overlays use here. "Сменить картинку" in the profile editor is the
+       only way to reach this dialog while .profile-overlay is still open and
+       covering the whole screen — at the old z-index:70 the crop dialog drew
+       BEHIND it, fully obscured by the profile modal's own backdrop and
+       unclickable. The picker's file dialog and the crop step both ran, the
+       upload would have gone through fine — but nothing of it was visible or
+       reachable, so from the profile tab specifically it looked exactly like
+       setting an avatar there just didn't work. Below .titlebar's 700 (which
+       intentionally always stays on top of every fullscreen overlay).
+       Reached only from openAvatarPicker() in events.js. */
+    z-index: 650;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -8392,6 +8403,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     position: absolute;
     /* .ava (the avatar right behind it) sets z-index:1 and creates its own
        stacking context — without a z-index here higher than that, the badge
+"""#,
+    #"""
        (z-index:auto) paints BELOW the avatar despite coming later in the DOM,
        so it was getting covered instead of overlapping the corner. */
     z-index: 2;
@@ -8422,8 +8435,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     z-index: 620;
     display: flex;
     align-items: center;
-"""#,
-    #"""
     justify-content: center;
     padding: 0;
     background: rgba(4,6,9,.72);
@@ -8439,7 +8450,17 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     width: 100%;
     height: 100%;
     max-height: 100vh;
-    overflow: auto;
+    /* Not the scroll container itself (was `overflow: auto` here) — that made
+       .profile-close, an absolutely-positioned child of THIS box, scroll away
+       with the content: absolute positioning is relative to the padding box,
+       but rendering still follows the scroll offset of whatever box actually
+       has the overflow. Only .profile-body scrolls now (below), so the close
+       button — a flex sibling, not a descendant of the scrolling box — stays
+       pinned at the same spot on screen no matter how far the profile is
+       scrolled. */
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
     border-radius: 0;
     border: none;
     background: var(--sidebar);
@@ -8469,7 +8490,21 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-close:hover { color: var(--text); background: rgba(255,255,255,.09); }
 .profile-close svg { width: 18px; height: 18px; }
 
-.profile-body { padding: 26px; display: grid; gap: 18px; }
+.profile-body {
+    padding: 26px;
+    display: grid;
+    gap: 18px;
+    /* The actual scroll container now (see .profile-modal) — flex:1 to fill
+       whatever space .profile-modal doesn't need for anything else (it needs
+       none, .profile-close is out of flow, but this is what makes the grid
+       take the full height rather than shrinking to its content), and
+       min-height:0 because a flex item's default min-height:auto would
+       otherwise refuse to shrink below its content size and defeat the
+       overflow entirely. */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
 .profile-loading { display: grid; gap: 10px; }
 .profile-error { color: var(--red); font-size: 13px; margin: 0; }
 .profile-help { color: var(--text2); font-size: 12px; margin: 0; }
@@ -8524,6 +8559,27 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-counters { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
 .profile-counter { display: flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--text2); }
 .profile-counter strong { font-size: 17px; color: var(--text); }
+
+/* Sites/socials entered in the editor (.profile-links-editor below) — was
+   saved and returned by the server all along, but never rendered anywhere
+   until now. Same row as bio/counters, on every tab. */
+.profile-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.profile-link-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 220px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    color: var(--lime);
+    font-size: 12px;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.profile-link-chip:hover { background: rgba(255,255,255,.08); border-color: var(--lime); }
 
 .profile-head-actions {
     grid-column: 1 / -1;
@@ -8677,7 +8733,24 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-avatar-preview .avatar-img { width: 100%; height: 100%; object-fit: cover; }
 
 .profile-links-editor { display: grid; gap: 10px; }
-.profile-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
+/* Named areas rather than relying on DOM order + implicit auto-placement:
+   the row mixes a spanning full-width element (url, on its own line on
+   mobile) with narrow fixed-size ones (color swatch, remove button) whose
+   auto-placement interacts with that span in ways that are easy to get
+   wrong and hard to eyeball-verify. Naming each cell makes the desktop and
+   mobile layouts below independently correct by construction instead of by
+   accident of source order. */
+.profile-link-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto auto;
+    grid-template-areas: "label url color remove";
+    gap: 8px;
+    align-items: center;
+}
+.profile-link-row input[type="text"] { grid-area: label; }
+.profile-link-row input[type="url"] { grid-area: url; }
+.profile-link-row .profile-link-color-input { grid-area: color; }
+.profile-link-row .profile-link-remove { grid-area: remove; }
 .profile-link-row input {
     padding: 11px 13px;
     border-radius: 10px;
@@ -8689,6 +8762,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     transition: border-color .18s var(--ease-out);
 }
 .profile-link-row input:focus { outline: none; border-color: var(--lime); }
+
+.profile-link-color-input {
+    width: 34px;
+    height: 34px;
+    padding: 2px;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
 
 .profile-link-remove {
     width: 34px;
@@ -8934,8 +9015,12 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .profile-head-copy { text-align: center; }
     .profile-counters { justify-content: center; }
     .profile-head-actions { justify-content: center; }
-    .profile-link-row { grid-template-columns: minmax(0, 1fr) auto; }
-    .profile-link-row input[type="url"] { grid-column: 1 / -1; }
+    .profile-link-row {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-areas:
+            "label color remove"
+            "url url url";
+    }
     .autograph-tool-actions { margin-left: 0; width: 100%; }
     .profile-editor-section { padding: 16px; }
     .profile-editor-row { grid-template-columns: 1fr; }
@@ -13704,6 +13789,20 @@ ZaliMixin(ZaliInterface, class {
         return this.setMobileSidebarOpen(next);
     }
 
+    // The sidebar (contact list, mode-switch, server/channel list) stays visible
+    // and clickable across every top-level view — Hub, ZaliCoin, Settings — not
+    // just the chat screen. Before this, picking a conversation from there while
+    // one of those was open silently updated S.current/activeServer/activeChannel
+    // and re-rendered #msgs behind the scenes, but #viewChat itself stayed
+    // display:none: the click looked like it did nothing at all. Called by
+    // switchChat/setActiveServer/setActiveChannel; guarded so re-selecting the
+    // already-open conversation from the chat view itself doesn't replay
+    // #viewChat's .24s enter animation on every call.
+    ensureChatViewOpen() {
+        if (document.getElementById('viewChat')?.classList.contains('active')) return;
+        this.openChatView();
+    }
+
     // showList=true lands on the mobile list/picker screen instead of the
     // chat screen — pass it when the caller is about to show the list right
     // after, so we settle on the final state in one step instead of closing
@@ -15480,6 +15579,8 @@ ZaliMixin(ZaliInterface, class {
     // Switches the active (sending) key for a scope while keeping the outgoing one
     // in the candidate pool.
     //
+"""#,
+    #"""
     // Every adoption site used to do this by hand as
     //     addAltConversationKey(stored, scope, current); stored[scope] = next;
     // which silently dropped `current` every single time: at that moment
@@ -15493,8 +15594,6 @@ ZaliMixin(ZaliInterface, class {
         const scoped = String(scope || '').trim();
         const next = String(nextKey || '').trim();
         if (!scoped || !next) return false;
-"""#,
-    #"""
         const current = String(stored[scoped] || '').trim();
         if (current === next) return false;
         stored[scoped] = next;
@@ -19491,6 +19590,8 @@ ZaliMixin(ZaliInterface, class {
     // getVoiceRtcConfig is synchronous (it is called from `new RTCPeerConnection`),
     // so making credentials a precondition would mean putting a network round trip
     // in front of every call — and failing the call when it times out. If the fetch
+"""#,
+    #"""
     // lands first the rotating credential is used; if it does not, the static pair
     // is, and the call proceeds either way.
     async refreshVoiceTurnCredentials({ force = false } = {}) {
@@ -19506,8 +19607,6 @@ ZaliMixin(ZaliInterface, class {
             return existing;
         }
         if (this._voiceTurnFetchInFlight) return this._voiceTurnFetchInFlight;
-"""#,
-    #"""
         const pending = (async () => {
             try {
                 const res = await this.apiFetch(route, { method: 'GET' });
@@ -23438,6 +23537,8 @@ ZaliMixin(ZaliInterface, class {
         // once) both walked past the guard and added the same track twice. A real
         // browser throws InvalidAccessError on the second one — and syncVoicePeers
         // does not guard this call, so the whole pass is abandoned: any peer after
+"""#,
+    #"""
         // this one gets no offer, and the late-track renegotiation never happens.
         entry.localTracksAttached = true;
         const added = [];
@@ -23456,8 +23557,6 @@ ZaliMixin(ZaliInterface, class {
             this.voiceDiag('attach-local-tracks-failed', {
                 peer,
                 added: added.length,
-"""#,
-    #"""
                 error: error?.message || String(error),
                 name: error?.name || '',
             }, 'ERROR');
@@ -26776,7 +26875,16 @@ ZaliMixin(ZaliInterface, class {
         if (!server || !next) return;
         const channel = (server.channels || []).find(ch => ch.id === next) || null;
         if (!channel) return;
-        if (this.S.navMode === 'servers' && this.S.activeChannel === next) return;
+        if (this.S.navMode === 'servers' && this.S.activeChannel === next) {
+            // Nothing changes in state, but this may still be a click from
+            // Hub/ZaliCoin/Settings asking to see the already-selected channel —
+            // see ensureChatViewOpen().
+            this.ensureChatViewOpen();
+            return;
+        }
+        // Same reasoning as switchChat: the channel list in the sidebar stays
+        // clickable outside the chat screen.
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         if (this.voice.roomType === 'channel' && this.voice.roomId) {
             const currentChannelId = String(this.voice.channelId || '').trim();
@@ -27363,6 +27471,8 @@ ZaliMixin(ZaliInterface, class {
 
     // Shared re-encode-to-JPEG core: iterates dimension/quality attempts down until the
     // encoded bytes fit targetBytes, keeping the largest/best-quality result that fits.
+"""#,
+    #"""
     // Best-effort: returns the original file if the canvas pipeline is unavailable or
     // nothing beats the original size.
     async downscaleImageFile(file, { targetBytes, attempts, baseNameFallback = 'image', traceLabel = 'downscaleImage' }) {
@@ -27386,8 +27496,6 @@ ZaliMixin(ZaliInterface, class {
                 const canvas = document.createElement('canvas');
                 canvas.width = cw;
                 canvas.height = ch;
-"""#,
-    #"""
                 const ctx = canvas.getContext('2d');
                 if (!ctx) return null;
                 ctx.drawImage(img, 0, 0, cw, ch);
@@ -30956,7 +31064,16 @@ ZaliMixin(ZaliInterface, class {
         const previousVoiceChannel = String(this.voice.channelId || '').trim();
         const current = this.currentServer();
         const currentChannel = this.currentChannel();
-        if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) return;
+        if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) {
+            // Same reasoning as setActiveChannel's identical guard: state is
+            // already correct, but the click may be asking to return to the chat
+            // screen from Hub/ZaliCoin/Settings — see ensureChatViewOpen().
+            this.ensureChatViewOpen();
+            return;
+        }
+        // The server list in the sidebar stays clickable outside the chat screen
+        // too (see switchChat's identical call for the DM list).
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         this.S.activeServer = next;
         this.S.activeConversationType = 'servers';
@@ -31572,6 +31689,8 @@ ZaliMixin(ZaliInterface, class {
 
         // Redundant re-renders are common (an avatar finishing its fetch, an unrelated
         // state sync). Reassigning identical innerHTML would still destroy and rebuild
+"""#,
+    #"""
         // every bubble, restart the media hydration and re-run the height probe — and
         // on WebKit it also resets scrollTop mid-scroll. Compare first.
         const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
@@ -31607,8 +31726,6 @@ ZaliMixin(ZaliInterface, class {
         this.messageWindow.start = windowInfo.useWindow ? windowInfo.start : 0;
         this.messageWindow.end = windowInfo.useWindow ? windowInfo.end : msgs.length;
         this.messageWindow.count = msgs.length;
-"""#,
-    #"""
         this.messageWindow.useWindow = !!windowInfo.useWindow;
 
         const preserveScroll = !conversationChanged && !this.pendingMessagesScroll && !stickToBottom;
@@ -31678,6 +31795,11 @@ ZaliMixin(ZaliInterface, class {
         const peer = String(name || '').trim();
         if (!peer) return;
         this.trace(`switchChat peer=${peer}`);
+        // A contact row in the sidebar is clickable from Hub/ZaliCoin/Settings too
+        // (the sidebar never hides) — bring the chat screen back if one of those
+        // was open, otherwise picking a conversation from there looked like a
+        // no-op.
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         this.clearActiveServerSelection();
         // A reply quote and an edit both point at a message in the conversation
@@ -34393,7 +34515,7 @@ ZaliMixin(ZaliInterface, class {
         const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
         const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
         if (links.length >= 6) return;
-        links.push({ label: '', url: '' });
+        links.push({ label: '', url: '', color: '' });
         this.setProfileState({ draft: { ...draft, links } });
     }
 
@@ -34876,9 +34998,42 @@ ZaliMixin(ZaliInterface, class {
                         </span>
                     `).join('')}
                 </div>
+                ${this.renderProfileLinks(data)}
             </div>
             <div class="profile-head-actions">${this.renderProfileActions(state, data)}</div>
         </header>`;
+    }
+
+    // The editor (renderProfileEditor below) has always let you add/edit these,
+    // and the server has always saved and returned them (sanitize_links in
+    // profiles.rs enforces http/https there) — but nothing ever rendered
+    // `data.links` back out anywhere in the read view, so a saved link was
+    // simply invisible to everyone, including the owner looking at their own
+    // profile. Shown in the header (like bio) so it's on every tab, not tied
+    // to one.
+    renderProfileLinks(data) {
+        const links = (Array.isArray(data.links) ? data.links : [])
+            .filter(link => String(link?.url || '').trim());
+        if (!links.length) return '';
+        return `<div class="profile-links">
+            ${links.map(link => {
+                const url = String(link.url || '').trim();
+                // Server-enforced already (sanitize_links), but a link chip is an
+                // <a href> about to be handed to the browser — re-checking the
+                // scheme here means this can't be made to emit a bad href just
+                // because some future write path forgets to sanitize.
+                if (!/^https?:\/\//i.test(url)) return '';
+                const label = String(link.label || '').trim()
+                    || url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                // Same double-check pattern as accentColor in renderProfileHeader:
+                // server-sanitised already (sanitize_links -> sanitize_color), but
+                // this becomes an inline style attribute, so it's re-validated here
+                // too rather than trusted blind.
+                const color = this.safeCssColor(link.color);
+                const styleAttr = color ? ` style="color:${this.esc(color)};border-color:${this.esc(color)}"` : '';
+                return `<a class="profile-link-chip" href="${this.esc(url)}" target="_blank" rel="noopener noreferrer" title="${this.esc(url)}"${styleAttr}>${this.esc(label)}</a>`;
+            }).join('')}
+        </div>`;
     }
 
     renderProfileActions(state, data) {
@@ -35024,12 +35179,13 @@ ZaliMixin(ZaliInterface, class {
                         <div class="profile-link-row">
                             <input type="text" maxlength="48" placeholder="Название" data-profile-link-field="label" data-profile-link-index="${index}" value="${this.esc(link.label || '')}">
                             <input type="url" maxlength="300" placeholder="https://" data-profile-link-field="url" data-profile-link-index="${index}" value="${this.esc(link.url || '')}">
+                            <input type="color" class="profile-link-color-input" title="Цвет ссылки" aria-label="Цвет ссылки" data-profile-link-field="color" data-profile-link-index="${index}" value="${this.esc(this.safeCssColor(link.color) || '#cbff00')}">
                             <button class="profile-link-remove" type="button" data-profile-action="remove-link" data-profile-link-index="${index}" aria-label="Удалить ссылку">${this.uiIcon('close')}</button>
                         </div>
                     `).join('')}
                     ${links.length < 6 ? `<button class="btn-flat" type="button" data-profile-action="add-link">Добавить ссылку</button>` : ''}
                 </div>
-                <small class="profile-help">Принимаются только http/https-ссылки.</small>
+                <small class="profile-help">Принимаются только http/https-ссылки. Цвет — необязательно, без выбора ссылка отображается акцентным цветом.</small>
             </section>
 
             <section class="profile-editor-section">
@@ -35567,6 +35723,8 @@ ZaliMixin(ZaliInterface, class {
      */
     autographPathData(points) {
         const list = Array.isArray(points) ? points : [];
+"""#,
+    #"""
         if (!list.length) return '';
         const r = (n) => this.autographRound(n);
         if (list.length === 1) {
@@ -35649,8 +35807,6 @@ ZaliMixin(ZaliInterface, class {
     renderAutographPreview(autograph) {
         const viewBox = this.esc(String(autograph?.viewBox || '0 0 100 100'));
         const paths = (Array.isArray(autograph?.strokes) ? autograph.strokes : []).map(stroke => (
-"""#,
-    #"""
             `<path d="${this.esc(stroke?.d || '')}" fill="none" stroke="${this.esc(this.safeCssColor(stroke?.color) || '#cbff00')}" stroke-width="${Number(stroke?.width) || 2}" stroke-linecap="round" stroke-linejoin="round"></path>`
         )).join('');
         return `<svg class="autograph-preview-svg" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Автограф">${paths}</svg>`;
@@ -37447,14 +37603,15 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        // Клик по своей аватарке слева снизу открывает СВОЙ профиль сразу в
-        // режиме редактирования — оттуда же доступны приглашения в друзья.
+        // Клик по своей аватарке слева снизу открывает СВОЙ профиль как обычный
+        // просмотр — оттуда же доступны приглашения в друзья и кнопка
+        // «Редактировать», если человек действительно хочет что-то поменять.
         // Сменить картинку можно кнопкой внутри редактора и здесь же в
         // настройках, поэтому прежний прямой вызов выбора файла не потерян.
         const meAvaBtn = document.getElementById('meAvaBtn');
         if (meAvaBtn) {
             meAvaBtn.addEventListener('click', () => {
-                void this.openProfile(this.myName(), { editing: true });
+                void this.openProfile(this.myName());
             });
         }
         // Открывает системный выбор файла для аватара. Замыкание объявлено

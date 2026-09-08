@@ -412,6 +412,11 @@ ZaliMixin(ZaliInterface, class {
         const peer = String(name || '').trim();
         if (!peer) return;
         this.trace(`switchChat peer=${peer}`);
+        // A contact row in the sidebar is clickable from Hub/ZaliCoin/Settings too
+        // (the sidebar never hides) — bring the chat screen back if one of those
+        // was open, otherwise picking a conversation from there looked like a
+        // no-op.
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         this.clearActiveServerSelection();
         // A reply quote and an edit both point at a message in the conversation

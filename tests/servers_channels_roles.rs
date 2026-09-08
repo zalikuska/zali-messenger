@@ -90,11 +90,12 @@ async fn public_servers_are_discoverable_by_others_but_not_shown_to_owner() {
         .json()
         .await
         .unwrap();
-    // The fresh DB is seeded with 6 public "system"-owned servers alongside
-    // Alice's — assert hers is discoverable rather than pinning exact count.
-    assert!(discovered["servers"]
-        .as_array()
-        .unwrap()
+    // A fresh DB no longer seeds any demo servers (see storage.rs — the six
+    // "system"-owned ones this comment used to warn about are gone), so
+    // Alice's is the only thing here.
+    let discovered_servers = discovered["servers"].as_array().unwrap();
+    assert_eq!(discovered_servers.len(), 1);
+    assert!(discovered_servers
         .iter()
         .any(|s| s["name"] == "Public Place" && s["owner"] == "alice"));
 
@@ -459,4 +460,38 @@ async fn contacts_reject_self_and_unknown_users() {
     assert_eq!(removed.status(), 200);
     let body: serde_json::Value = removed.json().await.unwrap();
     assert!(body["contacts"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_fresh_install_seeds_no_demo_servers() {
+    // Regression test for the removal of seed_default_servers (storage.rs): a
+    // fresh account on a fresh install used to find six "system"-owned demo
+    // servers (Zali Hub, Dev Team, Friends, Music, Games, Study) already
+    // sitting in both /api/servers and /api/discover/servers on first boot.
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+
+    let own: serde_json::Value = app
+        .http
+        .get(app.url("/api/servers"))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(own["servers"].as_array().unwrap().len(), 0);
+
+    let discoverable: serde_json::Value = app
+        .http
+        .get(app.url("/api/discover/servers"))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(discoverable["servers"].as_array().unwrap().len(), 0);
 }

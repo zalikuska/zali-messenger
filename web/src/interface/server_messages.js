@@ -649,7 +649,16 @@ ZaliMixin(ZaliInterface, class {
         if (!server || !next) return;
         const channel = (server.channels || []).find(ch => ch.id === next) || null;
         if (!channel) return;
-        if (this.S.navMode === 'servers' && this.S.activeChannel === next) return;
+        if (this.S.navMode === 'servers' && this.S.activeChannel === next) {
+            // Nothing changes in state, but this may still be a click from
+            // Hub/ZaliCoin/Settings asking to see the already-selected channel —
+            // see ensureChatViewOpen().
+            this.ensureChatViewOpen();
+            return;
+        }
+        // Same reasoning as switchChat: the channel list in the sidebar stays
+        // clickable outside the chat screen.
+        this.ensureChatViewOpen();
         this.collapseActiveCallView();
         if (this.voice.roomType === 'channel' && this.voice.roomId) {
             const currentChannelId = String(this.voice.channelId || '').trim();

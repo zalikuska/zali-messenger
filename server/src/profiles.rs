@@ -187,6 +187,10 @@ async fn audience_allows(
 pub(crate) struct ProfileLink {
     label: String,
     url: String,
+    /// `#rgb`/`#rrggbb`, or empty for "no custom colour" (the client falls
+    /// back to its default chip colour). Sanitised the same way as the
+    /// profile's own `accentColor` — see `sanitize_color`.
+    color: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +199,8 @@ pub(crate) struct ProfileLinkInput {
     label: String,
     #[serde(default)]
     url: String,
+    #[serde(default)]
+    color: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -416,7 +422,11 @@ fn parse_links(raw: &str) -> Vec<ProfileLink> {
             if url.is_empty() {
                 return None;
             }
-            Some(ProfileLink { label, url })
+            // A row written before `color` existed simply has no such key —
+            // `.get()` returns None and this falls back to "" (no custom
+            // colour), not a parse failure.
+            let color = item.get("color").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Some(ProfileLink { label, url, color })
         })
         .collect()
 }
@@ -623,7 +633,13 @@ fn sanitize_links(input: Vec<ProfileLinkInput>) -> Vec<ProfileLink> {
                 return None;
             }
             let label = trim_limited(&link.label, MAX_LINK_LABEL);
-            Some(ProfileLink { label, url })
+            // Same validator as the profile's own accentColor: only `#rgb`/
+            // `#rrggbb` survives, anything else (an attempted CSS injection,
+            // a stray `javascript:` scheme smuggled in as a "colour", plain
+            // garbage) comes back empty rather than reaching a client's
+            // inline `style="color:...".
+            let color = sanitize_color(&link.color);
+            Some(ProfileLink { label, url, color })
         })
         .take(MAX_LINKS)
         .collect()
@@ -712,7 +728,7 @@ pub(crate) async fn update_profile(
     let links_json = serde_json::to_string(
         &links
             .iter()
-            .map(|link| json!({ "label": link.label, "url": link.url }))
+            .map(|link| json!({ "label": link.label, "url": link.url, "color": link.color }))
             .collect::<Vec<_>>(),
     )
     .unwrap_or_else(|_| "[]".to_string());

@@ -494,6 +494,20 @@ ZaliMixin(ZaliInterface, class {
         return this.setMobileSidebarOpen(next);
     }
 
+    // The sidebar (contact list, mode-switch, server/channel list) stays visible
+    // and clickable across every top-level view — Hub, ZaliCoin, Settings — not
+    // just the chat screen. Before this, picking a conversation from there while
+    // one of those was open silently updated S.current/activeServer/activeChannel
+    // and re-rendered #msgs behind the scenes, but #viewChat itself stayed
+    // display:none: the click looked like it did nothing at all. Called by
+    // switchChat/setActiveServer/setActiveChannel; guarded so re-selecting the
+    // already-open conversation from the chat view itself doesn't replay
+    // #viewChat's .24s enter animation on every call.
+    ensureChatViewOpen() {
+        if (document.getElementById('viewChat')?.classList.contains('active')) return;
+        this.openChatView();
+    }
+
     // showList=true lands on the mobile list/picker screen instead of the
     // chat screen — pass it when the caller is about to show the list right
     // after, so we settle on the final state in one step instead of closing
