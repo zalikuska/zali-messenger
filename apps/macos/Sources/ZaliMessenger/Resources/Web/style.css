@@ -8364,6 +8364,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .me-friend-badge {
     position: absolute;
+    /* .ava (the avatar right behind it) sets z-index:1 and creates its own
+       stacking context — without a z-index here higher than that, the badge
+       (z-index:auto) paints BELOW the avatar despite coming later in the DOM,
+       so it was getting covered instead of overlapping the corner. */
+    z-index: 2;
     top: -4px;
     right: -4px;
     min-width: 18px;
@@ -8447,14 +8452,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 18px;
-    align-items: start;
+    /* stretch (not start): the avatar has no fixed size of its own anymore —
+       height:100% on .profile-head-ava below makes it match whatever height
+       .profile-head-copy's content (name/handle/bio/counters) naturally
+       takes, so its bottom edge lines up with that column, with the actions
+       row (edit button) sitting below both via this grid's own `gap`. */
+    align-items: stretch;
     padding-right: 44px;
     --profile-accent: var(--lime);
 }
 
 .profile-head-ava {
-    width: 86px;
-    height: 86px;
+    width: auto;
+    height: 100%;
+    aspect-ratio: 1;
+    min-width: 86px;
+    min-height: 86px;
     border-radius: 26px;
     overflow: hidden;
     display: grid;
@@ -8470,7 +8483,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-name { margin: 0; font-size: 24px; line-height: 1.2; }
 .profile-handle { color: var(--text2); font-size: 13px; margin-top: 2px; }
-.profile-status { margin-top: 8px; font-size: 14px; color: var(--text); }
+
+/* Bio, shown in the header in place of a separate "About" section/tab. */
+.profile-bio-inline {
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: pre-wrap;
+}
 
 .profile-counters { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
 .profile-counter { display: flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--text2); }
@@ -8526,30 +8547,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-tab-body { min-height: 200px; }
 
-/* --- «О себе» --- */
-
-.profile-about { display: grid; gap: 14px; }
-.profile-bio { margin: 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
-.profile-bio.muted { color: var(--text2); }
-
-.profile-facts { display: grid; gap: 6px; margin: 0; }
-.profile-fact { display: flex; gap: 8px; font-size: 13px; }
-.profile-fact dt { color: var(--text2); }
-.profile-fact dd { margin: 0; }
-
-.profile-links { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.profile-links a {
-    display: inline-block;
-    padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--lime);
-    font-size: 12px;
-    text-decoration: none;
-}
-.profile-links a:hover { background: var(--lime-soft); }
-
-.profile-policy-summary { display: flex; flex-wrap: wrap; gap: 8px; }
 .profile-policy-chip {
     padding: 5px 10px;
     border-radius: 999px;
@@ -8902,6 +8899,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .profile-modal { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
     .profile-body { padding: 20px 16px 32px; }
     .profile-head { grid-template-columns: 1fr; justify-items: center; text-align: center; padding-right: 0; }
+    /* Single-column stack here, so the avatar's height:100% trick (matching
+       .profile-head-copy's height) has nothing to stretch against — pin it
+       back to a fixed size instead of letting it collapse to near-zero. */
+    .profile-head-ava { width: 86px; height: 86px; }
     .profile-head-copy { text-align: center; }
     .profile-counters { justify-content: center; }
     .profile-head-actions { justify-content: center; }

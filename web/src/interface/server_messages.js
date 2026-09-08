@@ -220,6 +220,9 @@ ZaliMixin(ZaliInterface, class {
             }
             return;
         }
+        // See loadBrowserDmHistory: cleared before the walk, re-marked by any row this
+        // pass still cannot open.
+        this.clearBrowserDecryptGap({ serverId: sid, channelId: cid });
         try {
             const limit = 200;
             let offset = 0;
@@ -370,21 +373,54 @@ ZaliMixin(ZaliInterface, class {
                 channelId: this.S.activeChannel,
                 reason: 'refreshAfterKey'
             });
-            this.loadServerMessages(this.S.activeServer, this.S.activeChannel, { silent: true });
+            if (this.keyChangeCanRevealMore({ serverId: this.S.activeServer, channelId: this.S.activeChannel })) {
+                this.loadServerMessages(this.S.activeServer, this.S.activeChannel, { silent: true });
+            }
             this.scheduleFlushPendingOutbox(300);
             return;
         }
 
         if (this.S.current) {
             const key = await this.resolveConversationCryptoKey({ peer: this.S.current, reason: 'refreshAfterKey' });
-            if (this.nativeSupports('sendMessage')) {
-                this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer: this.S.current });
-            } else {
-                void this.loadBrowserDmHistory(this.S.current, key);
+            if (this.keyChangeCanRevealMore({ peer: this.S.current })) {
+                if (this.nativeSupports('sendMessage')) {
+                    this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer: this.S.current });
+                } else {
+                    void this.loadBrowserDmHistory(this.S.current, key);
+                }
             }
         }
         this.scheduleFlushPendingOutbox(300);
     }
+
+    keyChangeCanRevealMore({ peer = null, serverId = null, channelId = null } = {}) {
+        const store = (serverId && channelId)
+            ? this.S.serverChats[`${serverId}:${channelId}`]
+            : this.S.chats[String(peer || '').trim()];
+        if (!Array.isArray(store) || !store.length) return true;
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (scope && this._browserDecryptGaps?.has(scope)) return true;
+        return store.some(msg => this.detectSystemNotice(msg?.text) === 'decrypt-error');
+    }
+
+    // A message the browser client could not open, recorded against its conversation.
+    // Unlike the native shells it renders no placeholder for these — the message is
+    // simply absent — so without this the conversation would look complete and a key
+    // arriving later would never trigger the reload that fetches it.
+    markBrowserDecryptGap({ peer = null, serverId = null, channelId = null } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (!scope) return;
+        if (!this._browserDecryptGaps) this._browserDecryptGaps = new Set();
+        this._browserDecryptGaps.add(scope);
+    }
+
+    /// Called at the START of a browser history load: the load itself re-marks
+    /// anything it still cannot open, so whatever survives is a live gap.
+    clearBrowserDecryptGap({ peer = null, serverId = null, channelId = null } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (scope) this._browserDecryptGaps?.delete(scope);
+    }
+
 
     async syncActiveConversation({ force = false } = {}) {
         if (!this.S.session?.token) return;

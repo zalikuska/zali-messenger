@@ -28,7 +28,7 @@ ZaliMixin(ZaliInterface, class {
             loading: false,
             error: '',
             data: null,
-            tab: 'about',
+            tab: 'wall',
             editing: false,
             /** Черновик формы редактирования — правки видны сразу, но не уходят на сервер до «Сохранить». */
             draft: null,
@@ -113,7 +113,7 @@ ZaliMixin(ZaliInterface, class {
             username: name,
             loading: true,
             editing: editing && isSelf,
-            tab: tab || 'about',
+            tab: tab || 'wall',
         });
         this.showProfileOverlay();
         await this.refreshProfile();
@@ -192,7 +192,7 @@ ZaliMixin(ZaliInterface, class {
     startProfileEditing() {
         const state = this.ensureProfileState();
         if (!state.data?.isSelf) return;
-        this.setProfileState({ editing: true, tab: 'about', draft: this.profileDraftFrom(state.data) });
+        this.setProfileState({ editing: true, draft: this.profileDraftFrom(state.data) });
     }
 
     cancelProfileEditing() {

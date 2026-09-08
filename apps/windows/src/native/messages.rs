@@ -14,8 +14,9 @@ use futures_util::{stream, StreamExt};
 use zali_messenger_core::{zali_bus_dispatch, zali_bus_free_string};
 
 use crate::native::{
-    cache_decrypted_message, cached_decrypted_message, candidate_message_keys, dispatch_ui_event,
-    forget_decrypted_message, http_client, json_string_literal, make_data_url, new_request_id,
+    cache_decrypted_message, cached_decrypted_message, candidate_keys_fingerprint,
+    candidate_message_keys, decrypt_known_to_fail, dispatch_ui_event, forget_decrypted_message,
+    remember_decrypt_failure, http_client, json_string_literal, make_data_url, new_request_id,
     retry_with_backoff, sanitize_file_name, trace, ApiSession, AppEvent, UiBusEvent, UploadError,
 };
 
@@ -644,6 +645,43 @@ pub(crate) fn build_history_output(
     output
 }
 
+/// The stand-in rendered for a message this device could not open, so it stays
+/// visible in the conversation instead of silently vanishing. Shared by the path that
+/// just failed a decrypt sweep and the one that skips a sweep already known to fail.
+fn undecryptable_placeholder(
+    message_id: &str,
+    record: &Value,
+    server_id: Option<String>,
+    channel_id: Option<String>,
+    decryption_error: &str,
+) -> Value {
+    let mut output = json!({
+        "id": message_id,
+        "clientId": record.get("clientId").or_else(|| record.get("client_id")).cloned().unwrap_or(Value::Null),
+        "sender": record.get("sender").and_then(Value::as_str).unwrap_or(""),
+        "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
+        "text": "Не удалось расшифровать сообщение: нет E2E-ключа для этой переписки",
+        "attachments": [],
+        "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
+        "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
+        "myReactions": record.get("myReactions").or_else(|| record.get("my_reactions")).cloned().unwrap_or_else(|| json!([])),
+        "decryptionError": decryption_error,
+    });
+    if let Some(server_id_value) = server_id
+        .or_else(|| record.get("serverId").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| record.get("server_id").and_then(Value::as_str).map(str::to_string))
+    {
+        output["serverId"] = Value::String(server_id_value);
+    }
+    if let Some(channel_id_value) = channel_id
+        .or_else(|| record.get("channelId").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| record.get("channel_id").and_then(Value::as_str).map(str::to_string))
+    {
+        output["channelId"] = Value::String(channel_id_value);
+    }
+    output
+}
+
 pub(crate) async fn process_history_record(
     session: ApiSession,
     keys: Vec<String>,
@@ -670,6 +708,28 @@ pub(crate) async fn process_history_record(
             &cached,
             server_id,
             channel_id,
+        ));
+    }
+
+    // Already tried against exactly this key material, and none of it worked. Redoing
+    // the sweep costs two PBKDF2-SHA256 passes per candidate for a verdict we already
+    // have. The fingerprint covers every key the shell holds, so the first byte of new
+    // key material invalidates this and the retry happens on the very next pass.
+    let key_fingerprint = candidate_keys_fingerprint(&keys);
+    if decrypt_known_to_fail(&message_id, key_fingerprint) {
+        trace(format!(
+            "{} skipped message_id={} reason=known_undecryptable_with_current_keys",
+            context_label, message_id
+        ));
+        // The SAME placeholder the failing path below produces, not None: returning
+        // nothing would drop the message out of history entirely, turning a saved
+        // round of PBKDF2 into a message that visibly disappears.
+        return Some(undecryptable_placeholder(
+            &message_id,
+            &record,
+            server_id,
+            channel_id,
+            "known undecryptable with the current key set",
         ));
     }
 
@@ -766,53 +826,17 @@ pub(crate) async fn process_history_record(
         ));
         let _ = tokio::fs::remove_file(&file_url).await;
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-        let mut output = json!({
-            "id": message_id,
-            "clientId": record.get("clientId").or_else(|| record.get("client_id")).cloned().unwrap_or(Value::Null),
-            "sender": record.get("sender").and_then(Value::as_str).unwrap_or(""),
-            "receiver": record.get("receiver").and_then(Value::as_str).unwrap_or(""),
-            "text": "Не удалось расшифровать сообщение: нет E2E-ключа для этой переписки",
-            "attachments": [],
-            "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
-            "reactions": record.get("reactions").cloned().unwrap_or_else(|| json!([])),
-            "myReactions": record.get("myReactions").or_else(|| record.get("my_reactions")).cloned().unwrap_or_else(|| json!([])),
-            "decryptionError": last_unpack_error,
-        });
-        if let Some(server_id_value) = server_id
-            .clone()
-            .or_else(|| {
-                record
-                    .get("serverId")
-                    .and_then(Value::as_str)
-                    .map(|s| s.to_string())
-            })
-            .or_else(|| {
-                record
-                    .get("server_id")
-                    .and_then(Value::as_str)
-                    .map(|s| s.to_string())
-            })
-        {
-            output["serverId"] = Value::String(server_id_value);
-        }
-        if let Some(channel_id_value) = channel_id
-            .clone()
-            .or_else(|| {
-                record
-                    .get("channelId")
-                    .and_then(Value::as_str)
-                    .map(|s| s.to_string())
-            })
-            .or_else(|| {
-                record
-                    .get("channel_id")
-                    .and_then(Value::as_str)
-                    .map(|s| s.to_string())
-            })
-        {
-            output["channelId"] = Value::String(channel_id_value);
-        }
-        return Some(output);
+        // Recorded against the key set that failed, so the next refresh does not repeat
+        // the identical sweep. Only decryption failures land here — a download failure
+        // returns earlier and stays retryable, because that one really is transient.
+        remember_decrypt_failure(&message_id, key_fingerprint);
+        return Some(undecryptable_placeholder(
+            &message_id,
+            &record,
+            server_id,
+            channel_id,
+            &last_unpack_error,
+        ));
     };
 
     // zali_net:unpack_message (core/src/net.rs) only returns attachment metadata

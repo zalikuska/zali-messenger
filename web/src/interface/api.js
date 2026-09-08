@@ -125,14 +125,35 @@ ZaliMixin(ZaliInterface, class {
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         }
+        // The native path has always bounded itself (nativeApiFetch above falls back to
+        // API_REQUEST_TIMEOUT_MS); the browser path only had a timeout when a caller
+        // remembered to ask for one, and almost none did. `fetch` has no timeout of its
+        // own, so one stalled request sat in an apiFetch concurrency slot until the
+        // browser gave up minutes later — including the deliberately-prioritised
+        // envelope sync, which is the one call that can repair a wrong key.
+        //
+        // Bulk transfers get their own, much larger budget rather than the request
+        // default: a multi-megabyte attachment legitimately outlives it, and cutting
+        // those off would trade a rare stall for a routine failure. Uploads are
+        // detected here by their multipart body; DOWNLOADS cannot be detected from the
+        // request, so the handful of call sites that pull binary (message archives,
+        // avatars, server assets) pass TRANSFER_REQUEST_TIMEOUT_MS explicitly.
+        //
+        // An explicit `timeoutMs` from the caller always wins; anything falsy means
+        // "use the default for this kind of request", which is what every existing
+        // call site was silently getting as "none at all".
+        const isMultipartBody = typeof FormData !== 'undefined' && options.body instanceof FormData;
+        const effectiveTimeoutMs = timeoutMs > 0
+            ? timeoutMs
+            : (isMultipartBody ? TRANSFER_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS);
         let timeoutId = null;
         let abortController = null;
         let abortForwarder = null;
         const originalSignal = fetchOptions.signal;
-        if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+        if (effectiveTimeoutMs > 0 && typeof AbortController !== 'undefined') {
             abortController = new AbortController();
             fetchOptions.signal = abortController.signal;
-            timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+            timeoutId = setTimeout(() => abortController.abort(), effectiveTimeoutMs);
             if (originalSignal) {
                 if (originalSignal.aborted) {
                     abortController.abort();

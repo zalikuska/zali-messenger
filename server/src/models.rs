@@ -526,6 +526,13 @@ pub(crate) struct KeyEnvelopePayload {
     pub(crate) recipientDeviceId: Option<String>,
     pub(crate) senderDeviceId: Option<String>,
     pub(crate) encryptedKey: String,
+    /// SHA-256 fingerprint of the conversation key inside `encryptedKey` — the same
+    /// non-secret id the registry stores, computed client-side. It is part of the
+    /// row's identity, so two different keys for one scope no longer overwrite each
+    /// other (see the UNIQUE constraint in init_db). Optional: a client that predates
+    /// it sends nothing, lands on the empty-string id, and gets exactly the old
+    /// one-row-per-(scope, sender device, recipient device) behaviour.
+    pub(crate) keyId: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

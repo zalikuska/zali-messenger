@@ -49,6 +49,7 @@
     "web/src/interface/message_render.js|class|mine",
     "web/src/interface/notifications.js|value|percent",
     "web/src/interface/prefs.js|aria-pressed|mode.id === active",
+    "web/src/interface/profile_ui.js|aria-pressed|option.value === value",
     "web/src/interface/profile_ui.js|aria-selected|tab.key === active",
     "web/src/interface/profile_ui.js|data-profile-link-index|index",
     "web/src/interface/render_shell.js|class|active",

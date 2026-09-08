@@ -49,7 +49,51 @@ struct WebView: NSViewRepresentable {
         private var serverHistoryReloadToken = UUID()
         private var reloadHistoryTask: Task<Void, Never>?
         private var reloadServerHistoryTask: Task<Void, Never>?
+        /// Successful decryptions, keyed by message id. Archives are immutable once
+        /// stored, so a hit is always valid (an edit replaces the archive behind the
+        /// id and explicitly evicts it — see forgetDecryptedMessage).
+        ///
+        /// Bounded, unlike the version this replaces. Entries hold every attachment
+        /// inline as a base64 data URL, and nothing ever evicted one, so a long
+        /// conversation with photos pinned its entire decrypted self in memory for the
+        /// life of the process. The Windows shell has carried these same two limits
+        /// from the start (`DECRYPTED_CACHE_MAX_ENTRIES` / `_MAX_ENTRY_BYTES` in
+        /// native/cache.rs); this is the missing half of that pair.
         private var decryptedMessageCache: [String: [String: Any]] = [:]
+        private var decryptedMessageCacheOrder: [String] = []
+        /// Guards the three decryption caches below.
+        ///
+        /// renderHistoryRecord runs inside a TaskGroup — four records concurrently —
+        /// so every read and write of these lives on an arbitrary thread. The positive
+        /// cache was already being mutated that way; adding the eviction order and the
+        /// negative cache alongside it made an unsynchronised Dictionary/Array a
+        /// genuine hazard rather than a latent one (a Dictionary resized from two
+        /// threads corrupts, it does not merely lose a write). A plain lock is enough
+        /// here: every critical section is a handful of dictionary operations, and the
+        /// alternative — making the Coordinator an actor — would ripple through every
+        /// bridge callback for no additional safety.
+        private let decryptCacheLock = NSLock()
+        private static let decryptedCacheMaxEntries = 2048
+        private static let decryptedCacheMaxEntryBytes = 1024 * 1024
+        /// Ceiling on the keys tried against one archive. See the fallback loop in
+        /// renderHistoryRecord for why an unbounded sweep is not affordable.
+        private static let maxDecryptCandidates = 12
+
+        /// Message ids that could NOT be opened, and the key material that failed.
+        ///
+        /// Failures were deliberately not cached, on the reasoning that the state
+        /// repairs itself once key sync converges. It does — but until it does, every
+        /// history refresh re-downloaded each unreadable archive and re-ran the whole
+        /// candidate sweep against it, and each attempt is two PBKDF2-SHA256 passes at
+        /// 210 000 iterations. Twenty candidates on fifty unreadable messages is
+        /// thousands of derivations, repeated on every `key_envelope_available` push —
+        /// which is exactly when a conversation is unreadable and pushes are frequent.
+        ///
+        /// The self-repair is kept by storing WHICH key set failed: the moment any new
+        /// key material arrives the fingerprint changes, every entry is stale, and the
+        /// retry happens immediately. Re-running the sweep against a key set already
+        /// known not to work is the only thing this removes.
+        private var failedDecryptKeyFingerprint: [String: Int] = [:]
         // All trailing-edge debounced refreshes share one keyed store (see debounce()).
         // Distinct keys are independent, so e.g. per-peer history reloads
         // ("reloadHistory:<username>") never cancel each other — a single shared work item
@@ -398,7 +442,71 @@ struct WebView: NSViewRepresentable {
         /// Drops one message from the decrypted-render cache. Called whenever the
         /// archive behind that id is replaced, locally or by the peer.
         fileprivate func forgetDecryptedMessage(_ messageId: String) {
+            decryptCacheLock.lock()
+            defer { decryptCacheLock.unlock() }
             decryptedMessageCache.removeValue(forKey: messageId)
+            decryptedMessageCacheOrder.removeAll { $0 == messageId }
+            failedDecryptKeyFingerprint.removeValue(forKey: messageId)
+        }
+
+        /// Everything the caches can say about one message, read under one lock.
+        private func decryptVerdict(for messageId: String) -> (cached: [String: Any]?, failedWith: Int?) {
+            decryptCacheLock.lock()
+            defer { decryptCacheLock.unlock() }
+            return (decryptedMessageCache[messageId], failedDecryptKeyFingerprint[messageId])
+        }
+
+        private func rememberDecryptFailure(_ messageId: String, fingerprint: Int) {
+            decryptCacheLock.lock()
+            defer { decryptCacheLock.unlock() }
+            failedDecryptKeyFingerprint[messageId] = fingerprint
+            if failedDecryptKeyFingerprint.count > Coordinator.decryptedCacheMaxEntries {
+                failedDecryptKeyFingerprint.removeAll()
+            }
+        }
+
+        private func clearDecryptCaches() {
+            decryptCacheLock.lock()
+            defer { decryptCacheLock.unlock() }
+            decryptedMessageCache.removeAll()
+            decryptedMessageCacheOrder.removeAll()
+            failedDecryptKeyFingerprint.removeAll()
+        }
+
+        /// Stores a decrypted message, evicting the oldest entries past the cap.
+        /// Oversized entries (an attachment inlined as a data URL) are not cached at
+        /// all: this exists to save CPU, and it must not become a memory sink.
+        private func cacheDecryptedMessage(_ messageId: String, _ entry: [String: Any]) {
+            guard !messageId.isEmpty else { return }
+            if let data = try? JSONSerialization.data(withJSONObject: entry, options: []),
+               data.count > Coordinator.decryptedCacheMaxEntryBytes {
+                return
+            }
+            decryptCacheLock.lock()
+            defer { decryptCacheLock.unlock() }
+            if decryptedMessageCache[messageId] == nil {
+                decryptedMessageCacheOrder.append(messageId)
+            }
+            decryptedMessageCache[messageId] = entry
+            // Succeeding voids any earlier "no key of ours opens this" verdict.
+            failedDecryptKeyFingerprint.removeValue(forKey: messageId)
+            while decryptedMessageCacheOrder.count > Coordinator.decryptedCacheMaxEntries {
+                let oldest = decryptedMessageCacheOrder.removeFirst()
+                decryptedMessageCache.removeValue(forKey: oldest)
+            }
+        }
+
+        /// Cheap identity of the key material currently available for decryption.
+        /// Any change — a new envelope imported, a key promoted, a vault merge — moves
+        /// it, which is what makes the negative cache above self-repairing.
+        private func currentKeyFingerprint() -> Int {
+            var hasher = Hasher()
+            hasher.combine(NetworkService.shared.currentKey)
+            for key in NetworkService.shared.allConversationKeys.keys.sorted() {
+                hasher.combine(key)
+                hasher.combine(NetworkService.shared.allConversationKeys[key] ?? "")
+            }
+            return hasher.finalize()
         }
 
         private func sendNativeResponse(_ payload: [String: Any]) {
@@ -865,7 +973,23 @@ struct WebView: NSViewRepresentable {
             let messageId = record.id.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !messageId.isEmpty else { return nil }
 
-            if let cached = decryptedMessageCache[messageId] { return cached }
+            let verdict = decryptVerdict(for: messageId)
+            if let cached = verdict.cached { return cached }
+
+            let keyFingerprint = currentKeyFingerprint()
+            // Already tried, against exactly this key material, and none of it worked.
+            // Re-running the sweep would burn the same thousands of PBKDF2 passes for
+            // the same answer. A single new key anywhere moves the fingerprint and
+            // this stops matching, so the repair still lands the moment it can.
+            if verdict.failedWith == keyFingerprint {
+                return decryptFailurePlaceholder(
+                    record: record,
+                    serverId: serverId,
+                    channelId: channelId,
+                    decryptFailed: true,
+                    lastDownloadError: nil
+                )
+            }
 
             let keys: [String] = {
                 var candidates = ZaliCore.candidateMessageKeys(
@@ -877,8 +1001,24 @@ struct WebView: NSViewRepresentable {
                     channelId: channelId
                 )
                 // Last-resort fallback: try every other known conversation key too.
-                NetworkService.shared.allConversationKeys.values.forEach { k in
-                    let normalized = k.trimmingCharacters(in: .whitespacesAndNewlines)
+                //
+                // Bounded, because this is charged per message: every candidate that
+                // does not fit costs two PBKDF2-SHA256 passes at 210 000 iterations
+                // (the archive session key, then the message body), so an account that
+                // has accumulated dozens of `alt:` keys was paying seconds of CPU per
+                // unreadable message. The scope's own keys are added first by
+                // candidateMessageKeys and are the ones that can realistically work;
+                // this tail is a heuristic for mis-scoped material, and a heuristic
+                // does not deserve an unbounded budget.
+                //
+                // Walked in sorted scope order, not Dictionary order. Once the tail is
+                // capped, an unordered walk would make the *contents* of the list vary
+                // between calls for the same message — decryption would succeed or fail
+                // depending on which twelve keys the dictionary happened to yield first.
+                for scope in NetworkService.shared.allConversationKeys.keys.sorted() {
+                    if candidates.count >= Coordinator.maxDecryptCandidates { break }
+                    let normalized = (NetworkService.shared.allConversationKeys[scope] ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !normalized.isEmpty, !candidates.contains(normalized) { candidates.append(normalized) }
                 }
                 return candidates
@@ -962,7 +1102,7 @@ struct WebView: NSViewRepresentable {
                         "reactions": record.reactions ?? [],
                         "myReactions": record.myReactions ?? []
                     ]
-                    decryptedMessageCache[messageId] = result
+                    self.cacheDecryptedMessage(messageId, result)
                     return result
                 }
 
@@ -976,7 +1116,30 @@ struct WebView: NSViewRepresentable {
             }
 
             print("[ZALI][WEBVIEW] \(logPrefix) render failed messageId=\(messageId) decryptFailed=\(decryptFailed) downloadError=\(lastDownloadError ?? "none")")
-            // Return a placeholder so the message is visible rather than silently missing
+            if decryptFailed {
+                // Remembered against the key material that failed, so the identical
+                // sweep is not re-run on the next refresh. Only decryption failures:
+                // a download failure is transient and must always be retried.
+                self.rememberDecryptFailure(messageId, fingerprint: keyFingerprint)
+            }
+            return decryptFailurePlaceholder(
+                record: record,
+                serverId: serverId,
+                channelId: channelId,
+                decryptFailed: decryptFailed,
+                lastDownloadError: lastDownloadError
+            )
+        }
+
+        /// The visible stand-in for a message this device could not render, so it shows
+        /// up in the conversation instead of silently going missing.
+        private func decryptFailurePlaceholder(
+            record: NetworkService.RemoteMessageRecord,
+            serverId: String?,
+            channelId: String?,
+            decryptFailed: Bool,
+            lastDownloadError: String?
+        ) -> [String: Any] {
             let placeholderText: String
             if decryptFailed {
                 // A freshly logged-in device renders history before the conversation key
@@ -984,7 +1147,7 @@ struct WebView: NSViewRepresentable {
                 // currentKey, decryption fails, and the old wording claimed the message
                 // was encrypted under someone else's key — a permanent-sounding verdict
                 // on a state that repairs itself seconds later, once key sync converges
-                // and history re-renders (failed decryptions are deliberately not cached).
+                // and history re-renders.
                 let hasScopeKey = ZaliCore.hasConversationScopeKey(
                     conversationKeys: NetworkService.shared.allConversationKeys,
                     participantA: record.sender,
@@ -1001,7 +1164,7 @@ struct WebView: NSViewRepresentable {
                 placeholderText = "⚠️ Не удалось загрузить сообщение"
             }
             return [
-                "id": messageId,
+                "id": record.id.trimmingCharacters(in: .whitespacesAndNewlines),
                 "clientId": record.clientId ?? record.client_id ?? "",
                 "sender": record.sender,
                 "receiver": record.receiver,
@@ -1514,7 +1677,11 @@ struct WebView: NSViewRepresentable {
                                 // decrypted from the archive we just replaced — leaving
                                 // it would make every later history reload re-render the
                                 // pre-edit message and look like the edit was lost.
-                                self.decryptedMessageCache.removeValue(forKey: messageId)
+                                // Through forgetDecryptedMessage, not a bare removeValue:
+                                // the entry also has a slot in the eviction order and may
+                                // have a "no key opens this" verdict attached, and both
+                                // describe the archive that was just replaced.
+                                self.forgetDecryptedMessage(messageId)
                                 self.addLog(level: "SUCCESS", text: "Network: Сообщение отредактировано")
                                 self.sendNativeResponse(["requestId": requestId, "ok": true])
                             } else {
@@ -1599,7 +1766,7 @@ struct WebView: NSViewRepresentable {
                     NetworkService.shared.clearAllLocalData()
                     Coordinator.saveLegacyCryptoKey("")
                     Coordinator.removeSharedDeviceIdentities()
-                    self.decryptedMessageCache.removeAll()
+                    self.clearDecryptCaches()
                     self.consoleLog("Swift: локальные данные очищены (сброс базы)")
                 }
                 
@@ -1960,6 +2127,19 @@ struct WebView: NSViewRepresentable {
         let conversationKeysForBootstrap = NetworkService.shared.allConversationKeys
         let convKeysBootstrap = "window.__ZALI_CONVERSATION_KEYS = \(WebView.javascriptLiteral(conversationKeysForBootstrap));"
         config.userContentController.addUserScript(WKUserScript(source: convKeysBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Stamps whose account the injected key map and device identity belong to.
+        // Both are read from the LAST logged-in user's storage and then live for the
+        // whole life of the document, while applySession only swaps the in-page
+        // session — so signing in as someone else afterwards used to merge the
+        // previous account's conversation keys into the new one's store and hand it
+        // the previous account's device identity, private ECDH key included. The
+        // shared UI now refuses injected material stamped for a different account
+        // (injectedMaterialMatchesAccount() in web/src/interface/key_resolution.js).
+        let injectedForUser = NetworkService.shared.currentUser.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !injectedForUser.isEmpty {
+            let injectedForUserBootstrap = "window.__ZALI_INJECTED_FOR_USER = \(WebView.javascriptLiteral(injectedForUser));"
+            config.userContentController.addUserScript(WKUserScript(source: injectedForUserBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
 
         // Re-adopt the on-disk device identity so a WebView localStorage wipe doesn't mint a
         // fresh device_id and orphan the key envelopes addressed to the old one. Raw JSON is

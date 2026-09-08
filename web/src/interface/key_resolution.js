@@ -72,16 +72,46 @@ ZaliMixin(ZaliInterface, class {
                 if (!promoted) await this.requestKeyRepublish(scope, { reason });
             }
 
-            for (let attempt = 0; attempt < 2 && !this.getStoredConversationKey(scope); attempt += 1) {
-                this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} retry=${attempt}`);
-                await new Promise(resolve => setTimeout(resolve, 1500 + attempt * 1500));
-                if (recoveredVaultPassphrase) {
-                    await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}:retry${attempt}` });
+            // Wait only when there is something to wait FOR.
+            //
+            // This used to sleep 1.5 s and then 3 s unconditionally, with a vault sync
+            // and an envelope sync inside each round — up to 4.5 s of dead time plus
+            // six round trips, awaited on the path that opens a chat and on the path
+            // that sends a message. The reason for waiting at all is sound and stays:
+            // inventing a key here is irreversible, it gets published as the scope's
+            // key, and doing that because a slow round trip had not landed yet orphans
+            // the real key along with every message under it.
+            //
+            // But that risk only exists when a key we do not have might be out there.
+            // The registry answers exactly that question, and it has already been asked
+            // above: `knownCanonical` set means somebody holds a key for this scope, so
+            // waiting is warranted. Empty means the lookup succeeded and found no claim
+            // — nothing to lose the race to — and the retries were pure latency.
+            //
+            // A FAILED lookup is not "no claim": fetchCanonicalKeyIds returns its cache
+            // on error and an absent entry means "unknown". That case is treated as
+            // worth waiting for, same as a known claim.
+            //
+            // Which is why this asks canonicalLookupSucceeded() rather than looking at
+            // the cache: an absent cache entry is produced BOTH by "the registry has no
+            // claim" and by "we never got an answer", so testing the cache would have
+            // reported "unknown" every single time and this whole branch would have
+            // waited exactly as long as before while looking like it did not.
+            const worthWaiting = !!knownCanonical || !this.canonicalLookupSucceeded(scope);
+            if (worthWaiting) {
+                for (let attempt = 0; attempt < 2 && !this.getStoredConversationKey(scope); attempt += 1) {
+                    this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} retry=${attempt} canonical=${knownCanonical ? 'known' : 'unknown'}`);
+                    await new Promise(resolve => setTimeout(resolve, 600 + attempt * 1200));
+                    if (recoveredVaultPassphrase) {
+                        await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}:retry${attempt}` });
+                    }
+                    await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}:retry${attempt}`, triggerRefresh: false });
+                    if (knownCanonical && !this.getStoredConversationKey(scope)) {
+                        await this.promoteCanonicalConversationKey(scope, knownCanonical, { reason: `${reason}:retry${attempt}` });
+                    }
                 }
-                await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}:retry${attempt}`, triggerRefresh: false });
-                if (knownCanonical && !this.getStoredConversationKey(scope)) {
-                    await this.promoteCanonicalConversationKey(scope, knownCanonical, { reason: `${reason}:retry${attempt}` });
-                }
+            } else {
+                this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} no_wait=true registry_empty=true`);
             }
         }
 
@@ -320,8 +350,38 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {}
     }
 
+    // Whose account the native shell's document-start injection belongs to.
+    //
+    // macOS, Windows and Android all inject the LAST logged-in user's device
+    // identity and conversation keys before the page script runs, and nothing
+    // cleared them when a different account signed in — the globals live for the
+    // lifetime of the document, while applySession only swaps the in-page session.
+    // So logging in as B on a device that last ran as A merged A's conversation keys
+    // into B's key store (from there into B's cloud vault) and, when B had no local
+    // identity yet, handed B A's device identity including its private ECDH key.
+    // The localStorage legacy fallbacks two functions below were removed for exactly
+    // this hazard; the injected channel had no such guard.
+    //
+    // Shells that stamp `__ZALI_INJECTED_FOR_USER` get checked against it. Older
+    // shells do not set it at all, and for them the pre-existing behaviour stands —
+    // wrong only on the account-switch path, which is what the stamp fixes going
+    // forward. An empty myName() means we are still booting and do not yet know who
+    // we are; adopting is right there, and it is the normal single-account path.
+    injectedMaterialMatchesAccount() {
+        try {
+            const stamped = String(window.__ZALI_INJECTED_FOR_USER || '').trim().toLowerCase();
+            if (!stamped) return true;
+            const me = String(this.myName() || '').trim().toLowerCase();
+            if (!me) return true;
+            return me === stamped;
+        } catch (e) {
+            return true;
+        }
+    }
+
     loadInjectedDeviceIdentity() {
         try {
+            if (!this.injectedMaterialMatchesAccount()) return null;
             const raw = window.__ZALI_INJECTED_DEVICE_IDENTITY;
             if (!raw) return null;
             const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -634,6 +694,29 @@ ZaliMixin(ZaliInterface, class {
         return promoted;
     }
 
+    // Does the vault event we just read already contain every key this device holds?
+    //
+    // Compared entry by entry over the whole stored map, `alt:` candidates included:
+    // those are exactly the historical keys a second device needs in order to read
+    // anything written before the conversation converged, and they are the ones the
+    // republish sweep deliberately never sends (see retryPublishConversationKeys), so
+    // the vault is their only route between an account's own devices.
+    //
+    // Note that `payload` is read BEFORE applyVaultPlainPayload merges it, or the
+    // comparison would be against a map that just absorbed it and always match.
+    vaultPayloadCoversLocalKeys(payload) {
+        const remote = payload?.conversationKeys && typeof payload.conversationKeys === 'object'
+            ? payload.conversationKeys
+            : {};
+        const local = this.loadStoredConversationKeys();
+        for (const [scope, value] of Object.entries(local)) {
+            const key = String(value || '').trim();
+            if (!key) continue;
+            if (String(remote[scope] || '').trim() !== key) return false;
+        }
+        return true;
+    }
+
     scheduleCloudVaultSync(delayMs = 300) {
         if (!this.S.session?.token || !this.S.auth?.vaultPassphrase || !this.isVaultCloudSyncEnabled()) return;
         if (this.cloudVaultSyncTimer) {
@@ -662,6 +745,7 @@ ZaliMixin(ZaliInterface, class {
 
             let imported = false;
             let sawCompatibleServerEvents = false;
+            let serverAlreadyHasEverything = false;
             let undecryptableServerEvents = false;
             try {
                 const res = await this.apiFetch(this.apiRoutes.vault.events);
@@ -697,6 +781,11 @@ ZaliMixin(ZaliInterface, class {
                         }
                         if (payload) {
                             try {
+                                // Measured against the key map as it stands BEFORE the merge:
+                                // applyVaultPlainPayload folds this very payload into it, so
+                                // asking afterwards would compare the server against a copy of
+                                // itself for every scope it happened to carry.
+                                const covers = this.vaultPayloadCoversLocalKeys(payload);
                                 this.applyVaultPlainPayload(payload);
                                 await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
                                 imported = true;
@@ -706,7 +795,19 @@ ZaliMixin(ZaliInterface, class {
                                 // publish below pushes "latest" back to something every device
                                 // can read again instead of leaving it stuck behind them.
                                 sawCompatibleServerEvents = matchIndex === events.length - 1;
-                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length} matchIndex=${matchIndex}`);
+                                // ...and only when that newest event actually carries everything
+                                // this device holds. Position alone used to decide it, which
+                                // froze the vault after its very first publish: from then on the
+                                // newest event was always ours and always decryptable, so this
+                                // returned before the publish below every single time, and no
+                                // key created afterwards ever reached the cloud. A second device
+                                // of the account then recovered the key set as it stood on day
+                                // one and invented fresh keys for every conversation opened
+                                // since. It only ever unstuck itself by accident, when a
+                                // one-time-code export (approveDeviceAndExport) landed on top
+                                // and pushed the match off the end of the stream.
+                                serverAlreadyHasEverything = covers;
+                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length} matchIndex=${matchIndex} covers=${serverAlreadyHasEverything}`);
                             } catch (e) {
                                 // Расшифровалось, но пакет старой схемы — публикация ниже
                                 // выступает как upgrade до v2, это допустимо.
@@ -726,7 +827,7 @@ ZaliMixin(ZaliInterface, class {
                 return imported;
             }
 
-            if (sawCompatibleServerEvents) {
+            if (sawCompatibleServerEvents && serverAlreadyHasEverything) {
                 return imported;
             }
 

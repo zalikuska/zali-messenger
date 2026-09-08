@@ -42,7 +42,40 @@ pub(crate) struct ClaimConversationKeyPayload {
     /// Set only by an explicit user-driven key reset. A normal claim never
     /// replaces an existing row — that is the whole point of the registry.
     pub(crate) force: Option<bool>,
+    /// Set by a participant that has proven, over a long window, that the
+    /// standing claim names a key nobody can hand it. See `STALE_CLAIM_TAKEOVER`.
+    pub(crate) takeover: Option<bool>,
 }
+
+/// How long a claim must sit untouched before a participant may take it over.
+///
+/// A registry row can outlive every copy of the key it names: reinstall the app
+/// on both sides of a DM, or wipe the one device that ever held a channel key,
+/// and `key_id` points at material that no longer exists anywhere. Nothing then
+/// converged, because the only way to replace a row was `force`, which is wired
+/// exclusively to the user pressing "сбросить ключи шифрования". Observed effect:
+/// each participant kept its own sending key forever, every chat open re-ran
+/// claim → promote(fail) → republish → sync → promote(fail), and the union of
+/// live keys grew with every new device — each one another PBKDF2 pass on every
+/// undecryptable message.
+///
+/// The takeover is deliberately split across the two sides:
+///
+/// * the client decides *whether* a claim is unreachable — only it knows that it
+///   asked for a republish, waited, synced and still holds nothing matching —
+///   and it has to have believed that continuously for longer than this window
+///   (`STALE_CANONICAL_TAKEOVER_MS` in web/src/interface/conversation_keys.js);
+/// * the server decides *who wins* — the first takeover in a window replaces the
+///   row and refreshes `updated_at`, so every other participant crossing the
+///   threshold at the same moment is refused and gets the winner's key id back
+///   instead. That is what makes this terminate rather than ping-pong.
+///
+/// `updated_at` is only ever written by force/takeover (a normal claim is
+/// INSERT OR IGNORE), so a healthy long-lived row always looks "old" here. That
+/// is intentional: the age check exists to serialise competing takeovers, not to
+/// judge health — judging health is the client's half, and it is the half that
+/// protects a working conversation from a spurious takeover.
+const STALE_CLAIM_TAKEOVER: &str = "-15 minutes";
 
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]
@@ -332,7 +365,7 @@ pub(crate) async fn claim_conversation_key(
 
     // A forced claim (explicit "сбросить ключи шифрования" in the UI) replaces
     // the row; a normal claim is INSERT-OR-IGNORE so the first writer keeps it.
-    let write = if payload.force.unwrap_or(false) {
+    let write_result = if payload.force.unwrap_or(false) {
         sqlx::query(
             "INSERT INTO conversation_key_registry (scope_key, key_id, claimed_by, claimed_device_id)
              VALUES (?, ?, ?, ?)
@@ -342,21 +375,65 @@ pub(crate) async fn claim_conversation_key(
                  claimed_device_id = excluded.claimed_device_id,
                  updated_at = CURRENT_TIMESTAMP",
         )
-    } else {
-        sqlx::query(
-            "INSERT OR IGNORE INTO conversation_key_registry
-             (scope_key, key_id, claimed_by, claimed_device_id)
-             VALUES (?, ?, ?, ?)",
-        )
-    };
-    if let Err(e) = write
         .bind(&scope)
         .bind(&key_id)
         .bind(&caller)
         .bind(&device_id)
         .execute(&state.db)
         .await
-    {
+    } else if payload.takeover.unwrap_or(false) {
+        // Conditional UPDATE, never an INSERT: a takeover only ever replaces a row
+        // that already exists. An absent row is not stale, it is unclaimed, and the
+        // plain first-write-wins path below is the right answer for it — so fall
+        // through to that when nothing was updated (rows_affected() == 0), which is
+        // also what a losing racer sees.
+        let updated = sqlx::query(
+            "UPDATE conversation_key_registry
+                SET key_id = ?, claimed_by = ?, claimed_device_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+              WHERE scope_key = ?
+                AND key_id <> ?
+                AND datetime(updated_at) <= datetime('now', ?)",
+        )
+        .bind(&key_id)
+        .bind(&caller)
+        .bind(&device_id)
+        .bind(&scope)
+        .bind(&key_id)
+        .bind(STALE_CLAIM_TAKEOVER)
+        .execute(&state.db)
+        .await;
+        match updated {
+            Ok(result) if result.rows_affected() > 0 => Ok(result),
+            Ok(_) => {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO conversation_key_registry
+                     (scope_key, key_id, claimed_by, claimed_device_id)
+                     VALUES (?, ?, ?, ?)",
+                )
+                .bind(&scope)
+                .bind(&key_id)
+                .bind(&caller)
+                .bind(&device_id)
+                .execute(&state.db)
+                .await
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        sqlx::query(
+            "INSERT OR IGNORE INTO conversation_key_registry
+             (scope_key, key_id, claimed_by, claimed_device_id)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&scope)
+        .bind(&key_id)
+        .bind(&caller)
+        .bind(&device_id)
+        .execute(&state.db)
+        .await
+    };
+    if let Err(e) = write_result {
         error!("Ошибка claim ключа scope {}: {}", scope, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }

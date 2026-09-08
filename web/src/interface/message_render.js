@@ -34,6 +34,15 @@ ZaliMixin(ZaliInterface, class {
             /^🔑\s*Получение ключа…?$/.test(value) ||
             /^📦\s*Файл сообщения превышает допустимый размер$/.test(value) ||
             /^⚠️\s*Не удалось загрузить сообщение$/.test(value) ||
+            // The Windows/Rust shell writes its own wording (native/messages.rs's
+            // undecryptable_placeholder) and carries no emoji marker. It was missing
+            // from this list entirely, so on Windows a message that would not decrypt
+            // rendered as an ordinary chat bubble and — far worse — never reached
+            // queueDecryptFailureReport, which is what asks the holders to republish.
+            // The one mechanism that repairs an unreadable conversation was therefore
+            // unreachable on that platform, exactly as it was on Android before the
+            // key_republish_request routing was split out.
+            /^Не удалось расшифровать сообщение:/.test(value) ||
             /^(?:🚨\s*)?\[Ошибка расшифрования:[^\]]*\]$/.test(value)
         ) return 'decrypt-error';
         return null;
@@ -48,6 +57,9 @@ ZaliMixin(ZaliInterface, class {
         if (/Получение ключа/.test(value)) return 'awaiting-key';
         if (/превышает допустимый размер/.test(value)) return 'oversized';
         if (/Не удалось загрузить/.test(value)) return 'download-failed';
+        // Windows shell wording; the cause is the same as 'wrong-key' — no key this
+        // device holds opened the archive.
+        if (/Не удалось расшифровать сообщение/.test(value)) return 'wrong-key';
         if (/Ошибка расшифрования/.test(value)) return 'legacy-decrypt-error';
         return 'unknown';
     }

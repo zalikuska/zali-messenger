@@ -42,7 +42,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b24";
+const APP_DISPLAY_VERSION: &str = "0.2b26";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -506,6 +506,9 @@ impl NativeState {
     /// and the shared_device_identity_*.json exports. Server URLs and custom CSS are
     /// deliberately kept — they are not tied to the wiped database.
     pub(crate) fn clear_all_local_data(&mut self) {
+        // Process-global, unlike everything else here, so it is the one thing that
+        // used to survive a local-data wipe.
+        clear_decrypted_message_caches();
         self.current_username = String::new();
         self.current_device_id = String::new();
         self.auth_token = None;
@@ -879,6 +882,20 @@ impl NativeState {
                 "window.__ZALI_INJECTED_DEVICE_IDENTITY = {};\n",
                 raw
             ));
+        }
+        // Stamps whose account the two injections above belong to. Both are read from
+        // the LAST logged-in user's storage and then live for the whole life of the
+        // document, while applySession only swaps the in-page session — so signing in
+        // as someone else afterwards used to merge the previous account's conversation
+        // keys into the new one's store and hand it the previous account's device
+        // identity, private ECDH key included. The shared UI refuses injected material
+        // stamped for a different account — see injectedMaterialMatchesAccount() in
+        // web/src/interface/key_resolution.js.
+        let injected_for_user = self.current_username.trim().to_lowercase();
+        if !injected_for_user.is_empty() {
+            if let Ok(json) = serde_json::to_string(&injected_for_user) {
+                script.push_str(&format!("window.__ZALI_INJECTED_FOR_USER = {};\n", json));
+            }
         }
 
         let session = json!({

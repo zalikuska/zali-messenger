@@ -25,6 +25,17 @@ export class Device {
         this.logs = [];
 
         const { ZaliInterface, sandbox, apiRoutes } = loadZaliInterface({});
+        // `sandbox` in opts models a relaunch: a brand-new interface instance over
+        // storage that survived, so anything the previous instance kept in memory is
+        // gone while everything it persisted is still there. That distinction is the
+        // whole point of some checks — a queue held on the instance looks identical
+        // to a persisted one until the process restarts.
+        if (opts.sandbox) {
+            sandbox.localStorage = opts.sandbox.localStorage;
+            sandbox.sessionStorage = opts.sandbox.sessionStorage;
+            sandbox.window.localStorage = opts.sandbox.localStorage;
+            sandbox.window.sessionStorage = opts.sandbox.sessionStorage;
+        }
         this.sandbox = sandbox;
         const api = Object.create(ZaliInterface.prototype);
         this.api = api;

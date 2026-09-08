@@ -8390,6 +8390,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .me-friend-badge {
     position: absolute;
+    /* .ava (the avatar right behind it) sets z-index:1 and creates its own
+       stacking context — without a z-index here higher than that, the badge
+       (z-index:auto) paints BELOW the avatar despite coming later in the DOM,
+       so it was getting covered instead of overlapping the corner. */
+    z-index: 2;
     top: -4px;
     right: -4px;
     min-width: 18px;
@@ -8417,6 +8422,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     z-index: 620;
     display: flex;
     align-items: center;
+"""#,
+    #"""
     justify-content: center;
     padding: 0;
     background: rgba(4,6,9,.72);
@@ -8432,8 +8439,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     width: 100%;
     height: 100%;
     max-height: 100vh;
-"""#,
-    #"""
     overflow: auto;
     border-radius: 0;
     border: none;
@@ -8475,14 +8480,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 18px;
-    align-items: start;
+    /* stretch (not start): the avatar has no fixed size of its own anymore —
+       height:100% on .profile-head-ava below makes it match whatever height
+       .profile-head-copy's content (name/handle/bio/counters) naturally
+       takes, so its bottom edge lines up with that column, with the actions
+       row (edit button) sitting below both via this grid's own `gap`. */
+    align-items: stretch;
     padding-right: 44px;
     --profile-accent: var(--lime);
 }
 
 .profile-head-ava {
-    width: 86px;
-    height: 86px;
+    width: auto;
+    height: 100%;
+    aspect-ratio: 1;
+    min-width: 86px;
+    min-height: 86px;
     border-radius: 26px;
     overflow: hidden;
     display: grid;
@@ -8498,7 +8511,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-name { margin: 0; font-size: 24px; line-height: 1.2; }
 .profile-handle { color: var(--text2); font-size: 13px; margin-top: 2px; }
-.profile-status { margin-top: 8px; font-size: 14px; color: var(--text); }
+
+/* Bio, shown in the header in place of a separate "About" section/tab. */
+.profile-bio-inline {
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: pre-wrap;
+}
 
 .profile-counters { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
 .profile-counter { display: flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--text2); }
@@ -8554,30 +8575,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-tab-body { min-height: 200px; }
 
-/* --- «О себе» --- */
-
-.profile-about { display: grid; gap: 14px; }
-.profile-bio { margin: 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
-.profile-bio.muted { color: var(--text2); }
-
-.profile-facts { display: grid; gap: 6px; margin: 0; }
-.profile-fact { display: flex; gap: 8px; font-size: 13px; }
-.profile-fact dt { color: var(--text2); }
-.profile-fact dd { margin: 0; }
-
-.profile-links { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.profile-links a {
-    display: inline-block;
-    padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--lime);
-    font-size: 12px;
-    text-decoration: none;
-}
-.profile-links a:hover { background: var(--lime-soft); }
-
-.profile-policy-summary { display: flex; flex-wrap: wrap; gap: 8px; }
 .profile-policy-chip {
     padding: 5px 10px;
     border-radius: 999px;
@@ -8930,6 +8927,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .profile-modal { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
     .profile-body { padding: 20px 16px 32px; }
     .profile-head { grid-template-columns: 1fr; justify-items: center; text-align: center; padding-right: 0; }
+    /* Single-column stack here, so the avatar's height:100% trick (matching
+       .profile-head-copy's height) has nothing to stretch against — pin it
+       back to a fixed size instead of letting it collapse to near-zero. */
+    .profile-head-ava { width: 86px; height: 86px; }
     .profile-head-copy { text-align: center; }
     .profile-counters { justify-content: center; }
     .profile-head-actions { justify-content: center; }
@@ -11973,6 +11974,13 @@ const API_VERSION_PREFIX = '/api';
 const AUTH_REQUEST_TIMEOUT_MS = 6500;
 const SESSION_RESTORE_TIMEOUT_MS = 12000;
 const API_REQUEST_TIMEOUT_MS = 8000;
+// Bulk transfers — an upload of a multipart body, or a download of a `.zali`
+// archive / avatar / server asset — are the requests whose honest duration is
+// measured in megabytes rather than round trips. They get their own ceiling
+// instead of the general one; applying API_REQUEST_TIMEOUT_MS to them would abort
+// a perfectly healthy large attachment on a slow link, trading a rare stall for a
+// routine failure. See the timeout choice in api.js and its explicit call sites.
+const TRANSFER_REQUEST_TIMEOUT_MS = 120000;
 
 const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     SEND_MESSAGE: 'SEND_MESSAGE',
@@ -15178,6 +15186,134 @@ ZaliMixin(ZaliInterface, class {
         return `zali_vault_cloud_sync_enabled_v1${this._userSuffix()}`;
     }
 
+    // Scopes queued by resetEncryptionKeys that still owe the registry a forced claim.
+    //
+    // On disk, not in a Set on the instance. A reset queues every scope the account
+    // holds, but each one is only claimed when that conversation is next resolved —
+    // so quitting the app before every chat has been opened left the rest to make an
+    // ordinary claim, lose to the pre-reset row, and go on asking the peer to
+    // republish a key the user had deliberately thrown away. The reset silently did
+    // not apply to exactly the conversations the user had not visited.
+    forceClaimScopesStorageKey() {
+        return `zali_force_claim_scopes_v1${this._userSuffix()}`;
+    }
+
+    // Per-scope timestamp of the first time the registry named a key this device
+    // could not obtain. See requestStaleCanonicalTakeover for what it is for; it
+    // lives on disk because the window it measures is longer than a session.
+    staleCanonicalStorageKey() {
+        return `zali_stale_canonical_v1${this._userSuffix()}`;
+    }
+
+    /// A claim must have been unobtainable for at least this long before this device
+    /// offers to take the scope over. Deliberately generous: the point is to outlast
+    /// every transient reason a republish can come up empty — the holder being asleep,
+    /// offline, mid-reinstall, or simply not having opened the app today.
+    static get STALE_CANONICAL_TAKEOVER_MS() { return 15 * 60 * 1000; }
+
+    /// ...and at least this many separate failed attempts. See markStaleCanonical:
+    /// the window alone would let one stale visit an hour after another take over a
+    /// conversation that is working perfectly well for everyone else.
+    static get STALE_CANONICAL_MIN_ATTEMPTS() { return 3; }
+
+    /// Most candidate keys one republish answer may carry. `alt:` entries accumulate
+    /// for the life of a conversation and nothing prunes them, while each candidate
+    /// costs an envelope POST per device of every participant — so an unbounded
+    /// answer turns one request into a fan-out proportional to the whole key history.
+    /// Candidates come back newest-first (active key, then alts in insertion order),
+    /// which is the order a requester is most likely to need.
+    static get MAX_REPUBLISH_CANDIDATES() { return 6; }
+
+    /// Most keys tried against one archive before giving up. Every candidate that does
+    /// not fit costs two PBKDF2-SHA256 passes at 210 000 iterations (the archive
+    /// session key, then the body), charged per message — so an account that has
+    /// accumulated dozens of `alt:` keys was spending seconds of CPU on each
+    /// unreadable message, and repeating it on every refresh. Kept identical to the
+    /// native shells (`Coordinator.maxDecryptCandidates`, `MAX_DECRYPT_CANDIDATES`).
+    static get MAX_DECRYPT_CANDIDATES() { return 12; }
+
+    loadScopeMarkMap(storageKey) {
+        try {
+            const raw = localStorage.getItem(storageKey);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    saveScopeMarkMap(storageKey, map) {
+        try {
+            const entries = Object.entries(map || {});
+            if (!entries.length) localStorage.removeItem(storageKey);
+            else localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(entries)));
+        } catch (e) {}
+    }
+
+    queueForceClaimScopes(scopes = []) {
+        const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
+        for (const scope of scopes) {
+            const scoped = String(scope || '').trim();
+            if (scoped) map[scoped] = Date.now();
+        }
+        this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
+    }
+
+    // Reads and clears in one step: a forced claim is a one-shot instruction, and
+    // leaving it queued would keep overwriting the registry on every later resolve.
+    consumeForceClaimScope(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return false;
+        const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
+        if (!Object.prototype.hasOwnProperty.call(map, scoped)) return false;
+        delete map[scoped];
+        this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
+        return true;
+    }
+
+    // Records that the canonical key for `scope` is still unobtainable, and reports
+    // whether this device has now earned the right to take the scope over.
+    //
+    // Two conditions, both required, because either alone gives false positives:
+    //
+    //  * the window. Elapsed time since the FIRST failure, so a peer that is merely
+    //    asleep, offline or mid-reinstall gets a long grace period;
+    //  * the attempt count. Time alone is not evidence of anything — open a chat
+    //    once, come back an hour later, and a single fresh failure would look
+    //    "15 minutes old" and hijack a conversation that was never broken. Only a
+    //    scope that keeps failing, across separate attempts, is genuinely stuck.
+    markStaleCanonical(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return false;
+        const key = this.staleCanonicalStorageKey();
+        const map = this.loadScopeMarkMap(key);
+        const now = Date.now();
+        const entry = map[scoped] && typeof map[scoped] === 'object' ? map[scoped] : null;
+        // Number = the pre-attempt-count format. Treated as one attempt so an
+        // upgrade in the middle of a stuck scope does not reset its progress.
+        const legacyFirst = typeof map[scoped] === 'number' ? Number(map[scoped]) : 0;
+        let first = Number(entry?.first || legacyFirst || 0);
+        let attempts = Number(entry?.attempts || (legacyFirst ? 1 : 0));
+        // A clock that moved backwards (or a stored value from the future) would
+        // otherwise pin this scope as "not stale yet" forever.
+        if (!first || first > now) first = now;
+        attempts += 1;
+        map[scoped] = { first, attempts };
+        this.saveScopeMarkMap(key, map);
+        return (now - first) >= ZaliInterface.STALE_CANONICAL_TAKEOVER_MS
+            && attempts >= ZaliInterface.STALE_CANONICAL_MIN_ATTEMPTS;
+    }
+
+    clearStaleCanonical(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return;
+        const map = this.loadScopeMarkMap(this.staleCanonicalStorageKey());
+        if (!Object.prototype.hasOwnProperty.call(map, scoped)) return;
+        delete map[scoped];
+        this.saveScopeMarkMap(this.staleCanonicalStorageKey(), map);
+    }
+
     loadVaultCloudSyncEnabled() {
         try {
             const raw = localStorage.getItem(this.vaultCloudSyncEnabledStorageKey());
@@ -15357,6 +15493,8 @@ ZaliMixin(ZaliInterface, class {
         const scoped = String(scope || '').trim();
         const next = String(nextKey || '').trim();
         if (!scoped || !next) return false;
+"""#,
+    #"""
         const current = String(stored[scoped] || '').trim();
         if (current === next) return false;
         stored[scoped] = next;
@@ -15462,20 +15600,47 @@ ZaliMixin(ZaliInterface, class {
                     if (scope && keyId) cache.set(scope, keyId);
                 }
             }
+            // The answer arrived, so for these scopes "not in the cache" now means
+            // "the registry has no claim", not "we could not ask". Callers must not
+            // have to guess between the two: an absent entry looks identical either
+            // way, and a caller deciding whether it is safe to stop waiting for a key
+            // needs to know which it is. See canonicalLookupSucceeded.
+            for (const scope of list) this.canonicalLookupAnswered().add(scope);
             return cache;
         } catch (e) {
             // A failed lookup must never be read as "no canonical key exists" —
             // that is exactly the mistake that made clients invent keys. Callers
             // check `has(scope)`, and an absent entry means "unknown", not "none".
             this.trace(`fetchCanonicalKeyIds failed error=${e?.message || e}`);
+            for (const scope of list) this.canonicalLookupAnswered().delete(scope);
             return this.canonicalKeyIdCache();
         }
+    }
+
+    /// Scopes whose most recent registry lookup actually reached the server.
+    ///
+    /// Tracked as successes rather than failures on purpose: the default for a scope
+    /// nobody has asked about must be "we do not know", and a set of failures would
+    /// have made it "answered, and the answer was no claim" — the reading that lets a
+    /// client stop waiting for a key it never asked about. Bounded by the number of
+    /// scopes an account has.
+    canonicalLookupAnswered() {
+        if (!this._canonicalLookupAnswered) this._canonicalLookupAnswered = new Set();
+        return this._canonicalLookupAnswered;
+    }
+
+    /// True when the last lookup for `scope` actually reached the server — so an
+    /// empty answer really does mean "nobody has claimed this conversation".
+    canonicalLookupSucceeded(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return false;
+        return this.canonicalLookupAnswered().has(scoped);
     }
 
     // Returns { keyId, mine, claimedBy } or null when the claim could not be made.
     // `mine === false` means another device already owns this scope's key and the
     // caller is holding a fork.
-    async claimConversationKey(scope, key, { force = false, reason = 'auto' } = {}) {
+    async claimConversationKey(scope, key, { force = false, takeover = false, reason = 'auto' } = {}) {
         const scoped = String(scope || '').trim();
         const secret = String(key || '').trim();
         if (!scoped || !secret || !this.S.session?.token) return null;
@@ -15484,7 +15649,7 @@ ZaliMixin(ZaliInterface, class {
             const res = await this.apiFetch(this.apiRoutes.conversationKeys.claim, {
                 method: 'POST',
                 includeDeviceId: true,
-                body: JSON.stringify({ scope: scoped, keyId, force: !!force }),
+                body: JSON.stringify({ scope: scoped, keyId, force: !!force, takeover: !!takeover }),
             });
             if (!res.ok) throw new Error(await res.text().catch(() => 'claim failed'));
             const data = await res.json();
@@ -15499,8 +15664,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async requestKeyRepublish(scope, { reason = 'auto' } = {}) {
-"""#,
-    #"""
         const scoped = String(scope || '').trim();
         if (!scoped || !this.S.session?.token) return false;
         try {
@@ -15551,16 +15714,19 @@ ZaliMixin(ZaliInterface, class {
         if (!scoped || !local) return local;
         // A scope queued by resetEncryptionKeys takes the registry over by force —
         // the user explicitly asked for new keys, so the old claim must not win.
-        const force = !!this._forceClaimScopes?.has(scoped);
+        const force = this.consumeForceClaimScope(scoped);
         const claim = await this.claimConversationKey(scoped, local, { reason, force });
-        if (force) this._forceClaimScopes.delete(scoped);
-        if (!claim || claim.mine) return local;
+        if (!claim || claim.mine) {
+            this.clearStaleCanonical(scoped);
+            return local;
+        }
 
         // Someone else claimed this scope first. Prefer a key we already hold
         // that matches, otherwise ask the holders to republish an envelope for
         // this device and pick it up on the next sync.
         const promoted = await this.promoteCanonicalConversationKey(scoped, claim.keyId, { reason });
         if (promoted) {
+            this.clearStaleCanonical(scoped);
             this.setKey(promoted);
             this.updateCryptoKeyDisplay({ key: promoted });
             return promoted;
@@ -15569,10 +15735,18 @@ ZaliMixin(ZaliInterface, class {
         await this.syncIncomingKeyEnvelopes({ reason: `reconcile:${reason}`, triggerRefresh: false });
         const afterSync = await this.promoteCanonicalConversationKey(scoped, claim.keyId, { reason: `${reason}:afterSync` });
         if (afterSync) {
+            this.clearStaleCanonical(scoped);
             this.setKey(afterSync);
             this.updateCryptoKeyDisplay({ key: afterSync });
             return afterSync;
         }
+
+        // Nothing we hold matches and asking the holders produced nothing. That is
+        // normally transient, so it is only recorded here — but it can also be
+        // permanent, and there was no path out of the permanent case at all.
+        const takenOver = await this.requestStaleCanonicalTakeover(scoped, local, { reason });
+        if (takenOver) return takenOver;
+
         // Still missing. Keep sending with the local key rather than blocking the
         // user — the peer stores every incoming envelope key as a decryption
         // candidate, so these messages stay readable on their side — and keep the
@@ -15583,6 +15757,87 @@ ZaliMixin(ZaliInterface, class {
             ts: new Date().toLocaleTimeString(),
         });
         return local;
+    }
+
+    // Last resort for a registry row that names a key nobody can supply any more.
+    //
+    // A `conversation_key_registry` row outlives the key material it fingerprints.
+    // Reinstall on both sides of a DM, or wipe the one device that ever held a
+    // channel key, and every participant is left claiming, failing to promote,
+    // asking for a republish nobody can answer, and falling back to its own locally
+    // invented key — forever, because the only way to replace a row was the user
+    // pressing "сбросить ключи шифрования". Reproduced: two DM devices and three
+    // channel members each kept a different active key indefinitely, readable only
+    // through `alt:` candidates, with the union of live keys — and therefore the
+    // PBKDF2 cost of every undecryptable message — growing on each new device.
+    //
+    // Which side decides what is split on purpose:
+    //
+    // * this device decides the claim is *unreachable*, because only it knows it
+    //   asked, waited and synced with nothing to show. The mark is persisted and
+    //   must be older than STALE_CANONICAL_TAKEOVER_MS, so a peer that is merely
+    //   asleep, offline or mid-reinstall never triggers this;
+    // * the server decides *who wins* (see STALE_CLAIM_TAKEOVER in
+    //   conversation_keys.rs): the first takeover in its window replaces the row and
+    //   refreshes `updated_at`, so simultaneous claimants are refused and handed the
+    //   winner's key id instead. That is what makes this converge instead of
+    //   ping-ponging between participants.
+    //
+    // Nothing becomes unreadable either way: the displaced key stays a decryption
+    // candidate on every device that held it.
+    async requestStaleCanonicalTakeover(scope, localKey, { reason = 'auto' } = {}) {
+        const scoped = String(scope || '').trim();
+        const local = String(localKey || '').trim();
+        if (!scoped || !local) return '';
+        if (!this.markStaleCanonical(scoped)) return '';
+
+        const taken = await this.claimConversationKey(scoped, local, {
+            reason: `${reason}:takeover`,
+            takeover: true,
+        });
+        if (!taken) return '';
+
+        if (taken.mine) {
+            this.clearStaleCanonical(scoped);
+            this.addLogEntry({
+                type: 'WARN',
+                msg: `Прежний ключ разговора недоступен ни у кого, зарегистрирован новый (scope=${scoped})`,
+                ts: new Date().toLocaleTimeString(),
+            });
+            // The takeover only means the registry now names a key that exists. It
+            // still has to reach everyone, or the next device to reconcile would find
+            // the very same situation and take the scope over again.
+            void this.publishConversationKeyToOwnDevices({ scope: scoped, key: local, reason: `takeover:${reason}` });
+            const channel = this.channelFromConversationScope(scoped);
+            if (channel) {
+                void this.publishConversationKeyToServerMembers({
+                    serverId: channel.serverId,
+                    channelId: channel.channelId,
+                    scope: scoped,
+                    key: local,
+                    reason: `takeover:${reason}`,
+                });
+            } else {
+                const peer = this.peerFromConversationScope(scoped);
+                if (peer) void this.publishConversationKeyToPeer({ peer, scope: scoped, key: local, reason: `takeover:${reason}` });
+            }
+            return local;
+        }
+
+        // Someone else won the window. Their key is the canonical one now, and it is
+        // reachable by definition — they hold it — so adopt it if it already arrived.
+        const adopted = await this.promoteCanonicalConversationKey(scoped, taken.keyId, { reason: `${reason}:takeoverLost` });
+        if (adopted) {
+            this.clearStaleCanonical(scoped);
+            this.setKey(adopted);
+            this.updateCryptoKeyDisplay({ key: adopted });
+            return adopted;
+        }
+        // Not here yet — ask, and let the next reconcile pick it up. The mark stays
+        // set, but the winner's fresh `updated_at` means the server refuses another
+        // takeover for a full window, which is what gives convergence time to happen.
+        await this.requestKeyRepublish(scoped, { reason: `${reason}:takeoverLost` });
+        return '';
     }
 
     keyEnvelopeOverridesLocal(scope, payload) {
@@ -15662,7 +15917,7 @@ ZaliMixin(ZaliInterface, class {
                     return null;
                 }
             };
-            const injected = window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
+            const injected = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
                 : {};
             const persisted = readStore(localStorage);
@@ -15674,10 +15929,22 @@ ZaliMixin(ZaliInterface, class {
                 ...(persisted || {}),
                 ...(session || {}),
             });
+            // Write back ONLY when the merge actually produced something different.
+            //
+            // This is a read path with ~30 call sites, several of them inside render
+            // and send, and it used to serialise the whole key map and write it to both
+            // stores on every single call — two synchronous localStorage writes per
+            // read, for a result that is normally byte-identical to what is already
+            // there. The write still has to happen when it changes something (a legacy
+            // scope folded onto its canonical form, or one store ahead of the other),
+            // because a key filed under a name nobody looks up is a key that is lost.
             try {
                 const encoded = JSON.stringify(merged || {});
-                sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
-                localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                if (encoded !== this._lastConversationKeysEncoded) {
+                    sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    this._lastConversationKeysEncoded = encoded;
+                }
             } catch (e) {}
             return merged && typeof merged === 'object' ? merged : {};
         } catch (e) {
@@ -15731,6 +15998,8 @@ ZaliMixin(ZaliInterface, class {
             // Durable copy — see loadStoredConversationKeys() for why dropping this
             // was the single largest source of "сообщение зашифровано не тем ключом".
             localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+            // Keeps the read path's write-back guard honest about what is on disk.
+            this._lastConversationKeysEncoded = encoded;
             this.syncNativeConversationKeys(keys || {});
             if (this.S.session?.token && this.S.auth?.vaultPassphrase && !this.cloudVaultSyncInFlight) {
                 this.scheduleCloudVaultSync(300);
@@ -15890,7 +16159,14 @@ ZaliMixin(ZaliInterface, class {
             if (!raw) return '';
             return await this.decryptVaultUnlockSecret(raw, guard);
         } catch (e) {
-            this.trace(`loadVaultUnlockSecret error=${e?.message || e}`);
+            // Both this blob and the local vault snapshot are sealed with the session
+            // JWT, and a password login mints a new one — so after a re-login the
+            // stored copy is undecryptable for good. It used to be retried, and fail,
+            // on every launch forever, with nothing but a trace to show for it. Drop
+            // it: the caller then falls back to the network, and the password login
+            // path re-saves a fresh copy under the new token.
+            this.trace(`loadVaultUnlockSecret error=${e?.message || e} dropped=true`);
+            try { localStorage.removeItem(this.vaultUnlockStorageKey()); } catch (err) {}
             return '';
         }
     }
@@ -15912,7 +16188,13 @@ ZaliMixin(ZaliInterface, class {
                 if (count >= 0) this._vaultSnapshotApplied = true;
                 return count > 0;
             } catch (e) {
-                this.trace(`restoreCloudVaultSnapshot failed reason=${reason} error=${e?.message || e}`);
+                // Sealed with the session JWT, which a password login rotates — so a
+                // snapshot written before the last re-login can never be opened again.
+                // Silently failing left this device paying a PBKDF2 derivation on every
+                // cold start for a blob that was already dead. Drop it and let the
+                // network path repopulate it.
+                this.trace(`restoreCloudVaultSnapshot failed reason=${reason} error=${e?.message || e} dropped=true`);
+                try { localStorage.removeItem(this.cloudVaultSnapshotStorageKey()); } catch (err) {}
                 return false;
             } finally {
                 this._restoreVaultInFlight = null;
@@ -15998,16 +16280,46 @@ ZaliMixin(ZaliInterface, class {
                 if (!promoted) await this.requestKeyRepublish(scope, { reason });
             }
 
-            for (let attempt = 0; attempt < 2 && !this.getStoredConversationKey(scope); attempt += 1) {
-                this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} retry=${attempt}`);
-                await new Promise(resolve => setTimeout(resolve, 1500 + attempt * 1500));
-                if (recoveredVaultPassphrase) {
-                    await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}:retry${attempt}` });
+            // Wait only when there is something to wait FOR.
+            //
+            // This used to sleep 1.5 s and then 3 s unconditionally, with a vault sync
+            // and an envelope sync inside each round — up to 4.5 s of dead time plus
+            // six round trips, awaited on the path that opens a chat and on the path
+            // that sends a message. The reason for waiting at all is sound and stays:
+            // inventing a key here is irreversible, it gets published as the scope's
+            // key, and doing that because a slow round trip had not landed yet orphans
+            // the real key along with every message under it.
+            //
+            // But that risk only exists when a key we do not have might be out there.
+            // The registry answers exactly that question, and it has already been asked
+            // above: `knownCanonical` set means somebody holds a key for this scope, so
+            // waiting is warranted. Empty means the lookup succeeded and found no claim
+            // — nothing to lose the race to — and the retries were pure latency.
+            //
+            // A FAILED lookup is not "no claim": fetchCanonicalKeyIds returns its cache
+            // on error and an absent entry means "unknown". That case is treated as
+            // worth waiting for, same as a known claim.
+            //
+            // Which is why this asks canonicalLookupSucceeded() rather than looking at
+            // the cache: an absent cache entry is produced BOTH by "the registry has no
+            // claim" and by "we never got an answer", so testing the cache would have
+            // reported "unknown" every single time and this whole branch would have
+            // waited exactly as long as before while looking like it did not.
+            const worthWaiting = !!knownCanonical || !this.canonicalLookupSucceeded(scope);
+            if (worthWaiting) {
+                for (let attempt = 0; attempt < 2 && !this.getStoredConversationKey(scope); attempt += 1) {
+                    this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} retry=${attempt} canonical=${knownCanonical ? 'known' : 'unknown'}`);
+                    await new Promise(resolve => setTimeout(resolve, 600 + attempt * 1200));
+                    if (recoveredVaultPassphrase) {
+                        await this.syncCloudVaultPackage({ passphrase: recoveredVaultPassphrase, reason: `resolveConversationCryptoKey:${reason}:retry${attempt}` });
+                    }
+                    await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}:retry${attempt}`, triggerRefresh: false });
+                    if (knownCanonical && !this.getStoredConversationKey(scope)) {
+                        await this.promoteCanonicalConversationKey(scope, knownCanonical, { reason: `${reason}:retry${attempt}` });
+                    }
                 }
-                await this.syncIncomingKeyEnvelopes({ reason: `resolveConversationCryptoKey:${reason}:retry${attempt}`, triggerRefresh: false });
-                if (knownCanonical && !this.getStoredConversationKey(scope)) {
-                    await this.promoteCanonicalConversationKey(scope, knownCanonical, { reason: `${reason}:retry${attempt}` });
-                }
+            } else {
+                this.trace(`resolveConversationCryptoKey reason=${reason} scope=${scope} no_wait=true registry_empty=true`);
             }
         }
 
@@ -16246,8 +16558,38 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {}
     }
 
+    // Whose account the native shell's document-start injection belongs to.
+    //
+    // macOS, Windows and Android all inject the LAST logged-in user's device
+    // identity and conversation keys before the page script runs, and nothing
+    // cleared them when a different account signed in — the globals live for the
+    // lifetime of the document, while applySession only swaps the in-page session.
+    // So logging in as B on a device that last ran as A merged A's conversation keys
+    // into B's key store (from there into B's cloud vault) and, when B had no local
+    // identity yet, handed B A's device identity including its private ECDH key.
+    // The localStorage legacy fallbacks two functions below were removed for exactly
+    // this hazard; the injected channel had no such guard.
+    //
+    // Shells that stamp `__ZALI_INJECTED_FOR_USER` get checked against it. Older
+    // shells do not set it at all, and for them the pre-existing behaviour stands —
+    // wrong only on the account-switch path, which is what the stamp fixes going
+    // forward. An empty myName() means we are still booting and do not yet know who
+    // we are; adopting is right there, and it is the normal single-account path.
+    injectedMaterialMatchesAccount() {
+        try {
+            const stamped = String(window.__ZALI_INJECTED_FOR_USER || '').trim().toLowerCase();
+            if (!stamped) return true;
+            const me = String(this.myName() || '').trim().toLowerCase();
+            if (!me) return true;
+            return me === stamped;
+        } catch (e) {
+            return true;
+        }
+    }
+
     loadInjectedDeviceIdentity() {
         try {
+            if (!this.injectedMaterialMatchesAccount()) return null;
             const raw = window.__ZALI_INJECTED_DEVICE_IDENTITY;
             if (!raw) return null;
             const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -16560,6 +16902,29 @@ ZaliMixin(ZaliInterface, class {
         return promoted;
     }
 
+    // Does the vault event we just read already contain every key this device holds?
+    //
+    // Compared entry by entry over the whole stored map, `alt:` candidates included:
+    // those are exactly the historical keys a second device needs in order to read
+    // anything written before the conversation converged, and they are the ones the
+    // republish sweep deliberately never sends (see retryPublishConversationKeys), so
+    // the vault is their only route between an account's own devices.
+    //
+    // Note that `payload` is read BEFORE applyVaultPlainPayload merges it, or the
+    // comparison would be against a map that just absorbed it and always match.
+    vaultPayloadCoversLocalKeys(payload) {
+        const remote = payload?.conversationKeys && typeof payload.conversationKeys === 'object'
+            ? payload.conversationKeys
+            : {};
+        const local = this.loadStoredConversationKeys();
+        for (const [scope, value] of Object.entries(local)) {
+            const key = String(value || '').trim();
+            if (!key) continue;
+            if (String(remote[scope] || '').trim() !== key) return false;
+        }
+        return true;
+    }
+
     scheduleCloudVaultSync(delayMs = 300) {
         if (!this.S.session?.token || !this.S.auth?.vaultPassphrase || !this.isVaultCloudSyncEnabled()) return;
         if (this.cloudVaultSyncTimer) {
@@ -16588,6 +16953,7 @@ ZaliMixin(ZaliInterface, class {
 
             let imported = false;
             let sawCompatibleServerEvents = false;
+            let serverAlreadyHasEverything = false;
             let undecryptableServerEvents = false;
             try {
                 const res = await this.apiFetch(this.apiRoutes.vault.events);
@@ -16623,6 +16989,11 @@ ZaliMixin(ZaliInterface, class {
                         }
                         if (payload) {
                             try {
+                                // Measured against the key map as it stands BEFORE the merge:
+                                // applyVaultPlainPayload folds this very payload into it, so
+                                // asking afterwards would compare the server against a copy of
+                                // itself for every scope it happened to carry.
+                                const covers = this.vaultPayloadCoversLocalKeys(payload);
                                 this.applyVaultPlainPayload(payload);
                                 await this.saveCloudVaultSnapshot(payload, this.S.session?.token);
                                 imported = true;
@@ -16632,7 +17003,19 @@ ZaliMixin(ZaliInterface, class {
                                 // publish below pushes "latest" back to something every device
                                 // can read again instead of leaving it stuck behind them.
                                 sawCompatibleServerEvents = matchIndex === events.length - 1;
-                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length} matchIndex=${matchIndex}`);
+                                // ...and only when that newest event actually carries everything
+                                // this device holds. Position alone used to decide it, which
+                                // froze the vault after its very first publish: from then on the
+                                // newest event was always ours and always decryptable, so this
+                                // returned before the publish below every single time, and no
+                                // key created afterwards ever reached the cloud. A second device
+                                // of the account then recovered the key set as it stood on day
+                                // one and invented fresh keys for every conversation opened
+                                // since. It only ever unstuck itself by accident, when a
+                                // one-time-code export (approveDeviceAndExport) landed on top
+                                // and pushed the match off the end of the stream.
+                                serverAlreadyHasEverything = covers;
+                                this.trace(`syncCloudVaultPackage imported reason=${reason} events=${events.length} matchIndex=${matchIndex} covers=${serverAlreadyHasEverything}`);
                             } catch (e) {
                                 // Расшифровалось, но пакет старой схемы — публикация ниже
                                 // выступает как upgrade до v2, это допустимо.
@@ -16652,7 +17035,7 @@ ZaliMixin(ZaliInterface, class {
                 return imported;
             }
 
-            if (sawCompatibleServerEvents) {
+            if (sawCompatibleServerEvents && serverAlreadyHasEverything) {
                 return imported;
             }
 
@@ -16715,11 +17098,22 @@ ZaliMixin(ZaliInterface, class {
     // legitimately logged-in device of key material does not make anything
     // safer — the envelope is sealed to that device's own ECDH public key
     // and only that device can open it — it just breaks the conversation.
-    async publishConversationKeyEnvelopes({ recipient, scope, key, reason = 'auto', excludeCurrentDevice = false } = {}) {
+    // `keys` publishes several candidates for one scope in a single pass. It exists
+    // because the per-recipient DEVICE lookup is the expensive part: calling this once
+    // per candidate re-fetched `/api/users/<peer>/devices` for every one of them, so a
+    // republish answer carrying six candidates to a twenty-member channel spent a
+    // hundred and twenty directory round trips through a five-slot pool before it had
+    // published anything. The envelope POSTs themselves are irreducible — one per key
+    // per device — but the lookups are not.
+    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false } = {}) {
         const target = String(recipient || '').trim();
         const scoped = String(scope || '').trim();
-        const secret = String(key || '').trim();
-        if (!this.S.session?.token || !target || !scoped || !secret) return false;
+        const secrets = Array.from(new Set(
+            (Array.isArray(keys) ? keys : [key])
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+        )).slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
+        if (!this.S.session?.token || !target || !scoped || !secrets.length) return false;
         try {
             await this.ensureDeviceCryptoIdentity();
             const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
@@ -16738,7 +17132,16 @@ ZaliMixin(ZaliInterface, class {
                 this.trace(`publishConversationKeyEnvelopes skipped reason=${reason} recipient=${target} devices=0`);
                 return 'no_devices';
             }
-            const results = await Promise.allSettled(usable.map(async device => {
+            // Non-secret SHA-256 fingerprint — the same id the registry stores, never
+            // the key. It is part of the envelope row's identity on the server, so
+            // several candidate keys for one scope reach one device as several
+            // envelopes instead of overwriting each other down to the last one.
+            const keyIds = await Promise.all(secrets.map(secret => this.conversationKeyId(secret)));
+            const jobs = [];
+            for (const device of usable) {
+                secrets.forEach((secret, i) => jobs.push({ device, secret, keyId: keyIds[i] }));
+            }
+            const results = await Promise.allSettled(jobs.map(async ({ device, secret, keyId }) => {
                 const encryptedKey = await this.encryptConversationKeyEnvelope({
                     scope: scoped,
                     key: secret,
@@ -16753,6 +17156,7 @@ ZaliMixin(ZaliInterface, class {
                         scope: scoped,
                         recipientDeviceId: device.deviceId,
                         senderDeviceId: selfDeviceId,
+                        keyId,
                         encryptedKey,
                     }),
                 });
@@ -16763,7 +17167,7 @@ ZaliMixin(ZaliInterface, class {
                 const firstErr = results.find(r => r.status === 'rejected')?.reason;
                 throw new Error(firstErr?.message || 'Не удалось опубликовать ни один key envelope');
             }
-            this.trace(`publishConversationKeyEnvelopes reason=${reason} recipient=${target} devices=${usable.length}`);
+            this.trace(`publishConversationKeyEnvelopes reason=${reason} recipient=${target} devices=${usable.length} keys=${secrets.length}`);
             return true;
         } catch (e) {
             this.trace(`publishConversationKeyEnvelopes failed reason=${reason} recipient=${target} error=${e?.message || e}`);
@@ -16771,12 +17175,12 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async publishConversationKeyToPeer({ peer, scope, key, reason = 'auto' } = {}) {
+    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto' } = {}) {
         const recipient = String(peer || '').trim();
         // Self is not a peer: own devices go through publishConversationKeyToOwnDevices,
         // which excludes this device and reports separately.
         if (!recipient || recipient === this.myName()) return false;
-        return this.publishConversationKeyEnvelopes({ recipient, scope, key, reason });
+        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason });
     }
 
     // The account's *other* devices need this key just as much as the peer's do,
@@ -16792,13 +17196,14 @@ ZaliMixin(ZaliInterface, class {
     // This widens nothing: each envelope is sealed to one of our own devices'
     // ECDH public keys, and the cloud vault already hands every own device the
     // full key set — this is the same reach over a channel that actually works.
-    async publishConversationKeyToOwnDevices({ scope, key, reason = 'auto' } = {}) {
+    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto' } = {}) {
         const me = String(this.myName() || '').trim();
         if (!me) return false;
         return this.publishConversationKeyEnvelopes({
             recipient: me,
             scope,
             key,
+            keys,
             reason: `self:${reason}`,
             excludeCurrentDevice: true,
         });
@@ -16832,12 +17237,24 @@ ZaliMixin(ZaliInterface, class {
     // (single recipient), a channel can have any number of members and the
     // membership list can change, so this is re-run on every resolve/retry
     // rather than tracked with a one-shot "published" flag.
-    async publishConversationKeyToServerMembers({ serverId, channelId, scope, key, reason = 'auto' } = {}) {
+    // `keys` may carry several candidates for one scope (a republish request is
+    // answered with every key we hold for it). They are fanned out per member in one
+    // pass rather than by calling this once per key: each call costs a members
+    // lookup and, inside publishConversationKeyToPeer, a devices lookup per member,
+    // so the per-key loop it replaces multiplied both by the candidate count. A
+    // twenty-member server answering one request with three candidates spent sixty
+    // directory lookups before publishing anything — and every member that cannot
+    // read the channel sends a request of its own.
+    async publishConversationKeyToServerMembers({ serverId, channelId, scope, key, keys = null, reason = 'auto' } = {}) {
         const sid = String(serverId || '').trim();
         const cid = String(channelId || '').trim();
         const scoped = String(scope || '').trim();
-        const secret = String(key || '').trim();
-        if (!this.S.session?.token || !sid || !cid || !scoped || !secret) return 0;
+        const secrets = Array.from(new Set(
+            (Array.isArray(keys) ? keys : [key])
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+        )).slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
+        if (!this.S.session?.token || !sid || !cid || !scoped || !secrets.length) return 0;
         const me = String(this.myName() || '').trim();
         let members = [];
         try {
@@ -16849,11 +17266,11 @@ ZaliMixin(ZaliInterface, class {
         const recipients = members
             .map(member => String(member?.username || '').trim())
             .filter(username => username && username !== me);
-        const results = await Promise.allSettled(
-            recipients.map(peer => this.publishConversationKeyToPeer({ peer, scope: scoped, key: secret, reason }))
-        );
+        const results = await Promise.allSettled(recipients.map(peer =>
+            this.publishConversationKeyToPeer({ peer, scope: scoped, keys: secrets, reason })
+        ));
         const published = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
-        this.trace(`publishConversationKeyToServerMembers reason=${reason} scope=${scoped} members=${recipients.length} published=${published}`);
+        this.trace(`publishConversationKeyToServerMembers reason=${reason} scope=${scoped} members=${recipients.length} keys=${secrets.length} published=${published}`);
         return published;
     }
 
@@ -16871,45 +17288,55 @@ ZaliMixin(ZaliInterface, class {
         // are exactly the ones encrypted under a key we have since demoted to an
         // `alt:` candidate. Sending only the active key answered the request with
         // the one key that could not possibly help.
-        const candidates = this.conversationKeyCandidates(this.loadStoredConversationKeys(), scope);
+        // Bounded. Every candidate costs an envelope POST per device of every
+        // participant, and `alt:` entries accumulate without limit, so an old scope
+        // could answer a single request with dozens of keys times dozens of devices.
+        // The newest candidates are the ones a requester is most likely to be missing;
+        // anything older is still reachable by asking again after this batch lands.
+        const candidates = this
+            .conversationKeyCandidates(this.loadStoredConversationKeys(), scope)
+            .slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
         if (!candidates.length) {
             this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=true`);
             return false;
         }
         const channel = this.channelFromConversationScope(scope);
         if (channel) {
-            for (const key of candidates) {
-                await this.publishConversationKeyToServerMembers({
-                    serverId: channel.serverId,
-                    channelId: channel.channelId,
-                    scope,
-                    key,
-                    reason: 'republish_request',
-                });
-            }
+            // One pass over the membership for all candidates, not one pass per key.
+            await this.publishConversationKeyToServerMembers({
+                serverId: channel.serverId,
+                channelId: channel.channelId,
+                scope,
+                keys: candidates,
+                reason: 'republish_request',
+            });
             return true;
         }
         const peer = requester || this.peerFromConversationScope(scope);
         // A request from our own account is another of our devices asking for this
         // key. That used to be dropped on the floor here, which is precisely the
         // device that has no other way to obtain it.
+        // Every candidate goes out in ONE call per recipient, not one call per key:
+        // each call re-fetches that recipient's device list, and the answer to a
+        // republish request is by definition several keys.
         if (peer === this.myName()) {
-            let selfResult = false;
-            for (const key of candidates) {
-                const one = await this.publishConversationKeyToOwnDevices({ scope, key, reason: 'republish_request' });
-                selfResult = selfResult || one === true;
-            }
+            const selfResult = await this.publishConversationKeyToOwnDevices({
+                scope,
+                keys: candidates,
+                reason: 'republish_request',
+            });
             this.trace(`handleKeyRepublishRequest scope=${scope} self=true keys=${candidates.length} result=${selfResult}`);
-            return selfResult;
+            return selfResult === true;
         }
         if (!peer) return false;
-        let result = false;
-        for (const key of candidates) {
-            const one = await this.publishConversationKeyToPeer({ peer, scope, key, reason: 'republish_request' });
-            result = result || one === true;
-        }
+        const result = await this.publishConversationKeyToPeer({
+            peer,
+            scope,
+            keys: candidates,
+            reason: 'republish_request',
+        });
         this.trace(`handleKeyRepublishRequest scope=${scope} peer=${peer} keys=${candidates.length} result=${result}`);
-        return result;
+        return result === true;
     }
 
     // Collapses bursts of full-sweep requests into one sweep per cooldown window.
@@ -16942,8 +17369,34 @@ ZaliMixin(ZaliInterface, class {
             this.trace(`retryPublishConversationKeys coalesced reason=${reason}`);
             return 0;
         }
+        // The cooldown alone does not serialise anything: it is stamped here, before
+        // the sweep starts, while the sweep itself runs for minutes (one devices
+        // lookup plus an envelope POST per device for every scope, all queued through
+        // a five-slot pool). A trailing timer armed during that run fires as soon as
+        // the window elapses — with the first sweep still in flight — and a second
+        // full sweep piles onto the same pool, doubling the storm this coalescing was
+        // added to prevent. Anything arriving while one is running becomes a trailing
+        // sweep instead, so nothing is dropped.
+        if (this._keyPublishSweepInFlight) {
+            if (!this._keyPublishSweepTrailing) {
+                this._keyPublishSweepTrailing = setTimeout(() => {
+                    this._keyPublishSweepTrailing = null;
+                    void this.retryPublishConversationKeys({ reason: `${reason}:trailing`, limit, cooldownMs });
+                }, cooldownMs);
+            }
+            this.trace(`retryPublishConversationKeys deferred reason=${reason} in_flight=true`);
+            return 0;
+        }
         this._lastKeyPublishSweepAt = now;
-        return this._retryPublishConversationKeysImpl({ reason, limit });
+        this._keyPublishSweepInFlight = true;
+        try {
+            return await this._retryPublishConversationKeysImpl({ reason, limit });
+        } finally {
+            this._keyPublishSweepInFlight = false;
+            // Stamped again on the way out: the window that matters is the gap between
+            // sweeps, not the moment one happened to start.
+            this._lastKeyPublishSweepAt = Date.now();
+        }
     }
 
     async _retryPublishConversationKeysImpl({ reason = 'auto', limit = 200 } = {}) {
@@ -17050,67 +17503,121 @@ ZaliMixin(ZaliInterface, class {
                     .filter(Boolean)
             ));
             const canonical = await this.fetchCanonicalKeyIds(batchScopes);
+
+            // Envelopes are never deleted server-side, and every sync re-downloads the
+            // whole set for this device — a full ECDH derive plus AES open per row, on
+            // a path that runs on login, on every key_envelope_available push, on every
+            // refreshAfterKey and on every decrypt failure.
+            //
+            // The skip condition is deliberately the strongest one available: not "we
+            // have seen this row" but "we already hold the exact key this row was
+            // carrying, for the scope it named". Anything weaker can drop key material.
+            // The first version of this skipped a row whenever its scope held *any*
+            // key, which is wrong the moment a scope has more than one (the normal
+            // state — that is what `alt:` candidates are), and the harness caught it as
+            // devices ending up with one candidate out of thirty-seven envelopes.
+            //
+            // A row with no id or no timestamp is never memoised: a missing field must
+            // degrade to "open it again", never to "skip everything".
+            //
+            // In memory only, so a relaunch re-imports the lot — that is the recovery
+            // path for a device whose key store was wiped, and it must not be memoised
+            // away.
+            if (!this._openedEnvelopeStamps) this._openedEnvelopeStamps = new Map();
+            const seen = this._openedEnvelopeStamps;
+
+            // Opened OUTSIDE the write lock, on a snapshot of the key store used only
+            // to answer "would re-opening this row tell us anything new?".
+            //
+            // Decryption is per-envelope ECDH: two key imports and a derive apiece, and
+            // a real account fetches a few hundred rows. Doing that inside the lock
+            // meant every other writer — the "generate a key for this new chat" write
+            // on the chat-open path above all — queued behind the whole batch. The lock
+            // exists to serialise the load-mutate-save cycle, and that is all it now
+            // covers; the decrypted results are applied to a freshly loaded map inside
+            // it, so nothing is decided from the snapshot.
+            const snapshot = this.loadStoredConversationKeys();
+            let decryptFailed = 0;
+            let skippedKnown = 0;
+            const opened = [];
+            for (const record of envelopes) {
+                try {
+                    const envelopeId = String(record?.envelopeId || '').trim();
+                    const createdAt = String(record?.createdAt || '').trim();
+                    // A republish upserts the row with a fresh created_at, so an
+                    // updated envelope misses the memo and is opened again.
+                    const stamp = (envelopeId && createdAt) ? `${envelopeId}|${createdAt}` : '';
+                    const memo = stamp ? seen.get(stamp) : null;
+                    if (memo && this.conversationKeyCandidates(snapshot, memo.scope).includes(memo.key)) {
+                        skippedKnown += 1;
+                        continue;
+                    }
+                    const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
+                    if (!payload.scope || !payload.key) continue;
+                    // The sender may predate canonicalConversationScope, so fold
+                    // its scope before it is used as a storage/registry key.
+                    const scope = this.canonicalConversationScope(String(payload.scope));
+                    // Remember exactly what this row was carrying, so the check
+                    // above can prove the re-open would be a no-op before skipping.
+                    if (stamp) {
+                        seen.set(stamp, { scope, key: payload.key });
+                        if (seen.size > 4000) seen.delete(seen.keys().next().value);
+                    }
+                    opened.push({ scope, payload });
+                } catch (e) {
+                    decryptFailed += 1;
+                    this.trace(`syncIncomingKeyEnvelopes decrypt failed reason=${reason} error=${e?.message || e}`);
+                }
+            }
+
             // The load-mutate-save below must not race promoteCanonicalConversationKey
             // or the "generate a new key" write in _resolveConversationCryptoKeyImpl —
-            // both can run concurrently in the background for a different scope while
-            // this sync (itself deduped against concurrent *calls to itself* by
-            // syncIncomingKeyEnvelopes, but not against other writers) is still
-            // awaiting per-envelope decryption. See withConversationKeysWriteLock.
-            const { imported, decryptFailed, skippedSame } = await this.withConversationKeysWriteLock(async () => {
+            // both can run concurrently in the background for a different scope. See
+            // withConversationKeysWriteLock.
+            const { imported, skippedSame } = await this.withConversationKeysWriteLock(async () => {
                 const stored = this.loadStoredConversationKeys();
                 let imported = 0;
-                let decryptFailed = 0;
                 let skippedSame = 0;
-                for (const record of envelopes) {
-                    try {
-                        const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
-                        if (!payload.scope || !payload.key) continue;
-                        // The sender may predate canonicalConversationScope, so fold
-                        // its scope before it is used as a storage/registry key.
-                        const scope = this.canonicalConversationScope(String(payload.scope));
-                        const current = String(stored[scope] || '').trim();
-                        const wantedKeyId = String(canonical.get(scope) || '').trim();
-                        const isCanonical = wantedKeyId
-                            ? (await this.conversationKeyId(payload.key)) === wantedKeyId
-                            : false;
-                        if (!current) {
-                            stored[scope] = payload.key;
-                            imported += 1;
-                        } else if (current !== payload.key && isCanonical) {
-                            this.trace(`syncIncomingKeyEnvelopes adopt canonical key scope=${scope} sender=${payload.sender}`);
-                            this.setActiveConversationKey(stored, scope, payload.key);
-                            imported += 1;
-                        } else if (current !== payload.key && !wantedKeyId && this.keyEnvelopeOverridesLocal(scope, payload)) {
-                            // The canonical owner's key becomes the active (sending) key so
-                            // both peers converge. Preserve the previous key as a decryption
-                            // candidate so messages already encrypted with it stay readable.
-                            this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
-                            this.setActiveConversationKey(stored, scope, payload.key);
-                            imported += 1;
-                        } else if (current !== payload.key) {
-                            // Not the canonical key, but keep it as a decryption candidate:
-                            // the peer may have encrypted messages with it before convergence.
-                            if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
-                            else skippedSame += 1;
-                        } else {
-                            skippedSame += 1;
-                        }
-                    } catch (e) {
-                        decryptFailed += 1;
-                        this.trace(`syncIncomingKeyEnvelopes decrypt failed reason=${reason} error=${e?.message || e}`);
+                for (const { scope, payload } of opened) {
+                    const current = String(stored[scope] || '').trim();
+                    const wantedKeyId = String(canonical.get(scope) || '').trim();
+                    const isCanonical = wantedKeyId
+                        ? (await this.conversationKeyId(payload.key)) === wantedKeyId
+                        : false;
+                    if (!current) {
+                        stored[scope] = payload.key;
+                        imported += 1;
+                    } else if (current !== payload.key && isCanonical) {
+                        this.trace(`syncIncomingKeyEnvelopes adopt canonical key scope=${scope} sender=${payload.sender}`);
+                        this.setActiveConversationKey(stored, scope, payload.key);
+                        imported += 1;
+                    } else if (current !== payload.key && !wantedKeyId && this.keyEnvelopeOverridesLocal(scope, payload)) {
+                        // The canonical owner's key becomes the active (sending) key so
+                        // both peers converge. Preserve the previous key as a decryption
+                        // candidate so messages already encrypted with it stay readable.
+                        this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
+                        this.setActiveConversationKey(stored, scope, payload.key);
+                        imported += 1;
+                    } else if (current !== payload.key) {
+                        // Not the canonical key, but keep it as a decryption candidate:
+                        // the peer may have encrypted messages with it before convergence.
+                        if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
+                        else skippedSame += 1;
+                    } else {
+                        skippedSame += 1;
                     }
                 }
                 if (imported > 0) {
                     this.saveStoredConversationKeys(stored);
                 }
-                return { imported, decryptFailed, skippedSame };
+                return { imported, skippedSame };
             });
             // Surface the outcome in the in-app log panel. decryptFailed>0 means the
             // envelope was encrypted to a device key this client cannot open (device
             // identity mismatch) — that is why a delivered message stays unreadable.
             this.addLogEntry({
                 type: decryptFailed > 0 ? 'WARN' : 'INFO',
-                msg: `Ключи: получено ${envelopes.length}, принято ${imported}, совпало ${skippedSame}, не расшифровано ${decryptFailed} (reason=${reason})`,
+                msg: `Ключи: получено ${envelopes.length}, принято ${imported}, совпало ${skippedSame}, уже разобрано ${skippedKnown}, не расшифровано ${decryptFailed} (reason=${reason})`,
                 ts: new Date().toLocaleTimeString()
             });
             if (imported > 0) {
@@ -17164,6 +17671,9 @@ ZaliMixin(ZaliInterface, class {
         // 1. Clear local AES conversation keys
         this._publishedKeyScopes = new Set();
         this._vaultSnapshotApplied = false;
+        // The key store is about to be emptied, so every envelope has to be openable
+        // again — the memo would otherwise skip exactly the rows that refill it.
+        this._openedEnvelopeStamps = null;
         // The user explicitly asked for new keys, so the sweep that fans them out
         // must not sit out retryPublishConversationKeys' coalescing window.
         this._lastKeyPublishSweepAt = 0;
@@ -17171,10 +17681,18 @@ ZaliMixin(ZaliInterface, class {
         // defeat the reset: every regenerated key would lose the (non-forced)
         // claim to the pre-reset row and the client would keep asking the peer to
         // republish a key the user just deliberately threw away.
-        this._forceClaimScopes = new Set(
+        //
+        // Persisted, not held in a Set on the instance: a scope is only force-claimed
+        // when that conversation is next resolved, so an in-memory queue silently
+        // expired at the next relaunch and the reset never reached any chat the user
+        // had not happened to open in that session.
+        this.queueForceClaimScopes(
             Object.keys(this.loadStoredConversationKeys())
                 .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
         );
+        // Every scope is about to get a brand-new key of our own making, so no scope
+        // is waiting on an unreachable canonical key any more.
+        this.saveScopeMarkMap(this.staleCanonicalStorageKey(), {});
         this.canonicalKeyIdCache().clear();
         this.saveStoredConversationKeys({});
         try { sessionStorage.removeItem(this.cryptoKeyStorageKey()); } catch (e) {}
@@ -18988,6 +19506,8 @@ ZaliMixin(ZaliInterface, class {
             return existing;
         }
         if (this._voiceTurnFetchInFlight) return this._voiceTurnFetchInFlight;
+"""#,
+    #"""
         const pending = (async () => {
             try {
                 const res = await this.apiFetch(route, { method: 'GET' });
@@ -19679,8 +20199,6 @@ ZaliMixin(ZaliInterface, class {
     renderPublicServersModal() {
         const list = document.getElementById('serverDiscoverList');
         const count = document.getElementById('serverDiscoverCount');
-"""#,
-    #"""
         const refreshBtn = document.getElementById('serverDiscoverRefreshBtn');
         const servers = this.renderFilteredPublicServers();
         if (count) count.textContent = String(servers.length || 0);
@@ -22938,6 +23456,8 @@ ZaliMixin(ZaliInterface, class {
             this.voiceDiag('attach-local-tracks-failed', {
                 peer,
                 added: added.length,
+"""#,
+    #"""
                 error: error?.message || String(error),
                 name: error?.name || '',
             }, 'ERROR');
@@ -23555,8 +24075,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Re-asserts room membership. The server evicts a user from their voice room
-"""#,
-    #"""
     // 150 s after their WebSocket closes (the delayed cleanup in realtime.rs — the
     // window has been 12 s and 45 s in the past, and both were shorter than a real
     // reconnect; check realtime.rs before trusting a number written here), and
@@ -25829,6 +26347,9 @@ ZaliMixin(ZaliInterface, class {
             }
             return;
         }
+        // See loadBrowserDmHistory: cleared before the walk, re-marked by any row this
+        // pass still cannot open.
+        this.clearBrowserDecryptGap({ serverId: sid, channelId: cid });
         try {
             const limit = 200;
             let offset = 0;
@@ -25979,21 +26500,54 @@ ZaliMixin(ZaliInterface, class {
                 channelId: this.S.activeChannel,
                 reason: 'refreshAfterKey'
             });
-            this.loadServerMessages(this.S.activeServer, this.S.activeChannel, { silent: true });
+            if (this.keyChangeCanRevealMore({ serverId: this.S.activeServer, channelId: this.S.activeChannel })) {
+                this.loadServerMessages(this.S.activeServer, this.S.activeChannel, { silent: true });
+            }
             this.scheduleFlushPendingOutbox(300);
             return;
         }
 
         if (this.S.current) {
             const key = await this.resolveConversationCryptoKey({ peer: this.S.current, reason: 'refreshAfterKey' });
-            if (this.nativeSupports('sendMessage')) {
-                this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer: this.S.current });
-            } else {
-                void this.loadBrowserDmHistory(this.S.current, key);
+            if (this.keyChangeCanRevealMore({ peer: this.S.current })) {
+                if (this.nativeSupports('sendMessage')) {
+                    this.postNativeMessage({ type: NativeMessageTypes.REFRESH_HISTORY, key, peer: this.S.current });
+                } else {
+                    void this.loadBrowserDmHistory(this.S.current, key);
+                }
             }
         }
         this.scheduleFlushPendingOutbox(300);
     }
+
+    keyChangeCanRevealMore({ peer = null, serverId = null, channelId = null } = {}) {
+        const store = (serverId && channelId)
+            ? this.S.serverChats[`${serverId}:${channelId}`]
+            : this.S.chats[String(peer || '').trim()];
+        if (!Array.isArray(store) || !store.length) return true;
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (scope && this._browserDecryptGaps?.has(scope)) return true;
+        return store.some(msg => this.detectSystemNotice(msg?.text) === 'decrypt-error');
+    }
+
+    // A message the browser client could not open, recorded against its conversation.
+    // Unlike the native shells it renders no placeholder for these — the message is
+    // simply absent — so without this the conversation would look complete and a key
+    // arriving later would never trigger the reload that fetches it.
+    markBrowserDecryptGap({ peer = null, serverId = null, channelId = null } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (!scope) return;
+        if (!this._browserDecryptGaps) this._browserDecryptGaps = new Set();
+        this._browserDecryptGaps.add(scope);
+    }
+
+    /// Called at the START of a browser history load: the load itself re-marks
+    /// anything it still cannot open, so whatever survives is a live gap.
+    clearBrowserDecryptGap({ peer = null, serverId = null, channelId = null } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        if (scope) this._browserDecryptGaps?.delete(scope);
+    }
+
 
     async syncActiveConversation({ force = false } = {}) {
         if (!this.S.session?.token) return;
@@ -26414,7 +26968,10 @@ ZaliMixin(ZaliInterface, class {
 
         const request = (async () => {
             try {
-                const res = await this.apiFetch(this.apiRoutes.servers.assets(sid, kind));
+                // Binary body — see TRANSFER_REQUEST_TIMEOUT_MS.
+                const res = await this.apiFetch(this.apiRoutes.servers.assets(sid, kind), {
+                    timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+                });
                 if (this.serverAssetFetchSeq.get(key) !== seq) return null;
                 if (res.status === 404) {
                     this.serverAssetCache.set(key, null);
@@ -26724,7 +27281,10 @@ ZaliMixin(ZaliInterface, class {
                     }
                 }
 
-                const res = await this.apiFetch(this.apiRoutes.avatar.byUsername(name));
+                // Binary body — see TRANSFER_REQUEST_TIMEOUT_MS.
+                const res = await this.apiFetch(this.apiRoutes.avatar.byUsername(name), {
+                    timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+                });
                 if (this.avatarFetchSeq.get(key) !== seq) {
                     return null;
                 }
@@ -26826,6 +27386,8 @@ ZaliMixin(ZaliInterface, class {
                 const canvas = document.createElement('canvas');
                 canvas.width = cw;
                 canvas.height = ch;
+"""#,
+    #"""
                 const ctx = canvas.getContext('2d');
                 if (!ctx) return null;
                 ctx.drawImage(img, 0, 0, cw, ch);
@@ -27249,14 +27811,35 @@ ZaliMixin(ZaliInterface, class {
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         }
+        // The native path has always bounded itself (nativeApiFetch above falls back to
+        // API_REQUEST_TIMEOUT_MS); the browser path only had a timeout when a caller
+        // remembered to ask for one, and almost none did. `fetch` has no timeout of its
+        // own, so one stalled request sat in an apiFetch concurrency slot until the
+        // browser gave up minutes later — including the deliberately-prioritised
+        // envelope sync, which is the one call that can repair a wrong key.
+        //
+        // Bulk transfers get their own, much larger budget rather than the request
+        // default: a multi-megabyte attachment legitimately outlives it, and cutting
+        // those off would trade a rare stall for a routine failure. Uploads are
+        // detected here by their multipart body; DOWNLOADS cannot be detected from the
+        // request, so the handful of call sites that pull binary (message archives,
+        // avatars, server assets) pass TRANSFER_REQUEST_TIMEOUT_MS explicitly.
+        //
+        // An explicit `timeoutMs` from the caller always wins; anything falsy means
+        // "use the default for this kind of request", which is what every existing
+        // call site was silently getting as "none at all".
+        const isMultipartBody = typeof FormData !== 'undefined' && options.body instanceof FormData;
+        const effectiveTimeoutMs = timeoutMs > 0
+            ? timeoutMs
+            : (isMultipartBody ? TRANSFER_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS);
         let timeoutId = null;
         let abortController = null;
         let abortForwarder = null;
         const originalSignal = fetchOptions.signal;
-        if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+        if (effectiveTimeoutMs > 0 && typeof AbortController !== 'undefined') {
             abortController = new AbortController();
             fetchOptions.signal = abortController.signal;
-            timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+            timeoutId = setTimeout(() => abortController.abort(), effectiveTimeoutMs);
             if (originalSignal) {
                 if (originalSignal.aborted) {
                     abortController.abort();
@@ -27515,9 +28098,23 @@ ZaliMixin(ZaliInterface, class {
             // the next account logged in during this page session would skip its own
             // on-demand vault fetch and mint a temporary key instead of adopting the
             // real key from its vault (key divergence on the account-switch flow).
-"""#,
-    #"""
             this._cloudVaultResolveFetchDone = false;
+            // Memo of key envelopes this session has already opened, keyed by envelope
+            // id. Envelope ids are per-account, and the incoming account must open its
+            // own from scratch — a stale hit here would skip an import it needs.
+            this._openedEnvelopeStamps = null;
+            // Same story for the "no key of ours opens this message" memo: message ids
+            // are per-account and the incoming account must judge them for itself.
+            this._failedBrowserUnpacks = null;
+            this._decodedBrowserMessageIds = null;
+            // Storage keys are per-account, so what the previous account had on disk
+            // says nothing about the incoming one — the read path must write its own
+            // merge through at least once.
+            this._lastConversationKeysEncoded = null;
+            // Registry answers are per-account; carrying "this scope has no claim"
+            // across a switch could let the new account skip a wait it never made.
+            this._canonicalLookupAnswered = null;
+            this._browserDecryptGaps = null;
             this.S.current = null;
             this.S.activeServer = null;
             this.S.activeChannel = null;
@@ -27939,6 +28536,22 @@ ZaliMixin(ZaliInterface, class {
                 if (!superseded()) {
                     if (code) {
                         void this.timeStage('syncCloudVaultPackage(bg)', () => this.syncCloudVaultPackage({ passphrase: code, reason }));
+                    } else if (this.isVaultCloudSyncEnabled()) {
+                        // No passphrase means the cloud vault is off for this whole
+                        // session: syncCloudVaultPackage bails without one and so does
+                        // scheduleCloudVaultSync, so nothing this device learns can ever
+                        // reach the account's other devices through the vault, and
+                        // nothing they publish reaches it. That is a real, load-bearing
+                        // failure — a restored session whose stored unlock secret was
+                        // lost (cleared storage, or a blob sealed with a since-rotated
+                        // token) hits it — and until now it happened without a single
+                        // word anywhere. Say so; a password login re-seals the secret.
+                        this.addLogEntry({
+                            type: 'WARN',
+                            msg: 'Облачная синхронизация ключей недоступна: не восстановлена парольная фраза vault. Войдите по паролю, чтобы включить её снова.',
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                        this.trace(`postAuthSetup cloud vault disabled reason=${reason} no_passphrase=true`);
                     }
                     void this.timeStage('retryPublishConversationKeys(bg)', () => this.retryPublishConversationKeys({ reason }));
                 }
@@ -29023,6 +29636,15 @@ ZaliMixin(ZaliInterface, class {
             /^🔑\s*Получение ключа…?$/.test(value) ||
             /^📦\s*Файл сообщения превышает допустимый размер$/.test(value) ||
             /^⚠️\s*Не удалось загрузить сообщение$/.test(value) ||
+            // The Windows/Rust shell writes its own wording (native/messages.rs's
+            // undecryptable_placeholder) and carries no emoji marker. It was missing
+            // from this list entirely, so on Windows a message that would not decrypt
+            // rendered as an ordinary chat bubble and — far worse — never reached
+            // queueDecryptFailureReport, which is what asks the holders to republish.
+            // The one mechanism that repairs an unreadable conversation was therefore
+            // unreachable on that platform, exactly as it was on Android before the
+            // key_republish_request routing was split out.
+            /^Не удалось расшифровать сообщение:/.test(value) ||
             /^(?:🚨\s*)?\[Ошибка расшифрования:[^\]]*\]$/.test(value)
         ) return 'decrypt-error';
         return null;
@@ -29037,6 +29659,9 @@ ZaliMixin(ZaliInterface, class {
         if (/Получение ключа/.test(value)) return 'awaiting-key';
         if (/превышает допустимый размер/.test(value)) return 'oversized';
         if (/Не удалось загрузить/.test(value)) return 'download-failed';
+        // Windows shell wording; the cause is the same as 'wrong-key' — no key this
+        // device holds opened the archive.
+        if (/Не удалось расшифровать сообщение/.test(value)) return 'wrong-key';
         if (/Ошибка расшифрования/.test(value)) return 'legacy-decrypt-error';
         return 'unknown';
     }
@@ -30982,6 +31607,8 @@ ZaliMixin(ZaliInterface, class {
         this.messageWindow.start = windowInfo.useWindow ? windowInfo.start : 0;
         this.messageWindow.end = windowInfo.useWindow ? windowInfo.end : msgs.length;
         this.messageWindow.count = msgs.length;
+"""#,
+    #"""
         this.messageWindow.useWindow = !!windowInfo.useWindow;
 
         const preserveScroll = !conversationChanged && !this.pendingMessagesScroll && !stickToBottom;
@@ -31539,14 +32166,34 @@ ZaliMixin(ZaliInterface, class {
         }
         if (!key) {
             this.trace(`handleIncomingBrowserMessage missingKey id=${id} peer=${peer}`);
+            // Dropped, not placeholdered — record it so a key arriving later still
+            // triggers the reload that fetches this message.
+            this.markBrowserDecryptGap({ peer: serverId ? null : peer, serverId, channelId });
+            return;
+        }
+
+        const candidates = this.browserDecryptCandidates({
+            peer: serverId ? null : peer,
+            serverId,
+            channelId,
+            activeKey: key,
+        });
+        if (this.browserUnpackKnownToFail(id, candidates)) {
+            this.trace(`handleIncomingBrowserMessage skipped id=${id} reason=known_undecryptable_with_current_keys`);
+            this.markBrowserDecryptGap({ peer: serverId ? null : peer, serverId, channelId });
             return;
         }
 
         try {
-            const res = await this.apiFetch(this.apiRoutes.messages.download(id));
+            // A `.zali` archive carries the message's attachments, so this is a bulk
+            // transfer, not an API round trip — the general request timeout would
+            // abort a large but perfectly healthy download.
+            const res = await this.apiFetch(this.apiRoutes.messages.download(id), {
+                timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+            });
             if (!res.ok) return;
             const archiveBytes = new Uint8Array(await res.arrayBuffer());
-            const unpacked = await window.ZaliWasm.unpackMessage(archiveBytes, key);
+            const unpacked = await this.unpackBrowserMessageWithCandidates(archiveBytes, candidates, id);
             const attachments = (unpacked.attachments || []).map(att => ({
                 name: att.name,
                 mimeType: att.mimeType,
@@ -31601,6 +32248,7 @@ ZaliMixin(ZaliInterface, class {
             }
         } catch (e) {
             this.trace(`handleIncomingBrowserMessage failed id=${id} error=${e?.message || e}`);
+            this.markBrowserDecryptGap({ peer: serverId ? null : peer, serverId, channelId });
             // Unlike the native shells, this path fails silently otherwise — there
             // is no placeholder message for the render-time hook in
             // detectSystemNotice() to catch, so this is the only place a
@@ -31619,20 +32267,116 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Opens a downloaded archive with every key this device could plausibly have
+    // encrypted it under, not just the scope's current active key.
+    //
+    // The native shells have always done this — macOS `renderHistoryRecord` and
+    // Windows `candidate_message_keys` both try the scope key, then every other key
+    // the account holds — and the whole `alt:` mechanism exists to keep a superseded
+    // key usable for decryption after it has been demoted. The browser path ignored
+    // all of it and passed one key to unpackMessage(), so in a browser tab or the
+    // PWA every message written before a conversation converged was permanently
+    // unreadable, with no placeholder and no retry: exactly the messages the
+    // candidate pool was built to rescue.
+    //
+    // Ordering matters for cost, not correctness: each failed attempt is a full
+    // PBKDF2-SHA256 210 000 derivation, so the key most likely to work goes first
+    // and the account-wide sweep last.
+    browserDecryptCandidates({ peer = null, serverId = null, channelId = null, activeKey = '' } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        const stored = this.loadStoredConversationKeys();
+        const candidates = [];
+        const push = (value) => {
+            const key = String(value || '').trim();
+            if (key && !candidates.includes(key)) candidates.push(key);
+        };
+        push(activeKey);
+        if (scope) this.conversationKeyCandidates(stored, scope).forEach(push);
+        // Last resort, mirroring both native shells: a message whose scope→key
+        // mapping is stale or missing may still open under a key filed elsewhere.
+        Object.values(stored).forEach(push);
+
+        // Bounded for the same reason the native shells bound theirs: every candidate
+        // that does not fit costs two PBKDF2-SHA256 passes at 210 000 iterations, and
+        // `alt:` keys accumulate for the life of a conversation. The scoped candidates
+        // come first and are the ones that can realistically work; the account-wide
+        // tail is a heuristic and does not deserve an unbounded budget.
+        return candidates.slice(0, ZaliInterface.MAX_DECRYPT_CANDIDATES);
+    }
+
+    // Has this exact message already been tried against exactly this candidate list?
+    //
+    // Checked BEFORE the archive is fetched, not just before the sweep: a message
+    // nothing can open is re-encountered on every history load, and re-downloading it
+    // to re-derive the same failures is the larger half of the waste. The memo is
+    // keyed on the candidate list itself, so the first new key changes it and the
+    // retry — download included — happens immediately.
+    browserUnpackKnownToFail(messageId, candidates) {
+        const id = String(messageId || '').trim();
+        if (!id || !this._failedBrowserUnpacks) return false;
+        return this._failedBrowserUnpacks.get(id) === candidates.join('|');
+    }
+
+    rememberBrowserUnpackFailure(messageId, candidates) {
+        const id = String(messageId || '').trim();
+        if (!id) return;
+        if (!this._failedBrowserUnpacks) this._failedBrowserUnpacks = new Map();
+        this._failedBrowserUnpacks.set(id, candidates.join('|'));
+        if (this._failedBrowserUnpacks.size > 4000) {
+            this._failedBrowserUnpacks.delete(this._failedBrowserUnpacks.keys().next().value);
+        }
+    }
+
+    async unpackBrowserMessageWithCandidates(archiveBytes, candidates, messageId = '') {
+        let lastError = null;
+        for (const candidate of candidates) {
+            try {
+                const unpacked = await window.ZaliWasm.unpackMessage(archiveBytes, candidate);
+                if (messageId && this._failedBrowserUnpacks) {
+                    this._failedBrowserUnpacks.delete(String(messageId).trim());
+                }
+                return unpacked;
+            } catch (e) {
+                lastError = e;
+            }
+        }
+        this.rememberBrowserUnpackFailure(messageId, candidates);
+        throw lastError || new Error('Нет ключа для расшифровки сообщения');
+    }
+
     // Fallback for loading DM history from a plain browser tab (no native shell to do
     // it via REFRESH_HISTORY). Downloads + decrypts each message metadata row returned
     // by GET /api/messages/:user and feeds it through receiveMessage(), same as above.
     async loadBrowserDmHistory(peer, key) {
         if (!peer || !key) return;
         if (!(await this.wasmAvailable())) return;
+        // Cleared before the walk, not after: every row is fed through
+        // handleIncomingBrowserMessage below, which re-marks the gap for anything it
+        // still cannot open. A gap that survives this load is therefore a real one,
+        // and a conversation that has been repaired stops asking for reloads.
+        this.clearBrowserDecryptGap({ peer });
         try {
             const res = await this.apiFetch(this.apiRoutes.messages.direct(peer));
             if (!res.ok) return;
             const rows = await res.json();
             if (!Array.isArray(rows)) return;
-            for (const row of rows) {
-                await this.handleIncomingBrowserMessage(row);
-            }
+            // Bounded concurrency instead of one strictly serial pass. Each row is an
+            // independent download plus a WASM unpack, and doing them one after another
+            // made a history load take the sum of every round trip. Kept small on
+            // purpose: the requests still share the five-slot apiFetch pool, and going
+            // wider here would starve the envelope sync and the live message path
+            // behind a history load rather than speed anything up.
+            const HISTORY_CONCURRENCY = 4;
+            let next = 0;
+            const worker = async () => {
+                while (next < rows.length) {
+                    const row = rows[next++];
+                    await this.handleIncomingBrowserMessage(row);
+                }
+            };
+            await Promise.all(
+                Array.from({ length: Math.min(HISTORY_CONCURRENCY, rows.length) }, worker)
+            );
         } catch (e) {
             this.trace(`loadBrowserDmHistory failed peer=${peer} error=${e?.message || e}`);
         }
@@ -31737,8 +32481,6 @@ ZaliMixin(ZaliInterface, class {
                     m.text === incomingText &&
                     this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey
                 );
-"""#,
-    #"""
             if (existingIndex >= 0) {
                 const prev = msgs[existingIndex];
                 msgs[existingIndex] = {
@@ -33455,7 +34197,7 @@ ZaliMixin(ZaliInterface, class {
             loading: false,
             error: '',
             data: null,
-            tab: 'about',
+            tab: 'wall',
             editing: false,
             /** Черновик формы редактирования — правки видны сразу, но не уходят на сервер до «Сохранить». */
             draft: null,
@@ -33540,7 +34282,7 @@ ZaliMixin(ZaliInterface, class {
             username: name,
             loading: true,
             editing: editing && isSelf,
-            tab: tab || 'about',
+            tab: tab || 'wall',
         });
         this.showProfileOverlay();
         await this.refreshProfile();
@@ -33619,7 +34361,7 @@ ZaliMixin(ZaliInterface, class {
     startProfileEditing() {
         const state = this.ensureProfileState();
         if (!state.data?.isSelf) return;
-        this.setProfileState({ editing: true, tab: 'about', draft: this.profileDraftFrom(state.data) });
+        this.setProfileState({ editing: true, draft: this.profileDraftFrom(state.data) });
     }
 
     cancelProfileEditing() {
@@ -34094,9 +34836,14 @@ ZaliMixin(ZaliInterface, class {
         const data = state.data;
         if (!data) return '';
 
+        // Пока открыт редактор, вкладки не соответствуют ничему конкретному
+        // («О себе» больше нет — её место в шапке, см. renderProfileHeader) —
+        // показывать их подсвеченными на случайной вкладке хуже, чем не
+        // показывать вовсе.
+        const editingSelf = state.editing && data.isSelf;
         return `
             ${this.renderProfileHeader(state, data)}
-            ${this.renderProfileTabs(state, data)}
+            ${editingSelf ? '' : this.renderProfileTabs(state, data)}
             <div class="profile-tab-body">${this.renderProfileTabContent(state, data)}</div>
         `;
     }
@@ -34120,7 +34867,7 @@ ZaliMixin(ZaliInterface, class {
             <div class="profile-head-copy">
                 <h2 class="profile-name" id="profileModalName">${this.esc(title)}</h2>
                 <div class="profile-handle">@${this.esc(username)}</div>
-                ${data.status ? `<div class="profile-status">${this.esc(data.status)}</div>` : ''}
+                ${data.bio ? `<div class="profile-bio-inline">${this.esc(data.bio)}</div>` : ''}
                 <div class="profile-counters">
                     ${counters.map(counter => `
                         <span class="profile-counter">
@@ -34178,7 +34925,6 @@ ZaliMixin(ZaliInterface, class {
 
     profileTabsFor(state, data) {
         const tabs = [
-            { key: 'about', label: 'О себе' },
             { key: 'wall', label: 'Стена' },
             { key: 'comments', label: 'Комментарии' },
         ];
@@ -34192,7 +34938,7 @@ ZaliMixin(ZaliInterface, class {
 
     renderProfileTabs(state, data) {
         const tabs = this.profileTabsFor(state, data);
-        const active = tabs.some(tab => tab.key === state.tab) ? state.tab : 'about';
+        const active = tabs.some(tab => tab.key === state.tab) ? state.tab : 'wall';
         return `<nav class="profile-tabs" role="tablist">
             ${tabs.map(tab => `
                 <button class="profile-tab${tab.key === active ? ' active' : ''}" type="button" role="tab" aria-selected="${tab.key === active}" data-profile-tab="${this.esc(tab.key)}">
@@ -34204,43 +34950,15 @@ ZaliMixin(ZaliInterface, class {
     }
 
     renderProfileTabContent(state, data) {
+        // Редактор больше не привязан к вкладке «О себе» (она убрана — см.
+        // profileTabsFor) и проверяется первым, до маршрутизации по вкладкам.
+        if (state.editing && data.isSelf) return this.renderProfileEditor(state);
         const tabs = this.profileTabsFor(state, data).map(tab => tab.key);
-        const active = tabs.includes(state.tab) ? state.tab : 'about';
-        if (active === 'wall') return this.renderProfileWallTab(state, data);
+        const active = tabs.includes(state.tab) ? state.tab : 'wall';
         if (active === 'comments') return this.renderProfileCommentsTab(state, data);
         if (active === 'moderation') return this.renderProfileModerationTab(state, data);
         if (active === 'friends') return this.renderProfileFriendsTab(state, data);
-        return this.renderProfileAboutTab(state, data);
-    }
-
-    // ------------------------------------------------------------
-    // Вкладка «О себе» (просмотр и редактирование)
-    // ------------------------------------------------------------
-
-    renderProfileAboutTab(state, data) {
-        if (state.editing && data.isSelf) return this.renderProfileEditor(state);
-
-        const links = Array.isArray(data.links) ? data.links : [];
-        const rows = [
-            data.location ? { label: 'Где', value: data.location } : null,
-        ].filter(Boolean);
-
-        return `<div class="profile-about">
-            ${data.bio
-                ? `<p class="profile-bio">${this.esc(data.bio)}</p>`
-                : `<p class="profile-bio muted">${data.isSelf ? 'Расскажите о себе — нажмите «Редактировать профиль».' : 'Пользователь пока ничего о себе не написал.'}</p>`}
-            ${rows.length ? `<dl class="profile-facts">${rows.map(row => `
-                <div class="profile-fact"><dt>${this.esc(row.label)}</dt><dd>${this.esc(row.value)}</dd></div>
-            `).join('')}</dl>` : ''}
-            ${links.length ? `<ul class="profile-links">${links.map(link => `
-                <li><a href="${this.esc(link.url)}" target="_blank" rel="noopener noreferrer">${this.esc(link.label || link.url)}</a></li>
-            `).join('')}</ul>` : ''}
-            <div class="profile-policy-summary">
-                <span class="profile-policy-chip">Комментарии: <strong>${this.esc(this.audienceLabel(data.commentPolicy))}</strong></span>
-                <span class="profile-policy-chip">Автографы: <strong>${this.esc(this.audienceLabel(data.autographPolicy))}</strong></span>
-                <span class="profile-policy-chip">Одобрение: <strong>${this.esc(this.audienceLabel(data.autographAutoApprove))}</strong></span>
-            </div>
-        </div>`;
+        return this.renderProfileWallTab(state, data);
     }
 
     /** Ряд из нескольких кнопок вместо системного `<select>` — активный вариант подсвечен акцентом. */
@@ -34931,6 +35649,8 @@ ZaliMixin(ZaliInterface, class {
     renderAutographPreview(autograph) {
         const viewBox = this.esc(String(autograph?.viewBox || '0 0 100 100'));
         const paths = (Array.isArray(autograph?.strokes) ? autograph.strokes : []).map(stroke => (
+"""#,
+    #"""
             `<path d="${this.esc(stroke?.d || '')}" fill="none" stroke="${this.esc(this.safeCssColor(stroke?.color) || '#cbff00')}" stroke-width="${Number(stroke?.width) || 2}" stroke-linecap="round" stroke-linejoin="round"></path>`
         )).join('');
         return `<svg class="autograph-preview-svg" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Автограф">${paths}</svg>`;
@@ -35810,8 +36530,6 @@ ZaliMixin(ZaliInterface, class {
                 const quote = e.target.closest('.msg-quote[data-reply-target]');
                 if (quote) {
                     e.stopPropagation();
-"""#,
-    #"""
                     this.scrollToMessage(quote.getAttribute('data-reply-target'));
                     return;
                 }

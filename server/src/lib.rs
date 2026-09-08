@@ -22,7 +22,7 @@ use std::{
 };
 use tokio::{fs, sync::mpsc};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, warn, Instrument};
+use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
 
 mod voice;
@@ -728,14 +728,127 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
             sender TEXT NOT NULL,
             sender_device_id TEXT NOT NULL,
             recipient_device_id TEXT NOT NULL,
+            key_id TEXT NOT NULL DEFAULT '',
             encrypted_key TEXT NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(owner, scope_key, sender_device_id, recipient_device_id)
+            UNIQUE(owner, scope_key, sender_device_id, recipient_device_id, key_id)
         )",
     )
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы conversation_key_envelopes");
+
+    // `key_id` belongs to the row's identity, and adding it needs a table rebuild:
+    // the old UNIQUE was declared inline, so ALTER TABLE cannot widen it.
+    //
+    // What the narrow constraint did: one (owner, scope, sender device, recipient
+    // device) could hold exactly ONE envelope, so publishing several keys for a scope
+    // to the same device was a sequence of upserts over a single row and only the
+    // last survived. That silently defeated the mechanism built to repair an
+    // unreadable conversation — handleKeyRepublishRequest answers a "I cannot decrypt
+    // this scope" with every candidate it holds, precisely because the one key the
+    // requester certainly already has is the active one, and all of them but the last
+    // were overwritten before the requester could fetch them. It also meant a device
+    // that was offline while the key changed lost the previous key from this channel
+    // for good. Distinct keys now occupy distinct rows.
+    let envelopes_have_key_id = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM pragma_table_info('conversation_key_envelopes') WHERE name = 'key_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0)
+        > 0;
+    if !envelopes_have_key_id {
+        // One connection, one transaction, and nothing destructive outside it.
+        //
+        // The first version of this ran each statement through the pool — so
+        // potentially four different connections — and cleaned up after a failure by
+        // dropping the half-built table. That is the worst possible pairing: the
+        // original is dropped in the middle, and if anything after that point fails,
+        // the cleanup deletes the replacement too and the table is simply gone along
+        // with every envelope in it. The integration test
+        // `adding_key_id_to_the_envelope_table_preserves_existing_rows` reproduced
+        // exactly that. SQLite makes DDL transactional, so the whole rebuild either
+        // lands or rolls back and leaves the old table untouched.
+        let rebuild = async {
+            let mut conn = pool.acquire().await?;
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+            let staged = async {
+                // Left over from an earlier interrupted attempt, if any: harmless to
+                // drop, since it is never the live table.
+                sqlx::query("DROP TABLE IF EXISTS conversation_key_envelopes_v2")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query(
+                    "CREATE TABLE conversation_key_envelopes_v2 (
+                        envelope_id TEXT PRIMARY KEY,
+                        owner TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        sender TEXT NOT NULL,
+                        sender_device_id TEXT NOT NULL,
+                        recipient_device_id TEXT NOT NULL,
+                        key_id TEXT NOT NULL DEFAULT '',
+                        encrypted_key TEXT NOT NULL,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(owner, scope_key, sender_device_id, recipient_device_id, key_id)
+                    )",
+                )
+                .execute(&mut *conn)
+                .await?;
+                // Existing rows keep the empty key_id they effectively already had, so
+                // nothing is dropped and every envelope stays fetchable.
+                sqlx::query(
+                    "INSERT INTO conversation_key_envelopes_v2
+                        (envelope_id, owner, scope_key, sender, sender_device_id,
+                         recipient_device_id, key_id, encrypted_key, created_at)
+                     SELECT envelope_id, owner, scope_key, sender, sender_device_id,
+                            recipient_device_id, '', encrypted_key, created_at
+                       FROM conversation_key_envelopes",
+                )
+                .execute(&mut *conn)
+                .await?;
+                // The index names the old table and would otherwise block the rename;
+                // it is recreated against the new one immediately below this block.
+                sqlx::query("DROP INDEX IF EXISTS idx_conversation_key_envelopes_owner_device")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query("DROP TABLE conversation_key_envelopes")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query(
+                    "ALTER TABLE conversation_key_envelopes_v2 RENAME TO conversation_key_envelopes",
+                )
+                .execute(&mut *conn)
+                .await?;
+                Ok::<(), sqlx::Error>(())
+            }
+            .await;
+            match staged {
+                Ok(()) => {
+                    sqlx::query("COMMIT").execute(&mut *conn).await?;
+                    Ok::<(), sqlx::Error>(())
+                }
+                Err(e) => {
+                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                    Err(e)
+                }
+            }
+        }
+        .await;
+        match rebuild {
+            Ok(()) => info!("conversation_key_envelopes: key_id добавлен, таблица перестроена"),
+            Err(e) => {
+                // Rolled back, so the old table and every envelope in it are still
+                // there. It just keeps collapsing distinct keys onto one row until
+                // this succeeds on a later start.
+                error!(
+                    "Не удалось перестроить conversation_key_envelopes, откат: {}",
+                    e
+                );
+            }
+        }
+    }
+
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_conversation_key_envelopes_owner_device
          ON conversation_key_envelopes (owner, recipient_device_id, created_at)",

@@ -30,7 +30,47 @@ use uuid::Uuid;
 /// How long one `key_envelope_available` push suppresses the next one for the same
 /// recipient. Sized against a republish sweep, which writes an envelope per device
 /// per scope back-to-back: the whole burst should collapse into a single push.
-const KEY_ENVELOPE_NOTIFY_COOLDOWN: Duration = Duration::from_secs(5);
+/// Raised from 5 s: a real sweep runs for far longer than that. It publishes one
+/// envelope per device per scope through a five-slot client-side pool, so ~18
+/// scopes took minutes end to end and produced a push every five seconds. Each
+/// push costs the recipient a full envelope sync plus a re-decrypt of its open
+/// conversation — and for own-device envelopes the recipient is the publishing
+/// account itself, so a device paid that price a dozen times for its own sweep.
+/// One push per sweep is the whole intent of this window; 5 s did not deliver it.
+const KEY_ENVELOPE_NOTIFY_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// Above this many tracked recipients, entries older than the cooldown are swept.
+/// The map is pure rate-limiter state — an entry past its window is indistinguishable
+/// from an absent one — but nothing ever removed them, so it grew one permanent entry
+/// per username that has ever received an envelope.
+const KEY_ENVELOPE_NOTIFY_MAP_SOFT_CAP: usize = 512;
+
+/// Ceiling on one `GET /api/key-envelopes` page. Generous next to a real account
+/// (scopes × peers' devices), tight enough that a pathological row count cannot
+/// turn every sync into an unbounded download plus one ECDH open per row.
+const MAX_KEY_ENVELOPES_PER_FETCH: i64 = 2000;
+
+/// How many vault events per account survive a write.
+///
+/// The client re-publishes the whole encrypted key set on essentially every key
+/// change and reads the stream back on every sync, and nothing ever deleted a row:
+/// the table grew without bound while `GET /api/vault/events` returned all of it,
+/// each row up to 256 KB. The client only ever scans the newest few (SCAN_WINDOW = 8
+/// in syncCloudVaultPackage) looking for one it can decrypt, so anything below this
+/// depth is already unreachable by the code that reads it — keeping it only made the
+/// read slower. Kept comfortably above that scan window so a run of one-time-code
+/// exports (approveDeviceAndExport) cannot bury the newest passphrase-encrypted event.
+const MAX_VAULT_EVENTS_PER_OWNER: i64 = 24;
+
+/// Ceiling on one `GET /api/vault/events` page.
+///
+/// Tied to the prune above rather than chosen separately: retention keeps up to
+/// MAX_VAULT_EVENTS_PER_OWNER broadcast events AND up to that many targeted ones,
+/// so a read window narrower than the sum can drop rows storage deliberately kept.
+/// It did — a one-time targeted handoff sat below a full window of broadcast churn
+/// and became invisible to the very device it was written for, even though the
+/// prune had protected it.
+const MAX_VAULT_EVENTS_PER_FETCH: i64 = MAX_VAULT_EVENTS_PER_OWNER * 2;
 
 /// Tell `recipient` that new key envelopes are waiting, at most once per cooldown
 /// window.
@@ -60,6 +100,11 @@ async fn notify_key_envelope_available(state: &Arc<AppState>, recipient: &str) {
     state
         .key_envelope_notified_at
         .insert(recipient.to_string(), now);
+    if state.key_envelope_notified_at.len() > KEY_ENVELOPE_NOTIFY_MAP_SOFT_CAP {
+        state
+            .key_envelope_notified_at
+            .retain(|_, at| now.duration_since(*at) < KEY_ENVELOPE_NOTIFY_COOLDOWN);
+    }
     let payload = serde_json::json!({ "type": "key_envelope_available" }).to_string();
     send_payload_to_user(state, recipient, payload, "post_key_envelope").await;
 }
@@ -829,6 +874,48 @@ pub(crate) async fn post_vault_event(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    // Prune on write rather than on a timer: this is the only place the stream can
+    // grow, so it is the only place that has to bound it. Best effort — a vault event
+    // that was stored successfully must not be reported as failed because tidying up
+    // after it did not work.
+    // Broadcast and targeted events are capped SEPARATELY, not as one stream.
+    //
+    // A targeted event is a one-time handoff to a specific new device
+    // (approveDeviceAndExport), encrypted with a code that device was given out of
+    // band, and it is the only copy. Sharing one cap with the broadcast stream would
+    // let ordinary key churn on the approving device evict that handoff before the
+    // new device ever logged in to collect it.
+    for targeted in [false, true] {
+        let sql = if targeted {
+            "DELETE FROM account_vault_events
+              WHERE owner = ? AND issued_to_device_id IS NOT NULL
+                AND event_id NOT IN (
+                    SELECT event_id FROM account_vault_events
+                     WHERE owner = ? AND issued_to_device_id IS NOT NULL
+                     ORDER BY vault_epoch DESC, created_at DESC, rowid DESC
+                     LIMIT ?
+                )"
+        } else {
+            "DELETE FROM account_vault_events
+              WHERE owner = ? AND issued_to_device_id IS NULL
+                AND event_id NOT IN (
+                    SELECT event_id FROM account_vault_events
+                     WHERE owner = ? AND issued_to_device_id IS NULL
+                     ORDER BY vault_epoch DESC, created_at DESC, rowid DESC
+                     LIMIT ?
+                )"
+        };
+        if let Err(e) = sqlx::query(sql)
+            .bind(&owner)
+            .bind(&owner)
+            .bind(MAX_VAULT_EVENTS_PER_OWNER)
+            .execute(&state.db)
+            .await
+        {
+            error!("Ошибка очистки старых vault events для {}: {}", owner, e);
+        }
+    }
+
     Json(serde_json::json!({
         "eventId": event_id,
         "vaultEpoch": vault_epoch
@@ -860,8 +947,17 @@ pub(crate) async fn delete_key_envelopes(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(user): AuthenticatedUser,
 ) -> impl IntoResponse {
-    match sqlx::query("DELETE FROM conversation_key_envelopes WHERE owner = ? OR sender = ?")
-        .bind(&user)
+    // `owner` only — NEVER `OR sender = ?`.
+    //
+    // This is the server half of "сбросить ключи шифрования". Dropping the
+    // envelopes addressed *to* this account is the point: they carry the keys the
+    // user just threw away, and without this the next sync would re-import them.
+    // Dropping the ones this account *sent* is a different act entirely — those are
+    // addressed to other people's devices, and a peer that has not opened the app
+    // since they were published loses that key permanently, along with every
+    // message already encrypted under it. Resetting one's own keys must not be able
+    // to make someone else's history unreadable.
+    match sqlx::query("DELETE FROM conversation_key_envelopes WHERE owner = ?")
         .bind(&user)
         .execute(&state.db)
         .await
@@ -916,6 +1012,10 @@ pub(crate) async fn post_key_envelope(
     } else {
         recipient_device_id
     };
+    // Part of the row identity, so publishing several candidate keys for one scope to
+    // one device stores several envelopes instead of overwriting a single row. Empty
+    // for clients that predate it, which reproduces the old behaviour exactly.
+    let key_id = trim_limited(payload.keyId.unwrap_or_default(), 128);
     if recipient.is_empty() || scope.is_empty() || encrypted_key.len() < 32 {
         return (StatusCode::BAD_REQUEST, "Некорректный key envelope").into_response();
     }
@@ -929,9 +1029,9 @@ pub(crate) async fn post_key_envelope(
     let envelope_id = Uuid::new_v4().to_string();
     match sqlx::query(
         "INSERT INTO conversation_key_envelopes
-         (envelope_id, owner, scope_key, sender, sender_device_id, recipient_device_id, encrypted_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(owner, scope_key, sender_device_id, recipient_device_id) DO UPDATE SET
+         (envelope_id, owner, scope_key, sender, sender_device_id, recipient_device_id, key_id, encrypted_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner, scope_key, sender_device_id, recipient_device_id, key_id) DO UPDATE SET
              encrypted_key = excluded.encrypted_key,
              created_at = CURRENT_TIMESTAMP",
     )
@@ -941,6 +1041,7 @@ pub(crate) async fn post_key_envelope(
     .bind(&sender)
     .bind(&sender_device_id)
     .bind(&recipient_device_id)
+    .bind(&key_id)
     .bind(&encrypted_key)
     .execute(&state.db)
     .await
@@ -967,16 +1068,34 @@ pub(crate) async fn get_key_envelopes(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    // Bounded. Rows are upserted per (owner, scope, sender_device, recipient_device),
+    // so the count is normally scopes × senders' devices — but nothing deletes an
+    // envelope, and a client re-fetches and re-opens (one ECDH derive apiece) the
+    // whole set on every sync. The newest rows are the ones that matter: an envelope
+    // is republished with a fresh created_at whenever its key is re-sent, so the tail
+    // this cuts off can only be material that has since been superseded or that the
+    // client already imported. `ORDER BY created_at DESC` picks the window, then the
+    // rows are handed back oldest-first so the client's import order is unchanged.
     let rows = sqlx::query_as::<_, KeyEnvelopeRecord>(
+        // `rowid` breaks ties, and it is load-bearing rather than tidy: created_at has
+        // one-second resolution, so a burst of envelopes written in the same second
+        // sorts arbitrarily — and taking a DESC window and re-sorting it ASC would
+        // then hand back that whole group REVERSED. Insertion order is the truth here.
         "SELECT envelope_id, owner, scope_key, sender, sender_device_id,
                 recipient_device_id, encrypted_key, created_at
-         FROM conversation_key_envelopes
-         WHERE owner = ? AND (? IS NULL OR recipient_device_id = ?)
-         ORDER BY created_at ASC",
+           FROM (
+             SELECT rowid AS rid, envelope_id, owner, scope_key, sender, sender_device_id,
+                    recipient_device_id, encrypted_key, created_at
+             FROM conversation_key_envelopes
+             WHERE owner = ? AND (? IS NULL OR recipient_device_id = ?)
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT ?
+           ) ORDER BY created_at ASC, rid ASC",
     )
     .bind(&owner)
     .bind(target_device.as_deref())
     .bind(target_device.as_deref())
+    .bind(MAX_KEY_ENVELOPES_PER_FETCH)
     .fetch_all(&state.db)
     .await;
 
@@ -1005,16 +1124,30 @@ pub(crate) async fn get_vault_events(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    // Newest window only, handed back oldest-first so the client keeps scanning
+    // backwards from the end exactly as before. post_vault_event prunes to the same
+    // depth, so this bound is normally a no-op — it is here so a stream that grew
+    // before the prune shipped cannot make a single sync download tens of megabytes.
     let rows = sqlx::query_as::<_, VaultEventRecord>(
+        // `rowid` breaks ties — see the envelope query above for why that matters.
+        // It matters more here: the client scans this list BACKWARDS from the end
+        // looking for the newest event it can decrypt, so an order that is merely
+        // "some permutation of the right rows" makes it read a stale key set.
         "SELECT event_id, owner, device_id, issued_to_device_id, vault_epoch,
                 encrypted_vault_event, signature, created_at
-         FROM account_vault_events
-         WHERE owner = ? AND (? IS NULL OR issued_to_device_id IS NULL OR issued_to_device_id = ?)
-         ORDER BY vault_epoch ASC, created_at ASC",
+           FROM (
+             SELECT rowid AS rid, event_id, owner, device_id, issued_to_device_id, vault_epoch,
+                    encrypted_vault_event, signature, created_at
+             FROM account_vault_events
+             WHERE owner = ? AND (? IS NULL OR issued_to_device_id IS NULL OR issued_to_device_id = ?)
+             ORDER BY vault_epoch DESC, created_at DESC, rowid DESC
+             LIMIT ?
+           ) ORDER BY vault_epoch ASC, created_at ASC, rid ASC",
     )
     .bind(&owner)
     .bind(target_device.as_deref())
     .bind(target_device.as_deref())
+    .bind(MAX_VAULT_EVENTS_PER_FETCH)
     .fetch_all(&state.db)
     .await;
 
@@ -1204,6 +1337,27 @@ pub(crate) async fn create_history_ticket(
     {
         error!("Ошибка записи history ticket {}: {}", ticket_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // Expired tickets were never removed by anything. Each one carries a full copy of
+    // the encrypted vault package (up to 256 KB) and stops being usable the moment
+    // `expires_at` passes — an hour after it was written — so this is dead weight with
+    // a long tail. Best effort, for the same reason as the vault-event prune above.
+    if let Err(e) = sqlx::query(
+        // datetime() on both sides rather than a raw string compare: `expires_at` is
+        // written through sqlx as a DateTime and comes back ISO-8601 with a `T` and an
+        // offset, while CURRENT_TIMESTAMP is `YYYY-MM-DD HH:MM:SS`. Comparing those as
+        // text agrees only because the date part dominates — it disagrees within the
+        // same day, which is exactly the range these tickets live in (they expire an
+        // hour after they are written).
+        "DELETE FROM history_tickets
+          WHERE owner = ? AND datetime(expires_at) < datetime('now')",
+    )
+    .bind(&owner)
+    .execute(&state.db)
+    .await
+    {
+        error!("Ошибка очистки истёкших history tickets для {}: {}", owner, e);
     }
 
     Json(serde_json::json!({

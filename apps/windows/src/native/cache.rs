@@ -2,7 +2,9 @@
 //! key-scope candidate derivation.
 
 use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) fn in_flight_send_client_ids() -> &'static Mutex<HashSet<String>> {
@@ -24,6 +26,10 @@ pub(crate) fn decrypted_message_cache() -> &'static Mutex<HashMap<String, Value>
 
 pub(crate) const DECRYPTED_CACHE_MAX_ENTRIES: usize = 2048;
 pub(crate) const DECRYPTED_CACHE_MAX_ENTRY_BYTES: usize = 1024 * 1024;
+/// Ceiling on the keys tried against one archive — see the fallback loop in
+/// `candidate_message_keys`. Kept identical to the macOS shell's
+/// `Coordinator.maxDecryptCandidates`.
+pub(crate) const MAX_DECRYPT_CANDIDATES: usize = 12;
 
 pub(crate) fn cache_decrypted_message(message_id: &str, entry: &Value) {
     let id = message_id.trim();
@@ -43,6 +49,45 @@ pub(crate) fn cache_decrypted_message(message_id: &str, entry: &Value) {
     }
 }
 
+/// Message ids that could NOT be opened, against the key material that failed.
+///
+/// Mirror of the positive cache above, and needed for the same reason: a wrong
+/// candidate key costs two PBKDF2-SHA256 passes at 210 000 iterations (the archive
+/// session key, then the body), so a screenful of unreadable history re-ran
+/// thousands of derivations on every history refresh — and a refresh fires on every
+/// `key_envelope_available` push, which is precisely what happens while a
+/// conversation is unreadable.
+///
+/// The self-repair is preserved by keying on a fingerprint of the whole key set:
+/// any new key material moves it, every entry goes stale at once, and the retry
+/// happens on the very next pass.
+pub(crate) fn failed_decrypt_cache() -> &'static Mutex<HashMap<String, u64>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn decrypt_known_to_fail(message_id: &str, fingerprint: u64) -> bool {
+    failed_decrypt_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(message_id).copied())
+        .map(|seen| seen == fingerprint)
+        .unwrap_or(false)
+}
+
+pub(crate) fn remember_decrypt_failure(message_id: &str, fingerprint: u64) {
+    let id = message_id.trim();
+    if id.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = failed_decrypt_cache().lock() {
+        if cache.len() >= DECRYPTED_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(id.to_string(), fingerprint);
+    }
+}
+
 /// Drops one message from the decrypt cache.
 ///
 /// Needed because an edit replaces the archive an entry was decrypted from: the
@@ -55,6 +100,26 @@ pub(crate) fn forget_decrypted_message(message_id: &str) {
     }
     if let Ok(mut cache) = decrypted_message_cache().lock() {
         cache.remove(id);
+    }
+    // The archive behind this id was replaced, so an earlier "no key opens it"
+    // verdict was about different bytes and must not survive.
+    if let Ok(mut cache) = failed_decrypt_cache().lock() {
+        cache.remove(id);
+    }
+}
+
+/// Drops every decryption verdict, positive and negative.
+///
+/// Called from CLEAR_LOCAL_DATA. Both caches are process-global while everything
+/// else that reset clears is per-account state, so without this they were the one
+/// thing that survived a "wipe local data" — including, now, "no key of ours opens
+/// this message", a verdict about key material the reset just deleted.
+pub(crate) fn clear_decrypted_message_caches() {
+    if let Ok(mut cache) = decrypted_message_cache().lock() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = failed_decrypt_cache().lock() {
+        cache.clear();
     }
 }
 
@@ -152,10 +217,38 @@ pub(crate) fn candidate_message_keys(
     // client (WebView.swift renderHistoryRecord) — a message whose scope→key mapping is
     // stale or missing may still decrypt under a key filed under a different scope, so the
     // scoped candidate above is tried first but not treated as the only option.
-    for key in conversation_keys.values() {
-        push_candidate_key(&mut keys, key.clone());
+    //
+    // Bounded, because the cost is charged per message: every candidate that does not
+    // fit costs two PBKDF2-SHA256 passes at 210 000 iterations, and `alt:` keys
+    // accumulate for the life of a conversation with nothing pruning them. The scoped
+    // candidates above are the ones that can realistically work; this tail is a
+    // heuristic for mis-scoped material and does not deserve an unbounded budget.
+    //
+    // Walked in sorted scope order, not `HashMap::values()`. Once the tail is capped,
+    // an unordered iteration would make the *contents* of the candidate list vary
+    // between calls for the same message — decryption would succeed or fail depending
+    // on which twelve keys the map happened to yield, and the "we already tried this
+    // key set" fingerprint below would never match twice.
+    let mut scopes: Vec<&String> = conversation_keys.keys().collect();
+    scopes.sort();
+    for scope in scopes {
+        if keys.len() >= MAX_DECRYPT_CANDIDATES {
+            break;
+        }
+        push_candidate_key(&mut keys, conversation_keys[scope].clone());
     }
     keys
+}
+
+/// Identity of the exact candidate list a message was tried against. Used by the
+/// negative decrypt cache: same list, same outcome, so there is nothing to redo.
+pub(crate) fn candidate_keys_fingerprint(keys: &[String]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    keys.len().hash(&mut hasher);
+    for key in keys {
+        key.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[cfg(test)]

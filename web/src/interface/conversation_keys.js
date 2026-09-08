@@ -28,6 +28,134 @@ ZaliMixin(ZaliInterface, class {
         return `zali_vault_cloud_sync_enabled_v1${this._userSuffix()}`;
     }
 
+    // Scopes queued by resetEncryptionKeys that still owe the registry a forced claim.
+    //
+    // On disk, not in a Set on the instance. A reset queues every scope the account
+    // holds, but each one is only claimed when that conversation is next resolved —
+    // so quitting the app before every chat has been opened left the rest to make an
+    // ordinary claim, lose to the pre-reset row, and go on asking the peer to
+    // republish a key the user had deliberately thrown away. The reset silently did
+    // not apply to exactly the conversations the user had not visited.
+    forceClaimScopesStorageKey() {
+        return `zali_force_claim_scopes_v1${this._userSuffix()}`;
+    }
+
+    // Per-scope timestamp of the first time the registry named a key this device
+    // could not obtain. See requestStaleCanonicalTakeover for what it is for; it
+    // lives on disk because the window it measures is longer than a session.
+    staleCanonicalStorageKey() {
+        return `zali_stale_canonical_v1${this._userSuffix()}`;
+    }
+
+    /// A claim must have been unobtainable for at least this long before this device
+    /// offers to take the scope over. Deliberately generous: the point is to outlast
+    /// every transient reason a republish can come up empty — the holder being asleep,
+    /// offline, mid-reinstall, or simply not having opened the app today.
+    static get STALE_CANONICAL_TAKEOVER_MS() { return 15 * 60 * 1000; }
+
+    /// ...and at least this many separate failed attempts. See markStaleCanonical:
+    /// the window alone would let one stale visit an hour after another take over a
+    /// conversation that is working perfectly well for everyone else.
+    static get STALE_CANONICAL_MIN_ATTEMPTS() { return 3; }
+
+    /// Most candidate keys one republish answer may carry. `alt:` entries accumulate
+    /// for the life of a conversation and nothing prunes them, while each candidate
+    /// costs an envelope POST per device of every participant — so an unbounded
+    /// answer turns one request into a fan-out proportional to the whole key history.
+    /// Candidates come back newest-first (active key, then alts in insertion order),
+    /// which is the order a requester is most likely to need.
+    static get MAX_REPUBLISH_CANDIDATES() { return 6; }
+
+    /// Most keys tried against one archive before giving up. Every candidate that does
+    /// not fit costs two PBKDF2-SHA256 passes at 210 000 iterations (the archive
+    /// session key, then the body), charged per message — so an account that has
+    /// accumulated dozens of `alt:` keys was spending seconds of CPU on each
+    /// unreadable message, and repeating it on every refresh. Kept identical to the
+    /// native shells (`Coordinator.maxDecryptCandidates`, `MAX_DECRYPT_CANDIDATES`).
+    static get MAX_DECRYPT_CANDIDATES() { return 12; }
+
+    loadScopeMarkMap(storageKey) {
+        try {
+            const raw = localStorage.getItem(storageKey);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    saveScopeMarkMap(storageKey, map) {
+        try {
+            const entries = Object.entries(map || {});
+            if (!entries.length) localStorage.removeItem(storageKey);
+            else localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(entries)));
+        } catch (e) {}
+    }
+
+    queueForceClaimScopes(scopes = []) {
+        const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
+        for (const scope of scopes) {
+            const scoped = String(scope || '').trim();
+            if (scoped) map[scoped] = Date.now();
+        }
+        this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
+    }
+
+    // Reads and clears in one step: a forced claim is a one-shot instruction, and
+    // leaving it queued would keep overwriting the registry on every later resolve.
+    consumeForceClaimScope(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return false;
+        const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
+        if (!Object.prototype.hasOwnProperty.call(map, scoped)) return false;
+        delete map[scoped];
+        this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
+        return true;
+    }
+
+    // Records that the canonical key for `scope` is still unobtainable, and reports
+    // whether this device has now earned the right to take the scope over.
+    //
+    // Two conditions, both required, because either alone gives false positives:
+    //
+    //  * the window. Elapsed time since the FIRST failure, so a peer that is merely
+    //    asleep, offline or mid-reinstall gets a long grace period;
+    //  * the attempt count. Time alone is not evidence of anything — open a chat
+    //    once, come back an hour later, and a single fresh failure would look
+    //    "15 minutes old" and hijack a conversation that was never broken. Only a
+    //    scope that keeps failing, across separate attempts, is genuinely stuck.
+    markStaleCanonical(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return false;
+        const key = this.staleCanonicalStorageKey();
+        const map = this.loadScopeMarkMap(key);
+        const now = Date.now();
+        const entry = map[scoped] && typeof map[scoped] === 'object' ? map[scoped] : null;
+        // Number = the pre-attempt-count format. Treated as one attempt so an
+        // upgrade in the middle of a stuck scope does not reset its progress.
+        const legacyFirst = typeof map[scoped] === 'number' ? Number(map[scoped]) : 0;
+        let first = Number(entry?.first || legacyFirst || 0);
+        let attempts = Number(entry?.attempts || (legacyFirst ? 1 : 0));
+        // A clock that moved backwards (or a stored value from the future) would
+        // otherwise pin this scope as "not stale yet" forever.
+        if (!first || first > now) first = now;
+        attempts += 1;
+        map[scoped] = { first, attempts };
+        this.saveScopeMarkMap(key, map);
+        return (now - first) >= ZaliInterface.STALE_CANONICAL_TAKEOVER_MS
+            && attempts >= ZaliInterface.STALE_CANONICAL_MIN_ATTEMPTS;
+    }
+
+    clearStaleCanonical(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return;
+        const map = this.loadScopeMarkMap(this.staleCanonicalStorageKey());
+        if (!Object.prototype.hasOwnProperty.call(map, scoped)) return;
+        delete map[scoped];
+        this.saveScopeMarkMap(this.staleCanonicalStorageKey(), map);
+    }
+
     loadVaultCloudSyncEnabled() {
         try {
             const raw = localStorage.getItem(this.vaultCloudSyncEnabledStorageKey());
@@ -312,20 +440,47 @@ ZaliMixin(ZaliInterface, class {
                     if (scope && keyId) cache.set(scope, keyId);
                 }
             }
+            // The answer arrived, so for these scopes "not in the cache" now means
+            // "the registry has no claim", not "we could not ask". Callers must not
+            // have to guess between the two: an absent entry looks identical either
+            // way, and a caller deciding whether it is safe to stop waiting for a key
+            // needs to know which it is. See canonicalLookupSucceeded.
+            for (const scope of list) this.canonicalLookupAnswered().add(scope);
             return cache;
         } catch (e) {
             // A failed lookup must never be read as "no canonical key exists" —
             // that is exactly the mistake that made clients invent keys. Callers
             // check `has(scope)`, and an absent entry means "unknown", not "none".
             this.trace(`fetchCanonicalKeyIds failed error=${e?.message || e}`);
+            for (const scope of list) this.canonicalLookupAnswered().delete(scope);
             return this.canonicalKeyIdCache();
         }
+    }
+
+    /// Scopes whose most recent registry lookup actually reached the server.
+    ///
+    /// Tracked as successes rather than failures on purpose: the default for a scope
+    /// nobody has asked about must be "we do not know", and a set of failures would
+    /// have made it "answered, and the answer was no claim" — the reading that lets a
+    /// client stop waiting for a key it never asked about. Bounded by the number of
+    /// scopes an account has.
+    canonicalLookupAnswered() {
+        if (!this._canonicalLookupAnswered) this._canonicalLookupAnswered = new Set();
+        return this._canonicalLookupAnswered;
+    }
+
+    /// True when the last lookup for `scope` actually reached the server — so an
+    /// empty answer really does mean "nobody has claimed this conversation".
+    canonicalLookupSucceeded(scope) {
+        const scoped = String(scope || '').trim();
+        if (!scoped) return false;
+        return this.canonicalLookupAnswered().has(scoped);
     }
 
     // Returns { keyId, mine, claimedBy } or null when the claim could not be made.
     // `mine === false` means another device already owns this scope's key and the
     // caller is holding a fork.
-    async claimConversationKey(scope, key, { force = false, reason = 'auto' } = {}) {
+    async claimConversationKey(scope, key, { force = false, takeover = false, reason = 'auto' } = {}) {
         const scoped = String(scope || '').trim();
         const secret = String(key || '').trim();
         if (!scoped || !secret || !this.S.session?.token) return null;
@@ -334,7 +489,7 @@ ZaliMixin(ZaliInterface, class {
             const res = await this.apiFetch(this.apiRoutes.conversationKeys.claim, {
                 method: 'POST',
                 includeDeviceId: true,
-                body: JSON.stringify({ scope: scoped, keyId, force: !!force }),
+                body: JSON.stringify({ scope: scoped, keyId, force: !!force, takeover: !!takeover }),
             });
             if (!res.ok) throw new Error(await res.text().catch(() => 'claim failed'));
             const data = await res.json();
@@ -399,16 +554,19 @@ ZaliMixin(ZaliInterface, class {
         if (!scoped || !local) return local;
         // A scope queued by resetEncryptionKeys takes the registry over by force —
         // the user explicitly asked for new keys, so the old claim must not win.
-        const force = !!this._forceClaimScopes?.has(scoped);
+        const force = this.consumeForceClaimScope(scoped);
         const claim = await this.claimConversationKey(scoped, local, { reason, force });
-        if (force) this._forceClaimScopes.delete(scoped);
-        if (!claim || claim.mine) return local;
+        if (!claim || claim.mine) {
+            this.clearStaleCanonical(scoped);
+            return local;
+        }
 
         // Someone else claimed this scope first. Prefer a key we already hold
         // that matches, otherwise ask the holders to republish an envelope for
         // this device and pick it up on the next sync.
         const promoted = await this.promoteCanonicalConversationKey(scoped, claim.keyId, { reason });
         if (promoted) {
+            this.clearStaleCanonical(scoped);
             this.setKey(promoted);
             this.updateCryptoKeyDisplay({ key: promoted });
             return promoted;
@@ -417,10 +575,18 @@ ZaliMixin(ZaliInterface, class {
         await this.syncIncomingKeyEnvelopes({ reason: `reconcile:${reason}`, triggerRefresh: false });
         const afterSync = await this.promoteCanonicalConversationKey(scoped, claim.keyId, { reason: `${reason}:afterSync` });
         if (afterSync) {
+            this.clearStaleCanonical(scoped);
             this.setKey(afterSync);
             this.updateCryptoKeyDisplay({ key: afterSync });
             return afterSync;
         }
+
+        // Nothing we hold matches and asking the holders produced nothing. That is
+        // normally transient, so it is only recorded here — but it can also be
+        // permanent, and there was no path out of the permanent case at all.
+        const takenOver = await this.requestStaleCanonicalTakeover(scoped, local, { reason });
+        if (takenOver) return takenOver;
+
         // Still missing. Keep sending with the local key rather than blocking the
         // user — the peer stores every incoming envelope key as a decryption
         // candidate, so these messages stay readable on their side — and keep the
@@ -431,6 +597,87 @@ ZaliMixin(ZaliInterface, class {
             ts: new Date().toLocaleTimeString(),
         });
         return local;
+    }
+
+    // Last resort for a registry row that names a key nobody can supply any more.
+    //
+    // A `conversation_key_registry` row outlives the key material it fingerprints.
+    // Reinstall on both sides of a DM, or wipe the one device that ever held a
+    // channel key, and every participant is left claiming, failing to promote,
+    // asking for a republish nobody can answer, and falling back to its own locally
+    // invented key — forever, because the only way to replace a row was the user
+    // pressing "сбросить ключи шифрования". Reproduced: two DM devices and three
+    // channel members each kept a different active key indefinitely, readable only
+    // through `alt:` candidates, with the union of live keys — and therefore the
+    // PBKDF2 cost of every undecryptable message — growing on each new device.
+    //
+    // Which side decides what is split on purpose:
+    //
+    // * this device decides the claim is *unreachable*, because only it knows it
+    //   asked, waited and synced with nothing to show. The mark is persisted and
+    //   must be older than STALE_CANONICAL_TAKEOVER_MS, so a peer that is merely
+    //   asleep, offline or mid-reinstall never triggers this;
+    // * the server decides *who wins* (see STALE_CLAIM_TAKEOVER in
+    //   conversation_keys.rs): the first takeover in its window replaces the row and
+    //   refreshes `updated_at`, so simultaneous claimants are refused and handed the
+    //   winner's key id instead. That is what makes this converge instead of
+    //   ping-ponging between participants.
+    //
+    // Nothing becomes unreadable either way: the displaced key stays a decryption
+    // candidate on every device that held it.
+    async requestStaleCanonicalTakeover(scope, localKey, { reason = 'auto' } = {}) {
+        const scoped = String(scope || '').trim();
+        const local = String(localKey || '').trim();
+        if (!scoped || !local) return '';
+        if (!this.markStaleCanonical(scoped)) return '';
+
+        const taken = await this.claimConversationKey(scoped, local, {
+            reason: `${reason}:takeover`,
+            takeover: true,
+        });
+        if (!taken) return '';
+
+        if (taken.mine) {
+            this.clearStaleCanonical(scoped);
+            this.addLogEntry({
+                type: 'WARN',
+                msg: `Прежний ключ разговора недоступен ни у кого, зарегистрирован новый (scope=${scoped})`,
+                ts: new Date().toLocaleTimeString(),
+            });
+            // The takeover only means the registry now names a key that exists. It
+            // still has to reach everyone, or the next device to reconcile would find
+            // the very same situation and take the scope over again.
+            void this.publishConversationKeyToOwnDevices({ scope: scoped, key: local, reason: `takeover:${reason}` });
+            const channel = this.channelFromConversationScope(scoped);
+            if (channel) {
+                void this.publishConversationKeyToServerMembers({
+                    serverId: channel.serverId,
+                    channelId: channel.channelId,
+                    scope: scoped,
+                    key: local,
+                    reason: `takeover:${reason}`,
+                });
+            } else {
+                const peer = this.peerFromConversationScope(scoped);
+                if (peer) void this.publishConversationKeyToPeer({ peer, scope: scoped, key: local, reason: `takeover:${reason}` });
+            }
+            return local;
+        }
+
+        // Someone else won the window. Their key is the canonical one now, and it is
+        // reachable by definition — they hold it — so adopt it if it already arrived.
+        const adopted = await this.promoteCanonicalConversationKey(scoped, taken.keyId, { reason: `${reason}:takeoverLost` });
+        if (adopted) {
+            this.clearStaleCanonical(scoped);
+            this.setKey(adopted);
+            this.updateCryptoKeyDisplay({ key: adopted });
+            return adopted;
+        }
+        // Not here yet — ask, and let the next reconcile pick it up. The mark stays
+        // set, but the winner's fresh `updated_at` means the server refuses another
+        // takeover for a full window, which is what gives convergence time to happen.
+        await this.requestKeyRepublish(scoped, { reason: `${reason}:takeoverLost` });
+        return '';
     }
 
     keyEnvelopeOverridesLocal(scope, payload) {
@@ -510,7 +757,7 @@ ZaliMixin(ZaliInterface, class {
                     return null;
                 }
             };
-            const injected = window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
+            const injected = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
                 : {};
             const persisted = readStore(localStorage);
@@ -522,10 +769,22 @@ ZaliMixin(ZaliInterface, class {
                 ...(persisted || {}),
                 ...(session || {}),
             });
+            // Write back ONLY when the merge actually produced something different.
+            //
+            // This is a read path with ~30 call sites, several of them inside render
+            // and send, and it used to serialise the whole key map and write it to both
+            // stores on every single call — two synchronous localStorage writes per
+            // read, for a result that is normally byte-identical to what is already
+            // there. The write still has to happen when it changes something (a legacy
+            // scope folded onto its canonical form, or one store ahead of the other),
+            // because a key filed under a name nobody looks up is a key that is lost.
             try {
                 const encoded = JSON.stringify(merged || {});
-                sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
-                localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                if (encoded !== this._lastConversationKeysEncoded) {
+                    sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    this._lastConversationKeysEncoded = encoded;
+                }
             } catch (e) {}
             return merged && typeof merged === 'object' ? merged : {};
         } catch (e) {
@@ -579,6 +838,8 @@ ZaliMixin(ZaliInterface, class {
             // Durable copy — see loadStoredConversationKeys() for why dropping this
             // was the single largest source of "сообщение зашифровано не тем ключом".
             localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+            // Keeps the read path's write-back guard honest about what is on disk.
+            this._lastConversationKeysEncoded = encoded;
             this.syncNativeConversationKeys(keys || {});
             if (this.S.session?.token && this.S.auth?.vaultPassphrase && !this.cloudVaultSyncInFlight) {
                 this.scheduleCloudVaultSync(300);
@@ -738,7 +999,14 @@ ZaliMixin(ZaliInterface, class {
             if (!raw) return '';
             return await this.decryptVaultUnlockSecret(raw, guard);
         } catch (e) {
-            this.trace(`loadVaultUnlockSecret error=${e?.message || e}`);
+            // Both this blob and the local vault snapshot are sealed with the session
+            // JWT, and a password login mints a new one — so after a re-login the
+            // stored copy is undecryptable for good. It used to be retried, and fail,
+            // on every launch forever, with nothing but a trace to show for it. Drop
+            // it: the caller then falls back to the network, and the password login
+            // path re-saves a fresh copy under the new token.
+            this.trace(`loadVaultUnlockSecret error=${e?.message || e} dropped=true`);
+            try { localStorage.removeItem(this.vaultUnlockStorageKey()); } catch (err) {}
             return '';
         }
     }
@@ -760,7 +1028,13 @@ ZaliMixin(ZaliInterface, class {
                 if (count >= 0) this._vaultSnapshotApplied = true;
                 return count > 0;
             } catch (e) {
-                this.trace(`restoreCloudVaultSnapshot failed reason=${reason} error=${e?.message || e}`);
+                // Sealed with the session JWT, which a password login rotates — so a
+                // snapshot written before the last re-login can never be opened again.
+                // Silently failing left this device paying a PBKDF2 derivation on every
+                // cold start for a blob that was already dead. Drop it and let the
+                // network path repopulate it.
+                this.trace(`restoreCloudVaultSnapshot failed reason=${reason} error=${e?.message || e} dropped=true`);
+                try { localStorage.removeItem(this.cloudVaultSnapshotStorageKey()); } catch (err) {}
                 return false;
             } finally {
                 this._restoreVaultInFlight = null;

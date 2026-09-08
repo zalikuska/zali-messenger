@@ -428,14 +428,34 @@ ZaliMixin(ZaliInterface, class {
         }
         if (!key) {
             this.trace(`handleIncomingBrowserMessage missingKey id=${id} peer=${peer}`);
+            // Dropped, not placeholdered — record it so a key arriving later still
+            // triggers the reload that fetches this message.
+            this.markBrowserDecryptGap({ peer: serverId ? null : peer, serverId, channelId });
+            return;
+        }
+
+        const candidates = this.browserDecryptCandidates({
+            peer: serverId ? null : peer,
+            serverId,
+            channelId,
+            activeKey: key,
+        });
+        if (this.browserUnpackKnownToFail(id, candidates)) {
+            this.trace(`handleIncomingBrowserMessage skipped id=${id} reason=known_undecryptable_with_current_keys`);
+            this.markBrowserDecryptGap({ peer: serverId ? null : peer, serverId, channelId });
             return;
         }
 
         try {
-            const res = await this.apiFetch(this.apiRoutes.messages.download(id));
+            // A `.zali` archive carries the message's attachments, so this is a bulk
+            // transfer, not an API round trip — the general request timeout would
+            // abort a large but perfectly healthy download.
+            const res = await this.apiFetch(this.apiRoutes.messages.download(id), {
+                timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+            });
             if (!res.ok) return;
             const archiveBytes = new Uint8Array(await res.arrayBuffer());
-            const unpacked = await window.ZaliWasm.unpackMessage(archiveBytes, key);
+            const unpacked = await this.unpackBrowserMessageWithCandidates(archiveBytes, candidates, id);
             const attachments = (unpacked.attachments || []).map(att => ({
                 name: att.name,
                 mimeType: att.mimeType,
@@ -490,6 +510,7 @@ ZaliMixin(ZaliInterface, class {
             }
         } catch (e) {
             this.trace(`handleIncomingBrowserMessage failed id=${id} error=${e?.message || e}`);
+            this.markBrowserDecryptGap({ peer: serverId ? null : peer, serverId, channelId });
             // Unlike the native shells, this path fails silently otherwise — there
             // is no placeholder message for the render-time hook in
             // detectSystemNotice() to catch, so this is the only place a
@@ -508,20 +529,116 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Opens a downloaded archive with every key this device could plausibly have
+    // encrypted it under, not just the scope's current active key.
+    //
+    // The native shells have always done this — macOS `renderHistoryRecord` and
+    // Windows `candidate_message_keys` both try the scope key, then every other key
+    // the account holds — and the whole `alt:` mechanism exists to keep a superseded
+    // key usable for decryption after it has been demoted. The browser path ignored
+    // all of it and passed one key to unpackMessage(), so in a browser tab or the
+    // PWA every message written before a conversation converged was permanently
+    // unreadable, with no placeholder and no retry: exactly the messages the
+    // candidate pool was built to rescue.
+    //
+    // Ordering matters for cost, not correctness: each failed attempt is a full
+    // PBKDF2-SHA256 210 000 derivation, so the key most likely to work goes first
+    // and the account-wide sweep last.
+    browserDecryptCandidates({ peer = null, serverId = null, channelId = null, activeKey = '' } = {}) {
+        const scope = this.conversationScopeKey(peer, serverId, channelId);
+        const stored = this.loadStoredConversationKeys();
+        const candidates = [];
+        const push = (value) => {
+            const key = String(value || '').trim();
+            if (key && !candidates.includes(key)) candidates.push(key);
+        };
+        push(activeKey);
+        if (scope) this.conversationKeyCandidates(stored, scope).forEach(push);
+        // Last resort, mirroring both native shells: a message whose scope→key
+        // mapping is stale or missing may still open under a key filed elsewhere.
+        Object.values(stored).forEach(push);
+
+        // Bounded for the same reason the native shells bound theirs: every candidate
+        // that does not fit costs two PBKDF2-SHA256 passes at 210 000 iterations, and
+        // `alt:` keys accumulate for the life of a conversation. The scoped candidates
+        // come first and are the ones that can realistically work; the account-wide
+        // tail is a heuristic and does not deserve an unbounded budget.
+        return candidates.slice(0, ZaliInterface.MAX_DECRYPT_CANDIDATES);
+    }
+
+    // Has this exact message already been tried against exactly this candidate list?
+    //
+    // Checked BEFORE the archive is fetched, not just before the sweep: a message
+    // nothing can open is re-encountered on every history load, and re-downloading it
+    // to re-derive the same failures is the larger half of the waste. The memo is
+    // keyed on the candidate list itself, so the first new key changes it and the
+    // retry — download included — happens immediately.
+    browserUnpackKnownToFail(messageId, candidates) {
+        const id = String(messageId || '').trim();
+        if (!id || !this._failedBrowserUnpacks) return false;
+        return this._failedBrowserUnpacks.get(id) === candidates.join('|');
+    }
+
+    rememberBrowserUnpackFailure(messageId, candidates) {
+        const id = String(messageId || '').trim();
+        if (!id) return;
+        if (!this._failedBrowserUnpacks) this._failedBrowserUnpacks = new Map();
+        this._failedBrowserUnpacks.set(id, candidates.join('|'));
+        if (this._failedBrowserUnpacks.size > 4000) {
+            this._failedBrowserUnpacks.delete(this._failedBrowserUnpacks.keys().next().value);
+        }
+    }
+
+    async unpackBrowserMessageWithCandidates(archiveBytes, candidates, messageId = '') {
+        let lastError = null;
+        for (const candidate of candidates) {
+            try {
+                const unpacked = await window.ZaliWasm.unpackMessage(archiveBytes, candidate);
+                if (messageId && this._failedBrowserUnpacks) {
+                    this._failedBrowserUnpacks.delete(String(messageId).trim());
+                }
+                return unpacked;
+            } catch (e) {
+                lastError = e;
+            }
+        }
+        this.rememberBrowserUnpackFailure(messageId, candidates);
+        throw lastError || new Error('Нет ключа для расшифровки сообщения');
+    }
+
     // Fallback for loading DM history from a plain browser tab (no native shell to do
     // it via REFRESH_HISTORY). Downloads + decrypts each message metadata row returned
     // by GET /api/messages/:user and feeds it through receiveMessage(), same as above.
     async loadBrowserDmHistory(peer, key) {
         if (!peer || !key) return;
         if (!(await this.wasmAvailable())) return;
+        // Cleared before the walk, not after: every row is fed through
+        // handleIncomingBrowserMessage below, which re-marks the gap for anything it
+        // still cannot open. A gap that survives this load is therefore a real one,
+        // and a conversation that has been repaired stops asking for reloads.
+        this.clearBrowserDecryptGap({ peer });
         try {
             const res = await this.apiFetch(this.apiRoutes.messages.direct(peer));
             if (!res.ok) return;
             const rows = await res.json();
             if (!Array.isArray(rows)) return;
-            for (const row of rows) {
-                await this.handleIncomingBrowserMessage(row);
-            }
+            // Bounded concurrency instead of one strictly serial pass. Each row is an
+            // independent download plus a WASM unpack, and doing them one after another
+            // made a history load take the sum of every round trip. Kept small on
+            // purpose: the requests still share the five-slot apiFetch pool, and going
+            // wider here would starve the envelope sync and the live message path
+            // behind a history load rather than speed anything up.
+            const HISTORY_CONCURRENCY = 4;
+            let next = 0;
+            const worker = async () => {
+                while (next < rows.length) {
+                    const row = rows[next++];
+                    await this.handleIncomingBrowserMessage(row);
+                }
+            };
+            await Promise.all(
+                Array.from({ length: Math.min(HISTORY_CONCURRENCY, rows.length) }, worker)
+            );
         } catch (e) {
             this.trace(`loadBrowserDmHistory failed peer=${peer} error=${e?.message || e}`);
         }

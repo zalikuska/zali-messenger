@@ -15,11 +15,22 @@ ZaliMixin(ZaliInterface, class {
     // legitimately logged-in device of key material does not make anything
     // safer — the envelope is sealed to that device's own ECDH public key
     // and only that device can open it — it just breaks the conversation.
-    async publishConversationKeyEnvelopes({ recipient, scope, key, reason = 'auto', excludeCurrentDevice = false } = {}) {
+    // `keys` publishes several candidates for one scope in a single pass. It exists
+    // because the per-recipient DEVICE lookup is the expensive part: calling this once
+    // per candidate re-fetched `/api/users/<peer>/devices` for every one of them, so a
+    // republish answer carrying six candidates to a twenty-member channel spent a
+    // hundred and twenty directory round trips through a five-slot pool before it had
+    // published anything. The envelope POSTs themselves are irreducible — one per key
+    // per device — but the lookups are not.
+    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false } = {}) {
         const target = String(recipient || '').trim();
         const scoped = String(scope || '').trim();
-        const secret = String(key || '').trim();
-        if (!this.S.session?.token || !target || !scoped || !secret) return false;
+        const secrets = Array.from(new Set(
+            (Array.isArray(keys) ? keys : [key])
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+        )).slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
+        if (!this.S.session?.token || !target || !scoped || !secrets.length) return false;
         try {
             await this.ensureDeviceCryptoIdentity();
             const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
@@ -38,7 +49,16 @@ ZaliMixin(ZaliInterface, class {
                 this.trace(`publishConversationKeyEnvelopes skipped reason=${reason} recipient=${target} devices=0`);
                 return 'no_devices';
             }
-            const results = await Promise.allSettled(usable.map(async device => {
+            // Non-secret SHA-256 fingerprint — the same id the registry stores, never
+            // the key. It is part of the envelope row's identity on the server, so
+            // several candidate keys for one scope reach one device as several
+            // envelopes instead of overwriting each other down to the last one.
+            const keyIds = await Promise.all(secrets.map(secret => this.conversationKeyId(secret)));
+            const jobs = [];
+            for (const device of usable) {
+                secrets.forEach((secret, i) => jobs.push({ device, secret, keyId: keyIds[i] }));
+            }
+            const results = await Promise.allSettled(jobs.map(async ({ device, secret, keyId }) => {
                 const encryptedKey = await this.encryptConversationKeyEnvelope({
                     scope: scoped,
                     key: secret,
@@ -53,6 +73,7 @@ ZaliMixin(ZaliInterface, class {
                         scope: scoped,
                         recipientDeviceId: device.deviceId,
                         senderDeviceId: selfDeviceId,
+                        keyId,
                         encryptedKey,
                     }),
                 });
@@ -63,7 +84,7 @@ ZaliMixin(ZaliInterface, class {
                 const firstErr = results.find(r => r.status === 'rejected')?.reason;
                 throw new Error(firstErr?.message || 'Не удалось опубликовать ни один key envelope');
             }
-            this.trace(`publishConversationKeyEnvelopes reason=${reason} recipient=${target} devices=${usable.length}`);
+            this.trace(`publishConversationKeyEnvelopes reason=${reason} recipient=${target} devices=${usable.length} keys=${secrets.length}`);
             return true;
         } catch (e) {
             this.trace(`publishConversationKeyEnvelopes failed reason=${reason} recipient=${target} error=${e?.message || e}`);
@@ -71,12 +92,12 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async publishConversationKeyToPeer({ peer, scope, key, reason = 'auto' } = {}) {
+    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto' } = {}) {
         const recipient = String(peer || '').trim();
         // Self is not a peer: own devices go through publishConversationKeyToOwnDevices,
         // which excludes this device and reports separately.
         if (!recipient || recipient === this.myName()) return false;
-        return this.publishConversationKeyEnvelopes({ recipient, scope, key, reason });
+        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason });
     }
 
     // The account's *other* devices need this key just as much as the peer's do,
@@ -92,13 +113,14 @@ ZaliMixin(ZaliInterface, class {
     // This widens nothing: each envelope is sealed to one of our own devices'
     // ECDH public keys, and the cloud vault already hands every own device the
     // full key set — this is the same reach over a channel that actually works.
-    async publishConversationKeyToOwnDevices({ scope, key, reason = 'auto' } = {}) {
+    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto' } = {}) {
         const me = String(this.myName() || '').trim();
         if (!me) return false;
         return this.publishConversationKeyEnvelopes({
             recipient: me,
             scope,
             key,
+            keys,
             reason: `self:${reason}`,
             excludeCurrentDevice: true,
         });
@@ -132,12 +154,24 @@ ZaliMixin(ZaliInterface, class {
     // (single recipient), a channel can have any number of members and the
     // membership list can change, so this is re-run on every resolve/retry
     // rather than tracked with a one-shot "published" flag.
-    async publishConversationKeyToServerMembers({ serverId, channelId, scope, key, reason = 'auto' } = {}) {
+    // `keys` may carry several candidates for one scope (a republish request is
+    // answered with every key we hold for it). They are fanned out per member in one
+    // pass rather than by calling this once per key: each call costs a members
+    // lookup and, inside publishConversationKeyToPeer, a devices lookup per member,
+    // so the per-key loop it replaces multiplied both by the candidate count. A
+    // twenty-member server answering one request with three candidates spent sixty
+    // directory lookups before publishing anything — and every member that cannot
+    // read the channel sends a request of its own.
+    async publishConversationKeyToServerMembers({ serverId, channelId, scope, key, keys = null, reason = 'auto' } = {}) {
         const sid = String(serverId || '').trim();
         const cid = String(channelId || '').trim();
         const scoped = String(scope || '').trim();
-        const secret = String(key || '').trim();
-        if (!this.S.session?.token || !sid || !cid || !scoped || !secret) return 0;
+        const secrets = Array.from(new Set(
+            (Array.isArray(keys) ? keys : [key])
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+        )).slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
+        if (!this.S.session?.token || !sid || !cid || !scoped || !secrets.length) return 0;
         const me = String(this.myName() || '').trim();
         let members = [];
         try {
@@ -149,11 +183,11 @@ ZaliMixin(ZaliInterface, class {
         const recipients = members
             .map(member => String(member?.username || '').trim())
             .filter(username => username && username !== me);
-        const results = await Promise.allSettled(
-            recipients.map(peer => this.publishConversationKeyToPeer({ peer, scope: scoped, key: secret, reason }))
-        );
+        const results = await Promise.allSettled(recipients.map(peer =>
+            this.publishConversationKeyToPeer({ peer, scope: scoped, keys: secrets, reason })
+        ));
         const published = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
-        this.trace(`publishConversationKeyToServerMembers reason=${reason} scope=${scoped} members=${recipients.length} published=${published}`);
+        this.trace(`publishConversationKeyToServerMembers reason=${reason} scope=${scoped} members=${recipients.length} keys=${secrets.length} published=${published}`);
         return published;
     }
 
@@ -171,45 +205,55 @@ ZaliMixin(ZaliInterface, class {
         // are exactly the ones encrypted under a key we have since demoted to an
         // `alt:` candidate. Sending only the active key answered the request with
         // the one key that could not possibly help.
-        const candidates = this.conversationKeyCandidates(this.loadStoredConversationKeys(), scope);
+        // Bounded. Every candidate costs an envelope POST per device of every
+        // participant, and `alt:` entries accumulate without limit, so an old scope
+        // could answer a single request with dozens of keys times dozens of devices.
+        // The newest candidates are the ones a requester is most likely to be missing;
+        // anything older is still reachable by asking again after this batch lands.
+        const candidates = this
+            .conversationKeyCandidates(this.loadStoredConversationKeys(), scope)
+            .slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
         if (!candidates.length) {
             this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=true`);
             return false;
         }
         const channel = this.channelFromConversationScope(scope);
         if (channel) {
-            for (const key of candidates) {
-                await this.publishConversationKeyToServerMembers({
-                    serverId: channel.serverId,
-                    channelId: channel.channelId,
-                    scope,
-                    key,
-                    reason: 'republish_request',
-                });
-            }
+            // One pass over the membership for all candidates, not one pass per key.
+            await this.publishConversationKeyToServerMembers({
+                serverId: channel.serverId,
+                channelId: channel.channelId,
+                scope,
+                keys: candidates,
+                reason: 'republish_request',
+            });
             return true;
         }
         const peer = requester || this.peerFromConversationScope(scope);
         // A request from our own account is another of our devices asking for this
         // key. That used to be dropped on the floor here, which is precisely the
         // device that has no other way to obtain it.
+        // Every candidate goes out in ONE call per recipient, not one call per key:
+        // each call re-fetches that recipient's device list, and the answer to a
+        // republish request is by definition several keys.
         if (peer === this.myName()) {
-            let selfResult = false;
-            for (const key of candidates) {
-                const one = await this.publishConversationKeyToOwnDevices({ scope, key, reason: 'republish_request' });
-                selfResult = selfResult || one === true;
-            }
+            const selfResult = await this.publishConversationKeyToOwnDevices({
+                scope,
+                keys: candidates,
+                reason: 'republish_request',
+            });
             this.trace(`handleKeyRepublishRequest scope=${scope} self=true keys=${candidates.length} result=${selfResult}`);
-            return selfResult;
+            return selfResult === true;
         }
         if (!peer) return false;
-        let result = false;
-        for (const key of candidates) {
-            const one = await this.publishConversationKeyToPeer({ peer, scope, key, reason: 'republish_request' });
-            result = result || one === true;
-        }
+        const result = await this.publishConversationKeyToPeer({
+            peer,
+            scope,
+            keys: candidates,
+            reason: 'republish_request',
+        });
         this.trace(`handleKeyRepublishRequest scope=${scope} peer=${peer} keys=${candidates.length} result=${result}`);
-        return result;
+        return result === true;
     }
 
     // Collapses bursts of full-sweep requests into one sweep per cooldown window.
@@ -242,8 +286,34 @@ ZaliMixin(ZaliInterface, class {
             this.trace(`retryPublishConversationKeys coalesced reason=${reason}`);
             return 0;
         }
+        // The cooldown alone does not serialise anything: it is stamped here, before
+        // the sweep starts, while the sweep itself runs for minutes (one devices
+        // lookup plus an envelope POST per device for every scope, all queued through
+        // a five-slot pool). A trailing timer armed during that run fires as soon as
+        // the window elapses — with the first sweep still in flight — and a second
+        // full sweep piles onto the same pool, doubling the storm this coalescing was
+        // added to prevent. Anything arriving while one is running becomes a trailing
+        // sweep instead, so nothing is dropped.
+        if (this._keyPublishSweepInFlight) {
+            if (!this._keyPublishSweepTrailing) {
+                this._keyPublishSweepTrailing = setTimeout(() => {
+                    this._keyPublishSweepTrailing = null;
+                    void this.retryPublishConversationKeys({ reason: `${reason}:trailing`, limit, cooldownMs });
+                }, cooldownMs);
+            }
+            this.trace(`retryPublishConversationKeys deferred reason=${reason} in_flight=true`);
+            return 0;
+        }
         this._lastKeyPublishSweepAt = now;
-        return this._retryPublishConversationKeysImpl({ reason, limit });
+        this._keyPublishSweepInFlight = true;
+        try {
+            return await this._retryPublishConversationKeysImpl({ reason, limit });
+        } finally {
+            this._keyPublishSweepInFlight = false;
+            // Stamped again on the way out: the window that matters is the gap between
+            // sweeps, not the moment one happened to start.
+            this._lastKeyPublishSweepAt = Date.now();
+        }
     }
 
     async _retryPublishConversationKeysImpl({ reason = 'auto', limit = 200 } = {}) {
@@ -350,67 +420,121 @@ ZaliMixin(ZaliInterface, class {
                     .filter(Boolean)
             ));
             const canonical = await this.fetchCanonicalKeyIds(batchScopes);
+
+            // Envelopes are never deleted server-side, and every sync re-downloads the
+            // whole set for this device — a full ECDH derive plus AES open per row, on
+            // a path that runs on login, on every key_envelope_available push, on every
+            // refreshAfterKey and on every decrypt failure.
+            //
+            // The skip condition is deliberately the strongest one available: not "we
+            // have seen this row" but "we already hold the exact key this row was
+            // carrying, for the scope it named". Anything weaker can drop key material.
+            // The first version of this skipped a row whenever its scope held *any*
+            // key, which is wrong the moment a scope has more than one (the normal
+            // state — that is what `alt:` candidates are), and the harness caught it as
+            // devices ending up with one candidate out of thirty-seven envelopes.
+            //
+            // A row with no id or no timestamp is never memoised: a missing field must
+            // degrade to "open it again", never to "skip everything".
+            //
+            // In memory only, so a relaunch re-imports the lot — that is the recovery
+            // path for a device whose key store was wiped, and it must not be memoised
+            // away.
+            if (!this._openedEnvelopeStamps) this._openedEnvelopeStamps = new Map();
+            const seen = this._openedEnvelopeStamps;
+
+            // Opened OUTSIDE the write lock, on a snapshot of the key store used only
+            // to answer "would re-opening this row tell us anything new?".
+            //
+            // Decryption is per-envelope ECDH: two key imports and a derive apiece, and
+            // a real account fetches a few hundred rows. Doing that inside the lock
+            // meant every other writer — the "generate a key for this new chat" write
+            // on the chat-open path above all — queued behind the whole batch. The lock
+            // exists to serialise the load-mutate-save cycle, and that is all it now
+            // covers; the decrypted results are applied to a freshly loaded map inside
+            // it, so nothing is decided from the snapshot.
+            const snapshot = this.loadStoredConversationKeys();
+            let decryptFailed = 0;
+            let skippedKnown = 0;
+            const opened = [];
+            for (const record of envelopes) {
+                try {
+                    const envelopeId = String(record?.envelopeId || '').trim();
+                    const createdAt = String(record?.createdAt || '').trim();
+                    // A republish upserts the row with a fresh created_at, so an
+                    // updated envelope misses the memo and is opened again.
+                    const stamp = (envelopeId && createdAt) ? `${envelopeId}|${createdAt}` : '';
+                    const memo = stamp ? seen.get(stamp) : null;
+                    if (memo && this.conversationKeyCandidates(snapshot, memo.scope).includes(memo.key)) {
+                        skippedKnown += 1;
+                        continue;
+                    }
+                    const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
+                    if (!payload.scope || !payload.key) continue;
+                    // The sender may predate canonicalConversationScope, so fold
+                    // its scope before it is used as a storage/registry key.
+                    const scope = this.canonicalConversationScope(String(payload.scope));
+                    // Remember exactly what this row was carrying, so the check
+                    // above can prove the re-open would be a no-op before skipping.
+                    if (stamp) {
+                        seen.set(stamp, { scope, key: payload.key });
+                        if (seen.size > 4000) seen.delete(seen.keys().next().value);
+                    }
+                    opened.push({ scope, payload });
+                } catch (e) {
+                    decryptFailed += 1;
+                    this.trace(`syncIncomingKeyEnvelopes decrypt failed reason=${reason} error=${e?.message || e}`);
+                }
+            }
+
             // The load-mutate-save below must not race promoteCanonicalConversationKey
             // or the "generate a new key" write in _resolveConversationCryptoKeyImpl —
-            // both can run concurrently in the background for a different scope while
-            // this sync (itself deduped against concurrent *calls to itself* by
-            // syncIncomingKeyEnvelopes, but not against other writers) is still
-            // awaiting per-envelope decryption. See withConversationKeysWriteLock.
-            const { imported, decryptFailed, skippedSame } = await this.withConversationKeysWriteLock(async () => {
+            // both can run concurrently in the background for a different scope. See
+            // withConversationKeysWriteLock.
+            const { imported, skippedSame } = await this.withConversationKeysWriteLock(async () => {
                 const stored = this.loadStoredConversationKeys();
                 let imported = 0;
-                let decryptFailed = 0;
                 let skippedSame = 0;
-                for (const record of envelopes) {
-                    try {
-                        const payload = await this.decryptConversationKeyEnvelope(record?.encryptedKey);
-                        if (!payload.scope || !payload.key) continue;
-                        // The sender may predate canonicalConversationScope, so fold
-                        // its scope before it is used as a storage/registry key.
-                        const scope = this.canonicalConversationScope(String(payload.scope));
-                        const current = String(stored[scope] || '').trim();
-                        const wantedKeyId = String(canonical.get(scope) || '').trim();
-                        const isCanonical = wantedKeyId
-                            ? (await this.conversationKeyId(payload.key)) === wantedKeyId
-                            : false;
-                        if (!current) {
-                            stored[scope] = payload.key;
-                            imported += 1;
-                        } else if (current !== payload.key && isCanonical) {
-                            this.trace(`syncIncomingKeyEnvelopes adopt canonical key scope=${scope} sender=${payload.sender}`);
-                            this.setActiveConversationKey(stored, scope, payload.key);
-                            imported += 1;
-                        } else if (current !== payload.key && !wantedKeyId && this.keyEnvelopeOverridesLocal(scope, payload)) {
-                            // The canonical owner's key becomes the active (sending) key so
-                            // both peers converge. Preserve the previous key as a decryption
-                            // candidate so messages already encrypted with it stay readable.
-                            this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
-                            this.setActiveConversationKey(stored, scope, payload.key);
-                            imported += 1;
-                        } else if (current !== payload.key) {
-                            // Not the canonical key, but keep it as a decryption candidate:
-                            // the peer may have encrypted messages with it before convergence.
-                            if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
-                            else skippedSame += 1;
-                        } else {
-                            skippedSame += 1;
-                        }
-                    } catch (e) {
-                        decryptFailed += 1;
-                        this.trace(`syncIncomingKeyEnvelopes decrypt failed reason=${reason} error=${e?.message || e}`);
+                for (const { scope, payload } of opened) {
+                    const current = String(stored[scope] || '').trim();
+                    const wantedKeyId = String(canonical.get(scope) || '').trim();
+                    const isCanonical = wantedKeyId
+                        ? (await this.conversationKeyId(payload.key)) === wantedKeyId
+                        : false;
+                    if (!current) {
+                        stored[scope] = payload.key;
+                        imported += 1;
+                    } else if (current !== payload.key && isCanonical) {
+                        this.trace(`syncIncomingKeyEnvelopes adopt canonical key scope=${scope} sender=${payload.sender}`);
+                        this.setActiveConversationKey(stored, scope, payload.key);
+                        imported += 1;
+                    } else if (current !== payload.key && !wantedKeyId && this.keyEnvelopeOverridesLocal(scope, payload)) {
+                        // The canonical owner's key becomes the active (sending) key so
+                        // both peers converge. Preserve the previous key as a decryption
+                        // candidate so messages already encrypted with it stay readable.
+                        this.trace(`syncIncomingKeyEnvelopes adopt owner key scope=${scope} sender=${payload.sender}`);
+                        this.setActiveConversationKey(stored, scope, payload.key);
+                        imported += 1;
+                    } else if (current !== payload.key) {
+                        // Not the canonical key, but keep it as a decryption candidate:
+                        // the peer may have encrypted messages with it before convergence.
+                        if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
+                        else skippedSame += 1;
+                    } else {
+                        skippedSame += 1;
                     }
                 }
                 if (imported > 0) {
                     this.saveStoredConversationKeys(stored);
                 }
-                return { imported, decryptFailed, skippedSame };
+                return { imported, skippedSame };
             });
             // Surface the outcome in the in-app log panel. decryptFailed>0 means the
             // envelope was encrypted to a device key this client cannot open (device
             // identity mismatch) — that is why a delivered message stays unreadable.
             this.addLogEntry({
                 type: decryptFailed > 0 ? 'WARN' : 'INFO',
-                msg: `Ключи: получено ${envelopes.length}, принято ${imported}, совпало ${skippedSame}, не расшифровано ${decryptFailed} (reason=${reason})`,
+                msg: `Ключи: получено ${envelopes.length}, принято ${imported}, совпало ${skippedSame}, уже разобрано ${skippedKnown}, не расшифровано ${decryptFailed} (reason=${reason})`,
                 ts: new Date().toLocaleTimeString()
             });
             if (imported > 0) {
@@ -464,6 +588,9 @@ ZaliMixin(ZaliInterface, class {
         // 1. Clear local AES conversation keys
         this._publishedKeyScopes = new Set();
         this._vaultSnapshotApplied = false;
+        // The key store is about to be emptied, so every envelope has to be openable
+        // again — the memo would otherwise skip exactly the rows that refill it.
+        this._openedEnvelopeStamps = null;
         // The user explicitly asked for new keys, so the sweep that fans them out
         // must not sit out retryPublishConversationKeys' coalescing window.
         this._lastKeyPublishSweepAt = 0;
@@ -471,10 +598,18 @@ ZaliMixin(ZaliInterface, class {
         // defeat the reset: every regenerated key would lose the (non-forced)
         // claim to the pre-reset row and the client would keep asking the peer to
         // republish a key the user just deliberately threw away.
-        this._forceClaimScopes = new Set(
+        //
+        // Persisted, not held in a Set on the instance: a scope is only force-claimed
+        // when that conversation is next resolved, so an in-memory queue silently
+        // expired at the next relaunch and the reset never reached any chat the user
+        // had not happened to open in that session.
+        this.queueForceClaimScopes(
             Object.keys(this.loadStoredConversationKeys())
                 .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
         );
+        // Every scope is about to get a brand-new key of our own making, so no scope
+        // is waiting on an unreachable canonical key any more.
+        this.saveScopeMarkMap(this.staleCanonicalStorageKey(), {});
         this.canonicalKeyIdCache().clear();
         this.saveStoredConversationKeys({});
         try { sessionStorage.removeItem(this.cryptoKeyStorageKey()); } catch (e) {}

@@ -398,3 +398,104 @@ async fn a_third_user_never_sees_someone_elses_dm() {
         result
     );
 }
+
+// ---------------------------------------------------------------------------
+// `newest_first` paging.
+//
+// A long-standing query parameter with no coverage at all: nothing verified that
+// it reverses the order, that offset paging stays consistent under it, or that a
+// full walk with it returns the same set as the default ascending walk. It is the
+// only way to ask this API for the recent end of a long conversation, so anything
+// that ever wants a bounded, most-recent view depends on all three.
+// ---------------------------------------------------------------------------
+
+async fn dm_history(
+    app: &TestApp,
+    user: &RegisteredUser,
+    peer: &str,
+    query: &str,
+) -> Vec<serde_json::Value> {
+    let resp = app
+        .http
+        .get(app.url(&format!("/api/messages/{peer}?{query}")))
+        .header("Authorization", user.auth_header())
+        .send()
+        .await
+        .expect("history request");
+    assert!(resp.status().is_success(), "history request failed");
+    resp.json().await.expect("history json")
+}
+
+#[tokio::test]
+async fn newest_first_paging_returns_the_recent_end_of_a_conversation() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+
+    let mut client_ids = Vec::new();
+    for i in 0..12 {
+        let client_id = format!("msg-{i:02}");
+        let resp = upload_dm(&app, &alice, "bob", Some(&client_id)).await;
+        assert!(resp.status().is_success(), "upload {i} failed");
+        client_ids.push(client_id);
+    }
+
+    let ascending = dm_history(&app, &bob, "alice", "limit=500&offset=0").await;
+    assert_eq!(ascending.len(), 12);
+    let ascending_ids: Vec<&str> = ascending
+        .iter()
+        .map(|m| m["clientId"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(ascending_ids.first(), Some(&"msg-00"), "default order is oldest-first");
+
+    // The recent end, bounded: newest N in reverse chronological order.
+    let newest = dm_history(&app, &bob, "alice", "limit=5&offset=0&newest_first=true").await;
+    let newest_ids: Vec<&str> = newest
+        .iter()
+        .map(|m| m["clientId"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(newest_ids.len(), 5);
+    assert_eq!(
+        newest_ids,
+        vec!["msg-11", "msg-10", "msg-09", "msg-08", "msg-07"],
+        "a capped newest-first page must hold the most recent messages"
+    );
+
+    // Paging onwards keeps walking backwards without repeating or skipping.
+    let second = dm_history(&app, &bob, "alice", "limit=5&offset=5&newest_first=true").await;
+    let second_ids: Vec<&str> = second
+        .iter()
+        .map(|m| m["clientId"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(second_ids, vec!["msg-06", "msg-05", "msg-04", "msg-03", "msg-02"]);
+
+    // Walked to the end, a newest-first walk covers exactly the same set as the
+    // default ascending one — the direction changes the order, never the contents.
+    let mut walked: Vec<String> = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = dm_history(
+            &app,
+            &bob,
+            "alice",
+            &format!("limit=5&offset={offset}&newest_first=true"),
+        )
+        .await;
+        let len = page.len();
+        walked.extend(
+            page.iter()
+                .map(|m| m["clientId"].as_str().unwrap_or("").to_string()),
+        );
+        if len < 5 {
+            break;
+        }
+        offset += 5;
+    }
+    walked.sort();
+    let mut expected = ascending_ids
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>();
+    expected.sort();
+    assert_eq!(walked, expected, "a full newest-first walk must cover the same set");
+}

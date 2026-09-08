@@ -222,11 +222,189 @@ function attachmentsNormalizedOncePerRender() {
     );
 }
 
+
+// Цена расшифровки: она пропорциональна количеству ключей, а не должна быть.
+//
+// Каждая неподошедшая попытка — это два прохода PBKDF2-SHA256 по 210 000
+// итераций (ключ архива, потом тело). Кандидаты берутся из всего набора ключей
+// аккаунта, а `alt:`-записи копятся всю жизнь переписки и ничем не чистятся, —
+// то есть цена одного нечитаемого сообщения растёт вместе с историей ключей.
+// Проверяется по исходнику: числа тут нет, есть потолок и его отсутствие.
+function decryptCandidatesAreBounded() {
+    console.log('\n──────── перебор ключей при расшифровке\n');
+
+    const shells = [
+        ['web (браузер/PWA)', 'interface/message_send.js', /MAX_DECRYPT_CANDIDATES/],
+        ['macOS (Swift)', null, /maxDecryptCandidates/],
+        ['Windows (Rust)', null, /MAX_DECRYPT_CANDIDATES/],
+    ];
+    const macos = fs.readFileSync(new URL('../../apps/macos/Sources/ZaliMessenger/Views/WebView.swift', import.meta.url), 'utf8');
+    const windows = fs.readFileSync(new URL('../../apps/windows/src/native/cache.rs', import.meta.url), 'utf8');
+    const sources = [src(shells[0][1]), macos, windows];
+
+    shells.forEach(([label, , needle], i) => {
+        check(
+            `перебор ключей ограничен потолком — ${label}`,
+            needle.test(sources[i]),
+            'нет потолка: цена нечитаемого сообщения растёт вместе с числом ключей аккаунта',
+        );
+    });
+
+    // Потолок бесполезен, если хвост берётся из неупорядоченной мапы: тогда
+    // «какие 12 ключей» меняется от вызова к вызову, и сообщение расшифровывается
+    // или нет в зависимости от порядка обхода.
+    check(
+        'хвост кандидатов обходится детерминированно — macOS',
+        /allConversationKeys\.keys\.sorted\(\)/.test(macos),
+        'обход Dictionary без sorted(): состав ограниченного списка непредсказуем',
+    );
+    check(
+        'хвост кандидатов обходится детерминированно — Windows',
+        /scopes\.sort\(\)/.test(windows) && !/for key in conversation_keys\.values\(\)/.test(windows),
+        'обход HashMap::values() без сортировки: состав ограниченного списка непредсказуем',
+    );
+}
+
+// Неудачная расшифровка обязана запоминаться — вместе с тем, ЧЕМ её пробовали.
+//
+// Иначе каждый refreshAfterKey (а он срабатывает на каждый key_envelope_available)
+// заново качает архив и заново гоняет весь перебор ради того же ответа. Ключ
+// памяти — отпечаток набора ключей: появился новый ключ — отпечаток другой,
+// запись протухла, повтор происходит сразу. Самопочинка сохраняется, уходит
+// только повторение.
+function failedDecryptsAreRemembered() {
+    console.log('\n──────── повторный перебор на уже проверенных ключах\n');
+    const macos = fs.readFileSync(new URL('../../apps/macos/Sources/ZaliMessenger/Views/WebView.swift', import.meta.url), 'utf8');
+    const windows = fs.readFileSync(new URL('../../apps/windows/src/native/messages.rs', import.meta.url), 'utf8');
+    const web = src('interface/message_send.js');
+
+    check('macOS помнит неудачную расшифровку и набор ключей',
+        /failedDecryptKeyFingerprint/.test(macos) && /currentKeyFingerprint\(\)/.test(macos),
+        'нет отрицательного кэша: весь перебор повторяется на каждом обновлении истории');
+    check('Windows помнит неудачную расшифровку и набор ключей',
+        /decrypt_known_to_fail/.test(windows) && /remember_decrypt_failure/.test(windows),
+        'нет отрицательного кэша: весь перебор повторяется на каждом обновлении истории');
+    check('браузер помнит неудачную расшифровку и набор ключей',
+        /_failedBrowserUnpacks/.test(web),
+        'нет отрицательного кэша: весь перебор повторяется на каждой загрузке истории');
+
+    // Отрицательный кэш обязан сбрасываться там же, где положительный: правка
+    // сообщения подменяет архив под тем же id.
+    const cacheRs = fs.readFileSync(new URL('../../apps/windows/src/native/cache.rs', import.meta.url), 'utf8');
+    const forgetFn = cacheRs.slice(cacheRs.indexOf('pub(crate) fn forget_decrypted_message'));
+    check('правка сообщения сбрасывает и отрицательный кэш — Windows',
+        /failed_decrypt_cache/.test(forgetFn.slice(0, 600)),
+        'после правки сообщение остаётся «нерасшифровываемым» по устаревшему вердикту');
+    const forgetSwift = macos.slice(macos.indexOf('func forgetDecryptedMessage'));
+    check('правка сообщения сбрасывает и отрицательный кэш — macOS',
+        /failedDecryptKeyFingerprint/.test(forgetSwift.slice(0, 600)),
+        'после правки сообщение остаётся «нерасшифровываемым» по устаревшему вердикту');
+}
+
+// Кэш расшифрованных сообщений держит вложения инлайном (data:-URL). Без
+// потолка он превращается из защиты процессора в утечку памяти.
+function decryptedCacheIsBounded() {
+    console.log('\n──────── потолок кэша расшифрованных сообщений\n');
+    const macos = fs.readFileSync(new URL('../../apps/macos/Sources/ZaliMessenger/Views/WebView.swift', import.meta.url), 'utf8');
+    const windows = fs.readFileSync(new URL('../../apps/windows/src/native/cache.rs', import.meta.url), 'utf8');
+    check('macOS ограничивает кэш по числу записей и по размеру записи',
+        /decryptedCacheMaxEntries/.test(macos) && /decryptedCacheMaxEntryBytes/.test(macos),
+        'кэш неограничен: вся расшифрованная переписка с вложениями остаётся в памяти');
+    check('Windows ограничивает кэш по числу записей и по размеру записи',
+        /DECRYPTED_CACHE_MAX_ENTRIES/.test(windows) && /DECRYPTED_CACHE_MAX_ENTRY_BYTES/.test(windows),
+        'кэш неограничен');
+}
+
+// Событие ключей не должно перечитывать всю переписку, когда читать нечего.
+//
+// refreshAfterKey срабатывает на каждый key_envelope_available, и каждое
+// срабатывание заново обходило переписку постранично. Обрезать историю нельзя —
+// пользователь теряет сообщения, — поэтому вопрос ставится иначе: новый ключ
+// меняет ровно одно, читается ли сообщение, которое не читалось. Если в
+// переписке таких нет, перечитывать нечего.
+//
+// Умолчание обязано быть «перечитать»: пустое хранилище — не доказательство, а
+// незагруженный чат, и пропуск оставил бы его пустым.
+function keyEventDoesNotReloadWhenNothingIsBroken() {
+    console.log('\n──────── перечитывание истории на событие ключей\n');
+    const text = src('interface/server_messages.js');
+
+    check('загрузка истории по событию ключей условная',
+        /keyChangeCanRevealMore\(/.test(text),
+        'каждое событие ключей заново обходит всю переписку постранично');
+
+    // Anchored on the DEFINITION, not the first call site — the calls come earlier
+    // in the file and slicing from one of those reads the wrong function.
+    const fn = text.slice(text.indexOf('\n    keyChangeCanRevealMore('));
+    check('незагруженная переписка всегда перечитывается',
+        /if \(!Array\.isArray\(store\) \|\| !store\.length\) return true;/.test(fn.slice(0, 900)),
+        'пустое хранилище принято за «всё в порядке» — чат останется пустым');
+    check('плейсхолдер расшифровки считается поводом перечитать',
+        /detectSystemNotice\(msg\?\.text\) === 'decrypt-error'/.test(fn.slice(0, 900)),
+        'нативные шеллы рисуют плейсхолдер, а он и есть признак «ключ может помочь»');
+
+    // Браузер не рисует плейсхолдер — он просто не кладёт сообщение в хранилище,
+    // поэтому по нему одному судить нельзя.
+    const sendSrc = src('interface/message_send.js');
+    check('пропущенное браузером сообщение отмечается отдельно',
+        (sendSrc.match(/markBrowserDecryptGap\(/g) || []).length >= 3,
+        'браузерный путь роняет сообщение молча — без отметки переписка выглядит целой');
+    check('успешная загрузка снимает отметку',
+        /clearBrowserDecryptGap\(/.test(sendSrc) && /clearBrowserDecryptGap\(/.test(text),
+        'отметка залипнет навсегда и пропуск никогда не сработает');
+
+    // Плейсхолдер Windows-шелла — своя формулировка без эмодзи. Пока он не
+    // распознаётся, на Windows и пропуск неверен, и republish не запрашивается.
+    // Только тело detectSystemNotice: та же формулировка встречается ниже в
+    // decryptFailureReasonSlug, и проверка по всему файлу проходила бы даже с
+    // вырезанной веткой распознавания — ровно это и случилось при первой попытке
+    // её сломать намеренно.
+    const renderSrc = src('interface/message_render.js');
+    const detect = renderSrc.slice(
+        renderSrc.indexOf('detectSystemNotice(text) {'),
+        renderSrc.indexOf('decryptFailureReasonSlug('),
+    );
+    check('плейсхолдер Windows-шелла распознаётся как ошибка расшифровки',
+        /Не удалось расшифровать сообщение/.test(detect),
+        'на Windows такой текст рисуется обычным пузырём и не запускает republish');
+}
+
+// Чтение хранилища ключей не должно писать. Метод зовётся с ~30 мест, часть из
+// них — отрисовка и отправка, а он сериализовал всю карту и писал её в оба
+// хранилища на каждом вызове.
+function keyStoreReadDoesNotWrite() {
+    console.log('\n──────── запись при чтении хранилища ключей\n');
+    const text = src('interface/conversation_keys.js');
+    const fn = text.slice(text.indexOf('loadStoredConversationKeys()'), text.indexOf('getStoredConversationKey('));
+    check('чтение ключей пишет в хранилище только при реальном изменении',
+        /_lastConversationKeysEncoded/.test(fn),
+        'каждое чтение делает две синхронные записи в localStorage/sessionStorage');
+}
+
+// Расшифровка конвертов (ECDH на каждый) не должна держать write-lock: под ним
+// стоит в очереди запись «сгенерировали ключ для нового чата» с пути открытия чата.
+function envelopeDecryptionIsOutsideTheLock() {
+    console.log('\n──────── write-lock во время разбора конвертов\n');
+    const text = src('interface/key_envelopes.js');
+    const impl = text.slice(text.indexOf('_syncIncomingKeyEnvelopesImpl'));
+    const lockAt = impl.indexOf('withConversationKeysWriteLock');
+    const decryptAt = impl.indexOf('decryptConversationKeyEnvelope');
+    check('конверты расшифровываются до взятия write-lock',
+        decryptAt !== -1 && lockAt !== -1 && decryptAt < lockAt,
+        'ECDH по всей пачке выполняется под замком — запись нового ключа ждёт всю пачку');
+}
+
 avatarDuplication();
 nativeAttachmentsRenderAsBlob();
 videoPlaybackIsBounded();
 searchIsDebounced();
 sortsDoNotAllocateDates();
 attachmentsNormalizedOncePerRender();
+decryptCandidatesAreBounded();
+failedDecryptsAreRemembered();
+decryptedCacheIsBounded();
+keyEventDoesNotReloadWhenNothingIsBroken();
+keyStoreReadDoesNotWrite();
+envelopeDecryptionIsOutsideTheLock();
 console.log(`\n  итог: ${checks} проверок, ${failures} нарушено`);
 process.exit(failures > 0 ? 1 : 0);

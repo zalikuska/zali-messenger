@@ -769,3 +769,470 @@ async fn a_burst_of_envelopes_produces_one_notification_but_loses_none() {
         "coalescing the notification must not drop any envelope"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Stale-claim takeover.
+//
+// A registry row can outlive every copy of the key it fingerprints — reinstall
+// both ends of a DM and `key_id` names material nobody has. Before the takeover
+// existed there was no way out of that except the user pressing "сбросить ключи":
+// every participant kept its own sending key and re-ran claim → promote(fail) →
+// republish → sync → promote(fail) on every chat open, forever.
+//
+// The client decides a claim is unreachable; the server decides who wins. These
+// pin the server's half, which is what makes it terminate instead of ping-pong.
+// ---------------------------------------------------------------------------
+
+async fn claim_takeover(
+    app: &TestApp,
+    user: &RegisteredUser,
+    scope: &str,
+    key_id: &str,
+) -> serde_json::Value {
+    let resp = app
+        .http
+        .post(app.url("/api/conversation-keys/claim"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({ "scope": scope, "keyId": key_id, "takeover": true }))
+        .send()
+        .await
+        .expect("takeover claim request");
+    assert!(resp.status().is_success());
+    resp.json().await.expect("takeover claim json")
+}
+
+/// Backdates a row's `updated_at`, standing in for the 15 minutes a client must
+/// have spent unable to obtain the canonical key before it asks for a takeover.
+async fn age_registry_row(pool: &sqlx::SqlitePool, scope: &str, minutes: i64) {
+    sqlx::query(
+        "UPDATE conversation_key_registry
+            SET updated_at = datetime('now', ?)
+          WHERE scope_key = ?",
+    )
+    .bind(format!("-{minutes} minutes"))
+    .bind(scope)
+    .execute(pool)
+    .await
+    .expect("age registry row");
+}
+
+#[tokio::test]
+async fn a_recent_claim_cannot_be_taken_over() {
+    let (data_dir, pool) = spawn_with_pool().await;
+    let app = common::spawn_app_with_data_dir(data_dir.clone()).await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    let (status, _) = claim(&app, &alice, scope, "key-id-alice").await;
+    assert!(status.is_success());
+
+    // The client-side gate is the one that decides a claim is unreachable; the
+    // server's job is only to refuse a second takeover inside the window. A row
+    // that was just written must survive one regardless of who asks.
+    let body = claim_takeover(&app, &bob, scope, "key-id-bob").await;
+    assert_eq!(body["keyId"], "key-id-alice");
+    assert_eq!(body["mine"], false);
+    drop(pool);
+}
+
+#[tokio::test]
+async fn a_stale_claim_is_taken_over_and_the_winner_is_reported() {
+    let (data_dir, pool) = spawn_with_pool().await;
+    let app = common::spawn_app_with_data_dir(data_dir.clone()).await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    let (status, _) = claim(&app, &alice, scope, "key-id-alice").await;
+    assert!(status.is_success());
+    age_registry_row(&pool, scope, 30).await;
+
+    let body = claim_takeover(&app, &bob, scope, "key-id-bob").await;
+    assert_eq!(body["keyId"], "key-id-bob", "the takeover must replace the row");
+    assert_eq!(body["mine"], true);
+    assert_eq!(body["claimedBy"], "bob");
+
+    // And an ordinary claim by anyone else now reports bob's key, so the rest of
+    // the participants converge on something that actually exists.
+    let (status, seen) = claim(&app, &alice, scope, "key-id-alice").await;
+    assert!(status.is_success());
+    assert_eq!(seen["keyId"], "key-id-bob");
+    assert_eq!(seen["mine"], false);
+    drop(pool);
+}
+
+#[tokio::test]
+async fn only_one_takeover_wins_per_window() {
+    let (data_dir, pool) = spawn_with_pool().await;
+    let app = common::spawn_app_with_data_dir(data_dir.clone()).await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    let (status, _) = claim(&app, &alice, scope, "key-id-original").await;
+    assert!(status.is_success());
+    age_registry_row(&pool, scope, 30).await;
+
+    // Both sides cross the threshold at the same moment — the exact case that
+    // produced one live key per participant when nothing arbitrated it.
+    let first = claim_takeover(&app, &bob, scope, "key-id-bob").await;
+    let second = claim_takeover(&app, &alice, scope, "key-id-alice").await;
+
+    assert_eq!(first["keyId"], "key-id-bob");
+    assert_eq!(first["mine"], true);
+    // The second one is refused because the first refreshed `updated_at`, and is
+    // handed the winner instead of being allowed to overwrite it.
+    assert_eq!(second["keyId"], "key-id-bob", "the second takeover must lose");
+    assert_eq!(second["mine"], false);
+    drop(pool);
+}
+
+#[tokio::test]
+async fn a_takeover_on_an_unclaimed_scope_is_an_ordinary_first_claim() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let _bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    // No row exists. That is "unclaimed", not "stale", so this must behave exactly
+    // like a normal claim rather than being rejected for having nothing to replace.
+    let body = claim_takeover(&app, &alice, scope, "key-id-alice").await;
+    assert_eq!(body["keyId"], "key-id-alice");
+    assert_eq!(body["mine"], true);
+}
+
+#[tokio::test]
+async fn a_takeover_still_requires_participation() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let _bob = register_user(&app, "bob", "hunter22").await;
+    let mallory = register_user(&app, "mallory", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    let (status, _) = claim(&app, &alice, scope, "key-id-alice").await;
+    assert!(status.is_success());
+
+    // The participant check runs before the write mode is even chosen; a takeover
+    // must not be a way around it.
+    let resp = app
+        .http
+        .post(app.url("/api/conversation-keys/claim"))
+        .header("Authorization", mallory.auth_header())
+        .json(&serde_json::json!({ "scope": scope, "keyId": "key-id-mallory", "takeover": true }))
+        .send()
+        .await
+        .expect("outsider takeover");
+    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
+// Envelope identity includes the key.
+//
+// `conversation_key_envelopes` used to be UNIQUE on
+// (owner, scope, sender_device, recipient_device) — with no reference to WHICH
+// key the envelope carried. Publishing several candidate keys for one scope to
+// one device was therefore a run of upserts over a single row, and only the last
+// survived. That silently defeated the mechanism built to repair an unreadable
+// conversation: handleKeyRepublishRequest answers "I cannot decrypt this scope"
+// with every candidate it holds, precisely because the ONE key the requester
+// certainly already has is the active one.
+// ---------------------------------------------------------------------------
+
+async fn post_envelope(
+    app: &TestApp,
+    sender: &RegisteredUser,
+    recipient: &str,
+    scope: &str,
+    key_id: Option<&str>,
+    encrypted: &str,
+) -> reqwest::StatusCode {
+    let mut body = serde_json::json!({
+        "recipient": recipient,
+        "scope": scope,
+        "recipientDeviceId": "dev_recipient",
+        "senderDeviceId": "dev_sender",
+        "encryptedKey": encrypted,
+    });
+    if let Some(key_id) = key_id {
+        body["keyId"] = serde_json::Value::String(key_id.to_string());
+    }
+    app.http
+        .post(app.url("/api/key-envelopes"))
+        .header("Authorization", sender.auth_header())
+        .json(&body)
+        .send()
+        .await
+        .expect("post envelope")
+        .status()
+}
+
+async fn envelopes_for(app: &TestApp, user: &RegisteredUser, device: &str) -> Vec<serde_json::Value> {
+    let resp = app
+        .http
+        .get(app.url(&format!("/api/key-envelopes?deviceId={device}")))
+        .header("Authorization", user.auth_header())
+        .send()
+        .await
+        .expect("list envelopes");
+    assert!(resp.status().is_success());
+    resp.json().await.expect("envelope json")
+}
+
+#[tokio::test]
+async fn distinct_keys_for_one_scope_are_stored_as_distinct_envelopes() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    // Three candidates for one scope, same sender device, same recipient device —
+    // exactly the shape of a republish answer.
+    for (key_id, blob) in [
+        ("key-id-active", "encrypted-envelope-payload-active-aaaaaaaa"),
+        ("key-id-old-one", "encrypted-envelope-payload-old-one-bbbbbbb"),
+        ("key-id-old-two", "encrypted-envelope-payload-old-two-ccccccc"),
+    ] {
+        let status = post_envelope(&app, &alice, "bob", scope, Some(key_id), blob).await;
+        assert!(status.is_success(), "publishing {key_id} failed");
+    }
+
+    let rows = envelopes_for(&app, &bob, "dev_recipient").await;
+    assert_eq!(rows.len(), 3, "each distinct key needs its own envelope row");
+    let mut blobs: Vec<&str> = rows
+        .iter()
+        .map(|row| row["encryptedKey"].as_str().unwrap_or(""))
+        .collect();
+    blobs.sort();
+    assert_eq!(
+        blobs,
+        vec![
+            "encrypted-envelope-payload-active-aaaaaaaa",
+            "encrypted-envelope-payload-old-one-bbbbbbb",
+            "encrypted-envelope-payload-old-two-ccccccc",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn republishing_the_same_key_replaces_its_envelope_rather_than_adding_one() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    post_envelope(&app, &alice, "bob", scope, Some("key-id-a"), "encrypted-envelope-first-version-aa").await;
+    post_envelope(&app, &alice, "bob", scope, Some("key-id-a"), "encrypted-envelope-second-version-b").await;
+
+    let rows = envelopes_for(&app, &bob, "dev_recipient").await;
+    assert_eq!(rows.len(), 1, "the same key must keep occupying one row");
+    assert_eq!(rows[0]["encryptedKey"], "encrypted-envelope-second-version-b");
+}
+
+#[tokio::test]
+async fn a_client_that_sends_no_key_id_keeps_the_old_one_row_behaviour() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let scope = "dm:alice:bob";
+
+    // Older clients predate `keyId` entirely. They land on the empty-string id, so
+    // they behave exactly as before rather than accumulating a row per publish.
+    post_envelope(&app, &alice, "bob", scope, None, "encrypted-envelope-legacy-first-a").await;
+    post_envelope(&app, &alice, "bob", scope, None, "encrypted-envelope-legacy-second-b").await;
+
+    let rows = envelopes_for(&app, &bob, "dev_recipient").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["encryptedKey"], "encrypted-envelope-legacy-second-b");
+}
+
+/// The column is part of a UNIQUE constraint declared inline, so adding it needs a
+/// table rebuild rather than an ALTER. Existing envelopes must come through it.
+#[tokio::test]
+async fn adding_key_id_to_the_envelope_table_preserves_existing_rows() {
+    let (data_dir, pool) = spawn_with_pool().await;
+
+    // Recreate the pre-migration shape, then put a row in it.
+    sqlx::query("DROP TABLE conversation_key_envelopes")
+        .execute(&pool)
+        .await
+        .expect("drop new table");
+    sqlx::query(
+        "CREATE TABLE conversation_key_envelopes (
+            envelope_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            sender_device_id TEXT NOT NULL,
+            recipient_device_id TEXT NOT NULL,
+            encrypted_key TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner, scope_key, sender_device_id, recipient_device_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("recreate legacy table");
+    sqlx::query(
+        "INSERT INTO conversation_key_envelopes
+         (envelope_id, owner, scope_key, sender, sender_device_id, recipient_device_id, encrypted_key, created_at)
+         VALUES ('env_legacy', 'bob', 'dm:alice:bob', 'alice', 'dev_a', 'dev_b', 'legacy-blob', '2026-08-01 10:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed legacy envelope");
+    drop(pool);
+
+    let _rebooted = common::spawn_app_with_data_dir(data_dir.clone()).await;
+    let pool = open_pool(&data_dir).await;
+
+    let (envelope_id, key_id, blob, created_at) =
+        sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT envelope_id, key_id, encrypted_key, created_at FROM conversation_key_envelopes",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("legacy row survived the rebuild");
+    assert_eq!(envelope_id, "env_legacy");
+    assert_eq!(blob, "legacy-blob");
+    assert_eq!(created_at, "2026-08-01 10:00:00", "created_at must not be reset");
+    assert_eq!(key_id, "", "pre-migration rows keep the id they effectively had");
+
+    // And the widened constraint is actually in force afterwards.
+    sqlx::query(
+        "INSERT INTO conversation_key_envelopes
+         (envelope_id, owner, scope_key, sender, sender_device_id, recipient_device_id, key_id, encrypted_key)
+         VALUES ('env_new', 'bob', 'dm:alice:bob', 'alice', 'dev_a', 'dev_b', 'key-id-2', 'second-blob')",
+    )
+    .execute(&pool)
+    .await
+    .expect("a second key for the same pair must be storable");
+
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversation_key_envelopes")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 2);
+
+    // Idempotent: booting again must not rebuild or duplicate anything.
+    drop(pool);
+    let _again = common::spawn_app_with_data_dir(data_dir.clone()).await;
+    let pool = open_pool(&data_dir).await;
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversation_key_envelopes")
+        .fetch_one(&pool)
+        .await
+        .expect("count after second boot");
+    assert_eq!(count, 2);
+
+    // The rebuild has to drop the lookup index (it names the old table and would
+    // otherwise block the rename — that is what made the first version of this
+    // migration fail, and the failure took the table with it). Whatever it drops,
+    // startup must put back: without this index every envelope fetch is a scan.
+    let index_exists = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'index' AND name = 'idx_conversation_key_envelopes_owner_device'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("index lookup");
+    assert_eq!(index_exists, 1, "the envelope lookup index must be restored");
+}
+
+// ---------------------------------------------------------------------------
+// Cloud vault event retention.
+//
+// The client republishes the whole encrypted key set on every key change and
+// reads the stream back on every sync, and nothing ever deleted a row: the table
+// grew without bound while the read returned all of it, each row up to 256 KB.
+// ---------------------------------------------------------------------------
+
+async fn post_vault_event(app: &TestApp, user: &RegisteredUser, blob: &str, target: Option<&str>) {
+    let mut body = serde_json::json!({
+        "vaultEpoch": 1_i64,
+        "encryptedVaultEvent": blob,
+    });
+    if let Some(target) = target {
+        body["issuedToDeviceId"] = serde_json::Value::String(target.to_string());
+    }
+    let resp = app
+        .http
+        .post(app.url("/api/vault/events"))
+        .header("Authorization", user.auth_header())
+        .json(&body)
+        .send()
+        .await
+        .expect("post vault event");
+    assert!(resp.status().is_success(), "vault event rejected");
+}
+
+async fn vault_events(app: &TestApp, user: &RegisteredUser) -> Vec<serde_json::Value> {
+    let resp = app
+        .http
+        .get(app.url("/api/vault/events"))
+        .header("Authorization", user.auth_header())
+        .send()
+        .await
+        .expect("list vault events");
+    assert!(resp.status().is_success());
+    resp.json().await.expect("vault json")
+}
+
+#[tokio::test]
+async fn the_vault_event_stream_is_capped_and_keeps_the_newest() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+
+    for i in 0..40 {
+        post_vault_event(&app, &alice, &format!("encrypted-vault-event-number-{i:03}"), None).await;
+    }
+
+    let events = vault_events(&app, &alice).await;
+    assert!(
+        events.len() <= 24,
+        "the stream must be bounded, got {}",
+        events.len()
+    );
+    // Newest survive: the client scans backwards from the end looking for one it
+    // can decrypt, so the tail is the only part that is ever reachable.
+    let blobs: Vec<&str> = events
+        .iter()
+        .map(|e| e["encryptedVaultEvent"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        blobs.contains(&"encrypted-vault-event-number-039"),
+        "the newest event must survive"
+    );
+    assert!(
+        !blobs.contains(&"encrypted-vault-event-number-000"),
+        "the oldest must have been pruned"
+    );
+    // Handed back oldest-first, which is the order the client's backward scan expects.
+    let mut sorted = blobs.clone();
+    sorted.sort();
+    assert_eq!(blobs, sorted, "events must come back in ascending order");
+}
+
+#[tokio::test]
+async fn broadcast_churn_does_not_evict_a_targeted_vault_handoff() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+
+    // A one-time handoff to a specific new device (approveDeviceAndExport). It is
+    // encrypted with a code that device was given out of band, and it is the only
+    // copy — ordinary key churn on the approving device must not be able to bury it
+    // before the new device has logged in to collect it.
+    post_vault_event(&app, &alice, "encrypted-vault-handoff-for-the-new-device", Some("dev_new")).await;
+    for i in 0..40 {
+        post_vault_event(&app, &alice, &format!("encrypted-vault-broadcast-{i:03}"), None).await;
+    }
+
+    let events = vault_events(&app, &alice).await;
+    let blobs: Vec<&str> = events
+        .iter()
+        .map(|e| e["encryptedVaultEvent"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        blobs.contains(&"encrypted-vault-handoff-for-the-new-device"),
+        "a targeted handoff must not be evicted by broadcast churn"
+    );
+}

@@ -191,6 +191,22 @@ ZaliMixin(ZaliInterface, class {
             // on-demand vault fetch and mint a temporary key instead of adopting the
             // real key from its vault (key divergence on the account-switch flow).
             this._cloudVaultResolveFetchDone = false;
+            // Memo of key envelopes this session has already opened, keyed by envelope
+            // id. Envelope ids are per-account, and the incoming account must open its
+            // own from scratch — a stale hit here would skip an import it needs.
+            this._openedEnvelopeStamps = null;
+            // Same story for the "no key of ours opens this message" memo: message ids
+            // are per-account and the incoming account must judge them for itself.
+            this._failedBrowserUnpacks = null;
+            this._decodedBrowserMessageIds = null;
+            // Storage keys are per-account, so what the previous account had on disk
+            // says nothing about the incoming one — the read path must write its own
+            // merge through at least once.
+            this._lastConversationKeysEncoded = null;
+            // Registry answers are per-account; carrying "this scope has no claim"
+            // across a switch could let the new account skip a wait it never made.
+            this._canonicalLookupAnswered = null;
+            this._browserDecryptGaps = null;
             this.S.current = null;
             this.S.activeServer = null;
             this.S.activeChannel = null;
@@ -612,6 +628,22 @@ ZaliMixin(ZaliInterface, class {
                 if (!superseded()) {
                     if (code) {
                         void this.timeStage('syncCloudVaultPackage(bg)', () => this.syncCloudVaultPackage({ passphrase: code, reason }));
+                    } else if (this.isVaultCloudSyncEnabled()) {
+                        // No passphrase means the cloud vault is off for this whole
+                        // session: syncCloudVaultPackage bails without one and so does
+                        // scheduleCloudVaultSync, so nothing this device learns can ever
+                        // reach the account's other devices through the vault, and
+                        // nothing they publish reaches it. That is a real, load-bearing
+                        // failure — a restored session whose stored unlock secret was
+                        // lost (cleared storage, or a blob sealed with a since-rotated
+                        // token) hits it — and until now it happened without a single
+                        // word anywhere. Say so; a password login re-seals the secret.
+                        this.addLogEntry({
+                            type: 'WARN',
+                            msg: 'Облачная синхронизация ключей недоступна: не восстановлена парольная фраза vault. Войдите по паролю, чтобы включить её снова.',
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                        this.trace(`postAuthSetup cloud vault disabled reason=${reason} no_passphrase=true`);
                     }
                     void this.timeStage('retryPublishConversationKeys(bg)', () => this.retryPublishConversationKeys({ reason }));
                 }

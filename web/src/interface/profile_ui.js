@@ -74,9 +74,14 @@ ZaliMixin(ZaliInterface, class {
         const data = state.data;
         if (!data) return '';
 
+        // Пока открыт редактор, вкладки не соответствуют ничему конкретному
+        // («О себе» больше нет — её место в шапке, см. renderProfileHeader) —
+        // показывать их подсвеченными на случайной вкладке хуже, чем не
+        // показывать вовсе.
+        const editingSelf = state.editing && data.isSelf;
         return `
             ${this.renderProfileHeader(state, data)}
-            ${this.renderProfileTabs(state, data)}
+            ${editingSelf ? '' : this.renderProfileTabs(state, data)}
             <div class="profile-tab-body">${this.renderProfileTabContent(state, data)}</div>
         `;
     }
@@ -100,7 +105,7 @@ ZaliMixin(ZaliInterface, class {
             <div class="profile-head-copy">
                 <h2 class="profile-name" id="profileModalName">${this.esc(title)}</h2>
                 <div class="profile-handle">@${this.esc(username)}</div>
-                ${data.status ? `<div class="profile-status">${this.esc(data.status)}</div>` : ''}
+                ${data.bio ? `<div class="profile-bio-inline">${this.esc(data.bio)}</div>` : ''}
                 <div class="profile-counters">
                     ${counters.map(counter => `
                         <span class="profile-counter">
@@ -158,7 +163,6 @@ ZaliMixin(ZaliInterface, class {
 
     profileTabsFor(state, data) {
         const tabs = [
-            { key: 'about', label: 'О себе' },
             { key: 'wall', label: 'Стена' },
             { key: 'comments', label: 'Комментарии' },
         ];
@@ -172,7 +176,7 @@ ZaliMixin(ZaliInterface, class {
 
     renderProfileTabs(state, data) {
         const tabs = this.profileTabsFor(state, data);
-        const active = tabs.some(tab => tab.key === state.tab) ? state.tab : 'about';
+        const active = tabs.some(tab => tab.key === state.tab) ? state.tab : 'wall';
         return `<nav class="profile-tabs" role="tablist">
             ${tabs.map(tab => `
                 <button class="profile-tab${tab.key === active ? ' active' : ''}" type="button" role="tab" aria-selected="${tab.key === active}" data-profile-tab="${this.esc(tab.key)}">
@@ -184,43 +188,15 @@ ZaliMixin(ZaliInterface, class {
     }
 
     renderProfileTabContent(state, data) {
+        // Редактор больше не привязан к вкладке «О себе» (она убрана — см.
+        // profileTabsFor) и проверяется первым, до маршрутизации по вкладкам.
+        if (state.editing && data.isSelf) return this.renderProfileEditor(state);
         const tabs = this.profileTabsFor(state, data).map(tab => tab.key);
-        const active = tabs.includes(state.tab) ? state.tab : 'about';
-        if (active === 'wall') return this.renderProfileWallTab(state, data);
+        const active = tabs.includes(state.tab) ? state.tab : 'wall';
         if (active === 'comments') return this.renderProfileCommentsTab(state, data);
         if (active === 'moderation') return this.renderProfileModerationTab(state, data);
         if (active === 'friends') return this.renderProfileFriendsTab(state, data);
-        return this.renderProfileAboutTab(state, data);
-    }
-
-    // ------------------------------------------------------------
-    // Вкладка «О себе» (просмотр и редактирование)
-    // ------------------------------------------------------------
-
-    renderProfileAboutTab(state, data) {
-        if (state.editing && data.isSelf) return this.renderProfileEditor(state);
-
-        const links = Array.isArray(data.links) ? data.links : [];
-        const rows = [
-            data.location ? { label: 'Где', value: data.location } : null,
-        ].filter(Boolean);
-
-        return `<div class="profile-about">
-            ${data.bio
-                ? `<p class="profile-bio">${this.esc(data.bio)}</p>`
-                : `<p class="profile-bio muted">${data.isSelf ? 'Расскажите о себе — нажмите «Редактировать профиль».' : 'Пользователь пока ничего о себе не написал.'}</p>`}
-            ${rows.length ? `<dl class="profile-facts">${rows.map(row => `
-                <div class="profile-fact"><dt>${this.esc(row.label)}</dt><dd>${this.esc(row.value)}</dd></div>
-            `).join('')}</dl>` : ''}
-            ${links.length ? `<ul class="profile-links">${links.map(link => `
-                <li><a href="${this.esc(link.url)}" target="_blank" rel="noopener noreferrer">${this.esc(link.label || link.url)}</a></li>
-            `).join('')}</ul>` : ''}
-            <div class="profile-policy-summary">
-                <span class="profile-policy-chip">Комментарии: <strong>${this.esc(this.audienceLabel(data.commentPolicy))}</strong></span>
-                <span class="profile-policy-chip">Автографы: <strong>${this.esc(this.audienceLabel(data.autographPolicy))}</strong></span>
-                <span class="profile-policy-chip">Одобрение: <strong>${this.esc(this.audienceLabel(data.autographAutoApprove))}</strong></span>
-            </div>
-        </div>`;
+        return this.renderProfileWallTab(state, data);
     }
 
     /** Ряд из нескольких кнопок вместо системного `<select>` — активный вариант подсвечен акцентом. */

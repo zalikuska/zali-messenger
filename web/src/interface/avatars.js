@@ -102,7 +102,10 @@ ZaliMixin(ZaliInterface, class {
 
         const request = (async () => {
             try {
-                const res = await this.apiFetch(this.apiRoutes.servers.assets(sid, kind));
+                // Binary body — see TRANSFER_REQUEST_TIMEOUT_MS.
+                const res = await this.apiFetch(this.apiRoutes.servers.assets(sid, kind), {
+                    timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+                });
                 if (this.serverAssetFetchSeq.get(key) !== seq) return null;
                 if (res.status === 404) {
                     this.serverAssetCache.set(key, null);
@@ -412,7 +415,10 @@ ZaliMixin(ZaliInterface, class {
                     }
                 }
 
-                const res = await this.apiFetch(this.apiRoutes.avatar.byUsername(name));
+                // Binary body — see TRANSFER_REQUEST_TIMEOUT_MS.
+                const res = await this.apiFetch(this.apiRoutes.avatar.byUsername(name), {
+                    timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+                });
                 if (this.avatarFetchSeq.get(key) !== seq) {
                     return null;
                 }

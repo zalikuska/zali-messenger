@@ -190,8 +190,19 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         // macOS and Windows already mirror + re-inject these; Android did not.
         val conversationKeysJson = if (!lastUser.isNullOrEmpty()) readStoredConversationKeys(lastUser) else null
         val conversationKeysLine = if (conversationKeysJson != null) "window.__ZALI_CONVERSATION_KEYS = $conversationKeysJson;" else ""
+        // Who the two lines above belong to. Everything injected here is read out of
+        // the LAST logged-in user's files and then lives for the whole life of the
+        // document, so without this stamp a different account signing in afterwards
+        // merged the previous account's conversation keys into its own store and
+        // adopted its device identity (private ECDH key included). The shared UI
+        // refuses injected material whose stamp does not match the signed-in account
+        // — see injectedMaterialMatchesAccount() in web/src/interface/key_resolution.js.
+        val injectedForUserLine = if (!lastUser.isNullOrEmpty()) {
+            "window.__ZALI_INJECTED_FOR_USER = ${JSONObject.quote(lastUser)};"
+        } else ""
         return """
         (function () {
+          $injectedForUserLine
           $identityLine
           $conversationKeysLine
           window.__ZALI_NATIVE_CAPS__ = {
@@ -1111,12 +1122,24 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "key_envelope_available" -> {
                 webView.evaluateJavascript("window.refreshAfterKey && window.refreshAfterKey();", null)
             }
-            "device_approved", "key_republish_request" -> {
-                // A peer registered/approved a device, or reported it cannot decrypt a
-                // shared conversation — push our conversation keys out again instead of
-                // waiting for our own next login. Android handled neither event before,
-                // so a phone was a permanent dead end for key redistribution.
+            "device_approved" -> {
+                // A peer registered or approved a device — push our conversation keys out
+                // again instead of waiting for our own next login. Android handled neither
+                // event before, so a phone was a permanent dead end for key redistribution.
                 webView.evaluateJavascript("window.retryPublishKeys && window.retryPublishKeys();", null)
+            }
+            "key_republish_request" -> {
+                // Deliberately NOT folded into retryPublishKeys() above, which is exactly
+                // what this used to do. The sweep publishes each scope's ACTIVE key only,
+                // while a participant sends this event precisely because the messages it
+                // cannot read were encrypted under a key we have since demoted to an
+                // `alt:` candidate — so the sweep answers with the one key the requester
+                // is guaranteed to already have. It is also coalesced on a 60 s window,
+                // so a targeted request often produced nothing at all. Only
+                // handleKeyRepublishRequest replies with every candidate for the scope,
+                // and it needs the payload to know which scope that is. Mirrors Windows
+                // (native/transport.rs) and macOS (NetworkService.swift).
+                webView.evaluateJavascript("window.keyRepublishRequest && window.keyRepublishRequest($raw);", null)
             }
             "" -> {
                 val id = raw.optString("id", "")
@@ -1489,6 +1512,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     companion object {
         private const val LAST_USERNAME_KEY = "last_username"
+
         private const val REQUEST_CODE_NOTIFICATIONS = 4201
         /** Feature-checked at the call site before using [androidx.webkit.WebViewCompat.addDocumentStartJavaScript]. */
         val documentStartScriptSupported: Boolean

@@ -23,7 +23,16 @@ export class SimBackend {
         this.failures = 0;
         this.devices = [];               // attached Device objects, for WS-style pushes
         this.pendingPushes = [];
+        // Virtual clock, so a check can age a registry row past the takeover window
+        // without sleeping for it. `advance(ms)` moves it; Date.now() is the base.
+        this.clockOffsetMs = 0;
+        this.staleClaimTakeoverMs = opts.staleClaimTakeoverMs ?? 15 * 60 * 1000;
     }
+
+    now() { return Date.now() + this.clockOffsetMs; }
+
+    /** Moves the backend's clock forward — used to age a claim past its window. */
+    advance(ms) { this.clockOffsetMs += Math.max(0, Number(ms) || 0); }
 
     /**
      * Registers a Device so the backend can push to it the way the real server
@@ -131,14 +140,40 @@ export class SimBackend {
             if (typeof body?.encryptedKey !== 'string' || !body.encryptedKey) {
                 return this._res(400, 'missing envelope');
             }
-            this.envelopes.push({
-                recipient: String(body.recipient || '').toLowerCase(),
-                recipientDeviceId: String(body.recipientDeviceId || ''),
-                senderDeviceId: String(body.senderDeviceId || ''),
-                scope,
-                encryptedKey: body.encryptedKey,
-                at: this.envelopes.length,
-            });
+            // Upsert on (owner, scope, senderDevice, recipientDevice, keyId), like the
+            // real ON CONFLICT — and, as there, a republish keeps the row's identity
+            // while stamping a fresh createdAt, which is what tells a client the
+            // content behind that id changed and has to be opened again.
+            //
+            // Modelling this at all matters: while these rows were append-only here,
+            // the harness could not see that the server's narrower constraint (no
+            // keyId) collapsed every candidate key for a scope onto one row, so
+            // answering a republish request with all of them delivered only the last.
+            const recipient = String(body.recipient || '').toLowerCase();
+            const recipientDeviceId = String(body.recipientDeviceId || '');
+            const senderDeviceId = String(body.senderDeviceId || '');
+            const keyId = String(body.keyId || '');
+            const existing = this.envelopes.find(e => e.recipient === recipient
+                && e.scope === scope
+                && e.senderDeviceId === senderDeviceId
+                && e.recipientDeviceId === recipientDeviceId
+                && e.keyId === keyId);
+            if (existing) {
+                existing.encryptedKey = body.encryptedKey;
+                existing.createdAt = new Date(this.now() + (this.envelopeSeq = (this.envelopeSeq || 0) + 1)).toISOString();
+            } else {
+                this.envelopes.push({
+                    envelopeId: `env_${this.envelopes.length + 1}`,
+                    recipient,
+                    recipientDeviceId,
+                    senderDeviceId,
+                    keyId,
+                    scope,
+                    encryptedKey: body.encryptedKey,
+                    createdAt: new Date(this.now() + (this.envelopeSeq = (this.envelopeSeq || 0) + 1)).toISOString(),
+                    at: this.envelopes.length,
+                });
+            }
             return this._res(200, { ok: true });
         }
 
@@ -146,8 +181,12 @@ export class SimBackend {
             const wanted = String(query.get('deviceId') || deviceId || '');
             const rows = this.envelopes.filter(e =>
                 e.recipient === String(caller).toLowerCase() && e.recipientDeviceId === wanted);
-            return this._res(200, rows.map(({ scope, encryptedKey, senderDeviceId }) => ({
-                scope, encryptedKey, senderDeviceId,
+            // envelopeId/createdAt are part of the real response and the client keys a
+            // "already opened this exact row" memo on the pair. Omitting them here made
+            // every row look identical to that memo, which is how a fragile version of
+            // it passed review and then skipped nearly every import.
+            return this._res(200, rows.map(({ envelopeId, scope, encryptedKey, senderDeviceId, createdAt }) => ({
+                envelopeId, scope, encryptedKey, senderDeviceId, createdAt,
             })));
         }
 
@@ -170,7 +209,21 @@ export class SimBackend {
             if (!this._participants(scope, caller)) return this._res(403, 'forbidden');
             const existing = this.registry.get(scope);
             if (!existing || body?.force === true) {
-                this.registry.set(scope, { keyId, claimedBy: caller, claimedDeviceId: deviceId });
+                this.registry.set(scope, {
+                    keyId, claimedBy: caller, claimedDeviceId: deviceId, updatedAt: this.now(),
+                });
+            } else if (body?.takeover === true && existing.keyId !== keyId) {
+                // Mirrors STALE_CLAIM_TAKEOVER in server/src/conversation_keys.rs: the
+                // first takeover in a window replaces the row and refreshes updatedAt,
+                // so everyone else crossing the threshold at the same moment is refused
+                // and gets the winner back instead. Without modelling the refusal the
+                // harness would be testing a design that ping-pongs forever.
+                const updatedAt = Number(existing.updatedAt || 0);
+                if (this.now() - updatedAt >= this.staleClaimTakeoverMs) {
+                    this.registry.set(scope, {
+                        keyId, claimedBy: caller, claimedDeviceId: deviceId, updatedAt: this.now(),
+                    });
+                }
             }
             const row = this.registry.get(scope);
             return this._res(200, {

@@ -4,6 +4,13 @@ const API_VERSION_PREFIX = '/api';
 const AUTH_REQUEST_TIMEOUT_MS = 6500;
 const SESSION_RESTORE_TIMEOUT_MS = 12000;
 const API_REQUEST_TIMEOUT_MS = 8000;
+// Bulk transfers — an upload of a multipart body, or a download of a `.zali`
+// archive / avatar / server asset — are the requests whose honest duration is
+// measured in megabytes rather than round trips. They get their own ceiling
+// instead of the general one; applying API_REQUEST_TIMEOUT_MS to them would abort
+// a perfectly healthy large attachment on a slow link, trading a rare stall for a
+// routine failure. See the timeout choice in api.js and its explicit call sites.
+const TRANSFER_REQUEST_TIMEOUT_MS = 120000;
 
 const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     SEND_MESSAGE: 'SEND_MESSAGE',
