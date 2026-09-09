@@ -22,6 +22,13 @@ ZaliMixin(ZaliInterface, class {
             window.__ZALI_ACTIVE_CONVERSATION_SCOPE = scope;
         } catch (e) {}
 
+        // Канал сервера не проходит ничего из того, что ниже: ни реестр, ни конверты,
+        // ни ожидание чужого ключа, ни генерацию случайного. Его ключ выводится из
+        // scope и потому уже есть у каждого участника (см. deriveServerChannelKey).
+        if (this.isServerChannelScope(scope)) {
+            return await this.adoptDerivedChannelKey({ scope, serverId, channelId, reason });
+        }
+
         const existing = this.getStoredConversationKey(scope);
         if (existing) {
             this.syncNativeConversationKeys();
@@ -206,6 +213,17 @@ ZaliMixin(ZaliInterface, class {
             try {
                 window.__ZALI_ACTIVE_CONVERSATION_SCOPE = scope;
             } catch (e) {}
+            // На устройстве может лежать ещё старый, случайный ключ канала — один раз
+            // за сессию переключаемся на выводимый (старый остаётся кандидатом на
+            // расшифровку). Один раз, а не на каждый рендер шапки: этот метод зовут
+            // и оттуда тоже.
+            if (this.isServerChannelScope(scope)) {
+                if (!this._derivedChannelScopesChecked) this._derivedChannelScopesChecked = new Set();
+                if (!this._derivedChannelScopesChecked.has(scope)) {
+                    this._derivedChannelScopesChecked.add(scope);
+                    void this.resolveConversationCryptoKey({ peer, serverId, channelId, reason });
+                }
+            }
             this.syncNativeConversationKeys();
             this.updateCryptoKeyDisplay({
                 key: stored,
@@ -234,7 +252,9 @@ ZaliMixin(ZaliInterface, class {
         if (valueEl) valueEl.textContent = currentKey ? `задан (${currentKey.length} символов)` : 'не задан';
         if (metaEl) {
             if (serverId && channelId) {
-                metaEl.textContent = `Контекст: сервер ${serverId} / канал ${channelId}`;
+                // Без идентификаторов: пользователю они ничего не говорят, а канал он
+                // и так видит в шапке чата по имени.
+                metaEl.textContent = 'Контекст: канал сервера';
             } else if (peer) {
                 metaEl.textContent = `Контекст: диалог с ${peer}`;
             } else {
@@ -650,6 +670,15 @@ ZaliMixin(ZaliInterface, class {
             const current = String(nextKeys[scope] || '').trim();
             const next = String(value || '').trim();
             if (!next) continue;
+            // Ключ канала выводится из scope и активным остаётся всегда он. Снимок
+            // облака (в том числе старый, снятый до перехода) кладём только в
+            // кандидаты: иначе он перебивал активный, refreshAfterKey тут же
+            // возвращал выводимый обратно — и канал ходил по кругу, флипая ключ на
+            // каждой синхронизации хранилища.
+            if (this.isServerChannelScope(scope)) {
+                this.addAltConversationKey(nextKeys, scope, next);
+                continue;
+            }
             if (current && current !== next) {
                 // Облачный ключ замещает локальный, но локальный сохраняется как
                 // кандидат расшифровки: если в облако попал не тот ключ (например,
@@ -680,7 +709,9 @@ ZaliMixin(ZaliInterface, class {
     async reconcileVaultScopes(scopes = []) {
         const list = (Array.isArray(scopes) ? scopes : [])
             .map(scope => String(scope || '').trim())
-            .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
+            // `server:` намеренно исключён: у каналов канонического ключа в реестре
+            // нет, он выводится из scope (deriveServerChannelKey).
+            .filter(scope => scope.startsWith('dm:'))
             .slice(0, 200);
         if (!list.length || !this.S.session?.token) return 0;
         const canonical = await this.fetchCanonicalKeyIds(list);

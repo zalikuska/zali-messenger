@@ -163,6 +163,17 @@ ZaliMixin(ZaliInterface, class {
     // directory lookups before publishing anything — and every member that cannot
     // read the channel sends a request of its own.
     async publishConversationKeyToServerMembers({ serverId, channelId, scope, key, keys = null, reason = 'auto' } = {}) {
+        // Больше не рассылает ничего. Ключ канала выводится из его scope
+        // (deriveServerChannelKey), то есть уже есть у каждого участника до всякой
+        // сети — а веерная рассылка конвертов «по устройству на участника» и была
+        // тем механизмом, из-за которого канал читали только те двое, у кого обмен
+        // случайно сошёлся. Метод оставлен заглушкой, чтобы не разбирать по всему
+        // коду ветки republish/takeover, которые его зовут.
+        const scopedForChannel = String(scope || '').trim() || (serverId && channelId ? `server:${String(serverId).trim()}:${String(channelId).trim()}` : '');
+        if (this.isServerChannelScope(scopedForChannel)) {
+            this.trace(`publishConversationKeyToServerMembers skipped reason=${reason} scope=${scopedForChannel} derived_key=true`);
+            return 0;
+        }
         const sid = String(serverId || '').trim();
         const cid = String(channelId || '').trim();
         const scoped = String(scope || '').trim();
@@ -497,6 +508,15 @@ ZaliMixin(ZaliInterface, class {
                 let skippedSame = 0;
                 for (const { scope, payload } of opened) {
                     const current = String(stored[scope] || '').trim();
+                    // Ключ канала выводится локально и активным остаётся всегда он.
+                    // Конверт от старого клиента принимаем только как кандидата на
+                    // расшифровку — иначе он снова уводил бы канал на случайный ключ,
+                    // которого нет у остальных.
+                    if (this.isServerChannelScope(scope)) {
+                        if (this.addAltConversationKey(stored, scope, payload.key)) imported += 1;
+                        else skippedSame += 1;
+                        continue;
+                    }
                     const wantedKeyId = String(canonical.get(scope) || '').trim();
                     const isCanonical = wantedKeyId
                         ? (await this.conversationKeyId(payload.key)) === wantedKeyId
@@ -835,11 +855,21 @@ ZaliMixin(ZaliInterface, class {
         const chatHdrSub = document.getElementById('chatHdrSub');
         if (!chatHdrSub) return;
         const key = this.ensureConversationCryptoKey({ peer, serverId, channelId, reason: 'updateChatHeaderCryptoKey' });
-        const desc = serverId && channelId
-            ? `${String(serverId).trim()} / ${String(channelId).trim()}`
-            : peer
-                ? `Диалог с ${String(peer).trim()}`
-                : 'Личное сообщение';
+        if (serverId && channelId) {
+            // Раньше здесь печатались сырые uuid сервера и канала — пользователю они
+            // не говорят ничего, а занимали две строки шапки. Показываем то же, что
+            // ставит renderServerToolbar: имя сервера и тему канала.
+            const server = this.currentServer();
+            const channel = this.currentChannel();
+            const desc = server
+                ? `${String(server.name || '').trim()}${channel?.topic ? ` · ${String(channel.topic).trim()}` : ''}`
+                : '';
+            // Индикатор ключа тоже убран: у канала ключ выводится из его scope и есть
+            // всегда, сообщать тут было бы не о чем.
+            chatHdrSub.textContent = desc;
+            return;
+        }
+        const desc = peer ? `Диалог с ${String(peer).trim()}` : 'Личное сообщение';
         chatHdrSub.innerHTML = `
             <span class="chat-hdr-desc">${this.esc(desc)}</span>
             <span class="chat-hdr-key">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>

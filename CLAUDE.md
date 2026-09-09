@@ -297,8 +297,38 @@ cargo test --manifest-path server/Cargo.toml   # server integration tests (51 ш
 ### .zali archive format
 Magic header `ZALIMSSG` (8 bytes) + 1-byte protocol version, followed by AES-256-GCM encrypted chunks of 1 MB each. **Nonce per chunk**: `base_nonce[8..12]` += `chunk_index` using **wrapping addition** (not XOR). This matches Swift `addNonceCounter` and Rust `wrapping_add`. PBKDF2-SHA256 at 210 000 iterations for key derivation; always use `Array(password.utf8).count` (not `password.count`) for byte length.
 
-### E2E key exchange
-Conversation-scoped keys are exchanged via ECDH + AES-GCM envelopes. `resolveConversationCryptoKey` in `interface.js` deduplicates concurrent requests via `_resolveKeyInFlight` Map. After decrypting a key envelope, verify `payload.sender` matches the expected peer from the conversation scope.
+### E2E key exchange — только для личных переписок (`dm:`)
+
+Conversation-scoped keys are exchanged via ECDH + AES-GCM envelopes. `resolveConversationCryptoKey`
+in `interface.js` deduplicates concurrent requests via `_resolveKeyInFlight` Map. After decrypting a
+key envelope, verify `payload.sender` matches the expected peer from the conversation scope.
+
+**Каналы серверов (`server:sid:cid`) в этом не участвуют вообще — с 0.2b31.** Их ключ
+**выводится** из scope: `deriveServerChannelKey()` = base64url(SHA-256(`zali-channel-key-v1:` + scope)).
+Никакого реестра, никаких конвертов, никакого ожидания чужого ключа, никакой генерации
+случайного — `_resolveConversationCryptoKeyImpl` уходит в `adoptDerivedChannelKey()` первой же
+строкой.
+
+Почему: канал жил по схеме личной переписки, то есть первый открывший придумывал случайный ключ
+и рассылал его конвертами ECDH — **по одному на устройство каждого участника**. Для двоих это
+работает, для канала нет: доставка зависит от того, зарегистрировано ли устройство получателя,
+дошёл ли конверт и не придумал ли получатель тем временем свой ключ. На практике канал читали
+ровно те двое, у кого обмен случайно сошёлся, остальные видели «Зашифрованное сообщение
+недоступно».
+
+**Это осознанно НЕ сквозное шифрование** (см. «Что остаётся незакрытым»). Кто знает id сервера и
+канала, знает и ключ, а сервер их знает по определению.
+
+Инварианты, которые нельзя потерять (проверяются `crypto_doctor`, блок «channel: three members»):
+- ключ канала одинаков у всех участников **на первом же resolve**, до всякой сходимости;
+- вывод ключа канала не создаёт заявок в `conversation_key_registry` и **не шлёт ни одного
+  конверта** (`publishConversationKeyToServerMembers` — заглушка, `reconcileConversationKey`
+  для `server:`-scope выходит сразу);
+- входящий конверт со старым случайным ключом канала принимается **только как кандидат на
+  расшифровку** (`addAltConversationKey`), активным не становится — иначе старый клиент снова
+  увёл бы канал на ключ, которого нет у остальных;
+- прежний активный ключ канала при переходе не выбрасывается, а демотируется в `alt:` —
+  история, зашифрованная до перехода, остаётся читаемой на том же устройстве.
 
 ### Server (`server/src/`)
 Axum server split into modules (2026-07-07); `main.rs` keeps Config/AppState/router, handlers live in per-domain modules (see Project Structure). Key invariants established by recent security fixes:
@@ -800,6 +830,12 @@ SHA-256-отпечаток, а не ключ. Легаси-таблица `conve
   (прочитать текст по-прежнему не может).
 - **CSP для standalone-веба.** `msg.zalikus.org` раздаёт nginx, `security_headers` из
   этого репозитория к нему не применяются.
+- **Каналы серверов шифруются не сквозно (с 0.2b31, решение принято сознательно).** Ключ
+  канала выводится из его scope (`deriveServerChannelKey`), то есть вычисляется любым, кто
+  знает id сервера и канала — включая сам сервер. Шифрование там защищает архив в покое и на
+  транспорте, но не от сервера. Разменяно на работоспособность: сквозная схема с конвертами
+  на канал не доезжала до большинства участников, и канал читали только двое. Личные
+  переписки (`dm:`) остались сквозными.
 
 ## Приоритеты при исправлении багов
 

@@ -267,6 +267,7 @@ console.log('\n== channel: three members ==');
     const args = { serverId: 'srv1', channelId: 'chan1' };
     const scope = 'server:srv1:chan1';
 
+    const envelopesBefore = backend.envelopes.length;
     const messages = [];
     let n = 0;
     for (const d of [a, b, c]) {
@@ -275,8 +276,23 @@ console.log('\n== channel: three members ==');
         messages.push({ n: ++n, from: d.user, key });
     }
 
-    record('channel scope gets exactly one canonical key', backend.registry.size === 1,
-        `registry=${[...backend.registry.keys()].join(',')}`);
+    // Ключ канала выводится из scope, а не разыгрывается и не согласуется. Значит
+    // сходиться не с чем и нечему: три участника обязаны получить один и тот же
+    // ключ сразу, ДО всякого converge/recover — именно это раньше и ломалось, когда
+    // канал жил на случайном ключе и веере конвертов.
+    const firstKeys = messages.map(m => m.key);
+    record('every member derives the same channel key on first resolve',
+        new Set(firstKeys).size === 1 && firstKeys.every(Boolean),
+        firstKeys.map(k => String(k).slice(0, 8)).join(' '));
+    record('deriving a channel key claims nothing in the canonical registry',
+        ![...backend.registry.keys()].some(k => String(k).startsWith('server:')),
+        `registry=${[...backend.registry.keys()].join(',') || '(empty)'}`);
+    record('deriving a channel key sends no key envelopes',
+        backend.envelopes.length === envelopesBefore,
+        `envelopes ${envelopesBefore} -> ${backend.envelopes.length}`);
+    const badImmediately = unreadable(messages, [a, b, c], scope);
+    record('every member reads every channel message with no recovery at all',
+        badImmediately.length === 0, badImmediately.join('; '));
 
     await converge(backend, [a, b, c], () => args, 5);
     await recoverUnreadable(backend, [a, b, c], messages, scope);
