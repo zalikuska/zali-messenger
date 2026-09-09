@@ -83,6 +83,30 @@ else
     exit 1
 fi
 
+# 4c. Rust-ядро внутрь бандла.
+#
+# `core` собирается сразу как cdylib+staticlib, и линкер по `-l` предпочитает
+# .dylib — то есть бинарник получает зависимость на
+# `<repo>/core/target/release/deps/libzali_messenger_core.dylib` ПО АБСОЛЮТНОМУ
+# ПУТИ. На машине сборки это незаметно, а у любого, кто скачает релиз, dyld не
+# найдёт библиотеку и приложение не стартует вообще. Кладём её в
+# Contents/Frameworks и переписываем ссылку на @rpath.
+CORE_DYLIB_NAME="libzali_messenger_core.dylib"
+CORE_DYLIB_SRC="$PROJECT_ROOT/core/target/release/$CORE_DYLIB_NAME"
+LINKED_CORE="$(otool -L "$APP_BUNDLE/Contents/MacOS/$APP_NAME" | awk '/zali_messenger_core/ {print $1; exit}')"
+if [ -n "$LINKED_CORE" ]; then
+    if [ ! -f "$CORE_DYLIB_SRC" ]; then
+        echo "❌ Бинарник ссылается на $LINKED_CORE, а $CORE_DYLIB_SRC не найден"
+        exit 1
+    fi
+    mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+    cp "$CORE_DYLIB_SRC" "$APP_BUNDLE/Contents/Frameworks/$CORE_DYLIB_NAME"
+    install_name_tool -id "@rpath/$CORE_DYLIB_NAME" "$APP_BUNDLE/Contents/Frameworks/$CORE_DYLIB_NAME"
+    install_name_tool -change "$LINKED_CORE" "@rpath/$CORE_DYLIB_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+    echo "📦 Rust-ядро вложено в бандл: Contents/Frameworks/$CORE_DYLIB_NAME"
+fi
+
 # 5. Создание Info.plist
 cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -132,6 +156,15 @@ else
     echo "⚠️  Сертификат '$SIGN_IDENTITY' не найден в Keychain — подписываем ad-hoc."
     echo "   Push-уведомления не будут работать (UNErrorDomain error 1). См. CLAUDE.md."
     codesign --force --deep --sign - "$APP_BUNDLE"
+fi
+
+# 7. Бандл обязан быть самодостаточным: ни одной ссылки на пути этого репозитория.
+# tail -n +2 — первая строка вывода otool это путь к самому файлу, не зависимость.
+LEAKED="$(otool -L "$APP_BUNDLE/Contents/MacOS/$APP_NAME" | tail -n +2 | grep -F "$PROJECT_ROOT" || true)"
+if [ -n "$LEAKED" ]; then
+    echo "❌ Бандл ссылается на пути вне себя — на другой машине не запустится:"
+    echo "$LEAKED"
+    exit 1
 fi
 
 echo "✅ Готово! Приложение создано: $APP_BUNDLE"
