@@ -79,6 +79,15 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; The exe isn't tracked via [Files] (it's downloaded, not bundled), so it
 ; needs an explicit uninstall-delete entry or the uninstaller would leave it behind.
 Type: files; Name: "{app}\{#MyAppExeName}"
+; Профиль WebView2 (localStorage, IndexedDB, куки, HTTP-кэш). Каталог создаёт сам
+; движок, [Files] о нём не знает — без этих строк он переживает деинсталляцию.
+; Второй путь — старое, до 0.2b32, место профиля рядом с exe; удаляем и его, чтобы
+; после обновления и последующего удаления ничего не осталось.
+Type: filesandordirs; Name: "{localappdata}\ZaliMessenger\WebView2"
+Type: filesandordirs; Name: "{app}\{#MyAppExeName}.WebView2"
+; native_config.json намеренно НЕ удаляется: там лежат ключи разговоров и
+; идентичность устройства. Снести их — значит осиротить конверты, адресованные
+; этому устройству, у всех собеседников.
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: postinstall nowait skipifsilent unchecked

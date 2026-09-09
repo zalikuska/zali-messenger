@@ -412,7 +412,52 @@ fn main() -> wry::Result<()> {
     let message_bridge_for_ipc = Arc::clone(&message_bridge);
     let proxy_for_ipc = proxy.clone();
 
-    let webview = WebViewBuilder::new(&window)
+    // WebView2 нужен писуемый каталог под профиль Chromium (localStorage,
+    // IndexedDB, куки, HTTP-кэш, crashpad). Если его не задать, движок берёт
+    // умолчание — `<путь к exe>\<имя exe>.WebView2`, то есть кладёт всё состояние
+    // клиента рядом с бинарником. Это не косметика:
+    //   * профиль привязан к МЕСТУ запуска, поэтому запуск скачанного exe и
+    //     установленного даёт два независимых localStorage с разными device_id, а
+    //     конверты с ключами при этом адресуются мёртвому устройству;
+    //   * при перемещении/переустановке профиль остаётся позади мусором, и
+    //     деинсталлятор о нём не знает;
+    //   * из нераспиcуемого каталога (Program Files, сетевой шар, распакованный
+    //     zip во временной папке) окружение WebView2 не создаётся вовсе, и
+    //     приложение не стартует.
+    // Кладём профиль туда же, где уже лежит native_config.json.
+    #[cfg(target_os = "windows")]
+    let mut web_context = {
+        let dir = NativeState::app_data_dir().join("WebView2");
+        // Разовый переезд со старого места. Ключи разговоров и device identity
+        // переживают потерю профиля сами (они в native_config.json и инжектятся в
+        // документ при старте), но кэш сообщений на Windows живёт только в
+        // localStorage — без переноса история один раз перекачалась бы целиком.
+        if !dir.exists() {
+            if let Some(legacy) = std::env::current_exe().ok().and_then(|exe| {
+                let name = exe.file_name()?.to_string_lossy().into_owned();
+                Some(exe.parent()?.join(format!("{name}.WebView2")))
+            }) {
+                if legacy.is_dir() {
+                    if let Some(parent) = dir.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match std::fs::rename(&legacy, &dir) {
+                        Ok(()) => info!("WebView2 profile migrated from {}", legacy.display()),
+                        // Не фатально: не переехало — стартуем с чистого профиля,
+                        // потеряв только кэш.
+                        Err(error) => error!(
+                            "WebView2 profile migration from {} failed: {}",
+                            legacy.display(),
+                            error
+                        ),
+                    }
+                }
+            }
+        }
+        wry::WebContext::new(Some(dir))
+    };
+
+    let webview_builder = WebViewBuilder::new(&window)
         .with_initialization_script(&init_script)
         // Lets F12 / right-click → Inspect open WebView2 DevTools so JS-side
         // trace()/console logs (e.g. publishConversationKeyToPeer failures) are
@@ -466,8 +511,12 @@ fn main() -> wry::Result<()> {
                 Arc::clone(&runtime_for_ipc),
                 proxy_for_ipc.clone(),
             );
-        })
-        .build()?;
+        });
+
+    #[cfg(target_os = "windows")]
+    let webview_builder = webview_builder.with_web_context(&mut web_context);
+
+    let webview = webview_builder.build()?;
 
     // Window focus (window.set_focus()) and WebView2's own child-HWND focus are
     // tracked separately on Windows — the OS window can be active while the
