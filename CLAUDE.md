@@ -171,6 +171,16 @@ compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`.
    `apps/windows/src/native.rs` (Windows) — **not** `apps/windows/Cargo.toml`'s `version`, which is unrelated
    (bump it too, but only so Cargo has something monotonic; nobody compares it). Обе платформы сейчас
    идут одним номером — `0.2b11` (см. «Состояние миграции» выше).
+> **Ловушка, стоившая всех прежних macOS-релизов (найдена 2026-09-09).** `core`
+> собирается как cdylib+staticlib, и линкер по `-l` предпочитает `.dylib` — бинарник
+> получает зависимость на `<repo>/core/target/release/deps/libzali_messenger_core.dylib`
+> **по абсолютному пути**. На машине сборки это незаметно, у скачавшего релиз dyld
+> библиотеку не находит и приложение не стартует вообще. `build_app.sh` теперь кладёт
+> её в `Contents/Frameworks`, переписывает на `@rpath` и **после подписи проверяет**, что
+> среди зависимостей не осталось путей внутрь репозитория (иначе падает). Не убирать эту
+> проверку: поломка видна только на чужой машине. Признак старой сборки — zip ~1.2 МБ
+> вместо ~1.5 МБ.
+
 2. Build the client(s) — `./scripts/build_app.sh`, and for Windows either `scripts/build_windows_app.ps1`
    on Windows or a cross-build from macOS (see «Windows Build Distribution»). Pack the macOS `.app`
    with `ditto -c -k --keepParent` — `UpdateService.installAndRelaunch` unpacks with `ditto` and looks
