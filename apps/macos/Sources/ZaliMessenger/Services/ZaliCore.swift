@@ -131,8 +131,7 @@ class ZaliCore {
     
     /// Sends a JSON-serialized command payload to the Rust ZaliBus and returns the result.
     func dispatch(addressCommand: String, args: [String: Any]) -> [String: Any]? {
-        guard let argsData = try? JSONSerialization.data(withJSONObject: args, options: []),
-              let argsStr = String(data: argsData, encoding: .utf8) else {
+        guard let argsStr = zaliJSONString(args) else {
             return ["success": false, "error": "Failed to serialize arguments to JSON"]
         }
         
@@ -202,7 +201,7 @@ class ZaliCore {
         if let result = dispatch(addressCommand: "zali_net:unpack_message", args: args),
            let success = result["success"] as? Bool, success,
            let data = result["data"] {
-            guard let json = try? JSONSerialization.data(withJSONObject: data, options: []),
+            guard let json = zaliJSONData(data),
                   let payload = try? JSONDecoder().decode(MessagePayload.self, from: json) else {
                 return nil
             }

@@ -477,10 +477,8 @@ struct WebView {
         /// all: this exists to save CPU, and it must not become a memory sink.
         private func cacheDecryptedMessage(_ messageId: String, _ entry: [String: Any]) {
             guard !messageId.isEmpty else { return }
-            if let data = try? JSONSerialization.data(withJSONObject: entry, options: []),
-               data.count > Coordinator.decryptedCacheMaxEntryBytes {
-                return
-            }
+            guard let data = zaliJSONData(entry) else { return }
+            if data.count > Coordinator.decryptedCacheMaxEntryBytes { return }
             decryptCacheLock.lock()
             defer { decryptCacheLock.unlock() }
             if decryptedMessageCache[messageId] == nil {
@@ -1098,7 +1096,14 @@ struct WebView {
                         "reply": unpacked.reply ?? "",
                         "attachments": renderedAttachments,
                         "timestamp": record.timestamp,
-                        "reactions": record.reactions ?? [],
+                        // Flattened to plain JSON types on purpose. `record.reactions` is
+                        // [RemoteReactionSummary] — a Codable struct with no Foundation
+                        // bridge, so leaving it here boxed each element as __SwiftValue and
+                        // made every serialization of this payload raise an ObjC exception
+                        // (see zaliJSONData). It also meant reactions never reached the UI
+                        // on history load: javascriptLiteral's isValidJSONObject guard
+                        // turned the whole message into `null`.
+                        "reactions": (record.reactions ?? []).map { ["emoji": $0.emoji, "count": $0.count] },
                         "myReactions": record.myReactions ?? []
                     ]
                     self.cacheDecryptedMessage(messageId, result)
@@ -1344,8 +1349,7 @@ struct WebView {
 
                 case .savePendingOutbox: do {
                     let items = dict["items"] as? [[String: Any]] ?? []
-                    if let data = try? JSONSerialization.data(withJSONObject: items, options: []),
-                       let json = String(data: data, encoding: .utf8) {
+                    if let json = zaliJSONString(items) {
                         NetworkService.shared.savePendingOutboxJSON(json)
                     } else {
                         NetworkService.shared.savePendingOutboxJSON("[]")
@@ -2286,9 +2290,7 @@ struct WebView {
             return json
         }
 
-        guard JSONSerialization.isValidJSONObject(value),
-              let data = try? JSONSerialization.data(withJSONObject: value, options: []),
-              let json = String(data: data, encoding: .utf8) else {
+        guard let json = zaliJSONString(value) else {
             return "null"
         }
         return json

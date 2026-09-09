@@ -320,8 +320,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         connectionQueue.async { [weak self] in
             guard let self else { return }
             let json: String
-            if let data = try? JSONSerialization.data(withJSONObject: object, options: []),
-               let encoded = String(data: data, encoding: .utf8) {
+            if let encoded = zaliJSONString(object) {
                 json = encoded
             } else {
                 json = #"{"chats":{},"serverChats":{}}"#
@@ -730,8 +729,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 return
             }
 
-            guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-                  let text = String(data: data, encoding: .utf8) else {
+            guard let text = zaliJSONString(payload) else {
                 completion?(false)
                 return
             }
@@ -767,8 +765,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         guard let task = voiceWebSocketTask else { return }
         guard let item = voicePendingQueue.first else { return }
 
-        guard let data = try? JSONSerialization.data(withJSONObject: item.payload, options: []),
-              let text = String(data: data, encoding: .utf8) else {
+        guard let text = zaliJSONString(item.payload) else {
             // Malformed payload — drop just this one and keep draining the rest.
             voicePendingQueue.removeFirst()
             item.completion?(false)

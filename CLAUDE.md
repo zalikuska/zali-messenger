@@ -383,19 +383,34 @@ Append-only журнал **событий** сообщений: на каждо�
   (`ensureReactionMenu`), полоса контекста композера — `#composerContext`.
 
 ### macOS client (`apps/macos/`)
-- **Окно — чистый AppKit, SwiftUI в нём нет и быть не должно** (с 0.2b29). `WKWebView`
-  добавляется подвидом в `contentView` окна, созданного руками в `AppDelegate`; меню
-  строится программно (`installMainMenu()`), иначе в WKWebView не работают Cmd+C/V/X/A/Q.
-  Это не вкусовщина, а фикс жёсткого краша: WebKit вешает на вебвью tracking area
-  `WKMouseTrackingObserver`, и на **каждое** перемещение мыши дёргает `-hitTest:` у
-  `contentView` окна. Пока им был `NSHostingView`, этот hit-test заходил в
-  responder-машинерию SwiftUI, где геттер `NSViewResponder.platformCurrentEvent` идёт
-  через `MainActor.assumeIsolated` — а на macOS 27 (26A5425a) этот вызов разыменовывает
-  мусорный указатель исполнителя и падает с SIGSEGV (`swift_getObjectType` ←
-  `swift_task_isMainExecutorImpl`). Приложение падало через считанные секунды после
-  запуска, стоило подвести курсор. `SwiftUI.framework` больше не линкуется в бинарник
-  вообще — это и есть проверка (`otool -L`), что путь недостижим. **Не возвращать
-  `NSViewRepresentable`/`WindowGroup` в macOS-клиент.**
+- **Никогда не отдавать `JSONSerialization.data(withJSONObject:)` граф типа `Any` напрямую
+  — только через `zaliJSONData`/`zaliJSONString` (`Services/JSONSafe.swift`).** Эта функция
+  не бросает Swift-ошибку на непригодном значении, а **поднимает ObjC-исключение**
+  `NSInvalidArgumentException` (`Invalid type in JSON write (__SwiftValue)`): любой
+  Swift-struct/enum, попавший в `[String: Any]`, приезжает к писателю как `__SwiftValue`.
+  `try?` это НЕ ловит, и Swift вообще не может — исключение разматывает стек прямо сквозь
+  Swift-кадры. Если эти кадры принадлежат `async`-функции, размотка бросает на полпути
+  пер-тредовое состояние рантайма конкурентности, и дальше **любой**
+  `swift_task_isCurrentExecutorWithFlags` в процессе читает мусорный executor и падает —
+  причём падает тот, кто спросит следующим: hit-test SwiftUI, mouse tracking WebKit,
+  жест-распознаватели AppKit, системное меню-бар.
+  Так выглядела волна крашей 2026-09-09: `[RemoteReactionSummary]` (обычный Codable-struct)
+  клали в payload истории в `renderHistoryRecord`, а сериализовали в дочерней задаче
+  `withTaskGroup`. Пять отчётов — пять несвязанных стеков, ни один рядом с настоящей
+  ошибкой не лежал. Мораль: **проверка `isValidJSONObject` обязана быть ДО вызова**, и в
+  `[String: Any]` для JS кладём только String/Number/Bool/Array/Dictionary — Codable-модели
+  разворачиваем в словари руками. Побочно: то же самое молча теряло реакции в истории,
+  потому что `javascriptLiteral` на невалидном графе отдаёт `null`.
+- **Окно — чистый AppKit, SwiftUI в нём нет** (с 0.2b29). Это НЕ было лечением тех крашей
+  (лечение — пункт выше), но убирает целый класс поражаемых мест: `WKWebView` добавляется
+  подвидом в `contentView` окна, созданного руками в `AppDelegate`, меню строится
+  программно (`installMainMenu()`), иначе в WKWebView не работают Cmd+C/V/X/A/Q. Пока
+  `contentView` был `NSHostingView`, WebKit на **каждое** движение мыши гонял через
+  `-hitTest:` всю responder-машинерию SwiftUI — и когда рантайм конкурентности был уже
+  сломан, падало именно там. Теперь `SwiftUI.framework` не линкуется в бинарник вообще
+  (`otool -L`), и заодно исчезает полный SwiftUI hit-test на каждое движение мыши в окне,
+  которое целиком вебвью. **Не возвращать `NSViewRepresentable`/`WindowGroup` в
+  macOS-клиент.**
 - IPC: `WKScriptMessageHandler.userContentController` in `WebView.swift`; all handlers guard `message.frameInfo.isMainFrame`
 - Crypto key is stored in a **plain file** (`Coordinator.saveLegacyCryptoKey` / `loadLegacyCryptoKey`, `~/Library/Application Support/ZaliMessenger/legacy_crypto_key.txt`), not Keychain and never UserDefaults. Keychain was removed 2026-07-03: `build_app.sh` never code-signs with a stable identity, so its ad-hoc signature changes on every rebuild — the Keychain ACL then treats each rebuild as "a different app," reprompting for consent on every launch. Do not reintroduce Keychain here (see project memory `feedback_no_keychain`)
 - Camera/mic permission (`requestMediaCapturePermissionFor`) is granted only for `localhost`/`127.0.0.1` origins from the main frame
