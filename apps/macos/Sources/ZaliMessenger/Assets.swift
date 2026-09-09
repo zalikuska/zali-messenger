@@ -2010,7 +2010,16 @@ body[data-nav-mode="servers"] .contacts {
    and no separate camera strip competing with it. */
 .voice-tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    /* Capped at 220px (not 1fr) and centered: this grid is embedded inline in
+       the message flow (ringing/idle .voice-room-card), not a fullscreen call
+       stage — with few participants, 1fr stretched each tile to fill the
+       chat's full width, and at aspect-ratio 16/10 that made tiles hundreds of
+       pixels tall just to show a static avatar while ringing, ballooning the
+       card and forcing extra scroll. The real fullscreen stage
+       (.voice-call-expanded-grid .voice-tiles below) overrides this with its
+       own wider minmax and isn't affected. */
+    grid-template-columns: repeat(auto-fit, minmax(190px, 220px));
+    justify-content: center;
     gap: 10px;
 }
 
@@ -8383,6 +8392,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 
+"""#,
+    #"""
 /* ============================================================
    ПРОФИЛИ ЛЮДЕЙ
    Оверлей профиля, вкладки, комментарии, друзья и векторная
@@ -8403,8 +8414,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     position: absolute;
     /* .ava (the avatar right behind it) sets z-index:1 and creates its own
        stacking context — without a z-index here higher than that, the badge
-"""#,
-    #"""
        (z-index:auto) paints BELOW the avatar despite coming later in the DOM,
        so it was getting covered instead of overlapping the corner. */
     z-index: 2;

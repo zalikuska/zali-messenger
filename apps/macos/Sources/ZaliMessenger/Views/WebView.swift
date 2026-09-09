@@ -1,4 +1,3 @@
-import SwiftUI
 import WebKit
 import AppKit
 import CoreBridge
@@ -22,7 +21,7 @@ class ZaliNativeWebView: WKWebView {
     }
 }
 
-struct WebView: NSViewRepresentable {
+struct WebView {
     class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         // In-flight SEND_MESSAGE clientId guard, mirroring Windows' in_flight_send_client_ids
         // (native.rs). Without it a rapid double-trigger (double Enter, a retry racing the
@@ -2050,13 +2049,13 @@ struct WebView: NSViewRepresentable {
         return "window.__ZALI_BRIDGE_PROTOCOL__ = {\"version\":1,\"messages\":{}};"
     }
     
-    func makeNSView(context: Context) -> WKWebView {
+    func makeWebView(coordinator: Coordinator) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.userContentController.add(context.coordinator, name: "nativeApp")
+        config.userContentController.add(coordinator, name: "nativeApp")
         // Debug log capture: mirror every JS console.* call to a file on disk
         // (~/Library/Application Support/ZaliMessenger/zali-debug.log) so the whole
         // in-app journal is readable without copy-pasting from the UI.
-        config.userContentController.add(context.coordinator, name: "zaliLog")
+        config.userContentController.add(coordinator, name: "zaliLog")
         let consoleHook = """
         (function(){
           if (window.__zaliConsoleHooked) return; window.__zaliConsoleHooked = true;
@@ -2165,10 +2164,9 @@ struct WebView: NSViewRepresentable {
         config.userContentController.addUserScript(WKUserScript(source: messageCacheBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
         let webView = ZaliNativeWebView(frame: .zero, configuration: config)
-        context.coordinator.webView = webView
-        let coordinator = context.coordinator
-        webView.navigationDelegate = context.coordinator
-        webView.uiDelegate = context.coordinator
+        coordinator.webView = webView
+        webView.navigationDelegate = coordinator
+        webView.uiDelegate = coordinator
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
         webView.configuration.allowsAirPlayForMediaPlayback = true
@@ -2296,14 +2294,4 @@ struct WebView: NSViewRepresentable {
         return json
     }
     
-    func updateNSView(_ nsView: WKWebView, context: Context) {
-        DispatchQueue.main.async {
-            if let window = nsView.window {
-                window.titlebarAppearsTransparent = true
-                window.titleVisibility = .hidden
-                window.styleMask.insert(.fullSizeContentView)
-                window.isMovableByWindowBackground = true
-            }
-        }
-    }
 }

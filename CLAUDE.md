@@ -281,7 +281,7 @@ cargo test --manifest-path server/Cargo.toml   # server integration tests (51 ш
 |---|---|
 | `server/src/` | Axum server, split into modules: `main.rs`/`lib.rs` (config, AppState, router wiring, middlewares), `models.rs` (DTOs/records), `auth.rs`, `contacts.rs`, `servers.rs`, `channels.rs`, `roles.rs`, `messages.rs`, `assets.rs`, `realtime.rs` (WS), `storage.rs` (migrations/seeding), `util.rs`, `devices.rs`, `voice.rs`, `push.rs` (Web Push/VAPID), `updates.rs` (`/api/version` + публичный `/releases/:filename`), `conversation_keys.rs` (серверный реестр ключей разговоров), `hash_chain.rs` (append-only цепочка хэшей сообщений переписки + `.zali`-экспорт). Модули реэкспортируются в корень крейта (`pub(crate) use x::*;`), поэтому `use crate::{...}` работает отовсюду |
 | `web/src/interface.js` + `web/src/interface/` | Entire web UI (~21 500 строк), общий для браузера и нативных WebView. `interface.js` — только каркас класса `ZaliInterface` (конструктор, `init()`) плюс карта частей; тело разложено по 36 доменным файлам в `web/src/interface/`, подключаемым через `ZaliMixin` (`web/src/mixin.js`). Список и порядок файлов — `web/src/manifest.json` |
-| `apps/macos/` | SwiftUI app (Swift Package Manager); wraps WKWebView. **Основной macOS-клиент** |
+| `apps/macos/` | AppKit app (Swift Package Manager); wraps WKWebView, без SwiftUI — см. «macOS client». **Основной macOS-клиент** |
 | `apps/windows/src/native.rs` + `apps/windows/src/native/` | Rust desktop shell (WRY/TAO). `native.rs` держит NativeState/bridges и центральный `handle_ipc_message`; подмодули `native/{http,cache,keyring,util,transport,api,messages}.rs` — HTTP-клиенты, кэш расшифровки, keyring, санитайзеры, WS-транспорты, API-запросы, конвейер сообщений. Кроссплатформенный: собирается для Windows (`scripts/build_windows_app.ps1`, основной путь) и как **экспериментальный** macOS-шелл (`scripts/build_macos_rust_app.sh`, см. ниже) |
 | `core/` | Rust core library compiled to static `.a` for macOS FFI |
 | `sdk/Rust/` | Archive format SDK; used by server and Windows client |
@@ -383,6 +383,19 @@ Append-only журнал **событий** сообщений: на каждо�
   (`ensureReactionMenu`), полоса контекста композера — `#composerContext`.
 
 ### macOS client (`apps/macos/`)
+- **Окно — чистый AppKit, SwiftUI в нём нет и быть не должно** (с 0.2b29). `WKWebView`
+  добавляется подвидом в `contentView` окна, созданного руками в `AppDelegate`; меню
+  строится программно (`installMainMenu()`), иначе в WKWebView не работают Cmd+C/V/X/A/Q.
+  Это не вкусовщина, а фикс жёсткого краша: WebKit вешает на вебвью tracking area
+  `WKMouseTrackingObserver`, и на **каждое** перемещение мыши дёргает `-hitTest:` у
+  `contentView` окна. Пока им был `NSHostingView`, этот hit-test заходил в
+  responder-машинерию SwiftUI, где геттер `NSViewResponder.platformCurrentEvent` идёт
+  через `MainActor.assumeIsolated` — а на macOS 27 (26A5425a) этот вызов разыменовывает
+  мусорный указатель исполнителя и падает с SIGSEGV (`swift_getObjectType` ←
+  `swift_task_isMainExecutorImpl`). Приложение падало через считанные секунды после
+  запуска, стоило подвести курсор. `SwiftUI.framework` больше не линкуется в бинарник
+  вообще — это и есть проверка (`otool -L`), что путь недостижим. **Не возвращать
+  `NSViewRepresentable`/`WindowGroup` в macOS-клиент.**
 - IPC: `WKScriptMessageHandler.userContentController` in `WebView.swift`; all handlers guard `message.frameInfo.isMainFrame`
 - Crypto key is stored in a **plain file** (`Coordinator.saveLegacyCryptoKey` / `loadLegacyCryptoKey`, `~/Library/Application Support/ZaliMessenger/legacy_crypto_key.txt`), not Keychain and never UserDefaults. Keychain was removed 2026-07-03: `build_app.sh` never code-signs with a stable identity, so its ad-hoc signature changes on every rebuild — the Keychain ACL then treats each rebuild as "a different app," reprompting for consent on every launch. Do not reintroduce Keychain here (see project memory `feedback_no_keychain`)
 - Camera/mic permission (`requestMediaCapturePermissionFor`) is granted only for `localhost`/`127.0.0.1` origins from the main frame

@@ -1984,7 +1984,16 @@ body[data-nav-mode="servers"] .contacts {
    and no separate camera strip competing with it. */
 .voice-tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    /* Capped at 220px (not 1fr) and centered: this grid is embedded inline in
+       the message flow (ringing/idle .voice-room-card), not a fullscreen call
+       stage — with few participants, 1fr stretched each tile to fill the
+       chat's full width, and at aspect-ratio 16/10 that made tiles hundreds of
+       pixels tall just to show a static avatar while ringing, ballooning the
+       card and forcing extra scroll. The real fullscreen stage
+       (.voice-call-expanded-grid .voice-tiles below) overrides this with its
+       own wider minmax and isn't affected. */
+    grid-template-columns: repeat(auto-fit, minmax(190px, 220px));
+    justify-content: center;
     gap: 10px;
 }
 
