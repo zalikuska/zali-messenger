@@ -262,6 +262,13 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
+        // Аватарки и иконки серверов поднимаются с диска ДО первого кадра —
+        // ради этого постоянный кеш и существует. Прогрев идёт по текущему
+        // аккаунту, поэтому его место здесь, где S.session уже переставлен,
+        // и до renderSidebarProfile()/renderContacts() ниже.
+        void this.primeAssetCacheFromDisk();
+        void this.hydrateAttachmentPayloadsFromCache();
+
         this.updateAuthView();
         const overlay = document.getElementById('authOverlay');
         if (overlay && token) {

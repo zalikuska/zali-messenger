@@ -26,16 +26,16 @@
     --red: #ff4d6d;
     --accent-rgb: 203,255,0;
     --r-msg: 18px;
-    --contact-suggest-bg: rgba(8,10,14,.98);
-    --contact-suggest-border: rgba(255,255,255,.18);
-    --contact-suggest-shadow: 0 22px 48px rgba(0,0,0,.42);
+    --contact-suggest-bg: var(--menu-bg);
+    --contact-suggest-border: var(--menu-border);
+    --contact-suggest-shadow: var(--menu-shadow);
     --contact-suggest-max-h: 340px;
-    --contact-suggest-pad: 12px;
-    --contact-suggest-gap: 8px;
-    --contact-suggest-item-pad-y: 12px;
-    --contact-suggest-item-pad-x: 12px;
-    --contact-suggest-font: 14px;
-    --contact-suggest-hint: rgba(255,255,255,.58);
+    --contact-suggest-pad: 6px;
+    --contact-suggest-gap: 1px;
+    --contact-suggest-item-pad-y: 8px;
+    --contact-suggest-item-pad-x: 8px;
+    --contact-suggest-font: 13.5px;
+    --contact-suggest-hint: rgba(255,255,255,.42);
     --msg-gap: 2;
     --titlebar-h: 40px;
     --control-h: 40px;
@@ -50,6 +50,31 @@
        the browser's default "ease" instead, which decelerates less and reads
        as slightly stiffer next to those. One shared curve everywhere. */
     --ease-out: cubic-bezier(.2,.8,.2,1);
+    /* Всплывающие поверхности. Контекстное меню контакта, пикер реакций и
+       автодополнение контактов — три разных слоя, которые пользователь
+       видит поверх одного и того же интерфейса; пока у каждого были свой
+       фон, радиус и тень, они читались как куски разных приложений.
+       Теперь это один набор токенов: правка здесь меняет все три. */
+    --menu-bg: rgba(17,19,24,.88);
+    --menu-border: rgba(255,255,255,.10);
+    --menu-shadow: 0 24px 64px -16px rgba(0,0,0,.72), 0 2px 10px rgba(0,0,0,.34);
+    --menu-blur: blur(22px) saturate(150%);
+    --menu-radius: 14px;
+    --menu-item-radius: 9px;
+    /* Наведение в меню — нейтральная подсветка, а не акцентная заливка:
+       акцент в списке из пяти пунктов красит их все и перестаёт что-либо
+       выделять. Цветным в меню остаётся только опасное действие. */
+    --menu-hover: rgba(255,255,255,.075);
+    --menu-press: rgba(255,255,255,.12);
+    --menu-icon: rgba(255,255,255,.42);
+}
+
+/* Общая анимация появления для всех всплывающих меню: короткая, из точки
+   привязки (--menu-origin ставит JS по месту клика), без «прыжка» — меню
+   должно догонять курсор, а не разворачиваться на пол-экрана. */
+@keyframes menu-pop {
+    from { opacity: 0; transform: scale(.965) translateY(-3px); }
+    to   { opacity: 1; transform: none; }
 }
 
 * {
@@ -852,44 +877,55 @@ body[data-ui-v2="on"] .mode-switch {
     border: 1px solid var(--contact-suggest-border);
     border-radius: 12px;
     background: var(--contact-suggest-bg);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
     box-shadow: var(--contact-suggest-shadow);
     animation: suggest-drop .18s ease-out;
 }
 
 .contact-suggest-empty {
-    padding: 12px 14px;
-    border: 1px dashed rgba(255,255,255,.16);
-    border-radius: 10px;
+    padding: 14px 12px;
+    border: none;
+    border-radius: var(--menu-item-radius);
     color: var(--text2);
     font-size: 13px;
     line-height: 1.4;
-    background: rgba(255,255,255,.03);
+    background: transparent;
+    text-align: center;
 }
 
+/* Строка подсказки — такой же прозрачный ряд, как пункт контекстного меню:
+   выпадающий список из залитых плашек читается как отдельная карточка на
+   каждого человека, хотя это один список с одним выбором. */
 .contact-suggest-item {
     display: grid;
-    grid-template-columns: 34px 1fr auto;
+    grid-template-columns: 30px 1fr auto;
     gap: 10px;
     align-items: center;
     width: 100%;
     padding: var(--contact-suggest-item-pad-y) var(--contact-suggest-item-pad-x);
-    border: 1px solid transparent;
-    border-radius: 10px;
-    background: rgba(255,255,255,.05);
+    border: none;
+    border-radius: var(--menu-item-radius);
+    background: transparent;
     color: var(--text);
     cursor: pointer;
     text-align: left;
-    transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out);
+    transition: background .12s var(--ease-out);
 }
 
-.contact-suggest-item:hover {
-    background: rgba(255,255,255,.1);
-    border-color: rgba(var(--accent-rgb),.28);
+.contact-suggest-item:hover,
+.contact-suggest-item:focus-visible {
+    background: var(--menu-hover);
+    outline: 0;
+}
+
+.contact-suggest-item:active {
+    background: var(--menu-press);
 }
 
 .contact-suggest-ava {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     display: grid;
     place-items: center;
     border-radius: 50%;
@@ -904,8 +940,8 @@ body[data-ui-v2="on"] .mode-switch {
 }
 
 .contact-suggest-name {
-    font-weight: 800;
-    line-height: 1.1;
+    font-weight: 600;
+    line-height: 1.15;
     font-size: var(--contact-suggest-font);
 }
 
@@ -915,11 +951,20 @@ body[data-ui-v2="on"] .mode-switch {
     font-size: 11px;
 }
 
+/* Плюс проявляется под курсором. Постоянно горящий акцент в каждой строке
+   списка ничего не сообщает: подсказки все одинаково добавляемые. */
 .contact-suggest-plus {
-    color: var(--lime);
-    font-size: 20px;
-    font-weight: 900;
+    color: var(--text3);
+    font-size: 17px;
+    font-weight: 500;
     line-height: 1;
+    padding-right: 4px;
+    transition: color .12s var(--ease-out);
+}
+
+.contact-suggest-item:hover .contact-suggest-plus,
+.contact-suggest-item:focus-visible .contact-suggest-plus {
+    color: var(--lime);
 }
 
 .contacts {
@@ -1803,8 +1848,15 @@ body[data-nav-mode="servers"] .contacts {
     flex: 0 0 auto;
     scroll-snap-align: start;
     transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
-    content-visibility: auto;
-    contain-intrinsic-size: 44px;
+    /* Здесь НЕ должно быть content-visibility: auto. В вертикальном списке
+       (.contact) заглушка подменяет высоту, ширину задаёт контейнер — там это
+       безопасно. Канал же лежит в ГОРИЗОНТАЛЬНОЙ ленте, где ширина зависит от
+       длины названия: у пропущенного отрисовку канала она становится
+       заглушечной (44px вместо 66–160), и стоит ему въехать в видимую часть,
+       как он меняет ширину и сдвигает все следующие. У края ленты это
+       зацикливается — чип раздался, уехал за границу, снова пропущен, снова
+       сжался, — и лента дёргается сама по себе. Внутри чипа нет ничего
+       дорогого (иконка, строка, счётчик), так что экономить тут нечего. */
 }
 
 .server-channel:hover {
@@ -2941,7 +2993,8 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .avatar-crop-overlay {
-    position: fixed;
+    /* Внутри .main, как и остальные модальные слои — см. .profile-overlay. */
+    position: absolute;
     inset: 0;
     /* Above .profile-overlay's 620, not just the base-layer 70 most fixed
        overlays use here. "Сменить картинку" in the profile editor is the
@@ -3202,45 +3255,164 @@ body[data-nav-mode="servers"] .contacts {
     accent-color: var(--lime);
 }
 
+/* Контекстное меню контакта. Пункты — прозрачные строки с иконкой, а не
+   отдельные залитые плашки: плашка на каждый пункт превращает меню в
+   вертикальный ряд кнопок, где нечего выделять наведением, и добавляет
+   четыре лишних края в объект размером с ладонь. */
 .peer-context-menu {
     position: fixed;
     z-index: 500;
-    min-width: 240px;
-    padding: 8px;
-    border-radius: 14px;
-    border: 1px solid var(--border);
-    background: var(--sidebar);
-    box-shadow: 0 18px 40px rgba(0,0,0,.45);
+    min-width: 236px;
+    max-width: 300px;
+    padding: 6px;
+    border-radius: var(--menu-radius);
+    border: 1px solid var(--menu-border);
+    background: var(--menu-bg);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
+    box-shadow: var(--menu-shadow);
     display: grid;
-    gap: 6px;
+    gap: 1px;
+    transform-origin: var(--menu-origin, top left);
+    animation: menu-pop .15s var(--ease-out) both;
 }
 
 .peer-context-menu-item {
     display: flex;
     align-items: center;
-    padding: 9px 10px;
-    border-radius: 10px;
-    background: rgba(255,255,255,.03);
+    gap: 11px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--menu-item-radius);
+    background: transparent;
     cursor: pointer;
     color: var(--text);
-    font-size: 13px;
-    border: none;
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.25;
     text-align: left;
+    transition: background .12s var(--ease-out), color .12s var(--ease-out);
 }
 
-.peer-context-menu-item:hover {
-    background: rgba(var(--accent-rgb), .12);
+.peer-context-menu-item .ui-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--menu-icon);
+    transition: color .12s var(--ease-out);
 }
 
+.peer-context-menu-item > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.peer-context-menu-item:hover,
+.peer-context-menu-item:focus-visible {
+    background: var(--menu-hover);
+    outline: 0;
+}
+
+.peer-context-menu-item:hover .ui-icon,
+.peer-context-menu-item:focus-visible .ui-icon {
+    color: var(--text);
+}
+
+.peer-context-menu-item:active {
+    background: var(--menu-press);
+}
+
+/* Громкость — не пункт меню, а регулятор: подпись уходит в капс-строку
+   вполовину тише текста пунктов, чтобы её не читали как ещё одно действие. */
 .peer-context-menu-volume {
     display: grid;
-    gap: 6px;
-    padding: 8px 10px;
+    gap: 9px;
+    padding: 9px 10px 8px;
 }
 
-.peer-context-menu-volume span {
-    font-size: 12px;
+.peer-context-menu-volume-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+
+.peer-context-menu-volume-head strong {
     color: var(--text2);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Свой ползунок вместо accent-color: системный рисует канал во всю высоту
+   и заливает его акцентом — в меню на 236 px это самый яркий объект,
+   перетягивающий взгляд с пунктов. */
+.peer-context-menu-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 14px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+/* Заполненная часть рисуется градиентом по --fill, который ставит JS на
+   каждый input: без неё уровень читается только по положению бегунка, а на
+   шкале 0–200 % это ничего не говорит — 100 % посередине выглядит так же,
+   как любое другое «где-то там». */
+.peer-context-menu-range::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+        rgba(255,255,255,.72) 0 var(--fill, 50%),
+        rgba(255,255,255,.12) var(--fill, 50%) 100%);
+}
+
+.peer-context-menu-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4.5px;
+    border: none;
+    border-radius: 50%;
+    background: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,.5);
+    transition: transform .12s var(--ease-out);
+}
+
+.peer-context-menu-range:hover::-webkit-slider-thumb,
+.peer-context-menu-range:focus-visible::-webkit-slider-thumb {
+    transform: scale(1.15);
+}
+
+.peer-context-menu-range::-moz-range-track {
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+        rgba(255,255,255,.72) 0 var(--fill, 50%),
+        rgba(255,255,255,.12) var(--fill, 50%) 100%);
+}
+
+.peer-context-menu-range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: var(--text);
+}
+
+.peer-context-menu-range:focus-visible {
+    outline: 0;
 }
 
 .settings-control-row {
@@ -3533,14 +3705,15 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .server-overlay {
-    position: fixed;
-    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
-       macOS traffic lights over it — permanently uncovered instead of hidden
-       behind the fullscreen modal. See .titlebar's z-index note. */
-    top: var(--titlebar-h);
-    right: 0;
-    bottom: 0;
-    left: 0;
+    /* Слой живёт внутри .main (см. разметку index.html) и потому кроется
+       по области чата: левая навигация остаётся видимой и кликабельной,
+       пока открыт диалог. Раньше это был fixed-слой на весь экран с
+       ручным `top: var(--titlebar-h)`, чтобы не прятать титлбар; теперь
+       титлбар и боковая панель просто вне коробки. На телефоне слой
+       возвращается к fixed на весь экран — там боковой панели рядом с
+       чатом нет. */
+    position: absolute;
+    inset: 0;
     z-index: 60;
     display: flex;
     align-items: flex-start;
@@ -5252,19 +5425,24 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(var(--accent-rgb),.16);
 }
 
+/* Пикер реакций и действий над сообщением. Внутри пикера у кнопок нет ни
+   рамки, ни заливки: девять обведённых кружков подряд — это девять рамок
+   в объекте высотой 42 px, и глаз читает сетку, а не эмодзи. Обводка тут
+   лишняя ещё и потому, что у всей полосы уже есть своя. */
 .reaction-menu {
     position: fixed;
     z-index: 140;
     display: none;
-    gap: 4px;
-    padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    background: rgba(10,12,15,.96);
-    box-shadow: 0 18px 42px rgba(0,0,0,.38);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    transform: translateY(2px) scale(.98);
+    align-items: center;
+    gap: 1px;
+    padding: 5px;
+    border: 1px solid var(--menu-border);
+    border-radius: 999px;
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
+    transform: translateY(3px) scale(.96);
     transform-origin: center bottom;
     opacity: 0;
     pointer-events: none;
@@ -5280,6 +5458,46 @@ body[data-nav-mode="servers"] .contacts {
 
 .reaction-menu .reaction-btn {
     flex: none;
+    width: 34px;
+    height: 34px;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: none;
+    transition: background .12s var(--ease-out), transform .12s var(--ease-out), color .12s var(--ease-out);
+}
+
+/* Эмодзи подрастает под курсором — это и есть подтверждение попадания,
+   поэтому подсветка под ним может остаться едва заметной. */
+.reaction-menu .reaction-btn:hover,
+.reaction-menu .reaction-btn:focus-visible {
+    border-color: transparent;
+    background: var(--menu-hover);
+    box-shadow: none;
+    outline: 0;
+    transform: scale(1.14);
+}
+
+.reaction-menu .reaction-btn:active {
+    transform: scale(1.02);
+}
+
+.reaction-menu .reaction-btn .ui-icon {
+    width: 18px;
+    height: 18px;
+}
+
+/* Ответ / правка — линейные иконки того же набора, что и везде в
+   интерфейсе. Раньше это были типографские глифы ↩ ✎ 🗑, которые каждая
+   ОС рисует своим шрифтом: рядом с цветными эмодзи они выглядели то
+   бледной палочкой, то вторым эмодзи. */
+.reaction-btn-action {
+    color: var(--text2);
+}
+
+.reaction-menu .reaction-btn-action:hover,
+.reaction-menu .reaction-btn-action:focus-visible {
+    color: var(--text);
 }
 
 /* Trash icon appended to the same popup, shown only when canDeleteMessage()
@@ -5287,18 +5505,17 @@ body[data-nav-mode="servers"] .contacts {
    the reaction picker rather than a separate menu so there's one place to
    long-press/right-click a message for any per-message action. */
 .reaction-btn-delete {
-    margin-left: 4px;
-    padding-left: 4px;
-    border-left: 1px solid var(--border);
-    border-radius: 0 999px 999px 0;
-    color: rgba(255, 92, 118, .92);
+    color: rgba(255, 92, 118, .82);
 }
 
-.reaction-btn-delete:hover,
-.reaction-btn-delete:focus-visible {
-    border-color: rgba(255, 92, 118, .55);
-    background: rgba(255, 92, 118, .14);
-    box-shadow: 0 0 0 2px rgba(255, 92, 118, .28);
+/* Единственный цветной пункт в меню — и цвет тут несёт смысл (действие
+   необратимое), а не украшает. */
+.reaction-menu .reaction-btn-delete:hover,
+.reaction-menu .reaction-btn-delete:focus-visible {
+    border-color: transparent;
+    background: rgba(255, 92, 118, .16);
+    box-shadow: none;
+    color: rgb(255, 108, 132);
 }
 
 /* Reply / edit actions live in the same popup as the reactions — one
@@ -5306,17 +5523,11 @@ body[data-nav-mode="servers"] .contacts {
    second menu the user has to discover separately. */
 .reaction-menu-sep {
     flex: none;
-    align-self: stretch;
+    align-self: center;
     width: 1px;
-    margin: 2px 2px;
-    background: var(--border);
-}
-
-.reaction-btn-action:hover,
-.reaction-btn-action:focus-visible {
-    border-color: rgba(var(--accent-rgb), .5);
-    background: rgba(var(--accent-rgb), .12);
-    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .22);
+    height: 20px;
+    margin: 0 5px;
+    background: var(--menu-border);
 }
 
 /* Quote of the message being replied to, rendered at the top of the bubble.
@@ -6795,6 +7006,9 @@ body[data-nav-mode="servers"] .contacts {
     .auth-link,
     .contacts-suggest,
     .contact-suggest-item,
+    .peer-context-menu-item,
+    .reaction-menu,
+    .reaction-menu .reaction-btn,
     .view.active,
     .contact,
     .msg,
@@ -6815,6 +7029,7 @@ body[data-nav-mode="servers"] .contacts {
     .auth-overlay.visible .auth-card,
     .auth-overlay.visible .auth-form > *,
     .contacts-suggest,
+    .peer-context-menu,
     .view.active,
     .contact,
     .msg,
@@ -7285,6 +7500,13 @@ body[data-nav-mode="servers"] .contacts {
 body[data-experimental-design="on"] {
     --bg: #0c0e12;
     --sidebar: #0c0e12;
+    /* Плоский режим — без стекла и свечения, поэтому всплывающие
+       поверхности становятся непрозрачными: полупрозрачный фон без
+       backdrop-filter это не «плоско», это грязно — сквозь меню видно
+       текст под ним. */
+    --menu-bg: rgb(21, 23, 28);
+    --menu-blur: none;
+    --menu-shadow: 0 0 0 1px rgba(0,0,0,.4);
 }
 
 /* App background — solid, no accent bloom, no grid overlay */
@@ -7713,7 +7935,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .coin-transfer-modal {
-    position: fixed;
+    /* Внутри .main, как и остальные модальные слои — см. .profile-overlay. */
+    position: absolute;
     inset: 0;
     z-index: 70;
     display: flex;
@@ -7839,10 +8062,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
        for it — and the macOS traffic lights over it — on desktop) would just
        expose whatever per-screen app-bar sits underneath. No desktop window
        chrome on mobile, so go back to true edge-to-edge. */
-    .profile-overlay,
-    .server-overlay {
-        top: 0;
-    }
+
 
     /* Full-bleed app frame — no desktop card insets / rounded panels. */
     .body {
@@ -8336,9 +8556,38 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     }
     .msg .bubble { transition: transform .18s cubic-bezier(.2,.9,.24,1); }
 
+    /* То же самое для строки диалога и канала: долгое нажатие по ним теперь
+       открывает контекстное меню (bindMobileLongPress в mobile.js), а без
+       обратной связи такое нажатие неотличимо от подвисшего тапа — человек
+       отпускает палец раньше, чем меню успевает появиться.
+
+       Только transform: у .contact и .server-channel уже объявлен собственный
+       transition (строки ~1560 и ~1850), и он включает transform вместе с
+       цветом, фоном и тенью. Дописать здесь свой `transition` значило бы
+       заменить их шорткат целиком и молча выключить на мобильном всю остальную
+       анимацию этих строк. */
+    .contact.press-hold,
+    .server-channel.press-hold { transform: scale(.975); }
+
     /* Reaction menu: bigger touch targets on a phone. */
-    .reaction-menu { padding: 6px; border-radius: 22px; }
-    .reaction-menu .reaction-btn { width: 44px; height: 44px; font-size: 22px; }
+    /* Шесть эмодзи, разделитель и три действия — это девять кнопок в один
+       ряд. По 44 px ряд занимает 388 px и на 375-пиксельном экране просто
+       уезжает за край: showReactionMenu прижимает меню к левому отступу, а
+       «Удалить» оказывается за границей экрана. 36 укладывает весь ряд в
+       352 px, а max-width + горизонтальная прокрутка страхуют экраны уже
+       375 px и любую будущую кнопку. */
+    .reaction-menu {
+        padding: 5px;
+        border-radius: 999px;
+        max-width: calc(100vw - 16px);
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+    .reaction-menu::-webkit-scrollbar { display: none; }
+    .reaction-menu .reaction-btn { width: 36px; height: 36px; font-size: 21px; }
+    .reaction-menu .reaction-btn .ui-icon { width: 19px; height: 19px; }
+    .reaction-menu-sep { height: 22px; margin: 0 3px; }
 }
 
 /* ============================================================================
@@ -8405,14 +8654,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .profile-overlay {
-    position: fixed;
-    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
-       macOS traffic lights over it — permanently uncovered instead of hidden
-       behind the fullscreen modal. See .titlebar's z-index note. */
-    top: var(--titlebar-h);
-    right: 0;
-    bottom: 0;
-    left: 0;
+    /* Слой живёт внутри .main (см. разметку index.html) и потому кроется
+       по области чата: левая навигация остаётся видимой и кликабельной,
+       пока открыт диалог. Раньше это был fixed-слой на весь экран с
+       ручным `top: var(--titlebar-h)`, чтобы не прятать титлбар; теперь
+       титлбар и боковая панель просто вне коробки. На телефоне слой
+       возвращается к fixed на весь экран — там боковой панели рядом с
+       чатом нет. */
+    position: absolute;
+    inset: 0;
     z-index: 620;
     display: flex;
     align-items: center;
@@ -8430,7 +8680,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     position: relative;
     width: 100%;
     height: 100%;
-    max-height: 100vh;
+    /* 100%, а не 100vh: коробкой теперь служит панель чата, а не окно. */
+    max-height: 100%;
     /* Not the scroll container itself (was `overflow: auto` here) — that made
        .profile-close, an absolutely-positioned child of THIS box, scroll away
        with the content: absolute positioning is relative to the padding box,
@@ -8485,6 +8736,16 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    /* start, а не значение по умолчанию. У грида `align-content: normal`
+       ведёт себя как stretch и раздаёт свободную высоту ВСЕМ auto-строкам
+       поровну. Пока содержимое вкладки было выше коробки («Стена» с
+       холстом), свободной высоты не оставалось и этого никто не замечал; на
+       «Комментариях», «Модерации» и «Друзьях» содержимое короче — и лишние
+       248 px делились на три, раздувая шапку (210 → 293), полосу вкладок
+       (40 → 123), кнопку «Редактировать профиль» (40 → 81) и саму активную
+       вкладку (31 → 114). Строки должны держать свою высоту, а остаток —
+       оставаться пустым внизу. */
+    align-content: start;
 }
 .profile-loading { display: grid; gap: 10px; }
 .profile-error { color: var(--red); font-size: 13px; margin: 0; }
@@ -8512,6 +8773,19 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     aspect-ratio: 1;
     min-width: 86px;
     min-height: 86px;
+    /* Потолок обязателен, и вот почему. Колонка шапки — `auto`, её ширину
+       задаёт max-content содержимого, а содержимое здесь <img>: при
+       измерении max-content проценты на картинке не разрешаются, и в расчёт
+       идёт СОБСТВЕННЫЙ размер файла. Аватарка 600×800 давала колонку в
+       604 px, aspect-ratio делал квадрат такой же высоты, строка шапки
+       распухала до 662 px — и всё, что лежит в тех же строках грида
+       (кнопка «Редактировать профиль», вкладки), растягивалось следом.
+       Высота брала своё и от .profile-head-copy: 100 % от раздутой строки.
+       Проверено на 0.2b32 — там ровно те же 604×604, это не регрессия
+       переноса модалок в .main, просто в узкой панели чата оно наконец
+       перестало помещаться и полезло на имя. */
+    max-width: 152px;
+    max-height: 152px;
     border-radius: 26px;
     overflow: hidden;
     display: grid;
@@ -8747,9 +9021,45 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-link-color-input {
     width: 34px;
     height: 34px;
-    padding: 2px;
     cursor: pointer;
     flex: 0 0 auto;
+}
+
+/* Квадрат, залитый цветом целиком, а не точка в середине кнопки.
+   Мешали два независимых слоя:
+   1) `.profile-link-row input` задаёт padding 11px/13px и по специфичности
+      (0,1,1 против 0,1,0) побеждал собственное правило поля — в коробке
+      34×34 на сам цвет оставалось 6×10 px. Отсюда селектор в две
+      степени: `.profile-link-row .profile-link-color-input`.
+   2) При `appearance: auto` WebKit рисует не заливку, а «колодец» со своей
+      рамкой и отступами — их убирает только стилизация
+      ::-webkit-color-swatch. Firefox — ::-moz-color-swatch. */
+.profile-field-color input[type="color"],
+.profile-link-row .profile-link-color-input {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    overflow: hidden;
+}
+
+.profile-field-color input[type="color"]::-webkit-color-swatch-wrapper,
+.profile-link-row .profile-link-color-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.profile-field-color input[type="color"]::-webkit-color-swatch,
+.profile-link-row .profile-link-color-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 9px;
+}
+
+.profile-field-color input[type="color"]::-moz-color-swatch,
+.profile-link-row .profile-link-color-input::-moz-color-swatch {
+    border: none;
+    border-radius: 9px;
 }
 
 .profile-link-remove {
@@ -8982,7 +9292,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .moderation-actions { display: flex; gap: 6px; }
 .moderation-actions button { flex: 1; }
 
-.peer-context-menu-sep { height: 1px; background: var(--border); margin: 2px 0; }
+/* Во всю ширину меню (отрицательные поля гасят падинг контейнера) — 
+   вставленный по центру разделитель короче пунктов читается как ещё
+   один элемент списка, а не как граница между группами. */
+.peer-context-menu-sep { height: 1px; background: var(--menu-border); margin: 5px -6px; }
 
 @media (max-width: 720px) {
     .profile-overlay { padding: 0; }
@@ -9151,3 +9464,198 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     }
 }
 
+
+/* ════════════════════════════════════════════════════════════════════════
+   КЕШ АССЕТОВ — режим, потолок и сводка обращений
+   Разметку рисует renderCacheSettings() (web/src/interface/cache.js).
+   Кнопки режимов повторяют геометрию .design-mode-option, но без превью:
+   у режимов кеша нечего показывать картинкой, разница выражается словами.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.cache-settings {
+    display: grid;
+    gap: 12px;
+}
+
+.cache-mode-options {
+    display: grid;
+    gap: 8px;
+}
+
+.cache-mode-option {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 13px;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    background: rgba(255,255,255,.025);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
+}
+
+.cache-mode-option:hover {
+    background: rgba(255,255,255,.045);
+    border-color: rgba(255,255,255,.16);
+}
+
+.cache-mode-option:active { transform: translateY(1px); }
+
+.cache-mode-option.active {
+    border-color: rgba(var(--accent-rgb), .55);
+    background: rgba(var(--accent-rgb), .09);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
+}
+
+.cache-mode-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+
+.cache-mode-copy strong { color: var(--text); font-size: 13px; font-weight: 800; }
+.cache-mode-copy small { color: var(--text2); font-size: 11px; line-height: 1.4; }
+
+.cache-mode-note {
+    flex: none;
+    align-self: start;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.cache-mode-option.active .cache-mode-note { color: var(--lime); }
+
+.cache-limit-field { gap: 6px; }
+
+/* Полоса заполнения. Ширина ставится инлайном из посчитанного процента —
+   это единственное значение здесь, зависящее от данных. */
+.cache-usage-bar {
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: rgba(255,255,255,.07);
+}
+
+.cache-usage-bar > span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: rgb(var(--accent-rgb));
+    transition: width .25s var(--ease-out);
+}
+
+.cache-usage-status { margin: 0; }
+
+.cache-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+}
+
+.cache-summary-block {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.02);
+}
+
+.cache-kind-list,
+.cache-top-list {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.cache-kind-row,
+.cache-top-row {
+    display: grid;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text2);
+}
+
+.cache-kind-row { grid-template-columns: minmax(0, 1fr) auto; }
+.cache-top-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+
+.cache-kind-name,
+.cache-top-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+
+.cache-kind-meta,
+.cache-top-size { color: var(--text3); font-variant-numeric: tabular-nums; }
+
+/* Вид записи перед именем: аватарка и карточка профиля одного человека
+   называются одинаково, и без метки список читается как дубликаты. */
+.cache-top-kind {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 0 5px;
+    border-radius: 5px;
+    background: rgba(255,255,255,.06);
+    color: var(--text3);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+}
+
+/* Счётчик обращений — то, чем этот список полезен: он объясняет, почему
+   вытеснение выбирает именно эти файлы. Поэтому он акцентный, а не серый. */
+.cache-top-hits {
+    color: var(--lime);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.cache-kind-row--empty,
+.cache-top-row--empty {
+    grid-template-columns: 1fr;
+    color: var(--text3);
+}
+
+@media (max-width: 760px) {
+    .cache-mode-note { display: none; }
+    .cache-mode-option { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   МОДАЛЬНЫЕ СЛОИ НА ТЕЛЕФОНЕ — снова во весь экран
+   Блок держится В КОНЦЕ файла намеренно. Базовые правила этих четырёх
+   слоёв разбросаны по style.css, и часть из них (.profile-overlay, 8653)
+   объявлена ПОЗЖЕ основного мобильного @media — оттуда переопределение
+   не срабатывало вовсе: та же специфичность, кто ниже, тот и прав.
+   Одно место в самом низу перекрывает их все, где бы они ни стояли.
+
+   Почему на телефоне не absolute: там нет боковой панели рядом с чатом,
+   ограничивать диалог нечем и незачем, а .main выше вьюпорта
+   (min-height:100vh внутри строки грида) — absolute-слой оказался бы
+   длиннее экрана.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 760px) {
+    .profile-overlay,
+    .server-overlay,
+    .avatar-crop-overlay,
+    .coin-transfer-modal {
+        position: fixed;
+        inset: 0;
+    }
+}

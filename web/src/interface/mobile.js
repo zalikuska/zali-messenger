@@ -141,18 +141,37 @@ ZaliMixin(ZaliInterface, class {
             && !!document.getElementById('viewChat')?.classList.contains('active');
         const value = chatScreen ? (Number(progress) || 0) : 0;
         const flag = !!animate;
+        // Какая секция активна сейчас. Нативная панель (Android) рисуется поверх
+        // вебвью и прячет веб-док, поэтому подсветку своей активной вкладки она
+        // взять неоткуда не может: её собственный `selected` — это локальное
+        // состояние, меняющееся только от тапа по ней самой. А в Хаб и Настройки
+        // можно уйти и другим путём (сегмент-контрол внутри настроек), после чего
+        // подсветка начинала врать. Считается ровно теми же условиями, что и
+        // класс .active на кнопках веб-дока в syncMobileChrome().
+        const section = this.activeMobileNavSection();
         // Drag frames arrive at display rate; only the visible steps are worth
         // a bridge hop.
         if (this._lastNativeNavProgress != null
             && Math.abs(value - this._lastNativeNavProgress) < 0.01
-            && flag === this._lastNativeNavAnimate) return;
+            && flag === this._lastNativeNavAnimate
+            && section === this._lastNativeNavSection) return;
         this._lastNativeNavProgress = value;
         this._lastNativeNavAnimate = flag;
+        this._lastNativeNavSection = section;
         this.postNativeMessage({
             type: NativeMessageTypes.MOBILE_NAV_PROGRESS,
             progress: value,
             animate: flag,
+            section,
         });
+    }
+
+    /** 'chats' | 'servers' | 'hub' | 'settings' — источник истины для подсветки
+     * и веб-дока, и нативной панели. */
+    activeMobileNavSection() {
+        if (document.getElementById('viewSettings')?.classList.contains('active')) return 'settings';
+        if (document.getElementById('viewHub')?.classList.contains('active')) return 'hub';
+        return this.S.navMode === 'servers' ? 'servers' : 'chats';
     }
 
     currentMobileNavProgress() {
@@ -382,11 +401,20 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Mobile touch gestures, delegated on the persistent containers (#msgs /
-    // #contacts) so they survive the innerHTML re-renders those lists do.
+    // #contacts / #serverChannelList) so they survive the innerHTML re-renders
+    // those lists do.
     //
-    //  • Long-press a message  → opens the existing reaction menu. The desktop
-    //    path is `contextmenu`, which touch browsers fire inconsistently (and
-    //    iOS shows its own callout instead).
+    //  • Long-press a message  → opens the existing reaction menu.
+    //  • Long-press a contact  → opens the contact context menu (профиль,
+    //    подписка, заявка в друзья, глушилка, громкость собеседника).
+    //  • Long-press a channel  → глушилка канала.
+    //
+    // Всё это на десктопе висит на `contextmenu`, которого на тач-устройствах
+    // просто нет: браузеры его либо не шлют, либо шлют непредсказуемо, а iOS
+    // вместо него показывает собственное системное меню. Долгое нажатие для
+    // сообщений было сделано ещё тогда, а для контактов и каналов — нет, и
+    // комментарий выше про «#contacts» описывал намерение, а не код. То есть
+    // всё меню контакта было с телефона недостижимо в принципе.
     //
     // Dialog rows deliberately have NO horizontal gesture of their own: a
     // left-swipe on the list screen belongs to the forward navigation gesture
@@ -394,47 +422,93 @@ ZaliMixin(ZaliInterface, class {
     // dialog is the row's own × button (.contact-remove), which the mobile
     // stylesheet used to hide in favour of swipe-to-reveal-Delete.
     setupMobileTouchGestures() {
-        const LONG_PRESS_MS = 420;
-        const MOVE_CANCEL = 10;
-
         const msgsEl = document.getElementById('msgs');
-        if (msgsEl && !msgsEl.__mobileLongPressBound) {
-            msgsEl.__mobileLongPressBound = true;
-            let timer = null;
-            let startX = 0;
-            let startY = 0;
-            let held = null;
-            const cancelPress = () => {
-                if (timer) { clearTimeout(timer); timer = null; }
-                if (held) { held.classList.remove('press-hold'); held = null; }
-            };
-            msgsEl.addEventListener('touchstart', (e) => {
-                if (!this.isMobileLayout()) return;
-                const touch = e.touches[0];
-                const msgEl = e.target?.closest?.('.msg[data-message-id]');
-                if (!touch || !msgEl) return;
-                startX = touch.clientX;
-                startY = touch.clientY;
-                held = msgEl;
-                msgEl.classList.add('press-hold');
-                timer = setTimeout(() => {
-                    const id = msgEl.getAttribute('data-message-id');
-                    if (id) {
-                        this.showReactionMenu(msgEl, id, startX, startY);
-                        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* no haptics */ } }
-                    }
-                    cancelPress();
-                }, LONG_PRESS_MS);
-            }, { passive: true });
-            msgsEl.addEventListener('touchmove', (e) => {
-                const touch = e.touches[0];
-                if (!touch || !timer) return;
-                if (Math.abs(touch.clientX - startX) > MOVE_CANCEL || Math.abs(touch.clientY - startY) > MOVE_CANCEL) cancelPress();
-            }, { passive: true });
-            msgsEl.addEventListener('touchend', cancelPress);
-            msgsEl.addEventListener('touchcancel', cancelPress);
+        if (msgsEl) {
+            this.bindMobileLongPress(msgsEl, '.msg[data-message-id]', (msgEl, x, y) => {
+                const id = msgEl.getAttribute('data-message-id');
+                if (id) this.showReactionMenu(msgEl, id, x, y);
+            });
         }
 
+        const contactsEl = document.getElementById('contacts');
+        if (contactsEl) {
+            this.bindMobileLongPress(contactsEl, '.contact', (row, x, y) => {
+                if (!row.dataset.name) return;
+                this.openContactContextMenu(row.dataset.name, x, y);
+            });
+        }
+
+        const channelsEl = document.getElementById('serverChannelList');
+        if (channelsEl) {
+            this.bindMobileLongPress(channelsEl, '.server-channel[data-channel-id]', (btn) => {
+                if (btn.getAttribute('data-channel-kind') === 'voice') return;
+                const sid = btn.getAttribute('data-server-id');
+                const cid = btn.getAttribute('data-channel-id');
+                if (sid && cid) this.toggleMuteChannel(sid, cid);
+            });
+        }
+    }
+
+    /**
+     * Долгое нажатие с делегированием на постоянном контейнере.
+     *
+     * @param {HTMLElement} container контейнер, переживающий перерисовки списка
+     * @param {string} selector       что считать «строкой» внутри него
+     * @param {(el: HTMLElement, x: number, y: number) => void} onLongPress
+     */
+    bindMobileLongPress(container, selector, onLongPress) {
+        if (!container || container.__mobileLongPressBound) return;
+        container.__mobileLongPressBound = true;
+
+        const LONG_PRESS_MS = 420;
+        const MOVE_CANCEL = 10;
+        let timer = null;
+        let startX = 0;
+        let startY = 0;
+        let held = null;
+        let fired = false;
+
+        const cancelPress = () => {
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (held) { held.classList.remove('press-hold'); held = null; }
+        };
+
+        container.addEventListener('touchstart', (e) => {
+            if (!this.isMobileLayout()) return;
+            const touch = e.touches[0];
+            const target = e.target?.closest?.(selector);
+            if (!touch || !target) return;
+            fired = false;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            held = target;
+            target.classList.add('press-hold');
+            timer = setTimeout(() => {
+                fired = true;
+                onLongPress(target, startX, startY);
+                if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* no haptics */ } }
+                cancelPress();
+            }, LONG_PRESS_MS);
+        }, { passive: true });
+
+        container.addEventListener('touchmove', (e) => {
+            const touch = e.touches[0];
+            if (!touch || !timer) return;
+            if (Math.abs(touch.clientX - startX) > MOVE_CANCEL || Math.abs(touch.clientY - startY) > MOVE_CANCEL) cancelPress();
+        }, { passive: true });
+
+        container.addEventListener('touchend', cancelPress);
+        container.addEventListener('touchcancel', cancelPress);
+
+        // Долгое нажатие по строке диалога иначе доигрывалось обычным кликом: меню
+        // открывалось и тут же уезжало вместе с переключением чата. Перехват в фазе
+        // погружения, до делегированного обработчика в events.js.
+        container.addEventListener('click', (e) => {
+            if (!fired) return;
+            fired = false;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
     }
 
     syncMobileChrome() {
@@ -460,17 +534,18 @@ ZaliMixin(ZaliInterface, class {
 
         if (isMobile) this.syncNativeMobileNav();
 
-        const settingsActive = !!document.getElementById('viewSettings')?.classList.contains('active');
-        const hubActive = !!document.getElementById('viewHub')?.classList.contains('active');
+        // Одна функция на обе панели — веб-док и нативную: разъехаться им теперь
+        // негде, потому что подсветка считается в одном месте.
+        const section = this.activeMobileNavSection();
         const chatsBtn = document.getElementById('mobileChatsBtn');
         const serversBtn = document.getElementById('mobileServersBtn');
         const hubBtn = document.getElementById('mobileHubBtn');
         const settingsBtn = document.getElementById('mobileSettingsBtn');
 
-        if (chatsBtn) chatsBtn.classList.toggle('active', !settingsActive && !hubActive && this.S.navMode !== 'servers');
-        if (serversBtn) serversBtn.classList.toggle('active', !settingsActive && !hubActive && this.S.navMode === 'servers');
-        if (hubBtn) hubBtn.classList.toggle('active', hubActive);
-        if (settingsBtn) settingsBtn.classList.toggle('active', settingsActive);
+        if (chatsBtn) chatsBtn.classList.toggle('active', section === 'chats');
+        if (serversBtn) serversBtn.classList.toggle('active', section === 'servers');
+        if (hubBtn) hubBtn.classList.toggle('active', section === 'hub');
+        if (settingsBtn) settingsBtn.classList.toggle('active', section === 'settings');
 
         const mobileMenuBtn = document.getElementById('mobileMenuBtn');
         if (mobileMenuBtn) {
@@ -546,6 +621,12 @@ ZaliMixin(ZaliInterface, class {
         this.renderAudioDeviceSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
+        // Индекс сводок кеша поднимается лениво, первым обращением. Открытие
+        // настроек — как раз такое обращение: без него карточка на свежем
+        // запуске показала бы пустой кеш при полном диске. Рисуем сразу (чтобы
+        // не мигало) и ещё раз, когда база ответит.
+        this.renderCacheSettings();
+        void this.ensureCacheReady().then(() => this.renderCacheSettings());
         this.closeMobileSidebar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();

@@ -172,6 +172,49 @@ mod fetch_tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn textual_content_types_travel_as_text_and_everything_else_as_base64() {
+        // Текст — прежним полем `body`.
+        for value in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "APPLICATION/JSON",
+            "text/plain",
+            "text/html; charset=utf-8",
+            "application/problem+json",
+            "image/svg+xml",
+            "application/x-www-form-urlencoded",
+        ] {
+            assert!(
+                is_textual_content_type(Some(value)),
+                "{value} должен ехать текстом"
+            );
+        }
+        // Отсутствующий и пустой тип — тоже текст: так вели себя все ответы до
+        // появления развилки, и менять это для эндпойнтов без Content-Type незачем.
+        assert!(is_textual_content_type(None));
+        assert!(is_textual_content_type(Some("")));
+        assert!(is_textual_content_type(Some("   ")));
+
+        // Бинарь — только base64. `image/png` здесь не абстрактный пример: это
+        // Content-Type иконок и баннеров серверов, которые как раз и портились,
+        // проезжая через строковое поле.
+        for value in [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "application/octet-stream",
+            "application/zip",
+            "video/mp4",
+            "font/woff2",
+        ] {
+            assert!(
+                !is_textual_content_type(Some(value)),
+                "{value} обязан ехать base64"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn perform_api_request_rejects_bad_paths_without_hitting_the_network() {
         // These are validated before any request is sent, so an unreachable
@@ -649,14 +692,68 @@ pub(crate) async fn perform_api_request(
             response_headers.insert(name.as_str().to_string(), Value::String(text.to_string()));
         }
     }
-    let body = response.text().await.unwrap_or_default();
-    Ok(json!({
-        "status": status.as_u16(),
-        "ok": status.is_success(),
-        "headers": response_headers,
-        "body": body,
-        "httpRequestId": http_request_id,
-    }))
+    // Бинарь не проходит через строковое поле: `response.text()` декодирует байты как
+    // UTF-8 и подставляет replacement-символы вместо всего, что в UTF-8 не
+    // укладывается, — то есть портит PNG/JPEG необратимо. Так на всех нативных
+    // оболочках молча не работали иконки и баннеры серверов (`loadServerAsset` в
+    // web/src/interface/avatars.js), единственное место, где через мост шёл настоящий
+    // бинарь. Текстовые ответы едут прежним полем `body`, всё остальное — в
+    // `bodyBase64`; разбирает оба `nativeApiResponse()` в web/src/interface/api.js.
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if is_textual_content_type(content_type.as_deref()) {
+        let body = response.text().await.unwrap_or_default();
+        Ok(json!({
+            "status": status.as_u16(),
+            "ok": status.is_success(),
+            "headers": response_headers,
+            "body": body,
+            "httpRequestId": http_request_id,
+        }))
+    } else {
+        let bytes = response.bytes().await.unwrap_or_default();
+        Ok(json!({
+            "status": status.as_u16(),
+            "ok": status.is_success(),
+            "headers": response_headers,
+            "body": "",
+            "bodyBase64": BASE64_STANDARD.encode(&bytes),
+            "httpRequestId": http_request_id,
+        }))
+    }
+}
+
+/// Можно ли отдать это тело в вебвью строкой без потерь.
+///
+/// Правило одно на все оболочки (macOS `NetworkService.isTextualContentType`,
+/// Android `NativeBridge.isTextualContentType`) — иначе одна и та же ссылка
+/// приезжала бы текстом на одной платформе и base64 на другой.
+///
+/// Отсутствующий Content-Type считается текстом: так вели себя все ответы до
+/// появления этой развилки, и менять это для эндпойнтов, которые тип не ставят,
+/// незачем.
+pub(crate) fn is_textual_content_type(value: Option<&str>) -> bool {
+    let raw = value.unwrap_or("");
+    let type_only = raw.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if type_only.is_empty() {
+        return true;
+    }
+    if type_only.starts_with("text/") {
+        return true;
+    }
+    if type_only.ends_with("+json") || type_only.ends_with("+xml") {
+        return true;
+    }
+    matches!(
+        type_only.as_str(),
+        "application/json"
+            | "application/javascript"
+            | "application/xml"
+            | "application/x-www-form-urlencoded"
+    )
 }
 
 pub(crate) async fn perform_contacts_request(

@@ -52,16 +52,16 @@ struct WebAssets {
     --red: #ff4d6d;
     --accent-rgb: 203,255,0;
     --r-msg: 18px;
-    --contact-suggest-bg: rgba(8,10,14,.98);
-    --contact-suggest-border: rgba(255,255,255,.18);
-    --contact-suggest-shadow: 0 22px 48px rgba(0,0,0,.42);
+    --contact-suggest-bg: var(--menu-bg);
+    --contact-suggest-border: var(--menu-border);
+    --contact-suggest-shadow: var(--menu-shadow);
     --contact-suggest-max-h: 340px;
-    --contact-suggest-pad: 12px;
-    --contact-suggest-gap: 8px;
-    --contact-suggest-item-pad-y: 12px;
-    --contact-suggest-item-pad-x: 12px;
-    --contact-suggest-font: 14px;
-    --contact-suggest-hint: rgba(255,255,255,.58);
+    --contact-suggest-pad: 6px;
+    --contact-suggest-gap: 1px;
+    --contact-suggest-item-pad-y: 8px;
+    --contact-suggest-item-pad-x: 8px;
+    --contact-suggest-font: 13.5px;
+    --contact-suggest-hint: rgba(255,255,255,.42);
     --msg-gap: 2;
     --titlebar-h: 40px;
     --control-h: 40px;
@@ -76,6 +76,31 @@ struct WebAssets {
        the browser's default "ease" instead, which decelerates less and reads
        as slightly stiffer next to those. One shared curve everywhere. */
     --ease-out: cubic-bezier(.2,.8,.2,1);
+    /* Всплывающие поверхности. Контекстное меню контакта, пикер реакций и
+       автодополнение контактов — три разных слоя, которые пользователь
+       видит поверх одного и того же интерфейса; пока у каждого были свой
+       фон, радиус и тень, они читались как куски разных приложений.
+       Теперь это один набор токенов: правка здесь меняет все три. */
+    --menu-bg: rgba(17,19,24,.88);
+    --menu-border: rgba(255,255,255,.10);
+    --menu-shadow: 0 24px 64px -16px rgba(0,0,0,.72), 0 2px 10px rgba(0,0,0,.34);
+    --menu-blur: blur(22px) saturate(150%);
+    --menu-radius: 14px;
+    --menu-item-radius: 9px;
+    /* Наведение в меню — нейтральная подсветка, а не акцентная заливка:
+       акцент в списке из пяти пунктов красит их все и перестаёт что-либо
+       выделять. Цветным в меню остаётся только опасное действие. */
+    --menu-hover: rgba(255,255,255,.075);
+    --menu-press: rgba(255,255,255,.12);
+    --menu-icon: rgba(255,255,255,.42);
+}
+
+/* Общая анимация появления для всех всплывающих меню: короткая, из точки
+   привязки (--menu-origin ставит JS по месту клика), без «прыжка» — меню
+   должно догонять курсор, а не разворачиваться на пол-экрана. */
+@keyframes menu-pop {
+    from { opacity: 0; transform: scale(.965) translateY(-3px); }
+    to   { opacity: 1; transform: none; }
 }
 
 * {
@@ -878,44 +903,55 @@ body[data-ui-v2="on"] .mode-switch {
     border: 1px solid var(--contact-suggest-border);
     border-radius: 12px;
     background: var(--contact-suggest-bg);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
     box-shadow: var(--contact-suggest-shadow);
     animation: suggest-drop .18s ease-out;
 }
 
 .contact-suggest-empty {
-    padding: 12px 14px;
-    border: 1px dashed rgba(255,255,255,.16);
-    border-radius: 10px;
+    padding: 14px 12px;
+    border: none;
+    border-radius: var(--menu-item-radius);
     color: var(--text2);
     font-size: 13px;
     line-height: 1.4;
-    background: rgba(255,255,255,.03);
+    background: transparent;
+    text-align: center;
 }
 
+/* Строка подсказки — такой же прозрачный ряд, как пункт контекстного меню:
+   выпадающий список из залитых плашек читается как отдельная карточка на
+   каждого человека, хотя это один список с одним выбором. */
 .contact-suggest-item {
     display: grid;
-    grid-template-columns: 34px 1fr auto;
+    grid-template-columns: 30px 1fr auto;
     gap: 10px;
     align-items: center;
     width: 100%;
     padding: var(--contact-suggest-item-pad-y) var(--contact-suggest-item-pad-x);
-    border: 1px solid transparent;
-    border-radius: 10px;
-    background: rgba(255,255,255,.05);
+    border: none;
+    border-radius: var(--menu-item-radius);
+    background: transparent;
     color: var(--text);
     cursor: pointer;
     text-align: left;
-    transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out);
+    transition: background .12s var(--ease-out);
 }
 
-.contact-suggest-item:hover {
-    background: rgba(255,255,255,.1);
-    border-color: rgba(var(--accent-rgb),.28);
+.contact-suggest-item:hover,
+.contact-suggest-item:focus-visible {
+    background: var(--menu-hover);
+    outline: 0;
+}
+
+.contact-suggest-item:active {
+    background: var(--menu-press);
 }
 
 .contact-suggest-ava {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     display: grid;
     place-items: center;
     border-radius: 50%;
@@ -930,8 +966,8 @@ body[data-ui-v2="on"] .mode-switch {
 }
 
 .contact-suggest-name {
-    font-weight: 800;
-    line-height: 1.1;
+    font-weight: 600;
+    line-height: 1.15;
     font-size: var(--contact-suggest-font);
 }
 
@@ -941,11 +977,20 @@ body[data-ui-v2="on"] .mode-switch {
     font-size: 11px;
 }
 
+/* Плюс проявляется под курсором. Постоянно горящий акцент в каждой строке
+   списка ничего не сообщает: подсказки все одинаково добавляемые. */
 .contact-suggest-plus {
-    color: var(--lime);
-    font-size: 20px;
-    font-weight: 900;
+    color: var(--text3);
+    font-size: 17px;
+    font-weight: 500;
     line-height: 1;
+    padding-right: 4px;
+    transition: color .12s var(--ease-out);
+}
+
+.contact-suggest-item:hover .contact-suggest-plus,
+.contact-suggest-item:focus-visible .contact-suggest-plus {
+    color: var(--lime);
 }
 
 .contacts {
@@ -1829,8 +1874,15 @@ body[data-nav-mode="servers"] .contacts {
     flex: 0 0 auto;
     scroll-snap-align: start;
     transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
-    content-visibility: auto;
-    contain-intrinsic-size: 44px;
+    /* Здесь НЕ должно быть content-visibility: auto. В вертикальном списке
+       (.contact) заглушка подменяет высоту, ширину задаёт контейнер — там это
+       безопасно. Канал же лежит в ГОРИЗОНТАЛЬНОЙ ленте, где ширина зависит от
+       длины названия: у пропущенного отрисовку канала она становится
+       заглушечной (44px вместо 66–160), и стоит ему въехать в видимую часть,
+       как он меняет ширину и сдвигает все следующие. У края ленты это
+       зацикливается — чип раздался, уехал за границу, снова пропущен, снова
+       сжался, — и лента дёргается сама по себе. Внутри чипа нет ничего
+       дорогого (иконка, строка, счётчик), так что экономить тут нечего. */
 }
 
 .server-channel:hover {
@@ -2967,7 +3019,8 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .avatar-crop-overlay {
-    position: fixed;
+    /* Внутри .main, как и остальные модальные слои — см. .profile-overlay. */
+    position: absolute;
     inset: 0;
     /* Above .profile-overlay's 620, not just the base-layer 70 most fixed
        overlays use here. "Сменить картинку" in the profile editor is the
@@ -3228,45 +3281,164 @@ body[data-nav-mode="servers"] .contacts {
     accent-color: var(--lime);
 }
 
+/* Контекстное меню контакта. Пункты — прозрачные строки с иконкой, а не
+   отдельные залитые плашки: плашка на каждый пункт превращает меню в
+   вертикальный ряд кнопок, где нечего выделять наведением, и добавляет
+   четыре лишних края в объект размером с ладонь. */
 .peer-context-menu {
     position: fixed;
     z-index: 500;
-    min-width: 240px;
-    padding: 8px;
-    border-radius: 14px;
-    border: 1px solid var(--border);
-    background: var(--sidebar);
-    box-shadow: 0 18px 40px rgba(0,0,0,.45);
+    min-width: 236px;
+    max-width: 300px;
+    padding: 6px;
+    border-radius: var(--menu-radius);
+    border: 1px solid var(--menu-border);
+    background: var(--menu-bg);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
+    box-shadow: var(--menu-shadow);
     display: grid;
-    gap: 6px;
+    gap: 1px;
+    transform-origin: var(--menu-origin, top left);
+    animation: menu-pop .15s var(--ease-out) both;
 }
 
 .peer-context-menu-item {
     display: flex;
     align-items: center;
-    padding: 9px 10px;
-    border-radius: 10px;
-    background: rgba(255,255,255,.03);
+    gap: 11px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--menu-item-radius);
+    background: transparent;
     cursor: pointer;
     color: var(--text);
-    font-size: 13px;
-    border: none;
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.25;
     text-align: left;
+    transition: background .12s var(--ease-out), color .12s var(--ease-out);
 }
 
-.peer-context-menu-item:hover {
-    background: rgba(var(--accent-rgb), .12);
+.peer-context-menu-item .ui-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--menu-icon);
+    transition: color .12s var(--ease-out);
 }
 
+.peer-context-menu-item > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.peer-context-menu-item:hover,
+.peer-context-menu-item:focus-visible {
+    background: var(--menu-hover);
+    outline: 0;
+}
+
+.peer-context-menu-item:hover .ui-icon,
+.peer-context-menu-item:focus-visible .ui-icon {
+    color: var(--text);
+}
+
+.peer-context-menu-item:active {
+    background: var(--menu-press);
+}
+
+/* Громкость — не пункт меню, а регулятор: подпись уходит в капс-строку
+   вполовину тише текста пунктов, чтобы её не читали как ещё одно действие. */
 .peer-context-menu-volume {
     display: grid;
-    gap: 6px;
-    padding: 8px 10px;
+    gap: 9px;
+    padding: 9px 10px 8px;
 }
 
-.peer-context-menu-volume span {
-    font-size: 12px;
+.peer-context-menu-volume-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+
+.peer-context-menu-volume-head strong {
     color: var(--text2);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Свой ползунок вместо accent-color: системный рисует канал во всю высоту
+   и заливает его акцентом — в меню на 236 px это самый яркий объект,
+   перетягивающий взгляд с пунктов. */
+.peer-context-menu-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 14px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+/* Заполненная часть рисуется градиентом по --fill, который ставит JS на
+   каждый input: без неё уровень читается только по положению бегунка, а на
+   шкале 0–200 % это ничего не говорит — 100 % посередине выглядит так же,
+   как любое другое «где-то там». */
+.peer-context-menu-range::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+        rgba(255,255,255,.72) 0 var(--fill, 50%),
+        rgba(255,255,255,.12) var(--fill, 50%) 100%);
+}
+
+.peer-context-menu-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4.5px;
+    border: none;
+    border-radius: 50%;
+    background: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,.5);
+    transition: transform .12s var(--ease-out);
+}
+
+.peer-context-menu-range:hover::-webkit-slider-thumb,
+.peer-context-menu-range:focus-visible::-webkit-slider-thumb {
+    transform: scale(1.15);
+}
+
+.peer-context-menu-range::-moz-range-track {
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+        rgba(255,255,255,.72) 0 var(--fill, 50%),
+        rgba(255,255,255,.12) var(--fill, 50%) 100%);
+}
+
+.peer-context-menu-range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: var(--text);
+}
+
+.peer-context-menu-range:focus-visible {
+    outline: 0;
 }
 
 .settings-control-row {
@@ -3559,14 +3731,15 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .server-overlay {
-    position: fixed;
-    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
-       macOS traffic lights over it — permanently uncovered instead of hidden
-       behind the fullscreen modal. See .titlebar's z-index note. */
-    top: var(--titlebar-h);
-    right: 0;
-    bottom: 0;
-    left: 0;
+    /* Слой живёт внутри .main (см. разметку index.html) и потому кроется
+       по области чата: левая навигация остаётся видимой и кликабельной,
+       пока открыт диалог. Раньше это был fixed-слой на весь экран с
+       ручным `top: var(--titlebar-h)`, чтобы не прятать титлбар; теперь
+       титлбар и боковая панель просто вне коробки. На телефоне слой
+       возвращается к fixed на весь экран — там боковой панели рядом с
+       чатом нет. */
+    position: absolute;
+    inset: 0;
     z-index: 60;
     display: flex;
     align-items: flex-start;
@@ -5278,19 +5451,24 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(var(--accent-rgb),.16);
 }
 
+/* Пикер реакций и действий над сообщением. Внутри пикера у кнопок нет ни
+   рамки, ни заливки: девять обведённых кружков подряд — это девять рамок
+   в объекте высотой 42 px, и глаз читает сетку, а не эмодзи. Обводка тут
+   лишняя ещё и потому, что у всей полосы уже есть своя. */
 .reaction-menu {
     position: fixed;
     z-index: 140;
     display: none;
-    gap: 4px;
-    padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    background: rgba(10,12,15,.96);
-    box-shadow: 0 18px 42px rgba(0,0,0,.38);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    transform: translateY(2px) scale(.98);
+    align-items: center;
+    gap: 1px;
+    padding: 5px;
+    border: 1px solid var(--menu-border);
+    border-radius: 999px;
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
+    transform: translateY(3px) scale(.96);
     transform-origin: center bottom;
     opacity: 0;
     pointer-events: none;
@@ -5306,6 +5484,46 @@ body[data-nav-mode="servers"] .contacts {
 
 .reaction-menu .reaction-btn {
     flex: none;
+    width: 34px;
+    height: 34px;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: none;
+    transition: background .12s var(--ease-out), transform .12s var(--ease-out), color .12s var(--ease-out);
+}
+
+/* Эмодзи подрастает под курсором — это и есть подтверждение попадания,
+   поэтому подсветка под ним может остаться едва заметной. */
+.reaction-menu .reaction-btn:hover,
+.reaction-menu .reaction-btn:focus-visible {
+    border-color: transparent;
+    background: var(--menu-hover);
+    box-shadow: none;
+    outline: 0;
+    transform: scale(1.14);
+}
+
+.reaction-menu .reaction-btn:active {
+    transform: scale(1.02);
+}
+
+.reaction-menu .reaction-btn .ui-icon {
+    width: 18px;
+    height: 18px;
+}
+
+/* Ответ / правка — линейные иконки того же набора, что и везде в
+   интерфейсе. Раньше это были типографские глифы ↩ ✎ 🗑, которые каждая
+   ОС рисует своим шрифтом: рядом с цветными эмодзи они выглядели то
+   бледной палочкой, то вторым эмодзи. */
+.reaction-btn-action {
+    color: var(--text2);
+}
+
+.reaction-menu .reaction-btn-action:hover,
+.reaction-menu .reaction-btn-action:focus-visible {
+    color: var(--text);
 }
 
 /* Trash icon appended to the same popup, shown only when canDeleteMessage()
@@ -5313,18 +5531,17 @@ body[data-nav-mode="servers"] .contacts {
    the reaction picker rather than a separate menu so there's one place to
    long-press/right-click a message for any per-message action. */
 .reaction-btn-delete {
-    margin-left: 4px;
-    padding-left: 4px;
-    border-left: 1px solid var(--border);
-    border-radius: 0 999px 999px 0;
-    color: rgba(255, 92, 118, .92);
+    color: rgba(255, 92, 118, .82);
 }
 
-.reaction-btn-delete:hover,
-.reaction-btn-delete:focus-visible {
-    border-color: rgba(255, 92, 118, .55);
-    background: rgba(255, 92, 118, .14);
-    box-shadow: 0 0 0 2px rgba(255, 92, 118, .28);
+/* Единственный цветной пункт в меню — и цвет тут несёт смысл (действие
+   необратимое), а не украшает. */
+.reaction-menu .reaction-btn-delete:hover,
+.reaction-menu .reaction-btn-delete:focus-visible {
+    border-color: transparent;
+    background: rgba(255, 92, 118, .16);
+    box-shadow: none;
+    color: rgb(255, 108, 132);
 }
 
 /* Reply / edit actions live in the same popup as the reactions — one
@@ -5332,17 +5549,11 @@ body[data-nav-mode="servers"] .contacts {
    second menu the user has to discover separately. */
 .reaction-menu-sep {
     flex: none;
-    align-self: stretch;
+    align-self: center;
     width: 1px;
-    margin: 2px 2px;
-    background: var(--border);
-}
-
-.reaction-btn-action:hover,
-.reaction-btn-action:focus-visible {
-    border-color: rgba(var(--accent-rgb), .5);
-    background: rgba(var(--accent-rgb), .12);
-    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .22);
+    height: 20px;
+    margin: 0 5px;
+    background: var(--menu-border);
 }
 
 /* Quote of the message being replied to, rendered at the top of the bubble.
@@ -6821,6 +7032,9 @@ body[data-nav-mode="servers"] .contacts {
     .auth-link,
     .contacts-suggest,
     .contact-suggest-item,
+    .peer-context-menu-item,
+    .reaction-menu,
+    .reaction-menu .reaction-btn,
     .view.active,
     .contact,
     .msg,
@@ -6841,6 +7055,7 @@ body[data-nav-mode="servers"] .contacts {
     .auth-overlay.visible .auth-card,
     .auth-overlay.visible .auth-form > *,
     .contacts-suggest,
+    .peer-context-menu,
     .view.active,
     .contact,
     .msg,
@@ -7311,6 +7526,13 @@ body[data-nav-mode="servers"] .contacts {
 body[data-experimental-design="on"] {
     --bg: #0c0e12;
     --sidebar: #0c0e12;
+    /* Плоский режим — без стекла и свечения, поэтому всплывающие
+       поверхности становятся непрозрачными: полупрозрачный фон без
+       backdrop-filter это не «плоско», это грязно — сквозь меню видно
+       текст под ним. */
+    --menu-bg: rgb(21, 23, 28);
+    --menu-blur: none;
+    --menu-shadow: 0 0 0 1px rgba(0,0,0,.4);
 }
 
 /* App background — solid, no accent bloom, no grid overlay */
@@ -7739,7 +7961,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .coin-transfer-modal {
-    position: fixed;
+    /* Внутри .main, как и остальные модальные слои — см. .profile-overlay. */
+    position: absolute;
     inset: 0;
     z-index: 70;
     display: flex;
@@ -7865,10 +8088,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
        for it — and the macOS traffic lights over it — on desktop) would just
        expose whatever per-screen app-bar sits underneath. No desktop window
        chrome on mobile, so go back to true edge-to-edge. */
-    .profile-overlay,
-    .server-overlay {
-        top: 0;
-    }
+
 
     /* Full-bleed app frame — no desktop card insets / rounded panels. */
     .body {
@@ -8171,6 +8391,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         font-size: 10.5px;
         opacity: .5;
         pointer-events: none;
+"""#,
+    #"""
     }
     .msg.in .msg-time  { color: var(--text3); }
     .msg.out .msg-time { color: rgba(15,20,0,.5); }
@@ -8362,9 +8584,38 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     }
     .msg .bubble { transition: transform .18s cubic-bezier(.2,.9,.24,1); }
 
+    /* То же самое для строки диалога и канала: долгое нажатие по ним теперь
+       открывает контекстное меню (bindMobileLongPress в mobile.js), а без
+       обратной связи такое нажатие неотличимо от подвисшего тапа — человек
+       отпускает палец раньше, чем меню успевает появиться.
+
+       Только transform: у .contact и .server-channel уже объявлен собственный
+       transition (строки ~1560 и ~1850), и он включает transform вместе с
+       цветом, фоном и тенью. Дописать здесь свой `transition` значило бы
+       заменить их шорткат целиком и молча выключить на мобильном всю остальную
+       анимацию этих строк. */
+    .contact.press-hold,
+    .server-channel.press-hold { transform: scale(.975); }
+
     /* Reaction menu: bigger touch targets on a phone. */
-    .reaction-menu { padding: 6px; border-radius: 22px; }
-    .reaction-menu .reaction-btn { width: 44px; height: 44px; font-size: 22px; }
+    /* Шесть эмодзи, разделитель и три действия — это девять кнопок в один
+       ряд. По 44 px ряд занимает 388 px и на 375-пиксельном экране просто
+       уезжает за край: showReactionMenu прижимает меню к левому отступу, а
+       «Удалить» оказывается за границей экрана. 36 укладывает весь ряд в
+       352 px, а max-width + горизонтальная прокрутка страхуют экраны уже
+       375 px и любую будущую кнопку. */
+    .reaction-menu {
+        padding: 5px;
+        border-radius: 999px;
+        max-width: calc(100vw - 16px);
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+    .reaction-menu::-webkit-scrollbar { display: none; }
+    .reaction-menu .reaction-btn { width: 36px; height: 36px; font-size: 21px; }
+    .reaction-menu .reaction-btn .ui-icon { width: 19px; height: 19px; }
+    .reaction-menu-sep { height: 22px; margin: 0 3px; }
 }
 
 /* ============================================================================
@@ -8392,8 +8643,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 
-"""#,
-    #"""
 /* ============================================================
    ПРОФИЛИ ЛЮДЕЙ
    Оверлей профиля, вкладки, комментарии, друзья и векторная
@@ -8433,14 +8682,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .profile-overlay {
-    position: fixed;
-    /* top:var(--titlebar-h) (not inset:0) keeps the app's titlebar — and the
-       macOS traffic lights over it — permanently uncovered instead of hidden
-       behind the fullscreen modal. See .titlebar's z-index note. */
-    top: var(--titlebar-h);
-    right: 0;
-    bottom: 0;
-    left: 0;
+    /* Слой живёт внутри .main (см. разметку index.html) и потому кроется
+       по области чата: левая навигация остаётся видимой и кликабельной,
+       пока открыт диалог. Раньше это был fixed-слой на весь экран с
+       ручным `top: var(--titlebar-h)`, чтобы не прятать титлбар; теперь
+       титлбар и боковая панель просто вне коробки. На телефоне слой
+       возвращается к fixed на весь экран — там боковой панели рядом с
+       чатом нет. */
+    position: absolute;
+    inset: 0;
     z-index: 620;
     display: flex;
     align-items: center;
@@ -8458,7 +8708,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     position: relative;
     width: 100%;
     height: 100%;
-    max-height: 100vh;
+    /* 100%, а не 100vh: коробкой теперь служит панель чата, а не окно. */
+    max-height: 100%;
     /* Not the scroll container itself (was `overflow: auto` here) — that made
        .profile-close, an absolutely-positioned child of THIS box, scroll away
        with the content: absolute positioning is relative to the padding box,
@@ -8513,6 +8764,16 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    /* start, а не значение по умолчанию. У грида `align-content: normal`
+       ведёт себя как stretch и раздаёт свободную высоту ВСЕМ auto-строкам
+       поровну. Пока содержимое вкладки было выше коробки («Стена» с
+       холстом), свободной высоты не оставалось и этого никто не замечал; на
+       «Комментариях», «Модерации» и «Друзьях» содержимое короче — и лишние
+       248 px делились на три, раздувая шапку (210 → 293), полосу вкладок
+       (40 → 123), кнопку «Редактировать профиль» (40 → 81) и саму активную
+       вкладку (31 → 114). Строки должны держать свою высоту, а остаток —
+       оставаться пустым внизу. */
+    align-content: start;
 }
 .profile-loading { display: grid; gap: 10px; }
 .profile-error { color: var(--red); font-size: 13px; margin: 0; }
@@ -8540,6 +8801,19 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     aspect-ratio: 1;
     min-width: 86px;
     min-height: 86px;
+    /* Потолок обязателен, и вот почему. Колонка шапки — `auto`, её ширину
+       задаёт max-content содержимого, а содержимое здесь <img>: при
+       измерении max-content проценты на картинке не разрешаются, и в расчёт
+       идёт СОБСТВЕННЫЙ размер файла. Аватарка 600×800 давала колонку в
+       604 px, aspect-ratio делал квадрат такой же высоты, строка шапки
+       распухала до 662 px — и всё, что лежит в тех же строках грида
+       (кнопка «Редактировать профиль», вкладки), растягивалось следом.
+       Высота брала своё и от .profile-head-copy: 100 % от раздутой строки.
+       Проверено на 0.2b32 — там ровно те же 604×604, это не регрессия
+       переноса модалок в .main, просто в узкой панели чата оно наконец
+       перестало помещаться и полезло на имя. */
+    max-width: 152px;
+    max-height: 152px;
     border-radius: 26px;
     overflow: hidden;
     display: grid;
@@ -8775,9 +9049,45 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-link-color-input {
     width: 34px;
     height: 34px;
-    padding: 2px;
     cursor: pointer;
     flex: 0 0 auto;
+}
+
+/* Квадрат, залитый цветом целиком, а не точка в середине кнопки.
+   Мешали два независимых слоя:
+   1) `.profile-link-row input` задаёт padding 11px/13px и по специфичности
+      (0,1,1 против 0,1,0) побеждал собственное правило поля — в коробке
+      34×34 на сам цвет оставалось 6×10 px. Отсюда селектор в две
+      степени: `.profile-link-row .profile-link-color-input`.
+   2) При `appearance: auto` WebKit рисует не заливку, а «колодец» со своей
+      рамкой и отступами — их убирает только стилизация
+      ::-webkit-color-swatch. Firefox — ::-moz-color-swatch. */
+.profile-field-color input[type="color"],
+.profile-link-row .profile-link-color-input {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    overflow: hidden;
+}
+
+.profile-field-color input[type="color"]::-webkit-color-swatch-wrapper,
+.profile-link-row .profile-link-color-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.profile-field-color input[type="color"]::-webkit-color-swatch,
+.profile-link-row .profile-link-color-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 9px;
+}
+
+.profile-field-color input[type="color"]::-moz-color-swatch,
+.profile-link-row .profile-link-color-input::-moz-color-swatch {
+    border: none;
+    border-radius: 9px;
 }
 
 .profile-link-remove {
@@ -9010,7 +9320,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .moderation-actions { display: flex; gap: 6px; }
 .moderation-actions button { flex: 1; }
 
-.peer-context-menu-sep { height: 1px; background: var(--border); margin: 2px 0; }
+/* Во всю ширину меню (отрицательные поля гасят падинг контейнера) — 
+   вставленный по центру разделитель короче пунктов читается как ещё
+   один элемент списка, а не как граница между группами. */
+.peer-context-menu-sep { height: 1px; background: var(--menu-border); margin: 5px -6px; }
 
 @media (max-width: 720px) {
     .profile-overlay { padding: 0; }
@@ -9180,6 +9493,201 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 
+/* ════════════════════════════════════════════════════════════════════════
+   КЕШ АССЕТОВ — режим, потолок и сводка обращений
+   Разметку рисует renderCacheSettings() (web/src/interface/cache.js).
+   Кнопки режимов повторяют геометрию .design-mode-option, но без превью:
+   у режимов кеша нечего показывать картинкой, разница выражается словами.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.cache-settings {
+    display: grid;
+    gap: 12px;
+}
+
+.cache-mode-options {
+    display: grid;
+    gap: 8px;
+}
+
+.cache-mode-option {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 13px;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    background: rgba(255,255,255,.025);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
+}
+
+.cache-mode-option:hover {
+    background: rgba(255,255,255,.045);
+    border-color: rgba(255,255,255,.16);
+}
+
+.cache-mode-option:active { transform: translateY(1px); }
+
+.cache-mode-option.active {
+    border-color: rgba(var(--accent-rgb), .55);
+    background: rgba(var(--accent-rgb), .09);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
+}
+
+.cache-mode-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+
+.cache-mode-copy strong { color: var(--text); font-size: 13px; font-weight: 800; }
+.cache-mode-copy small { color: var(--text2); font-size: 11px; line-height: 1.4; }
+
+.cache-mode-note {
+    flex: none;
+    align-self: start;
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.cache-mode-option.active .cache-mode-note { color: var(--lime); }
+
+.cache-limit-field { gap: 6px; }
+
+/* Полоса заполнения. Ширина ставится инлайном из посчитанного процента —
+   это единственное значение здесь, зависящее от данных. */
+.cache-usage-bar {
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: rgba(255,255,255,.07);
+}
+
+.cache-usage-bar > span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: rgb(var(--accent-rgb));
+    transition: width .25s var(--ease-out);
+}
+
+.cache-usage-status { margin: 0; }
+
+.cache-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+}
+
+.cache-summary-block {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.02);
+}
+
+.cache-kind-list,
+.cache-top-list {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.cache-kind-row,
+.cache-top-row {
+    display: grid;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text2);
+}
+
+.cache-kind-row { grid-template-columns: minmax(0, 1fr) auto; }
+.cache-top-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+
+.cache-kind-name,
+.cache-top-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+
+.cache-kind-meta,
+.cache-top-size { color: var(--text3); font-variant-numeric: tabular-nums; }
+
+/* Вид записи перед именем: аватарка и карточка профиля одного человека
+   называются одинаково, и без метки список читается как дубликаты. */
+.cache-top-kind {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 0 5px;
+    border-radius: 5px;
+    background: rgba(255,255,255,.06);
+    color: var(--text3);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+}
+
+/* Счётчик обращений — то, чем этот список полезен: он объясняет, почему
+   вытеснение выбирает именно эти файлы. Поэтому он акцентный, а не серый. */
+.cache-top-hits {
+    color: var(--lime);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.cache-kind-row--empty,
+.cache-top-row--empty {
+    grid-template-columns: 1fr;
+    color: var(--text3);
+}
+
+@media (max-width: 760px) {
+    .cache-mode-note { display: none; }
+    .cache-mode-option { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   МОДАЛЬНЫЕ СЛОИ НА ТЕЛЕФОНЕ — снова во весь экран
+   Блок держится В КОНЦЕ файла намеренно. Базовые правила этих четырёх
+   слоёв разбросаны по style.css, и часть из них (.profile-overlay, 8653)
+   объявлена ПОЗЖЕ основного мобильного @media — оттуда переопределение
+   не срабатывало вовсе: та же специфичность, кто ниже, тот и прав.
+   Одно место в самом низу перекрывает их все, где бы они ни стояли.
+
+   Почему на телефоне не absolute: там нет боковой панели рядом с чатом,
+   ограничивать диалог нечем и незачем, а .main выше вьюпорта
+   (min-height:100vh внутри строки грида) — absolute-слой оказался бы
+   длиннее экрана.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 760px) {
+    .profile-overlay,
+    .server-overlay,
+    .avatar-crop-overlay,
+    .coin-transfer-modal {
+        position: fixed;
+        inset: 0;
+    }
+}
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -9218,6 +9726,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
       "fields": [
         "messageId",
         "text",
+        "sender",
         "key",
         "keyVersion",
         "call",
@@ -9329,6 +9838,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         "body",
         "includeDeviceId",
         "requestId"
+      ],
+      "responseFields": [
+        "status",
+        "ok",
+        "headers",
+        "body",
+        "bodyBase64"
       ]
     },
     "ADD_CONTACT_REQUEST": {
@@ -9831,6 +10347,23 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                             <section class="settings-card">
                                 <div class="settings-card-head">
                                     <div>
+                                        <span class="settings-kicker">Storage</span>
+                                        <h3 class="settings-card-title">Кеш аватарок и медиа</h3>
+                                    </div>
+                                    <span class="settings-card-note">cache</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <!-- Содержимое рисует renderCacheSettings() (web/src/interface/cache.js):
+                                         режимы, слайдер потолка и сводка обращений считаются из индекса
+                                         в памяти и меняются на каждой записи в кеш. -->
+                                    <div class="cache-settings" id="cacheSettings"></div>
+                                    <p class="settings-help">Кеш хранится на этом устройстве и ускоряет открытие: аватарки, иконки серверов и профили показываются сразу, без ожидания сети. Когда места не хватает, первыми удаляются файлы, к которым обращались реже всего относительно их размера.</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
                                         <span class="settings-kicker">Voice</span>
                                         <h3 class="settings-card-title">Микрофон и динамики</h3>
                                     </div>
@@ -9959,6 +10492,416 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     </div>
                 </div>
 
+
+                <!-- Модальные слои (профиль, настройки сервера, обрезка
+                     аватара, перевод монет, обновление) живут ВНУТРИ .main,
+                     а не в <body>: так они накрывают только область чата и
+                     оставляют левую навигацию видимой и рабочей. На телефоне
+                     CSS возвращает им position: fixed — там боковой панели
+                     рядом с чатом нет, и диалог должен занимать весь экран.
+                     Порядок в разметке значения не имеет, слои разведены
+                     z-index (см. .avatar-crop-overlay в style.css). -->
+                <div class="avatar-crop-overlay" id="avatarCropOverlay" hidden>
+                    <div class="avatar-crop-modal" role="dialog" aria-modal="true" aria-labelledby="avatarCropTitle">
+                        <div class="avatar-crop-head">
+                            <h2 id="avatarCropTitle">Обрезка аватара</h2>
+                            <button class="avatar-crop-close" id="avatarCropCloseBtn" type="button" aria-label="Отмена">×</button>
+                        </div>
+                        <div class="avatar-crop-stage-wrap">
+                            <div class="avatar-crop-stage" id="avatarCropStage">
+                                <img class="avatar-crop-img" id="avatarCropImg" alt="Предпросмотр аватара" draggable="false">
+                                <div class="avatar-crop-circle-guide" id="avatarCropCircleGuide" aria-hidden="true"></div>
+                            </div>
+                        </div>
+                        <div class="avatar-crop-zoom-row">
+                            <span class="avatar-crop-zoom-icon" aria-hidden="true">−</span>
+                            <input type="range" class="avatar-crop-zoom" id="avatarCropZoom" min="0" max="1000" step="1" value="0" aria-label="Масштаб">
+                            <span class="avatar-crop-zoom-icon avatar-crop-zoom-icon--big" aria-hidden="true">+</span>
+                        </div>
+                        <p class="avatar-crop-hint">Перетащите фото, чтобы выбрать область, и настройте масштаб ползунком.</p>
+                        <div class="avatar-crop-actions">
+                            <button class="btn-flat" id="avatarCropCancelBtn" type="button">Отмена</button>
+                            <button class="auth-btn primary" id="avatarCropSaveBtn" type="button">Сохранить</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="coin-transfer-modal" id="coinTransferModal" role="dialog" aria-modal="true" aria-labelledby="coinTransferTitle" hidden>
+                    <div class="coin-transfer-box">
+                        <div class="coin-transfer-head">
+                            <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
+                            <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
+                        </div>
+                        <label class="coin-transfer-field">
+                            <span>Получатель</span>
+                            <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
+                        </label>
+                        <label class="coin-transfer-field">
+                            <span>Сумма (ZC)</span>
+                            <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
+                        </label>
+                        <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
+                        <div class="coin-transfer-actions">
+                            <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
+                            <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="coin-transfer-modal" id="updateAvailableModal" role="dialog" aria-modal="true" aria-labelledby="updateModalVersion" hidden>
+                    <div class="coin-transfer-box">
+                        <div class="coin-transfer-head">
+                            <h2 id="updateModalVersion">Доступно обновление</h2>
+                        </div>
+                        <p id="updateModalNotes"></p>
+                        <p class="coin-transfer-status" id="updateModalError" hidden></p>
+                        <div class="coin-transfer-field" id="updateModalProgressWrap" hidden>
+                            <div style="height:6px;border-radius:999px;background:rgba(127,127,127,0.25);overflow:hidden;">
+                                <div id="updateModalProgressBar" style="height:100%;width:0%;background:currentColor;transition:width 0.2s ease;"></div>
+                            </div>
+                        </div>
+                        <div class="coin-transfer-actions">
+                            <button class="btn-flat" id="updateModalDeclineBtn" type="button">Позже</button>
+                            <button class="auth-btn primary" id="updateModalAcceptBtn" type="button">Обновить</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="profile-overlay" id="profileOverlay" hidden>
+                    <div class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalName">
+                        <button class="profile-close" id="profileCloseBtn" type="button" aria-label="Закрыть профиль">
+                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+                        </button>
+                        <div class="profile-body" id="profileBody"></div>
+                    </div>
+                </div>
+
+                <div class="server-overlay" id="serverOverlay" hidden>
+                    <div class="server-modal" id="serverModal" role="dialog" aria-modal="true" aria-labelledby="serverModalTitle">
+                        <div class="server-modal-head">
+                            <div class="server-modal-headcopy">
+                                <span class="server-modal-kicker" id="serverModalKicker">Создание сервера</span>
+                                <h2 id="serverModalTitle">Создать сервер</h2>
+                                <p id="serverModalHint">Настройте имя, оформление и права доступа.</p>
+                            </div>
+                            <button class="server-modal-close" id="serverModalClose" type="button" aria-label="Закрыть">×</button>
+                        </div>
+
+                        <div class="server-modal-shell">
+                            <aside class="server-modal-sidebar">
+                                <div class="server-modal-sidebar-head">
+                                    <span class="server-modal-sidebar-kicker">Навигация</span>
+                                    <div class="server-modal-sidebar-title" id="serverModalSidebarTitle">Настройки сервера</div>
+                                    <div class="server-modal-sidebar-sub" id="serverModalSidebarHint">Выберите раздел слева, чтобы быстро перейти к нужным настройкам.</div>
+                                </div>
+                                <nav class="server-modal-nav" id="serverModalNav" aria-label="Разделы настроек">
+                                    <button class="server-modal-nav-btn" type="button" data-server-modal-section="overview">
+                                        <span class="server-modal-nav-label">Обзор</span>
+                                        <span class="server-modal-nav-desc">Имя, внешний вид и код</span>
+                                    </button>
+                                    <button class="server-modal-nav-btn" type="button" data-server-modal-section="channels">
+                                        <span class="server-modal-nav-label">Каналы</span>
+                                        <span class="server-modal-nav-desc">Создание и настройка каналов</span>
+                                    </button>
+                                    <button class="server-modal-nav-btn" type="button" data-server-modal-section="roles">
+                                        <span class="server-modal-nav-label">Роли</span>
+                                        <span class="server-modal-nav-desc">Права и оформление ролей</span>
+                                    </button>
+                                    <button class="server-modal-nav-btn" type="button" data-server-modal-section="members">
+                                        <span class="server-modal-nav-label">Участники</span>
+                                        <span class="server-modal-nav-desc">Управление участниками сервера</span>
+                                    </button>
+                                    <button class="server-modal-nav-btn" type="button" data-server-modal-section="discover">
+                                        <span class="server-modal-nav-label">Публичные серверы</span>
+                                        <span class="server-modal-nav-desc">Поиск и вход в сообщества</span>
+                                    </button>
+                                </nav>
+                            </aside>
+
+                            <div class="server-modal-body">
+                                <div class="server-modal-grid">
+                                    <section class="server-modal-section" data-server-modal-panel="overview" id="serverOverviewPanel">
+                                        <section class="server-modal-card" id="serverBasicsCard">
+                                            <div class="settings-card-head settings-card-head--tight">
+                                                <div>
+                                                    <span class="settings-kicker">Basics</span>
+                                                    <h3 class="settings-card-title">Параметры сервера</h3>
+                                                </div>
+                                                <span class="settings-card-note" id="serverModalModeNote">create</span>
+                                            </div>
+                                            <div class="server-form">
+                                                <input id="serverNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название сервера">
+                                                <input id="serverIconInput" class="settings-input" type="text" maxlength="8" placeholder="Иконка, символ или эмодзи">
+                                                <div class="color-picker color-picker--compact color-picker--collapsible is-collapsed" data-color-picker-key="server-basics">
+                                                    <div class="color-picker-head">
+                                                        <div class="color-picker-summary">
+                                                            <span class="color-picker-preview" style="background:#cbff00"></span>
+                                                            <div class="color-picker-copy">
+                                                                <div class="color-picker-title">RGB</div>
+                                                                <div class="color-picker-sub">Свернуто по умолчанию</div>
+                                                            </div>
+                                                        </div>
+                                                        <button class="btn-flat color-picker-toggle" id="serverColorToggleBtn" type="button" data-color-picker-toggle="server-basics">Развернуть</button>
+                                                    </div>
+                                                    <div class="color-picker-body">
+                                                        <div class="color-wheel color-wheel--small" id="serverColorWheel" tabindex="0" aria-label="Цвет сервера">
+                                                            <div class="color-wheel-thumb"></div>
+                                                            <div class="color-wheel-center">RGB</div>
+                                                        </div>
+                                                        <div class="color-picker-side">
+                                                            <input id="serverColorInput" type="hidden" value="#cbff00">
+                                                            <input id="serverColorHexInput" class="settings-input color-hex-input" type="text" maxlength="7" value="#cbff00" aria-label="HEX цвет сервера">
+                                                            <p class="settings-help color-picker-help">Выберите цвет колесом или введите HEX.</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <textarea id="serverDescriptionInput" class="settings-textarea" rows="4" maxlength="180" placeholder="Описание сервера"></textarea>
+                                                <label class="server-toggle">
+                                                    <input id="serverPublicInput" type="checkbox" checked>
+                                                    <span>
+                                                        <strong>Публичный сервер</strong>
+                                                        <small>Виден всем пользователям</small>
+                                                    </span>
+                                                </label>
+                                            </div>
+                                            <div class="server-assets">
+                                                <div class="server-asset-card">
+                                                    <div class="server-asset-preview server-avatar-preview" id="serverAvatarPreview">S</div>
+                                                    <div class="server-asset-copy">
+                                                        <div class="server-asset-title">Аватар сервера</div>
+                                                        <div class="server-asset-sub">Круглая иконка в списке серверов</div>
+                                                        <div class="server-asset-actions">
+                                                            <button class="btn-flat" id="serverAvatarUploadBtn" type="button">Загрузить</button>
+                                                            <button class="btn-flat" id="serverAvatarRemoveBtn" type="button">Удалить</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="server-asset-card server-banner-card">
+                                                    <div class="server-asset-preview server-banner-preview" id="serverBannerPreview">BAN</div>
+                                                    <div class="server-asset-copy">
+                                                        <div class="server-asset-title">Баннер сервера</div>
+                                                        <div class="server-asset-sub">Широкая шапка для сервера</div>
+                                                        <div class="server-asset-actions">
+                                                            <button class="btn-flat" id="serverBannerUploadBtn" type="button">Загрузить</button>
+                                                            <button class="btn-flat" id="serverBannerRemoveBtn" type="button">Удалить</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="server-link-card">
+                                                    <div class="server-asset-title">Код входа</div>
+                                                    <div class="server-asset-sub">Сюда можно вставить код сервера, по которому будут входить пользователи.</div>
+                                                    <div class="server-link-row">
+                                                        <input id="serverJoinLinkInput" class="settings-input" type="text" placeholder="Код сервера">
+                                                        <button class="btn-flat" id="serverJoinLinkGenerateBtn" type="button">Сгенерировать</button>
+                                                        <button class="btn-flat" id="serverJoinLinkCopyBtn" type="button">Копировать</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </section>
+                                    </section>
+
+                                    <section class="server-modal-section" data-server-modal-panel="channels" id="serverChannelsPanel" hidden>
+                                        <section class="server-modal-card" id="serverChannelsCard">
+                                            <div class="settings-card-head settings-card-head--tight">
+                                                <div>
+                                                    <span class="settings-kicker">Channels</span>
+                                                    <h3 class="settings-card-title">Каналы сервера</h3>
+                                                </div>
+                                                <span class="settings-card-note" id="serverChannelsCount">0</span>
+                                            </div>
+                                            <div class="server-channel-create is-collapsed" data-server-channel-create>
+                                                <div class="server-channel-create-head">
+                                                    <div class="server-channel-create-copy">
+                                                        <div class="server-channel-create-title">Новый канал</div>
+                                                        <div class="server-channel-create-sub">Нажмите, чтобы открыть форму создания</div>
+                                                    </div>
+                                                    <button class="btn-flat server-channel-create-btn" id="serverChannelCreateBtn" type="button">Новый канал</button>
+                                                </div>
+                                                <div class="server-channel-create-body" data-server-channel-create-body hidden>
+                                                    <input id="serverChannelNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название канала" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+                                                    <input id="serverChannelTopicInput" class="settings-input" type="text" maxlength="180" placeholder="Тема или описание канала" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+                                                    <div class="server-channel-create-row">
+                                                        <select id="serverChannelKindInput" class="settings-input">
+                                                            <option value="text" selected>Текстовый канал</option>
+                                                            <option value="voice">Голосовой канал</option>
+                                                        </select>
+                                                        <button class="auth-btn primary" id="serverChannelCreateSubmitBtn" type="button">Создать канал</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="server-channels-list" id="serverChannelsList"></div>
+                                        </section>
+                                    </section>
+
+                                    <section class="server-modal-section" data-server-modal-panel="roles" id="serverRolesPanel" hidden>
+                                        <section class="server-modal-card" id="serverRolesCard">
+                                            <div class="settings-card-head settings-card-head--tight">
+                                                <div>
+                                                    <span class="settings-kicker">Roles</span>
+                                                    <h3 class="settings-card-title">Роли сервера</h3>
+                                                </div>
+                                                <span class="settings-card-note" id="serverRolesCount">0</span>
+                                            </div>
+                                            <div class="server-role-create is-collapsed" data-server-role-create>
+                                                <div class="server-role-create-head">
+                                                    <div class="server-role-create-copy">
+                                                        <div class="server-role-create-title">Новая роль</div>
+                                                        <div class="server-role-create-sub">Нажмите, чтобы открыть форму создания</div>
+                                                    </div>
+                                                    <button class="btn-flat server-role-create-btn" id="serverRoleCreateBtn" type="button">Новая роль</button>
+                                                </div>
+                                                <div class="server-role-create-body" data-server-role-create-body hidden>
+                                                    <input id="serverRoleNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название роли" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+                                                    <div class="color-picker color-picker--compact color-picker--collapsible is-collapsed" data-color-picker-key="server-role-create">
+                                                        <div class="color-picker-head">
+                                                            <div class="color-picker-summary">
+                                                                <span class="color-picker-preview" style="background:#cbff00"></span>
+                                                                <div class="color-picker-copy">
+                                                                    <div class="color-picker-title">RGB</div>
+                                                                    <div class="color-picker-sub">Свернуто по умолчанию</div>
+                                                                </div>
+                                                            </div>
+                                                            <button class="btn-flat color-picker-toggle" id="serverRoleColorToggleBtn" type="button" data-color-picker-toggle="server-role-create">Развернуть</button>
+                                                        </div>
+                                                        <div class="color-picker-body">
+                                                            <div class="color-wheel color-wheel--small" id="serverRoleColorWheel" tabindex="0" aria-label="Цвет роли">
+                                                                <div class="color-wheel-thumb"></div>
+                                                                <div class="color-wheel-center">RGB</div>
+                                                            </div>
+                                                            <div class="color-picker-side">
+                                                                <input id="serverRoleColorInput" type="hidden" value="#cbff00">
+                                                                <input id="serverRoleColorHexInput" class="settings-input color-hex-input" type="text" maxlength="7" value="#cbff00" aria-label="HEX цвет роли">
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="server-role-create-perms">
+                                                        <div class="server-perm-group">
+                                                            <div class="server-perm-group-title">Доступ</div>
+                                                            <div class="server-perm-grid server-perm-grid--dense">
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Чтение каналов</strong><small>Видеть список и историю сообщений</small></span>
+                                                                    <input id="serverRolePermView" type="checkbox" data-server-role-perm="can_view" checked>
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Отправка сообщений</strong><small>Писать в текстовые каналы</small></span>
+                                                                    <input id="serverRolePermSend" type="checkbox" data-server-role-perm="can_send" checked>
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Реакции</strong><small>Ставить реакции на сообщения</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_react" checked>
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Файлы</strong><small>Прикреплять изображения и файлы</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_attach" checked>
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Ссылки и медиа</strong><small>Встраивать превью ссылок</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_embed" checked>
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Голосовые каналы</strong><small>Входить и говорить в voice</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_voice" checked>
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="server-perm-group">
+                                                            <div class="server-perm-group-title">Управление</div>
+                                                            <div class="server-perm-grid server-perm-grid--dense">
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Управление сервером</strong><small>Общие админские действия</small></span>
+                                                                    <input id="serverRolePermManage" type="checkbox" data-server-role-perm="can_manage">
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Каналы</strong><small>Создавать и менять каналы</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_manage_channels">
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Роли</strong><small>Создавать и менять роли</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_manage_roles">
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Приглашения</strong><small>Генерировать инвайты</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_invite" checked>
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Закреплять</strong><small>Закреплять важные сообщения</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_pin">
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>@everyone</strong><small>Упоминать всех участников</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_mention">
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Исключать</strong><small>Кикать участников из сервера</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_kick">
+                                                                </label>
+                                                                <label class="server-perm-row server-perm-row--stacked">
+                                                                    <span><strong>Бан</strong><small>Блокировать участников</small></span>
+                                                                    <input type="checkbox" data-server-role-perm="can_ban">
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="server-role-create-actions">
+                                                        <button class="auth-btn primary" id="serverRoleCreateSubmitBtn" type="button">Создать роль</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="server-roles-list" id="serverRolesList"></div>
+                                        </section>
+                                    </section>
+
+                                    <section class="server-modal-section" data-server-modal-panel="members" id="serverMembersPanel" hidden>
+                                        <section class="server-modal-card" id="serverMembersCard">
+                                            <div class="settings-card-head settings-card-head--tight">
+                                                <div>
+                                                    <span class="settings-kicker">Members</span>
+                                                    <h3 class="settings-card-title">Участники и роли</h3>
+                                                </div>
+                                                <span class="settings-card-note" id="serverMembersCount">0</span>
+                                            </div>
+                                            <div class="server-member-add">
+                                                <input id="serverMemberInput" class="settings-input" type="text" maxlength="64" placeholder="Логин участника">
+                                                <select id="serverMemberRole" class="settings-input"></select>
+                                                <button class="btn-flat" id="serverMemberAddBtn" type="button">Добавить</button>
+                                            </div>
+                                            <div class="server-members-list" id="serverMembersList"></div>
+                                        </section>
+                                    </section>
+
+                                    <section class="server-modal-section" data-server-modal-panel="discover" id="serverDiscoverPanel" hidden>
+                                        <section class="server-modal-card server-discover-card" id="serverDiscoverCard">
+                                            <div class="settings-card-head settings-card-head--tight">
+                                                <div>
+                                                    <span class="settings-kicker">Public</span>
+                                                    <h3 class="settings-card-title">Публичные серверы</h3>
+                                                </div>
+                                                <div class="server-discover-head-actions">
+                                                    <span class="settings-card-note" id="serverDiscoverCount">0</span>
+                                                    <button class="btn-flat" id="serverDiscoverRefreshBtn" type="button">Обновить</button>
+                                                </div>
+                                            </div>
+                                            <div class="server-discover-toolbar">
+                                                <input id="serverDiscoverQuery" class="settings-input" type="text" placeholder="Поиск публичных серверов">
+                                            </div>
+                                            <div class="server-discover-list" id="serverDiscoverList"></div>
+                                        </section>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="server-modal-error" id="serverModalError"></div>
+                        <div class="server-modal-actions">
+                            <button class="btn-flat server-delete-btn" id="serverDeleteBtn" type="button" hidden>Удалить сервер</button>
+                            <div class="server-modal-actions-right">
+                                <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
+                                <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -9970,406 +10913,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         </div>
     </div>
 
-    <div class="avatar-crop-overlay" id="avatarCropOverlay" hidden>
-        <div class="avatar-crop-modal" role="dialog" aria-modal="true" aria-labelledby="avatarCropTitle">
-            <div class="avatar-crop-head">
-                <h2 id="avatarCropTitle">Обрезка аватара</h2>
-                <button class="avatar-crop-close" id="avatarCropCloseBtn" type="button" aria-label="Отмена">×</button>
-            </div>
-            <div class="avatar-crop-stage-wrap">
-                <div class="avatar-crop-stage" id="avatarCropStage">
-                    <img class="avatar-crop-img" id="avatarCropImg" alt="Предпросмотр аватара" draggable="false">
-                    <div class="avatar-crop-circle-guide" id="avatarCropCircleGuide" aria-hidden="true"></div>
-                </div>
-            </div>
-            <div class="avatar-crop-zoom-row">
-                <span class="avatar-crop-zoom-icon" aria-hidden="true">−</span>
-                <input type="range" class="avatar-crop-zoom" id="avatarCropZoom" min="0" max="1000" step="1" value="0" aria-label="Масштаб">
-                <span class="avatar-crop-zoom-icon avatar-crop-zoom-icon--big" aria-hidden="true">+</span>
-            </div>
-            <p class="avatar-crop-hint">Перетащите фото, чтобы выбрать область, и настройте масштаб ползунком.</p>
-            <div class="avatar-crop-actions">
-                <button class="btn-flat" id="avatarCropCancelBtn" type="button">Отмена</button>
-                <button class="auth-btn primary" id="avatarCropSaveBtn" type="button">Сохранить</button>
-            </div>
-        </div>
-    </div>
 
-    <div class="coin-transfer-modal" id="coinTransferModal" role="dialog" aria-modal="true" aria-labelledby="coinTransferTitle" hidden>
-        <div class="coin-transfer-box">
-            <div class="coin-transfer-head">
-                <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
-                <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
-            </div>
-            <label class="coin-transfer-field">
-                <span>Получатель</span>
-                <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
-            </label>
-            <label class="coin-transfer-field">
-                <span>Сумма (ZC)</span>
-                <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
-            </label>
-            <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
-            <div class="coin-transfer-actions">
-                <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
-                <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
-            </div>
-        </div>
-    </div>
 
-    <div class="coin-transfer-modal" id="updateAvailableModal" role="dialog" aria-modal="true" aria-labelledby="updateModalVersion" hidden>
-        <div class="coin-transfer-box">
-            <div class="coin-transfer-head">
-                <h2 id="updateModalVersion">Доступно обновление</h2>
-            </div>
-            <p id="updateModalNotes"></p>
-            <p class="coin-transfer-status" id="updateModalError" hidden></p>
-            <div class="coin-transfer-field" id="updateModalProgressWrap" hidden>
-                <div style="height:6px;border-radius:999px;background:rgba(127,127,127,0.25);overflow:hidden;">
-                    <div id="updateModalProgressBar" style="height:100%;width:0%;background:currentColor;transition:width 0.2s ease;"></div>
-                </div>
-            </div>
-            <div class="coin-transfer-actions">
-                <button class="btn-flat" id="updateModalDeclineBtn" type="button">Позже</button>
-                <button class="auth-btn primary" id="updateModalAcceptBtn" type="button">Обновить</button>
-            </div>
-        </div>
-    </div>
 
-    <div class="profile-overlay" id="profileOverlay" hidden>
-        <div class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalName">
-            <button class="profile-close" id="profileCloseBtn" type="button" aria-label="Закрыть профиль">
-                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-            </button>
-            <div class="profile-body" id="profileBody"></div>
-        </div>
-    </div>
 
-    <div class="server-overlay" id="serverOverlay" hidden>
-        <div class="server-modal" id="serverModal" role="dialog" aria-modal="true" aria-labelledby="serverModalTitle">
-            <div class="server-modal-head">
-                <div class="server-modal-headcopy">
-                    <span class="server-modal-kicker" id="serverModalKicker">Создание сервера</span>
-                    <h2 id="serverModalTitle">Создать сервер</h2>
-                    <p id="serverModalHint">Настройте имя, оформление и права доступа.</p>
-                </div>
-                <button class="server-modal-close" id="serverModalClose" type="button" aria-label="Закрыть">×</button>
-            </div>
-
-            <div class="server-modal-shell">
-                <aside class="server-modal-sidebar">
-                    <div class="server-modal-sidebar-head">
-                        <span class="server-modal-sidebar-kicker">Навигация</span>
-                        <div class="server-modal-sidebar-title" id="serverModalSidebarTitle">Настройки сервера</div>
-                        <div class="server-modal-sidebar-sub" id="serverModalSidebarHint">Выберите раздел слева, чтобы быстро перейти к нужным настройкам.</div>
-                    </div>
-                    <nav class="server-modal-nav" id="serverModalNav" aria-label="Разделы настроек">
-                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="overview">
-                            <span class="server-modal-nav-label">Обзор</span>
-                            <span class="server-modal-nav-desc">Имя, внешний вид и код</span>
-                        </button>
-                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="channels">
-                            <span class="server-modal-nav-label">Каналы</span>
-                            <span class="server-modal-nav-desc">Создание и настройка каналов</span>
-                        </button>
-                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="roles">
-                            <span class="server-modal-nav-label">Роли</span>
-                            <span class="server-modal-nav-desc">Права и оформление ролей</span>
-                        </button>
-                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="members">
-                            <span class="server-modal-nav-label">Участники</span>
-                            <span class="server-modal-nav-desc">Управление участниками сервера</span>
-                        </button>
-                        <button class="server-modal-nav-btn" type="button" data-server-modal-section="discover">
-                            <span class="server-modal-nav-label">Публичные серверы</span>
-                            <span class="server-modal-nav-desc">Поиск и вход в сообщества</span>
-                        </button>
-                    </nav>
-                </aside>
-
-                <div class="server-modal-body">
-                    <div class="server-modal-grid">
-                        <section class="server-modal-section" data-server-modal-panel="overview" id="serverOverviewPanel">
-                            <section class="server-modal-card" id="serverBasicsCard">
-                                <div class="settings-card-head settings-card-head--tight">
-                                    <div>
-                                        <span class="settings-kicker">Basics</span>
-                                        <h3 class="settings-card-title">Параметры сервера</h3>
-                                    </div>
-                                    <span class="settings-card-note" id="serverModalModeNote">create</span>
-                                </div>
-                                <div class="server-form">
-                                    <input id="serverNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название сервера">
-                                    <input id="serverIconInput" class="settings-input" type="text" maxlength="8" placeholder="Иконка, символ или эмодзи">
-                                    <div class="color-picker color-picker--compact color-picker--collapsible is-collapsed" data-color-picker-key="server-basics">
-                                        <div class="color-picker-head">
-                                            <div class="color-picker-summary">
-                                                <span class="color-picker-preview" style="background:#cbff00"></span>
-                                                <div class="color-picker-copy">
-                                                    <div class="color-picker-title">RGB</div>
-                                                    <div class="color-picker-sub">Свернуто по умолчанию</div>
-                                                </div>
-                                            </div>
-                                            <button class="btn-flat color-picker-toggle" id="serverColorToggleBtn" type="button" data-color-picker-toggle="server-basics">Развернуть</button>
-                                        </div>
-                                        <div class="color-picker-body">
-                                            <div class="color-wheel color-wheel--small" id="serverColorWheel" tabindex="0" aria-label="Цвет сервера">
-                                                <div class="color-wheel-thumb"></div>
-                                                <div class="color-wheel-center">RGB</div>
-                                            </div>
-                                            <div class="color-picker-side">
-                                                <input id="serverColorInput" type="hidden" value="#cbff00">
-                                                <input id="serverColorHexInput" class="settings-input color-hex-input" type="text" maxlength="7" value="#cbff00" aria-label="HEX цвет сервера">
-                                                <p class="settings-help color-picker-help">Выберите цвет колесом или введите HEX.</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <textarea id="serverDescriptionInput" class="settings-textarea" rows="4" maxlength="180" placeholder="Описание сервера"></textarea>
-                                    <label class="server-toggle">
-                                        <input id="serverPublicInput" type="checkbox" checked>
-                                        <span>
-                                            <strong>Публичный сервер</strong>
-                                            <small>Виден всем пользователям</small>
-                                        </span>
-                                    </label>
-                                </div>
-                                <div class="server-assets">
-                                    <div class="server-asset-card">
-                                        <div class="server-asset-preview server-avatar-preview" id="serverAvatarPreview">S</div>
-                                        <div class="server-asset-copy">
-                                            <div class="server-asset-title">Аватар сервера</div>
-                                            <div class="server-asset-sub">Круглая иконка в списке серверов</div>
-                                            <div class="server-asset-actions">
-                                                <button class="btn-flat" id="serverAvatarUploadBtn" type="button">Загрузить</button>
-                                                <button class="btn-flat" id="serverAvatarRemoveBtn" type="button">Удалить</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="server-asset-card server-banner-card">
-                                        <div class="server-asset-preview server-banner-preview" id="serverBannerPreview">BAN</div>
-                                        <div class="server-asset-copy">
-                                            <div class="server-asset-title">Баннер сервера</div>
-                                            <div class="server-asset-sub">Широкая шапка для сервера</div>
-                                            <div class="server-asset-actions">
-                                                <button class="btn-flat" id="serverBannerUploadBtn" type="button">Загрузить</button>
-                                                <button class="btn-flat" id="serverBannerRemoveBtn" type="button">Удалить</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="server-link-card">
-                                        <div class="server-asset-title">Код входа</div>
-                                        <div class="server-asset-sub">Сюда можно вставить код сервера, по которому будут входить пользователи.</div>
-                                        <div class="server-link-row">
-                                            <input id="serverJoinLinkInput" class="settings-input" type="text" placeholder="Код сервера">
-                                            <button class="btn-flat" id="serverJoinLinkGenerateBtn" type="button">Сгенерировать</button>
-                                            <button class="btn-flat" id="serverJoinLinkCopyBtn" type="button">Копировать</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </section>
-                        </section>
-
-                        <section class="server-modal-section" data-server-modal-panel="channels" id="serverChannelsPanel" hidden>
-                            <section class="server-modal-card" id="serverChannelsCard">
-                                <div class="settings-card-head settings-card-head--tight">
-                                    <div>
-                                        <span class="settings-kicker">Channels</span>
-                                        <h3 class="settings-card-title">Каналы сервера</h3>
-                                    </div>
-                                    <span class="settings-card-note" id="serverChannelsCount">0</span>
-                                </div>
-                                <div class="server-channel-create is-collapsed" data-server-channel-create>
-                                    <div class="server-channel-create-head">
-                                        <div class="server-channel-create-copy">
-                                            <div class="server-channel-create-title">Новый канал</div>
-                                            <div class="server-channel-create-sub">Нажмите, чтобы открыть форму создания</div>
-                                        </div>
-                                        <button class="btn-flat server-channel-create-btn" id="serverChannelCreateBtn" type="button">Новый канал</button>
-                                    </div>
-                                    <div class="server-channel-create-body" data-server-channel-create-body hidden>
-                                        <input id="serverChannelNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название канала" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
-                                        <input id="serverChannelTopicInput" class="settings-input" type="text" maxlength="180" placeholder="Тема или описание канала" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
-                                        <div class="server-channel-create-row">
-                                            <select id="serverChannelKindInput" class="settings-input">
-                                                <option value="text" selected>Текстовый канал</option>
-                                                <option value="voice">Голосовой канал</option>
-                                            </select>
-                                            <button class="auth-btn primary" id="serverChannelCreateSubmitBtn" type="button">Создать канал</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="server-channels-list" id="serverChannelsList"></div>
-                            </section>
-                        </section>
-
-                        <section class="server-modal-section" data-server-modal-panel="roles" id="serverRolesPanel" hidden>
-                            <section class="server-modal-card" id="serverRolesCard">
-                                <div class="settings-card-head settings-card-head--tight">
-                                    <div>
-                                        <span class="settings-kicker">Roles</span>
-                                        <h3 class="settings-card-title">Роли сервера</h3>
-                                    </div>
-                                    <span class="settings-card-note" id="serverRolesCount">0</span>
-                                </div>
-                                <div class="server-role-create is-collapsed" data-server-role-create>
-                                    <div class="server-role-create-head">
-                                        <div class="server-role-create-copy">
-                                            <div class="server-role-create-title">Новая роль</div>
-                                            <div class="server-role-create-sub">Нажмите, чтобы открыть форму создания</div>
-                                        </div>
-                                        <button class="btn-flat server-role-create-btn" id="serverRoleCreateBtn" type="button">Новая роль</button>
-                                    </div>
-                                    <div class="server-role-create-body" data-server-role-create-body hidden>
-                                        <input id="serverRoleNameInput" class="settings-input" type="text" maxlength="64" placeholder="Название роли" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
-                                        <div class="color-picker color-picker--compact color-picker--collapsible is-collapsed" data-color-picker-key="server-role-create">
-                                            <div class="color-picker-head">
-                                                <div class="color-picker-summary">
-                                                    <span class="color-picker-preview" style="background:#cbff00"></span>
-                                                    <div class="color-picker-copy">
-                                                        <div class="color-picker-title">RGB</div>
-                                                        <div class="color-picker-sub">Свернуто по умолчанию</div>
-                                                    </div>
-                                                </div>
-                                                <button class="btn-flat color-picker-toggle" id="serverRoleColorToggleBtn" type="button" data-color-picker-toggle="server-role-create">Развернуть</button>
-                                            </div>
-                                            <div class="color-picker-body">
-                                                <div class="color-wheel color-wheel--small" id="serverRoleColorWheel" tabindex="0" aria-label="Цвет роли">
-                                                    <div class="color-wheel-thumb"></div>
-                                                    <div class="color-wheel-center">RGB</div>
-                                                </div>
-                                                <div class="color-picker-side">
-                                                    <input id="serverRoleColorInput" type="hidden" value="#cbff00">
-                                                    <input id="serverRoleColorHexInput" class="settings-input color-hex-input" type="text" maxlength="7" value="#cbff00" aria-label="HEX цвет роли">
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="server-role-create-perms">
-                                            <div class="server-perm-group">
-                                                <div class="server-perm-group-title">Доступ</div>
-                                                <div class="server-perm-grid server-perm-grid--dense">
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Чтение каналов</strong><small>Видеть список и историю сообщений</small></span>
-                                                        <input id="serverRolePermView" type="checkbox" data-server-role-perm="can_view" checked>
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Отправка сообщений</strong><small>Писать в текстовые каналы</small></span>
-                                                        <input id="serverRolePermSend" type="checkbox" data-server-role-perm="can_send" checked>
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Реакции</strong><small>Ставить реакции на сообщения</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_react" checked>
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Файлы</strong><small>Прикреплять изображения и файлы</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_attach" checked>
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Ссылки и медиа</strong><small>Встраивать превью ссылок</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_embed" checked>
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Голосовые каналы</strong><small>Входить и говорить в voice</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_voice" checked>
-                                                    </label>
-                                                </div>
-                                            </div>
-                                            <div class="server-perm-group">
-                                                <div class="server-perm-group-title">Управление</div>
-                                                <div class="server-perm-grid server-perm-grid--dense">
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Управление сервером</strong><small>Общие админские действия</small></span>
-                                                        <input id="serverRolePermManage" type="checkbox" data-server-role-perm="can_manage">
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Каналы</strong><small>Создавать и менять каналы</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_manage_channels">
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Роли</strong><small>Создавать и менять роли</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_manage_roles">
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Приглашения</strong><small>Генерировать инвайты</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_invite" checked>
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Закреплять</strong><small>Закреплять важные сообщения</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_pin">
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>@everyone</strong><small>Упоминать всех участников</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_mention">
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Исключать</strong><small>Кикать участников из сервера</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_kick">
-                                                    </label>
-                                                    <label class="server-perm-row server-perm-row--stacked">
-                                                        <span><strong>Бан</strong><small>Блокировать участников</small></span>
-                                                        <input type="checkbox" data-server-role-perm="can_ban">
-                                                    </label>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="server-role-create-actions">
-                                            <button class="auth-btn primary" id="serverRoleCreateSubmitBtn" type="button">Создать роль</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="server-roles-list" id="serverRolesList"></div>
-                            </section>
-                        </section>
-
-                        <section class="server-modal-section" data-server-modal-panel="members" id="serverMembersPanel" hidden>
-                            <section class="server-modal-card" id="serverMembersCard">
-                                <div class="settings-card-head settings-card-head--tight">
-                                    <div>
-                                        <span class="settings-kicker">Members</span>
-                                        <h3 class="settings-card-title">Участники и роли</h3>
-                                    </div>
-                                    <span class="settings-card-note" id="serverMembersCount">0</span>
-                                </div>
-                                <div class="server-member-add">
-                                    <input id="serverMemberInput" class="settings-input" type="text" maxlength="64" placeholder="Логин участника">
-                                    <select id="serverMemberRole" class="settings-input"></select>
-                                    <button class="btn-flat" id="serverMemberAddBtn" type="button">Добавить</button>
-                                </div>
-                                <div class="server-members-list" id="serverMembersList"></div>
-                            </section>
-                        </section>
-
-                        <section class="server-modal-section" data-server-modal-panel="discover" id="serverDiscoverPanel" hidden>
-                            <section class="server-modal-card server-discover-card" id="serverDiscoverCard">
-                                <div class="settings-card-head settings-card-head--tight">
-                                    <div>
-                                        <span class="settings-kicker">Public</span>
-                                        <h3 class="settings-card-title">Публичные серверы</h3>
-                                    </div>
-                                    <div class="server-discover-head-actions">
-                                        <span class="settings-card-note" id="serverDiscoverCount">0</span>
-                                        <button class="btn-flat" id="serverDiscoverRefreshBtn" type="button">Обновить</button>
-                                    </div>
-                                </div>
-                                <div class="server-discover-toolbar">
-                                    <input id="serverDiscoverQuery" class="settings-input" type="text" placeholder="Поиск публичных серверов">
-                                </div>
-                                <div class="server-discover-list" id="serverDiscoverList"></div>
-                            </section>
-                        </section>
-                    </div>
-                </div>
-            </div>
-
-            <div class="server-modal-error" id="serverModalError"></div>
-            <div class="server-modal-actions">
-                <button class="btn-flat server-delete-btn" id="serverDeleteBtn" type="button" hidden>Удалить сервер</button>
-                <div class="server-modal-actions-right">
-                    <button class="btn-flat" id="serverModalCancel" type="button">Отмена</button>
-                    <button class="auth-btn primary" id="serverSaveBtn" type="button">Создать</button>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <div class="auth-overlay visible" id="authOverlay">
         <div class="auth-card">
@@ -12364,10 +12911,22 @@ class ZaliInterface {
         this.nativeRequests = new Map();
         this.avatarCache = new Map();
         this.avatarRequests = new Map();
+        // Когда можно снова пробовать скачать то, что не скачалось —
+        // см. ZALI_ASSET_RETRY_COOLDOWN_MS в interface/avatars.js.
+        this.avatarRetryAt = new Map();
         this.avatarFetchSeq = new Map();
         this.serverAssetCache = new Map();
         this.serverAssetRequests = new Map();
+        this.serverAssetRetryAt = new Map();
         this.serverAssetFetchSeq = new Map();
+        // Постоянный кеш ассетов (interface/cache.js). Индекс сводок и счётчик
+        // занятого места живут здесь, чтобы решение о вытеснении не читало диск;
+        // сама база открывается лениво, первым обращением.
+        this._cacheStats = new Map();
+        this._cacheDirtyStats = new Set();
+        this._cacheBytes = 0;
+        this._cacheDb = null;
+        this._cacheReady = null;
         this.colorWheelBindings = new Set();
         this.messageAnimSeen = new Set();
         this.mediaSizeCache = new Map();
@@ -12593,6 +13152,17 @@ ZaliMixin(ZaliInterface, class {
             close: `<svg ${attrs} fill="none"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`,
             bell: `<svg ${attrs} fill="none"><path d="M12 3.5a4.2 4.2 0 0 0-4.2 4.2v2.3c0 .78-.28 1.53-.79 2.12l-1.2 1.4c-.7.82-.12 2.08.96 2.08h10.46c1.08 0 1.66-1.26.96-2.08l-1.2-1.4a3.2 3.2 0 0 1-.79-2.12V7.7A4.2 4.2 0 0 0 12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.9 18.5a2.1 2.1 0 0 0 4.2 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             'bell-off': `<svg ${attrs} fill="none"><path d="M12 3.5a4.2 4.2 0 0 0-4.2 4.2v2.3c0 .78-.28 1.53-.79 2.12l-1.2 1.4c-.7.82-.12 2.08.96 2.08h10.46c1.08 0 1.66-1.26.96-2.08l-1.2-1.4a3.2 3.2 0 0 1-.79-2.12V7.7A4.2 4.2 0 0 0 12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.9 18.5a2.1 2.1 0 0 0 4.2 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M4.5 4.5l15 15" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>`,
+            // Пункты контекстных меню и действия над сообщением. Один
+            // стиль со всеми иконками выше: 24×24, обводка 1.8, круглые
+            // концы — иначе строка меню с иконкой выглядит склеенной из
+            // двух разных наборов.
+            user: `<svg ${attrs} fill="none"><circle cx="12" cy="8.4" r="3.6" stroke="currentColor" stroke-width="1.8"/><path d="M5 19.6c.55-3.4 3.45-5.7 7-5.7s6.45 2.3 7 5.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+            'user-plus': `<svg ${attrs} fill="none"><circle cx="10.2" cy="8.4" r="3.6" stroke="currentColor" stroke-width="1.8"/><path d="M3.4 19.6c.5-3.3 3.3-5.7 6.8-5.7 1.05 0 2.05.18 2.95.52" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M17.6 14.1v5.9M14.65 17.05h5.9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+            eye: `<svg ${attrs} fill="none"><path d="M2.9 12S6.7 5.9 12 5.9 21.1 12 21.1 12 17.3 18.1 12 18.1 2.9 12 2.9 12Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.85" stroke="currentColor" stroke-width="1.8"/></svg>`,
+            'eye-off': `<svg ${attrs} fill="none"><path d="M6.4 6.9C4.2 8.4 2.9 12 2.9 12s3.8 6.1 9.1 6.1c1.7 0 3.2-.63 4.45-1.5M9.6 5.35A8.9 8.9 0 0 1 12 5.9c5.3 0 9.1 6.1 9.1 6.1s-.86 1.4-2.35 2.85" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.98 9.98a2.85 2.85 0 0 0 4.04 4.04" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M4.6 4.6l14.8 14.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+            reply: `<svg ${attrs} fill="none"><path d="M9.4 6.6 4.2 11.8l5.2 5.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.8 11.8h8.9a5.9 5.9 0 0 1 5.9 5.9v.9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`,
+            pencil: `<svg ${attrs} fill="none"><path d="M15.05 5.5 18.5 8.95" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m16.05 4.5 1.5 1.5a1.6 1.6 0 0 1 0 2.26L9.4 16.4l-3.4 1.1 1.1-3.4 8.14-8.15a1.6 1.6 0 0 1 2.26 0Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4.9 20.3h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+            trash: `<svg ${attrs} fill="none"><path d="M4.9 6.9h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.7 6.9V5.5a1.4 1.4 0 0 1 1.4-1.4h1.8a1.4 1.4 0 0 1 1.4 1.4v1.4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m6.8 6.9.75 11.5a1.6 1.6 0 0 0 1.6 1.5h5.7a1.6 1.6 0 0 0 1.6-1.5l.75-11.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
         };
         return icons[name] || '';
     }
@@ -12804,8 +13374,15 @@ ZaliMixin(ZaliInterface, class {
     }
 
     hasNativeAvatarBridge() {
+        // 'android' входит сюда наравне с остальными, и это не расширение
+        // возможностей, а починка: Android объявляет avatarFetch и обрабатывает
+        // UPLOAD_AVATAR_REQUEST / DELETE_AVATAR_REQUEST у себя в мосте — просто эта
+        // проверка его не пускала, и обработчики никогда не вызывались. Загрузка
+        // уходила в браузерный фолбэк с FormData, то есть мимо моста, из
+        // `file://`-документа с `Origin: null`, который сервер отвергает по CORS.
+        // Итог: поставить или снять аватар с телефона было нельзя вообще.
         const transport = this.nativeBridge()?.transport;
-        return transport === 'ipc' || transport === 'webview2' || transport === 'webkit';
+        return transport === 'ipc' || transport === 'webview2' || transport === 'webkit' || transport === 'android';
     }
 
     startEnergyAwareMaintenance() {
@@ -12814,6 +13391,12 @@ ZaliMixin(ZaliInterface, class {
             const onVisibilityChange = () => {
                 if (document.hidden) {
                     this.stopVoiceMeterLoop();
+                    // Счётчики обращений копятся в памяти и уходят на диск по
+                    // таймеру (см. interface/cache.js). Уход в фон — последний
+                    // момент, когда таймер ещё точно сработает: дальше его
+                    // душит браузер, а на мобильных вкладку могут и выгрузить,
+                    // и тогда кеш забудет, чем пользовались весь сеанс.
+                    void this.flushCacheStats();
                     return;
                 }
                 this.refreshVisibleAvatars();
@@ -12829,8 +13412,8 @@ ZaliMixin(ZaliInterface, class {
             document.addEventListener('visibilitychange', onVisibilityChange);
             window.addEventListener('focus', onVisibilityChange);
             // Debounced message-cache saves must land before the page goes away.
-            window.addEventListener('pagehide', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); });
-            window.addEventListener('beforeunload', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); });
+            window.addEventListener('pagehide', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); void this.flushCacheStats(); });
+            window.addEventListener('beforeunload', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); void this.flushCacheStats(); });
             window.addEventListener('error', () => this.flushTrace());
         }
 
@@ -13445,18 +14028,37 @@ ZaliMixin(ZaliInterface, class {
             && !!document.getElementById('viewChat')?.classList.contains('active');
         const value = chatScreen ? (Number(progress) || 0) : 0;
         const flag = !!animate;
+        // Какая секция активна сейчас. Нативная панель (Android) рисуется поверх
+        // вебвью и прячет веб-док, поэтому подсветку своей активной вкладки она
+        // взять неоткуда не может: её собственный `selected` — это локальное
+        // состояние, меняющееся только от тапа по ней самой. А в Хаб и Настройки
+        // можно уйти и другим путём (сегмент-контрол внутри настроек), после чего
+        // подсветка начинала врать. Считается ровно теми же условиями, что и
+        // класс .active на кнопках веб-дока в syncMobileChrome().
+        const section = this.activeMobileNavSection();
         // Drag frames arrive at display rate; only the visible steps are worth
         // a bridge hop.
         if (this._lastNativeNavProgress != null
             && Math.abs(value - this._lastNativeNavProgress) < 0.01
-            && flag === this._lastNativeNavAnimate) return;
+            && flag === this._lastNativeNavAnimate
+            && section === this._lastNativeNavSection) return;
         this._lastNativeNavProgress = value;
         this._lastNativeNavAnimate = flag;
+        this._lastNativeNavSection = section;
         this.postNativeMessage({
             type: NativeMessageTypes.MOBILE_NAV_PROGRESS,
             progress: value,
             animate: flag,
+            section,
         });
+    }
+
+    /** 'chats' | 'servers' | 'hub' | 'settings' — источник истины для подсветки
+     * и веб-дока, и нативной панели. */
+    activeMobileNavSection() {
+        if (document.getElementById('viewSettings')?.classList.contains('active')) return 'settings';
+        if (document.getElementById('viewHub')?.classList.contains('active')) return 'hub';
+        return this.S.navMode === 'servers' ? 'servers' : 'chats';
     }
 
     currentMobileNavProgress() {
@@ -13686,11 +14288,20 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Mobile touch gestures, delegated on the persistent containers (#msgs /
-    // #contacts) so they survive the innerHTML re-renders those lists do.
+    // #contacts / #serverChannelList) so they survive the innerHTML re-renders
+    // those lists do.
     //
-    //  • Long-press a message  → opens the existing reaction menu. The desktop
-    //    path is `contextmenu`, which touch browsers fire inconsistently (and
-    //    iOS shows its own callout instead).
+    //  • Long-press a message  → opens the existing reaction menu.
+    //  • Long-press a contact  → opens the contact context menu (профиль,
+    //    подписка, заявка в друзья, глушилка, громкость собеседника).
+    //  • Long-press a channel  → глушилка канала.
+    //
+    // Всё это на десктопе висит на `contextmenu`, которого на тач-устройствах
+    // просто нет: браузеры его либо не шлют, либо шлют непредсказуемо, а iOS
+    // вместо него показывает собственное системное меню. Долгое нажатие для
+    // сообщений было сделано ещё тогда, а для контактов и каналов — нет, и
+    // комментарий выше про «#contacts» описывал намерение, а не код. То есть
+    // всё меню контакта было с телефона недостижимо в принципе.
     //
     // Dialog rows deliberately have NO horizontal gesture of their own: a
     // left-swipe on the list screen belongs to the forward navigation gesture
@@ -13698,47 +14309,93 @@ ZaliMixin(ZaliInterface, class {
     // dialog is the row's own × button (.contact-remove), which the mobile
     // stylesheet used to hide in favour of swipe-to-reveal-Delete.
     setupMobileTouchGestures() {
-        const LONG_PRESS_MS = 420;
-        const MOVE_CANCEL = 10;
-
         const msgsEl = document.getElementById('msgs');
-        if (msgsEl && !msgsEl.__mobileLongPressBound) {
-            msgsEl.__mobileLongPressBound = true;
-            let timer = null;
-            let startX = 0;
-            let startY = 0;
-            let held = null;
-            const cancelPress = () => {
-                if (timer) { clearTimeout(timer); timer = null; }
-                if (held) { held.classList.remove('press-hold'); held = null; }
-            };
-            msgsEl.addEventListener('touchstart', (e) => {
-                if (!this.isMobileLayout()) return;
-                const touch = e.touches[0];
-                const msgEl = e.target?.closest?.('.msg[data-message-id]');
-                if (!touch || !msgEl) return;
-                startX = touch.clientX;
-                startY = touch.clientY;
-                held = msgEl;
-                msgEl.classList.add('press-hold');
-                timer = setTimeout(() => {
-                    const id = msgEl.getAttribute('data-message-id');
-                    if (id) {
-                        this.showReactionMenu(msgEl, id, startX, startY);
-                        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* no haptics */ } }
-                    }
-                    cancelPress();
-                }, LONG_PRESS_MS);
-            }, { passive: true });
-            msgsEl.addEventListener('touchmove', (e) => {
-                const touch = e.touches[0];
-                if (!touch || !timer) return;
-                if (Math.abs(touch.clientX - startX) > MOVE_CANCEL || Math.abs(touch.clientY - startY) > MOVE_CANCEL) cancelPress();
-            }, { passive: true });
-            msgsEl.addEventListener('touchend', cancelPress);
-            msgsEl.addEventListener('touchcancel', cancelPress);
+        if (msgsEl) {
+            this.bindMobileLongPress(msgsEl, '.msg[data-message-id]', (msgEl, x, y) => {
+                const id = msgEl.getAttribute('data-message-id');
+                if (id) this.showReactionMenu(msgEl, id, x, y);
+            });
         }
 
+        const contactsEl = document.getElementById('contacts');
+        if (contactsEl) {
+            this.bindMobileLongPress(contactsEl, '.contact', (row, x, y) => {
+                if (!row.dataset.name) return;
+                this.openContactContextMenu(row.dataset.name, x, y);
+            });
+        }
+
+        const channelsEl = document.getElementById('serverChannelList');
+        if (channelsEl) {
+            this.bindMobileLongPress(channelsEl, '.server-channel[data-channel-id]', (btn) => {
+                if (btn.getAttribute('data-channel-kind') === 'voice') return;
+                const sid = btn.getAttribute('data-server-id');
+                const cid = btn.getAttribute('data-channel-id');
+                if (sid && cid) this.toggleMuteChannel(sid, cid);
+            });
+        }
+    }
+
+    /**
+     * Долгое нажатие с делегированием на постоянном контейнере.
+     *
+     * @param {HTMLElement} container контейнер, переживающий перерисовки списка
+     * @param {string} selector       что считать «строкой» внутри него
+     * @param {(el: HTMLElement, x: number, y: number) => void} onLongPress
+     */
+    bindMobileLongPress(container, selector, onLongPress) {
+        if (!container || container.__mobileLongPressBound) return;
+        container.__mobileLongPressBound = true;
+
+        const LONG_PRESS_MS = 420;
+        const MOVE_CANCEL = 10;
+        let timer = null;
+        let startX = 0;
+        let startY = 0;
+        let held = null;
+        let fired = false;
+
+        const cancelPress = () => {
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (held) { held.classList.remove('press-hold'); held = null; }
+        };
+
+        container.addEventListener('touchstart', (e) => {
+            if (!this.isMobileLayout()) return;
+            const touch = e.touches[0];
+            const target = e.target?.closest?.(selector);
+            if (!touch || !target) return;
+            fired = false;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            held = target;
+            target.classList.add('press-hold');
+            timer = setTimeout(() => {
+                fired = true;
+                onLongPress(target, startX, startY);
+                if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* no haptics */ } }
+                cancelPress();
+            }, LONG_PRESS_MS);
+        }, { passive: true });
+
+        container.addEventListener('touchmove', (e) => {
+            const touch = e.touches[0];
+            if (!touch || !timer) return;
+            if (Math.abs(touch.clientX - startX) > MOVE_CANCEL || Math.abs(touch.clientY - startY) > MOVE_CANCEL) cancelPress();
+        }, { passive: true });
+
+        container.addEventListener('touchend', cancelPress);
+        container.addEventListener('touchcancel', cancelPress);
+
+        // Долгое нажатие по строке диалога иначе доигрывалось обычным кликом: меню
+        // открывалось и тут же уезжало вместе с переключением чата. Перехват в фазе
+        // погружения, до делегированного обработчика в events.js.
+        container.addEventListener('click', (e) => {
+            if (!fired) return;
+            fired = false;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
     }
 
     syncMobileChrome() {
@@ -13764,17 +14421,18 @@ ZaliMixin(ZaliInterface, class {
 
         if (isMobile) this.syncNativeMobileNav();
 
-        const settingsActive = !!document.getElementById('viewSettings')?.classList.contains('active');
-        const hubActive = !!document.getElementById('viewHub')?.classList.contains('active');
+        // Одна функция на обе панели — веб-док и нативную: разъехаться им теперь
+        // негде, потому что подсветка считается в одном месте.
+        const section = this.activeMobileNavSection();
         const chatsBtn = document.getElementById('mobileChatsBtn');
         const serversBtn = document.getElementById('mobileServersBtn');
         const hubBtn = document.getElementById('mobileHubBtn');
         const settingsBtn = document.getElementById('mobileSettingsBtn');
 
-        if (chatsBtn) chatsBtn.classList.toggle('active', !settingsActive && !hubActive && this.S.navMode !== 'servers');
-        if (serversBtn) serversBtn.classList.toggle('active', !settingsActive && !hubActive && this.S.navMode === 'servers');
-        if (hubBtn) hubBtn.classList.toggle('active', hubActive);
-        if (settingsBtn) settingsBtn.classList.toggle('active', settingsActive);
+        if (chatsBtn) chatsBtn.classList.toggle('active', section === 'chats');
+        if (serversBtn) serversBtn.classList.toggle('active', section === 'servers');
+        if (hubBtn) hubBtn.classList.toggle('active', section === 'hub');
+        if (settingsBtn) settingsBtn.classList.toggle('active', section === 'settings');
 
         const mobileMenuBtn = document.getElementById('mobileMenuBtn');
         if (mobileMenuBtn) {
@@ -13850,6 +14508,12 @@ ZaliMixin(ZaliInterface, class {
         this.renderAudioDeviceSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
+        // Индекс сводок кеша поднимается лениво, первым обращением. Открытие
+        // настроек — как раз такое обращение: без него карточка на свежем
+        // запуске показала бы пустой кеш при полном диске. Рисуем сразу (чтобы
+        // не мигало) и ещё раз, когда база ответит.
+        this.renderCacheSettings();
+        void this.ensureCacheReady().then(() => this.renderCacheSettings());
         this.closeMobileSidebar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
@@ -14791,6 +15455,11 @@ ZaliMixin(ZaliInterface, class {
         }
         try { localStorage.setItem(marker, epoch); } catch (e) {}
 
+        // Постоянный кеш ассетов живёт в IndexedDB, а не в localStorage, и
+        // цикл выше его не видит — а в нём лежат аватарки и вложения, снятые
+        // с сервера, которого больше нет. Удаляется целиком, вместе со схемой.
+        try { this.destroyAssetCacheDatabase(); } catch (e) {}
+
         // Injected at document-start from native storage — already in memory by now.
         try { window.__ZALI_SAVED_KEY = ''; } catch (e) {}
         try { window.__ZALI_MESSAGE_CACHE = { chats: {}, serverChats: {} }; } catch (e) {}
@@ -15044,6 +15713,20 @@ ZaliMixin(ZaliInterface, class {
         const json = JSON.stringify(this.stripMessageCachePayloads(payload));
         const unchanged = this._lastSavedMessageCacheJson === json
             && this._lastSavedMessageCacheKey === storageKey;
+        // Вложения уезжают в постоянный кеш (interface/cache.js), а не в
+        // localStorage: там они перестают помещаться задолго до того, как
+        // переписка станет большой, и клиент переходит на копию без байтов
+        // (см. writeMessageCacheToStorage). Раньше на Windows/iOS/Android это
+        // значило «фотографии в истории навсегда превращаются в имена файлов».
+        // Проверка «уже лежит» идёт по индексу сводок в памяти, поэтому цена
+        // прохода пропорциональна новым вложениям, а не всему архиву.
+        if (!unchanged) {
+            for (const store of [payload.chats, payload.serverChats]) {
+                for (const msgs of Object.values(store || {})) {
+                    for (const msg of msgs || []) this.cacheStoreMessageAttachments(msg);
+                }
+            }
+        }
         // The object, not a string: loadInjectedMessageCache() accepts either, and
         // handing it the object skips a second full serialisation of the archive.
         this.saveInjectedMessageCache(payload);
@@ -15259,6 +15942,1396 @@ ZaliMixin(ZaliInterface, class {
             this.trace('loadStoredCryptoKey error fallback empty');
             return '';
         }
+    }
+});
+
+
+// --- MODULE: interface/cache.js ---
+// --- ZaliInterface: Постоянный кеш бинарных ассетов: аватарки, ассеты серверов, профили, вложения. ---
+// Часть класса ZaliInterface (см. web/src/interface.js).
+//
+// Зачем это вообще появилось
+// --------------------------
+// До этого файла кеш ассетов был `new Map()` в конструкторе — то есть жил ровно
+// до перезагрузки страницы. Каждый запуск клиента заново скачивал аватарку
+// КАЖДОГО контакта, иконку и баннер каждого сервера, а профиль перезапрашивался
+// на каждом открытии (см. шапку profiles.js — там это было записано как
+// осознанное решение). Отсюда «многие аватарки и раздел профиля требуют
+// подгрузки»: не медленная сеть, а отсутствие диска под кешем.
+//
+// Здесь появляется диск — IndexedDB — и политика, которая решает, что на него
+// класть и что с него выкидывать.
+//
+// Три вещи, вокруг которых построен файл
+// --------------------------------------
+//  1. СВОДКА ДЕШЕВЛЕ САМОГО ФАЙЛА. На каждый файл хранится один компактный
+//     stat-объект (~60 байт, однобуквенные поля) в ОТДЕЛЬНОМ object store.
+//     Весь индекс сводок целиком поднимается в память ОДНИМ getAll() при
+//     открытии базы, дальше попадание в кеш меняет только Map в памяти, а на
+//     диск дирти-записи уходят пачкой раз в ZALI_CACHE_STAT_FLUSH_MS. Иначе
+//     каждое обращение к аватарке стоило бы отдельной транзакции записи —
+//     дороже, чем сама аватарка.
+//  2. РЕШЕНИЕ О ВЫТЕСНЕНИИ ПРИНИМАЕТСЯ БЕЗ ЕДИНОГО ЧТЕНИЯ С ДИСКА. Индекс уже
+//     в памяти, поэтому выбор жертвы — это сортировка массива, а не обход базы.
+//  3. ЦЕНА ПРОПОРЦИОНАЛЬНА ДЕЙСТВИЮ (общий принцип раздела «Производительность»
+//     в CLAUDE.md). Запись одного файла трогает один blob и один stat, а не
+//     пересобирает индекс; вытеснение трогает ровно столько записей, сколько
+//     нужно освободить.
+//
+// Чего здесь СОЗНАТЕЛЬНО нет
+// --------------------------
+// Нативного слоя. Всё живёт в вебвью и работает одинаково во всех четырёх
+// оболочках — как и голосовые звонки (см. исключение в CLAUDE.md), правку
+// дублировать в macOS/Windows/Android не нужно, достаточно bundle_web.py.
+// Плата: там, где IndexedDB недоступна (документ с opaque-origin — это про
+// Android с его file:///android_asset/), кеш деградирует до сегодняшнего
+// поведения «только память», а не ломается. Проверять доступность обязательно
+// через реальное открытие базы: наличие window.indexedDB ещё ничего не значит,
+// на file:// оно есть и бросает SecurityError на open().
+
+const ZALI_CACHE_DB_NAME = 'zali_asset_cache_v1';
+const ZALI_CACHE_DB_VERSION = 1;
+const ZALI_CACHE_BLOB_STORE = 'blobs';
+const ZALI_CACHE_STAT_STORE = 'stats';
+
+// Дирти-сводки сбрасываются пачкой. Число подобрано так, чтобы всплеск
+// обращений (первая отрисовка списка контактов трогает все аватарки разом)
+// уложился в одну транзакцию.
+const ZALI_CACHE_STAT_FLUSH_MS = 4000;
+
+// Потолок «лёгкого» режима: картинка/стикер крупнее этого считается тяжёлой и
+// в режиме «Кешировать легковесное» на диск не попадает.
+const ZALI_CACHE_LIGHT_MAX_BYTES = 2 * 1024 * 1024;
+
+// Сколько blob:-ссылок разрешено создать при прогреве. Прогрев существует ради
+// первого кадра, а не ради полноты: остальное подтянется обычным путём по мере
+// обращения. Без потолка аккаунт с тысячей контактов создавал бы тысячу
+// object URL'ов до того, как нарисован первый экран.
+const ZALI_CACHE_PRIME_LIMIT = 400;
+
+// Через сколько кешированный ассет перепроверяется в фоне. Аватарки штатно
+// инвалидируются событием avatar_updated (handleAvatarUpdated), поэтому срок
+// длинный — это страховка на случай пропущенного события, а не основной путь.
+const ZALI_CACHE_REVALIDATE_MS = 24 * 60 * 60 * 1000;
+
+// Окно дедупликации показов: см. cacheNoteAssetUse(). Аватарка, весь день
+// висящая в списке контактов, набирает столько обращений, сколько минут
+// приложение было открыто, — а не сколько раз перерисовался список.
+const ZALI_CACHE_USE_WINDOW_MS = 60_000;
+
+// Потолок ожидания открытия базы — см. openCacheDb(). Это не «медленный диск»,
+// а «открытие может не завершиться никогда»; секунды хватает с запасом на любое
+// честное открытие, а всё, что дольше, для отрисовки уже неотличимо от отказа.
+const ZALI_CACHE_OPEN_TIMEOUT_MS = 4000;
+
+// Вес класса в формуле полезности. Аватарка в 8 КБ, к которой обращаются на
+// каждой отрисовке, обязана переживать видео в 40 МБ, открытое однажды, —
+// и без веса это уже вытекало бы из деления на размер, но вес делает
+// приоритет явным и настраиваемым.
+const ZALI_CACHE_CLASS_WEIGHT = { essential: 8, light: 2, bulk: 1 };
+
+// Сколько сверх необходимого освобождать за один проход вытеснения. Освобождать
+// ровно столько, сколько нужно под текущий файл, — значит запускать вытеснение
+// на каждой следующей записи; 12% дают запас на серию.
+const ZALI_CACHE_EVICT_HEADROOM = 0.12;
+
+ZaliMixin(ZaliInterface, class {
+
+    // ============================================================
+    // Настройки: режим и потолок
+    // ============================================================
+
+    // Настройка устройства, а не аккаунта: потолок кеша — про свободное место
+    // на этой машине, и переживать переключение аккаунта он обязан.
+    cachePrefsStorageKey() {
+        return 'zali_cache_prefs_v1';
+    }
+
+    static get cacheModeCatalog() {
+        return [
+            {
+                id: 'all',
+                label: 'Кешировать всё',
+                note: 'all',
+                hint: 'Аватарки, ассеты серверов, профили, стикеры и любые вложения — включая видео и файлы.',
+            },
+            {
+                id: 'light',
+                label: 'Кешировать легковесное',
+                note: 'default',
+"""#,
+    #"""
+                hint: 'Всё необходимое плюс стикеры и медиа до 2 МБ. Тяжёлые вложения качаются заново.',
+            },
+            {
+                id: 'essential',
+                label: 'Кешировать необходимое',
+                note: 'min',
+                hint: 'Только аватарки, иконки и баннеры серверов и карточки профилей.',
+            },
+            {
+                id: 'off',
+                label: 'Не кешировать',
+                note: 'off',
+                hint: 'Ничего не хранится между запусками. Всё подгружается заново при каждом открытии.',
+            },
+        ];
+    }
+
+    // Остановки слайдера. Последняя — Infinity: «безлимитно» здесь означает
+    // «клиент сам не вытесняет», а не «место бесконечно» — реальный потолок
+    // тогда ставит браузерная квота, и запись, не влезшая в неё, всё равно
+    // запускает вытеснение (см. cachePut).
+    static get cacheLimitStops() {
+        return [
+            { bytes: 512 * 1024 * 1024, label: '512 МБ' },
+            { bytes: 1024 * 1024 * 1024, label: '1 ГБ' },
+            { bytes: 2 * 1024 * 1024 * 1024, label: '2 ГБ' },
+            { bytes: 4 * 1024 * 1024 * 1024, label: '4 ГБ' },
+            { bytes: 8 * 1024 * 1024 * 1024, label: '8 ГБ' },
+            { bytes: 16 * 1024 * 1024 * 1024, label: '16 ГБ' },
+            { bytes: Infinity, label: 'Без ограничения' },
+        ];
+    }
+
+    static get defaultCacheMode() { return 'light'; }
+
+    /** 2 ГБ — третья остановка. Индекс, а не значение: слайдер работает по индексу. */
+    static get defaultCacheLimitIndex() { return 2; }
+
+    normalizeCacheMode(value) {
+        const id = String(value || '').trim().toLowerCase();
+        return ZaliInterface.cacheModeCatalog.some(mode => mode.id === id)
+            ? id
+            : ZaliInterface.defaultCacheMode;
+    }
+
+    normalizeCacheLimitIndex(value) {
+        // `null` отдельно от прочего мусора: Number(null) — это 0, то есть
+        // самый маленький потолок. Отсутствующее значение в сохранённых
+        // настройках должно давать значение ПО УМОЛЧАНИЮ, а не 512 МБ.
+        if (value === null || value === undefined || value === '') {
+            return ZaliInterface.defaultCacheLimitIndex;
+        }
+        const index = Number(value);
+        if (!Number.isFinite(index)) return ZaliInterface.defaultCacheLimitIndex;
+        const max = ZaliInterface.cacheLimitStops.length - 1;
+        return Math.min(max, Math.max(0, Math.round(index)));
+    }
+
+    loadCachePrefs() {
+        if (this._cachePrefs) return this._cachePrefs;
+        let parsed = null;
+        try {
+            const raw = localStorage.getItem(this.cachePrefsStorageKey());
+            parsed = raw ? JSON.parse(raw) : null;
+        } catch (e) {
+            parsed = null;
+        }
+        this._cachePrefs = {
+            mode: this.normalizeCacheMode(parsed?.mode),
+            limitIndex: this.normalizeCacheLimitIndex(
+                parsed?.limitIndex === undefined ? ZaliInterface.defaultCacheLimitIndex : parsed.limitIndex,
+            ),
+        };
+        return this._cachePrefs;
+    }
+
+    saveCachePrefs(partial = {}) {
+        const current = this.loadCachePrefs();
+        const next = {
+            mode: partial.mode === undefined ? current.mode : this.normalizeCacheMode(partial.mode),
+            limitIndex: partial.limitIndex === undefined
+                ? current.limitIndex
+                : this.normalizeCacheLimitIndex(partial.limitIndex),
+        };
+        const modeChanged = next.mode !== current.mode;
+        const limitLowered = next.limitIndex < current.limitIndex;
+        this._cachePrefs = next;
+        try {
+            localStorage.setItem(this.cachePrefsStorageKey(), JSON.stringify(next));
+        } catch (e) {}
+        this.trace(`saveCachePrefs mode=${next.mode} limit=${this.cacheLimitBytes()}`);
+        // Ужесточение настройки применяется сразу, а не «когда-нибудь при
+        // следующей записи»: человек, выкрутивший потолок с 16 ГБ до 512 МБ,
+        // ждёт, что место освободится сейчас.
+        if (next.mode === 'off') {
+            void this.clearAssetCache();
+        } else if (modeChanged || limitLowered) {
+            void this.enforceCachePolicy();
+        }
+        this.renderCacheSettings();
+        return next;
+    }
+
+    cacheMode() {
+        return this.loadCachePrefs().mode;
+    }
+
+    cacheLimitBytes() {
+        return ZaliInterface.cacheLimitStops[this.loadCachePrefs().limitIndex].bytes;
+    }
+
+    cacheLimitLabel() {
+        return ZaliInterface.cacheLimitStops[this.loadCachePrefs().limitIndex].label;
+    }
+
+    // ============================================================
+    // Политика: что вообще кладём на диск
+    // ============================================================
+
+    /**
+     * Класс ассета. Определяет и вес при вытеснении, и режим, начиная с
+     * которого ассет вообще попадает на диск.
+     *   essential — маленькое и переиспользуемое на каждой отрисовке.
+     *   light     — заметное, но всё ещё дешёвое.
+     *   bulk      — тяжёлое, ради чего и существует потолок кеша.
+     */
+    cacheClassOf(kind, size = 0) {
+        switch (kind) {
+            case 'avatar':
+            case 'server_asset':
+            case 'profile':
+                return 'essential';
+            case 'sticker':
+                return 'light';
+            case 'attachment':
+                return Number(size || 0) <= ZALI_CACHE_LIGHT_MAX_BYTES ? 'light' : 'bulk';
+            default:
+                return 'bulk';
+        }
+    }
+
+    /** Пускает ли текущий режим ассет этого класса на диск. */
+    cachePolicyAllows(kind, size = 0) {
+        const mode = this.cacheMode();
+        if (mode === 'off') return false;
+        const cls = this.cacheClassOf(kind, size);
+        if (mode === 'all') return true;
+        if (mode === 'light') return cls !== 'bulk';
+        return cls === 'essential';
+    }
+
+    // ============================================================
+    // Хранилище
+    // ============================================================
+
+    /**
+     * Ключ записи. Аккаунт входит в ключ, и это не перестраховка: список
+     * контактов, состав серверов и карточки профилей — это то, с кем аккаунт
+     * общается. Оставлять их видимыми следующему аккаунту на той же машине
+     * незачем, а очистка по префиксу выходит бесплатной.
+     */
+    cacheEntryKey(kind, id) {
+        const account = String(this.S?.session?.username || 'anon').trim().toLowerCase() || 'anon';
+        return `${account}|${kind}|${String(id || '')}`;
+    }
+
+    cacheAccountPrefix() {
+        const account = String(this.S?.session?.username || 'anon').trim().toLowerCase() || 'anon';
+        return `${account}|`;
+    }
+
+    /**
+     * Открывает базу ровно один раз за сессию и запоминает РЕЗУЛЬТАТ, включая
+     * отказ: там, где IndexedDB закрыта origin'ом документа, open() бросает на
+     * каждой попытке, и без запоминания клиент дёргал бы её на каждой аватарке.
+     */
+    ensureCacheStorage() {
+        if (this._cacheReady) return this._cacheReady;
+        this._cacheReady = (async () => {
+            let db = null;
+            try {
+                db = await this.openCacheDb();
+            } catch (e) {
+                this.trace(`assetCache unavailable reason=${e?.name || e?.message || e}`);
+                db = null;
+            }
+            if (!db) {
+                this._cacheDisabledReason = 'IndexedDB недоступна в этой оболочке';
+                this._cacheStats = new Map();
+                this._cacheBytes = 0;
+                return null;
+            }
+            this._cacheDb = db;
+            await this.loadCacheStatIndex(db);
+            return db;
+        })();
+        return this._cacheReady;
+    }
+
+    /**
+     * То же самое, но с оглядкой на режим. Разделено намеренно: memo стоит на
+     * ОТКРЫТИИ базы, а не на режиме, иначе выключение кеша в настройках
+     * запоминало бы «базы нет» на весь сеанс, и обратное включение не
+     * заработало бы до перезагрузки. Очистка и удаление базы, наоборот,
+     * обязаны работать и при выключенном кеше — им нужно добраться до того,
+     * что записали, пока он был включён.
+     */
+    ensureCacheReady() {
+        if (this.cacheMode() === 'off') return Promise.resolve(null);
+        return this.ensureCacheStorage();
+    }
+
+    /**
+     * Открытие базы ОБЯЗАНО завершаться. Это не перестраховка — без таймаута
+     * подсистема кеша умеет подвесить отрисовку.
+     *
+     * `indexedDB.open()` не даёт никаких гарантий по времени и не обязан
+     * завершиться вообще: пока по этой базе висит незавершённый
+     * `deleteDatabase()` (а он висит, пока хоть одна другая вкладка держит
+     * соединение открытым), запрос на открытие просто ждёт — не `success`, не
+     * `error`, и `blocked` тоже нет, потому что это событие только про смену
+     * версии. Две вкладки веб-клиента — совершенно обычное дело, а
+     * `destroyAssetCacheDatabase()` вызывается из конструктора при смене
+     * localResetEpoch, то есть ровно в тот момент, когда вкладок может быть
+     * несколько.
+     *
+     * Цена такого зависания непропорциональна: `ensureAvatarLoaded()` ждёт
+     * `cacheGet()`, тот ждёт открытия базы — и промис аватарки не резолвится
+     * НИКОГДА, оставаясь в `avatarRequests`. То есть аватарки перестают
+     * грузиться совсем, включая сетевой путь, к которому кеш отношения не
+     * имеет. Проверено вживую: `deleteDatabase` из второй вкладки → аватарка
+     * висит в PENDING бесконечно.
+     *
+     * Поэтому: истёк таймаут — считаем, что диска нет, и работаем как на
+     * платформе без IndexedDB. Соединение, если оно всё-таки откроется позже,
+     * закрывается, чтобы не мешать чужому `deleteDatabase`.
+     */
+    openCacheDb() {
+        return new Promise((resolve, reject) => {
+            let request;
+            try {
+                if (!window.indexedDB) { resolve(null); return; }
+                request = window.indexedDB.open(ZALI_CACHE_DB_NAME, ZALI_CACHE_DB_VERSION);
+            } catch (e) {
+                reject(e);
+                return;
+            }
+            let done = false;
+            const settle = (value) => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                resolve(value);
+            };
+            const timer = setTimeout(() => {
+                if (done) return;
+                done = true;
+                this.trace('assetCache open timed out — работаем без диска');
+                // Опоздавшее соединение закрываем: держать его открытым значит
+                // блокировать deleteDatabase той вкладки, которая нас и ждёт.
+                request.onsuccess = () => { try { request.result.close(); } catch (e) {} };
+                resolve(null);
+            }, ZALI_CACHE_OPEN_TIMEOUT_MS);
+
+            request.onupgradeneeded = () => {
+                const db = request.result;
+                if (!db.objectStoreNames.contains(ZALI_CACHE_BLOB_STORE)) {
+                    db.createObjectStore(ZALI_CACHE_BLOB_STORE);
+                }
+                if (!db.objectStoreNames.contains(ZALI_CACHE_STAT_STORE)) {
+                    db.createObjectStore(ZALI_CACHE_STAT_STORE);
+                }
+            };
+            request.onsuccess = () => settle(request.result);
+            request.onerror = () => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                reject(request.error || new Error('indexedDB open failed'));
+            };
+            // Другая вкладка держит старую версию базы. Ждать нечего — работаем
+            // без диска, но не висим на промисе вечно.
+            request.onblocked = () => settle(null);
+        });
+    }
+
+    /**
+     * Весь индекс сводок — одним чтением. Это и есть «максимально ресурсно
+     * оптимизированная сводка»: дальше ни одно обращение к кешу не читает с
+     * диска ничего, кроме самого файла.
+     */
+    async loadCacheStatIndex(db) {
+        const stats = new Map();
+        let bytes = 0;
+        try {
+            const rows = await this.cacheIdbRequest(
+                db.transaction(ZALI_CACHE_STAT_STORE, 'readonly').objectStore(ZALI_CACHE_STAT_STORE).getAll(),
+            );
+            for (const row of rows || []) {
+                if (!row || !row.k) continue;
+                stats.set(row.k, row);
+                bytes += Number(row.s || 0);
+            }
+        } catch (e) {
+            this.trace(`assetCache stat index read failed reason=${e?.name || e?.message || e}`);
+        }
+        this._cacheStats = stats;
+        this._cacheBytes = bytes;
+        this.trace(`assetCache ready entries=${stats.size} bytes=${bytes}`);
+        return stats;
+    }
+
+    /** Промис вокруг IDBRequest — весь остальной файл говорит на async/await. */
+    cacheIdbRequest(request) {
+        return new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error || new Error('indexedDB request failed'));
+        });
+    }
+
+    cacheStats() {
+        if (!this._cacheStats) this._cacheStats = new Map();
+        return this._cacheStats;
+    }
+
+    cacheUsedBytes() {
+        return Number(this._cacheBytes || 0);
+    }
+
+    // ============================================================
+    // Чтение / запись
+    // ============================================================
+
+    /**
+     * Достаёт файл и засчитывает обращение. Возвращает Blob или null.
+     *
+     * Обращение засчитывается ТОЛЬКО при попадании: промах — это не
+     * использование файла, и накручивать им счётчик значило бы поднимать
+     * ценность записи, которой в кеше нет.
+     */
+    async cacheGet(kind, id) {
+        const db = await this.ensureCacheReady();
+        if (!db) return null;
+        const key = this.cacheEntryKey(kind, id);
+        const stat = this.cacheStats().get(key);
+        if (!stat) return null;
+        try {
+            const row = await this.cacheIdbRequest(
+                db.transaction(ZALI_CACHE_BLOB_STORE, 'readonly').objectStore(ZALI_CACHE_BLOB_STORE).get(key),
+            );
+            if (!row || !row.b) {
+                // Сводка есть, файла нет — рассинхрон после прерванной
+                // транзакции. Чинится удалением сводки, иначе она вечно
+                // занимает место в учёте и мешает вытеснению.
+                this.cacheForgetStat(key, { purgeDisk: true });
+                return null;
+            }
+            this.cacheNoteHit(key);
+            return new Blob([row.b], { type: row.t || stat.t || 'application/octet-stream' });
+        } catch (e) {
+            this.trace(`cacheGet failed key=${key} reason=${e?.name || e?.message || e}`);
+            return null;
+        }
+    }
+
+    /**
+     * Пакетное чтение — одна транзакция на весь набор.
+     *
+     * Прогрев поднимает до ZALI_CACHE_PRIME_LIMIT записей; отдельная
+     * транзакция на каждую — это столько же обращений к движку хранилища, а в
+     * WKWebView/WebView2 ещё и столько же переходов через границу процесса,
+     * на самом старте приложения.
+     *
+     * Обращения здесь НЕ засчитываются, и это принципиально. Прогрев берёт
+     * самые используемые записи — если бы он их же и повышал, счётчик
+     * подтверждал бы сам себя: однажды популярная аватарка вечно попадала бы
+     * в прогрев, вечно обновляла время обращения и никогда бы не устаревала,
+     * даже если человек уже год с ней не разговаривает. Использование
+     * засчитывает тот, кто действительно показывает картинку, —
+     * cacheNoteAssetUse() из loadStoredAvatar()/loadServerAsset().
+     */
+    async cacheReadBatch(keys) {
+        const out = new Map();
+        const db = this._cacheDb;
+        if (!db || !keys.length) return out;
+        try {
+            const tx = db.transaction(ZALI_CACHE_BLOB_STORE, 'readonly');
+            const store = tx.objectStore(ZALI_CACHE_BLOB_STORE);
+            const reads = keys.map(key => this.cacheIdbRequest(store.get(key)).then(row => [key, row]));
+            const rows = await Promise.all(reads);
+            for (const [key, row] of rows) {
+                if (row && row.b) out.set(key, new Blob([row.b], { type: row.t || 'application/octet-stream' }));
+                else this.cacheForgetStat(key, { purgeDisk: true });
+            }
+        } catch (e) {
+            this.trace(`cacheReadBatch failed count=${keys.length} reason=${e?.name || e?.message || e}`);
+        }
+        return out;
+    }
+
+    /**
+     * Засчитывает показ ассета — но не чаще раза в ZALI_CACHE_USE_WINDOW_MS
+     * на ключ.
+     *
+     * Вызывается из loadStoredAvatar(), то есть из отрисовки каждой строки
+     * контакта и каждой группы сообщений: считать там КАЖДЫЙ вызов значило бы
+     * мерить не «как часто нужен файл», а «сколько раз перерисовался список»,
+     * и одна прокрутка ленты дала бы аватарке больше обращений, чем все
+     * вложения переписки вместе. Окно превращает это в понятную величину:
+     * сколько минут работы приложения файл реально был на экране.
+     *
+     * Цена — одна проверка Set на пути, где уже есть проверка Map.
+     */
+    cacheNoteAssetUse(kind, id) {
+        if (!this._cacheStats || !this._cacheStats.size) return;
+        const now = Date.now();
+        if (!this._cacheUseWindow || now - this._cacheUseWindowAt > ZALI_CACHE_USE_WINDOW_MS) {
+            this._cacheUseWindow = new Set();
+            this._cacheUseWindowAt = now;
+        }
+        const key = this.cacheEntryKey(kind, id);
+        if (this._cacheUseWindow.has(key)) return;
+        this._cacheUseWindow.add(key);
+        this.cacheNoteHit(key);
+    }
+
+    /** Свежесть записи — для фоновой перепроверки. */
+    cacheIsStale(kind, id, maxAgeMs = ZALI_CACHE_REVALIDATE_MS) {
+        const stat = this.cacheStats().get(this.cacheEntryKey(kind, id));
+        if (!stat) return true;
+        return (Date.now() - Number(stat.c || 0)) > maxAgeMs;
+    }
+
+    /**
+     * Кладёт файл. Молча ничего не делает, если политика его не пускает —
+     * вызывающему не нужно знать про режимы.
+     */
+    async cachePut(kind, id, source, { contentType = '' } = {}) {
+        const blob = await this.toCacheBlob(source, contentType);
+        if (!blob || !blob.size) return false;
+        if (!this.cachePolicyAllows(kind, blob.size)) return false;
+        const db = await this.ensureCacheReady();
+        if (!db) return false;
+
+        const key = this.cacheEntryKey(kind, id);
+        // Удаление того же ключа, начатое раньше, должно ЗАВЕРШИТЬСЯ раньше —
+        // см. cacheDelete(). Обе операции фоновые, и без этого порядок решает
+        // то, кому первым досталось открытое соединение.
+        const pendingDelete = this._cachePendingDeletes?.get(key);
+        if (pendingDelete) {
+            try { await pendingDelete; } catch (e) {}
+        }
+        const previous = this.cacheStats().get(key);
+        const delta = blob.size - Number(previous?.s || 0);
+        // Освобождаем место ДО записи: запись, не влезающая в потолок, иначе
+        // сначала превысила бы его, а потом сама себя и вытеснила.
+        if (delta > 0) await this.cacheEvictFor(delta);
+
+        let buffer;
+        try {
+            buffer = await this.blobToArrayBuffer(blob);
+        } catch (e) {
+            return false;
+        }
+        // ArrayBuffer, а не Blob: Blob в IndexedDB исторически ломался в
+        // WKWebView, а буфер лежит везде одинаково. Тип хранится рядом.
+        const row = { b: buffer, t: blob.type || contentType || 'application/octet-stream' };
+        const now = Date.now();
+        const stat = {
+            k: key,
+            s: blob.size,
+            // Свежая запись стартует с одним обращением: файл, который только
+            // что понадобился, уже один раз использован.
+            h: Number(previous?.h || 0) + 1,
+            u: now,
+            c: now,
+            g: this.cacheClassOf(kind, blob.size),
+            n: kind,
+            t: row.t,
+        };
+
+        const write = async () => {
+            const tx = db.transaction([ZALI_CACHE_BLOB_STORE, ZALI_CACHE_STAT_STORE], 'readwrite');
+            tx.objectStore(ZALI_CACHE_BLOB_STORE).put(row, key);
+            tx.objectStore(ZALI_CACHE_STAT_STORE).put(stat, key);
+            await this.cacheTransactionDone(tx);
+        };
+
+        try {
+            await write();
+        } catch (e) {
+            // Квота браузера может оказаться меньше выбранного потолка (и
+            // всегда меньше «без ограничения»). Один раз освобождаем заметную
+            // долю и пробуем снова; второй отказ — просто не кешируем.
+            const quota = e?.name === 'QuotaExceededError' || /quota/i.test(String(e?.message || ''));
+            if (!quota) {
+                this.trace(`cachePut failed key=${key} reason=${e?.name || e?.message || e}`);
+                return false;
+            }
+            // ignoreLimit: место кончилось по квоте браузера, а не по нашему
+            // потолку — при «Без ограничения» обычное вытеснение не сработало бы.
+            await this.cacheEvictFor(
+                Math.max(delta, Math.ceil(this.cacheUsedBytes() * 0.25)),
+                { ignoreLimit: true },
+            );
+            try {
+                await write();
+            } catch (inner) {
+                this.trace(`cachePut quota-bound key=${key} reason=${inner?.name || inner?.message || inner}`);
+                return false;
+            }
+        }
+
+        // Учёт сводится по ТЕКУЩЕМУ состоянию индекса, а не по delta, посчитанной
+        // до await'ов. Между ними стоит cacheEvictFor(), и вытеснение вправе
+        // выбрать жертвой ровно ту запись, которую мы сейчас перезаписываем, —
+        // тогда cacheForgetStat() уже вычел её размер, и прибавление старой
+        // delta теряет previous.s безвозвратно. Замер: 81920 против реальных
+        // 92160 после одной такой перезаписи, и дрейф копится, пока индекс не
+        // будет перечитан с диска, — то есть выбранный потолок молча превышается.
+        const current = this.cacheStats().get(key);
+        this._cacheBytes = Math.max(0, this.cacheUsedBytes() - Number(current?.s || 0)) + blob.size;
+        this.cacheStats().set(key, stat);
+        this.scheduleCacheSummaryRefresh();
+        return true;
+    }
+
+    // Через ensureCacheStorage(), а не ensureCacheReady(): инвалидация обязана
+    // доходить до диска и при выключенном кеше — иначе снятая аватарка
+    // осталась бы лежать там до включения кеша обратно.
+    //
+    // Удаление регистрируется в _cachePendingDeletes, и cachePut() по тому же
+    // ключу его дожидается. Иначе инвалидация и перезакачка — две несвязанные
+    // фоновые операции: handleAvatarUpdated() вызывает clearStoredAvatar()
+    // (delete) и тут же ensureAvatarLoaded(force) (put), а delete успевает
+    // раньше открыть базу, то есть приходит ВТОРЫМ и стирает только что
+    // сохранённую новую аватарку.
+    async cacheDelete(kind, id) {
+        const key = this.cacheEntryKey(kind, id);
+        if (!this._cachePendingDeletes) this._cachePendingDeletes = new Map();
+        const pending = (async () => {
+            const db = await this.ensureCacheStorage();
+            if (!db) return;
+            await this.cacheDeleteKeys([key]);
+        })();
+        this._cachePendingDeletes.set(key, pending);
+        try {
+            await pending;
+        } finally {
+            if (this._cachePendingDeletes.get(key) === pending) {
+                this._cachePendingDeletes.delete(key);
+            }
+        }
+    }
+
+    async cacheDeleteKeys(keys) {
+        const db = this._cacheDb;
+        if (!db || !keys.length) return;
+        try {
+            const tx = db.transaction([ZALI_CACHE_BLOB_STORE, ZALI_CACHE_STAT_STORE], 'readwrite');
+            const blobs = tx.objectStore(ZALI_CACHE_BLOB_STORE);
+            const stats = tx.objectStore(ZALI_CACHE_STAT_STORE);
+            keys.forEach(key => { blobs.delete(key); stats.delete(key); });
+            await this.cacheTransactionDone(tx);
+        } catch (e) {
+            this.trace(`cacheDeleteKeys failed count=${keys.length} reason=${e?.name || e?.message || e}`);
+            return;
+        }
+        keys.forEach(key => this.cacheForgetStat(key));
+        this.scheduleCacheSummaryRefresh();
+    }
+
+    /**
+     * Забывает запись в памяти. `purgeDisk` — когда сводка осиротела (файла под
+     * ней нет): без него строка остаётся в object store и на КАЖДОМ следующем
+     * запуске снова попадает в индекс, продолжая занимать место в учёте и
+     * вытеснять настоящие записи. Из cacheDeleteKeys() приходит false —
+     * там строка уже удалена той же транзакцией.
+     */
+    cacheForgetStat(key, { purgeDisk = false } = {}) {
+        const stat = this.cacheStats().get(key);
+        if (!stat) return;
+        this._cacheBytes = Math.max(0, this.cacheUsedBytes() - Number(stat.s || 0));
+        this.cacheStats().delete(key);
+        this._cacheDirtyStats?.delete(key);
+        if (!purgeDisk || !this._cacheDb) return;
+        try {
+            const tx = this._cacheDb.transaction(ZALI_CACHE_STAT_STORE, 'readwrite');
+            tx.objectStore(ZALI_CACHE_STAT_STORE).delete(key);
+        } catch (e) {
+            this.trace(`cacheForgetStat purge failed key=${key} reason=${e?.name || e?.message || e}`);
+        }
+    }
+
+    cacheTransactionDone(tx) {
+        return new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error || new Error('indexedDB transaction failed'));
+            tx.onabort = () => reject(tx.error || new Error('indexedDB transaction aborted'));
+        });
+    }
+
+    // ============================================================
+    // Сводка обращений
+    // ============================================================
+
+    /**
+     * Обращение к файлу. Самый горячий путь во всём кеше — поэтому здесь
+     * НЕТ ни одной операции с диском: правится объект в памяти, ключ
+     * попадает в дирти-набор, а запись уходит пачкой по таймеру.
+     */
+    cacheNoteHit(key) {
+        const stat = this.cacheStats().get(key);
+        if (!stat) return;
+        stat.h = Number(stat.h || 0) + 1;
+        stat.u = Date.now();
+        if (!this._cacheDirtyStats) this._cacheDirtyStats = new Set();
+        this._cacheDirtyStats.add(key);
+        this.scheduleCacheStatFlush();
+    }
+
+    scheduleCacheStatFlush() {
+        if (this._cacheStatFlushTimer) return;
+        this._cacheStatFlushTimer = setTimeout(() => {
+            this._cacheStatFlushTimer = null;
+            void this.flushCacheStats();
+        }, ZALI_CACHE_STAT_FLUSH_MS);
+    }
+
+    /** Пишет только изменившиеся сводки, одной транзакцией. */
+    async flushCacheStats() {
+        const dirty = this._cacheDirtyStats;
+        if (!dirty || !dirty.size) return;
+        const db = this._cacheDb;
+        if (!db) { dirty.clear(); return; }
+        // Снимаем ровно те ключи, что уносим (а не весь набор): обращения,
+        // случившиеся во время самой записи, обязаны остаться дирти.
+        const keys = Array.from(dirty);
+        keys.forEach(key => dirty.delete(key));
+        try {
+            const tx = db.transaction(ZALI_CACHE_STAT_STORE, 'readwrite');
+            const store = tx.objectStore(ZALI_CACHE_STAT_STORE);
+            keys.forEach(key => {
+                const stat = this.cacheStats().get(key);
+                if (stat) store.put(stat, key);
+            });
+            await this.cacheTransactionDone(tx);
+        } catch (e) {
+            // Неудачная запись — не повод забыть, чем пользовались: счётчики
+            // решают, кого вытеснять, и потерянная пачка занижает ценность
+            // ровно тех файлов, которые человек и открывал. Возвращаем в
+            // дирти-набор и пробуем следующим тиком.
+            keys.forEach(key => { if (this.cacheStats().has(key)) dirty.add(key); });
+            this.scheduleCacheStatFlush();
+            this.trace(`flushCacheStats failed count=${keys.length} reason=${e?.name || e?.message || e}`);
+        }
+    }
+
+    /**
+     * Полезность записи — она же ответ на вопрос «кого выкинуть первым».
+     *
+     *   полезность = обращения × вес класса / размер в КБ
+     *   счёт       = полезность / (1 + возраст обращения в днях)
+     *
+     * Три свойства, ради которых формула именно такая:
+     *   - обращения в числителе: то, чем пользуются, остаётся (прямое
+     *     требование — счётчики обращений решают, кого удалить);
+     *   - деление на размер: аватарка в 8 КБ с двумя обращениями ценнее
+     *     видео в 40 МБ с двумя обращениями, потому что за то же место
+     *     помещаются пять тысяч аватарок;
+     *   - старение: иначе запись, набравшая обращений полгода назад,
+     *     держалась бы вечно и кеш застыл бы на прошлогоднем составе.
+     */
+    cacheEntryScore(stat, now = Date.now()) {
+        const sizeKb = Math.max(1, Number(stat?.s || 0) / 1024);
+        const weight = ZALI_CACHE_CLASS_WEIGHT[stat?.g] || 1;
+        const hits = Math.max(1, Number(stat?.h || 1));
+        const ageDays = Math.max(0, (now - Number(stat?.u || 0)) / 86400000);
+        return (hits * weight) / sizeKb / (1 + ageDays);
+    }
+
+    /** Записи, отсортированные от наименее полезной к наиболее. */
+    cacheEvictionOrder(now = Date.now()) {
+        return Array.from(this.cacheStats().values())
+            .map(stat => ({ stat, score: this.cacheEntryScore(stat, now) }))
+            .sort((a, b) => a.score - b.score);
+    }
+
+    /**
+     * Освобождает место под `needBytes`, выкидывая наименее полезное.
+     *
+     * `ignoreLimit` — для случая, когда место кончилось НЕ по нашему потолку, а
+     * по квоте браузера. Без него ветка восстановления в cachePut() при
+     * выбранном «Без ограничения» не освобождала ничего (потолок Infinity —
+     * выходим первой же строкой) и повторяла байт-в-байт ту же запись, которая
+     * только что упала: после первого QuotaExceededError кеш переставал
+     * принимать что-либо до конца сеанса.
+     */
+    async cacheEvictFor(needBytes, { ignoreLimit = false } = {}) {
+        const limit = this.cacheLimitBytes();
+        const used = this.cacheUsedBytes();
+        let over;
+        if (ignoreLimit || !Number.isFinite(limit)) {
+            // Освобождаем ровно столько, сколько попросили: ориентира в виде
+            // потолка здесь нет.
+            if (!ignoreLimit) return 0;
+            over = Number(needBytes || 0);
+            if (over <= 0) return 0;
+        } else {
+            over = (used + Number(needBytes || 0)) - limit;
+            if (over <= 0) return 0;
+            over += Math.ceil(limit * ZALI_CACHE_EVICT_HEADROOM);
+        }
+
+        const doomed = [];
+        let freed = 0;
+        for (const { stat } of this.cacheEvictionOrder()) {
+            if (freed >= over) break;
+            doomed.push(stat.k);
+            freed += Number(stat.s || 0);
+        }
+        if (!doomed.length) return 0;
+        this.trace(`cacheEvict entries=${doomed.length} freed=${freed} limit=${limit}`);
+        await this.cacheDeleteKeys(doomed);
+        return freed;
+    }
+
+    /**
+     * Приводит кеш в соответствие с текущими настройками. Вызывается, когда
+     * настройки ужесточили: сначала выкидывается всё, что новый режим больше
+     * не пускает (класс записи уже посчитан и лежит в сводке — обходить
+     * файлы не нужно), потом добивается потолок.
+     */
+    async enforceCachePolicy() {
+        const db = await this.ensureCacheStorage();
+        if (!db) return;
+        const mode = this.cacheMode();
+        if (mode === 'off') { await this.clearAssetCache(); return; }
+        const forbidden = [];
+        for (const stat of this.cacheStats().values()) {
+            const allowed = mode === 'all'
+                || (mode === 'light' && stat.g !== 'bulk')
+                || (mode === 'essential' && stat.g === 'essential');
+            if (!allowed) forbidden.push(stat.k);
+        }
+        if (forbidden.length) await this.cacheDeleteKeys(forbidden);
+        await this.cacheEvictFor(0);
+        this.renderCacheSettings();
+    }
+
+    /**
+     * Сводка для настроек. Считается по индексу в памяти — ни одного чтения
+     * с диска, поэтому её не страшно пересчитывать на каждой отрисовке.
+     */
+    cacheSummary({ topLimit = 12 } = {}) {
+        const now = Date.now();
+        const evictionOrder = this.cacheEvictionOrder(now);
+        // Всё, что несёт ИМЯ, показывается только по текущему аккаунту. Метка
+        // записи — это ключ без префикса, то есть логин собеседника: без
+        // фильтра карточка настроек перечисляла бы контакты предыдущего
+        // аккаунта на той же машине. Ровно от этого префикс в ключе и заведён
+        // (см. cacheEntryKey). Суммарные же цифры остаются общими: место на
+        // диске и потолок — device-wide, вытеснение ходит по всем записям, и
+        // показать здесь только «свою» долю значило бы соврать о занятом месте.
+        const prefix = this.cacheAccountPrefix();
+        const isMine = (stat) => String(stat?.k || '').startsWith(prefix);
+        const kinds = new Map();
+        let hits = 0;
+        let bytes = 0;
+        const entries = [];
+        for (const stat of this.cacheStats().values()) {
+            const size = Number(stat.s || 0);
+            const hit = Number(stat.h || 0);
+            bytes += size;
+            hits += hit;
+            const bucket = kinds.get(stat.n) || { kind: stat.n, count: 0, bytes: 0, hits: 0 };
+            bucket.count += 1;
+            bucket.bytes += size;
+            bucket.hits += hit;
+            kinds.set(stat.n, bucket);
+            entries.push(stat);
+        }
+        const top = entries
+            .filter(isMine)
+            .sort((a, b) => (Number(b.h || 0) - Number(a.h || 0)) || (Number(b.s || 0) - Number(a.s || 0)))
+            .slice(0, Math.max(0, topLimit))
+            .map(stat => ({
+                key: stat.k,
+                kind: stat.n,
+                label: this.cacheEntryLabel(stat),
+                hits: Number(stat.h || 0),
+                size: Number(stat.s || 0),
+                lastUsed: Number(stat.u || 0),
+                score: this.cacheEntryScore(stat, now),
+            }));
+        return {
+            available: !!this._cacheDb,
+            // База открывается лениво, поэтому «ещё не открывали» и «открыть
+            // не удалось» — разные состояния. Без этого различия карточка
+            // настроек на первом кадре сообщала бы, что кеш не работает,
+            // на платформе, где он работает прекрасно.
+            probed: !!this._cacheReady,
+            reason: this._cacheDisabledReason || '',
+            count: entries.length,
+            bytes,
+            hits,
+            limit: this.cacheLimitBytes(),
+            mode: this.cacheMode(),
+            kinds: Array.from(kinds.values()).sort((a, b) => b.bytes - a.bytes),
+            top,
+            // Следующий кандидат на вылет — самое понятное объяснение того,
+            // как счётчики обращений влияют на кеш.
+            nextEvicted: (() => {
+                const next = evictionOrder.find(entry => isMine(entry.stat));
+                return next ? this.cacheEntryLabel(next.stat) : '';
+            })(),
+            // Сколько из общего объёма занимают другие аккаунты этого
+            // устройства — числом, без имён.
+            foreignCount: entries.length - entries.filter(isMine).length,
+        };
+    }
+
+    /** Человекочитаемое имя записи: ключ без служебного префикса аккаунта. */
+    cacheEntryLabel(stat) {
+        const key = String(stat?.k || '');
+        const parts = key.split('|');
+        return parts.length > 2 ? parts.slice(2).join('|') : key;
+    }
+
+    /**
+     * Короткая метка вида в списке «чаще всего используются». Без неё аватарка
+     * bob и карточка профиля bob — две разные записи с одинаковой подписью, и
+     * список выглядит так, будто в нём дубликаты.
+     */
+    cacheEntryKindTag(kind) {
+        switch (kind) {
+            case 'avatar': return 'ава';
+            case 'server_asset': return 'сервер';
+            case 'profile': return 'профиль';
+            case 'sticker': return 'стикер';
+            case 'attachment': return 'файл';
+            default: return 'прочее';
+        }
+    }
+
+    cacheKindLabel(kind) {
+        switch (kind) {
+            case 'avatar': return 'Аватарки';
+            case 'server_asset': return 'Иконки серверов';
+            case 'profile': return 'Профили';
+            case 'sticker': return 'Стикеры';
+            case 'attachment': return 'Вложения';
+            default: return String(kind || 'Прочее');
+        }
+    }
+
+    async clearAssetCache() {
+        const db = this._cacheDb || await this.ensureCacheStorage();
+        this._cacheDirtyStats?.clear();
+        if (db) {
+            try {
+                const tx = db.transaction([ZALI_CACHE_BLOB_STORE, ZALI_CACHE_STAT_STORE], 'readwrite');
+                tx.objectStore(ZALI_CACHE_BLOB_STORE).clear();
+                tx.objectStore(ZALI_CACHE_STAT_STORE).clear();
+                await this.cacheTransactionDone(tx);
+            } catch (e) {
+                this.trace(`clearAssetCache failed reason=${e?.name || e?.message || e}`);
+            }
+        }
+        this._cacheStats = new Map();
+        this._cacheBytes = 0;
+        this.renderCacheSettings();
+    }
+
+    /**
+     * Полное удаление базы — для сброса локальных данных (localResetEpoch).
+     * Отдельно от clearAssetCache(): там база остаётся открытой и рабочей,
+     * здесь исчезает вместе со схемой.
+     */
+    destroyAssetCacheDatabase() {
+        try {
+            this._cacheDb?.close?.();
+        } catch (e) {}
+        this._cacheDb = null;
+        this._cacheReady = null;
+        this._cacheStats = new Map();
+        this._cacheBytes = 0;
+        try {
+            const request = window.indexedDB?.deleteDatabase?.(ZALI_CACHE_DB_NAME);
+            // Удаление блокируется, пока другая вкладка держит соединение, и
+            // остаётся висеть — а висящее удаление подвешивает ЧУЖИЕ открытия
+            // этой базы (см. openCacheDb). Помешать этому отсюда нельзя, но
+            // молча такое расследовать невозможно.
+            if (request) {
+                request.onblocked = () => this.trace('assetCache delete blocked — база открыта в другой вкладке');
+            }
+        } catch (e) {}
+    }
+
+    // ============================================================
+    // Преобразования
+    // ============================================================
+
+    async toCacheBlob(source, contentType = '') {
+        if (!source) return null;
+        if (typeof Blob !== 'undefined' && source instanceof Blob) return source;
+        if (source instanceof ArrayBuffer) {
+            return new Blob([source], { type: contentType || 'application/octet-stream' });
+        }
+        if (typeof source === 'string') {
+            if (source.startsWith('data:')) return this.dataUrlToBlob(source);
+            return new Blob([source], { type: contentType || 'text/plain' });
+        }
+        return null;
+    }
+
+    // Blob.arrayBuffer() есть везде, куда мы целимся, но FileReader страхует
+    // старые WKWebView — эта ветка дешевле, чем выяснять версию Safari в
+    // каждой оболочке.
+    blobToArrayBuffer(blob) {
+        if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error || new Error('blob read failed'));
+            reader.readAsArrayBuffer(blob);
+        });
+    }
+
+    // ============================================================
+    // Прогрев: ради него всё и затевалось
+    // ============================================================
+
+    /**
+     * Поднимает аватарки и ассеты серверов с диска в память ДО первой
+     * отрисовки. Это и есть ответ на «аватарки требуют подгрузки»: без
+     * прогрева каждая из них ждала бы своего ensureAvatarLoaded(), то есть
+     * сетевого ответа, и первый экран рисовался бы буквами-заглушками.
+     *
+     * Один проход, один набор транзакций, и только для текущего аккаунта.
+     */
+    async primeAssetCacheFromDisk() {
+        const prefix = this.cacheAccountPrefix();
+        // applySession() зовут на каждом применении сессии, включая повторные
+        // с тем же аккаунтом. Прогрев — полный обход индекса, повторять его
+        // на каждый вызов незачем: всё, что он поднял, уже в памяти.
+        if (this._cachePrimedFor === prefix) return 0;
+        const db = await this.ensureCacheReady();
+        // Защёлка ставится ПОСЛЕ ответа базы. Раньше она стояла до await'а, и
+        // один неудачный проход (открытие упёрлось в таймаут, потому что чужая
+        // вкладка держит незавершённый deleteDatabase) навсегда отменял прогрев
+        // для этого аккаунта — аватарки весь сеанс шли по сети, хотя база
+        // открылась при следующем же cacheGet.
+        if (!db) return 0;
+        if (this._cachePrimedFor === prefix) return 0;
+        this._cachePrimedFor = prefix;
+        // Прогреваем самое используемое: если записей больше потолка, буквы
+        // получат те, к кому обращаются реже всех.
+        const candidates = Array.from(this.cacheStats().values())
+            .filter(stat => String(stat.k || '').startsWith(prefix)
+                && (stat.n === 'avatar' || stat.n === 'server_asset'))
+            .sort((a, b) => Number(b.h || 0) - Number(a.h || 0))
+            .slice(0, ZALI_CACHE_PRIME_LIMIT);
+        if (!candidates.length) return 0;
+
+        const wanted = candidates.filter(stat => {
+            const id = String(stat.k).split('|').slice(2).join('|');
+            if (!id) return false;
+            return stat.n === 'avatar'
+                ? !this.avatarCache.has(this.avatarCacheKey(id))
+                : !this.serverAssetCache.has(id);
+        });
+        const blobs = await this.cacheReadBatch(wanted.map(stat => stat.k));
+
+        let primed = 0;
+        const stale = [];
+        for (const stat of wanted) {
+            const blob = blobs.get(stat.k);
+            if (!blob) continue;
+            const id = String(stat.k).split('|').slice(2).join('|');
+            if (stat.n === 'avatar') {
+                this.saveStoredAvatar(id, URL.createObjectURL(blob));
+            } else {
+                this.serverAssetCache.set(id, URL.createObjectURL(blob));
+            }
+            if (this.cacheIsStale(stat.n, id)) stale.push(stat);
+            primed += 1;
+        }
+        if (primed) {
+            this.trace(`primeAssetCacheFromDisk primed=${primed} stale=${stale.length}`);
+            this.scheduleAvatarRefresh();
+            this.scheduleServerAssetRefresh();
+        }
+        // Прогретую запись больше НИКТО не перепроверит, если не сделать этого
+        // здесь: прогрев кладёт картинку прямо в avatarCache, после чего
+        // loadStoredAvatar() возвращает значение, ensureAvatarLoaded() не
+        // вызывается вовсе — а проверка свежести живёт только внутри неё.
+        // То есть аватарка, поменянная, пока приложение было закрыто (события
+        // avatar_updated не было и не будет), оставалась бы прошлогодней
+        // навсегда. Фоновая перепроверка идёт после отрисовки: картинка уже
+        // на экране, обновится под рукой.
+        if (stale.length) this.revalidateStaleAssets(stale);
+        return primed;
+    }
+
+    /** Фоновая перепроверка прогретых записей, у которых вышел срок. */
+    revalidateStaleAssets(stats) {
+        setTimeout(() => {
+            for (const stat of stats) {
+                const id = String(stat.k).split('|').slice(2).join('|');
+                if (!id) continue;
+                if (stat.n === 'avatar') {
+                    void this.ensureAvatarLoaded(id, { force: true });
+                    continue;
+                }
+                // Ключ ассета сервера — `${serverId}:${kind}`, а kind всегда
+                // последний сегмент: id сервера сам может содержать ':'.
+                const cut = id.lastIndexOf(':');
+                if (cut <= 0) continue;
+                void this.loadServerAsset(id.slice(0, cut), id.slice(cut + 1), { force: true });
+            }
+        }, 0);
+    }
+
+    /**
+     * Досыпает вложения из кеша в уже загруженную историю. Работает после
+     * восстановления истории, а не вместо него: loadStoredMessageCache()
+     * синхронный, а диск — нет.
+     *
+     * Смысл в том, что localStorage перестаёт вмещать вложения задолго до
+     * того, как переписка станет большой (см. writeMessageCacheToStorage —
+     * там клиент переходит на копию без байтов). Раньше на Windows/iOS/Android
+     * это означало «фотографии в истории превращаются в имена файлов
+     * навсегда»; теперь байты лежат здесь.
+     */
+    async hydrateAttachmentPayloadsFromCache() {
+        if (this.cacheMode() === 'off') return 0;
+        // Обход всей истории — не то, что стоит делать дважды за сеанс на один
+        // аккаунт: живая доставка приносит вложения уже с байтами.
+        const prefix = this.cacheAccountPrefix();
+        if (this._cacheHydratedFor === prefix) return 0;
+        const db = await this.ensureCacheReady();
+        // Защёлка — после ответа базы, по той же причине, что и в
+        // primeAssetCacheFromDisk().
+        if (!db) return 0;
+        if (this._cacheHydratedFor === prefix) return 0;
+        this._cacheHydratedFor = prefix;
+        let restored = 0;
+        for (const store of [this.S.chats, this.S.serverChats]) {
+            for (const msgs of Object.values(store || {})) {
+                for (const msg of msgs || []) {
+                    const attachments = msg?.attachments || [];
+                    if (!attachments.length) continue;
+                    for (let index = 0; index < attachments.length; index += 1) {
+                        const att = attachments[index];
+                        if (!att || att.dataUrl || att.data_url) continue;
+                        const id = this.attachmentCacheId(msg, att, index);
+                        if (!id) continue;
+                        const blob = await this.cacheGet(this.attachmentCacheKind(att), id);
+                        if (!blob) continue;
+                        att.dataUrl = await this.blobToDataUrl(blob);
+                        restored += 1;
+                    }
+                }
+            }
+        }
+        if (restored) {
+            // Мемо normalizeAttachments() ключуется по строкам payload'ов и
+            // само заметит подставленные байты — сбрасывать его не нужно.
+            this.trace(`hydrateAttachmentPayloadsFromCache restored=${restored}`);
+            this.scheduleRenderMessages();
+        }
+        return restored;
+    }
+
+    /**
+     * Кладёт вложения в кеш. Идентичность записи — id сообщения + позиция +
+     * имя: ровно тот же тройной ключ, по которому restoreAttachmentPayloads()
+     * сверяет вложения, потому что отредактированное сообщение может нести
+     * под тем же id другой набор файлов.
+     */
+    attachmentCacheId(msg, att, index) {
+        const id = String(msg?.id || msg?.clientId || '').trim();
+        if (!id) return '';
+        return `${id}#${index}#${String(att?.name || '')}`;
+    }
+
+    /**
+     * Вид записи для вложения — ОДНА функция на запись и на чтение.
+     *
+     * Вид входит в ключ (cacheEntryKey), поэтому расхождение здесь не роняет
+     * ничего и не пишет в лог: стикер просто ложится под `sticker|…`, а
+     * hydrateAttachmentPayloadsFromCache ищет его под `attachment|…` и не
+     * находит — стикеры после перезагрузки остаются чипом с именем файла.
+     * Вторая половина той же ошибки дороже: проверка «уже лежит» тоже
+     * промахивается, поэтому каждый стикер архива переписывался на диск при
+     * КАЖДОМ сохранении кеша сообщений — ровно та квадратичная работа на
+     * горячем пути, которую эта проверка и должна была убрать.
+     */
+    attachmentCacheKind(att) {
+        return att?.kind === 'sticker' ? 'sticker' : 'attachment';
+    }
+
+    /**
+     * Сохраняет вложения сообщения. Ничего не читает с диска, чтобы понять,
+     * лежит ли файл уже там: индекс сводок в памяти отвечает на это сразу,
+     * а без такой проверки каждое сохранение кеша переписывало бы весь архив
+     * заново (та самая «квадратичная работа на горячем пути»).
+     */
+    cacheStoreMessageAttachments(msg) {
+        if (this.cacheMode() === 'off') return;
+        const attachments = msg?.attachments || [];
+        if (!attachments.length) return;
+        attachments.forEach((att, index) => {
+            const payload = att?.dataUrl || att?.data_url || '';
+            if (!payload || !String(payload).startsWith('data:')) return;
+            const id = this.attachmentCacheId(msg, att, index);
+            if (!id) return;
+            const kind = this.attachmentCacheKind(att);
+            if (this.cacheStats().has(this.cacheEntryKey(kind, id))) return;
+            void this.cachePut(kind, id, payload, { contentType: att.mimeType || '' });
+        });
+    }
+
+    // Blob.text() — Safari 14+; FileReader страхует старые WKWebView так же,
+    // как в blobToArrayBuffer().
+    blobToText(blob) {
+        if (typeof blob.text === 'function') return blob.text();
+        return new Promise((resolve) => {
+            try {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ''));
+                reader.onerror = () => resolve('');
+                reader.readAsText(blob);
+            } catch (e) {
+                resolve('');
+            }
+        });
+    }
+
+    blobToDataUrl(blob) {
+        return new Promise((resolve) => {
+            try {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ''));
+                reader.onerror = () => resolve('');
+                reader.readAsDataURL(blob);
+            } catch (e) {
+                resolve('');
+            }
+        });
+    }
+
+    // ============================================================
+    // Отрисовка сводки в настройках
+    // ============================================================
+
+    // Сводка меняется на каждой записи в кеш, а карточка настроек чаще всего
+    // не открыта. Поэтому перерисовка коалесцируется и сама проверяет, есть
+    // ли кому смотреть.
+    scheduleCacheSummaryRefresh() {
+        if (this._cacheSummaryRefreshTimer) return;
+        this._cacheSummaryRefreshTimer = setTimeout(() => {
+            this._cacheSummaryRefreshTimer = null;
+            // Перерисовка заменяет контейнер целиком, вместе со слайдером. Если
+            // его сейчас тащат, новый элемент теряет захват указателя, и
+            // значение отскакивает к сохранённому — незавершённый жест просто
+            // пропадает. А поводов для перерисовки в этот момент сколько
+            // угодно: любая запись в кеш (аватарки ещё догружаются) меняет
+            // цифры в сводке, так что защита равенством html не спасает.
+            if (this.cacheLimitSliderBusy()) {
+                this.scheduleCacheSummaryRefresh();
+                return;
+            }
+            this.renderCacheSettings();
+        }, 600);
+    }
+
+    /** Тащат ли прямо сейчас слайдер потолка. */
+    cacheLimitSliderBusy() {
+        if (this._cacheLimitDragging) return true;
+        const slider = document.getElementById('inputCacheLimit');
+        return !!slider && document.activeElement === slider;
+    }
+
+    renderCacheSettings() {
+        const host = document.getElementById('cacheSettings');
+        if (!host) return;
+        const prefs = this.loadCachePrefs();
+        const summary = this.cacheSummary();
+
+        const modes = ZaliInterface.cacheModeCatalog.map(mode => `
+            <button type="button" class="cache-mode-option${mode.id === prefs.mode ? ' active' : ''}" data-cache-mode="${this.esc(mode.id)}" aria-pressed="${mode.id === prefs.mode}">
+                <span class="cache-mode-copy">
+                    <strong>${this.esc(mode.label)}</strong>
+                    <small>${this.esc(mode.hint)}</small>
+                </span>
+                <span class="cache-mode-note">${this.esc(mode.note)}</span>
+            </button>
+        `).join('');
+
+        const stops = ZaliInterface.cacheLimitStops
+            .map((stop, index) => `<option value="${index}" label="${this.esc(stop.label)}"></option>`)
+            .join('');
+
+        const limitLabel = this.cacheLimitLabel();
+        const usedLabel = this.formatFileSize(summary.bytes);
+        const fill = Number.isFinite(summary.limit) && summary.limit > 0
+            ? Math.min(100, Math.round((summary.bytes / summary.limit) * 100))
+            : 0;
+
+        const kinds = summary.kinds.length
+            ? summary.kinds.map(bucket => `
+                <li class="cache-kind-row">
+                    <span class="cache-kind-name">${this.esc(this.cacheKindLabel(bucket.kind))}</span>
+                    <span class="cache-kind-meta">${bucket.count} шт · ${this.esc(this.formatFileSize(bucket.bytes))} · ${bucket.hits} обр.</span>
+                </li>
+            `).join('')
+            : '<li class="cache-kind-row cache-kind-row--empty">Кеш пуст</li>';
+
+        const top = summary.top.length
+            ? summary.top.map(entry => `
+                <li class="cache-top-row">
+                    <span class="cache-top-name" title="${this.esc(`${this.cacheKindLabel(entry.kind)}: ${entry.label}`)}"><span class="cache-top-kind">${this.esc(this.cacheEntryKindTag(entry.kind))}</span>${this.esc(entry.label)}</span>
+                    <span class="cache-top-hits">${entry.hits}×</span>
+                    <span class="cache-top-size">${this.esc(this.formatFileSize(entry.size))}</span>
+                </li>
+            `).join('')
+            : '<li class="cache-top-row cache-top-row--empty">Обращений пока не было</li>';
+
+        let status;
+        if (summary.reason && !summary.available) {
+            status = `Постоянный кеш недоступен: ${this.esc(summary.reason)}. Ассеты живут только до перезагрузки.`;
+        } else if (prefs.mode === 'off') {
+            status = 'Кеширование выключено — ассеты подгружаются заново при каждом открытии.';
+        } else if (!summary.probed) {
+            status = 'Кеш ещё не открывался в этом сеансе — сводка появится после первого обращения.';
+        } else {
+            const foreign = summary.foreignCount
+                ? ` · из них ${summary.foreignCount} от других аккаунтов на этом устройстве`
+                : '';
+            status = `Занято ${this.esc(usedLabel)} из ${this.esc(limitLabel)} · ${summary.count} файлов · ${summary.hits} обращений${this.esc(foreign)}`;
+        }
+
+        const nextOut = summary.nextEvicted && prefs.mode !== 'off'
+            ? `<p class="settings-help">Следующим освободит место: <code>${this.esc(summary.nextEvicted)}</code> — реже всего используется относительно своего размера.</p>`
+            : '';
+
+        const html = `
+            <div class="cache-mode-options">${modes}</div>
+            <label class="settings-field cache-limit-field">
+                <span>Потолок кеша: <strong id="cacheLimitValue">${this.esc(limitLabel)}</strong></span>
+                <input type="range" min="0" max="${ZaliInterface.cacheLimitStops.length - 1}" step="1" value="${prefs.limitIndex}" id="inputCacheLimit" class="settings-range" list="cacheLimitStops">
+                <datalist id="cacheLimitStops">${stops}</datalist>
+            </label>
+            <div class="cache-usage-bar" role="presentation"><span style="width:${fill}%"></span></div>
+            <p class="settings-help cache-usage-status">${status}</p>
+            ${nextOut}
+            <div class="cache-summary-grid">
+                <div class="cache-summary-block">
+                    <span class="settings-kicker">По типам</span>
+                    <ul class="cache-kind-list">${kinds}</ul>
+                </div>
+                <div class="cache-summary-block">
+                    <span class="settings-kicker">Чаще всего используются</span>
+                    <ul class="cache-top-list">${top}</ul>
+                </div>
+            </div>
+            <button class="btn-flat" id="cacheClearBtn" type="button">Очистить кеш</button>
+        `;
+        if (host.innerHTML !== html) host.innerHTML = html;
     }
 });
 
@@ -15583,8 +17656,6 @@ ZaliMixin(ZaliInterface, class {
     // Плата названа прямо: это НЕ сквозное шифрование. Кто знает id сервера и
     // канала — знает и ключ, а сервер их знает по определению. Шифрование здесь
     // защищает архив в покое и на транспорте, но не от самого сервера. Для личных
-"""#,
-    #"""
     // переписок (`dm:`) всё остаётся как было — там сквозной обмен ключами имеет
     // смысл и работает.
     async deriveServerChannelKey(scope) {
@@ -17987,6 +20058,8 @@ ZaliMixin(ZaliInterface, class {
                     // Targeted at the new device specifically — it's encrypted with a
                     // one-time code, not the account passphrase, so it must not be
                     // mistaken for the regular auto-sync broadcast event by any client
+"""#,
+    #"""
                     // that filters on issuedToDeviceId.
                     issuedToDeviceId: targetId,
                     vaultEpoch: payload.vaultEpoch,
@@ -19557,8 +21630,6 @@ ZaliMixin(ZaliInterface, class {
             // TLS port; 443 is the one that survives a firewall that allows nothing
             // but web traffic. A port with nothing listening costs a failed gathering
             // attempt, which onicecandidateerror now records by name, so adding them
-"""#,
-    #"""
             // is safe whether or not the deployment answers there.
             `turns:${safeHost}:5349?transport=tcp`,
             `turns:${safeHost}:443?transport=tcp`,
@@ -22116,6 +24187,8 @@ ZaliMixin(ZaliInterface, class {
             };
         } catch (error) {
             this.addLogEntry({ type: 'ERROR', msg: `Не удалось подключить browser voice socket: ${error?.message || error}`, ts: new Date().toLocaleTimeString() });
+"""#,
+    #"""
         }
     }
 
@@ -23527,8 +25600,6 @@ ZaliMixin(ZaliInterface, class {
             const source = ctx.createMediaStreamSource(stream);
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 512;
-"""#,
-    #"""
             analyser.smoothingTimeConstant = 0.8;
             source.connect(analyser);
             const next = {
@@ -25993,6 +28064,8 @@ ZaliMixin(ZaliInterface, class {
             'headphones-off': headphones + slash,
             'chevron-down': chevronDown,
         };
+"""#,
+    #"""
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
 
@@ -27116,6 +29189,11 @@ ZaliMixin(ZaliInterface, class {
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+// Пауза перед повторной попыткой скачать аватар/ассет сервера после
+// НЕокончательной неудачи (сеть, таймаут, 5xx). Окончательные ответы
+// (404, пустое тело) кэшируются как «нет картинки» и сюда не попадают.
+const ZALI_ASSET_RETRY_COOLDOWN_MS = 30_000;
+
 ZaliMixin(ZaliInterface, class {
 
     avatarCacheKey(username) {
@@ -27124,7 +29202,13 @@ ZaliMixin(ZaliInterface, class {
 
     loadStoredAvatar(username) {
         const key = this.avatarCacheKey(username);
-        return this.avatarCache.has(key) ? this.avatarCache.get(key) : undefined;
+        if (!this.avatarCache.has(key)) return undefined;
+        // Показ засчитывается здесь, потому что здесь он и происходит: это
+        // единственное место, откуда аватарка попадает в разметку. Счётчик
+        // дедуплицируется по времени (cacheNoteAssetUse), поэтому прокрутка
+        // ленты не превращается в тысячу обращений — см. interface/cache.js.
+        this.cacheNoteAssetUse('avatar', key);
+        return this.avatarCache.get(key);
     }
 
     // The single place an avatar enters the cache, and therefore the single
@@ -27171,6 +29255,9 @@ ZaliMixin(ZaliInterface, class {
         }
         this.avatarFetchSeq.set(key, (this.avatarFetchSeq.get(key) || 0) + 1);
         this.avatarCache.delete(key);
+        // Инвалидация обязана доходить до диска: без этого handleAvatarUpdated()
+        // сбрасывал бы только память, а перезагрузка возвращала прежнюю картинку.
+        void this.cacheDelete('avatar', key);
     }
 
     avatarFallback(username) {
@@ -27205,10 +29292,21 @@ ZaliMixin(ZaliInterface, class {
         if (!sid) return null;
         const key = this.serverAssetCacheKey(sid, kind);
         if (!force && this.serverAssetCache.has(key)) {
+            this.cacheNoteAssetUse('server_asset', key);
             return this.serverAssetCache.get(key);
         }
         if (this.serverAssetRequests.has(key) && !force) {
             return this.serverAssetRequests.get(key);
+        }
+        // Неудача, после которой в кэше ничего не остаётся, — это приглашение
+        // спросить снова на следующей же отрисовке. А отрисовка вызывается из
+        // .then() этого самого запроса, так что один упавший ассет
+        // раскручивает бесконечный цикл «отрисовка → запрос → отрисовка»,
+        // ограниченный только временем ответа сервера. Пауза разрывает его,
+        // не превращая временную ошибку в вечное «картинки нет».
+        if (!force) {
+            const retryAt = this.serverAssetRetryAt.get(key) || 0;
+            if (retryAt && Date.now() < retryAt) return null;
         }
 
         const seq = (this.serverAssetFetchSeq.get(key) || 0) + 1;
@@ -27216,25 +29314,53 @@ ZaliMixin(ZaliInterface, class {
 
         const request = (async () => {
             try {
+                // Диск раньше сети — та же логика, что у аватарок. Иконка и
+                // баннер сервера рисуются в рейле, в шапке чата и в модалке
+                // публичных серверов, то есть на каждой отрисовке; тянуть их
+                // по сети на каждом запуске незачем.
+                if (!force) {
+                    const cached = await this.cacheGet('server_asset', key);
+                    if (cached) {
+                        if (this.serverAssetFetchSeq.get(key) !== seq) return null;
+                        const cachedUrl = URL.createObjectURL(cached);
+                        this.serverAssetRetryAt.delete(key);
+                        this.serverAssetCache.set(key, cachedUrl);
+                        if (this.cacheIsStale('server_asset', key)) {
+                            setTimeout(() => { void this.loadServerAsset(sid, kind, { force: true }); }, 0);
+                        }
+                        return cachedUrl;
+                    }
+                }
+
                 // Binary body — see TRANSFER_REQUEST_TIMEOUT_MS.
                 const res = await this.apiFetch(this.apiRoutes.servers.assets(sid, kind), {
                     timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
                 });
                 if (this.serverAssetFetchSeq.get(key) !== seq) return null;
                 if (res.status === 404) {
+                    this.serverAssetRetryAt.delete(key);
                     this.serverAssetCache.set(key, null);
+                    void this.cacheDelete('server_asset', key);
                     return null;
                 }
-                if (!res.ok) return null;
+                if (!res.ok) {
+                    this.serverAssetRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
+                    return null;
+                }
                 const blob = await res.blob();
                 if (!blob || blob.size === 0) {
+                    this.serverAssetRetryAt.delete(key);
                     this.serverAssetCache.set(key, null);
+                    void this.cacheDelete('server_asset', key);
                     return null;
                 }
                 const url = await this.blobToObjectUrl(blob);
+                this.serverAssetRetryAt.delete(key);
                 this.serverAssetCache.set(key, url);
+                void this.cachePut('server_asset', key, blob);
                 return url;
             } catch (e) {
+                this.serverAssetRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
                 return null;
             } finally {
                 if (this.serverAssetRequests.get(key) === request) {
@@ -27254,7 +29380,9 @@ ZaliMixin(ZaliInterface, class {
             try { URL.revokeObjectURL(prev); } catch (e) {}
         }
         this.serverAssetFetchSeq.set(key, (this.serverAssetFetchSeq.get(key) || 0) + 1);
+        this.serverAssetRetryAt.delete(key);
         this.serverAssetCache.delete(key);
+        void this.cacheDelete('server_asset', key);
     }
 
     serverAssetFallback(server, kind) {
@@ -27277,13 +29405,16 @@ ZaliMixin(ZaliInterface, class {
         if (!id) return fallback();
         const key = this.serverAssetCacheKey(id, 'avatar');
         if (!this.serverAssetCache.has(key)) {
-            this.loadServerAsset(id, 'avatar').then(() => this.scheduleServerAssetRefresh());
+            // Перерисовываем, только когда картинка реально приехала. Раньше
+            // .then() дёргал отрисовку на ЛЮБОМ исходе, включая неудачу, —
+            // а отрисовка снова звала загрузку: вторая половина того же цикла.
+            this.loadServerAsset(id, 'avatar').then(url => { if (url) this.scheduleServerAssetRefresh(); });
             return fallback();
         }
         const cached = this.serverAssetCache.get(key);
-        return cached
-            ? `<img class="avatar-img" src="${this.esc(cached)}" alt="${this.esc(server?.name || '')}">`
-            : fallback();
+        if (!cached) return fallback();
+        this.cacheNoteAssetUse('server_asset', key);
+        return `<img class="avatar-img" src="${this.esc(cached)}" alt="${this.esc(server?.name || '')}">`;
     }
 
     renderServerAvatarHTML(server, extraClass = '') {
@@ -27291,14 +29422,22 @@ ZaliMixin(ZaliInterface, class {
         return `<span class="${classes}" style="background:${this.serverAvatarBackground(server)}">${this.serverAvatarInnerHTML(server)}</span>`;
     }
 
+    // Защёлка снимается ТЕМ ЖЕ вызовом, который делает работу, и работа
+    // назначена двумя путями: requestAnimationFrame не срабатывает, пока окно
+    // скрыто или свёрнуто, а защёлка ставится до него — один кадр, пришедший
+    // в скрытом окне, оставлял её взведённой навсегда, и после возврата к
+    // приложению аватарки серверов больше не обновлялись до перезагрузки.
     scheduleServerAssetRefresh() {
         if (this.serverAssetRefreshScheduled) return;
         this.serverAssetRefreshScheduled = true;
-        requestAnimationFrame(() => {
+        const run = () => {
+            if (!this.serverAssetRefreshScheduled) return;
             this.serverAssetRefreshScheduled = false;
             this.renderServers();
             this.renderServerToolbar();
-        });
+        };
+        requestAnimationFrame(run);
+        setTimeout(run, 250);
     }
 
     resetServerAssetPreview() {
@@ -27348,10 +29487,13 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Тот же двойной путь, что и у scheduleServerAssetRefresh: иначе аватарка,
+    // доехавшая в скрытом окне, взводит защёлку навсегда.
     scheduleAvatarRefresh() {
         if (this.avatarRefreshScheduled) return;
         this.avatarRefreshScheduled = true;
-        requestAnimationFrame(() => {
+        const run = () => {
+            if (!this.avatarRefreshScheduled) return;
             this.avatarRefreshScheduled = false;
             this.renderSidebarProfile();
             this.renderContacts();
@@ -27359,7 +29501,9 @@ ZaliMixin(ZaliInterface, class {
             // DM) is rendered by renderServerToolbar; without refreshing it here it keeps
             // the fallback letter it drew before the avatar finished loading async.
             this.renderServerToolbar();
-        });
+        };
+        requestAnimationFrame(run);
+        setTimeout(run, 250);
     }
 
     updateAvatarViews() {
@@ -27418,8 +29562,6 @@ ZaliMixin(ZaliInterface, class {
 
     async downloadAttachmentFromHref(href, filename) {
         const source = String(href || '').trim();
-"""#,
-    #"""
         const safeName = String(filename || 'attachment').trim() || 'attachment';
         if (!source) return false;
 
@@ -27493,6 +29635,10 @@ ZaliMixin(ZaliInterface, class {
         if (!force && this.avatarCache.has(key)) {
             return this.avatarCache.get(key);
         }
+        if (!force) {
+            const retryAt = this.avatarRetryAt.get(key) || 0;
+            if (retryAt && Date.now() < retryAt) return null;
+        }
         if (this.avatarRequests.has(key)) {
             if (!force) {
                 return this.avatarRequests.get(key);
@@ -27504,6 +29650,25 @@ ZaliMixin(ZaliInterface, class {
 
         const request = (async () => {
             try {
+                // Диск раньше сети. Это и есть лечение «аватарки требуют
+                // подгрузки»: до этого кеш жил в Map и умирал вместе со
+                // страницей, поэтому каждый запуск заново качал аватарку
+                // каждого контакта. Запись при этом не считается свежей
+                // навсегда — устаревшую перепроверяем в фоне, уже показав
+                // картинку, а событие avatar_updated сбрасывает её сразу.
+                if (!force) {
+                    const cached = await this.cacheGet('avatar', key);
+                    if (cached) {
+                        if (this.avatarFetchSeq.get(key) !== seq) return null;
+                        this.saveStoredAvatar(name, URL.createObjectURL(cached));
+                        this.scheduleAvatarRefresh();
+                        if (this.cacheIsStale('avatar', key)) {
+                            setTimeout(() => { void this.ensureAvatarLoaded(name, { force: true }); }, 0);
+                        }
+                        return this.loadStoredAvatar(name);
+                    }
+                }
+
                 if (this.nativeSupports('avatarFetch')) {
                     try {
                         const payload = await this.requestNativeAction({
@@ -27524,6 +29689,7 @@ ZaliMixin(ZaliInterface, class {
                         // comment there for why the payload must not survive
                         // into the markup.
                         this.saveStoredAvatar(name, dataUrl);
+                        void this.cachePut('avatar', key, dataUrl);
                         this.scheduleAvatarRefresh();
                         return this.loadStoredAvatar(name);
                     } catch (nativeError) {
@@ -27540,10 +29706,15 @@ ZaliMixin(ZaliInterface, class {
                 }
                 if (res.status === 404) {
                     this.saveStoredAvatar(name, null);
+                    // Аватарку сняли — снимаем и с диска, иначе следующий
+                    // запуск поднял бы её из кеша и показывал бы удалённую
+                    // картинку до самого истечения срока перепроверки.
+                    void this.cacheDelete('avatar', key);
                     this.scheduleAvatarRefresh();
                     return null;
                 }
                 if (!res.ok) {
+                    this.avatarRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
                     return null;
                 }
 
@@ -27562,10 +29733,13 @@ ZaliMixin(ZaliInterface, class {
                     try { URL.revokeObjectURL(url); } catch (e) {}
                     return null;
                 }
+                this.avatarRetryAt.delete(key);
                 this.saveStoredAvatar(name, url);
+                void this.cachePut('avatar', key, blob);
                 this.scheduleAvatarRefresh();
                 return url;
             } catch (e) {
+                this.avatarRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
                 return null;
             } finally {
                 if (this.avatarRequests.get(key) === request) {
@@ -27950,21 +30124,65 @@ ZaliMixin(ZaliInterface, class {
         return headers;
     }
 
+    /**
+     * Ответ нативного моста в оболочке, совместимой с `fetch`.
+     *
+     * **Почему у ответа два тела.** Мост — это JSON-канал, по нему ходят строки.
+     * Пока бинарные ответы ехали тем же полем `body`, что и текстовые, они
+     * необратимо портились: на macOS `String(data:encoding:.utf8)` возвращает nil
+     * на первом же байте PNG, который не является валидным UTF-8, — тело
+     * приезжало ПУСТЫМ; на Android `body.string()` подставляет replacement-символы
+     * — тело приезжало битым. `res.blob()` при этом честно заворачивал строку в
+     * Blob, и картинка не открывалась. Так на всех нативных оболочках молча не
+     * работали иконки и баннеры серверов (`loadServerAsset`) — единственное место,
+     * где через мост шёл настоящий бинарь, — а `res.arrayBuffer()` вообще
+     * отсутствовал, из-за чего браузерный путь скачивания архива был на нативе
+     * нерабочим в принципе.
+     *
+     * Теперь оболочка сама решает по Content-Type: текст едет в `body`, всё
+     * остальное — в `bodyBase64`. Старое поле осталось на месте, поэтому свежий
+     * веб на старой оболочке ведёт себя ровно как раньше.
+     */
     nativeApiResponse(payload) {
         const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
         const status = Number(data.status || 0) || 0;
         const body = String(data.body || '');
+        const bodyBase64 = typeof data.bodyBase64 === 'string' ? data.bodyBase64 : '';
         const headers = data.headers && typeof data.headers === 'object' ? data.headers : {};
+        const contentType = String(headers['content-type'] || headers['Content-Type'] || 'application/octet-stream');
+
+        // Декодируется один раз и лениво: у текстовых ответов (то есть почти у всех)
+        // этот путь не исполняется вовсе.
+        let bytes = null;
+        const asBytes = () => {
+            if (bytes) return bytes;
+            if (bodyBase64) {
+                try {
+                    const binary = atob(bodyBase64);
+                    const out = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+                    bytes = out;
+                } catch (e) {
+                    bytes = new Uint8Array(0);
+                }
+            } else {
+                bytes = new TextEncoder().encode(body);
+            }
+            return bytes;
+        };
+        const asText = () => (bodyBase64 ? new TextDecoder().decode(asBytes()) : body);
+
         return {
             ok: !!data.ok || (status >= 200 && status < 300),
             status,
             headers,
-            text: async () => body,
-            json: async () => JSON.parse(body || 'null'),
-            blob: async () => {
-                const contentType = String(headers['content-type'] || headers['Content-Type'] || 'application/octet-stream');
-                return new Blob([body], { type: contentType });
+            text: async () => asText(),
+            json: async () => JSON.parse(asText() || 'null'),
+            arrayBuffer: async () => {
+                const view = asBytes();
+                return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
             },
+            blob: async () => new Blob([asBytes()], { type: contentType }),
         };
     }
 
@@ -28417,6 +30635,13 @@ ZaliMixin(ZaliInterface, class {
                 this.clearStoredSession();
             }
         }
+
+        // Аватарки и иконки серверов поднимаются с диска ДО первого кадра —
+        // ради этого постоянный кеш и существует. Прогрев идёт по текущему
+        // аккаунту, поэтому его место здесь, где S.session уже переставлен,
+        // и до renderSidebarProfile()/renderContacts() ниже.
+        void this.primeAssetCacheFromDisk();
+        void this.hydrateAttachmentPayloadsFromCache();
 
         this.updateAuthView();
         const overlay = document.getElementById('authOverlay');
@@ -30004,6 +32229,8 @@ ZaliMixin(ZaliInterface, class {
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
                 : [];
             const payload = {
+"""#,
+    #"""
                 reason: details.reason || this.decryptFailureReasonSlug(details.placeholderText || ''),
                 placeholderText: String(details.placeholderText || '').slice(0, 200),
                 clientError: String(details.clientError || '').slice(0, 500),
@@ -30478,10 +32705,14 @@ ZaliMixin(ZaliInterface, class {
         menu.innerHTML = this.reactionOptions.map(emoji => (
             `<button class="reaction-btn" type="button" data-menu-reaction="${this.esc(emoji)}" aria-label="${this.esc(emoji)}"><span class="reaction-btn-emoji">${this.esc(emoji)}</span></button>`
         )).join('')
+            // Действия — иконки общего набора (uiIcon), а не глифы ↩ ✎ 🗑:
+            // последние рисуются шрифтом ОС и рядом с цветными эмодзи
+            // выглядели то бледной палочкой, то ещё одним эмодзи, причём
+            // по-разному на macOS, Windows и Android.
             + `<span class="reaction-menu-sep" aria-hidden="true"></span>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-reply title="Ответить" aria-label="Ответить на сообщение"><span class="reaction-btn-emoji">↩</span></button>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-edit title="Изменить" aria-label="Изменить сообщение" hidden><span class="reaction-btn-emoji">✎</span></button>`
-            + `<button class="reaction-btn reaction-btn-delete" type="button" data-menu-delete title="Удалить" aria-label="Удалить сообщение" hidden><span class="reaction-btn-emoji">🗑</span></button>`;
+            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-reply title="Ответить" aria-label="Ответить на сообщение">${this.uiIcon('reply')}</button>`
+            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-edit title="Изменить" aria-label="Изменить сообщение" hidden>${this.uiIcon('pencil')}</button>`
+            + `<button class="reaction-btn reaction-btn-delete" type="button" data-menu-delete title="Удалить" aria-label="Удалить сообщение" hidden>${this.uiIcon('trash')}</button>`;
         document.body.appendChild(menu);
 
         menu.addEventListener('click', (e) => {
@@ -30544,7 +32775,11 @@ ZaliMixin(ZaliInterface, class {
         menu.setAttribute('aria-hidden', 'false');
         menu.style.left = '0px';
         menu.style.top = '0px';
-        const menuRect = menu.getBoundingClientRect();
+        // Размер берём из layout-бокса, а не из getBoundingClientRect():
+        // у скрытого состояния меню есть transform: scale(...), и
+        // прямоугольник в момент показа возвращает уменьшенную копию —
+        // погрешность уходит прямо в расчёт края экрана.
+        const menuRect = { width: menu.offsetWidth, height: menu.offsetHeight };
         const anchor = messageEl.querySelector('.bwrap') || messageEl;
         const anchorRect = anchor.getBoundingClientRect();
         const pad = 12;
@@ -30863,6 +33098,24 @@ ZaliMixin(ZaliInterface, class {
     // .badge `badge-pop`), which is what made the sidebar visibly twitch and flash
     // avatars while chatting. Writing only on a real content change makes the common
     // case a string compare.
+    /**
+     * Закрывает то, что накрывает панель чата (профиль, настройки сервера).
+     *
+     * Модальные слои живут внутри .main и больше не гасят левую навигацию —
+     * по контакту или серверу можно щёлкнуть, не закрывая диалог. Без этого
+     * переключение происходило бы ЗА окном: чат сменился, а поверх него
+     * по-прежнему висит чужой профиль, и человек этого не видит. Поэтому
+     * выбор в навигации закрывает модальный слой.
+     *
+     * Вызывается только из веток навигации в bindContactListEvents(); плитки
+     * «создать/присоединиться», которые сами открывают окно, сюда не заходят.
+     */
+    closeChatPanelModals() {
+        if (this.ensureProfileState().open) this.closeProfile();
+        const serverOverlay = document.getElementById('serverOverlay');
+        if (serverOverlay && !serverOverlay.hidden) this.closeServerOverlay();
+    }
+
     commitListHTML(el, slot, html) {
         if (!el) return false;
         this._listHTMLCache = this._listHTMLCache || new Map();
@@ -31699,8 +33952,6 @@ ZaliMixin(ZaliInterface, class {
             const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
-"""#,
-    #"""
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
 
             if (isGroupable && sameSender && sameDay && withinWindow) {
@@ -32886,6 +35137,13 @@ ZaliMixin(ZaliInterface, class {
 
         if (deleted) {
             this.saveStoredAvatar(name, null);
+            // saveStoredAvatar() правит только память — в отличие от
+            // clearStoredAvatar() она не трогает диск. Без этой строки снятая
+            // аватарка оставалась в постоянном кеше, и следующий запуск
+            // поднимал её обратно прогревом: renderAvatarHTML находил значение,
+            // ensureAvatarLoaded() не вызывался, и удалённая картинка висела
+            // бы бессрочно — перепроверять её было бы просто некому.
+            void this.cacheDelete('avatar', this.avatarCacheKey(name));
         } else {
             this.clearStoredAvatar(name);
             this.ensureAvatarLoaded(name, { force: true });
@@ -32946,6 +35204,10 @@ ZaliMixin(ZaliInterface, class {
             document.removeEventListener('contextmenu', this._contactContextMenuOutsideHandler);
             this._contactContextMenuOutsideHandler = null;
         }
+        if (this._contactContextMenuKeyHandler) {
+            document.removeEventListener('keydown', this._contactContextMenuKeyHandler, true);
+            this._contactContextMenuKeyHandler = null;
+        }
     }
 
     // Right-click on a contact — notification mute (existing behavior) plus
@@ -32966,33 +35228,48 @@ ZaliMixin(ZaliInterface, class {
         // и жмут ПКМ. Их подписи зависят от текущих отношений, которых мы ещё
         // не знаем, — они уточняются ниже, когда придёт профиль. До ответа
         // пункты показывают нейтральное действие, а не мигают пустотой.
+        menu.setAttribute('role', 'menu');
+        menu.tabIndex = -1;
         menu.innerHTML = `
-            <button type="button" class="peer-context-menu-item" data-action="profile">
-                <span>Открыть профиль</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="profile">
+                ${this.uiIcon('user')}<span>Открыть профиль</span>
             </button>
             ${isSelf ? '' : `
-            <button type="button" class="peer-context-menu-item" data-action="follow">
-                <span id="contactFollowLabel">Отслеживать</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="follow">
+                ${this.uiIcon('eye')}<span id="contactFollowLabel">Отслеживать</span>
             </button>
-            <button type="button" class="peer-context-menu-item" data-action="friend">
-                <span id="contactFriendLabel">Попроситься в друзья</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="friend">
+                ${this.uiIcon('user-plus')}<span id="contactFriendLabel">Попроситься в друзья</span>
             </button>`}
             <div class="peer-context-menu-sep" aria-hidden="true"></div>
-            <button type="button" class="peer-context-menu-item" data-action="mute">
-                <span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
+                ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
             <div class="peer-context-menu-volume">
-                <span>Громкость собеседника: <strong id="contactVolumeValue">${percent}%</strong></span>
-                <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange" class="settings-range">
+                <div class="peer-context-menu-volume-head"><span>Громкость</span><strong id="contactVolumeValue">${percent}%</strong></div>
+                <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
+                       class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
         `;
         document.body.appendChild(menu);
 
-        const rect = menu.getBoundingClientRect();
-        const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
-        const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+        // Меню разворачивается ОТ курсора, а не на ближайший свободный край:
+        // раньше оно только зажималось в окно, поэтому у нижней или правой
+        // границы накрывало собой ту самую строку, по которой щёлкнули.
+        // offsetWidth/Height, а не getBoundingClientRect(): меню в этот момент
+        // на первом кадре анимации появления, то есть под scale(.965), и
+        // прямоугольник вернул бы размер на 3,5 % меньше настоящего — ровно
+        // столько меню потом и вылезало бы за край экрана.
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        const pad = 8;
+        const flipX = x + width + pad > window.innerWidth && x - width > pad;
+        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
+        const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
+        menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
 
         menu.querySelector('[data-action="profile"]')?.addEventListener('click', () => {
             this.closeContactContextMenu();
@@ -33020,13 +35297,47 @@ ZaliMixin(ZaliInterface, class {
         });
         const range = menu.querySelector('#contactVolumeRange');
         const label = menu.querySelector('#contactVolumeValue');
+        // Шкала 0–200 %, поэтому доля закрашенной части — это value/200,
+        // а не value: без пересчёта 100 % заливало бы ползунок целиком.
+        const paintRange = (value) => range?.style.setProperty('--fill', `${Math.max(0, Math.min(100, value / 2))}%`);
+        paintRange(percent);
         range?.addEventListener('input', () => {
             const value = Number(range.value) || 100;
             if (label) label.textContent = `${value}%`;
+            paintRange(value);
             this.setPeerVolumePercent(name, value);
         });
 
         if (!isSelf) void this.decorateContactContextMenu(menu, name);
+
+        // Меню, которое нельзя закрыть с клавиатуры, приходится закрывать
+        // мышью «куда-нибудь мимо» — а мимо здесь означает по контакту или
+        // по сообщению, то есть случайное действие. Escape закрывает,
+        // стрелки ходят по пунктам.
+        const items = () => Array.from(menu.querySelectorAll('.peer-context-menu-item'));
+        const keyHandler = (evt) => {
+            if (!menu.isConnected) return;
+            if (evt.key === 'Escape') {
+                evt.preventDefault();
+                this.closeContactContextMenu();
+                return;
+            }
+            if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp') return;
+            const list = items();
+            if (!list.length) return;
+            evt.preventDefault();
+            const current = list.indexOf(document.activeElement);
+            const step = evt.key === 'ArrowDown' ? 1 : -1;
+            const next = current < 0
+                ? (step > 0 ? 0 : list.length - 1)
+                : (current + step + list.length) % list.length;
+            list[next].focus();
+        };
+        this._contactContextMenuKeyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler, true);
+        // Фокус на самом меню, а не на первом пункте: подсвеченный пункт
+        // сразу после ПКМ читается как уже выбранное действие.
+        menu.focus({ preventScroll: true });
 
         const outsideHandler = (evt) => {
             if (menu.contains(evt.target)) return;
@@ -33057,6 +35368,8 @@ ZaliMixin(ZaliInterface, class {
             menu.dataset.friend = data?.isFriend ? '1' : '0';
             const followLabel = menu.querySelector('#contactFollowLabel');
             if (followLabel) followLabel.textContent = data?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
+            const followIcon = menu.querySelector('[data-action="follow"] .ui-icon');
+            if (followIcon) followIcon.outerHTML = this.uiIcon(data?.isFollowing ? 'eye-off' : 'eye');
             const friendLabel = menu.querySelector('#contactFriendLabel');
             if (friendLabel) {
                 if (data?.isFriend) friendLabel.textContent = 'Вы друзья';
@@ -33907,6 +36220,8 @@ ZaliMixin(ZaliInterface, class {
         const statusCode = Number(payload?.statusCode || 0);
         const responseBody = String(payload?.responseBody || '').trim();
         const permanentError = statusCode >= 400 && statusCode < 500;
+"""#,
+    #"""
         this.trace(`onSendError clientId=${clientId} status=${statusCode || 'n/a'} body=${responseBody.slice(0, 120)}`);
         if (clientId) {
             if (permanentError) {
@@ -34339,6 +36654,12 @@ ZaliMixin(ZaliInterface, class {
                     text,
                     key: cryptoKey,
                     keyVersion,
+                    // Автор кладётся в архив и именно оттуда потом читается при
+                    // отрисовке. Оболочка не обязана знать его в том же регистре, в
+                    // каком его показывает UI: Android, например, хранит последнего
+                    // вошедшего в нижнем регистре, и правка переименовала бы автора.
+                    // SEND_MESSAGE передаёт `sender` ровно по этой же причине.
+                    sender: this.myName(),
                     reply: replyPayload,
                     attachments: attachments.map(att => ({
                         name: att.name,
@@ -34445,10 +36766,12 @@ ZaliMixin(ZaliInterface, class {
 //     автографы и очередь модерации грузятся отдельными запросами, но живут
 //     в одном месте, чтобы перерисовка была одна на всех.
 //
-//   - Данные всегда перезапрашиваются при открытии. Кэшировать профиль между
-//     открытиями смысла нет (счётчик подписчиков и статус дружбы меняются
-//     чужими действиями), а показать вчерашнее «вы не друзья» и спрятать
-//     кнопку — хуже, чем моргнуть скелетоном.
+//   - Данные всегда перезапрашиваются при открытии — и это не изменилось.
+//     Изменилось то, ЧТО видно, пока запрос идёт: карточка из постоянного
+//     кеша (interface/cache.js) вместо скелетона. Прежнее возражение —
+//     «показать вчерашнее «вы не друзья» хуже, чем моргнуть» — снято тем,
+//     что вчерашнее живёт на экране ровно столько, сколько идёт запрос,
+//     после чего затирается свежим ответом. См. refreshProfile().
 ZaliMixin(ZaliInterface, class {
 
     /** Пустое состояние. Одна точка правды для конструктора и для закрытия. */
@@ -34564,22 +36887,82 @@ ZaliMixin(ZaliInterface, class {
         this.S.profile = ZaliInterface.emptyProfileState;
     }
 
+    /**
+     * Карточка профиля с диска. Хранится JSON-ответом целиком: он маленький
+     * (единицы килобайт), а разбирать его на части значило бы держать вторую
+     * схему рядом с серверной.
+     */
+    async loadCachedProfile(name) {
+        try {
+            const blob = await this.cacheGet('profile', String(name || '').trim().toLowerCase());
+            if (!blob) return null;
+            const parsed = JSON.parse(await this.blobToText(blob));
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Профиль показывается из кеша сразу и обновляется под рукой.
+     *
+     * Раньше здесь было записано обратное решение — «данные всегда
+     * перезапрашиваются, показать вчерашнее хуже, чем моргнуть скелетоном».
+     * Возражение верное, но оно про КЕШ ВМЕСТО ЗАПРОСА. Запрос никуда не
+     * делся: он уходит в той же строке, а кешированная карточка просто
+     * занимает место скелетона на те 100–300 мс, что он идёт. Счётчик
+     * подписчиков и статус дружбы приезжают ровно так же быстро, как
+     * раньше, — но вместо пустой рамки человек всё это время видит профиль.
+     */
     async refreshProfile() {
         const state = this.ensureProfileState();
         const name = state.username;
         if (!name) return;
+        // Запрос уходит ПЕРВЫМ, до чтения кеша. Чтение с диска может оказаться
+        // первым обращением к базе за сеанс, то есть включать в себя открытие
+        // IndexedDB — а оно в патологическом случае длится до
+        // ZALI_CACHE_OPEN_TIMEOUT_MS. Дожидаться его перед отправкой запроса
+        // значит превратить ускорение в задержку: профиль начинал бы грузиться
+        // на секунды позже, чем до появления кеша.
+        let request;
         try {
-            const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+            request = this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+        } catch (e) {
+            request = Promise.reject(e);
+        }
+        const cached = state.data ? null : await this.loadCachedProfile(name);
+        if (cached && this.ensureProfileState().username === name && !this.ensureProfileState().data) {
+            this.setProfileState({
+                loading: false,
+                error: '',
+                data: cached,
+                draft: this.ensureProfileState().editing ? this.ensureProfileState().draft : this.profileDraftFrom(cached),
+            });
+            this.ensureAvatarLoaded(name);
+        }
+        try {
+            const res = await request;
             if (this.ensureProfileState().username !== name) return;
             if (res.status === 404) {
+                // Профиля больше нет — кешированная карточка обязана уйти
+                // вместе с ним, иначе следующее открытие снова покажет её.
+                void this.cacheDelete('profile', String(name).trim().toLowerCase());
                 this.setProfileState({ loading: false, error: 'Пользователь не найден', data: null });
                 return;
             }
             if (!res.ok) {
+                // Сеть отвалилась, а карточка из кеша уже на экране — она
+                // лучше, чем ошибка на пустом месте; ошибку показываем только
+                // когда показывать больше нечего.
+                if (this.ensureProfileState().data) {
+                    this.setProfileState({ loading: false });
+                    return;
+                }
                 this.setProfileState({ loading: false, error: 'Не удалось загрузить профиль' });
                 return;
             }
             const data = await res.json();
+            void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
             this.setProfileState({
                 loading: false,
                 error: '',
@@ -34590,6 +36973,10 @@ ZaliMixin(ZaliInterface, class {
             });
             this.ensureAvatarLoaded(name);
         } catch (e) {
+            if (this.ensureProfileState().data) {
+                this.setProfileState({ loading: false });
+                return;
+            }
             this.setProfileState({ loading: false, error: 'Не удалось загрузить профиль' });
         }
     }
@@ -34666,12 +37053,34 @@ ZaliMixin(ZaliInterface, class {
         this.setProfileState({ draft: { ...draft, links } });
     }
 
+    /**
+     * «vk.com/имя» — это https://vk.com/имя, а не мусор. Голый адрес получает
+     * схему; то, что уже несёт какую-то схему (в том числе javascript:),
+     * возвращается как есть — решение принимает сервер, а не эта функция.
+     */
+    normalizeProfileLinkUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+        if (raw.startsWith('//')) return `https:${raw}`;
+        return `https://${raw}`;
+    }
+
     async saveProfile() {
         const state = this.ensureProfileState();
         if (!state.data?.isSelf || state.saving) return;
         const draft = state.draft || this.profileDraftFrom(state.data);
         this.setProfileState({ saving: true, error: '' });
         try {
+            // Сервер принимает только http/https (sanitize_links в profiles.rs) и
+            // всё остальное выбрасывает МОЛЧА: человек вводил «vk.com/имя»,
+            // сохранял, и ссылка просто не появлялась в профиле — ни ошибки,
+            // ни следа. Голый адрес — это https, дописываем схему за него;
+            // явную чужую схему не трогаем, её отклонит сервер, и об этом
+            // ниже будет сказано вслух.
+            const outgoingLinks = (draft.links || [])
+                .map(link => ({ ...link, url: this.normalizeProfileLinkUrl(link.url) }))
+                .filter(link => link.url);
             const res = await this.apiFetch(this.apiRoutes.profiles.update, {
                 method: 'PUT',
                 interactive: true,
@@ -34685,7 +37094,7 @@ ZaliMixin(ZaliInterface, class {
                     commentPolicy: draft.commentPolicy || 'anyone',
                     autographPolicy: draft.autographPolicy || 'anyone',
                     autographAutoApprove: draft.autographAutoApprove || 'nobody',
-                    links: (draft.links || []).filter(link => String(link.url || '').trim()),
+                    links: outgoingLinks,
                 }),
             });
             if (!res.ok) {
@@ -34694,6 +37103,20 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const data = await res.json();
+            const kept = Array.isArray(data?.links) ? data.links.length : 0;
+            const dropped = outgoingLinks.length - kept;
+            if (dropped > 0) {
+                // Редактор НЕ закрываем: иначе единственным следом отказа
+                // осталось бы отсутствие ссылки в профиле — ровно то, на что
+                // и жаловались.
+                this.setProfileState({
+                    saving: false,
+                    data,
+                    draft: this.profileDraftFrom(data),
+                    error: `Профиль сохранён, но ${dropped} ${this.ruPlural(dropped, 'ссылка отклонена', 'ссылки отклонены', 'ссылок отклонено')}: принимаются только http/https-адреса.`,
+                });
+                return;
+            }
             this.setProfileState({ saving: false, editing: false, data, draft: this.profileDraftFrom(data), error: '' });
             this.addLogEntry({ type: 'SUCCESS', msg: 'Профиль сохранён', ts: new Date().toLocaleTimeString() });
         } catch (e) {
@@ -35130,6 +37553,7 @@ ZaliMixin(ZaliInterface, class {
                 <h2 class="profile-name" id="profileModalName">${this.esc(title)}</h2>
                 <div class="profile-handle">@${this.esc(username)}</div>
                 ${data.bio ? `<div class="profile-bio-inline">${this.esc(data.bio)}</div>` : ''}
+                ${this.renderProfileLinks(data)}
                 <div class="profile-counters">
                     ${counters.map(counter => `
                         <span class="profile-counter">
@@ -35138,7 +37562,6 @@ ZaliMixin(ZaliInterface, class {
                         </span>
                     `).join('')}
                 </div>
-                ${this.renderProfileLinks(data)}
             </div>
             <div class="profile-head-actions">${this.renderProfileActions(state, data)}</div>
         </header>`;
@@ -35688,8 +38111,6 @@ ZaliMixin(ZaliInterface, class {
             case 'toggle-follow': void this.toggleFollow(); break;
             case 'add-friend': void this.requestFriendship(); break;
             case 'accept-friend': void this.respondFriendRequest(requestId, 'accept'); break;
-"""#,
-    #"""
             case 'decline-friend': void this.respondFriendRequest(requestId, 'decline'); break;
             case 'cancel-friend': void this.respondFriendRequest(requestId, 'cancel'); break;
             case 'remove-friend': void this.removeFriend(state.username); break;
@@ -36597,7 +39018,10 @@ ZaliMixin(ZaliInterface, class {
                 const serverBtn = e.target.closest('.server-item[data-server-id]');
                 if (serverBtn) {
                     const serverId = serverBtn.getAttribute('data-server-id');
-                    if (serverId) this.setActiveServer(serverId);
+                    if (serverId) {
+                        this.closeChatPanelModals();
+                        this.setActiveServer(serverId);
+                    }
                     e.stopPropagation();
                     return;
                 }
@@ -36638,7 +39062,10 @@ ZaliMixin(ZaliInterface, class {
                     }
                 }
                 const row = e.target.closest('.contact');
-                if (row && row.dataset.name) this.switchChat(row.dataset.name);
+                if (row && row.dataset.name) {
+                    this.closeChatPanelModals();
+                    this.switchChat(row.dataset.name);
+                }
             });
             contactsEl.addEventListener('contextmenu', (e) => {
                 const row = e.target.closest('.contact');
@@ -37266,6 +39693,7 @@ ZaliMixin(ZaliInterface, class {
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
         const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
         const designModeOptions = document.getElementById('designModeOptions');
+        const cacheSettings = document.getElementById('cacheSettings');
         const inputVoiceTrace = document.getElementById('inputVoiceTrace');
         const hubSegmentSettings = document.getElementById('hubSegmentSettings');
         const recentAccounts = document.getElementById('recentAccounts');
@@ -37328,6 +39756,11 @@ ZaliMixin(ZaliInterface, class {
             this.applyNetworkConfigToInputs();
             this.renderUiV2Settings();
             this.renderAudioDeviceSettings();
+            // Карточку кеша рисует openSettingsView() — там же, где остальные
+            // разделы настроек. Здесь её быть не должно: в настройки попадают
+            // ещё и через нижнюю панель и через сегмент Хаба, и карточка,
+            // привязанная к одной этой кнопке, в тех двух путях оставалась
+            // пустой.
             showSettingsView();
         });
         if (inputAudioMic) {
@@ -37370,6 +39803,40 @@ ZaliMixin(ZaliInterface, class {
         if (inputVoiceTrace) {
             inputVoiceTrace.addEventListener('change', () => {
                 this.saveVoiceTraceEnabled(!!inputVoiceTrace.checked);
+            });
+        }
+        if (cacheSettings) {
+            // Делегирование по той же причине, что и у designModeOptions:
+            // renderCacheSettings() переписывает контейнер целиком каждый раз,
+            // когда меняется сводка, — слушатели на кнопках не пережили бы это.
+            cacheSettings.addEventListener('click', (event) => {
+                const modeBtn = event.target?.closest?.('[data-cache-mode]');
+                if (modeBtn && cacheSettings.contains(modeBtn)) {
+                    this.saveCachePrefs({ mode: modeBtn.getAttribute('data-cache-mode') });
+                    return;
+                }
+                if (event.target?.closest?.('#cacheClearBtn')) {
+                    void this.clearAssetCache();
+                }
+            });
+            // 'input' обновляет только подпись — слайдер тащат, и запускать на
+            // каждый промежуточный шаг вытеснение значило бы стереть половину
+            // кеша по дороге к 16 ГБ. Запись и применение — на 'change'.
+            cacheSettings.addEventListener('input', (event) => {
+                const slider = event.target;
+                if (!slider || slider.id !== 'inputCacheLimit') return;
+                // Пока жест идёт, карточку перерисовывать нельзя — иначе
+                // слайдер заменят прямо под пальцем (см. cacheLimitSliderBusy).
+                this._cacheLimitDragging = true;
+                const label = document.getElementById('cacheLimitValue');
+                const stop = ZaliInterface.cacheLimitStops[this.normalizeCacheLimitIndex(slider.value)];
+                if (label && stop) label.textContent = stop.label;
+            });
+            cacheSettings.addEventListener('change', (event) => {
+                const slider = event.target;
+                if (!slider || slider.id !== 'inputCacheLimit') return;
+                this._cacheLimitDragging = false;
+                this.saveCachePrefs({ limitIndex: slider.value });
             });
         }
         if (hubSegmentSettings) {
@@ -37871,6 +40338,8 @@ ZaliMixin(ZaliInterface, class {
             networkConfigResetBtn.addEventListener('click', () => this.resetNetworkConfig());
         }
         if (networkTurnApplyBtn) {
+"""#,
+    #"""
             networkTurnApplyBtn.addEventListener('click', () => {
                 try {
                     const nextIceServers = this.appendTurnPresetToIceServers(

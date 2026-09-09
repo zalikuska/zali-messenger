@@ -10,6 +10,13 @@ ZaliMixin(ZaliInterface, class {
 
         if (deleted) {
             this.saveStoredAvatar(name, null);
+            // saveStoredAvatar() правит только память — в отличие от
+            // clearStoredAvatar() она не трогает диск. Без этой строки снятая
+            // аватарка оставалась в постоянном кеше, и следующий запуск
+            // поднимал её обратно прогревом: renderAvatarHTML находил значение,
+            // ensureAvatarLoaded() не вызывался, и удалённая картинка висела
+            // бы бессрочно — перепроверять её было бы просто некому.
+            void this.cacheDelete('avatar', this.avatarCacheKey(name));
         } else {
             this.clearStoredAvatar(name);
             this.ensureAvatarLoaded(name, { force: true });
@@ -70,6 +77,10 @@ ZaliMixin(ZaliInterface, class {
             document.removeEventListener('contextmenu', this._contactContextMenuOutsideHandler);
             this._contactContextMenuOutsideHandler = null;
         }
+        if (this._contactContextMenuKeyHandler) {
+            document.removeEventListener('keydown', this._contactContextMenuKeyHandler, true);
+            this._contactContextMenuKeyHandler = null;
+        }
     }
 
     // Right-click on a contact — notification mute (existing behavior) plus
@@ -90,33 +101,48 @@ ZaliMixin(ZaliInterface, class {
         // и жмут ПКМ. Их подписи зависят от текущих отношений, которых мы ещё
         // не знаем, — они уточняются ниже, когда придёт профиль. До ответа
         // пункты показывают нейтральное действие, а не мигают пустотой.
+        menu.setAttribute('role', 'menu');
+        menu.tabIndex = -1;
         menu.innerHTML = `
-            <button type="button" class="peer-context-menu-item" data-action="profile">
-                <span>Открыть профиль</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="profile">
+                ${this.uiIcon('user')}<span>Открыть профиль</span>
             </button>
             ${isSelf ? '' : `
-            <button type="button" class="peer-context-menu-item" data-action="follow">
-                <span id="contactFollowLabel">Отслеживать</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="follow">
+                ${this.uiIcon('eye')}<span id="contactFollowLabel">Отслеживать</span>
             </button>
-            <button type="button" class="peer-context-menu-item" data-action="friend">
-                <span id="contactFriendLabel">Попроситься в друзья</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="friend">
+                ${this.uiIcon('user-plus')}<span id="contactFriendLabel">Попроситься в друзья</span>
             </button>`}
             <div class="peer-context-menu-sep" aria-hidden="true"></div>
-            <button type="button" class="peer-context-menu-item" data-action="mute">
-                <span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
+                ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
             <div class="peer-context-menu-volume">
-                <span>Громкость собеседника: <strong id="contactVolumeValue">${percent}%</strong></span>
-                <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange" class="settings-range">
+                <div class="peer-context-menu-volume-head"><span>Громкость</span><strong id="contactVolumeValue">${percent}%</strong></div>
+                <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
+                       class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
         `;
         document.body.appendChild(menu);
 
-        const rect = menu.getBoundingClientRect();
-        const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
-        const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+        // Меню разворачивается ОТ курсора, а не на ближайший свободный край:
+        // раньше оно только зажималось в окно, поэтому у нижней или правой
+        // границы накрывало собой ту самую строку, по которой щёлкнули.
+        // offsetWidth/Height, а не getBoundingClientRect(): меню в этот момент
+        // на первом кадре анимации появления, то есть под scale(.965), и
+        // прямоугольник вернул бы размер на 3,5 % меньше настоящего — ровно
+        // столько меню потом и вылезало бы за край экрана.
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        const pad = 8;
+        const flipX = x + width + pad > window.innerWidth && x - width > pad;
+        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
+        const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
+        menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
 
         menu.querySelector('[data-action="profile"]')?.addEventListener('click', () => {
             this.closeContactContextMenu();
@@ -144,13 +170,47 @@ ZaliMixin(ZaliInterface, class {
         });
         const range = menu.querySelector('#contactVolumeRange');
         const label = menu.querySelector('#contactVolumeValue');
+        // Шкала 0–200 %, поэтому доля закрашенной части — это value/200,
+        // а не value: без пересчёта 100 % заливало бы ползунок целиком.
+        const paintRange = (value) => range?.style.setProperty('--fill', `${Math.max(0, Math.min(100, value / 2))}%`);
+        paintRange(percent);
         range?.addEventListener('input', () => {
             const value = Number(range.value) || 100;
             if (label) label.textContent = `${value}%`;
+            paintRange(value);
             this.setPeerVolumePercent(name, value);
         });
 
         if (!isSelf) void this.decorateContactContextMenu(menu, name);
+
+        // Меню, которое нельзя закрыть с клавиатуры, приходится закрывать
+        // мышью «куда-нибудь мимо» — а мимо здесь означает по контакту или
+        // по сообщению, то есть случайное действие. Escape закрывает,
+        // стрелки ходят по пунктам.
+        const items = () => Array.from(menu.querySelectorAll('.peer-context-menu-item'));
+        const keyHandler = (evt) => {
+            if (!menu.isConnected) return;
+            if (evt.key === 'Escape') {
+                evt.preventDefault();
+                this.closeContactContextMenu();
+                return;
+            }
+            if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp') return;
+            const list = items();
+            if (!list.length) return;
+            evt.preventDefault();
+            const current = list.indexOf(document.activeElement);
+            const step = evt.key === 'ArrowDown' ? 1 : -1;
+            const next = current < 0
+                ? (step > 0 ? 0 : list.length - 1)
+                : (current + step + list.length) % list.length;
+            list[next].focus();
+        };
+        this._contactContextMenuKeyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler, true);
+        // Фокус на самом меню, а не на первом пункте: подсвеченный пункт
+        // сразу после ПКМ читается как уже выбранное действие.
+        menu.focus({ preventScroll: true });
 
         const outsideHandler = (evt) => {
             if (menu.contains(evt.target)) return;
@@ -181,6 +241,8 @@ ZaliMixin(ZaliInterface, class {
             menu.dataset.friend = data?.isFriend ? '1' : '0';
             const followLabel = menu.querySelector('#contactFollowLabel');
             if (followLabel) followLabel.textContent = data?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
+            const followIcon = menu.querySelector('[data-action="follow"] .ui-icon');
+            if (followIcon) followIcon.outerHTML = this.uiIcon(data?.isFollowing ? 'eye-off' : 'eye');
             const friendLabel = menu.querySelector('#contactFriendLabel');
             if (friendLabel) {
                 if (data?.isFriend) friendLabel.textContent = 'Вы друзья';

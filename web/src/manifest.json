@@ -45,6 +45,7 @@
     "interface/zalicoin.js",
     "interface/prefs.js",
     "interface/storage.js",
+    "interface/cache.js",
     "interface/conversation_keys.js",
     "interface/key_resolution.js",
     "interface/key_envelopes.js",

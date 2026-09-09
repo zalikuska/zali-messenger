@@ -14,10 +14,12 @@
 //     автографы и очередь модерации грузятся отдельными запросами, но живут
 //     в одном месте, чтобы перерисовка была одна на всех.
 //
-//   - Данные всегда перезапрашиваются при открытии. Кэшировать профиль между
-//     открытиями смысла нет (счётчик подписчиков и статус дружбы меняются
-//     чужими действиями), а показать вчерашнее «вы не друзья» и спрятать
-//     кнопку — хуже, чем моргнуть скелетоном.
+//   - Данные всегда перезапрашиваются при открытии — и это не изменилось.
+//     Изменилось то, ЧТО видно, пока запрос идёт: карточка из постоянного
+//     кеша (interface/cache.js) вместо скелетона. Прежнее возражение —
+//     «показать вчерашнее «вы не друзья» хуже, чем моргнуть» — снято тем,
+//     что вчерашнее живёт на экране ровно столько, сколько идёт запрос,
+//     после чего затирается свежим ответом. См. refreshProfile().
 ZaliMixin(ZaliInterface, class {
 
     /** Пустое состояние. Одна точка правды для конструктора и для закрытия. */
@@ -133,22 +135,82 @@ ZaliMixin(ZaliInterface, class {
         this.S.profile = ZaliInterface.emptyProfileState;
     }
 
+    /**
+     * Карточка профиля с диска. Хранится JSON-ответом целиком: он маленький
+     * (единицы килобайт), а разбирать его на части значило бы держать вторую
+     * схему рядом с серверной.
+     */
+    async loadCachedProfile(name) {
+        try {
+            const blob = await this.cacheGet('profile', String(name || '').trim().toLowerCase());
+            if (!blob) return null;
+            const parsed = JSON.parse(await this.blobToText(blob));
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Профиль показывается из кеша сразу и обновляется под рукой.
+     *
+     * Раньше здесь было записано обратное решение — «данные всегда
+     * перезапрашиваются, показать вчерашнее хуже, чем моргнуть скелетоном».
+     * Возражение верное, но оно про КЕШ ВМЕСТО ЗАПРОСА. Запрос никуда не
+     * делся: он уходит в той же строке, а кешированная карточка просто
+     * занимает место скелетона на те 100–300 мс, что он идёт. Счётчик
+     * подписчиков и статус дружбы приезжают ровно так же быстро, как
+     * раньше, — но вместо пустой рамки человек всё это время видит профиль.
+     */
     async refreshProfile() {
         const state = this.ensureProfileState();
         const name = state.username;
         if (!name) return;
+        // Запрос уходит ПЕРВЫМ, до чтения кеша. Чтение с диска может оказаться
+        // первым обращением к базе за сеанс, то есть включать в себя открытие
+        // IndexedDB — а оно в патологическом случае длится до
+        // ZALI_CACHE_OPEN_TIMEOUT_MS. Дожидаться его перед отправкой запроса
+        // значит превратить ускорение в задержку: профиль начинал бы грузиться
+        // на секунды позже, чем до появления кеша.
+        let request;
         try {
-            const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+            request = this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
+        } catch (e) {
+            request = Promise.reject(e);
+        }
+        const cached = state.data ? null : await this.loadCachedProfile(name);
+        if (cached && this.ensureProfileState().username === name && !this.ensureProfileState().data) {
+            this.setProfileState({
+                loading: false,
+                error: '',
+                data: cached,
+                draft: this.ensureProfileState().editing ? this.ensureProfileState().draft : this.profileDraftFrom(cached),
+            });
+            this.ensureAvatarLoaded(name);
+        }
+        try {
+            const res = await request;
             if (this.ensureProfileState().username !== name) return;
             if (res.status === 404) {
+                // Профиля больше нет — кешированная карточка обязана уйти
+                // вместе с ним, иначе следующее открытие снова покажет её.
+                void this.cacheDelete('profile', String(name).trim().toLowerCase());
                 this.setProfileState({ loading: false, error: 'Пользователь не найден', data: null });
                 return;
             }
             if (!res.ok) {
+                // Сеть отвалилась, а карточка из кеша уже на экране — она
+                // лучше, чем ошибка на пустом месте; ошибку показываем только
+                // когда показывать больше нечего.
+                if (this.ensureProfileState().data) {
+                    this.setProfileState({ loading: false });
+                    return;
+                }
                 this.setProfileState({ loading: false, error: 'Не удалось загрузить профиль' });
                 return;
             }
             const data = await res.json();
+            void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
             this.setProfileState({
                 loading: false,
                 error: '',
@@ -159,6 +221,10 @@ ZaliMixin(ZaliInterface, class {
             });
             this.ensureAvatarLoaded(name);
         } catch (e) {
+            if (this.ensureProfileState().data) {
+                this.setProfileState({ loading: false });
+                return;
+            }
             this.setProfileState({ loading: false, error: 'Не удалось загрузить профиль' });
         }
     }
@@ -235,12 +301,34 @@ ZaliMixin(ZaliInterface, class {
         this.setProfileState({ draft: { ...draft, links } });
     }
 
+    /**
+     * «vk.com/имя» — это https://vk.com/имя, а не мусор. Голый адрес получает
+     * схему; то, что уже несёт какую-то схему (в том числе javascript:),
+     * возвращается как есть — решение принимает сервер, а не эта функция.
+     */
+    normalizeProfileLinkUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+        if (raw.startsWith('//')) return `https:${raw}`;
+        return `https://${raw}`;
+    }
+
     async saveProfile() {
         const state = this.ensureProfileState();
         if (!state.data?.isSelf || state.saving) return;
         const draft = state.draft || this.profileDraftFrom(state.data);
         this.setProfileState({ saving: true, error: '' });
         try {
+            // Сервер принимает только http/https (sanitize_links в profiles.rs) и
+            // всё остальное выбрасывает МОЛЧА: человек вводил «vk.com/имя»,
+            // сохранял, и ссылка просто не появлялась в профиле — ни ошибки,
+            // ни следа. Голый адрес — это https, дописываем схему за него;
+            // явную чужую схему не трогаем, её отклонит сервер, и об этом
+            // ниже будет сказано вслух.
+            const outgoingLinks = (draft.links || [])
+                .map(link => ({ ...link, url: this.normalizeProfileLinkUrl(link.url) }))
+                .filter(link => link.url);
             const res = await this.apiFetch(this.apiRoutes.profiles.update, {
                 method: 'PUT',
                 interactive: true,
@@ -254,7 +342,7 @@ ZaliMixin(ZaliInterface, class {
                     commentPolicy: draft.commentPolicy || 'anyone',
                     autographPolicy: draft.autographPolicy || 'anyone',
                     autographAutoApprove: draft.autographAutoApprove || 'nobody',
-                    links: (draft.links || []).filter(link => String(link.url || '').trim()),
+                    links: outgoingLinks,
                 }),
             });
             if (!res.ok) {
@@ -263,6 +351,20 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const data = await res.json();
+            const kept = Array.isArray(data?.links) ? data.links.length : 0;
+            const dropped = outgoingLinks.length - kept;
+            if (dropped > 0) {
+                // Редактор НЕ закрываем: иначе единственным следом отказа
+                // осталось бы отсутствие ссылки в профиле — ровно то, на что
+                // и жаловались.
+                this.setProfileState({
+                    saving: false,
+                    data,
+                    draft: this.profileDraftFrom(data),
+                    error: `Профиль сохранён, но ${dropped} ${this.ruPlural(dropped, 'ссылка отклонена', 'ссылки отклонены', 'ссылок отклонено')}: принимаются только http/https-адреса.`,
+                });
+                return;
+            }
             this.setProfileState({ saving: false, editing: false, data, draft: this.profileDraftFrom(data), error: '' });
             this.addLogEntry({ type: 'SUCCESS', msg: 'Профиль сохранён', ts: new Date().toLocaleTimeString() });
         } catch (e) {

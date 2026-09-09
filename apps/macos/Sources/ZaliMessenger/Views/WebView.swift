@@ -1382,7 +1382,7 @@ struct WebView {
                     NetworkService.shared.performApiRequest(
                         method: method, path: path, headers: headers,
                         body: body, timeoutMs: timeoutMs
-                    ) { [weak self] status, bodyStr, respHeaders, error in
+                    ) { [weak self] status, bodyStr, bodyBase64, respHeaders, error in
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if let error, status == 0 {
@@ -1407,15 +1407,25 @@ struct WebView {
                             // 429 rate limit, ...) was treated as a native failure and
                             // collapsed into the generic "Операция не удалась" — hiding the
                             // real reason and breaking executeAuth's 409 recovery logic.
+                            // Только String/Number/Bool/Array/Dictionary — см. JSONSafe.swift:
+                            // Optional и любой Swift-тип приезжают к писателю как
+                            // __SwiftValue и поднимают ObjC-исключение прямо сквозь
+                            // async-кадры.
+                            var responseData: [String: Any] = [
+                                "status": status,
+                                "ok": (status >= 200 && status < 300),
+                                "body": bodyStr ?? "",
+                                "headers": respHeaders ?? [:],
+                            ]
+                            // Непустой только для нетекстовых ответов — см.
+                            // NetworkService.isTextualContentType.
+                            if let bodyBase64, !bodyBase64.isEmpty {
+                                responseData["bodyBase64"] = bodyBase64
+                            }
                             self.sendNativeResponse([
                                 "requestId": requestId,
                                 "ok": true,
-                                "data": [
-                                    "status": status,
-                                    "ok": (status >= 200 && status < 300),
-                                    "body": bodyStr as Any,
-                                    "headers": respHeaders as Any,
-                                ],
+                                "data": responseData,
                             ])
                         }
                     }

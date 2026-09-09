@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **macOS Swift-клиент** (`apps/macos/Sources/ZaliMessenger/`, основной) ↔ **Windows/Rust-шелл** (`apps/windows/src/native.rs` + `apps/windows/src/native/`) — реализуют один и тот же нативный слой (IPC-бридж, ключи, реконнект WS, HTTP-запросы, голосовой транспорт) **параллельно**. Фикс сетевого/крипто/бридж-поведения в одном почти всегда нужен и в другом — но с адаптацией под платформу (напр. macOS Keychain/файлы vs Windows `keyring`), не 1:1.
 - **Сервер**: локальный `server/src/` в этом монорепо ↔ серверный репозиторий (`zali-server`, ветка `zali-server`). Правки хендлеров нужно пушить в серверный репо и деплоить (см. «Deploy process»).
 - **Archiver SDK**: `sdk/Rust/` (сервер+Windows) ↔ `sdk/Swift/` (macOS) — зеркальные реализации формата `.zali`. Изменение формата/крипто нужно в обоих.
+- **Android-шелл** (`apps/android/app/src/main/java/org/zalikus/messenger/`) — четвёртая независимая реализация того же нативного слоя (`NativeBridge.kt` + `ZaliCoreBridge.kt`). Её **систематически забывали**: аудит 0.2b33 нашёл, что Android не знал про `reply`/`call` (вышли в 0.2b26 и уехали только в macOS и Windows), не имел ни потолка перебора ключей, ни кэшей расшифровки, а `.so` в `jniLibs/` была на неделю старше `core/src/`. Правя `core/`, **пересобирай ядро для Android** (`ANDROID_NDK_HOME=... ./apps/android/build_android_core.sh`) — Gradle его не собирает и о его устаревании молчит.
 
 > **Исключение — голосовые звонки.** Вся WebRTC-логика (mesh, оффер/ответ, ICE, glare, микрофон)
 > живёт только в вебе (`web/src/interface/voice_*.js`) и исполняется в WebView. Нативные шеллы лишь ретранслируют
@@ -230,7 +231,13 @@ compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`.
 - `APP_VERSION` в `scripts/build_app.sh` (macOS),
 - `APP_DISPLAY_VERSION` в `apps/windows/src/native.rs` (Windows),
 - `version` в `apps/windows/Cargo.toml` — отдельное SemVer-значение, которое никто не
-  сравнивает; бампается только чтобы Cargo был доволен (`0.2b22` → `0.2.22`).
+  сравнивает; бампается только чтобы Cargo был доволен (`0.2b22` → `0.2.22`),
+- `versionName` и `versionCode` в `apps/android/app/build.gradle.kts`. До 0.2b33 там
+  вечно стояла заглушка `1.0` / `1`, пока десктопы ушли на 0.2b32, — по установленному
+  APK нельзя было понять, какой в нём код. `versionCode` обязан быть монотонным целым,
+  поэтому считается как `MAJOR*10000 + MINOR*1000 + BUILD` (`0.2b33` → `2033`).
+  Канала автообновления у Android нет (`/api/version` знает только macos/windows), так
+  что номер нужен исключительно для опознания сборки.
 
 Серверные коммиты попадают в `zali-server` тем же именем: история серверного репозитория
 и история монорепо должны читаться как один ряд версий, иначе по логу деплоя невозможно
@@ -303,6 +310,24 @@ cargo test --manifest-path server/Cargo.toml   # server integration tests (51 ш
 1. Sender calls `sendMessage` IPC on macOS/Windows → native client POSTs to `/api/send` with a `.zali` archive body
 2. Server stores the archive blob, delivers via WebSocket to recipient's connected sessions
 3. Recipient native client receives WS event, calls `downloadMessage`, unpacks the `.zali` archive, decrypts
+
+### Бинарные ответы через нативный мост (`API_REQUEST`)
+
+Мост — JSON-канал, по нему ходят строки, поэтому у ответа **два тела**: текст едет
+в `body`, всё остальное — base64 в `bodyBase64`. Развилку делает оболочка по
+`Content-Type`; правило одно на всех и продублировано в четырёх местах:
+`NetworkService.isTextualContentType` (macOS), `native/api::is_textual_content_type`
+(Windows, с тестом), `NativeBridge.isTextualContentType` (Android) и разбор в
+`nativeApiResponse()` (`web/src/interface/api.js`). Отсутствующий `Content-Type`
+считается текстом.
+
+Почему так, а не «всё строкой», как было до 0.2b33: бинарь не переживает такой
+проезд. На macOS `String(data:encoding:.utf8)` возвращает **nil** на первом же
+байте PNG — тело приезжало пустым, `res.blob()` отдавал Blob нулевого размера, и
+`loadServerAsset` молча рисовал букву вместо иконки сервера. На Android
+`body.string()` подставляет replacement-символы — картинка приезжала битой. То есть
+иконки и баннеры серверов не работали **ни в одной** нативной оболочке, а
+`res.arrayBuffer()` в мостовом ответе отсутствовал вовсе.
 
 ### .zali archive format
 Magic header `ZALIMSSG` (8 bytes) + 1-byte protocol version, followed by AES-256-GCM encrypted chunks of 1 MB each. **Nonce per chunk**: `base_nonce[8..12]` += `chunk_index` using **wrapping addition** (not XOR). This matches Swift `addNonceCounter` and Rust `wrapping_add`. PBKDF2-SHA256 at 210 000 iterations for key derivation; always use `Array(password.utf8).count` (not `password.count`) for byte length.
@@ -403,9 +428,14 @@ Append-only журнал **событий** сообщений: на каждо�
 - **Куда пришлось продублировать `reply`** (тот же список, что и для `call`): `core/src/net.rs`
   (bus-команды + байтовый API), `core/src/lib.rs` (WASM), `web/src/modules/wasm_bridge.js`,
   macOS `ZaliCore.packMessage`/`MessagePayload`/`WebView.swift`, Windows
-  `native/messages.rs`+`native.rs`. **`receiveMessage()` в `interface.js` собирает сообщение
+  `native/messages.rs`+`native.rs`, Android `ZaliCoreBridge.packMessage`/`MessagePayload` +
+  `NativeBridge` (оба пути доставки). **`receiveMessage()` в `interface.js` собирает сообщение
   по полям, а не спредом** — забытое там поле теряется при живой доставке и «чинится» только
   следующей перезагрузкой истории; ровно это и произошло при первой сборке.
+  Android в этот список **не попал** и просидел без `reply`/`call` с 0.2b26 до 0.2b33: ответ,
+  отправленный с телефона, приезжал собеседнику без цитаты — безвозвратно, потому что цитата
+  лежит внутри шифротекста и восстанавливать её неоткуда. Отдельно от кода: `.so` в
+  `jniLibs/` тоже была старше `core/src/`, так что одной правки Kotlin не хватило бы.
 - **Редактирует только автор.** Менеджеры канала могут *удалять* чужое (`can_delete_message`),
   но переписывать чужие слова от чужого имени — подлог, который hash chain честно записал бы
   на автора. Сервер (`PUT /api/message/:id`) проверяет это независимо от UI.
@@ -473,6 +503,51 @@ Append-only журнал **событий** сообщений: на каждо�
 - `perform_api_request` blocks `..`, `%2F`, `%5C` in paths
 - Avatar and message file downloads use streaming byte counters (100 MB and 512 MB caps respectively)
 - `decode_data_url` has a 100 MB hard cap before any parsing
+
+### Android client (`apps/android/`)
+
+Тонкий шелл вокруг того же вебвью, но нативный слой у него **свой** — четвёртая
+независимая реализация моста. Инварианты, найденные аудитом 0.2b33:
+
+- **Всё, что обходит мост, на Android не работает.** Документ живёт по
+  `file:///android_asset/web/`, а `fetch()` с такой схемы шлёт `Origin: null`, который
+  сервер отвергает по CORS. Поэтому любой браузерный фолбэк здесь мёртв: `FormData`
+  идёт мимо моста (`_apiFetchImpl` исключает её из нативного пути), а WASM-ветки не
+  запускаются вовсе — Chromium не грузит ES-модули с `file://`. Из-за этого до 0.2b33
+  молча не работали загрузка/удаление аватара (`hasNativeAvatarBridge()` не пускал
+  транспорт `'android'`, хотя обработчики в `NativeBridge.kt` были написаны), правка
+  сообщений и история каналов. Лечение — **нативный обработчик**, а не фолбэк:
+  `serverHistory` и `editMessage` теперь объявлены `true` и реализованы в
+  `handleLoadServerHistory` / `handleEditMessage`.
+- **Перебор ключей ограничен и детерминирован** — `ZaliCoreBridge.MAX_DECRYPT_CANDIDATES`
+  (12) плюс обход `conversationKeys.keys.sorted()`, и оба кэша расшифровки
+  (положительный и отрицательный по `candidateKeysFingerprint`). Раньше в двух местах
+  дописывались **все** значения мапы без потолка: цена одного нечитаемого сообщения
+  росла вместе с историей `alt:`-ключей, а это два прохода PBKDF2 по 210 000 итераций
+  на кандидата — на самом слабом железе из всех оболочек. Проверяется `perf_doctor`.
+- **`allowBackup` выключен, и это не перестраховка.** В `filesDir` лежат
+  `conversation_keys_<user>.json` (ключи переписок открытым текстом) и
+  `shared_device_identity_<user>.json` (приватный ECDH-ключ). При `allowBackup="true"`
+  Android без спроса выгружал бы их в Google Drive. Выключены **оба** канала:
+  `android:allowBackup="false"` и `res/xml/data_extraction_rules.xml` (на API 31+
+  читается именно он, и `device-transfer` — отдельный канал от `cloud-backup`).
+- **Микрофон и камеру нужно просить у ОС.** `PermissionRequest.grant()` в
+  `WebChromeClient` не выдаёт приложению того, чего у приложения нет: `RECORD_AUDIO` и
+  `CAMERA` — dangerous-разрешения. Они были объявлены в манифесте с самого начала, но
+  не запрашивались в рантайме нигде (в коде стоял только `POST_NOTIFICATIONS`), поэтому
+  `getUserMedia()` падал и звонок на Android не мог начаться в принципе — при полностью
+  рабочем сигналинге. Теперь `MainActivity` откладывает `PermissionRequest` до ответа
+  системного диалога и отвечает вебвью ровно тем, что ОС дала.
+- **`reply` и `call` едут внутри шифротекста**, поэтому их обязан пробрасывать и
+  `packMessage`, и разбор `unpackMessage` (`ZaliCoreBridge`), и оба пути доставки в
+  `NativeBridge`. Пропущенное поле теряется безвозвратно: восстанавливать цитату неоткуда.
+- **Нативная нижняя панель** (Compose) прячет веб-док, поэтому её подсветка не может
+  узнать о навигации, случившейся в вебе. Веб сообщает активную секцию полем `section`
+  в `MOBILE_NAV_PROGRESS` (`activeMobileNavSection()` — один источник истины для обеих
+  панелей). Вкладок четыре, включая Хаб: без него в Хаб можно было попасть только
+  окольным путём, через сегмент-контрол внутри Настроек.
+- Фоновой доставки нет: WS живёт в Activity, foreground-сервиса нет, Web Push отключён
+  при наличии моста. Уведомления приходят, только пока приложение живо.
 
 ### Web UI (`web/src/interface.js` + `web/src/interface/`)
 
@@ -618,6 +693,24 @@ Append-only журнал **событий** сообщений: на каждо�
 ### Standalone browser/PWA client (mobile + desktop, no native shell)
 Started 2026-07-12: `web/index.html` + `web/app.js` can now run as a plain browser tab with zero
 native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachments) send/receive.
+
+> **Деплой — отдельный шаг, и его легко забыть.** Клиент раздаёт nginx с
+> `/var/www/msg.zalikus.org/` (вхост `msg.zalikus.org`), а не сам `zali_server`. Переезд на
+> `ms` 2026-09-05 его не захватил: до 0.2b33 там лежала 25-байтная заглушка
+> `<h1>msg.zalikus.org</h1>`, то есть браузерной и PWA-версии в проде физически не было
+> несколько дней, и никакой сборкой или коммитом это не проверялось.
+>
+> Выкладывать надо ровно этот набор (`web/src/` браузеру не нужен, `index.html` грузит
+> только `app.js`):
+> ```bash
+> scripts/build_web_wasm.sh && python3 scripts/bundle_web.py
+> rsync -av --delete-after web/{index.html,app.js,style.css,manifest.json,service-worker.js,icon.svg,icon-192.png,icon-512.png,apple-touch-icon.png} ms:/var/www/msg.zalikus.org/
+> rsync -av web/wasm-pkg/{zali_core.js,zali_core_bg.wasm} ms:/var/www/msg.zalikus.org/wasm-pkg/
+> ```
+> Проверять живой загрузкой, а не кодом ответа: `wasmAvailable` в консоли должен быть
+> `true` (nginx обязан отдавать `.wasm` как `application/wasm` — в `mime.types` это есть),
+> а `https://msg.zalikus.org` — присутствовать в `ALLOWED_ORIGINS` серверного env, иначе
+> клиент поднимется и не сможет сделать ни одного запроса.
 - `hasNativeBridge()` gates almost every native-only code path in `interface.js`; the `!hasNativeBridge()`
   branches for sending, DM history load, and real-time receive used to just no-op/warn — they now
   have real browser implementations (`browserSendMessage`, `loadBrowserDmHistory`,
@@ -768,6 +861,61 @@ WKWebView и WebView2 не исполняют.
 - Мобильный `backdrop-filter` вынесен в токен `--m-glass` и снимается на время
   жеста (`body.mobile-nav-dragging`); `will-change: transform` ставится только
   на время жеста, а не навсегда.
+
+### Постоянный кеш ассетов (`web/src/interface/cache.js`)
+
+До 0.2b33 кеш аватарок и ассетов серверов был `new Map()` в конструкторе, то есть
+жил до перезагрузки: каждый запуск заново качал аватарку каждого контакта, иконку
+и баннер каждого сервера, а профиль перезапрашивался на каждом открытии. Теперь
+под кешем есть диск — IndexedDB — и политика.
+
+**Всё живёт в вебвью**, как и голосовые звонки: нативным слоям дублировать нечего,
+достаточно `bundle_web.py`. Плата — там, где IndexedDB закрыта origin'ом документа,
+кеш деградирует до прежнего поведения «только память». Проверять доступность
+только реальным `open()`: наличие `window.indexedDB` ничего не значит, на
+opaque-origin оно есть и бросает `SecurityError`.
+
+- **Сводка дешевле файла.** На каждый файл один компактный stat (`{k,s,h,u,c,g,n,t}`,
+  однобуквенные поля) в ОТДЕЛЬНОМ object store. Весь индекс поднимается одним
+  `getAll()` при открытии, дальше попадание меняет только Map в памяти, а дирти-записи
+  уходят пачкой раз в 4 с и на `visibilitychange`/`pagehide`. Отдельная транзакция на
+  каждое обращение стоила бы дороже самой аватарки.
+- **Вытеснение не читает диск.** `cacheEntryScore` = `обращения × вес класса / размер в КБ`,
+  делённое на `1 + возраст последнего обращения в днях`. Три свойства сразу: чем
+  пользуются — остаётся; аватарка в 8 КБ ценнее видео в 40 МБ при равных обращениях;
+  прошлогодняя популярность не держит запись вечно.
+- **Прогрев НЕ засчитывает обращения — и это принципиально.** `primeAssetCacheFromDisk()`
+  берёт самые используемые записи; если бы он их же и повышал, счётчик подтверждал бы
+  сам себя, и однажды популярная аватарка вечно попадала бы в прогрев, вечно обновляла
+  время обращения и никогда не устаревала. Показ засчитывает `cacheNoteAssetUse()` из
+  `loadStoredAvatar()`/`loadServerAsset()` — с окном дедупликации в 60 с, иначе счётчик
+  мерил бы число перерисовок списка, а не полезность файла.
+- **Прогрев — одна транзакция** (`cacheReadBatch`), а не по одной на запись: до 400
+  переходов через границу процесса на самом старте приложения.
+- **Режим и потолок — настройка устройства, не аккаунта** (`zali_cache_prefs_v1`).
+  По умолчанию «Кешировать легковесное» и 2 ГБ. Ужесточение применяется сразу:
+  `enforceCachePolicy()` выкидывает то, что новый режим больше не пускает (класс уже
+  лежит в сводке — обходить файлы не нужно), потом добивает потолок.
+- **memo стоит на ОТКРЫТИИ базы, а не на режиме** (`ensureCacheStorage` vs
+  `ensureCacheReady`): иначе выключение кеша запоминало бы «базы нет» на весь сеанс и
+  обратное включение не работало бы до перезагрузки. Очистка и `cacheDelete()`, наоборот,
+  обязаны работать при выключенном кеше — им нужно добраться до записанного раньше.
+- **Инвалидация обязана доходить до диска.** `clearStoredAvatar()` (то есть
+  `handleAvatarUpdated`), 404 на аватарку/ассет и 404 на профиль удаляют запись, иначе
+  перезагрузка возвращала бы снятую картинку.
+- **Профиль показывается из кеша сразу и обновляется под рукой.** Прежнее решение
+  «данные всегда перезапрашиваются, показать вчерашнее хуже, чем моргнуть скелетоном»
+  не отменено: запрос уходит в той же строке, кеш занимает место скелетона на те
+  100–300 мс, что он идёт. Сетевой сбой при уже показанной карточке НЕ заменяет её
+  ошибкой.
+- **Вложения пишутся с проверкой «уже лежит» по индексу в памяти.**
+  `saveStoredMessageCache()` обходит весь архив на каждом сохранении — без этой проверки
+  каждое новое текстовое сообщение переписывало бы на диск все фотографии переписки.
+  Побочно это чинит Windows/iOS/Android, где localStorage перестаёт вмещать вложения
+  задолго до того, как переписка станет большой, и фотографии в истории навсегда
+  превращались в имена файлов.
+
+Проверяется `scripts/perf_doctor/check_cache_policy.mjs` (28 проверок, IndexedDB не нужна).
 
 ## Безопасность — инварианты, которые нельзя терять
 

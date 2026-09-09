@@ -2,6 +2,11 @@
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+// Пауза перед повторной попыткой скачать аватар/ассет сервера после
+// НЕокончательной неудачи (сеть, таймаут, 5xx). Окончательные ответы
+// (404, пустое тело) кэшируются как «нет картинки» и сюда не попадают.
+const ZALI_ASSET_RETRY_COOLDOWN_MS = 30_000;
+
 ZaliMixin(ZaliInterface, class {
 
     avatarCacheKey(username) {
@@ -10,7 +15,13 @@ ZaliMixin(ZaliInterface, class {
 
     loadStoredAvatar(username) {
         const key = this.avatarCacheKey(username);
-        return this.avatarCache.has(key) ? this.avatarCache.get(key) : undefined;
+        if (!this.avatarCache.has(key)) return undefined;
+        // Показ засчитывается здесь, потому что здесь он и происходит: это
+        // единственное место, откуда аватарка попадает в разметку. Счётчик
+        // дедуплицируется по времени (cacheNoteAssetUse), поэтому прокрутка
+        // ленты не превращается в тысячу обращений — см. interface/cache.js.
+        this.cacheNoteAssetUse('avatar', key);
+        return this.avatarCache.get(key);
     }
 
     // The single place an avatar enters the cache, and therefore the single
@@ -57,6 +68,9 @@ ZaliMixin(ZaliInterface, class {
         }
         this.avatarFetchSeq.set(key, (this.avatarFetchSeq.get(key) || 0) + 1);
         this.avatarCache.delete(key);
+        // Инвалидация обязана доходить до диска: без этого handleAvatarUpdated()
+        // сбрасывал бы только память, а перезагрузка возвращала прежнюю картинку.
+        void this.cacheDelete('avatar', key);
     }
 
     avatarFallback(username) {
@@ -91,10 +105,21 @@ ZaliMixin(ZaliInterface, class {
         if (!sid) return null;
         const key = this.serverAssetCacheKey(sid, kind);
         if (!force && this.serverAssetCache.has(key)) {
+            this.cacheNoteAssetUse('server_asset', key);
             return this.serverAssetCache.get(key);
         }
         if (this.serverAssetRequests.has(key) && !force) {
             return this.serverAssetRequests.get(key);
+        }
+        // Неудача, после которой в кэше ничего не остаётся, — это приглашение
+        // спросить снова на следующей же отрисовке. А отрисовка вызывается из
+        // .then() этого самого запроса, так что один упавший ассет
+        // раскручивает бесконечный цикл «отрисовка → запрос → отрисовка»,
+        // ограниченный только временем ответа сервера. Пауза разрывает его,
+        // не превращая временную ошибку в вечное «картинки нет».
+        if (!force) {
+            const retryAt = this.serverAssetRetryAt.get(key) || 0;
+            if (retryAt && Date.now() < retryAt) return null;
         }
 
         const seq = (this.serverAssetFetchSeq.get(key) || 0) + 1;
@@ -102,25 +127,53 @@ ZaliMixin(ZaliInterface, class {
 
         const request = (async () => {
             try {
+                // Диск раньше сети — та же логика, что у аватарок. Иконка и
+                // баннер сервера рисуются в рейле, в шапке чата и в модалке
+                // публичных серверов, то есть на каждой отрисовке; тянуть их
+                // по сети на каждом запуске незачем.
+                if (!force) {
+                    const cached = await this.cacheGet('server_asset', key);
+                    if (cached) {
+                        if (this.serverAssetFetchSeq.get(key) !== seq) return null;
+                        const cachedUrl = URL.createObjectURL(cached);
+                        this.serverAssetRetryAt.delete(key);
+                        this.serverAssetCache.set(key, cachedUrl);
+                        if (this.cacheIsStale('server_asset', key)) {
+                            setTimeout(() => { void this.loadServerAsset(sid, kind, { force: true }); }, 0);
+                        }
+                        return cachedUrl;
+                    }
+                }
+
                 // Binary body — see TRANSFER_REQUEST_TIMEOUT_MS.
                 const res = await this.apiFetch(this.apiRoutes.servers.assets(sid, kind), {
                     timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
                 });
                 if (this.serverAssetFetchSeq.get(key) !== seq) return null;
                 if (res.status === 404) {
+                    this.serverAssetRetryAt.delete(key);
                     this.serverAssetCache.set(key, null);
+                    void this.cacheDelete('server_asset', key);
                     return null;
                 }
-                if (!res.ok) return null;
+                if (!res.ok) {
+                    this.serverAssetRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
+                    return null;
+                }
                 const blob = await res.blob();
                 if (!blob || blob.size === 0) {
+                    this.serverAssetRetryAt.delete(key);
                     this.serverAssetCache.set(key, null);
+                    void this.cacheDelete('server_asset', key);
                     return null;
                 }
                 const url = await this.blobToObjectUrl(blob);
+                this.serverAssetRetryAt.delete(key);
                 this.serverAssetCache.set(key, url);
+                void this.cachePut('server_asset', key, blob);
                 return url;
             } catch (e) {
+                this.serverAssetRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
                 return null;
             } finally {
                 if (this.serverAssetRequests.get(key) === request) {
@@ -140,7 +193,9 @@ ZaliMixin(ZaliInterface, class {
             try { URL.revokeObjectURL(prev); } catch (e) {}
         }
         this.serverAssetFetchSeq.set(key, (this.serverAssetFetchSeq.get(key) || 0) + 1);
+        this.serverAssetRetryAt.delete(key);
         this.serverAssetCache.delete(key);
+        void this.cacheDelete('server_asset', key);
     }
 
     serverAssetFallback(server, kind) {
@@ -163,13 +218,16 @@ ZaliMixin(ZaliInterface, class {
         if (!id) return fallback();
         const key = this.serverAssetCacheKey(id, 'avatar');
         if (!this.serverAssetCache.has(key)) {
-            this.loadServerAsset(id, 'avatar').then(() => this.scheduleServerAssetRefresh());
+            // Перерисовываем, только когда картинка реально приехала. Раньше
+            // .then() дёргал отрисовку на ЛЮБОМ исходе, включая неудачу, —
+            // а отрисовка снова звала загрузку: вторая половина того же цикла.
+            this.loadServerAsset(id, 'avatar').then(url => { if (url) this.scheduleServerAssetRefresh(); });
             return fallback();
         }
         const cached = this.serverAssetCache.get(key);
-        return cached
-            ? `<img class="avatar-img" src="${this.esc(cached)}" alt="${this.esc(server?.name || '')}">`
-            : fallback();
+        if (!cached) return fallback();
+        this.cacheNoteAssetUse('server_asset', key);
+        return `<img class="avatar-img" src="${this.esc(cached)}" alt="${this.esc(server?.name || '')}">`;
     }
 
     renderServerAvatarHTML(server, extraClass = '') {
@@ -177,14 +235,22 @@ ZaliMixin(ZaliInterface, class {
         return `<span class="${classes}" style="background:${this.serverAvatarBackground(server)}">${this.serverAvatarInnerHTML(server)}</span>`;
     }
 
+    // Защёлка снимается ТЕМ ЖЕ вызовом, который делает работу, и работа
+    // назначена двумя путями: requestAnimationFrame не срабатывает, пока окно
+    // скрыто или свёрнуто, а защёлка ставится до него — один кадр, пришедший
+    // в скрытом окне, оставлял её взведённой навсегда, и после возврата к
+    // приложению аватарки серверов больше не обновлялись до перезагрузки.
     scheduleServerAssetRefresh() {
         if (this.serverAssetRefreshScheduled) return;
         this.serverAssetRefreshScheduled = true;
-        requestAnimationFrame(() => {
+        const run = () => {
+            if (!this.serverAssetRefreshScheduled) return;
             this.serverAssetRefreshScheduled = false;
             this.renderServers();
             this.renderServerToolbar();
-        });
+        };
+        requestAnimationFrame(run);
+        setTimeout(run, 250);
     }
 
     resetServerAssetPreview() {
@@ -234,10 +300,13 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Тот же двойной путь, что и у scheduleServerAssetRefresh: иначе аватарка,
+    // доехавшая в скрытом окне, взводит защёлку навсегда.
     scheduleAvatarRefresh() {
         if (this.avatarRefreshScheduled) return;
         this.avatarRefreshScheduled = true;
-        requestAnimationFrame(() => {
+        const run = () => {
+            if (!this.avatarRefreshScheduled) return;
             this.avatarRefreshScheduled = false;
             this.renderSidebarProfile();
             this.renderContacts();
@@ -245,7 +314,9 @@ ZaliMixin(ZaliInterface, class {
             // DM) is rendered by renderServerToolbar; without refreshing it here it keeps
             // the fallback letter it drew before the avatar finished loading async.
             this.renderServerToolbar();
-        });
+        };
+        requestAnimationFrame(run);
+        setTimeout(run, 250);
     }
 
     updateAvatarViews() {
@@ -377,6 +448,10 @@ ZaliMixin(ZaliInterface, class {
         if (!force && this.avatarCache.has(key)) {
             return this.avatarCache.get(key);
         }
+        if (!force) {
+            const retryAt = this.avatarRetryAt.get(key) || 0;
+            if (retryAt && Date.now() < retryAt) return null;
+        }
         if (this.avatarRequests.has(key)) {
             if (!force) {
                 return this.avatarRequests.get(key);
@@ -388,6 +463,25 @@ ZaliMixin(ZaliInterface, class {
 
         const request = (async () => {
             try {
+                // Диск раньше сети. Это и есть лечение «аватарки требуют
+                // подгрузки»: до этого кеш жил в Map и умирал вместе со
+                // страницей, поэтому каждый запуск заново качал аватарку
+                // каждого контакта. Запись при этом не считается свежей
+                // навсегда — устаревшую перепроверяем в фоне, уже показав
+                // картинку, а событие avatar_updated сбрасывает её сразу.
+                if (!force) {
+                    const cached = await this.cacheGet('avatar', key);
+                    if (cached) {
+                        if (this.avatarFetchSeq.get(key) !== seq) return null;
+                        this.saveStoredAvatar(name, URL.createObjectURL(cached));
+                        this.scheduleAvatarRefresh();
+                        if (this.cacheIsStale('avatar', key)) {
+                            setTimeout(() => { void this.ensureAvatarLoaded(name, { force: true }); }, 0);
+                        }
+                        return this.loadStoredAvatar(name);
+                    }
+                }
+
                 if (this.nativeSupports('avatarFetch')) {
                     try {
                         const payload = await this.requestNativeAction({
@@ -408,6 +502,7 @@ ZaliMixin(ZaliInterface, class {
                         // comment there for why the payload must not survive
                         // into the markup.
                         this.saveStoredAvatar(name, dataUrl);
+                        void this.cachePut('avatar', key, dataUrl);
                         this.scheduleAvatarRefresh();
                         return this.loadStoredAvatar(name);
                     } catch (nativeError) {
@@ -424,10 +519,15 @@ ZaliMixin(ZaliInterface, class {
                 }
                 if (res.status === 404) {
                     this.saveStoredAvatar(name, null);
+                    // Аватарку сняли — снимаем и с диска, иначе следующий
+                    // запуск поднял бы её из кеша и показывал бы удалённую
+                    // картинку до самого истечения срока перепроверки.
+                    void this.cacheDelete('avatar', key);
                     this.scheduleAvatarRefresh();
                     return null;
                 }
                 if (!res.ok) {
+                    this.avatarRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
                     return null;
                 }
 
@@ -446,10 +546,13 @@ ZaliMixin(ZaliInterface, class {
                     try { URL.revokeObjectURL(url); } catch (e) {}
                     return null;
                 }
+                this.avatarRetryAt.delete(key);
                 this.saveStoredAvatar(name, url);
+                void this.cachePut('avatar', key, blob);
                 this.scheduleAvatarRefresh();
                 return url;
             } catch (e) {
+                this.avatarRetryAt.set(key, Date.now() + ZALI_ASSET_RETRY_COOLDOWN_MS);
                 return null;
             } finally {
                 if (this.avatarRequests.get(key) === request) {

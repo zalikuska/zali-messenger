@@ -16,6 +16,7 @@
       "fields": [
         "messageId",
         "text",
+        "sender",
         "key",
         "keyVersion",
         "call",
@@ -127,6 +128,13 @@
         "body",
         "includeDeviceId",
         "requestId"
+      ],
+      "responseFields": [
+        "status",
+        "ok",
+        "headers",
+        "body",
+        "bodyBase64"
       ]
     },
     "ADD_CONTACT_REQUEST": {

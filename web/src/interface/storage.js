@@ -89,6 +89,11 @@ ZaliMixin(ZaliInterface, class {
         }
         try { localStorage.setItem(marker, epoch); } catch (e) {}
 
+        // Постоянный кеш ассетов живёт в IndexedDB, а не в localStorage, и
+        // цикл выше его не видит — а в нём лежат аватарки и вложения, снятые
+        // с сервера, которого больше нет. Удаляется целиком, вместе со схемой.
+        try { this.destroyAssetCacheDatabase(); } catch (e) {}
+
         // Injected at document-start from native storage — already in memory by now.
         try { window.__ZALI_SAVED_KEY = ''; } catch (e) {}
         try { window.__ZALI_MESSAGE_CACHE = { chats: {}, serverChats: {} }; } catch (e) {}
@@ -342,6 +347,20 @@ ZaliMixin(ZaliInterface, class {
         const json = JSON.stringify(this.stripMessageCachePayloads(payload));
         const unchanged = this._lastSavedMessageCacheJson === json
             && this._lastSavedMessageCacheKey === storageKey;
+        // Вложения уезжают в постоянный кеш (interface/cache.js), а не в
+        // localStorage: там они перестают помещаться задолго до того, как
+        // переписка станет большой, и клиент переходит на копию без байтов
+        // (см. writeMessageCacheToStorage). Раньше на Windows/iOS/Android это
+        // значило «фотографии в истории навсегда превращаются в имена файлов».
+        // Проверка «уже лежит» идёт по индексу сводок в памяти, поэтому цена
+        // прохода пропорциональна новым вложениям, а не всему архиву.
+        if (!unchanged) {
+            for (const store of [payload.chats, payload.serverChats]) {
+                for (const msgs of Object.values(store || {})) {
+                    for (const msg of msgs || []) this.cacheStoreMessageAttachments(msg);
+                }
+            }
+        }
         // The object, not a string: loadInjectedMessageCache() accepts either, and
         // handing it the object skips a second full serialisation of the archive.
         this.saveInjectedMessageCache(payload);

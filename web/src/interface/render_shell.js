@@ -78,6 +78,24 @@ ZaliMixin(ZaliInterface, class {
     // .badge `badge-pop`), which is what made the sidebar visibly twitch and flash
     // avatars while chatting. Writing only on a real content change makes the common
     // case a string compare.
+    /**
+     * Закрывает то, что накрывает панель чата (профиль, настройки сервера).
+     *
+     * Модальные слои живут внутри .main и больше не гасят левую навигацию —
+     * по контакту или серверу можно щёлкнуть, не закрывая диалог. Без этого
+     * переключение происходило бы ЗА окном: чат сменился, а поверх него
+     * по-прежнему висит чужой профиль, и человек этого не видит. Поэтому
+     * выбор в навигации закрывает модальный слой.
+     *
+     * Вызывается только из веток навигации в bindContactListEvents(); плитки
+     * «создать/присоединиться», которые сами открывают окно, сюда не заходят.
+     */
+    closeChatPanelModals() {
+        if (this.ensureProfileState().open) this.closeProfile();
+        const serverOverlay = document.getElementById('serverOverlay');
+        if (serverOverlay && !serverOverlay.hidden) this.closeServerOverlay();
+    }
+
     commitListHTML(el, slot, html) {
         if (!el) return false;
         this._listHTMLCache = this._listHTMLCache || new Map();

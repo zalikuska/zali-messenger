@@ -48,7 +48,25 @@ object ZaliCoreBridge {
         val timestamp: Long,
         val keyVersion: Int?,
         val attachments: List<Attachment>,
+        /** Opaque structured payload (call records), decrypted by the core. */
+        val call: String?,
+        /** Opaque quote of the message this one replies to, decrypted by the core. */
+        val reply: String?,
     )
+
+    /**
+     * Потолок перебора ключей при расшифровке. Ровно тот же, что у Windows
+     * (`native/cache.rs::MAX_DECRYPT_CANDIDATES`) и macOS
+     * (`WebView.swift::maxDecryptCandidates`).
+     *
+     * Каждый неподошедший кандидат — два прохода PBKDF2-SHA256 по 210 000
+     * итераций (сессионный ключ архива, затем тело), а `alt:`-записи копятся всю
+     * жизнь переписки и ничем не чистятся. Без потолка цена ОДНОГО нечитаемого
+     * сообщения росла вместе с историей ключей аккаунта — на телефоне, то есть на
+     * самом слабом железе из всех оболочек, это и выглядело как «со временем
+     * начинает тормозить».
+     */
+    const val MAX_DECRYPT_CANDIDATES: Int = 12
 
     fun dmConversationScope(a: String, b: String): String? {
         val first = a.trim()
@@ -107,6 +125,22 @@ object ZaliCoreBridge {
         return !conversationKeys[scope].isNullOrBlank()
     }
 
+    /**
+     * Ключи-кандидаты для расшифровки одного сообщения, в порядке убывания шансов:
+     * ключ собственного scope, затем текущий активный, затем — как эвристика на
+     * случай устаревшего или разъехавшегося отображения scope→ключ — весь
+     * остальной набор.
+     *
+     * Хвост **ограничен** [MAX_DECRYPT_CANDIDATES] и обходится в отсортированном
+     * порядке scope'ов, а не обходом `Map` (её порядок задаёт `JSONObject.keys()`,
+     * то есть HashMap). Без сортировки состав ограниченного списка менялся бы от
+     * вызова к вызову: одно и то же сообщение расшифровывалось бы или нет в
+     * зависимости от того, какие двенадцать ключей мапа выдала в этот раз, а
+     * отпечаток «этот набор уже пробовали» никогда не совпал бы дважды.
+     *
+     * Зеркало `native/cache.rs::candidate_message_keys` (Windows) и одноимённой
+     * логики в `WebView.swift` (macOS).
+     */
     fun candidateMessageKeys(
         currentKey: String,
         conversationKeys: Map<String, String> = emptyMap(),
@@ -124,7 +158,27 @@ object ZaliCoreBridge {
             dmConversationScope(participantA, participantB)?.let { pushCandidateKey(keys, conversationKeys[it]) }
         }
         pushCandidateKey(keys, currentKey)
-        return keys
+        for (scope in conversationKeys.keys.sorted()) {
+            if (keys.size >= MAX_DECRYPT_CANDIDATES) break
+            pushCandidateKey(keys, conversationKeys[scope])
+        }
+        return if (keys.size > MAX_DECRYPT_CANDIDATES) keys.take(MAX_DECRYPT_CANDIDATES) else keys
+    }
+
+    /**
+     * Тождество того самого списка кандидатов, которым уже пробовали открыть
+     * сообщение. На нём держится отрицательный кэш: тот же список — тот же исход,
+     * переделывать нечего. Появился новый ключ — отпечаток другой, запись протухла,
+     * и повтор происходит сразу, так что самопочинка сохраняется.
+     */
+    fun candidateKeysFingerprint(keys: List<String>): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update(keys.size.toString().toByteArray(Charsets.UTF_8))
+        for (key in keys) {
+            digest.update(0)
+            digest.update(key.toByteArray(Charsets.UTF_8))
+        }
+        return android.util.Base64.encodeToString(digest.digest(), android.util.Base64.NO_WRAP)
     }
 
     private fun dispatch(addressCommand: String, args: JSONObject): JSONObject? {
@@ -140,6 +194,8 @@ object ZaliCoreBridge {
         key: String,
         keyVersion: Int = 2,
         attachments: List<JSONObject> = emptyList(),
+        call: String? = null,
+        reply: String? = null,
     ): Boolean {
         if (key.trim().isEmpty() || !isAvailable) return false
         val args = JSONObject().apply {
@@ -149,6 +205,11 @@ object ZaliCoreBridge {
             put("output_path", output)
             put("key_version", maxOf(1, keyVersion))
             if (attachments.isNotEmpty()) put("attachments", JSONArray(attachments))
+            // Пересылается как есть; ядро шифрует его тем же ключом разговора, что и
+            // текст. Пропустить здесь = молча выбросить из сообщения: цитата ответа
+            // и запись о звонке живут ВНУТРИ шифротекста, а не рядом с ним.
+            call?.trim()?.takeIf { it.isNotEmpty() }?.let { put("call", it) }
+            reply?.trim()?.takeIf { it.isNotEmpty() }?.let { put("reply", it) }
         }
         val result = dispatch("zali_net:pack_message", args) ?: return false
         return result.optBoolean("success", false)
@@ -181,6 +242,8 @@ object ZaliCoreBridge {
             timestamp = data.optLong("timestamp"),
             keyVersion = if (data.has("keyVersion")) data.optInt("keyVersion") else null,
             attachments = attachments,
+            call = data.optString("call", "").ifEmpty { null },
+            reply = data.optString("reply", "").ifEmpty { null },
         )
     }
 

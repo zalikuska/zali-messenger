@@ -300,10 +300,22 @@ class ZaliInterface {
         this.nativeRequests = new Map();
         this.avatarCache = new Map();
         this.avatarRequests = new Map();
+        // Когда можно снова пробовать скачать то, что не скачалось —
+        // см. ZALI_ASSET_RETRY_COOLDOWN_MS в interface/avatars.js.
+        this.avatarRetryAt = new Map();
         this.avatarFetchSeq = new Map();
         this.serverAssetCache = new Map();
         this.serverAssetRequests = new Map();
+        this.serverAssetRetryAt = new Map();
         this.serverAssetFetchSeq = new Map();
+        // Постоянный кеш ассетов (interface/cache.js). Индекс сводок и счётчик
+        // занятого места живут здесь, чтобы решение о вытеснении не читало диск;
+        // сама база открывается лениво, первым обращением.
+        this._cacheStats = new Map();
+        this._cacheDirtyStats = new Set();
+        this._cacheBytes = 0;
+        this._cacheDb = null;
+        this._cacheReady = null;
         this.colorWheelBindings = new Set();
         this.messageAnimSeen = new Set();
         this.mediaSizeCache = new Map();

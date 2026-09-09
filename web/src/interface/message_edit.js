@@ -287,6 +287,12 @@ ZaliMixin(ZaliInterface, class {
                     text,
                     key: cryptoKey,
                     keyVersion,
+                    // Автор кладётся в архив и именно оттуда потом читается при
+                    // отрисовке. Оболочка не обязана знать его в том же регистре, в
+                    // каком его показывает UI: Android, например, хранит последнего
+                    // вошедшего в нижнем регистре, и правка переименовала бы автора.
+                    // SEND_MESSAGE передаёт `sender` ровно по этой же причине.
+                    sender: this.myName(),
                     reply: replyPayload,
                     attachments: attachments.map(att => ({
                         name: att.name,

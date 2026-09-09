@@ -14,8 +14,16 @@ android {
         applicationId = "org.zalikus.messenger"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Версия сборки, а не заглушка. Стояло versionCode=1 / versionName="1.0" с
+        // самого начала, пока десктопы ушли на 0.2b33, — то есть по установленному
+        // APK нельзя было понять, какой в нём код.
+        //
+        // versionCode обязан быть монотонным целым, а схема релизов
+        // (MAJOR.MINOR{a|b|r}BUILD) в него не укладывается — считаем как
+        // MAJOR*10000 + MINOR*1000 + BUILD: 0.2b33 → 2033. Порядок сохраняется, пока
+        // BUILD < 1000, чего с запасом хватает.
+        versionCode = 2033
+        versionName = "0.2b33"
     }
 
     buildTypes {

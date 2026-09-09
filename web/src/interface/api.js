@@ -16,21 +16,65 @@ ZaliMixin(ZaliInterface, class {
         return headers;
     }
 
+    /**
+     * Ответ нативного моста в оболочке, совместимой с `fetch`.
+     *
+     * **Почему у ответа два тела.** Мост — это JSON-канал, по нему ходят строки.
+     * Пока бинарные ответы ехали тем же полем `body`, что и текстовые, они
+     * необратимо портились: на macOS `String(data:encoding:.utf8)` возвращает nil
+     * на первом же байте PNG, который не является валидным UTF-8, — тело
+     * приезжало ПУСТЫМ; на Android `body.string()` подставляет replacement-символы
+     * — тело приезжало битым. `res.blob()` при этом честно заворачивал строку в
+     * Blob, и картинка не открывалась. Так на всех нативных оболочках молча не
+     * работали иконки и баннеры серверов (`loadServerAsset`) — единственное место,
+     * где через мост шёл настоящий бинарь, — а `res.arrayBuffer()` вообще
+     * отсутствовал, из-за чего браузерный путь скачивания архива был на нативе
+     * нерабочим в принципе.
+     *
+     * Теперь оболочка сама решает по Content-Type: текст едет в `body`, всё
+     * остальное — в `bodyBase64`. Старое поле осталось на месте, поэтому свежий
+     * веб на старой оболочке ведёт себя ровно как раньше.
+     */
     nativeApiResponse(payload) {
         const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
         const status = Number(data.status || 0) || 0;
         const body = String(data.body || '');
+        const bodyBase64 = typeof data.bodyBase64 === 'string' ? data.bodyBase64 : '';
         const headers = data.headers && typeof data.headers === 'object' ? data.headers : {};
+        const contentType = String(headers['content-type'] || headers['Content-Type'] || 'application/octet-stream');
+
+        // Декодируется один раз и лениво: у текстовых ответов (то есть почти у всех)
+        // этот путь не исполняется вовсе.
+        let bytes = null;
+        const asBytes = () => {
+            if (bytes) return bytes;
+            if (bodyBase64) {
+                try {
+                    const binary = atob(bodyBase64);
+                    const out = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+                    bytes = out;
+                } catch (e) {
+                    bytes = new Uint8Array(0);
+                }
+            } else {
+                bytes = new TextEncoder().encode(body);
+            }
+            return bytes;
+        };
+        const asText = () => (bodyBase64 ? new TextDecoder().decode(asBytes()) : body);
+
         return {
             ok: !!data.ok || (status >= 200 && status < 300),
             status,
             headers,
-            text: async () => body,
-            json: async () => JSON.parse(body || 'null'),
-            blob: async () => {
-                const contentType = String(headers['content-type'] || headers['Content-Type'] || 'application/octet-stream');
-                return new Blob([body], { type: contentType });
+            text: async () => asText(),
+            json: async () => JSON.parse(asText() || 'null'),
+            arrayBuffer: async () => {
+                const view = asBytes();
+                return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
             },
+            blob: async () => new Blob([asBytes()], { type: contentType }),
         };
     }
 

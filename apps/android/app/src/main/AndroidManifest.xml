@@ -15,8 +15,25 @@
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!--
+        Auto Backup ВЫКЛЮЧЕН намеренно, и это не перестраховка.
+
+        В filesDir лежат `conversation_keys_<user>.json` (все ключи переписок
+        открытым текстом) и `shared_device_identity_<user>.json` (приватный
+        ECDH-ключ устройства). При allowBackup="true" Android без спроса выгружает
+        этот каталог в Google Drive пользователя — то есть ключевой материал
+        сквозного шифрования уезжает третьей стороне, ровно тому наблюдателю, от
+        которого шифрование и защищает. Ни macOS, ни iOS, ни Windows такого канала
+        не имеют.
+
+        Восстановление ключей на новом устройстве закрыто своим механизмом —
+        cloud vault под парольной фразой (см. web/src/interface/conversation_keys.js),
+        где сервер видит только зашифрованный конверт.
+    -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"

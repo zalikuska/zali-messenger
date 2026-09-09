@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+ (API 31) читает эти правила ВМЕСТО android:allowBackup для двух
+    отдельных каналов: облачного бэкапа и переноса на новое устройство. Выключить
+    надо оба — иначе device-to-device transfer унесёт ключи мимо запрета на бэкап.
+
+    Причина — в комментарии над <application> в AndroidManifest.xml: в filesDir
+    лежат ключи переписок и приватный ключ устройства.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

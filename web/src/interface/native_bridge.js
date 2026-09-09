@@ -130,8 +130,15 @@ ZaliMixin(ZaliInterface, class {
     }
 
     hasNativeAvatarBridge() {
+        // 'android' входит сюда наравне с остальными, и это не расширение
+        // возможностей, а починка: Android объявляет avatarFetch и обрабатывает
+        // UPLOAD_AVATAR_REQUEST / DELETE_AVATAR_REQUEST у себя в мосте — просто эта
+        // проверка его не пускала, и обработчики никогда не вызывались. Загрузка
+        // уходила в браузерный фолбэк с FormData, то есть мимо моста, из
+        // `file://`-документа с `Origin: null`, который сервер отвергает по CORS.
+        // Итог: поставить или снять аватар с телефона было нельзя вообще.
         const transport = this.nativeBridge()?.transport;
-        return transport === 'ipc' || transport === 'webview2' || transport === 'webkit';
+        return transport === 'ipc' || transport === 'webview2' || transport === 'webkit' || transport === 'android';
     }
 
     startEnergyAwareMaintenance() {
@@ -140,6 +147,12 @@ ZaliMixin(ZaliInterface, class {
             const onVisibilityChange = () => {
                 if (document.hidden) {
                     this.stopVoiceMeterLoop();
+                    // Счётчики обращений копятся в памяти и уходят на диск по
+                    // таймеру (см. interface/cache.js). Уход в фон — последний
+                    // момент, когда таймер ещё точно сработает: дальше его
+                    // душит браузер, а на мобильных вкладку могут и выгрузить,
+                    // и тогда кеш забудет, чем пользовались весь сеанс.
+                    void this.flushCacheStats();
                     return;
                 }
                 this.refreshVisibleAvatars();
@@ -155,8 +168,8 @@ ZaliMixin(ZaliInterface, class {
             document.addEventListener('visibilitychange', onVisibilityChange);
             window.addEventListener('focus', onVisibilityChange);
             // Debounced message-cache saves must land before the page goes away.
-            window.addEventListener('pagehide', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); });
-            window.addEventListener('beforeunload', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); });
+            window.addEventListener('pagehide', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); void this.flushCacheStats(); });
+            window.addEventListener('beforeunload', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); void this.flushCacheStats(); });
             window.addEventListener('error', () => this.flushTrace());
         }
 

@@ -237,10 +237,12 @@ function decryptCandidatesAreBounded() {
         ['web (браузер/PWA)', 'interface/message_send.js', /MAX_DECRYPT_CANDIDATES/],
         ['macOS (Swift)', null, /maxDecryptCandidates/],
         ['Windows (Rust)', null, /MAX_DECRYPT_CANDIDATES/],
+        ['Android (Kotlin)', null, /MAX_DECRYPT_CANDIDATES/],
     ];
     const macos = fs.readFileSync(new URL('../../apps/macos/Sources/ZaliMessenger/Views/WebView.swift', import.meta.url), 'utf8');
     const windows = fs.readFileSync(new URL('../../apps/windows/src/native/cache.rs', import.meta.url), 'utf8');
-    const sources = [src(shells[0][1]), macos, windows];
+    const android = fs.readFileSync(new URL('../../apps/android/app/src/main/java/org/zalikus/messenger/ZaliCoreBridge.kt', import.meta.url), 'utf8');
+    const sources = [src(shells[0][1]), macos, windows, android];
 
     shells.forEach(([label, , needle], i) => {
         check(
@@ -262,6 +264,22 @@ function decryptCandidatesAreBounded() {
         'хвост кандидатов обходится детерминированно — Windows',
         /scopes\.sort\(\)/.test(windows) && !/for key in conversation_keys\.values\(\)/.test(windows),
         'обход HashMap::values() без сортировки: состав ограниченного списка непредсказуем',
+    );
+    // На Android набор ключей приезжает разбором JSONObject.keys(), то есть из
+    // HashMap: без sorted() «какие двенадцать» менялось бы от запуска к запуску.
+    check(
+        'хвост кандидатов обходится детерминированно — Android',
+        /conversationKeys\.keys\.sorted\(\)/.test(android),
+        'обход Map без sorted(): состав ограниченного списка непредсказуем',
+    );
+    // Отдельная проверка на возврат прежнего поведения: неограниченный дозор по
+    // всем значениям мапы стоял в ДВУХ местах NativeBridge (живой приём и
+    // отрисовка истории) и сводил потолок на нет, где бы тот ни был объявлен.
+    const androidBridge = fs.readFileSync(new URL('../../apps/android/app/src/main/java/org/zalikus/messenger/NativeBridge.kt', import.meta.url), 'utf8');
+    check(
+        'Android не дописывает кандидатов в обход потолка',
+        !/for \(k in conversationKeys\.values\)/.test(androidBridge),
+        'ручной дозор по conversationKeys.values обнуляет потолок',
     );
 }
 
@@ -287,6 +305,18 @@ function failedDecryptsAreRemembered() {
     check('браузер помнит неудачную расшифровку и набор ключей',
         /_failedBrowserUnpacks/.test(web),
         'нет отрицательного кэша: весь перебор повторяется на каждой загрузке истории');
+    const androidBridge = fs.readFileSync(new URL('../../apps/android/app/src/main/java/org/zalikus/messenger/NativeBridge.kt', import.meta.url), 'utf8');
+    check('Android помнит неудачную расшифровку и набор ключей',
+        /decryptKnownToFail/.test(androidBridge) && /rememberDecryptFailure/.test(androidBridge),
+        'нет отрицательного кэша: весь перебор повторяется на каждом обновлении истории');
+    check('Android кэширует удачную расшифровку',
+        /cachedDecryptedMessage/.test(androidBridge) && /cacheDecryptedMessage/.test(androidBridge),
+        'нет положительного кэша: каждое перечитывание истории заново качает и расшифровывает всё');
+    // Правка подменяет архив под тем же id — оба кэша обязаны про него забыть.
+    const forgetKt = androidBridge.slice(androidBridge.indexOf('private fun forgetDecryptedMessage'));
+    check('правка сообщения сбрасывает и отрицательный кэш — Android',
+        /failedDecryptFingerprints/.test(forgetKt.slice(0, 600)),
+        'после правки сообщение остаётся «нерасшифровываемым» по устаревшему вердикту');
 
     // Отрицательный кэш обязан сбрасываться там же, где положительный: правка
     // сообщения подменяет архив под тем же id.
@@ -313,6 +343,10 @@ function decryptedCacheIsBounded() {
     check('Windows ограничивает кэш по числу записей и по размеру записи',
         /DECRYPTED_CACHE_MAX_ENTRIES/.test(windows) && /DECRYPTED_CACHE_MAX_ENTRY_BYTES/.test(windows),
         'кэш неограничен');
+    const androidBridge = fs.readFileSync(new URL('../../apps/android/app/src/main/java/org/zalikus/messenger/NativeBridge.kt', import.meta.url), 'utf8');
+    check('Android ограничивает кэш по числу записей и по размеру записи',
+        /DECRYPTED_CACHE_MAX_ENTRIES/.test(androidBridge) && /DECRYPTED_CACHE_MAX_ENTRY_CHARS/.test(androidBridge),
+        'кэш неограничен: вложения лежат в нём inline data:-URL-ами');
 }
 
 // Событие ключей не должно перечитывать всю переписку, когда читать нечего.

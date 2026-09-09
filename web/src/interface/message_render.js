@@ -628,10 +628,14 @@ ZaliMixin(ZaliInterface, class {
         menu.innerHTML = this.reactionOptions.map(emoji => (
             `<button class="reaction-btn" type="button" data-menu-reaction="${this.esc(emoji)}" aria-label="${this.esc(emoji)}"><span class="reaction-btn-emoji">${this.esc(emoji)}</span></button>`
         )).join('')
+            // Действия — иконки общего набора (uiIcon), а не глифы ↩ ✎ 🗑:
+            // последние рисуются шрифтом ОС и рядом с цветными эмодзи
+            // выглядели то бледной палочкой, то ещё одним эмодзи, причём
+            // по-разному на macOS, Windows и Android.
             + `<span class="reaction-menu-sep" aria-hidden="true"></span>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-reply title="Ответить" aria-label="Ответить на сообщение"><span class="reaction-btn-emoji">↩</span></button>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-edit title="Изменить" aria-label="Изменить сообщение" hidden><span class="reaction-btn-emoji">✎</span></button>`
-            + `<button class="reaction-btn reaction-btn-delete" type="button" data-menu-delete title="Удалить" aria-label="Удалить сообщение" hidden><span class="reaction-btn-emoji">🗑</span></button>`;
+            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-reply title="Ответить" aria-label="Ответить на сообщение">${this.uiIcon('reply')}</button>`
+            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-edit title="Изменить" aria-label="Изменить сообщение" hidden>${this.uiIcon('pencil')}</button>`
+            + `<button class="reaction-btn reaction-btn-delete" type="button" data-menu-delete title="Удалить" aria-label="Удалить сообщение" hidden>${this.uiIcon('trash')}</button>`;
         document.body.appendChild(menu);
 
         menu.addEventListener('click', (e) => {
@@ -694,7 +698,11 @@ ZaliMixin(ZaliInterface, class {
         menu.setAttribute('aria-hidden', 'false');
         menu.style.left = '0px';
         menu.style.top = '0px';
-        const menuRect = menu.getBoundingClientRect();
+        // Размер берём из layout-бокса, а не из getBoundingClientRect():
+        // у скрытого состояния меню есть transform: scale(...), и
+        // прямоугольник в момент показа возвращает уменьшенную копию —
+        // погрешность уходит прямо в расчёт края экрана.
+        const menuRect = { width: menu.offsetWidth, height: menu.offsetHeight };
         const anchor = messageEl.querySelector('.bwrap') || messageEl;
         const anchorRect = anchor.getBoundingClientRect();
         const pad = 12;

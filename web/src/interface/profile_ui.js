@@ -106,6 +106,7 @@ ZaliMixin(ZaliInterface, class {
                 <h2 class="profile-name" id="profileModalName">${this.esc(title)}</h2>
                 <div class="profile-handle">@${this.esc(username)}</div>
                 ${data.bio ? `<div class="profile-bio-inline">${this.esc(data.bio)}</div>` : ''}
+                ${this.renderProfileLinks(data)}
                 <div class="profile-counters">
                     ${counters.map(counter => `
                         <span class="profile-counter">
@@ -114,7 +115,6 @@ ZaliMixin(ZaliInterface, class {
                         </span>
                     `).join('')}
                 </div>
-                ${this.renderProfileLinks(data)}
             </div>
             <div class="profile-head-actions">${this.renderProfileActions(state, data)}</div>
         </header>`;

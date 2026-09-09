@@ -14,7 +14,14 @@
     "you trace where the value comes from.",
     "",
     "Keyed on the expression text rather than a line number so ordinary edits above",
-    "it do not invalidate the review."
+    "it do not invalidate the review.",
+    "",
+    "2026-09-09: пять записей web/src/interface/cache.js. Все пять — числа и",
+    "булевы, посчитанные в renderCacheSettings() из настроек этого устройства",
+    "и из размеров файлов в кеше: индекс остановки слайдера, длина статического",
+    "списка остановок, процент заполнения (Math.round) и сравнение двух",
+    "локальных строк режима. Ни одно значение не приходит от другого",
+    "пользователя и не пересекает сеть."
   ],
   "reviewed": [
     "web/src/interface/attachments.js|class|gifClass",
@@ -39,6 +46,11 @@
     "web/src/interface/avatars.js|alt|safeAlt",
     "web/src/interface/avatars.js|class|classes",
     "web/src/interface/avatars.js|style|this.serverAvatarBackground(server)",
+    "web/src/interface/cache.js|aria-pressed|mode.id === prefs.mode",
+    "web/src/interface/cache.js|max|ZaliInterface.cacheLimitStops.length - 1",
+    "web/src/interface/cache.js|style|fill",
+    "web/src/interface/cache.js|value|index",
+    "web/src/interface/cache.js|value|prefs.limitIndex",
     "web/src/interface/message_list.js|class|bubbleClass",
     "web/src/interface/message_list.js|class|dir",
     "web/src/interface/message_list.js|class|isCall ? 'call-msg' : `group-${item.groupPos}`",

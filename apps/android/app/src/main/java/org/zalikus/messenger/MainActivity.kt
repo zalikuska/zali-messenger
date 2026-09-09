@@ -3,6 +3,7 @@ package org.zalikus.messenger
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -13,6 +14,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -65,11 +67,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 
-/** Sections, mirroring the shared web dock buttons. */
-private enum class Tab(val jsId: String, val title: String, val icon: ImageVector) {
-    Chats("mobileChatsBtn", "Чаты", Icons.Filled.Chat),
-    Servers("mobileServersBtn", "Сервера", Icons.Filled.Dns),
-    Settings("mobileSettingsBtn", "Настройки", Icons.Filled.Settings),
+/**
+ * Sections, mirroring the shared web dock buttons — все четыре.
+ *
+ * Хаба здесь не было, а веб-док (в котором он есть) на Android скрыт инъекцией
+ * CSS — то есть в Хаб можно было попасть только окольным путём, через
+ * сегмент-контрол внутри Настроек.
+ *
+ * `id` — это и имя секции в MOBILE_NAV_PROGRESS от веба, и аргумент
+ * `window.__zaliSelectTab`, так что строка одна на оба направления.
+ */
+private enum class Tab(val id: String, val title: String, val icon: ImageVector) {
+    Chats("chats", "Чаты", Icons.Filled.Chat),
+    Servers("servers", "Сервера", Icons.Filled.Dns),
+    Hub("hub", "Хаб", Icons.Filled.Home),
+    Settings("settings", "Настройки", Icons.Filled.Settings);
+
+    companion object {
+        fun fromId(value: String): Tab? = entries.firstOrNull { it.id == value }
+    }
 }
 
 private const val ASSET_BASE_URL = "file:///android_asset/web/"
@@ -93,6 +109,51 @@ class MainActivity : ComponentActivity() {
     // starts with no inline style on <html>.
     private var safeTopDp = 0f
     private var safeBottomDp = 0f
+
+    /**
+     * Запрос камеры/микрофона из вебвью, ожидающий ответа ОС.
+     *
+     * `PermissionRequest.grant()` не выдаёт приложению того, чего у приложения нет:
+     * `RECORD_AUDIO` и `CAMERA` — dangerous-разрешения, их нужно просить в рантайме
+     * (minSdk 26, то есть на всех поддерживаемых версиях). В манифесте они были
+     * объявлены с самого начала, а вот запрашивать их не запрашивал никто — в коде
+     * стоял только `POST_NOTIFICATIONS`. Из-за этого `getUserMedia()` в вебвью падал,
+     * и голосовой звонок на Android не мог начаться в принципе: сигналинг проходил,
+     * микрофон — нет.
+     */
+    private var pendingMediaRequest: PermissionRequest? = null
+
+    private val mediaPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        val request = pendingMediaRequest
+        pendingMediaRequest = null
+        if (request == null) return@registerForActivityResult
+        // Отвечаем ровно тем, что ОС действительно дала: пользователь мог разрешить
+        // микрофон и отказать камере, и тогда звонок обязан состояться без видео,
+        // а не провалиться целиком.
+        val granted = request.resources.filter {
+            (it == PermissionRequest.RESOURCE_AUDIO_CAPTURE || it == PermissionRequest.RESOURCE_VIDEO_CAPTURE) &&
+                osPermissionGranted(it)
+        }.toTypedArray()
+        if (granted.isEmpty()) request.deny() else request.grant(granted)
+    }
+
+    /** Есть ли у самого приложения OS-разрешение, стоящее за ресурсом вебвью. */
+    private fun osPermissionGranted(resource: String): Boolean {
+        val permission = when (resource) {
+            PermissionRequest.RESOURCE_AUDIO_CAPTURE -> android.Manifest.permission.RECORD_AUDIO
+            PermissionRequest.RESOURCE_VIDEO_CAPTURE -> android.Manifest.permission.CAMERA
+            else -> return false
+        }
+        return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun osPermissionFor(resource: String): String? = when (resource) {
+        PermissionRequest.RESOURCE_AUDIO_CAPTURE -> android.Manifest.permission.RECORD_AUDIO
+        PermissionRequest.RESOURCE_VIDEO_CAPTURE -> android.Manifest.permission.CAMERA
+        else -> null
+    }
 
     // START_SCREEN_CAPTURE (NativeBridge.kt) needs the system consent dialog
     // launched via ActivityResultContracts — must be registered as an Activity
@@ -258,6 +319,9 @@ class MainActivity : ComponentActivity() {
                             navAnimate = animate
                             navProgress = progress
                         }
+                        nativeBridge.onMobileNavSection = { section ->
+                            Tab.fromId(section)?.let { selected = it }
+                        }
                         nativeBridge.requestScreenCapturePermission = { requestId ->
                             pendingScreenCaptureRequestId = requestId
                             val manager = getSystemService(MediaProjectionManager::class.java)
@@ -304,8 +368,28 @@ class MainActivity : ComponentActivity() {
                                     val allowed = request.resources.filter {
                                         it == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
                                             it == PermissionRequest.RESOURCE_VIDEO_CAPTURE
-                                    }.toTypedArray()
-                                    if (allowed.isEmpty()) request.deny() else request.grant(allowed)
+                                    }
+                                    if (allowed.isEmpty()) {
+                                        request.deny()
+                                        return
+                                    }
+                                    // Второй, независимый от вебвью барьер: у САМОГО приложения
+                                    // должно быть OS-разрешение, иначе grant() ничего не значит и
+                                    // getUserMedia() всё равно упадёт. Спрашиваем ровно то, чего
+                                    // не хватает, и отвечаем вебвью уже после ответа пользователя.
+                                    val missing = allowed.mapNotNull { resource ->
+                                        osPermissionFor(resource)?.takeIf { !osPermissionGranted(resource) }
+                                    }.distinct()
+                                    if (missing.isEmpty()) {
+                                        request.grant(allowed.toTypedArray())
+                                        return
+                                    }
+                                    // Один запрос за раз: два одновременно открытых системных
+                                    // диалога Android не покажет, а первый PermissionRequest
+                                    // остался бы без ответа и вебвью ждал бы его вечно.
+                                    pendingMediaRequest?.deny()
+                                    pendingMediaRequest = request
+                                    mediaPermissionLauncher.launch(missing.toTypedArray())
                                 }
                             }
                             webViewClient = object : WebViewClient() {
@@ -375,7 +459,7 @@ class MainActivity : ComponentActivity() {
                     selected = selected,
                     onSelect = { tab ->
                         selected = tab
-                        bridge?.selectTab(tab.name.lowercase())
+                        bridge?.selectTab(tab.id)
                     },
                     navProgress = navProgress,
                     animateProgress = navAnimate,

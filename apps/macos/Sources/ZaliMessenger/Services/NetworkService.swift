@@ -1844,14 +1844,14 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         }.resume()
     }
 
-    func performApiRequest(method: String, path: String, headers: [String: String], body: String?, timeoutMs: Double, completion: @escaping (Int, String?, [String: String]?, String?) -> Void) {
+    func performApiRequest(method: String, path: String, headers: [String: String], body: String?, timeoutMs: Double, completion: @escaping (Int, String?, String?, [String: String]?, String?) -> Void) {
         let forbiddenPathTokens = ["..", "%2F", "%2f", "%5C", "%5c"]
         guard path.hasPrefix("/api/"), !forbiddenPathTokens.contains(where: path.contains) else {
-            completion(0, nil, nil, "Некорректный путь запроса")
+            completion(0, nil, nil, nil, "Некорректный путь запроса")
             return
         }
         guard let url = URL(string: "\(serverURL)\(path)") else {
-            completion(0, nil, nil, "Некорректный путь запроса")
+            completion(0, nil, nil, nil, "Некорректный путь запроса")
             return
         }
 
@@ -1887,7 +1887,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         attemptApiRequest(request, attempt: 1, maxAttempts: maxAttempts, perAttemptTimeout: firstAttemptTimeout, finalAttemptTimeout: finalAttemptTimeout, completion: completion)
     }
 
-    private func attemptApiRequest(_ request: URLRequest, attempt: Int, maxAttempts: Int, perAttemptTimeout: TimeInterval, finalAttemptTimeout: TimeInterval, completion: @escaping (Int, String?, [String: String]?, String?) -> Void) {
+    private func attemptApiRequest(_ request: URLRequest, attempt: Int, maxAttempts: Int, perAttemptTimeout: TimeInterval, finalAttemptTimeout: TimeInterval, completion: @escaping (Int, String?, String?, [String: String]?, String?) -> Void) {
         var attemptRequest = request
         attemptRequest.timeoutInterval = perAttemptTimeout
 
@@ -1911,18 +1911,57 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                     self.attemptApiRequest(request, attempt: nextAttempt, maxAttempts: maxAttempts, perAttemptTimeout: nextTimeout, finalAttemptTimeout: finalAttemptTimeout, completion: completion)
                     return
                 }
-                completion(0, nil, nil, error.localizedDescription)
+                completion(0, nil, nil, nil, error.localizedDescription)
                 return
             }
             let httpResponse = response as? HTTPURLResponse
             let status = httpResponse?.statusCode ?? 0
-            let bodyStr = data.flatMap { String(data: $0, encoding: .utf8) }
             var respHeaders: [String: String] = [:]
             httpResponse?.allHeaderFields.forEach { key, value in
                 respHeaders[String(describing: key)] = String(describing: value)
             }
-            completion(status, bodyStr, respHeaders, nil)
+            // Бинарь не проходит через строковое поле, и здесь это было особенно
+            // тихо: `String(data:encoding:.utf8)` возвращает nil на первом же байте
+            // PNG, который не является валидным UTF-8, — то есть тело приезжало в
+            // вебвью ПУСТЫМ, `res.blob()` отдавал Blob нулевого размера, а
+            // `loadServerAsset` трактовал это как «ассета нет» и молча рисовал
+            // букву вместо иконки сервера. Текстовые ответы едут прежним полем,
+            // всё остальное — base64 (`bodyBase64`); оба разбирает
+            // `nativeApiResponse()` в web/src/interface/api.js.
+            let contentType = httpResponse?.value(forHTTPHeaderField: "Content-Type")
+            if NetworkService.isTextualContentType(contentType) {
+                completion(status, data.flatMap { String(data: $0, encoding: .utf8) }, nil, respHeaders, nil)
+            } else {
+                completion(status, nil, (data ?? Data()).base64EncodedString(), respHeaders, nil)
+            }
         }.resume()
+    }
+
+    /// Можно ли отдать это тело в вебвью строкой без потерь.
+    ///
+    /// Правило одно на все оболочки (Android `NativeBridge.isTextualContentType`,
+    /// Windows `native/api::is_textual_content_type`) — иначе одна и та же ссылка
+    /// приезжала бы текстом на одной платформе и base64 на другой.
+    ///
+    /// Отсутствующий Content-Type считается текстом: так вели себя все ответы до
+    /// появления этой развилки, и менять это для эндпойнтов, которые тип не ставят,
+    /// незачем.
+    static func isTextualContentType(_ value: String?) -> Bool {
+        let typeOnly = (value ?? "")
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if typeOnly.isEmpty { return true }
+        if typeOnly.hasPrefix("text/") { return true }
+        if typeOnly.hasSuffix("+json") || typeOnly.hasSuffix("+xml") { return true }
+        return [
+            "application/json",
+            "application/javascript",
+            "application/xml",
+            "application/x-www-form-urlencoded",
+        ].contains(typeOnly)
     }
 
     struct RemoteMessageRecord: Codable {

@@ -18,6 +18,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.webkit.WebViewFeature
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -153,6 +154,17 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
      */
     var onMobileNavProgress: ((progress: Float, animate: Boolean) -> Unit)? = null
 
+    /**
+     * Активная секция по версии веба: `chats` / `servers` / `hub` / `settings`.
+     *
+     * Нативная панель рисуется поверх вебвью и прячет веб-док, поэтому её
+     * подсветка — локальное состояние Compose, меняющееся только от тапа по ней
+     * самой. А уйти в Хаб или Настройки можно и другим путём (сегмент-контрол
+     * внутри настроек), после чего подсветка начинала врать. Веб сообщает секцию
+     * тем же сообщением, что и прогресс навигации.
+     */
+    var onMobileNavSection: ((section: String) -> Unit)? = null
+
     init {
         val lastUser = prefs.getString(LAST_USERNAME_KEY, null)
         if (!lastUser.isNullOrEmpty()) {
@@ -214,8 +226,18 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             saveStyle: false,
             saveMessageCache: false,
             downloadAttachment: true,
-            serverHistory: false,
+            // История канала расшифровывается ЗДЕСЬ, тем же нативным конвейером,
+            // что и личная переписка. Пока стояло false, веб уходил в браузерную
+            // ветку loadServerMessages(), а та требует WASM-сборки ядра, которой в
+            // ассетах нет и из `file://`-документа быть не может (Chromium не
+            // грузит ES-модули с этой схемы). Каналы на телефоне просто не имели
+            // истории: живые сообщения приходили, всё до открытия — нет.
+            serverHistory: true,
             avatarFetch: true,
+            // Правка тоже нативная, по той же причине: browserEditMessage()
+            // переупаковывает архив в WASM и отправляет его multipart'ом мимо моста,
+            // то есть с Origin: null, который сервер отвергает по CORS.
+            editMessage: true,
             tenor: true,
             voice: false,
             windowDrag: false,
@@ -237,15 +259,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
           };
           if (document.readyState !== 'loading') hide();
           document.addEventListener('DOMContentLoaded', hide);
-          document.body && document.body.classList.add('zali-native-android');
+          // Здесь стояло document.body.classList.add('zali-native-android') — мёртвый
+          // код с двух сторон: на document-start document.body ещё null, а в CSS этот
+          // класс не используется нигде.
         })();
         """.trimIndent()
     }
 
     /** Switch the visible section by driving the shared web UI. */
     fun selectTab(name: String) {
+        // Через JSONObject.quote, а не интерполяцией: имя приходит из перечисления и
+        // сейчас безопасно, но строка, собираемая для evaluateJavascript вручную, —
+        // это ровно тот шов, на котором такие вещи потом и ломаются.
+        val quoted = JSONObject.quote(name)
         mainHandler.post {
-            webView.evaluateJavascript("window.__zaliSelectTab && window.__zaliSelectTab('$name');", null)
+            webView.evaluateJavascript("window.__zaliSelectTab && window.__zaliSelectTab($quoted);", null)
         }
     }
 
@@ -277,7 +305,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 }
             }
             "REFRESH_HISTORY" -> handleRefreshHistory(dict)
+            "LOAD_SERVER_HISTORY" -> handleLoadServerHistory(dict)
             "SEND_MESSAGE" -> handleSendMessage(dict)
+            "EDIT_MESSAGE" -> handleEditMessage(dict)
             "UPLOAD_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = false)
             "DELETE_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = true)
             "LOAD_AVATAR_REQUEST" -> handleLoadAvatarRequest(dict)
@@ -286,7 +316,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "MOBILE_NAV_PROGRESS" -> {
                 val progress = dict.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
                 val animate = dict.optBoolean("animate", true)
-                mainHandler.post { onMobileNavProgress?.invoke(progress, animate) }
+                val section = dict.optString("section", "").trim()
+                mainHandler.post {
+                    onMobileNavProgress?.invoke(progress, animate)
+                    if (section.isNotEmpty()) onMobileNavSection?.invoke(section)
+                }
             }
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
             "STOP_SCREEN_CAPTURE" -> handleStopScreenCapture()
@@ -468,21 +502,53 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
             override fun onResponse(call: Call, response: Response) {
                 response.use {
-                    val bodyString = try { it.body?.string() ?: "" } catch (e: IOException) { "" }
                     val headers = JSONObject()
                     for (name in it.headers.names()) {
                         headers.put(name, it.header(name))
                     }
+                    val contentType = it.header("Content-Type")
                     val data = JSONObject().apply {
                         put("status", it.code)
                         put("ok", it.code in 200..299)
-                        put("body", bodyString)
                         put("headers", headers)
+                    }
+                    // Бинарь не проходит через строковое поле: `body.string()` декодирует
+                    // байты как UTF-8 и подставляет replacement-символы вместо всего, что
+                    // в UTF-8 не укладывается, — то есть портит PNG/JPEG необратимо. Так
+                    // молча не работали иконки и баннеры серверов.
+                    if (isTextualContentType(contentType)) {
+                        data.put("body", try { it.body?.string() ?: "" } catch (e: IOException) { "" })
+                    } else {
+                        val raw = try { it.body?.bytes() } catch (e: IOException) { null } ?: ByteArray(0)
+                        data.put("body", "")
+                        data.put("bodyBase64", android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP))
                     }
                     sendNativeResponse(requestId, ok = true, data = data)
                 }
             }
         })
+    }
+
+    /**
+     * Можно ли отдать это тело JS-у строкой без потерь.
+     *
+     * Правило одно на все оболочки (macOS `NetworkService.isTextualContentType`,
+     * Windows `native/api::is_textual_content_type`) — иначе одна и та же ссылка
+     * приезжала бы текстом на одной платформе и base64 на другой.
+     *
+     * Отсутствующий Content-Type считается текстом: так вели себя все ответы до
+     * появления этой развилки, и менять это для эндпойнтов, которые тип не ставят,
+     * незачем.
+     */
+    private fun isTextualContentType(value: String?): Boolean {
+        val type = value.orEmpty().substringBefore(';').trim().lowercase()
+        if (type.isEmpty()) return true
+        if (type.startsWith("text/")) return true
+        if (type.endsWith("+json") || type.endsWith("+xml")) return true
+        return type == "application/json" ||
+            type == "application/javascript" ||
+            type == "application/xml" ||
+            type == "application/x-www-form-urlencoded"
     }
 
     /** Delivers a native bridge response into the JS bus (`onNativeResponse` in interface.js). */
@@ -527,6 +593,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val keyVersion = if (dict.has("keyVersion")) dict.optInt("keyVersion", 2) else 2
         val serverId = dict.optString("serverId", "").ifEmpty { null }
         val channelId = dict.optString("channelId", "").ifEmpty { null }
+        // Цитата ответа и запись о звонке — непрозрачные JSON-строки, которые ядро
+        // шифрует тем же ключом, что и текст. До 0.2b33 их здесь просто не читали,
+        // и ответ, отправленный с телефона, приезжал собеседнику без цитаты —
+        // безвозвратно, потому что восстанавливать её неоткуда.
+        val callPayload = dict.optString("call", "").trim().ifEmpty { null }
+        val replyPayload = dict.optString("reply", "").trim().ifEmpty { null }
 
         if (key.isEmpty()) {
             inFlightSendClientIds.remove(clientId)
@@ -544,35 +616,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         }
 
         val tempPath = File(context.cacheDir, "${UUID.randomUUID()}.zali").path
-        val attachmentsIn = dict.optJSONArray("attachments") ?: JSONArray()
-        val packedAttachments = mutableListOf<JSONObject>()
-        val tempAttachmentFiles = mutableListOf<File>()
+        val (packedAttachments, tempAttachmentFiles) = stageAttachmentsForPacking(dict.optJSONArray("attachments"))
 
-        for (i in 0 until attachmentsIn.length()) {
-            val attachment = attachmentsIn.getJSONObject(i)
-            val dataUrl = attachment.optString("dataUrl", "")
-            if (dataUrl.isEmpty()) continue
-            val name = attachment.optString("name", "attachment.bin")
-            val kind = attachment.optString("kind", "file")
-            val (bytes, mimeType, fileExtension) = decodeDataUrl(dataUrl)
-            if (bytes.isEmpty()) continue
-
-            val safeName = safeFileName(name, fileExtension)
-            val tempFile = File(context.cacheDir, "${UUID.randomUUID()}_$safeName")
-            tempFile.writeBytes(bytes)
-            tempAttachmentFiles.add(tempFile)
-
-            packedAttachments.add(JSONObject().apply {
-                put("path", tempFile.path)
-                put("archivePath", "attachments/$safeName")
-                put("name", name)
-                put("mimeType", if (attachment.has("mimeType")) attachment.optString("mimeType") else mimeType)
-                put("kind", kind)
-                put("size", if (attachment.has("size")) attachment.optLong("size") else bytes.size.toLong())
-            })
-        }
-
-        val packed = ZaliCoreBridge.packMessage(sender, text, tempPath, key, keyVersion, packedAttachments)
+        val packed = ZaliCoreBridge.packMessage(
+            sender, text, tempPath, key, keyVersion, packedAttachments,
+            call = callPayload, reply = replyPayload,
+        )
         tempAttachmentFiles.forEach { it.delete() }
         if (!packed) {
             inFlightSendClientIds.remove(clientId)
@@ -598,6 +647,146 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             }
             archiveFile.delete()
         }
+    }
+
+    /**
+     * Раскладывает вложения из `data:`-URL по временным файлам и собирает описания
+     * в том виде, в каком их ждёт `zali_net:pack_message`.
+     *
+     * Общая для отправки и для правки: правка заменяет архив ЦЕЛИКОМ, поэтому она
+     * обязана переупаковать сообщение вместе со всеми вложениями — пропустить их
+     * значит молча выбросить их из сообщения.
+     *
+     * Возвращает и список временных файлов: вызывающий удаляет их сразу после
+     * упаковки, независимо от её исхода.
+     */
+    private fun stageAttachmentsForPacking(attachmentsIn: JSONArray?): Pair<List<JSONObject>, List<File>> {
+        val packedAttachments = mutableListOf<JSONObject>()
+        val tempAttachmentFiles = mutableListOf<File>()
+        val source = attachmentsIn ?: JSONArray()
+
+        for (i in 0 until source.length()) {
+            val attachment = source.optJSONObject(i) ?: continue
+            val dataUrl = attachment.optString("dataUrl", "")
+            if (dataUrl.isEmpty()) continue
+            val name = attachment.optString("name", "attachment.bin")
+            val kind = attachment.optString("kind", "file")
+            val (bytes, mimeType, fileExtension) = decodeDataUrl(dataUrl)
+            if (bytes.isEmpty()) continue
+
+            val safeName = safeFileName(name, fileExtension)
+            val tempFile = File(context.cacheDir, "${UUID.randomUUID()}_$safeName")
+            tempFile.writeBytes(bytes)
+            tempAttachmentFiles.add(tempFile)
+
+            packedAttachments.add(JSONObject().apply {
+                put("path", tempFile.path)
+                put("archivePath", "attachments/$safeName")
+                put("name", name)
+                put("mimeType", if (attachment.has("mimeType")) attachment.optString("mimeType") else mimeType)
+                put("kind", kind)
+                put("size", if (attachment.has("size")) attachment.optLong("size") else bytes.size.toLong())
+            })
+        }
+        return packedAttachments to tempAttachmentFiles
+    }
+
+    // MARK: - Message edit (EDIT_MESSAGE)
+    //
+    // Порт macOS'ового `.editMessage` (WebView.swift) + `NetworkService.editMessage`.
+    // Правка заменяет архив целиком: сервер принимает `PUT /api/message/:id` с тем же
+    // multipart'ом, что и отправка (`key_version` + `file`), и сам проверяет, что
+    // правит автор.
+
+    private fun handleEditMessage(dict: JSONObject) {
+        val requestId = dict.optString("requestId", dict.optString("request_id", UUID.randomUUID().toString()))
+        cryptoExecutor.execute { performEditMessage(dict, requestId) }
+    }
+
+    private fun performEditMessage(dict: JSONObject, requestId: String) {
+        val messageId = dict.optString("messageId", "").trim()
+        val text = dict.optString("text", "")
+        val key = dict.optString("key", "").trim()
+        val keyVersion = if (dict.has("keyVersion")) dict.optInt("keyVersion", 2) else 2
+        val callPayload = dict.optString("call", "").trim().ifEmpty { null }
+        val replyPayload = dict.optString("reply", "").trim().ifEmpty { null }
+
+        if (messageId.isEmpty() || key.isEmpty()) {
+            sendNativeResponse(requestId, ok = false,
+                error = if (key.isEmpty()) "Core: E2E-ключ не задан" else "Не указано сообщение")
+            return
+        }
+        if (!ZaliCoreBridge.isAvailable) {
+            sendNativeResponse(requestId, ok = false, error = "Core: нативная библиотека не загружена")
+            return
+        }
+
+        val tempPath = File(context.cacheDir, "${UUID.randomUUID()}.zali").path
+        val (packedAttachments, tempAttachmentFiles) = stageAttachmentsForPacking(dict.optJSONArray("attachments"))
+        // Автор берётся из payload'а, а не из currentUsername(): последний хранится в
+        // нижнем регистре (см. handlePersistDeviceIdentity), а это поле попадает
+        // внутрь архива и оттуда читается при отрисовке — правка переименовала бы
+        // автора. currentUsername() остаётся страховкой на случай старого веба.
+        val sender = dict.optString("sender", "").trim().ifEmpty { currentUsername() }
+        val packed = ZaliCoreBridge.packMessage(
+            sender, text, tempPath, key, keyVersion, packedAttachments,
+            call = callPayload, reply = replyPayload,
+        )
+        tempAttachmentFiles.forEach { it.delete() }
+        if (!packed) {
+            sendNativeResponse(requestId, ok = false, error = "Core: Ошибка при упаковке сообщения")
+            return
+        }
+
+        val archiveFile = File(tempPath)
+        val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("key_version", max(1, keyVersion).toString())
+            .addFormDataPart(
+                "file", "msg.zali",
+                archiveFile.asRequestBody("application/octet-stream".toMediaTypeOrNull())
+            )
+
+        // Путь собирается сегментами (`addPathSegment` кодирует их сам), а не
+        // интерполяцией: id приходит из серверных данных и не должен уметь выйти за
+        // пределы пути. Тот же приём, что у Windows-шелла (`path_segments_mut().push()`)
+        // и macOS (`appendingPathComponent`).
+        val base = apiBaseUrl.toHttpUrlOrNull()
+        if (base == null) {
+            archiveFile.delete()
+            sendNativeResponse(requestId, ok = false, error = "Некорректный адрес сервера")
+            return
+        }
+        val url = base.newBuilder()
+            .addPathSegment("api").addPathSegment("message").addPathSegment(messageId)
+            .build()
+
+        val requestBuilder = Request.Builder().url(url).put(bodyBuilder.build())
+        if (wsAuthToken.isNotEmpty()) requestBuilder.header("Authorization", "Bearer $wsAuthToken")
+        if (wsDeviceId.isNotEmpty()) requestBuilder.header("X-Zali-Device-ID", wsDeviceId)
+
+        transferClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                archiveFile.delete()
+                sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось отправить изменения")
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    archiveFile.delete()
+                    val bodyString = try { it.body?.string() ?: "" } catch (e: IOException) { "" }
+                    if (!it.isSuccessful) {
+                        sendNativeResponse(requestId, ok = false,
+                            error = bodyString.trim().ifEmpty { "Не удалось отправить изменения" })
+                        return
+                    }
+                    // Кэш расшифровки ключуется id, а содержимое под этим id только что
+                    // сменилось — без сброса история вечно перерисовывала бы текст «до
+                    // правки». Отрицательный кэш сбрасывается по той же причине: архив
+                    // другой, прежний вердикт «не открывается» к нему не относится.
+                    forgetDecryptedMessage(messageId)
+                    sendNativeResponse(requestId, ok = true, data = JSONObject().put("messageId", messageId))
+                }
+            }
+        })
     }
 
     private fun decodeDataUrl(value: String): Triple<ByteArray, String, String> {
@@ -1202,6 +1391,100 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    // MARK: - Channel history load (LOAD_SERVER_HISTORY)
+    //
+    // Порт macOS'ового `.loadServerHistory` (WebView.swift::reloadServerHistory).
+    // Тот же конвейер, что и у личной переписки: страничная выборка метаданных, затем
+    // последовательное скачивание и расшифровка каждого архива нативным ядром — то
+    // есть с теми же кандидатами ключей и теми же кэшами.
+    //
+    // До 0.2b33 Android объявлял `serverHistory: false`, веб уходил в браузерную
+    // ветку на WASM, а её на этой платформе нет и быть не может (ES-модули с `file://`
+    // Chromium не грузит). Каналы на телефоне просто не имели истории.
+
+    private fun handleLoadServerHistory(dict: JSONObject) {
+        val serverId = dict.optString("serverId", dict.optString("server_id", "")).trim()
+        val channelId = dict.optString("channelId", dict.optString("channel_id", "")).trim()
+        if (serverId.isEmpty() || channelId.isEmpty()) return
+        val key = dict.optString("key", "").trim()
+        if (key.isNotEmpty()) currentE2eKey = key
+
+        val token = ++historyReloadToken
+        fetchChannelMessagesPage(serverId, channelId, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
+            if (token != historyReloadToken) return@fetchChannelMessagesPage
+            // Неудача выборки не бланкует канал: пустой пуш стёр бы то, что уже видно.
+            if (!ok) return@fetchChannelMessagesPage
+            if (records.isEmpty()) {
+                emitServerHistory(serverId, channelId, JSONArray())
+                return@fetchChannelMessagesPage
+            }
+            renderHistoryRecords(records, peer = "", token = token, serverId = serverId, channelId = channelId) { rendered ->
+                if (token != historyReloadToken) return@renderHistoryRecords
+                emitServerHistory(serverId, channelId, JSONArray(rendered))
+            }
+        }
+    }
+
+    private fun emitServerHistory(serverId: String, channelId: String, messages: JSONArray) {
+        val payload = JSONObject().apply {
+            put("serverId", serverId)
+            put("channelId", channelId)
+            put("messages", messages)
+        }
+        mainHandler.post {
+            webView.evaluateJavascript("window.loadServerHistory && window.loadServerHistory($payload);", null)
+        }
+    }
+
+    private fun fetchChannelMessagesPage(
+        serverId: String,
+        channelId: String,
+        limit: Int,
+        offset: Int,
+        accumulated: MutableList<JSONObject>,
+        completion: (List<JSONObject>, Boolean) -> Unit,
+    ) {
+        val base = apiBaseUrl.toHttpUrlOrNull()
+        if (base == null) {
+            completion(accumulated, false)
+            return
+        }
+        val url = base.newBuilder()
+            .addPathSegment("api").addPathSegment("servers").addPathSegment(serverId)
+            .addPathSegment("channels").addPathSegment(channelId).addPathSegment("messages")
+            .addQueryParameter("limit", limit.toString())
+            .addQueryParameter("offset", offset.toString())
+            .build()
+        val request = Request.Builder().url(url).apply {
+            if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
+        }.build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                completion(accumulated, false)
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        completion(accumulated, false)
+                        return
+                    }
+                    val bodyString = try { it.body?.string() } catch (e: IOException) { null }
+                    val page = try { bodyString?.let { s -> JSONArray(s) } } catch (e: Exception) { null }
+                    if (page == null) {
+                        completion(accumulated, false)
+                        return
+                    }
+                    for (i in 0 until page.length()) accumulated.add(page.getJSONObject(i))
+                    if (page.length() < limit) {
+                        completion(accumulated, true)
+                    } else {
+                        fetchChannelMessagesPage(serverId, channelId, limit, offset + limit, accumulated, completion)
+                    }
+                }
+            }
+        })
+    }
+
     /** `GET /api/messages/{user}?limit&offset`, same pagination as macOS's
      * `fetchMessagesPage` — recurse while a page comes back full. */
     private fun fetchMessagesPage(
@@ -1242,6 +1525,63 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         })
     }
 
+    // MARK: - Decrypt caches (положительный и отрицательный)
+    //
+    // Расшифровка одного сообщения — это PBKDF2-SHA256 по 210 000 итераций дважды на
+    // КАЖДЫЙ неподошедший ключ-кандидат. История перечитывается на каждый
+    // `key_envelope_available`, а он приходит именно тогда, когда переписка ещё
+    // нечитаема, — то есть ровно в тот момент, когда перебор самый дорогой и самый
+    // бесполезный. Оба кэша есть у macOS (`WebView.swift`) и Windows
+    // (`native/cache.rs`); на Android их не было вовсе.
+
+    private val decryptedMessageCache = object : LinkedHashMap<String, JSONObject>(64, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, JSONObject>): Boolean =
+            size > DECRYPTED_CACHE_MAX_ENTRIES
+    }
+
+    /**
+     * id сообщений, которые открыть НЕ удалось, вместе с отпечатком того набора
+     * ключей, которым пробовали. Самопочинка сохраняется: появился новый ключ —
+     * отпечаток другой, запись протухла, и повтор происходит на следующем же проходе.
+     */
+    private val failedDecryptFingerprints = object : LinkedHashMap<String, String>(64, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>): Boolean =
+            size > DECRYPTED_CACHE_MAX_ENTRIES
+    }
+
+    private fun cachedDecryptedMessage(messageId: String): JSONObject? =
+        synchronized(decryptedMessageCache) { decryptedMessageCache[messageId] }
+
+    private fun cacheDecryptedMessage(messageId: String, decrypted: JSONObject) {
+        val id = messageId.trim()
+        if (id.isEmpty()) return
+        // Вложения лежат внутри как inline data:-URL, поэтому кэш обязан оставаться
+        // щитом от процессора, а не свалкой в памяти.
+        if (decrypted.toString().length > DECRYPTED_CACHE_MAX_ENTRY_CHARS) return
+        synchronized(decryptedMessageCache) { decryptedMessageCache[id] = decrypted }
+    }
+
+    private fun decryptKnownToFail(messageId: String, fingerprint: String): Boolean =
+        synchronized(failedDecryptFingerprints) { failedDecryptFingerprints[messageId] == fingerprint }
+
+    private fun rememberDecryptFailure(messageId: String, fingerprint: String) {
+        val id = messageId.trim()
+        if (id.isEmpty()) return
+        synchronized(failedDecryptFingerprints) { failedDecryptFingerprints[id] = fingerprint }
+    }
+
+    /**
+     * Забывает про сообщение в ОБОИХ кэшах. Зовётся после правки: архив под этим id
+     * заменён целиком, поэтому и расшифрованный текст, и вердикт «не открывается»
+     * относятся к тому, чего больше нет.
+     */
+    private fun forgetDecryptedMessage(messageId: String) {
+        val id = messageId.trim()
+        if (id.isEmpty()) return
+        synchronized(decryptedMessageCache) { decryptedMessageCache.remove(id) }
+        synchronized(failedDecryptFingerprints) { failedDecryptFingerprints.remove(id) }
+    }
+
     /** Sequentially downloads + decrypts every record (mirrors macOS's `for record in
      * records { await ... }` — not parallel: a burst of many concurrent downloads
      * previously saturated the connection pool and stalled every request, see
@@ -1250,6 +1590,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         records: List<JSONObject>,
         peer: String,
         token: Int,
+        serverId: String? = null,
+        channelId: String? = null,
         completion: (List<JSONObject>) -> Unit,
     ) {
         val rendered = mutableListOf<JSONObject>()
@@ -1259,7 +1601,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 completion(rendered)
                 return
             }
-            renderHistoryRecord(records[index], peer) { result ->
+            renderHistoryRecord(records[index], peer, serverId, channelId) { result ->
                 if (result != null) rendered.add(result)
                 next(index + 1)
             }
@@ -1278,7 +1620,78 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         return path.split('/').none { it.isEmpty() || it == ".." }
     }
 
-    private fun renderHistoryRecord(record: JSONObject, peer: String, completion: (JSONObject?) -> Unit) {
+    /**
+     * Вложения расшифрованного архива в том виде, в каком их ждёт веб. Мелкие
+     * вкладываются inline как `data:`-URL (порог 2 МБ — тот же, что у macOS/iOS),
+     * крупные едут только описанием и докачиваются по требованию.
+     */
+    private fun renderedAttachments(payload: ZaliCoreBridge.MessagePayload, tempDir: File): JSONArray {
+        val attachments = JSONArray()
+        for (attachment in payload.attachments) {
+            val rendered = JSONObject().apply {
+                put("name", attachment.name)
+                put("mimeType", attachment.mimeType)
+                put("kind", attachment.kind)
+                put("size", attachment.size)
+            }
+            if (attachment.size <= 2 * 1024 * 1024 && isSafeArchivePath(attachment.archivePath)) {
+                val attachmentFile = File(tempDir, attachment.archivePath)
+                if (attachmentFile.exists()) {
+                    val b64 = android.util.Base64.encodeToString(attachmentFile.readBytes(), android.util.Base64.NO_WRAP)
+                    rendered.put("dataUrl", "data:${attachment.mimeType};base64,$b64")
+                }
+            }
+            attachments.put(rendered)
+        }
+        return attachments
+    }
+
+    /**
+     * Расшифрованное содержимое (`sender`/`text`/`call`/`reply`/`attachments`) —
+     * ровно то, что кладётся в положительный кэш. Метаданные (реакции, время) в него
+     * НЕ попадают: они меняются независимо от архива, и закэшировать их значило бы
+     * показывать вчерашние реакции.
+     */
+    private fun decryptedContent(payload: ZaliCoreBridge.MessagePayload, tempDir: File): JSONObject =
+        JSONObject().apply {
+            put("sender", payload.sender)
+            put("text", payload.text)
+            payload.call?.let { put("call", it) }
+            payload.reply?.let { put("reply", it) }
+            put("attachments", renderedAttachments(payload, tempDir))
+        }
+
+    /** Склейка расшифрованного содержимого со свежими метаданными записи истории. */
+    private fun buildHistoryOutput(
+        messageId: String,
+        record: JSONObject,
+        decrypted: JSONObject,
+        receiver: String,
+        serverId: String?,
+        channelId: String?,
+    ): JSONObject = JSONObject().apply {
+        put("id", messageId)
+        put("clientId", record.optString("clientId", record.optString("client_id", "")))
+        put("sender", decrypted.optString("sender"))
+        put("receiver", receiver)
+        put("text", decrypted.optString("text"))
+        put("attachments", decrypted.optJSONArray("attachments") ?: JSONArray())
+        if (decrypted.has("call")) put("call", decrypted.optString("call"))
+        if (decrypted.has("reply")) put("reply", decrypted.optString("reply"))
+        put("timestamp", record.opt("timestamp"))
+        put("reactions", record.optJSONArray("reactions") ?: JSONArray())
+        put("myReactions", record.optJSONArray("myReactions") ?: JSONArray())
+        if (serverId != null) put("serverId", serverId)
+        if (channelId != null) put("channelId", channelId)
+    }
+
+    private fun renderHistoryRecord(
+        record: JSONObject,
+        peer: String,
+        serverId: String?,
+        channelId: String?,
+        completion: (JSONObject?) -> Unit,
+    ) {
         val messageId = record.optString("id", "").trim()
         if (messageId.isEmpty()) {
             completion(null)
@@ -1298,10 +1711,40 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             put("timestamp", record.opt("timestamp"))
             put("reactions", record.optJSONArray("reactions") ?: JSONArray())
             put("myReactions", record.optJSONArray("myReactions") ?: JSONArray())
+            if (serverId != null) put("serverId", serverId)
+            if (channelId != null) put("channelId", channelId)
         }
 
         if (!ZaliCoreBridge.isAvailable) {
             completion(placeholder("⚠️ Не удалось загрузить сообщение"))
+            return
+        }
+
+        // Уже расшифровано в этой сессии — ни скачивания, ни PBKDF2.
+        cachedDecryptedMessage(messageId)?.let { cached ->
+            completion(buildHistoryOutput(messageId, record, cached, receiver, serverId, channelId))
+            return
+        }
+
+        val keys = ZaliCoreBridge.candidateMessageKeys(
+            currentKey = currentE2eKey, conversationKeys = conversationKeys,
+            participantA = sender, participantB = receiver,
+            serverId = serverId, channelId = channelId,
+        )
+        val fingerprint = ZaliCoreBridge.candidateKeysFingerprint(keys)
+        if (decryptKnownToFail(messageId, fingerprint)) {
+            // Тот же плейсхолдер, что и у неудачной ветки ниже, а не null: вернуть
+            // ничего значило бы выкинуть сообщение из истории, то есть разменять
+            // сэкономленный PBKDF2 на исчезающее сообщение.
+            val hasScopeKey = ZaliCoreBridge.hasConversationScopeKey(
+                conversationKeys = conversationKeys,
+                participantA = sender, participantB = receiver,
+                serverId = serverId, channelId = channelId,
+            )
+            completion(placeholder(
+                if (hasScopeKey) "🔒 Сообщение зашифровано другим ключом"
+                else "🔑 Получение ключа…"
+            ))
             return
         }
 
@@ -1336,20 +1779,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                         archiveFile.writeBytes(bytes)
                         tempDir.mkdirs()
 
-                        // Same candidate-key list as macOS's renderHistoryRecord: the
-                        // conversation-scoped key plus every other known conversation
-                        // key as a last resort (covers a stale/renamed scope).
-                        val keys = ZaliCoreBridge.candidateMessageKeys(
-                            currentKey = currentE2eKey, conversationKeys = conversationKeys,
-                            participantA = sender, participantB = receiver, serverId = null, channelId = null
-                        ).toMutableList()
-                        for (k in conversationKeys.values) {
-                            val normalized = k.trim()
-                            if (normalized.isNotEmpty() && !keys.contains(normalized)) keys.add(normalized)
-                        }
-
                         val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
                         if (payload == null) {
+                            rememberDecryptFailure(messageId, fingerprint)
                             // Before key sync converges on a freshly logged-in device the
                             // only candidate is currentE2eKey, so this fails for every
                             // message. "Encrypted with another key" is a permanent-sounding
@@ -1357,6 +1789,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                             val hasScopeKey = ZaliCoreBridge.hasConversationScopeKey(
                                 conversationKeys = conversationKeys,
                                 participantA = sender, participantB = receiver,
+                                serverId = serverId, channelId = channelId,
                             )
                             completion(placeholder(
                                 if (hasScopeKey) "🔒 Сообщение зашифровано другим ключом"
@@ -1365,35 +1798,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                             return
                         }
 
-                        val attachments = JSONArray()
-                        for (attachment in payload.attachments) {
-                            val renderedAttachment = JSONObject().apply {
-                                put("name", attachment.name)
-                                put("mimeType", attachment.mimeType)
-                                put("kind", attachment.kind)
-                                put("size", attachment.size)
-                            }
-                            if (attachment.size <= 2 * 1024 * 1024 && isSafeArchivePath(attachment.archivePath)) {
-                                val attachmentFile = File(tempDir, attachment.archivePath)
-                                if (attachmentFile.exists()) {
-                                    val b64 = android.util.Base64.encodeToString(attachmentFile.readBytes(), android.util.Base64.NO_WRAP)
-                                    renderedAttachment.put("dataUrl", "data:${attachment.mimeType};base64,$b64")
-                                }
-                            }
-                            attachments.put(renderedAttachment)
-                        }
-
-                        completion(JSONObject().apply {
-                            put("id", messageId)
-                            put("clientId", clientId)
-                            put("sender", payload.sender)
-                            put("receiver", receiver)
-                            put("text", payload.text)
-                            put("attachments", attachments)
-                            put("timestamp", record.opt("timestamp"))
-                            put("reactions", record.optJSONArray("reactions") ?: JSONArray())
-                            put("myReactions", record.optJSONArray("myReactions") ?: JSONArray())
-                        })
+                        val decrypted = decryptedContent(payload, tempDir)
+                        cacheDecryptedMessage(messageId, decrypted)
+                        completion(buildHistoryOutput(messageId, record, decrypted, receiver, serverId, channelId))
                     } finally {
                         archiveFile.delete()
                         tempDir.deleteRecursively()
@@ -1440,51 +1847,42 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             archiveFile.writeBytes(archiveBytes)
             tempDir.mkdirs()
 
+            // Кандидаты: ключ своего scope, текущий активный, затем ограниченный и
+            // отсортированный хвост из остальных (см. candidateMessageKeys). Раньше
+            // здесь дописывались ВСЕ значения мапы без потолка — на каждый
+            // неподошедший ключ два прохода PBKDF2 по 210 000 итераций.
             val keys = ZaliCoreBridge.candidateMessageKeys(
                 currentKey = currentE2eKey, conversationKeys = conversationKeys,
                 participantA = sender, participantB = receiver, serverId = serverId, channelId = channelId
-            ).toMutableList()
-            // Last-resort fallback: try every other known conversation key too. Both
-            // reference implementations do this on the live-receive path — macOS in
-            // WebView.swift's decrypt helper, Windows inside candidate_message_keys()
-            // itself (see its `includes_other_scopes_as_last_resort` test) — but this
-            // path (ported from iOS, which has the same gap) only ever tried the
-            // scoped key and the current key. A message whose scope→key mapping is
-            // stale or not yet synced then failed to unpack and was dropped in
-            // silence, which is a direct cause of "many messages never arrive".
-            // renderHistoryRecord below already had this fallback, so the same
-            // message often appeared later on a history reload but never live.
-            for (k in conversationKeys.values) {
-                val normalized = k.trim()
-                if (normalized.isNotEmpty() && !keys.contains(normalized)) keys.add(normalized)
-            }
-            val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys) ?: return
+            )
+            val fingerprint = ZaliCoreBridge.candidateKeysFingerprint(keys)
+            if (decryptKnownToFail(id, fingerprint)) return
 
-            val attachments = JSONArray()
-            for (attachment in payload.attachments) {
-                val rendered = JSONObject().apply {
-                    put("name", attachment.name)
-                    put("mimeType", attachment.mimeType)
-                    put("kind", attachment.kind)
-                    put("size", attachment.size)
-                }
-                // Inline small attachments as a data: URL, same 2 MB threshold as macOS/iOS.
-                if (attachment.size <= 2 * 1024 * 1024) {
-                    val attachmentFile = File(tempDir, attachment.archivePath)
-                    if (attachmentFile.exists()) {
-                        val b64 = android.util.Base64.encodeToString(attachmentFile.readBytes(), android.util.Base64.NO_WRAP)
-                        rendered.put("dataUrl", "data:${attachment.mimeType};base64,$b64")
-                    }
-                }
-                attachments.put(rendered)
+            val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
+            if (payload == null) {
+                rememberDecryptFailure(id, fingerprint)
+                return
             }
+
+            val decrypted = decryptedContent(payload, tempDir)
+            cacheDecryptedMessage(id, decrypted)
 
             val messagePayload = JSONObject().apply {
                 put("id", id)
                 put("sender", payload.sender)
                 put("receiver", receiver)
                 put("text", payload.text)
-                put("attachments", attachments)
+                put("attachments", decrypted.optJSONArray("attachments") ?: JSONArray())
+                // Цитата ответа и запись о звонке лежат ВНУТРИ шифротекста. receiveMessage()
+                // в interface.js собирает сообщение по полям, а не спредом, — поле,
+                // забытое здесь, теряется при живой доставке и «чинится» только
+                // следующей перезагрузкой истории.
+                payload.call?.let { put("call", it) }
+                payload.reply?.let { put("reply", it) }
+                // Времени здесь намеренно нет: в архиве оно лежит unix-секундами, а вся
+                // остальная история оперирует ISO-строками, и смешивать их в одном поле
+                // нельзя. Для только что доставленного сообщения веб сам подставляет
+                // текущий момент — как и на macOS/Windows, которые тоже его не шлют.
                 if (serverId != null) put("serverId", serverId)
                 if (channelId != null) put("channelId", channelId)
             }
@@ -1512,6 +1910,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     companion object {
         private const val LAST_USERNAME_KEY = "last_username"
+
+        /** Потолки обоих кэшей расшифровки — те же, что у Windows (`native/cache.rs`). */
+        private const val DECRYPTED_CACHE_MAX_ENTRIES = 400
+        private const val DECRYPTED_CACHE_MAX_ENTRY_CHARS = 512 * 1024
 
         private const val REQUEST_CODE_NOTIFICATIONS = 4201
         /** Feature-checked at the call site before using [androidx.webkit.WebViewCompat.addDocumentStartJavaScript]. */

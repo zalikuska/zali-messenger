@@ -36,7 +36,10 @@ ZaliMixin(ZaliInterface, class {
                 const serverBtn = e.target.closest('.server-item[data-server-id]');
                 if (serverBtn) {
                     const serverId = serverBtn.getAttribute('data-server-id');
-                    if (serverId) this.setActiveServer(serverId);
+                    if (serverId) {
+                        this.closeChatPanelModals();
+                        this.setActiveServer(serverId);
+                    }
                     e.stopPropagation();
                     return;
                 }
@@ -77,7 +80,10 @@ ZaliMixin(ZaliInterface, class {
                     }
                 }
                 const row = e.target.closest('.contact');
-                if (row && row.dataset.name) this.switchChat(row.dataset.name);
+                if (row && row.dataset.name) {
+                    this.closeChatPanelModals();
+                    this.switchChat(row.dataset.name);
+                }
             });
             contactsEl.addEventListener('contextmenu', (e) => {
                 const row = e.target.closest('.contact');
@@ -705,6 +711,7 @@ ZaliMixin(ZaliInterface, class {
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
         const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
         const designModeOptions = document.getElementById('designModeOptions');
+        const cacheSettings = document.getElementById('cacheSettings');
         const inputVoiceTrace = document.getElementById('inputVoiceTrace');
         const hubSegmentSettings = document.getElementById('hubSegmentSettings');
         const recentAccounts = document.getElementById('recentAccounts');
@@ -767,6 +774,11 @@ ZaliMixin(ZaliInterface, class {
             this.applyNetworkConfigToInputs();
             this.renderUiV2Settings();
             this.renderAudioDeviceSettings();
+            // Карточку кеша рисует openSettingsView() — там же, где остальные
+            // разделы настроек. Здесь её быть не должно: в настройки попадают
+            // ещё и через нижнюю панель и через сегмент Хаба, и карточка,
+            // привязанная к одной этой кнопке, в тех двух путях оставалась
+            // пустой.
             showSettingsView();
         });
         if (inputAudioMic) {
@@ -809,6 +821,40 @@ ZaliMixin(ZaliInterface, class {
         if (inputVoiceTrace) {
             inputVoiceTrace.addEventListener('change', () => {
                 this.saveVoiceTraceEnabled(!!inputVoiceTrace.checked);
+            });
+        }
+        if (cacheSettings) {
+            // Делегирование по той же причине, что и у designModeOptions:
+            // renderCacheSettings() переписывает контейнер целиком каждый раз,
+            // когда меняется сводка, — слушатели на кнопках не пережили бы это.
+            cacheSettings.addEventListener('click', (event) => {
+                const modeBtn = event.target?.closest?.('[data-cache-mode]');
+                if (modeBtn && cacheSettings.contains(modeBtn)) {
+                    this.saveCachePrefs({ mode: modeBtn.getAttribute('data-cache-mode') });
+                    return;
+                }
+                if (event.target?.closest?.('#cacheClearBtn')) {
+                    void this.clearAssetCache();
+                }
+            });
+            // 'input' обновляет только подпись — слайдер тащат, и запускать на
+            // каждый промежуточный шаг вытеснение значило бы стереть половину
+            // кеша по дороге к 16 ГБ. Запись и применение — на 'change'.
+            cacheSettings.addEventListener('input', (event) => {
+                const slider = event.target;
+                if (!slider || slider.id !== 'inputCacheLimit') return;
+                // Пока жест идёт, карточку перерисовывать нельзя — иначе
+                // слайдер заменят прямо под пальцем (см. cacheLimitSliderBusy).
+                this._cacheLimitDragging = true;
+                const label = document.getElementById('cacheLimitValue');
+                const stop = ZaliInterface.cacheLimitStops[this.normalizeCacheLimitIndex(slider.value)];
+                if (label && stop) label.textContent = stop.label;
+            });
+            cacheSettings.addEventListener('change', (event) => {
+                const slider = event.target;
+                if (!slider || slider.id !== 'inputCacheLimit') return;
+                this._cacheLimitDragging = false;
+                this.saveCachePrefs({ limitIndex: slider.value });
             });
         }
         if (hubSegmentSettings) {
