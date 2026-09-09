@@ -5,7 +5,7 @@ name = "zali_messenger_win"
 # APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
 # compares against the server's app_releases.version). This field only needs to
 # keep incrementing for Cargo's own bookkeeping; it is not shown to users.
-version = "0.2.27"
+version = "0.2.28"
 edition = "2021"
 
 [dependencies]
@@ -26,7 +26,7 @@ tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 notify-rust = "4.17"
 keyring = "2.3"
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security", "Win32_Foundation"] }
 # Needed to read the window's raw HWND for the taskbar-badge overlay (see
 # native/taskbar_badge.rs) — same 0.5.x already resolved transitively via tao's
 # "rwh_05" feature, so this doesn't add a new version to the dependency tree.

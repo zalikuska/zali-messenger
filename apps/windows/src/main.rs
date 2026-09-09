@@ -18,6 +18,52 @@ use tao::{
 use tracing::{error, info};
 use wry::{http::Response, WebViewBuilder};
 
+/// Grabs a named mutex so a second launch can detect the first instead of starting
+/// alongside it. Nothing enforced this before: `WindowEvent::CloseRequested` on
+/// Windows minimizes to tray instead of exiting (see below), so users routinely
+/// double-click the exe again believing the app isn't running, and end up with
+/// several background instances of the same file. Each holds the running image
+/// locked — that's what actually broke the self-updater (native/updates.rs):
+/// `install.log` showed "Процесс не может получить доступ к файлу, так как этот
+/// файл занят другим процессом" (sharing violation, not a permissions error) on
+/// every one of the 60 retries, even when the exe lived in Downloads with no
+/// admin rights involved at all. The stray instance — not the one being updated —
+/// held the lock the whole time, so no amount of retrying or elevating could have
+/// worked. If another instance is already running, this brings its window forward
+/// and exits instead of launching a second copy.
+#[cfg(target_os = "windows")]
+fn ensure_single_instance_or_focus_existing() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
+
+    let mutex_name: Vec<u16> = OsStr::new("Local\\ZaliMessengerSingleInstanceMutex")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr()) };
+    let already_running = handle.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    if !already_running {
+        // `handle` is a raw HANDLE (plain pointer-sized value, no Drop) — nothing
+        // to release here. The OS holds the mutex for as long as this process is
+        // alive and frees it automatically on exit, whether or not the handle is
+        // ever explicitly closed.
+        return;
+    }
+
+    let title: Vec<u16> = OsStr::new("Zali Messenger").encode_wide().chain(Some(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+        if !hwnd.is_null() {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+    }
+    std::process::exit(0);
+}
+
 #[cfg(target_os = "windows")]
 fn set_windows_app_user_model_id() {
     use std::ffi::OsStr;
@@ -301,6 +347,8 @@ fn init_logging() {
 fn main() -> wry::Result<()> {
     init_logging();
     info!("Zali Messenger starting...");
+    #[cfg(target_os = "windows")]
+    ensure_single_instance_or_focus_existing();
     #[cfg(target_os = "windows")]
     set_windows_app_user_model_id();
     // Set by the installer's autostart registry entry (see apps/windows/installer/)

@@ -38,8 +38,15 @@ AppName={#MyAppName}
 ; app version; that's a known cosmetic limitation of the online-install approach.
 AppVersion=1.0.0
 AppPublisher=Zali
-DefaultDirName={autopf}\ZaliMessenger
+; Per-user install (NOT Program Files). The self-updater (native/updates.rs)
+; overwrites this exe from the running, unelevated process — Program Files
+; needs admin rights to write, so every update hit a ~60s retry loop, then a
+; UAC prompt, and silently kept the old build if that prompt wasn't accepted.
+; {localappdata}\Programs is writable by the owning user with no elevation,
+; same approach Chrome/Discord/Slack/VS Code use for exactly this reason.
+DefaultDirName={localappdata}\Programs\ZaliMessenger
 DefaultGroupName={#MyAppName}
+PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputDir=..\..\dist\windows\installer
 OutputBaseFilename=ZaliMessengerOnlineSetup

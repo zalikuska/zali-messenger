@@ -21101,6 +21101,13 @@ ZaliMixin(ZaliInterface, class {
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
+            // Binary body (base64 data URL) — apiFetch only auto-detects FormData as a
+            // bulk transfer, so a plain JSON body like this one silently got the 8s
+            // default meant for ordinary calls instead of the 120s transfer budget
+            // (see TRANSFER_REQUEST_TIMEOUT_MS in api.js) — exactly the slow-link
+            // failure downscaleServerAssetFile's own comment warns about, just missed
+            // here specifically. loadServerAsset (the GET side) already passes it.
+            timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({ data_url: dataUrl }),
         });
         if (!res.ok && res.status !== 204) {
@@ -23530,6 +23537,8 @@ ZaliMixin(ZaliInterface, class {
         this.voiceTrace('attach-local-tracks', { peer, tracks: tracks.length, roomId: this.voice.roomId || '' });
         // The latch is taken, and every addTrack is done, BEFORE the first await —
         // the same discipline `entry.negotiating` needs, and for the same reason.
+"""#,
+    #"""
         // This used to set the flag only after awaiting the bitrate limit, so two
         // overlapping passes (they overlap on every call: voice_call_accepted and
         // voice_call_connected arrive back to back and are dispatched
@@ -23537,8 +23546,6 @@ ZaliMixin(ZaliInterface, class {
         // once) both walked past the guard and added the same track twice. A real
         // browser throws InvalidAccessError on the second one — and syncVoicePeers
         // does not guard this call, so the whole pass is abandoned: any peer after
-"""#,
-    #"""
         // this one gets no offer, and the late-track renegotiation never happens.
         entry.localTracksAttached = true;
         const added = [];
@@ -27460,6 +27467,8 @@ ZaliMixin(ZaliInterface, class {
         this.ensureServersState();
     }
 
+"""#,
+    #"""
     readFileAsDataURL(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -27471,8 +27480,6 @@ ZaliMixin(ZaliInterface, class {
 
     // Shared re-encode-to-JPEG core: iterates dimension/quality attempts down until the
     // encoded bytes fit targetBytes, keeping the largest/best-quality result that fits.
-"""#,
-    #"""
     // Best-effort: returns the original file if the canvas pipeline is unavailable or
     // nothing beats the original size.
     async downscaleImageFile(file, { targetBytes, attempts, baseNameFallback = 'image', traceLabel = 'downscaleImage' }) {
@@ -31680,6 +31687,8 @@ ZaliMixin(ZaliInterface, class {
             html += `<div class="sk sk-bubble sk-w2"></div>
                      <div class="sk sk-bubble sk-w3 sk-self"></div>
                      <div class="sk sk-bubble sk-w1"></div>
+"""#,
+    #"""
                      <div class="sk sk-bubble sk-w2 sk-self"></div>`;
         }
 
@@ -31689,8 +31698,6 @@ ZaliMixin(ZaliInterface, class {
 
         // Redundant re-renders are common (an avatar finishing its fetch, an unrelated
         // state sync). Reassigning identical innerHTML would still destroy and rebuild
-"""#,
-    #"""
         // every bubble, restart the media hydration and re-run the height probe — and
         // on WebKit it also resets scrollTop mid-scroll. Compare first.
         const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
@@ -35711,6 +35718,8 @@ ZaliMixin(ZaliInterface, class {
 
     /** Округление до 0.1 единицы: экономит байты и не влияет на вид. */
     autographRound(value) {
+"""#,
+    #"""
         return Math.round((Number(value) || 0) * 10) / 10;
     }
 
@@ -35723,8 +35732,6 @@ ZaliMixin(ZaliInterface, class {
      */
     autographPathData(points) {
         const list = Array.isArray(points) ? points : [];
-"""#,
-    #"""
         if (!list.length) return '';
         const r = (n) => this.autographRound(n);
         if (list.length === 1) {
@@ -37515,7 +37522,24 @@ ZaliMixin(ZaliInterface, class {
                     return;
                 }
                 try {
-                    await this.uploadServerAsset(kind, file);
+                    // Only the avatar renders as a circle (.server-avatar, border-radius:50%
+                    // + object-fit:cover) — the banner is a wide rectangle, so there is no
+                    // "wrong part got cropped" failure mode for it and it stays a plain
+                    // resize. Without this, downscaleServerAssetFile only shrinks the image
+                    // keeping its original aspect ratio; object-fit:cover then center-crops
+                    // it to a circle with zero user control over which part survives, same
+                    // class of bug the profile avatar's cropper (openAvatarPicker above)
+                    // exists to avoid.
+                    let toUpload = file;
+                    if (kind === 'avatar') {
+                        const cropped = await this.openAvatarCropper(file);
+                        if (!cropped) {
+                            input.remove();
+                            return;
+                        }
+                        toUpload = cropped;
+                    }
+                    await this.uploadServerAsset(kind, toUpload);
                     this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
                 } catch (e) {
                     this.setServerModalState({ error: e?.message || 'Не удалось обновить медиа сервера' });

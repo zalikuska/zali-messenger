@@ -918,6 +918,13 @@ ZaliMixin(ZaliInterface, class {
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
+            // Binary body (base64 data URL) — apiFetch only auto-detects FormData as a
+            // bulk transfer, so a plain JSON body like this one silently got the 8s
+            // default meant for ordinary calls instead of the 120s transfer budget
+            // (see TRANSFER_REQUEST_TIMEOUT_MS in api.js) — exactly the slow-link
+            // failure downscaleServerAssetFile's own comment warns about, just missed
+            // here specifically. loadServerAsset (the GET side) already passes it.
+            timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({ data_url: dataUrl }),
         });
         if (!res.ok && res.status !== 204) {

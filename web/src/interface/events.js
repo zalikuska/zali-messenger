@@ -1094,7 +1094,24 @@ ZaliMixin(ZaliInterface, class {
                     return;
                 }
                 try {
-                    await this.uploadServerAsset(kind, file);
+                    // Only the avatar renders as a circle (.server-avatar, border-radius:50%
+                    // + object-fit:cover) — the banner is a wide rectangle, so there is no
+                    // "wrong part got cropped" failure mode for it and it stays a plain
+                    // resize. Without this, downscaleServerAssetFile only shrinks the image
+                    // keeping its original aspect ratio; object-fit:cover then center-crops
+                    // it to a circle with zero user control over which part survives, same
+                    // class of bug the profile avatar's cropper (openAvatarPicker above)
+                    // exists to avoid.
+                    let toUpload = file;
+                    if (kind === 'avatar') {
+                        const cropped = await this.openAvatarCropper(file);
+                        if (!cropped) {
+                            input.remove();
+                            return;
+                        }
+                        toUpload = cropped;
+                    }
+                    await this.uploadServerAsset(kind, toUpload);
                     this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
                 } catch (e) {
                     this.setServerModalState({ error: e?.message || 'Не удалось обновить медиа сервера' });
