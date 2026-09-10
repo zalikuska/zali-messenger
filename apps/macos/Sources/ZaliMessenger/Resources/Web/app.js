@@ -1,4 +1,4 @@
-// --- MODULE: vendor/lottie_light.min.js ---
+// --- MODULE: vendor\lottie_light.min.js ---
 // lottie-web 5.12.2 — "light" build (SVG renderer, no expressions).
 // Vendored from npm package lottie-web@5.12.2, build/player/lottie_light.min.js.
 // MIT License, Copyright (c) 2015 Bodymovin. See web/src/vendor/LOTTIE_LICENSE.md.
@@ -8,7 +8,7 @@
 
 
 
-// --- MODULE: modules/bus_events.js ---
+// --- MODULE: modules\bus_events.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -53,7 +53,7 @@
 })();
 
 
-// --- MODULE: modules/api_routes.js ---
+// --- MODULE: modules\api_routes.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -158,7 +158,7 @@
 })();
 
 
-// --- MODULE: modules/native_types.js ---
+// --- MODULE: modules\native_types.js ---
 (function() {
     'use strict';
 
@@ -207,7 +207,7 @@
 })();
 
 
-// --- MODULE: modules/auth.js ---
+// --- MODULE: modules\auth.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -246,7 +246,7 @@
 })();
 
 
-// --- MODULE: modules/contacts.js ---
+// --- MODULE: modules\contacts.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -265,7 +265,7 @@
 })();
 
 
-// --- MODULE: modules/messaging.js ---
+// --- MODULE: modules\messaging.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -297,7 +297,7 @@
 })();
 
 
-// --- MODULE: modules/servers.js ---
+// --- MODULE: modules\servers.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -336,7 +336,7 @@
 })();
 
 
-// --- MODULE: modules/voice.js ---
+// --- MODULE: modules\voice.js ---
 // @ts-check
 (function() {
     'use strict';
@@ -455,7 +455,7 @@
 })();
 
 
-// --- MODULE: modules/wasm_bridge.js ---
+// --- MODULE: modules\wasm_bridge.js ---
 // @ts-check
 // Lazily loads the WASM build of core/ (see scripts/build_web_wasm.sh) and exposes
 // pack/unpack helpers for the .zali archive format to the rest of interface.js.
@@ -538,7 +538,7 @@
 })();
 
 
-// --- MODULE: modules/tgs.js ---
+// --- MODULE: modules\tgs.js ---
 // @ts-check
 // TGS (Telegram animated sticker) support.
 //
@@ -2134,7 +2134,7 @@ class ZaliInterface {
 window.ZaliInterface = ZaliInterface;
 
 
-// --- MODULE: interface/format.js ---
+// --- MODULE: interface\format.js ---
 // --- ZaliInterface: Экранирование, иконки, форматирование времени и дат. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -2280,7 +2280,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/native_bridge.js ---
+// --- MODULE: interface\native_bridge.js ---
 // --- ZaliInterface: Мост к нативной оболочке: доступность, IPC, разрешения, трассировка. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -2596,7 +2596,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/viewport.js ---
+// --- MODULE: interface\viewport.js ---
 // --- ZaliInterface: Окно прокрутки списка сообщений, класс производительности, якоря скролла. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -2923,7 +2923,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/mobile.js ---
+// --- MODULE: interface\mobile.js ---
 // --- ZaliInterface: Мобильная раскладка, жесты навигации, переключение экранов. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -3604,7 +3604,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/zalicoin.js ---
+// --- MODULE: interface\zalicoin.js ---
 // --- ZaliInterface: Экран ZaliCoin: баланс, распределение, переводы. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -3877,7 +3877,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/prefs.js ---
+// --- MODULE: interface\prefs.js ---
 // --- ZaliInterface: Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -4453,7 +4453,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/storage.js ---
+// --- MODULE: interface\storage.js ---
 // --- ZaliInterface: Ключи localStorage, кэш сообщений, персист контактов. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -5036,7 +5036,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/cache.js ---
+// --- MODULE: interface\cache.js ---
 // --- ZaliInterface: Постоянный кеш бинарных ассетов: аватарки, ассеты серверов, профили, вложения. ---
 // Часть класса ZaliInterface (см. web/src/interface.js).
 //
@@ -6495,7 +6495,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/conversation_keys.js ---
+// --- MODULE: interface\conversation_keys.js ---
 // --- ZaliInterface: Реестр ключей разговоров и облачный vault-снапшот. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -7606,7 +7606,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/key_resolution.js ---
+// --- MODULE: interface\key_resolution.js ---
 // --- ZaliInterface: Разрешение ключа разговора, идентичность устройства, крипто-примитивы конвертов и vault. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -8512,7 +8512,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/key_envelopes.js ---
+// --- MODULE: interface\key_envelopes.js ---
 // --- ZaliInterface: Публикация/приём ключевых конвертов, доверие устройств. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -9429,7 +9429,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/session.js ---
+// --- MODULE: interface\session.js ---
 // --- ZaliInterface: Сессия и токен, недавние аккаунты, снапшот здоровья звонка. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -9895,7 +9895,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/outbox.js ---
+// --- MODULE: interface\outbox.js ---
 // --- ZaliInterface: Очередь неотправленных сообщений и её досылка. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -10530,7 +10530,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/network_config.js ---
+// --- MODULE: interface\network_config.js ---
 // --- ZaliInterface: Сетевая конфигурация: API/WS адреса, ICE/TURN. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -11147,7 +11147,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/servers_model.js ---
+// --- MODULE: interface\servers_model.js ---
 // --- ZaliInterface: Модель серверов и ролей, работа с цветом. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -11545,7 +11545,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/server_modal.js ---
+// --- MODULE: interface\server_modal.js ---
 // --- ZaliInterface: Модалка настроек сервера: роли, каналы, участники, инвайты. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -13304,7 +13304,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/server_rail.js ---
+// --- MODULE: interface\server_rail.js ---
 // --- ZaliInterface: Лента серверов — аватарки с подсказкой и инерционной прокруткой. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Лента живёт в двух местах:
 // в шапке чата (десктоп, там, где раньше были пилюли каналов) и наверху сайдбара
@@ -13665,7 +13665,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/voice_transport.js ---
+// --- MODULE: interface\voice_transport.js ---
 // --- ZaliInterface: Голосовые комнаты и транспорт сигналинга. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -14219,7 +14219,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/voice_media.js ---
+// --- MODULE: interface\voice_media.js ---
 // --- ZaliInterface: Захват микрофона/камеры/экрана, треки, индикаторы уровня. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -15821,7 +15821,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/voice_negotiation.js ---
+// --- MODULE: interface\voice_negotiation.js ---
 // --- ZaliInterface: Жизненный цикл пира: offer/answer, рестарты, супервизор связи. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -16587,7 +16587,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/voice_call.js ---
+// --- MODULE: interface\voice_call.js ---
 // --- ZaliInterface: Управление звонком и записи о звонках. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -17071,7 +17071,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/voice_signal.js ---
+// --- MODULE: interface\voice_signal.js ---
 // --- ZaliInterface: Обработка входящих voice_* сигналов и событий. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -17986,7 +17986,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/voice_ui.js ---
+// --- MODULE: interface\voice_ui.js ---
 // --- ZaliInterface: Отрисовка голосовой панели, плиток и развёрнутого звонка. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -18514,7 +18514,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/server_messages.js ---
+// --- MODULE: interface\server_messages.js ---
 // --- ZaliInterface: Загрузка сообщений серверов/каналов, синхронизация активного разговора. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -19231,7 +19231,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/avatars.js ---
+// --- MODULE: interface\avatars.js ---
 // --- ZaliInterface: Аватары и ассеты серверов: кэш, загрузка, кроппер, даунскейл. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -20152,7 +20152,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/api.js ---
+// --- MODULE: interface\api.js ---
 // --- ZaliInterface: HTTP-конвейер: заголовки, слоты параллелизма, apiFetch. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -20418,7 +20418,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/auth.js ---
+// --- MODULE: interface\auth.js ---
 // --- ZaliInterface: Бутстрап сессии, вход/регистрация, контакты. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -21669,7 +21669,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/attachments.js ---
+// --- MODULE: interface\attachments.js ---
 // --- ZaliInterface: Вложения, Tenor, предпросмотр медиа. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -22119,7 +22119,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/message_render.js ---
+// --- MODULE: interface\message_render.js ---
 // --- ZaliInterface: Отрисовка тела сообщения, реакции, статусы. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -22489,6 +22489,47 @@ ZaliMixin(ZaliInterface, class {
         }
 
         return '';
+    }
+
+    // Ник над пузырём. Логин всегда есть в msg.sender; отображаемое имя
+    // подставляется, только если профиль уже открывали или сохраняли на этом
+    // устройстве — отдельный запрос на каждое сообщение в ленте не делается.
+    messageSenderLabel(username) {
+        const name = String(username || '').trim();
+        if (!name) return '';
+        const mapped = this._senderDisplayNames?.get(name.toLowerCase());
+        return mapped || name;
+    }
+
+    rememberSenderDisplayName(username, displayName) {
+        const name = String(username || '').trim();
+        if (!name) return false;
+        this._senderDisplayNames = this._senderDisplayNames || new Map();
+        const key = name.toLowerCase();
+        const label = String(displayName || '').trim();
+        const next = label && label !== name ? label : '';
+        const prev = this._senderDisplayNames.get(key) || '';
+        if (next) this._senderDisplayNames.set(key, next);
+        else this._senderDisplayNames.delete(key);
+        return prev !== next;
+    }
+
+    shouldShowMessageSender(msg, { isOut = false, isCall = false, isNotice = false, groupPos = 'single', isServers = false } = {}) {
+        if (isCall) return false;
+        const sender = String(msg?.sender || '').trim();
+        if (!sender) return false;
+        if (isNotice) return true;
+        if (groupPos !== 'single' && groupPos !== 'start') return false;
+        if (isOut && !isServers) return false;
+        return true;
+    }
+
+    renderMessageSenderLabel(msg) {
+        const sender = String(msg?.sender || '').trim();
+        if (!sender) return '';
+        const label = this.messageSenderLabel(sender);
+        const title = label === sender ? `Профиль: ${sender}` : `${label} (@${sender})`;
+        return `<button type="button" class="msg-sender" data-profile-open="${this.esc(sender)}" title="${this.esc(title)}">${this.esc(label)}</button>`;
     }
 
     renderMessageBody(msg) {
@@ -23062,7 +23103,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/render_shell.js ---
+// --- MODULE: interface\render_shell.js ---
 // --- ZaliInterface: Отрисовка списков контактов, хаба и серверов. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -23534,7 +23575,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/updates.js ---
+// --- MODULE: interface\updates.js ---
 // --- ZaliInterface: Встроенный апдейтер клиента. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -23798,7 +23839,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/message_list.js ---
+// --- MODULE: interface\message_list.js ---
 // --- ZaliInterface: Окно сообщений, рендер списка, переключение чата. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -24083,6 +24124,15 @@ ZaliMixin(ZaliInterface, class {
             // bubble so they read as distinct from a human-written message with the
             // same wording. See detectSystemNotice() for the caveat on what this
             // does and doesn't guarantee.
+            const showSender = this.shouldShowMessageSender(msg, {
+                isOut,
+                isCall,
+                isNotice,
+                groupPos: item.groupPos,
+                isServers,
+            });
+            const senderLabelHtml = showSender ? this.renderMessageSenderLabel(msg) : '';
+
             if (isNotice) {
                 if (noticeType === 'decrypt-error') {
                     // Queued, not awaited-and-fired here: see
@@ -24100,9 +24150,12 @@ ZaliMixin(ZaliInterface, class {
                     });
                 }
                 html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
-                    <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
-                        <span class="notice-icon" aria-hidden="true">${noticeType === 'transfer' ? '💸' : '🔐'}</span>
-                        <span class="notice-text">${this.renderMessageText(msg.text)}</span>
+                    <div class="notice-stack">
+                        ${senderLabelHtml}
+                        <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
+                            <span class="notice-icon" aria-hidden="true">${noticeType === 'transfer' ? '💸' : '🔐'}</span>
+                            <span class="notice-text">${this.renderMessageText(msg.text)}</span>
+                        </div>
                     </div>
                 </div>`;
                 return;
@@ -24123,6 +24176,7 @@ ZaliMixin(ZaliInterface, class {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
                 html += `<div class="bwrap image-caption-wrap">
+                    ${senderLabelHtml}
                     <div class="image-caption-media">${mediaHtml}</div>
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageReactions(msg)}
@@ -24139,6 +24193,7 @@ ZaliMixin(ZaliInterface, class {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
+                ${senderLabelHtml}
                 ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
@@ -24323,7 +24378,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/message_send.js ---
+// --- MODULE: interface\message_send.js ---
 // --- ZaliInterface: Отправка сообщений и приём в браузерном режиме. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -25199,7 +25254,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/notifications.js ---
+// --- MODULE: interface\notifications.js ---
 // --- ZaliInterface: Мьюты, звуки, уведомления, бейдж непрочитанного. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -25795,7 +25850,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/state_sync.js ---
+// --- MODULE: interface\state_sync.js ---
 // --- ZaliInterface: Приём состояния от нативного слоя: пользователи, история, статус связи. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -26444,7 +26499,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/message_edit.js ---
+// --- MODULE: interface\message_edit.js ---
 // --- ZaliInterface: Ответы, редактирование и удаление сообщений. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -26829,7 +26884,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/profiles.js ---
+// --- MODULE: interface\profiles.js ---
 // --- ZaliInterface: Профили людей: состояние, загрузка, подписки, дружба, комментарии. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Здесь только модель и
 // сетевой слой профиля; отрисовка живёт в profile_ui.js, а векторная стена —
@@ -27012,6 +27067,7 @@ ZaliMixin(ZaliInterface, class {
         }
         const cached = state.data ? null : await this.loadCachedProfile(name);
         if (cached && this.ensureProfileState().username === name && !this.ensureProfileState().data) {
+            if (this.rememberSenderDisplayName(name, cached.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
                 error: '',
@@ -27043,6 +27099,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json();
             void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
+            if (this.rememberSenderDisplayName(name, data?.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
                 error: '',
@@ -27183,6 +27240,7 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const data = await res.json();
+            if (this.rememberSenderDisplayName(state.username, data?.displayName)) this.scheduleRenderMessages();
             const kept = Array.isArray(data?.links) ? data.links.length : 0;
             const dropped = outgoingLinks.length - kept;
             if (dropped > 0) {
@@ -27524,7 +27582,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/profile_ui.js ---
+// --- MODULE: interface\profile_ui.js ---
 // --- ZaliInterface: Отрисовка профиля: шапка, вкладки, комментарии, друзья, модерация. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Модель и сеть — в
 // profiles.js, векторная стена — в autographs.js.
@@ -28218,7 +28276,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/autographs.js ---
+// --- MODULE: interface\autographs.js ---
 // --- ZaliInterface: Векторная стена автографов: рисование, публикация, модерация. ---
 // Часть класса ZaliInterface (см. web/src/interface.js).
 //
@@ -28713,7 +28771,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/diagnostics.js ---
+// --- MODULE: interface\diagnostics.js ---
 // --- ZaliInterface: Журнал диагностики и голосовая телеметрия. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -29059,7 +29117,7 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
-// --- MODULE: interface/events.js ---
+// --- MODULE: interface\events.js ---
 // --- ZaliInterface: Привязка DOM-событий и инерция прокрутки. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -29316,11 +29374,11 @@ ZaliMixin(ZaliInterface, class {
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
             msgsEl.addEventListener('click', (e) => {
-                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
-                if (avaTarget) {
+                const profileTarget = e.target.closest('[data-profile-open]');
+                if (profileTarget) {
                     e.preventDefault();
                     e.stopPropagation();
-                    const name = avaTarget.getAttribute('data-profile-open');
+                    const name = profileTarget.getAttribute('data-profile-open');
                     if (name) void this.openProfile(name);
                     return;
                 }
@@ -29352,11 +29410,11 @@ ZaliMixin(ZaliInterface, class {
                 this.hideReactionMenu();
             });
             msgsEl.addEventListener('contextmenu', (e) => {
-                // ПКМ по аватарке — меню человека (подписаться, в друзья),
-                // а не меню сообщения: реакция к аватарке отношения не имеет.
-                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
-                if (avaTarget) {
-                    const name = avaTarget.getAttribute('data-profile-open');
+                // ПКМ по аватарке или нику — меню человека (подписаться, в друзья),
+                // а не меню сообщения: реакция к отправителю отношения не имеет.
+                const profileTarget = e.target.closest('[data-profile-open]');
+                if (profileTarget) {
+                    const name = profileTarget.getAttribute('data-profile-open');
                     if (name) {
                         e.preventDefault();
                         e.stopPropagation();
