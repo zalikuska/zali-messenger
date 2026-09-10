@@ -42,7 +42,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b33";
+const APP_DISPLAY_VERSION: &str = "0.2b34";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -1175,9 +1175,10 @@ pub fn handle_ipc_message(
                 return;
             }
 
+            let timeout = api_request_timeout(payload.get("timeoutMs").and_then(Value::as_f64));
             let proxy = proxy.clone();
             runtime.spawn(async move {
-                match perform_api_request(
+                match perform_api_request_with_timeout(
                     ApiSession {
                         api_base_url,
                         auth_token,
@@ -1188,6 +1189,7 @@ pub fn handle_ipc_message(
                     headers,
                     body,
                     include_device_id,
+                    timeout,
                 )
                 .await
                 {

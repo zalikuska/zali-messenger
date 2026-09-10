@@ -51,6 +51,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private var reconnectAttempt: Int = 0
     private var reconnectWorkItem: DispatchWorkItem?
     private var heartbeatWorkItem: DispatchWorkItem?
+    /// Deadline for the message socket's in-flight ping — see scheduleHeartbeat.
+    private var pingTimeoutWorkItem: DispatchWorkItem?
     private var receiveLoopTask: Task<Void, Never>?
     private var pendingOutboxJSON: String = "[]"
     private var messageCacheJSON: String = #"{"chats":{},"serverChats":{}}"#
@@ -449,6 +451,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         reconnectWorkItem = nil
         heartbeatWorkItem?.cancel()
         heartbeatWorkItem = nil
+        pingTimeoutWorkItem?.cancel()
+        pingTimeoutWorkItem = nil
         receiveLoopTask?.cancel()
         receiveLoopTask = nil
         connectionGeneration += 1
@@ -505,6 +509,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
 
             self.heartbeatWorkItem?.cancel()
             self.heartbeatWorkItem = nil
+            self.pingTimeoutWorkItem?.cancel()
+            self.pingTimeoutWorkItem = nil
             self.reconnectWorkItem?.cancel()
             self.reconnectAttempt = min(self.reconnectAttempt + 1, 6)
             let baseDelay = min(pow(2.0, Double(self.reconnectAttempt - 1)) * 1.5, 30.0)
@@ -532,10 +538,32 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 guard generation == self.connectionGeneration else { return }
                 guard let task = self.webSocketTask else { return }
 
+                // Same hole scheduleVoiceHeartbeat already closed for the voice socket:
+                // sendPing's completion never fires on a path that died without a FIN,
+                // and this heartbeat only re-arms from that completion — so the message
+                // socket stopped pinging, receive() never failed either, nothing
+                // reconnected, the badge stayed «Подключено» and messages simply
+                // stopped arriving until the app was restarted.
+                var answered = false
+                let timeout = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    guard generation == self.connectionGeneration else { return }
+                    guard !answered else { return }
+                    answered = true
+                    self.trace("ws ping timed out gen=\(generation)")
+                    self.scheduleReconnect(reason: "ping timeout", generation: generation)
+                }
+                self.pingTimeoutWorkItem = timeout
+                self.connectionQueue.asyncAfter(deadline: .now() + 20, execute: timeout)
+
                 task.sendPing { [weak self] error in
                     guard let self else { return }
                     self.connectionQueue.async {
                         guard generation == self.connectionGeneration else { return }
+                        // A late pong must not resurrect a link the deadline gave up on.
+                        guard !answered else { return }
+                        answered = true
+                        timeout.cancel()
                         if let error {
                             self.trace("ws ping failed err=\(error)")
                             self.scheduleReconnect(reason: "ping failure", generation: generation)
@@ -2206,6 +2234,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             }
             self.heartbeatWorkItem?.cancel()
             self.heartbeatWorkItem = nil
+            self.pingTimeoutWorkItem?.cancel()
+            self.pingTimeoutWorkItem = nil
             self.webSocketTask = nil
             // onWebSocketDisconnected is fired centrally inside scheduleReconnect now.
             self.scheduleReconnect(reason: "didCloseWith", generation: self.connectionGeneration)

@@ -3822,6 +3822,12 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 0;
     display: grid;
     grid-template-columns: 292px minmax(0, 1fr);
+    /* Строка обязана быть ограничена высотой шелла. Неявная строка — это
+       `auto`, то есть высота содержимого: она вылезала за шелл, у
+       .server-modal-grid становилось clientHeight == scrollHeight, её
+       overflow-y ничего не прокручивал, а низ формы срезал overflow:hidden
+       модалки. */
+    grid-template-rows: minmax(0, 1fr);
     gap: 18px;
     flex: 1;
     position: relative;
@@ -3937,6 +3943,11 @@ body[data-nav-mode="servers"] .contacts {
     flex: 1;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    /* Строки — по содержимому. У секций и карточек min-height:0, и при
+       неявной `auto`-строке они ужимались до высоты сетки: карточка
+       (overflow:hidden) срезала форму, а сетке прокручивать было нечего. */
+    grid-auto-rows: max-content;
+    align-content: start;
     gap: 16px;
     align-items: stretch;
     overflow-y: auto;
@@ -6309,8 +6320,21 @@ body[data-nav-mode="servers"] .contacts {
         grid-template-columns: 1fr;
     }
 
+    /* В одну колонку навигация встаёт НАД содержимым и съедает всю высоту
+       шелла — внутренней прокрутке сетки не остаётся ни пикселя. Здесь
+       прокручивается модалка целиком, а шелл берёт высоту содержимого. */
+    .server-modal {
+        overflow-y: auto;
+    }
+
     .server-modal-shell {
         grid-template-columns: 1fr;
+        grid-template-rows: none;
+        flex: none;
+    }
+
+    .server-modal-grid {
+        overflow: visible;
     }
 
     .settings-chips {

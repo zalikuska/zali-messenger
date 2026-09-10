@@ -300,12 +300,16 @@ ZaliMixin(ZaliInterface, class {
         if (discoverQuery && !discoverQuery.value) {
             discoverQuery.value = '';
         }
-        const editLocked = !isEdit;
         const linkLocked = !!this.S.serverModal.saving || !!this.S.serverModal.loading;
-        if (serverAvatarUploadBtn) serverAvatarUploadBtn.disabled = editLocked;
-        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.disabled = editLocked;
-        if (serverBannerUploadBtn) serverBannerUploadBtn.disabled = editLocked;
-        if (serverBannerRemoveBtn) serverBannerRemoveBtn.disabled = editLocked;
+        // Медиа выбирается и при создании: файл ждёт в черновике и уезжает сразу
+        // после POST (до него у сервера нет id). Раньше здесь кнопки были disabled
+        // при создании, но выглядели активными — клик молча не делал ничего.
+        const assetLocked = isDiscover || !!this.S.serverModal.saving;
+        const pendingAssets = this._serverCreateAssets || {};
+        if (serverAvatarUploadBtn) serverAvatarUploadBtn.disabled = assetLocked;
+        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.disabled = assetLocked || (!isEdit && !pendingAssets.avatar);
+        if (serverBannerUploadBtn) serverBannerUploadBtn.disabled = assetLocked;
+        if (serverBannerRemoveBtn) serverBannerRemoveBtn.disabled = assetLocked || (!isEdit && !pendingAssets.banner);
         if (serverJoinLinkInput) serverJoinLinkInput.disabled = linkLocked;
         if (serverJoinLinkGenerateBtn) serverJoinLinkGenerateBtn.disabled = linkLocked;
         if (serverJoinLinkCopyBtn) serverJoinLinkCopyBtn.disabled = linkLocked;
@@ -321,10 +325,10 @@ ZaliMixin(ZaliInterface, class {
         if (serverRoleCreateBody) serverRoleCreateBody.hidden = !roleCreateOpen;
         if (serverRoleCreateToggleBtn) serverRoleCreateToggleBtn.textContent = roleCreateOpen ? 'Свернуть' : 'Новая роль';
         if (serverRoleCreateSubmitBtn) serverRoleCreateSubmitBtn.disabled = !!this.S.serverModal.saving || !!this.S.serverModal.loading || !roleCreateOpen;
-        if (serverAvatarUploadBtn) serverAvatarUploadBtn.title = isEdit ? 'Загрузить аватар' : 'Создать сервер сначала';
-        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.title = isEdit ? 'Удалить аватар' : 'Создать сервер сначала';
-        if (serverBannerUploadBtn) serverBannerUploadBtn.title = isEdit ? 'Загрузить баннер' : 'Создать сервер сначала';
-        if (serverBannerRemoveBtn) serverBannerRemoveBtn.title = isEdit ? 'Удалить баннер' : 'Создать сервер сначала';
+        if (serverAvatarUploadBtn) serverAvatarUploadBtn.title = 'Загрузить аватар';
+        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.title = 'Удалить аватар';
+        if (serverBannerUploadBtn) serverBannerUploadBtn.title = 'Загрузить баннер';
+        if (serverBannerRemoveBtn) serverBannerRemoveBtn.title = 'Удалить баннер';
         if (errorBox) errorBox.textContent = this.S.serverModal.error || '';
         if (serverMembersList) {
             serverMembersList.classList.toggle('is-loading', !!this.S.serverModal.loading);
@@ -383,6 +387,38 @@ ZaliMixin(ZaliInterface, class {
             this.syncServerAssetPreview(this.S.serverModal.serverId || server?.id || '');
         } else {
             this.resetServerAssetPreview();
+            if (!isDiscover) this.applyServerCreateAssetPreview();
+        }
+    }
+
+    // Файлы, выбранные при создании сервера. Держатся вне S: File не
+    // сериализуется, а blob:-ссылку превью надо отзывать при замене.
+    setServerCreateAsset(kind, file) {
+        const pending = this._serverCreateAssets || (this._serverCreateAssets = {});
+        const prev = pending[kind];
+        if (prev?.url) {
+            try { URL.revokeObjectURL(prev.url); } catch (e) {}
+        }
+        pending[kind] = file ? { file, url: URL.createObjectURL(file) } : null;
+    }
+
+    clearServerCreateAssets() {
+        this.setServerCreateAsset('avatar', null);
+        this.setServerCreateAsset('banner', null);
+    }
+
+    applyServerCreateAssetPreview() {
+        const pending = this._serverCreateAssets || {};
+        const avatarBox = document.getElementById('serverAvatarPreview');
+        const bannerBox = document.getElementById('serverBannerPreview');
+        if (avatarBox && pending.avatar) {
+            avatarBox.innerHTML = `<img class="avatar-img" src="${this.esc(pending.avatar.url)}" alt="server avatar">`;
+        }
+        if (bannerBox && pending.banner) {
+            bannerBox.textContent = '';
+            bannerBox.style.backgroundImage = `url('${this.esc(pending.banner.url)}')`;
+            bannerBox.style.backgroundSize = 'cover';
+            bannerBox.style.backgroundPosition = 'center';
         }
     }
 
@@ -738,6 +774,7 @@ ZaliMixin(ZaliInterface, class {
             saving: false,
             error: '',
         });
+        this.clearServerCreateAssets();
         this.openServerOverlay();
         this.renderServerModal();
         if (nextMode === 'create') {
@@ -897,11 +934,20 @@ ZaliMixin(ZaliInterface, class {
                 throw new Error(await res.text() || 'Не удалось сохранить сервер');
             }
             const data = await res.json();
+            const pendingAssets = mode === 'edit'
+                ? []
+                : ['avatar', 'banner']
+                    .map(kind => [kind, this._serverCreateAssets?.[kind]?.file])
+                    .filter(([, file]) => file);
             this.closeServerOverlay();
             await this.loadServers({ silent: true });
             if (data?.id) {
                 this.setActiveServer(data.id, { persist: true });
+                if (pendingAssets.length) {
+                    await this.uploadCreatedServerAssets(data.id, pendingAssets);
+                }
             }
+            if (mode !== 'edit') this.clearServerCreateAssets();
         } catch (e) {
             this.setServerModalState({ error: e?.message || 'Не удалось сохранить сервер' });
             this.renderServerModal();
@@ -910,9 +956,43 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // 'pending' — файл отложен до создания сервера, 'uploaded' — ушёл на сервер.
+    // Вызывающий пишет «обновлён» только на второе.
     async uploadServerAsset(kind, file) {
+        if (!file) return 'skipped';
+        const mode = this.S.serverModal.mode;
+        if (mode === 'create') {
+            this.setServerCreateAsset(kind, file);
+            this.renderServerModal();
+            return 'pending';
+        }
         const serverId = this.S.serverModal.serverId || this.S.activeServer;
-        if (!serverId || !file || this.S.serverModal.mode !== 'edit') return;
+        if (!serverId || mode !== 'edit') {
+            throw new Error('Медиа можно менять только у уже созданного сервера');
+        }
+        await this.putServerAsset(serverId, kind, file);
+        await this.syncServerAssetPreview(serverId);
+        return 'uploaded';
+    }
+
+    // Сервер уже создан и диалог закрыт: сбой медиа не должен выглядеть как
+    // сбой создания, поэтому он уходит в журнал, а не в ошибку модалки.
+    async uploadCreatedServerAssets(serverId, assets) {
+        for (const [kind, file] of assets) {
+            try {
+                await this.putServerAsset(serverId, kind, file);
+            } catch (e) {
+                this.addLogEntry({
+                    type: 'ERROR',
+                    msg: `Сервер создан, но ${kind === 'avatar' ? 'аватар' : 'баннер'} не загрузился: ${e?.message || e}`,
+                    ts: new Date().toLocaleTimeString(),
+                });
+            }
+        }
+        this.scheduleServerAssetRefresh();
+    }
+
+    async putServerAsset(serverId, kind, file) {
         const downscaled = await this.downscaleServerAssetFile(file, kind);
         const dataUrl = await this.readFileAsDataURL(downscaled);
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
@@ -931,12 +1011,18 @@ ZaliMixin(ZaliInterface, class {
             throw new Error(await res.text() || `Не удалось обновить ${kind}`);
         }
         this.clearServerAssetCache(serverId, kind);
-        await this.syncServerAssetPreview(serverId);
     }
 
     async removeServerAsset(kind) {
+        if (this.S.serverModal.mode === 'create') {
+            this.setServerCreateAsset(kind, null);
+            this.renderServerModal();
+            return;
+        }
         const serverId = this.S.serverModal.serverId || this.S.activeServer;
-        if (!serverId || this.S.serverModal.mode !== 'edit') return;
+        if (!serverId || this.S.serverModal.mode !== 'edit') {
+            throw new Error('Медиа можно менять только у уже созданного сервера');
+        }
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
             method: 'DELETE',
         });

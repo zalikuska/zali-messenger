@@ -372,6 +372,89 @@ function hotPath() {
         'индекс не растёт от промахов');
 }
 
+// saveStoredMessageCache() запускает cachePut() на каждое вложение сразу, и все
+// они видели один и тот же ещё не обновлённый объём: замер до правки — кеш 511 МБ
+// при потолке 512 МБ, 50 записей по 1 МБ разом дали 561 МБ и ноль вытеснений.
+async function concurrentBurst() {
+    console.log('\n──────── серия записей разом\n');
+    const tick = (ms) => new Promise(r => setTimeout(r, ms));
+    const build = () => {
+        const api = makeClient();
+        api._cachePrefs = { mode: 'all', limitIndex: 0 };
+        api.scheduleCacheSummaryRefresh = () => {};
+        const db = { transaction: () => ({ objectStore: () => ({ put() {}, delete() {} }) }) };
+        api._cacheDb = db;
+        api._cacheReady = Promise.resolve(db);
+        api.cacheTransactionDone = async () => { await tick(3); };
+        api.cacheDeleteKeys = async (keys) => { await tick(3); keys.forEach(k => api.cacheForgetStat(k)); };
+        for (let i = 0; i < 511; i += 1) seed(api, { kind: 'attachment', id: `old${i}`, size: 1 * MB, hits: (i % 7) + 1 });
+        return api;
+    };
+    const blob = () => new Blob([new Uint8Array(1 * MB)], { type: 'image/jpeg' });
+    const api = build();
+    await Promise.all(Array.from({ length: 50 }, (_, i) => api.cachePut('attachment', `new${i}`, blob())));
+    const real = Array.from(api._cacheStats.values()).reduce((sum, s) => sum + s.s, 0);
+    check('серия конкурентных записей не пробивает потолок',
+        api.cacheUsedBytes() <= api.cacheLimitBytes() && real === api.cacheUsedBytes(),
+        `занято ${Math.round(api.cacheUsedBytes() / MB)} МБ при потолке ${Math.round(api.cacheLimitBytes() / MB)} МБ`,
+        `${Math.round(api.cacheUsedBytes() / MB)} МБ из ${Math.round(api.cacheLimitBytes() / MB)} МБ, учёт сходится`);
+
+    // Проверка «уже лежит» смотрит в индекс, а запись попадает туда только после
+    // транзакции. Два сохранения подряд, пока первая серия ещё пишется, не должны
+    // ставить те же файлы в очередь второй раз.
+    const dup = makeClient();
+    dup._cachePrefs = { mode: 'light', limitIndex: 2 };
+    let writes = 0;
+    dup.cachePutNow = async () => { writes += 1; await tick(3); return true; };
+    const msg = { id: 'm1', attachments: [{ name: 'a.jpg', mimeType: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,AAAA' }] };
+    dup.cacheStoreMessageAttachments(msg);
+    dup.cacheStoreMessageAttachments(msg);
+    await dup._cachePutChain;
+    check('файл, который ещё пишется, второй раз в очередь не ставится',
+        writes === 1, `записей=${writes}`, '2 сохранения во время записи → 1 запись');
+}
+
+// Таймаут открытия (другая вкладка держит deleteDatabase) — временный отказ. Он
+// запоминался на весь сеанс: кеш выключался до перезагрузки, а настройки писали,
+// что IndexedDB в оболочке недоступна.
+async function transientOpen() {
+    console.log('\n──────── временный отказ открытия базы\n');
+    const fakeDb = { fake: true };
+    const api = makeClient();
+    let opens = 0;
+    let retries = 0;
+    api.openCacheDb = async () => {
+        opens += 1;
+        if (opens === 1) { api._cacheOpenTransient = true; return null; }
+        return fakeDb;
+    };
+    api.loadCacheStatIndex = async () => new Map();
+    api.scheduleCacheOpenRetry = () => { retries += 1; };
+
+    const first = await api.ensureCacheStorage();
+    check('временный отказ не запоминается на сеанс',
+        first === null && api._cacheReady === null && retries === 1,
+        `ready=${api._cacheReady} повторов=${retries}`, 'memo сброшен, повтор запланирован');
+    check('и не выдаётся за «IndexedDB недоступна»',
+        /занята/.test(api._cacheDisabledReason || ''), `reason=${api._cacheDisabledReason}`, api._cacheDisabledReason);
+    await api.ensureCacheStorage();
+    check('внутри окна повтора база не дёргается на каждом обращении',
+        opens === 1, `открытий=${opens}`, '1 открытие');
+    api._cacheRetryAt = Date.now() - 1;
+    const second = await api.ensureCacheStorage();
+    check('после окна база открывается без перезагрузки',
+        second === fakeDb && opens === 2 && !api._cacheDisabledReason,
+        `db=${!!second} открытий=${opens} reason=${api._cacheDisabledReason}`, 'кеш снова работает');
+
+    const hard = makeClient();
+    let hardOpens = 0;
+    hard.openCacheDb = async () => { hardOpens += 1; return null; };
+    await hard.ensureCacheStorage();
+    await hard.ensureCacheStorage();
+    check('настоящее отсутствие IndexedDB по-прежнему запоминается',
+        hardOpens === 1, `открытий=${hardOpens}`, '1 открытие на сеанс');
+}
+
 console.log('Постоянный кеш ассетов: политика, вытеснение, цена обращения');
 defaults();
 policy();
@@ -380,6 +463,8 @@ await toggling();
 attachmentPersistCost();
 await useWindow();
 hotPath();
+await concurrentBurst();
+await transientOpen();
 
 console.log(`\n  итог: ${checks} проверок, ${failures} нарушено`);
 process.exit(failures ? 1 : 0);

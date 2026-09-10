@@ -75,6 +75,10 @@ const ZALI_CACHE_USE_WINDOW_MS = 60_000;
 // честное открытие, а всё, что дольше, для отрисовки уже неотличимо от отказа.
 const ZALI_CACHE_OPEN_TIMEOUT_MS = 4000;
 
+// Пауза перед повторным открытием базы после ВРЕМЕННОГО отказа (таймаут, blocked):
+// см. ensureCacheStorage().
+const ZALI_CACHE_OPEN_RETRY_MS = 30_000;
+
 // Вес класса в формуле полезности. Аватарка в 8 КБ, к которой обращаются на
 // каждой отрисовке, обязана переживать видео в 40 МБ, открытое однажды, —
 // и без веса это уже вытекало бы из деления на размер, но вес делает
@@ -288,13 +292,28 @@ ZaliMixin(ZaliInterface, class {
      */
     ensureCacheStorage() {
         if (this._cacheReady) return this._cacheReady;
+        // Окно после временного отказа: без него каждая аватарка заново ждала бы
+        // таймаут открытия, пока другая вкладка держит deleteDatabase.
+        if (Number(this._cacheRetryAt || 0) > Date.now()) return Promise.resolve(null);
         this._cacheReady = (async () => {
             let db = null;
+            this._cacheOpenTransient = false;
             try {
                 db = await this.openCacheDb();
             } catch (e) {
                 this.trace(`assetCache unavailable reason=${e?.name || e?.message || e}`);
                 db = null;
+            }
+            if (!db && this._cacheOpenTransient) {
+                // Таймаут или blocked — это «база занята», а не «базы нет». Раньше
+                // и такой отказ запоминался на весь сеанс: кеш молча выключался до
+                // перезагрузки, а настройки врали, что IndexedDB недоступна в
+                // оболочке. Не запоминаем, повторяем через окно.
+                this._cacheReady = null;
+                this._cacheRetryAt = Date.now() + ZALI_CACHE_OPEN_RETRY_MS;
+                this._cacheDisabledReason = 'база кеша занята другой вкладкой — повторная попытка через 30 с';
+                this.scheduleCacheOpenRetry();
+                return null;
             }
             if (!db) {
                 this._cacheDisabledReason = 'IndexedDB недоступна в этой оболочке';
@@ -303,6 +322,8 @@ ZaliMixin(ZaliInterface, class {
                 return null;
             }
             this._cacheDb = db;
+            this._cacheDisabledReason = '';
+            this._cacheRetryAt = 0;
             await this.loadCacheStatIndex(db);
             return db;
         })();
@@ -367,6 +388,9 @@ ZaliMixin(ZaliInterface, class {
             const timer = setTimeout(() => {
                 if (done) return;
                 done = true;
+                // Временный отказ: база есть, но занята — ensureCacheStorage()
+                // не запоминает его на сеанс, а повторяет позже.
+                this._cacheOpenTransient = true;
                 this.trace('assetCache open timed out — работаем без диска');
                 // Опоздавшее соединение закрываем: держать его открытым значит
                 // блокировать deleteDatabase той вкладки, которая нас и ждёт.
@@ -392,7 +416,10 @@ ZaliMixin(ZaliInterface, class {
             };
             // Другая вкладка держит старую версию базы. Ждать нечего — работаем
             // без диска, но не висим на промисе вечно.
-            request.onblocked = () => settle(null);
+            request.onblocked = () => {
+                this._cacheOpenTransient = true;
+                settle(null);
+            };
         });
     }
 
@@ -547,7 +574,30 @@ ZaliMixin(ZaliInterface, class {
      * Кладёт файл. Молча ничего не делает, если политика его не пускает —
      * вызывающему не нужно знать про режимы.
      */
-    async cachePut(kind, id, source, { contentType = '' } = {}) {
+    /**
+     * Записи идут строго по одной. Решение о вытеснении принимается по учёту
+     * занятого места, а запись попадает в учёт только после своей транзакции —
+     * поэтому пачка записей разом (saveStoredMessageCache кладёт все вложения
+     * архива одним проходом) видела один и тот же старый объём и не вытесняла
+     * ничего: 50 файлов по 1 МБ на кеш 511 МБ при потолке 512 МБ давали 561 МБ.
+     * IndexedDB и так выполняет readwrite-транзакции по одним сторам по очереди,
+     * так что очередь здесь почти ничего не стоит.
+     */
+    cachePut(kind, id, source, options = {}) {
+        const key = this.cacheEntryKey(kind, id);
+        if (!this._cachePutInFlight) this._cachePutInFlight = new Map();
+        this._cachePutInFlight.set(key, (this._cachePutInFlight.get(key) || 0) + 1);
+        const run = () => this.cachePutNow(kind, id, source, options);
+        const result = (this._cachePutChain || Promise.resolve()).then(run);
+        this._cachePutChain = result.catch(() => false);
+        return result.finally(() => {
+            const left = (this._cachePutInFlight.get(key) || 1) - 1;
+            if (left > 0) this._cachePutInFlight.set(key, left);
+            else this._cachePutInFlight.delete(key);
+        });
+    }
+
+    async cachePutNow(kind, id, source, { contentType = '' } = {}) {
         const blob = await this.toCacheBlob(source, contentType);
         if (!blob || !blob.size) return false;
         if (!this.cachePolicyAllows(kind, blob.size)) return false;
@@ -1229,9 +1279,30 @@ ZaliMixin(ZaliInterface, class {
             const id = this.attachmentCacheId(msg, att, index);
             if (!id) return;
             const kind = this.attachmentCacheKind(att);
-            if (this.cacheStats().has(this.cacheEntryKey(kind, id))) return;
+            const key = this.cacheEntryKey(kind, id);
+            if (this.cacheStats().has(key)) return;
+            // Индекс узнаёт о записи только после её транзакции, а сохранение
+            // кеша сообщений часто идёт дважды подряд — без этой проверки файл,
+            // стоящий в очереди, ставился в неё ещё раз.
+            if (this._cachePutInFlight?.has(key)) return;
             void this.cachePut(kind, id, payload, { contentType: att.mimeType || '' });
         });
+    }
+
+    /**
+     * Повтор после временного отказа открытия базы. Прогрев и досыпка вложений
+     * запускаются один раз из applySession(); если база в тот момент была занята,
+     * никто бы их больше не позвал, и первый экран до перезагрузки рисовался бы
+     * буквами. Оба метода сами открывают базу и сами защёлкиваются по аккаунту.
+     */
+    scheduleCacheOpenRetry() {
+        if (this._cacheOpenRetryTimer) return;
+        this._cacheOpenRetryTimer = setTimeout(() => {
+            this._cacheOpenRetryTimer = null;
+            if (!this.S?.session?.token) return;
+            void this.primeAssetCacheFromDisk();
+            void this.hydrateAttachmentPayloadsFromCache();
+        }, ZALI_CACHE_OPEN_RETRY_MS + 50);
     }
 
     // Blob.text() — Safari 14+; FileReader страхует старые WKWebView так же,

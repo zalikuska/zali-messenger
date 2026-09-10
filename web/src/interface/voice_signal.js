@@ -187,7 +187,12 @@ ZaliMixin(ZaliInterface, class {
             this.voice.serverId = signal.serverId || this.voice.serverId || '';
             this.voice.channelId = signal.channelId || this.voice.channelId || '';
             this.voice.targetUser = signal.target || this.voice.targetUser || '';
-            this.voice.inviter = signal.from || this.voice.inviter || '';
+            // voice.inviter is deliberately NOT written here. The sender of an offer
+            // is whoever renegotiates (a camera toggle, an ICE restart), not who
+            // placed the call — writing it here flipped the caller's inviter to the
+            // callee on the first mid-call renegotiation, and inviter is exactly the
+            // rung shouldInitiateVoiceOffer/isPoliteVoicePeer fall back to once
+            // callTrack is gone: nobody owned the offer and both sides were polite.
             // Only downgrade to 'connecting' for the initial call setup offer.
             // Camera/screen-share toggles send a fresh offer to an already-
             // connected peer too (mid-call renegotiation) — RTCPeerConnection's
@@ -786,6 +791,17 @@ ZaliMixin(ZaliInterface, class {
             this.voice.serverId = String(payload.serverId || this.voice.serverId || '').trim();
             this.voice.channelId = String(payload.channelId || this.voice.channelId || '').trim();
             this.voice.participants = participants;
+            // The server's record of who placed a DM call, for EVERY room state — not
+            // only ringing ones. A client restored from the reconnect snapshot (page
+            // reload, app restart mid-call) has no callTrack, so its offer-owner
+            // ladder falls through to voice.inviter; left empty it fell further, to
+            // name order, while the other end still decided by callTrack.direction.
+            // For every pair whose callee sorts before the caller the two ends then
+            // disagreed: both owned the offer and both were impolite, or neither.
+            // A room rebuilt by restore_dm_room carries no initiator — keep ours.
+            if (this.voice.roomType === 'dm' && roomInitiator) {
+                this.voice.inviter = roomInitiator;
+            }
             const me = String(this.myName() || '').trim();
             const amParticipant = participants.includes(me);
             if (roomStatus === 'ringing' || roomStatus === 'pending') {

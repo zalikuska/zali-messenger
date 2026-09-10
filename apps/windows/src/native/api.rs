@@ -6,6 +6,7 @@ use base64::Engine;
 use reqwest::multipart;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::time::Duration;
 use tao::event_loop::EventLoopProxy;
 
 use futures_util::StreamExt;
@@ -213,6 +214,21 @@ mod fetch_tests {
                 "{value} обязан ехать base64"
             );
         }
+    }
+
+    #[test]
+    fn api_request_timeout_honours_caller_budget_within_bounds() {
+        // Нет значения / мусор — остаётся таймаут клиента (12 с).
+        assert_eq!(api_request_timeout(None), None);
+        assert_eq!(api_request_timeout(Some(0.0)), None);
+        assert_eq!(api_request_timeout(Some(-5.0)), None);
+        assert_eq!(api_request_timeout(Some(f64::NAN)), None);
+        // TRANSFER_REQUEST_TIMEOUT_MS из веба обязан доехать как есть, а не
+        // срезаться до 12 с — ровно из-за этого на Windows не ставились
+        // аватар и баннер сервера.
+        assert_eq!(api_request_timeout(Some(120_000.0)), Some(Duration::from_secs(120)));
+        assert_eq!(api_request_timeout(Some(10.0)), Some(Duration::from_secs(1)));
+        assert_eq!(api_request_timeout(Some(1e12)), Some(Duration::from_secs(300)));
     }
 
     #[tokio::test]
@@ -583,6 +599,9 @@ pub(crate) struct ApiSession {
     pub device_id: String,
 }
 
+/// Тот же запрос с таймаутом клиента. Боевой путь (`API_REQUEST`) ходит через
+/// `perform_api_request_with_timeout`; эта форма осталась для тестов.
+#[cfg(test)]
 pub(crate) async fn perform_api_request(
     session: ApiSession,
     method: String,
@@ -590,6 +609,33 @@ pub(crate) async fn perform_api_request(
     headers: Value,
     body: String,
     include_device_id: bool,
+) -> Result<Value, String> {
+    perform_api_request_with_timeout(session, method, path, headers, body, include_device_id, None)
+        .await
+}
+
+/// `timeoutMs` из `API_REQUEST` → таймаут одного запроса.
+///
+/// Раньше Windows его игнорировал: любой мостовой запрос жил не дольше 12 с
+/// `api_http_client()`, хотя веб для бинарных тел просит 120 с
+/// (`TRANSFER_REQUEST_TIMEOUT_MS`), а macOS (`performApiRequest`) и Android
+/// (`NativeBridge`) это значение честно учитывают. На медленном канале загрузка
+/// баннера/аватара сервера (base64 в JSON) и повторное скачивание превью
+/// обрывались по таймауту — выбранная картинка просто не ставилась.
+/// Нет значения — остаётся таймаут клиента.
+pub(crate) fn api_request_timeout(timeout_ms: Option<f64>) -> Option<Duration> {
+    let ms = timeout_ms.filter(|value| value.is_finite() && *value > 0.0)?;
+    Some(Duration::from_millis(ms.clamp(1_000.0, 300_000.0) as u64))
+}
+
+pub(crate) async fn perform_api_request_with_timeout(
+    session: ApiSession,
+    method: String,
+    path: String,
+    headers: Value,
+    body: String,
+    include_device_id: bool,
+    timeout: Option<Duration>,
 ) -> Result<Value, String> {
     let ApiSession {
         api_base_url,
@@ -661,6 +707,10 @@ pub(crate) async fn perform_api_request(
     }
     if !body.is_empty() {
         request = request.body(body);
+    }
+    // Таймаут запроса заменяет таймаут клиента целиком (до конца чтения тела).
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
     }
 
     trace(format!(

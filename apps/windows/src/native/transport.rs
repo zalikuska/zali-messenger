@@ -815,12 +815,28 @@ pub(crate) async fn run_message_transport(
         // attempts logged. Mirrors the Swift client's 25s sendPing heartbeat.
         let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
         ping_interval.tick().await; // first tick fires immediately; consume it
+        // Sending the Ping is not the liveness check — a path that died without a FIN
+        // keeps accepting bytes into the kernel buffer for minutes, so the send above
+        // "succeeds" and the socket sat half-open with the badge still green and no
+        // messages arriving. Same watchdog as run_voice_transport: the age of the
+        // OLDEST unanswered ping, cleared by any inbound frame (the server pings every
+        // 20 s itself, so a healthy link clears it constantly).
+        let mut unanswered_ping_at: Option<tokio::time::Instant> = None;
         loop {
             tokio::select! {
                 _ = ping_interval.tick() => {
+                    if let Some(since) = unanswered_ping_at {
+                        if since.elapsed() > Duration::from_secs(70) {
+                            trace("message ws pong missing; assuming half-open");
+                            break;
+                        }
+                    }
                     if let Err(error) = writer.send(Message::Ping(Vec::new())).await {
                         trace(format!("message ws ping failed err={}", error));
                         break;
+                    }
+                    if unanswered_ping_at.is_none() {
+                        unanswered_ping_at = Some(tokio::time::Instant::now());
                     }
                     trace("message ws ping ok");
                 }
@@ -848,6 +864,10 @@ pub(crate) async fn run_message_transport(
                     break;
                 }
                 maybe_msg = reader.next() => {
+                    if matches!(maybe_msg, Some(Ok(_))) {
+                        // Inbound traffic of any kind is proof of life.
+                        unanswered_ping_at = None;
+                    }
                     match maybe_msg {
                         Some(Ok(Message::Text(text))) => {
                             if let Ok(raw) = serde_json::from_str::<Value>(&text) {

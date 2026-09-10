@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.net.Uri
 import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -171,6 +172,65 @@ class MainActivity : ComponentActivity() {
         } else {
             bridge?.onScreenCaptureDenied(requestId)
         }
+    }
+
+    /**
+     * `<input type="file">` в вебвью. Android WebView, в отличие от WKWebView и
+     * WebView2, сам файловый диалог не открывает: без `onShowFileChooser`
+     * `input.click()` не делает ничего — ни диалога, ни `change`, ни ошибки. Из-за
+     * этого на Android нельзя было поставить аватар и баннер сервера, аватар
+     * профиля и прикрепить вложение: кнопка «Загрузить» просто молчала.
+     *
+     * Колбэк обязан получить ответ ВСЕГДА, в том числе `null` при отмене: пока он
+     * не закрыт, вебвью больше не откроет ни одного выбора файла до перезапуска.
+     */
+    private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = pendingFileChooser
+        pendingFileChooser = null
+        callback?.onReceiveValue(pickedFileUris(result.resultCode, result.data))
+    }
+
+    private fun pickedFileUris(resultCode: Int, data: Intent?): Array<Uri>? {
+        if (resultCode != RESULT_OK || data == null) return null
+        // parseResult видит только data.data, а множественный выбор приходит в clipData.
+        val clip = data.clipData
+        if (clip != null && clip.itemCount > 0) {
+            return (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+                .toTypedArray()
+                .takeIf { it.isNotEmpty() }
+        }
+        return WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+    }
+
+    /**
+     * Свой intent вместо `FileChooserParams.createIntent()`: тот берёт из `accept`
+     * только первый тип, и поле вложений (картинки, видео и `.tgs`) пускало бы
+     * одни картинки. Расширение (`.tgs`) MIME-типом не является, поэтому при нём
+     * фильтр не ставится вовсе — иначе стикеры в выборе не показались бы.
+     */
+    private fun fileChooserIntent(params: WebChromeClient.FileChooserParams): Intent {
+        val accept = (params.acceptTypes ?: emptyArray())
+            .flatMap { it.split(',') }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val mimeTypes = accept.filter { it.contains('/') }
+        val intent = Intent(Intent.ACTION_GET_CONTENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+        if (mimeTypes.isNotEmpty() && mimeTypes.size == accept.size) {
+            if (mimeTypes.size == 1) {
+                intent.type = mimeTypes[0]
+            } else {
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+            }
+        }
+        if (params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        return intent
     }
 
     /**
@@ -391,6 +451,25 @@ class MainActivity : ComponentActivity() {
                                     pendingMediaRequest = request
                                     mediaPermissionLauncher.launch(missing.toTypedArray())
                                 }
+
+                                override fun onShowFileChooser(
+                                    webView: WebView,
+                                    filePathCallback: ValueCallback<Array<Uri>>,
+                                    fileChooserParams: FileChooserParams,
+                                ): Boolean {
+                                    // Предыдущий выбор, оставшийся без ответа, закрываем
+                                    // отменой — иначе вебвью ждал бы его вечно.
+                                    pendingFileChooser?.onReceiveValue(null)
+                                    pendingFileChooser = filePathCallback
+                                    return try {
+                                        fileChooserLauncher.launch(fileChooserIntent(fileChooserParams))
+                                        true
+                                    } catch (e: ActivityNotFoundException) {
+                                        // По контракту при false колбэк вызывать нельзя.
+                                        pendingFileChooser = null
+                                        false
+                                    }
+                                }
                             }
                             webViewClient = object : WebViewClient() {
                                 // Origin pin. `addJavascriptInterface` above attaches
@@ -498,6 +577,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        pendingFileChooser?.onReceiveValue(null)
+        pendingFileChooser = null
         bridge?.teardown()
         super.onDestroy()
     }

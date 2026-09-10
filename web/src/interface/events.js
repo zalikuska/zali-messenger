@@ -1157,8 +1157,10 @@ ZaliMixin(ZaliInterface, class {
                         }
                         toUpload = cropped;
                     }
-                    await this.uploadServerAsset(kind, toUpload);
-                    this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
+                    const result = await this.uploadServerAsset(kind, toUpload);
+                    if (result === 'uploaded') {
+                        this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
+                    }
                 } catch (e) {
                     this.setServerModalState({ error: e?.message || 'Не удалось обновить медиа сервера' });
                     this.renderServerModal();

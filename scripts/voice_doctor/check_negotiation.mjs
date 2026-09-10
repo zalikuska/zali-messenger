@@ -913,6 +913,72 @@ console.log('\n== the signalling transport coming back ==');
         `offerSent=${ctx.a.entryFor('bob')?.offerSent}`);
 }
 
+console.log('\n== who placed the call survives renegotiation and reloads ==');
+
+{
+    // An incoming offer used to overwrite voice.inviter with its sender. The callee
+    // renegotiating (camera, ICE restart) therefore made the CALLER record the callee
+    // as inviter — and inviter is the rung the offer-owner ladder uses once callTrack
+    // is gone, so from then on nobody owned the offer and both sides were polite.
+    const ctx = await runDmCall({
+        afterConnect: async ({ a, b }) => { await b.api.renegotiateVoicePeer(a.name); },
+    });
+    record('a mid-call renegotiation by the callee does not rewrite who placed the call',
+        ctx.a.api.voice.inviter === ctx.a.name, `caller inviter=${ctx.a.api.voice.inviter}`);
+    ctx.a.api.voice.callTrack = null;
+    ctx.b.api.voice.callTrack = null;
+    const offerers = [ctx.a, ctx.b].filter((p, i) => p.api.shouldInitiateVoiceOffer((i ? ctx.a : ctx.b).name));
+    const politeA = ctx.a.api.isPoliteVoicePeer(ctx.b.name);
+    const politeB = ctx.b.api.isPoliteVoicePeer(ctx.a.name);
+    record('without callTrack the roles still resolve to exactly one owner',
+        offerers.length === 1 && politeA !== politeB,
+        `offerers=[${offerers.map(p => p.name)}] polite=[${politeA},${politeB}]`);
+}
+
+{
+    // One side reloads mid-call and comes back knowing only the server's room
+    // snapshot: no callTrack. It must reach the same offer owner as the side that
+    // still decides by callTrack.direction — for BOTH name orders, because the old
+    // fallback (name order) agreed with the caller only when the caller sorted first.
+    const failures = [];
+    const outcomes = [];
+    for (const [caller, callee] of [['alice', 'bob'], ['bob', 'alice']]) {
+        for (const who of ['caller', 'callee']) {
+            const ctx = await runDmCall({ caller, callee });
+            const { server } = ctx;
+            const survivor = who === 'callee' ? ctx.a : ctx.b;
+            const reloadedName = who === 'callee' ? callee : caller;
+            const roomId = survivor.api.voice.roomId;
+            const fresh = new VoicePeer(reloadedName, server, { clock: server.clock });
+            server.register(fresh);
+            let live = false;
+            try {
+                await withDeadline((async () => {
+                    const restoring = fresh.deliver(server._roomPayload(roomId));
+                    await server.settle(10);
+                    const offer = [survivor.api.shouldInitiateVoiceOffer(reloadedName), fresh.api.shouldInitiateVoiceOffer(survivor.name)];
+                    const polite = [survivor.api.isPoliteVoicePeer(reloadedName), fresh.api.isPoliteVoicePeer(survivor.name)];
+                    if (offer[0] === offer[1] || polite[0] === polite[1] || polite[0] === offer[0]) {
+                        failures.push(`${caller}->${callee} reloaded=${who}: offer=[${offer}] polite=[${polite}]`);
+                    }
+                    // The survivor's transport notices the other end vanished.
+                    survivor.breakLinkWith(reloadedName);
+                    await server.settle(900000);
+                    await restoring;
+                })(), `reload ${who}`);
+                live = survivor.hasTwoWayAudio(reloadedName) && fresh.hasTwoWayAudio(survivor.name);
+            } catch (error) {
+                if (!(error instanceof Deadlocked)) throw error;
+            }
+            if (!live) outcomes.push(`${caller}->${callee} reloaded=${who}`);
+        }
+    }
+    record('a client restored from the room snapshot agrees with its peer on the offer owner',
+        failures.length === 0, failures.join('; '));
+    record('and the call comes back with audio both ways', outcomes.length === 0,
+        outcomes.length ? `silent: ${outcomes.join('; ')}` : '4 reload variants');
+}
+
 console.log('\n== randomized scenarios ==');
 {
     let bad = 0; let ran = 0; const examples = [];

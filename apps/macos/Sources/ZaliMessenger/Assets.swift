@@ -3848,6 +3848,12 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 0;
     display: grid;
     grid-template-columns: 292px minmax(0, 1fr);
+    /* Строка обязана быть ограничена высотой шелла. Неявная строка — это
+       `auto`, то есть высота содержимого: она вылезала за шелл, у
+       .server-modal-grid становилось clientHeight == scrollHeight, её
+       overflow-y ничего не прокручивал, а низ формы срезал overflow:hidden
+       модалки. */
+    grid-template-rows: minmax(0, 1fr);
     gap: 18px;
     flex: 1;
     position: relative;
@@ -3963,6 +3969,11 @@ body[data-nav-mode="servers"] .contacts {
     flex: 1;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    /* Строки — по содержимому. У секций и карточек min-height:0, и при
+       неявной `auto`-строке они ужимались до высоты сетки: карточка
+       (overflow:hidden) срезала форму, а сетке прокручивать было нечего. */
+    grid-auto-rows: max-content;
+    align-content: start;
     gap: 16px;
     align-items: stretch;
     overflow-y: auto;
@@ -6335,8 +6346,21 @@ body[data-nav-mode="servers"] .contacts {
         grid-template-columns: 1fr;
     }
 
+    /* В одну колонку навигация встаёт НАД содержимым и съедает всю высоту
+       шелла — внутренней прокрутке сетки не остаётся ни пикселя. Здесь
+       прокручивается модалка целиком, а шелл берёт высоту содержимого. */
+    .server-modal {
+        overflow-y: auto;
+    }
+
     .server-modal-shell {
         grid-template-columns: 1fr;
+        grid-template-rows: none;
+        flex: none;
+    }
+
+    .server-modal-grid {
+        overflow: visible;
     }
 
     .settings-chips {
@@ -8369,6 +8393,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .msg.out .bubble { border-radius: 19px; }
     .msg.in.group-start  .bubble { border-bottom-left-radius: 7px; }
     .msg.in.group-mid    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
+"""#,
+    #"""
     .msg.in.group-end    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
     .msg.in.group-single .bubble { border-bottom-left-radius: 7px; }
     .msg.out.group-start  .bubble { border-bottom-right-radius: 7px; }
@@ -8391,8 +8417,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         font-size: 10.5px;
         opacity: .5;
         pointer-events: none;
-"""#,
-    #"""
     }
     .msg.in .msg-time  { color: var(--text3); }
     .msg.out .msg-time { color: rgba(15,20,0,.5); }
@@ -16024,6 +16048,10 @@ const ZALI_CACHE_USE_WINDOW_MS = 60_000;
 // честное открытие, а всё, что дольше, для отрисовки уже неотличимо от отказа.
 const ZALI_CACHE_OPEN_TIMEOUT_MS = 4000;
 
+// Пауза перед повторным открытием базы после ВРЕМЕННОГО отказа (таймаут, blocked):
+// см. ensureCacheStorage().
+const ZALI_CACHE_OPEN_RETRY_MS = 30_000;
+
 // Вес класса в формуле полезности. Аватарка в 8 КБ, к которой обращаются на
 // каждой отрисовке, обязана переживать видео в 40 МБ, открытое однажды, —
 // и без веса это уже вытекало бы из деления на размер, но вес делает
@@ -16057,10 +16085,10 @@ ZaliMixin(ZaliInterface, class {
             },
             {
                 id: 'light',
-                label: 'Кешировать легковесное',
-                note: 'default',
 """#,
     #"""
+                label: 'Кешировать легковесное',
+                note: 'default',
                 hint: 'Всё необходимое плюс стикеры и медиа до 2 МБ. Тяжёлые вложения качаются заново.',
             },
             {
@@ -16239,13 +16267,28 @@ ZaliMixin(ZaliInterface, class {
      */
     ensureCacheStorage() {
         if (this._cacheReady) return this._cacheReady;
+        // Окно после временного отказа: без него каждая аватарка заново ждала бы
+        // таймаут открытия, пока другая вкладка держит deleteDatabase.
+        if (Number(this._cacheRetryAt || 0) > Date.now()) return Promise.resolve(null);
         this._cacheReady = (async () => {
             let db = null;
+            this._cacheOpenTransient = false;
             try {
                 db = await this.openCacheDb();
             } catch (e) {
                 this.trace(`assetCache unavailable reason=${e?.name || e?.message || e}`);
                 db = null;
+            }
+            if (!db && this._cacheOpenTransient) {
+                // Таймаут или blocked — это «база занята», а не «базы нет». Раньше
+                // и такой отказ запоминался на весь сеанс: кеш молча выключался до
+                // перезагрузки, а настройки врали, что IndexedDB недоступна в
+                // оболочке. Не запоминаем, повторяем через окно.
+                this._cacheReady = null;
+                this._cacheRetryAt = Date.now() + ZALI_CACHE_OPEN_RETRY_MS;
+                this._cacheDisabledReason = 'база кеша занята другой вкладкой — повторная попытка через 30 с';
+                this.scheduleCacheOpenRetry();
+                return null;
             }
             if (!db) {
                 this._cacheDisabledReason = 'IndexedDB недоступна в этой оболочке';
@@ -16254,6 +16297,8 @@ ZaliMixin(ZaliInterface, class {
                 return null;
             }
             this._cacheDb = db;
+            this._cacheDisabledReason = '';
+            this._cacheRetryAt = 0;
             await this.loadCacheStatIndex(db);
             return db;
         })();
@@ -16318,6 +16363,9 @@ ZaliMixin(ZaliInterface, class {
             const timer = setTimeout(() => {
                 if (done) return;
                 done = true;
+                // Временный отказ: база есть, но занята — ensureCacheStorage()
+                // не запоминает его на сеанс, а повторяет позже.
+                this._cacheOpenTransient = true;
                 this.trace('assetCache open timed out — работаем без диска');
                 // Опоздавшее соединение закрываем: держать его открытым значит
                 // блокировать deleteDatabase той вкладки, которая нас и ждёт.
@@ -16343,7 +16391,10 @@ ZaliMixin(ZaliInterface, class {
             };
             // Другая вкладка держит старую версию базы. Ждать нечего — работаем
             // без диска, но не висим на промисе вечно.
-            request.onblocked = () => settle(null);
+            request.onblocked = () => {
+                this._cacheOpenTransient = true;
+                settle(null);
+            };
         });
     }
 
@@ -16498,7 +16549,30 @@ ZaliMixin(ZaliInterface, class {
      * Кладёт файл. Молча ничего не делает, если политика его не пускает —
      * вызывающему не нужно знать про режимы.
      */
-    async cachePut(kind, id, source, { contentType = '' } = {}) {
+    /**
+     * Записи идут строго по одной. Решение о вытеснении принимается по учёту
+     * занятого места, а запись попадает в учёт только после своей транзакции —
+     * поэтому пачка записей разом (saveStoredMessageCache кладёт все вложения
+     * архива одним проходом) видела один и тот же старый объём и не вытесняла
+     * ничего: 50 файлов по 1 МБ на кеш 511 МБ при потолке 512 МБ давали 561 МБ.
+     * IndexedDB и так выполняет readwrite-транзакции по одним сторам по очереди,
+     * так что очередь здесь почти ничего не стоит.
+     */
+    cachePut(kind, id, source, options = {}) {
+        const key = this.cacheEntryKey(kind, id);
+        if (!this._cachePutInFlight) this._cachePutInFlight = new Map();
+        this._cachePutInFlight.set(key, (this._cachePutInFlight.get(key) || 0) + 1);
+        const run = () => this.cachePutNow(kind, id, source, options);
+        const result = (this._cachePutChain || Promise.resolve()).then(run);
+        this._cachePutChain = result.catch(() => false);
+        return result.finally(() => {
+            const left = (this._cachePutInFlight.get(key) || 1) - 1;
+            if (left > 0) this._cachePutInFlight.set(key, left);
+            else this._cachePutInFlight.delete(key);
+        });
+    }
+
+    async cachePutNow(kind, id, source, { contentType = '' } = {}) {
         const blob = await this.toCacheBlob(source, contentType);
         if (!blob || !blob.size) return false;
         if (!this.cachePolicyAllows(kind, blob.size)) return false;
@@ -17180,9 +17254,30 @@ ZaliMixin(ZaliInterface, class {
             const id = this.attachmentCacheId(msg, att, index);
             if (!id) return;
             const kind = this.attachmentCacheKind(att);
-            if (this.cacheStats().has(this.cacheEntryKey(kind, id))) return;
+            const key = this.cacheEntryKey(kind, id);
+            if (this.cacheStats().has(key)) return;
+            // Индекс узнаёт о записи только после её транзакции, а сохранение
+            // кеша сообщений часто идёт дважды подряд — без этой проверки файл,
+            // стоящий в очереди, ставился в неё ещё раз.
+            if (this._cachePutInFlight?.has(key)) return;
             void this.cachePut(kind, id, payload, { contentType: att.mimeType || '' });
         });
+    }
+
+    /**
+     * Повтор после временного отказа открытия базы. Прогрев и досыпка вложений
+     * запускаются один раз из applySession(); если база в тот момент была занята,
+     * никто бы их больше не позвал, и первый экран до перезагрузки рисовался бы
+     * буквами. Оба метода сами открывают базу и сами защёлкиваются по аккаунту.
+     */
+    scheduleCacheOpenRetry() {
+        if (this._cacheOpenRetryTimer) return;
+        this._cacheOpenRetryTimer = setTimeout(() => {
+            this._cacheOpenRetryTimer = null;
+            if (!this.S?.session?.token) return;
+            void this.primeAssetCacheFromDisk();
+            void this.hydrateAttachmentPayloadsFromCache();
+        }, ZALI_CACHE_OPEN_RETRY_MS + 50);
     }
 
     // Blob.text() — Safari 14+; FileReader страхует старые WKWebView так же,
@@ -19981,6 +20076,8 @@ ZaliMixin(ZaliInterface, class {
         // had not happened to open in that session.
         this.queueForceClaimScopes(
             Object.keys(this.loadStoredConversationKeys())
+"""#,
+    #"""
                 .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
         );
         // Every scope is about to get a brand-new key of our own making, so no scope
@@ -20058,8 +20155,6 @@ ZaliMixin(ZaliInterface, class {
                     // Targeted at the new device specifically — it's encrypted with a
                     // one-time code, not the account passphrase, so it must not be
                     // mistaken for the regular auto-sync broadcast event by any client
-"""#,
-    #"""
                     // that filters on issuedToDeviceId.
                     issuedToDeviceId: targetId,
                     vaultEpoch: payload.vaultEpoch,
@@ -22687,12 +22782,16 @@ ZaliMixin(ZaliInterface, class {
         if (discoverQuery && !discoverQuery.value) {
             discoverQuery.value = '';
         }
-        const editLocked = !isEdit;
         const linkLocked = !!this.S.serverModal.saving || !!this.S.serverModal.loading;
-        if (serverAvatarUploadBtn) serverAvatarUploadBtn.disabled = editLocked;
-        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.disabled = editLocked;
-        if (serverBannerUploadBtn) serverBannerUploadBtn.disabled = editLocked;
-        if (serverBannerRemoveBtn) serverBannerRemoveBtn.disabled = editLocked;
+        // Медиа выбирается и при создании: файл ждёт в черновике и уезжает сразу
+        // после POST (до него у сервера нет id). Раньше здесь кнопки были disabled
+        // при создании, но выглядели активными — клик молча не делал ничего.
+        const assetLocked = isDiscover || !!this.S.serverModal.saving;
+        const pendingAssets = this._serverCreateAssets || {};
+        if (serverAvatarUploadBtn) serverAvatarUploadBtn.disabled = assetLocked;
+        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.disabled = assetLocked || (!isEdit && !pendingAssets.avatar);
+        if (serverBannerUploadBtn) serverBannerUploadBtn.disabled = assetLocked;
+        if (serverBannerRemoveBtn) serverBannerRemoveBtn.disabled = assetLocked || (!isEdit && !pendingAssets.banner);
         if (serverJoinLinkInput) serverJoinLinkInput.disabled = linkLocked;
         if (serverJoinLinkGenerateBtn) serverJoinLinkGenerateBtn.disabled = linkLocked;
         if (serverJoinLinkCopyBtn) serverJoinLinkCopyBtn.disabled = linkLocked;
@@ -22708,10 +22807,10 @@ ZaliMixin(ZaliInterface, class {
         if (serverRoleCreateBody) serverRoleCreateBody.hidden = !roleCreateOpen;
         if (serverRoleCreateToggleBtn) serverRoleCreateToggleBtn.textContent = roleCreateOpen ? 'Свернуть' : 'Новая роль';
         if (serverRoleCreateSubmitBtn) serverRoleCreateSubmitBtn.disabled = !!this.S.serverModal.saving || !!this.S.serverModal.loading || !roleCreateOpen;
-        if (serverAvatarUploadBtn) serverAvatarUploadBtn.title = isEdit ? 'Загрузить аватар' : 'Создать сервер сначала';
-        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.title = isEdit ? 'Удалить аватар' : 'Создать сервер сначала';
-        if (serverBannerUploadBtn) serverBannerUploadBtn.title = isEdit ? 'Загрузить баннер' : 'Создать сервер сначала';
-        if (serverBannerRemoveBtn) serverBannerRemoveBtn.title = isEdit ? 'Удалить баннер' : 'Создать сервер сначала';
+        if (serverAvatarUploadBtn) serverAvatarUploadBtn.title = 'Загрузить аватар';
+        if (serverAvatarRemoveBtn) serverAvatarRemoveBtn.title = 'Удалить аватар';
+        if (serverBannerUploadBtn) serverBannerUploadBtn.title = 'Загрузить баннер';
+        if (serverBannerRemoveBtn) serverBannerRemoveBtn.title = 'Удалить баннер';
         if (errorBox) errorBox.textContent = this.S.serverModal.error || '';
         if (serverMembersList) {
             serverMembersList.classList.toggle('is-loading', !!this.S.serverModal.loading);
@@ -22770,6 +22869,38 @@ ZaliMixin(ZaliInterface, class {
             this.syncServerAssetPreview(this.S.serverModal.serverId || server?.id || '');
         } else {
             this.resetServerAssetPreview();
+            if (!isDiscover) this.applyServerCreateAssetPreview();
+        }
+    }
+
+    // Файлы, выбранные при создании сервера. Держатся вне S: File не
+    // сериализуется, а blob:-ссылку превью надо отзывать при замене.
+    setServerCreateAsset(kind, file) {
+        const pending = this._serverCreateAssets || (this._serverCreateAssets = {});
+        const prev = pending[kind];
+        if (prev?.url) {
+            try { URL.revokeObjectURL(prev.url); } catch (e) {}
+        }
+        pending[kind] = file ? { file, url: URL.createObjectURL(file) } : null;
+    }
+
+    clearServerCreateAssets() {
+        this.setServerCreateAsset('avatar', null);
+        this.setServerCreateAsset('banner', null);
+    }
+
+    applyServerCreateAssetPreview() {
+        const pending = this._serverCreateAssets || {};
+        const avatarBox = document.getElementById('serverAvatarPreview');
+        const bannerBox = document.getElementById('serverBannerPreview');
+        if (avatarBox && pending.avatar) {
+            avatarBox.innerHTML = `<img class="avatar-img" src="${this.esc(pending.avatar.url)}" alt="server avatar">`;
+        }
+        if (bannerBox && pending.banner) {
+            bannerBox.textContent = '';
+            bannerBox.style.backgroundImage = `url('${this.esc(pending.banner.url)}')`;
+            bannerBox.style.backgroundSize = 'cover';
+            bannerBox.style.backgroundPosition = 'center';
         }
     }
 
@@ -23125,6 +23256,7 @@ ZaliMixin(ZaliInterface, class {
             saving: false,
             error: '',
         });
+        this.clearServerCreateAssets();
         this.openServerOverlay();
         this.renderServerModal();
         if (nextMode === 'create') {
@@ -23284,11 +23416,20 @@ ZaliMixin(ZaliInterface, class {
                 throw new Error(await res.text() || 'Не удалось сохранить сервер');
             }
             const data = await res.json();
+            const pendingAssets = mode === 'edit'
+                ? []
+                : ['avatar', 'banner']
+                    .map(kind => [kind, this._serverCreateAssets?.[kind]?.file])
+                    .filter(([, file]) => file);
             this.closeServerOverlay();
             await this.loadServers({ silent: true });
             if (data?.id) {
                 this.setActiveServer(data.id, { persist: true });
+                if (pendingAssets.length) {
+                    await this.uploadCreatedServerAssets(data.id, pendingAssets);
+                }
             }
+            if (mode !== 'edit') this.clearServerCreateAssets();
         } catch (e) {
             this.setServerModalState({ error: e?.message || 'Не удалось сохранить сервер' });
             this.renderServerModal();
@@ -23297,9 +23438,43 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // 'pending' — файл отложен до создания сервера, 'uploaded' — ушёл на сервер.
+    // Вызывающий пишет «обновлён» только на второе.
     async uploadServerAsset(kind, file) {
+        if (!file) return 'skipped';
+        const mode = this.S.serverModal.mode;
+        if (mode === 'create') {
+            this.setServerCreateAsset(kind, file);
+            this.renderServerModal();
+            return 'pending';
+        }
         const serverId = this.S.serverModal.serverId || this.S.activeServer;
-        if (!serverId || !file || this.S.serverModal.mode !== 'edit') return;
+        if (!serverId || mode !== 'edit') {
+            throw new Error('Медиа можно менять только у уже созданного сервера');
+        }
+        await this.putServerAsset(serverId, kind, file);
+        await this.syncServerAssetPreview(serverId);
+        return 'uploaded';
+    }
+
+    // Сервер уже создан и диалог закрыт: сбой медиа не должен выглядеть как
+    // сбой создания, поэтому он уходит в журнал, а не в ошибку модалки.
+    async uploadCreatedServerAssets(serverId, assets) {
+        for (const [kind, file] of assets) {
+            try {
+                await this.putServerAsset(serverId, kind, file);
+            } catch (e) {
+                this.addLogEntry({
+                    type: 'ERROR',
+                    msg: `Сервер создан, но ${kind === 'avatar' ? 'аватар' : 'баннер'} не загрузился: ${e?.message || e}`,
+                    ts: new Date().toLocaleTimeString(),
+                });
+            }
+        }
+        this.scheduleServerAssetRefresh();
+    }
+
+    async putServerAsset(serverId, kind, file) {
         const downscaled = await this.downscaleServerAssetFile(file, kind);
         const dataUrl = await this.readFileAsDataURL(downscaled);
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
@@ -23318,12 +23493,18 @@ ZaliMixin(ZaliInterface, class {
             throw new Error(await res.text() || `Не удалось обновить ${kind}`);
         }
         this.clearServerAssetCache(serverId, kind);
-        await this.syncServerAssetPreview(serverId);
     }
 
     async removeServerAsset(kind) {
+        if (this.S.serverModal.mode === 'create') {
+            this.setServerCreateAsset(kind, null);
+            this.renderServerModal();
+            return;
+        }
         const serverId = this.S.serverModal.serverId || this.S.activeServer;
-        if (!serverId || this.S.serverModal.mode !== 'edit') return;
+        if (!serverId || this.S.serverModal.mode !== 'edit') {
+            throw new Error('Медиа можно менять только у уже созданного сервера');
+        }
         const res = await this.apiFetch(this.apiRoutes.servers.assets(serverId, kind), {
             method: 'DELETE',
         });
@@ -24076,6 +24257,8 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceDiag('socket-open', { generation, url: url.toString() }, 'SUCCESS');
                 this.addLogEntry({ type: 'SUCCESS', msg: 'Browser voice socket connected', ts: new Date().toLocaleTimeString() });
                 // This socket doubles as the pure-browser client's only realtime connection
+"""#,
+    #"""
                 // (messages + voice signaling both ride it — see onmessage below), so its
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
@@ -24187,8 +24370,6 @@ ZaliMixin(ZaliInterface, class {
             };
         } catch (error) {
             this.addLogEntry({ type: 'ERROR', msg: `Не удалось подключить browser voice socket: ${error?.message || error}`, ts: new Date().toLocaleTimeString() });
-"""#,
-    #"""
         }
     }
 
@@ -27326,7 +27507,12 @@ ZaliMixin(ZaliInterface, class {
             this.voice.serverId = signal.serverId || this.voice.serverId || '';
             this.voice.channelId = signal.channelId || this.voice.channelId || '';
             this.voice.targetUser = signal.target || this.voice.targetUser || '';
-            this.voice.inviter = signal.from || this.voice.inviter || '';
+            // voice.inviter is deliberately NOT written here. The sender of an offer
+            // is whoever renegotiates (a camera toggle, an ICE restart), not who
+            // placed the call — writing it here flipped the caller's inviter to the
+            // callee on the first mid-call renegotiation, and inviter is exactly the
+            // rung shouldInitiateVoiceOffer/isPoliteVoicePeer fall back to once
+            // callTrack is gone: nobody owned the offer and both sides were polite.
             // Only downgrade to 'connecting' for the initial call setup offer.
             // Camera/screen-share toggles send a fresh offer to an already-
             // connected peer too (mid-call renegotiation) — RTCPeerConnection's
@@ -27925,6 +28111,19 @@ ZaliMixin(ZaliInterface, class {
             this.voice.serverId = String(payload.serverId || this.voice.serverId || '').trim();
             this.voice.channelId = String(payload.channelId || this.voice.channelId || '').trim();
             this.voice.participants = participants;
+            // The server's record of who placed a DM call, for EVERY room state — not
+            // only ringing ones. A client restored from the reconnect snapshot (page
+            // reload, app restart mid-call) has no callTrack, so its offer-owner
+            // ladder falls through to voice.inviter; left empty it fell further, to
+            // name order, while the other end still decided by callTrack.direction.
+"""#,
+    #"""
+            // For every pair whose callee sorts before the caller the two ends then
+            // disagreed: both owned the offer and both were impolite, or neither.
+            // A room rebuilt by restore_dm_room carries no initiator — keep ours.
+            if (this.voice.roomType === 'dm' && roomInitiator) {
+                this.voice.inviter = roomInitiator;
+            }
             const me = String(this.myName() || '').trim();
             const amParticipant = participants.includes(me);
             if (roomStatus === 'ringing' || roomStatus === 'pending') {
@@ -28064,8 +28263,6 @@ ZaliMixin(ZaliInterface, class {
             'headphones-off': headphones + slash,
             'chevron-down': chevronDown,
         };
-"""#,
-    #"""
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
 
@@ -32061,6 +32258,8 @@ ZaliMixin(ZaliInterface, class {
             </a>`;
         }
 
+"""#,
+    #"""
         return `<a class="file-message" href="${this.esc(src)}" download="${this.esc(attachment.name)}">
             ${fileIcon}
             <span class="file-message-info">
@@ -32229,8 +32428,6 @@ ZaliMixin(ZaliInterface, class {
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
                 : [];
             const payload = {
-"""#,
-    #"""
                 reason: details.reason || this.decryptFailureReasonSlug(details.placeholderText || ''),
                 placeholderText: String(details.placeholderText || '').slice(0, 200),
                 clientError: String(details.clientError || '').slice(0, 500),
@@ -36073,6 +36270,8 @@ ZaliMixin(ZaliInterface, class {
         if (connected) {
             // Connection (re)established — drain the outbox immediately instead of
             // waiting out each message's retry backoff (which grows up to 30s). This
+"""#,
+    #"""
             // was the cause of the long send delay after an account switch / blip.
             this.kickPendingOutboxNow('reconnect');
             // Don't wait out the keepalive tick to get back into the voice room: if
@@ -36220,8 +36419,6 @@ ZaliMixin(ZaliInterface, class {
         const statusCode = Number(payload?.statusCode || 0);
         const responseBody = String(payload?.responseBody || '').trim();
         const permanentError = statusCode >= 400 && statusCode < 500;
-"""#,
-    #"""
         this.trace(`onSendError clientId=${clientId} status=${statusCode || 'n/a'} body=${responseBody.slice(0, 120)}`);
         if (clientId) {
             if (permanentError) {
@@ -40139,8 +40336,10 @@ ZaliMixin(ZaliInterface, class {
                         }
                         toUpload = cropped;
                     }
-                    await this.uploadServerAsset(kind, toUpload);
-                    this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
+                    const result = await this.uploadServerAsset(kind, toUpload);
+                    if (result === 'uploaded') {
+                        this.addLogEntry({ type: 'SUCCESS', msg: `${kind === 'avatar' ? 'Аватар' : 'Баннер'} сервера обновлён`, ts: new Date().toLocaleTimeString() });
+                    }
                 } catch (e) {
                     this.setServerModalState({ error: e?.message || 'Не удалось обновить медиа сервера' });
                     this.renderServerModal();
@@ -40157,6 +40356,8 @@ ZaliMixin(ZaliInterface, class {
                 try {
                     await this.removeServerAsset('avatar');
                 } catch (e) {
+"""#,
+    #"""
                     this.setServerModalState({ error: e?.message || 'Не удалось удалить аватар' });
                     this.renderServerModal();
                 }
@@ -40338,8 +40539,6 @@ ZaliMixin(ZaliInterface, class {
             networkConfigResetBtn.addEventListener('click', () => this.resetNetworkConfig());
         }
         if (networkTurnApplyBtn) {
-"""#,
-    #"""
             networkTurnApplyBtn.addEventListener('click', () => {
                 try {
                     const nextIceServers = this.appendTurnPresetToIceServers(
