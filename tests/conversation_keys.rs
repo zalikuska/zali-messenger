@@ -539,8 +539,8 @@ async fn scope_casing_migration_leaves_channel_scopes_alone() {
 /// that touches `migrate_scope_casing`:
 ///
 /// ```text
-/// ssh zms "sqlite3 /var/lib/zali/zali_messenger.db \".backup '/tmp/dump.db'\""
-/// scp zms:/tmp/dump.db /some/dir/zali_messenger.db
+/// # on the production host: back up $ZALI_DATA_DIR/zali_messenger.db with
+/// # `sqlite3 ... ".backup '/tmp/dump.db'"`, then copy it to /some/dir/zali_messenger.db
 /// ZALI_PROD_SNAPSHOT_DIR=/some/dir \
 ///   cargo test --manifest-path server/Cargo.toml --test conversation_keys \
 ///   -- --ignored migration_against_a_production_snapshot --nocapture

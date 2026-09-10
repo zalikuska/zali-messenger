@@ -40,102 +40,19 @@ Rules:
 
 ## Production Server
 
-> **Мигрировано 2026-09-05 с `zms` (89.108.76.89) на `ms` (202.181.188.72).** Старый хост перестал
-> быть нашим (SSH-ключ хоста внезапно сменился, доступа больше нет) — переезд был на пустое место,
-> **без переноса данных**: БД, uploads и все аккаунты/переписка на старом сервере остались там и
-> недостижимы. Новый сервер стартовал с нуля 2026-09-05, `zms`/89.108.76.89 нигде больше не
-> используется и не должен упоминаться как прод.
-
-- URL: `https://msgs.zalikus.org`
-- SSH access: `ssh ms`
-- Server repo: https://github.com/zalikuska/zali-messenger-server (branch `zali-server`)
-- Server binary runs at: `/opt/zali-server/server/target/release/zali_server`
-- Env vars: `/etc/zali/zali-server.env` (symlinked to `/opt/zali-server/.env`). `JWT_SECRET` и
-  `RELEASE_ADMIN_TOKEN` — новые, сгенерированы при переезде; старые с `zms` не сохранились и нигде
-  не записаны за пределами этого файла на сервере.
-- **`ms` — общая машина, не выделенная под мессенджер.** На ней уже штатно живут: Minecraft-сервер
-  (`zalismp.service`, Java-процесс с `-Xms=-Xmx=5700M` — держит ~5.7 ГБ памяти постоянно),
-  `velocity.service` (прокси), AdGuard Home в Docker (**занимает порт 3000** — поэтому zali_server
-  слушает `127.0.0.1:3001`, см. `BIND_ADDR` ниже, и nginx проксирует `msgs.zalikus.org` на него) и
-  ещё несколько nginx-вхостов (`mc.zalikus.org`, `msg.zalikus.org`, `videl.zalikus.org`), деливших
-  TLS-сертификат `mc.zalikus.org` (мультидоменный, покрывает и `msgs.zalikus.org`). При памяти впритык
-  (обычно <200 МБ свободно) добавлен постоянный своп-файл `/swapfile_build` (4 ГБ, в `/etc/fstab`) —
-  без него сборка Rust на этой машине рискует спровоцировать OOM-killer, который с высокой
-  вероятностью снесёт именно Java-процесс Minecraft, а не сборку. Собирать релиз здесь можно, но
-  **ограничивать параллелизm** (`CARGO_BUILD_JOBS=2` и меньше) и проверять `free -h` по ходу.
-- **Data dir: `/var/lib/zali`** (from `ZALI_DATA_DIR`) — holds the DB, `uploads/` and `releases/`. **Not** the checkout at `/opt/zali-server`. Check with `ssh ms "grep '^ZALI_DATA_DIR' /etc/zali/zali-server.env"`
-- Process management: **systemd unit** `zali-server.service` (`/etc/systemd/system/zali-server.service` on the VPS) — `enabled` (survives reboot) + `Restart=always` (auto-recovers from crashes). **Do not go back to ad-hoc `nohup`/`pkill` for starting the server** — always use `systemctl`.
-
-### TURN-релей (coturn)
-
-Поставлен 2026-09-06. **С переезда на `ms` (2026-09-05) до этой даты релея не было
-вообще** — coturn не был даже установлен, `check_turn.py` отвечал `STUN Binding: TIMEOUT`.
-Всё это время звонки держались только на публичном STUN Google, то есть работали лишь там,
-где проходит hole-punching; пара, где обе стороны за симметричным NAT, не соединялась
-никогда. Клиент это фиксировал сам (`ice-candidate-end` пишет WARN, когда среди
-кандидатов нет `relay`), но журнал никто не читал.
-
-- Конфиг: `/etc/turnserver.conf`, служба `coturn.service` (`enabled`).
-- Слушает **только публичный адрес** `202.181.188.72` на 3478 (UDP+TCP) и 5349 (TLS).
-  Без `listening-ip` coturn садится ещё и на docker0/VPN-интерфейсы.
-- **Креды статические (`zali`/`turnpass`), а не REST.** coturn не умеет обе схемы
-  одновременно: `use-auth-secret` игнорирует `user=`. Все установленные клиенты знают
-  только статическую пару, поэтому переход на REST сломал бы TURN сразу у всех.
-  `TURN_STATIC_AUTH_SECRET` намеренно **не задан** — тогда `/api/voice/turn-credentials`
-  отдаёт 404 и новый клиент штатно падает на ту же статическую пару. Переключать можно
-  будет, когда весь парк уедет на 0.2b22+.
-- Плата за это: пара лежит внутри каждой сборки, то есть релеем может пользоваться любой,
-  кто её открывал. Поэтому в конфиге запрещён релей во все приватные и loopback-диапазоны
-  (`denied-peer-ip`) — иначе это открытый прокси **внутрь машины**, где на localhost живут
-  `zali_server:3001`, AdGuard и Minecraft — плюс квоты (`user-quota`, `total-quota`) и
-  `max-bps=3000000` (потолок клиента: камера 1.2, шаринг 2.0 Мбит/с).
-- Диапазон релей-портов сужен до `49160-49260` вместо дефолтных 16 тысяч.
-- **TLS-сертификат копируется, а не читается напрямую.** coturn работает под пользователем
-  `turnserver` и приватный ключ letsencrypt (root, 600) прочитать не может — из-за этого
-  5349 молча не поднимался. `/usr/local/bin/coturn-cert-sync` кладёт копию в `/etc/coturn`
-  с нужным владельцем и перезапускает службу; он же прилинкован в
-  `/etc/letsencrypt/renewal-hooks/deploy/`, иначе TLS отвалился бы через 90 дней.
-- **Логи — в journald** (`journalctl -u coturn`), не в файл: `log-file=/var/log/turnserver.log`
-  даёт `ERROR: Cannot open log file for writing` по тем же правам.
-- Ловушка установки: пакет запускает службу сразу, поэтому `systemctl enable --now` после
-  записи конфига **не перечитывает его** — нужен явный `restart`.
-
-Проверять только живой пробой, а не статусом службы:
-```bash
-python3 scripts/voice_doctor/check_turn.py   # Binding → Allocate → CreatePermission → реальные байты
-```
-
-### Deploy process
-
-```bash
-# 1. Push server changes from local monorepo to server repo (current branch is `main`)
-git push serverrepo main:zali-server
-
-# 2. On VPS: pull, build, restart via systemd
-ssh ms "cd /opt/zali-server && git pull --ff-only origin zali-server"
-ssh ms "cd /opt/zali-server && env CARGO_BUILD_JOBS=2 cargo build --release --manifest-path server/Cargo.toml -p zali_server 2>&1 | tail -3"
-ssh ms "systemctl restart zali-server.service"
-
-# 3. Verify
-ssh ms "sleep 2 && systemctl status zali-server.service --no-pager | head -10"
-ssh ms "readlink -f /proc/\$(pidof zali_server)/exe"   # confirm it's server/target/release/zali_server, not a stale path
-```
-
-Logs still land in `/root/zali-server.log` (the unit's `StandardOutput`/`StandardError` append there); `journalctl -u zali-server` also works for systemd-level events (start/stop/restart), but app-level tracing output is only in the log file.
-
-If the service ever needs hand-editing: unit file lives at `/etc/systemd/system/zali-server.service` on the VPS (not in this repo). After editing it, run `systemctl daemon-reload` before `restart`.
-
-> Note: since the Web Push feature landed (2026-07-12), the first build after pulling it will compile
-> OpenSSL from source (`openssl` crate's `vendored` feature, pulled in transitively for `web-push`'s
-> encryption backend) — noticeably slower one-time build, needs a C compiler (already required for
-> `sqlx-sqlite`, so nothing new to install) but no `libssl-dev`. To actually enable push, add
-> `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` to `/etc/zali/zali-server.env` — generate with
-> `cargo run --manifest-path server/Cargo.toml --example gen_vapid_keys` on the VPS (or copy from local
-> dev, VAPID keys aren't tied to any account/domain). Leaving them unset just disables push silently.
+- URL: `https://msgs.zalikus.org` (API), `https://msg.zalikus.org` (standalone веб-клиент).
+- Server repo: https://github.com/zalikuska/zali-messenger-server (branch `zali-server`).
+- **Всё про боевую машину — хост, SSH, пути, systemd, соседние сервисы, coturn, деплой — в
+  `CLAUDE.local.md` и `ops/` (оба в `.gitignore`).** Репозитории публичные: не возвращать эти
+  подробности сюда, в `docs/` или в комментарии кода.
+- Сервер запускается только через systemd (`systemctl restart zali-server.service`), не через
+  `nohup`/`pkill`.
+- TURN проверять живым пробоем, а не статусом службы:
+  `python3 scripts/voice_doctor/check_turn.py` (Binding → Allocate → CreatePermission → реальные байты).
 
 ### Publishing a client release (in-app updater)
 
-> **Полная процедура — в [`RELEASE.md`](RELEASE.md).** Здесь только суть и ловушки, на которых
+> **Полная процедура — в `ops/RELEASE.md` (не в git).** Здесь только суть и ловушки, на которых
 > уже спотыкались.
 
 macOS (`apps/macos/`) and Windows (`apps/windows/`) clients check `GET /api/version?platform=macos|windows`
@@ -186,15 +103,12 @@ compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`.
    on Windows or a cross-build from macOS (see «Windows Build Distribution»). Pack the macOS `.app`
    with `ditto -c -k --keepParent` — `UpdateService.installAndRelaunch` unpacks with `ditto` and looks
    for a `.app` inside. Windows ships as the raw `.exe`, no archive.
-3. Upload to **`/var/lib/zali/releases/`** on the VPS and compute SHA-256 (`shasum -a 256 <file>`).
-   The artifact is then served publicly at `https://msgs.zalikus.org/releases/<filename>`.
-4. Publish, once per platform (requires `RELEASE_ADMIN_TOKEN` set in the server's env — see `.env.example`;
-   unset means this route always 403s). Run the `curl` **on the VPS** so the token never leaves it:
-   ```bash
-   ssh ms 'set -a; . /etc/zali/zali-server.env; set +a; curl -X POST https://msgs.zalikus.org/api/version \
-     -H "Authorization: Bearer $RELEASE_ADMIN_TOKEN" -H "Content-Type: application/json" \
-     -d "{\"platform\":\"macos\",\"version\":\"0.2b11\",\"notes\":\"...\",\"downloadUrl\":\"https://msgs.zalikus.org/releases/ZaliMessenger-0.2b11.zip\",\"sha256\":\"<hex>\"}"'
-   ```
+3. Upload the artifact into the `releases/` directory of the server data dir (`ZALI_DATA_DIR`,
+   **not** the source checkout) and compute SHA-256 (`shasum -a 256 <file>`). The artifact is then
+   served publicly at `https://msgs.zalikus.org/releases/<filename>`.
+4. Publish, once per platform, with `POST /api/version` (requires `RELEASE_ADMIN_TOKEN` in the server's
+   env — see `.env.example`; unset means this route always 403s). Run the `curl` **on the server** so the
+   token never leaves it — exact command in `CLAUDE.local.md` / `ops/RELEASE.md`.
 5. Verify both the metadata **and** that the artifact actually downloads unauthenticated:
    `curl "https://msgs.zalikus.org/api/version?platform=macos"` and
    `curl -o /dev/null -w '%{http_code} %{size_download}\n' <downloadUrl>`.
@@ -215,7 +129,10 @@ compared version lives in `APP_DISPLAY_VERSION` in `apps/windows/src/native.rs`.
 - **Скрипт установки исполняет СТАРАЯ версия.** Любой фикс апдейтера начинает действовать только со
   следующего обновления — пользователям на сборке с багом нужен один ручной установ.
 
-> Note: after the 2026-07-12 repo reorg there is no root `Cargo.toml` on the VPS checkout — always pass `--manifest-path server/Cargo.toml` to `cargo build`, and restart from `server/target/release/zali_server`, not `target/release/zali_server`. On 2026-07-12 a deploy silently kept running a week-old binary at the old `target/release/zali_server` path (still present from a prior build) while the freshly built binary sat unused at `server/target/release/zali_server` — `pkill`+`nohup` "succeeded" with no errors and the new code never went live. If in doubt, verify with `ssh ms "readlink -f /proc/\$(pidof zali_server)/exe"` after restart. Consider deleting the stale `/opt/zali-server/target/` directory on the VPS once confirmed unused (ask before doing this — it's a production server path).
+> Note: после реорганизации 2026-07-12 в серверном чекауте нет корневого `Cargo.toml` — всегда
+> `--manifest-path server/Cargo.toml` и перезапуск из `server/target/release/zali_server`. Однажды
+> деплой молча оставил работать недельный бинарник по старому пути; после рестарта сверяйте
+> `readlink -f /proc/$(pidof zali_server)/exe` (подробности — `CLAUDE.local.md`).
 
 ## Именование коммитов — версия, и ничего кроме версии
 
@@ -720,23 +637,12 @@ Append-only журнал **событий** сообщений: на каждо�
 Started 2026-07-12: `web/index.html` + `web/app.js` can now run as a plain browser tab with zero
 native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachments) send/receive.
 
-> **Деплой — отдельный шаг, и его легко забыть.** Клиент раздаёт nginx с
-> `/var/www/msg.zalikus.org/` (вхост `msg.zalikus.org`), а не сам `zali_server`. Переезд на
-> `ms` 2026-09-05 его не захватил: до 0.2b33 там лежала 25-байтная заглушка
-> `<h1>msg.zalikus.org</h1>`, то есть браузерной и PWA-версии в проде физически не было
-> несколько дней, и никакой сборкой или коммитом это не проверялось.
->
-> Выкладывать надо ровно этот набор (`web/src/` браузеру не нужен, `index.html` грузит
-> только `app.js`):
-> ```bash
-> scripts/build_web_wasm.sh && python3 scripts/bundle_web.py
-> rsync -av --delete-after web/{index.html,app.js,style.css,manifest.json,service-worker.js,icon.svg,icon-192.png,icon-512.png,apple-touch-icon.png} ms:/var/www/msg.zalikus.org/
-> rsync -av web/wasm-pkg/{zali_core.js,zali_core_bg.wasm} ms:/var/www/msg.zalikus.org/wasm-pkg/
-> ```
-> Проверять живой загрузкой, а не кодом ответа: `wasmAvailable` в консоли должен быть
-> `true` (nginx обязан отдавать `.wasm` как `application/wasm` — в `mime.types` это есть),
-> а `https://msg.zalikus.org` — присутствовать в `ALLOWED_ORIGINS` серверного env, иначе
-> клиент поднимется и не сможет сделать ни одного запроса.
+> **Деплой — отдельный шаг, и его легко забыть.** Standalone-клиент раздаёт nginx отдельного
+> вхоста `msg.zalikus.org`, а не сам `zali_server`, поэтому ни сборка, ни коммит его не выкладывают.
+> Точный набор файлов и команды — в `CLAUDE.local.md`. Проверять живой загрузкой, а не кодом
+> ответа: `wasmAvailable` в консоли должен быть `true` (`.wasm` обязан отдаваться как
+> `application/wasm`), а `https://msg.zalikus.org` — присутствовать в `ALLOWED_ORIGINS` серверного
+> env, иначе клиент поднимется и не сможет сделать ни одного запроса.
 - `hasNativeBridge()` gates almost every native-only code path in `interface.js`; the `!hasNativeBridge()`
   branches for sending, DM history load, and real-time receive used to just no-op/warn — they now
   have real browser implementations (`browserSendMessage`, `loadBrowserDmHistory`,
@@ -1000,7 +906,7 @@ opaque-origin оно есть и бросает `SecurityError`.
 - `ALLOW_GUEST_MODE=true` — это не «упрощённый вход», а отключение аутентификации:
   любой запрос без токена выполняется от имени `Zalikus`. Сервер пишет об этом
   предупреждение при каждом старте. В `.env.example` значение по умолчанию было `true`
-  до 2026-08-22 — проверьте `/etc/zali/zali-server.env` на боевом сервере.
+  до 2026-08-22 — проверьте env боевого сервера (см. `CLAUDE.local.md`).
 - `null` в `ALLOWED_ORIGINS` отфильтровывается на старте: это origin песочничного
   iframe, `data:`- и `file:`-документа, а CORS работает с `allow_credentials(true)`.
   В `.env.example` он тоже стоял.
@@ -1015,20 +921,8 @@ SHA-256-отпечаток, а не ключ. Легаси-таблица `conve
 
 ### Что остаётся незакрытым (осознанно)
 
-- **Релизы не подписаны.** Клиент проверяет SHA-256, но сумма приходит из того же
-  ответа `/api/version`, что и ссылка: компрометация сервера = RCE на всех десктопах.
-  Лечится подписью манифеста офлайн-ключом, вшитым в клиенты.
-- **Нет аутентичности отправителя.** `sender` проставляет сервер из JWT, подписи
-  сообщений ключом устройства нет — скомпрометированный сервер может подменить автора
-  (прочитать текст по-прежнему не может).
-- **CSP для standalone-веба.** `msg.zalikus.org` раздаёт nginx, `security_headers` из
-  этого репозитория к нему не применяются.
-- **Каналы серверов шифруются не сквозно (с 0.2b31, решение принято сознательно).** Ключ
-  канала выводится из его scope (`deriveServerChannelKey`), то есть вычисляется любым, кто
-  знает id сервера и канала — включая сам сервер. Шифрование там защищает архив в покое и на
-  транспорте, но не от сервера. Разменяно на работоспособность: сквозная схема с конвертами
-  на канал не доезжала до большинства участников, и канал читали только двое. Личные
-  переписки (`dm:`) остались сквозными.
+Список известных, осознанно не закрытых слабостей ведётся в `CLAUDE.local.md` (не в git:
+репозиторий публичный). Сверяться с ним перед любой правкой в крипто, релизах и авторстве сообщений.
 
 ## Приоритеты при исправлении багов
 

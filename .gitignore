@@ -53,3 +53,7 @@ tests/voice_e2e/node_modules/
 
 # Runtime data (server-generated uploads/avatars), not source
 /assets/
+
+# Инфраструктура прода — репозиторий публичный, держать только локально
+CLAUDE.local.md
+ops/
