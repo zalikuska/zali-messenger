@@ -37,6 +37,18 @@ function hits(re) {
 
 console.log('\n== source invariants ==');
 
+// Production 2026-09-10: one account on two Macs. The idle one acted on call events
+// meant for the one in the call — joined, re-offered, and sent voice_leave three
+// seconds after the other answered. The server addresses events with `targetDevice`;
+// the client has to drop the ones that are not its own before anything acts on them,
+// and has to say which device it is on everything it sends.
+record('voice events addressed to another device are dropped before handling',
+    /handleVoiceEvent\(payload[\s\S]{0,600}?isDuplicateVoiceEvent[\s\S]{0,500}?payload\.targetDevice[\s\S]{0,200}?this\.voiceDeviceId\(\)[\s\S]{0,200}?return;/.test(src),
+    'handleVoiceEvent must compare payload.targetDevice with voiceDeviceId() right after dedupe');
+record('every outgoing voice event names its device',
+    /voiceEventPayload\(payload[\s\S]{0,800}?device:\s*this\.voiceDeviceId\(\)/.test(src),
+    'voiceEventPayload must add `device`');
+
 // WebKit never settles a refused resume(); awaiting it froze call setup entirely.
 record('no bare `await ctx.resume()` anywhere',
     hits(/await\s+[\w.?]*\.resume\(\)/).length === 0,

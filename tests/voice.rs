@@ -364,6 +364,264 @@ async fn channel_keepalive_refreshes_membership_while_still_in_the_room() {
     assert_eq!(state["participants"], serde_json::json!(["alice"]));
 }
 
+/// `voice_rooms` lives in memory, so a restart (every deploy) forgets every channel
+/// call in progress. 0.2b36 answered the members' keepalives with `room_not_found`,
+/// which the client obeys by hanging up — so each deploy ended every channel call two
+/// seconds after the server came back. A room the server merely forgot is recovered;
+/// only an explicit leave (the test above) is final.
+#[tokio::test]
+async fn channel_keepalive_rebuilds_membership_the_server_has_forgotten() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let room_id = format!("voice:channel:{}:{}", server_id, channel_id);
+
+    let mut ws = connect_ws(&app, &alice).await;
+    // Never joined on this server instance: what a restart leaves behind.
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+            "keepalive": true,
+            "device": "mac-1",
+        }),
+    )
+    .await;
+    let events = drain_voice_events(&mut ws, 400).await;
+    assert!(
+        find_event(&events, "voice_error").is_none(),
+        "a forgotten room must be recovered, not declared gone: {events:?}"
+    );
+    let state = find_event(&events, "voice_room_state").expect("membership must come back");
+    assert_eq!(state["participants"], serde_json::json!(["alice"]));
+    assert_eq!(state["targetDevice"], "mac-1");
+}
+
+/// Production, 2026-09-10: one account signed in on two Macs. The one that was not in
+/// the channel call sent `voice_leave`, the server removed the account from the room,
+/// and the Mac actually talking was hung up by its own next keepalive.
+#[tokio::test]
+async fn a_second_device_cannot_leave_a_call_it_is_not_in() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let room_id = format!("voice:channel:{}:{}", server_id, channel_id);
+    let join = |device: &str, keepalive: bool| {
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+            "keepalive": keepalive,
+            "device": device,
+        })
+    };
+
+    let mut in_call = connect_ws(&app, &alice).await;
+    let mut idle = connect_ws(&app, &alice).await;
+    send(&mut in_call, join("mac-1", false)).await;
+    let _ = drain_voice_events(&mut in_call, 300).await;
+    let _ = drain_voice_events(&mut idle, 100).await;
+
+    send(
+        &mut idle,
+        serde_json::json!({ "type": "voice_leave", "roomId": room_id, "device": "mac-2" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut idle, 300).await;
+
+    send(&mut in_call, join("mac-1", true)).await;
+    let events = drain_voice_events(&mut in_call, 400).await;
+    assert!(
+        find_event(&events, "voice_error").is_none(),
+        "the device in the call must still be in it: {events:?}"
+    );
+    let state = find_event(&events, "voice_room_state").expect("membership reaffirmed");
+    assert_eq!(state["participants"], serde_json::json!(["alice"]));
+}
+
+/// Joining on another device takes the call there, and the device that had it is told
+/// so — addressed to it alone, with a `vid` so its two sockets deliver it once.
+#[tokio::test]
+async fn joining_on_another_device_moves_the_call_and_tells_the_old_one() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let room_id = format!("voice:channel:{}:{}", server_id, channel_id);
+    let join = |device: &str, keepalive: bool| {
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+            "keepalive": keepalive,
+            "device": device,
+        })
+    };
+
+    let mut first = connect_ws(&app, &alice).await;
+    let mut second = connect_ws(&app, &alice).await;
+    send(&mut first, join("mac-1", false)).await;
+    let _ = drain_voice_events(&mut first, 300).await;
+    let _ = drain_voice_events(&mut second, 100).await;
+
+    send(&mut second, join("mac-2", false)).await;
+    let events = drain_voice_events(&mut first, 400).await;
+    let moved = events
+        .iter()
+        .find(|e| e["type"] == "voice_error" && e["code"] == "session_moved")
+        .expect("the old device must be told the call moved");
+    assert_eq!(moved["targetDevice"], "mac-1");
+    assert!(
+        moved["vid"].as_str().is_some_and(|vid| vid.starts_with("srv:")),
+        "server-made voice events need a vid: {moved}"
+    );
+
+    // Its leftover presence timer is refused, not allowed to take the call back.
+    send(&mut first, join("mac-1", true)).await;
+    let events = drain_voice_events(&mut first, 400).await;
+    let refused = find_event(&events, "voice_error").expect("stale keepalive must be refused");
+    assert_eq!(refused["code"], "session_moved");
+    assert!(
+        events
+            .iter()
+            .all(|e| e["type"] != "voice_room_state" || e["targetDevice"] == "mac-2"),
+        "nothing about the room may be addressed to the old device: {events:?}"
+    );
+}
+
+/// The DM half of the same incident: the callee's idle second device hung the call up
+/// three seconds after the first one answered. And the idle device's signals must not
+/// reach the caller either — two machines offering into one connection is a call with
+/// ICE up and no audio.
+#[tokio::test]
+async fn a_second_device_cannot_hang_up_or_signal_into_a_dm_call() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    add_contact(&app, &alice, "bob").await;
+    add_contact(&app, &bob, "alice").await;
+    let room_id = "voice:dm:alice:bob:two-devices";
+
+    let mut alice_ws = connect_ws(&app, &alice).await;
+    let mut bob_answering = connect_ws(&app, &bob).await;
+    let mut bob_idle = connect_ws(&app, &bob).await;
+
+    send(
+        &mut alice_ws,
+        serde_json::json!({
+            "type": "voice_call_invite", "roomId": room_id, "target": "bob", "device": "alice-1",
+        }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_idle, 300).await;
+    send(
+        &mut bob_answering,
+        serde_json::json!({
+            "type": "voice_call_accept", "roomId": room_id, "inviter": "alice", "device": "bob-1",
+        }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_answering, 400).await;
+    let accepted = find_event(&bob_events, "voice_call_accepted").expect("accept must be confirmed");
+    assert_eq!(accepted["targetDevice"], "bob-1", "only the answering device joins the call");
+    let alice_events = drain_voice_events(&mut alice_ws, 300).await;
+    let accepted = find_event(&alice_events, "voice_call_accepted").expect("caller must hear it");
+    assert_eq!(accepted["targetDevice"], "alice-1");
+    let _ = drain_voice_events(&mut bob_idle, 100).await;
+
+    send(
+        &mut bob_idle,
+        serde_json::json!({
+            "type": "voice_signal", "roomId": room_id, "to": "alice", "device": "bob-2",
+            "signal": { "type": "offer", "sdp": { "type": "offer", "sdp": "v=0" } },
+        }),
+    )
+    .await;
+    send(
+        &mut bob_idle,
+        serde_json::json!({ "type": "voice_leave", "roomId": room_id, "device": "bob-2" }),
+    )
+    .await;
+    let alice_events = drain_voice_events(&mut alice_ws, 400).await;
+    assert!(
+        find_event(&alice_events, "voice_call_ended").is_none()
+            && find_event(&alice_events, "voice_signal").is_none(),
+        "the idle device must neither end the call nor signal into it: {alice_events:?}"
+    );
+
+    // The answering device's keepalive still finds the call whole.
+    send(
+        &mut bob_answering,
+        serde_json::json!({
+            "type": "voice_join", "roomId": room_id, "roomType": "dm", "keepalive": true, "device": "bob-1",
+        }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_answering, 400).await;
+    assert!(find_event(&bob_events, "voice_error").is_none(), "call intact: {bob_events:?}");
+}
+
+/// After a real hang-up the other side's presence keepalive used to rebuild the DM
+/// room through restore_dm_room, and that client sat alone in a "connected" call,
+/// auto-rejecting every new call to it as busy.
+#[tokio::test]
+async fn dm_keepalive_does_not_rebuild_a_call_that_was_hung_up() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    add_contact(&app, &alice, "bob").await;
+    add_contact(&app, &bob, "alice").await;
+    let room_id = "voice:dm:alice:bob:hung-up";
+
+    let mut alice_ws = connect_ws(&app, &alice).await;
+    let mut bob_ws = connect_ws(&app, &bob).await;
+    send(
+        &mut alice_ws,
+        serde_json::json!({ "type": "voice_call_invite", "roomId": room_id, "target": "bob", "device": "a" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    send(
+        &mut bob_ws,
+        serde_json::json!({ "type": "voice_call_accept", "roomId": room_id, "inviter": "alice", "device": "b" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    let _ = drain_voice_events(&mut alice_ws, 100).await;
+
+    send(
+        &mut alice_ws,
+        serde_json::json!({ "type": "voice_leave", "roomId": room_id, "device": "a" }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_ws, 400).await;
+    assert!(find_event(&bob_events, "voice_call_ended").is_some(), "{bob_events:?}");
+
+    // Bob's client missed it (say, a reconnect in that very second) and keeps ticking.
+    send(
+        &mut bob_ws,
+        serde_json::json!({ "type": "voice_join", "roomId": room_id, "roomType": "dm", "keepalive": true, "device": "b" }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_ws, 400).await;
+    assert!(
+        find_event(&bob_events, "voice_room_state").is_none(),
+        "a hung-up call must not be rebuilt: {bob_events:?}"
+    );
+    let error = find_event(&bob_events, "voice_error").expect("must be told the call is over");
+    assert_eq!(error["code"], "room_not_found");
+}
+
 /// Every `voice_error` carries a machine-readable `code`. The client ends a call on
 /// `room_not_found`, and matching that on the Russian prose in `message` would come
 /// apart the first time someone rewords it.

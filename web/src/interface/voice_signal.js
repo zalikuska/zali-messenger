@@ -437,6 +437,24 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // An event the server addressed to another device of this account. Almost all of
+    // them are simply not ours; the one that matters is an invite this device is still
+    // ringing for being answered on the other one — without this, this device kept
+    // ringing for a call already in progress elsewhere until the server's missed-call
+    // timeout, and answering it then would have evicted the device that was talking.
+    handleVoiceEventForOtherDevice(eventType, payload = {}) {
+        const roomId = String(payload.roomId || '').trim();
+        this.voiceTrace('event-other-device', { eventType, roomId, targetDevice: payload.targetDevice || '' });
+        const answered = eventType === 'voice_call_accepted' || eventType === 'voice_call_connected';
+        if (!answered || !roomId) return;
+        if (String(this.voice.incomingInvite?.roomId || '').trim() !== roomId) return;
+        this.voiceDiag('invite-answered-elsewhere', { roomId, status: this.voice.status || '' });
+        this.addLogEntry({ type: 'INFO', msg: 'Звонок принят на другом устройстве', ts: new Date().toLocaleTimeString() });
+        // Not recorded in call history here: the device that answered records it.
+        this.resetVoiceState({ preserveInvite: false });
+        this.renderVoicePanel();
+    }
+
     // De-duplicates voice_* events that may now legitimately arrive twice — once
     // over the dedicated voice WebSocket, once over the more reliable main
     // message socket's fallback forwarding (see voiceEventPayload). Keeps a
@@ -459,6 +477,15 @@ ZaliMixin(ZaliInterface, class {
         if (!eventType) return;
         if (this.isDuplicateVoiceEvent(payload.vid)) {
             this.voiceTrace('event-dedup', { eventType, vid: payload.vid || '' }, 'INFO');
+            return;
+        }
+        // Addressed to another device of this account (the one actually in the call).
+        // The server still delivers it to every socket of the account, so this is where
+        // it stops: acting on it here made an idle device join, re-offer or tear down a
+        // call it had never been part of.
+        const targetDevice = String(payload.targetDevice || '').trim();
+        if (targetDevice && targetDevice !== this.voiceDeviceId()) {
+            this.handleVoiceEventForOtherDevice(eventType, payload);
             return;
         }
         this.voiceTrace('event-recv', {
@@ -588,6 +615,13 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceTrace('outgoing-rejected', { roomId: payload.roomId || '', from: payload.from || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'rejected', endedAt: Date.now() });
                 this.resetVoiceState({ preserveInvite: false });
+            } else if (this.voice.incomingInvite?.roomId === String(payload.roomId || '').trim()) {
+                // Declined on another device of this account — the server tells the
+                // callee's account too, so the rest of its devices stop ringing. The
+                // declining device already reset and records the call itself.
+                this.voiceTrace('incoming-rejected-elsewhere', { roomId: payload.roomId || '' }, 'INFO');
+                this.resetVoiceState({ preserveInvite: false });
+                this.renderVoicePanel();
             }
             return;
         }
@@ -707,6 +741,8 @@ ZaliMixin(ZaliInterface, class {
             // wording change would silently detach this from.
             if (code === 'room_not_found') {
                 this.concludeVanishedVoiceRoom(errorRoomId, String(payload.message || ''));
+            } else if (code === 'session_moved') {
+                this.concludeMovedVoiceSession(errorRoomId);
             }
             return;
         }

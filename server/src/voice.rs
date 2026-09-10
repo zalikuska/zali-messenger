@@ -6,9 +6,9 @@
 use crate::{can_access_channel, contact_exists, send_json_to_user, AppState, AuthenticatedUser};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use base64::Engine;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 /// Short-lived TURN credentials, in the scheme coturn implements as
@@ -63,6 +63,22 @@ pub(crate) struct VoiceRoom {
     initiator: Option<String>,
     target: Option<String>,
     participants: HashSet<String>,
+    /// Which DEVICE of each participant holds that participant's place in the room.
+    ///
+    /// Membership is per account (`participants`, `user_voice_rooms`), but a call is
+    /// carried by exactly one device — and the server used to fan every voice event
+    /// out to all of an account's devices and accept every event from any of them.
+    /// With one account signed in on two machines that is not a corner case, it is
+    /// what production looked like on 2026-09-10: the idle second Mac sent
+    /// `voice_leave` three seconds after the first one accepted, which destroyed the
+    /// DM room and hung up the caller; in a channel it removed the account from the
+    /// roster under the device actually talking. Absent entry = a client too old to
+    /// say which device it is; such a participant is not targeted and not guarded,
+    /// exactly as before.
+    devices: HashMap<String, String>,
+    /// The device that placed a DM call, so the ringing/accepted/rejected replies go
+    /// to it and not to every device of the caller's account.
+    initiator_device: Option<String>,
 }
 
 impl VoiceRoom {
@@ -75,8 +91,128 @@ impl VoiceRoom {
             initiator: None,
             target: None,
             participants: HashSet::new(),
+            devices: HashMap::new(),
+            initiator_device: None,
         }
     }
+}
+
+/// Why an account is leaving its voice room. Only an explicit hang-up is remembered
+/// (see `mark_voice_room_ended`): a WebSocket that closed or a switch to another room
+/// is exactly what a later keepalive is allowed to recover from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VoiceLeave {
+    Explicit,
+    Implicit,
+}
+
+/// How long an explicit end is remembered. Long enough to outlast any presence timer
+/// a client could still have running for that room; a genuinely new call gets a new
+/// room id anyway.
+const ENDED_VOICE_ROOM_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// The device a voice event came from, as the client names it (`device`, see
+/// voiceEventPayload). Bounded so a client cannot park arbitrary data in room state.
+fn event_device(payload: &serde_json::Value) -> String {
+    payload["device"]
+        .as_str()
+        .map(str::trim)
+        .filter(|device| device.len() <= 128)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Addresses an event to one device of the recipient account. The server cannot
+/// route by device (sockets are not tagged with one, and a native shell holds two per
+/// device), so every socket still gets the frame and the client drops what is not
+/// its own (`targetDevice`, see handleVoiceEvent).
+fn targeted(mut payload: serde_json::Value, device: &str) -> serde_json::Value {
+    if !device.is_empty() {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "targetDevice".to_string(),
+                serde_json::Value::String(device.to_string()),
+            );
+        }
+    }
+    payload
+}
+
+/// Two device ids name different devices only when both are known — an old client
+/// that sends none is never treated as a stranger to its own call.
+fn other_device(holder: &str, device: &str) -> bool {
+    !holder.is_empty() && !device.is_empty() && holder != device
+}
+
+fn member_device(state: &Arc<AppState>, room_id: &str, username: &str) -> String {
+    state
+        .voice_rooms
+        .get(room_id)
+        .and_then(|room| room.devices.get(username).cloned())
+        .unwrap_or_default()
+}
+
+fn member_end_key(room_id: &str, username: &str) -> String {
+    format!("{}\n{}", room_id, username)
+}
+
+/// Remembers that a room (DM: the whole room; channel: one account's place in it) was
+/// ended on purpose, so a presence keepalive still ticking somewhere cannot rebuild it.
+fn mark_voice_room_ended(state: &Arc<AppState>, key: String) {
+    let now = Instant::now();
+    if state.ended_voice_rooms.len() > 2048 {
+        state
+            .ended_voice_rooms
+            .retain(|_, at| now.duration_since(*at) < ENDED_VOICE_ROOM_TTL);
+    }
+    state.ended_voice_rooms.insert(key, now);
+}
+
+fn voice_room_ended(state: &Arc<AppState>, key: &str) -> bool {
+    match state.ended_voice_rooms.get(key).map(|at| at.elapsed()) {
+        Some(age) if age < ENDED_VOICE_ROOM_TTL => true,
+        Some(_) => {
+            state.ended_voice_rooms.remove(key);
+            false
+        }
+        None => false,
+    }
+}
+
+fn session_moved_payload(room_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "voice_error",
+        "roomId": room_id,
+        "code": "session_moved",
+        "message": "Звонок продолжен на другом устройстве",
+    })
+}
+
+async fn send_voice_error(
+    state: &Arc<AppState>,
+    username: &str,
+    device: &str,
+    room_id: &str,
+    code: &str,
+    message: &str,
+) {
+    // To the device that asked. An error about one device's request used to reach
+    // every device of the account, and `room_not_found` ends the call wherever it
+    // lands.
+    send_json_to_user(
+        state,
+        username,
+        targeted(
+            serde_json::json!({
+                "type": "voice_error",
+                "roomId": room_id,
+                "code": code,
+                "message": message,
+            }),
+            device,
+        ),
+    )
+    .await;
 }
 
 fn voice_room_key(
@@ -123,7 +259,10 @@ pub(crate) async fn send_voice_room_snapshot_to_user(state: &Arc<AppState>, user
 
     if let Some(room_id) = state.user_voice_rooms.get(username) {
         if let Some(room) = state.voice_rooms.get(room_id.value()) {
-            payloads.push(voice_room_payload(room_id.value(), room.value()));
+            // Only the device holding the call may adopt it from the reconnect
+            // snapshot; another device of the account connecting must not.
+            let device = room.devices.get(username).cloned().unwrap_or_default();
+            payloads.push(targeted(voice_room_payload(room_id.value(), room.value()), &device));
         }
     }
 
@@ -137,7 +276,14 @@ pub(crate) async fn send_voice_room_snapshot_to_user(state: &Arc<AppState>, user
             let initiator_match = room.initiator.as_deref() == Some(username.as_str());
             let target_match = room.target.as_deref() == Some(username.as_str());
             if is_pending_dm && (participant_match || initiator_match || target_match) {
-                payloads.push(voice_room_payload(&room_id, room));
+                // The caller's ringing belongs to the device that dialled; the callee
+                // rings on every device.
+                let device = if initiator_match {
+                    room.initiator_device.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                payloads.push(targeted(voice_room_payload(&room_id, room), &device));
             }
         }
     }
@@ -148,13 +294,15 @@ pub(crate) async fn send_voice_room_snapshot_to_user(state: &Arc<AppState>, user
 }
 
 async fn broadcast_voice_room_state(state: &Arc<AppState>, room_id: &str) {
-    let room = match state.voice_rooms.get(room_id) {
-        Some(room) => room,
-        None => return,
-    };
-    let payload = {
-        let room = room.value();
-        voice_room_payload(room_id, room)
+    // Copied out and the map guard dropped before the first await: the guard used to
+    // live across every send below, holding a voice_rooms shard lock through
+    // arbitrary socket I/O.
+    let Some((payload, devices)) = state
+        .voice_rooms
+        .get(room_id)
+        .map(|room| (voice_room_payload(room_id, room.value()), room.devices.clone()))
+    else {
+        return;
     };
     let participants = payload["participants"]
         .as_array()
@@ -164,26 +312,43 @@ async fn broadcast_voice_room_state(state: &Arc<AppState>, room_id: &str) {
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect::<Vec<_>>();
     for participant in participants {
-        send_json_to_user(state, &participant, payload.clone()).await;
+        let device = devices.get(&participant).cloned().unwrap_or_default();
+        send_json_to_user(state, &participant, targeted(payload.clone(), &device)).await;
     }
 }
 
-pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str) {
+pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reason: VoiceLeave) {
     let room_id = match state.user_voice_rooms.remove(username) {
         Some((_, room_id)) => room_id,
         None => return,
     };
-    info!("[VOICE] '{}' leaves room {}", username, room_id);
+    info!("[VOICE] '{}' leaves room {} ({:?})", username, room_id, reason);
 
     let mut room_type = String::new();
     let mut remaining_participants: Vec<String> = Vec::new();
+    let mut devices: HashMap<String, String> = HashMap::new();
     let mut remove_room = false;
     if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
         room_type = room.room_type.clone();
         room.participants.remove(username);
+        room.devices.remove(username);
         remaining_participants = room.participants.iter().cloned().collect();
+        devices = room.devices.clone();
         remove_room =
             room.participants.is_empty() || (room_type == "dm" && room.participants.len() <= 1);
+    }
+
+    if reason == VoiceLeave::Explicit {
+        if room_type == "dm" {
+            // The whole DM room is over. Without this the other side's presence
+            // keepalive — or this side's, from a device that missed the hang-up —
+            // rebuilt it through restore_dm_room within 8 s, and that client sat
+            // alone in a "connected" call forever, auto-rejecting every new call to
+            // it as busy.
+            mark_voice_room_ended(state, room_id.clone());
+        } else {
+            mark_voice_room_ended(state, member_end_key(&room_id, username));
+        }
     }
 
     if remove_room {
@@ -191,14 +356,18 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str) {
         state.voice_rooms.remove(&room_id);
         if room_type == "dm" {
             for participant in remaining_participants {
+                let device = devices.get(&participant).cloned().unwrap_or_default();
                 send_json_to_user(
                     state,
                     &participant,
-                    serde_json::json!({
-                        "type": "voice_call_ended",
-                        "roomId": room_id,
-                        "from": username,
-                    }),
+                    targeted(
+                        serde_json::json!({
+                            "type": "voice_call_ended",
+                            "roomId": room_id,
+                            "from": username,
+                        }),
+                        &device,
+                    ),
                 )
                 .await;
             }
@@ -208,9 +377,11 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn join_voice_room(
     state: &Arc<AppState>,
     username: &str,
+    device: &str,
     room_id: &str,
     room_type: &str,
     server_id: Option<&str>,
@@ -218,13 +389,14 @@ async fn join_voice_room(
     keepalive: bool,
 ) {
     info!(
-        "[VOICE] '{}' joining room {} ({}) keepalive={}",
-        username, room_id, room_type, keepalive
+        "[VOICE] '{}' joining room {} ({}) keepalive={} device={}",
+        username, room_id, room_type, keepalive, device
     );
-    let should_leave_current_room = match state.user_voice_rooms.get(username) {
-        Some(current_room) => current_room.value().as_str() != room_id,
-        None => true,
-    };
+    let current_room = state
+        .user_voice_rooms
+        .get(username)
+        .map(|current| current.value().clone());
+    let should_leave_current_room = current_room.as_deref() != Some(room_id);
 
     // user_voice_rooms is keyed by USERNAME, so a user can only be in one voice
     // room account-wide: joining evicts whatever room they were in. That is fine
@@ -233,16 +405,60 @@ async fn join_voice_room(
     // device's keepalive would evict the other every few seconds, flapping both
     // calls forever. Absent mapping (the eviction we are recovering from) is not
     // "a different room", so the recovery path still works.
-    if keepalive && should_leave_current_room && state.user_voice_rooms.contains_key(username) {
+    if keepalive && should_leave_current_room {
+        if let Some(current) = current_room.as_deref() {
+            info!(
+                "[VOICE] ignoring keepalive from '{}' for {} — already in another room",
+                username, room_id
+            );
+            // And when that other room is held by another device, the one ticking here
+            // is a device whose call was moved away. Tell it, or it keeps a dead call
+            // on screen and re-asserts it every 8 s.
+            if other_device(&member_device(state, current, username), device) {
+                send_json_to_user(state, username, targeted(session_moved_payload(room_id), device))
+                    .await;
+            }
+            return;
+        }
+    }
+
+    // The same account's place in THIS room is held by another device: a keepalive from
+    // here is a leftover timer, not a member re-asserting itself, and must not refresh
+    // (or re-route) anything.
+    if keepalive
+        && !should_leave_current_room
+        && other_device(&member_device(state, room_id, username), device)
+    {
         info!(
-            "[VOICE] ignoring keepalive from '{}' for {} — already in another room",
-            username, room_id
+            "[VOICE] ignoring keepalive from '{}' device={} for {} — held by another device",
+            username, device, room_id
         );
+        send_json_to_user(state, username, targeted(session_moved_payload(room_id), device)).await;
         return;
     }
 
     if should_leave_current_room {
-        leave_voice_room(state, username).await;
+        if let Some(previous) = current_room.as_deref() {
+            let previous_holder = member_device(state, previous, username);
+            if other_device(&previous_holder, device) {
+                // Joining here takes the account out of the call another of its
+                // devices is in; that device has to hear it from us.
+                send_json_to_user(
+                    state,
+                    username,
+                    targeted(session_moved_payload(previous), &previous_holder),
+                )
+                .await;
+            }
+        }
+        leave_voice_room(state, username, VoiceLeave::Implicit).await;
+    }
+
+    if !keepalive {
+        // A real join is the user asking to be here again.
+        state
+            .ended_voice_rooms
+            .remove(&member_end_key(room_id, username));
     }
 
     let mut room = state
@@ -256,14 +472,33 @@ async fn join_voice_room(
             )
         });
 
-    let roster_changed = {
+    let (roster_changed, displaced) = {
         let room = room.value_mut();
         room.room_type = room_type.to_string();
         room.server_id = server_id.map(|v| v.to_string());
         room.channel_id = channel_id.map(|v| v.to_string());
-        room.participants.insert(username.to_string())
+        let displaced = room
+            .devices
+            .get(username)
+            .filter(|held| other_device(held.as_str(), device))
+            .cloned();
+        if !device.is_empty() {
+            room.devices.insert(username.to_string(), device.to_string());
+        } else if !keepalive {
+            // An explicit join from a client that names no device: nothing to target.
+            room.devices.remove(username);
+        }
+        (room.participants.insert(username.to_string()), displaced)
     };
     drop(room); // release DashMap shard lock before re-entering voice_rooms via broadcast
+
+    if let Some(previous) = displaced {
+        info!(
+            "[VOICE] '{}' moved room {} from device={} to device={}",
+            username, room_id, previous, device
+        );
+        send_json_to_user(state, username, targeted(session_moved_payload(room_id), &previous)).await;
+    }
 
     state
         .user_voice_rooms
@@ -397,9 +632,11 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
             room.initiator.clone(),
             room.target.clone(),
             participants,
+            room.devices.clone(),
         )
     });
-    let Some((room_type, call_state, initiator, room_target, participants)) = room_snapshot else {
+    let Some((room_type, call_state, initiator, room_target, participants, devices)) = room_snapshot
+    else {
         warn!(
             "[VOICE][ROUTE] reject missing room sender={} roomId={}",
             sender, room_id
@@ -413,6 +650,18 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
         warn!(
             "[VOICE][ROUTE] reject unauthorized sender={} roomId={} roomType={} state={}",
             sender, room_id, room_type, call_state
+        );
+        return;
+    }
+    // The account is in the room, but through another device. Offers from here are
+    // what left a peer applying descriptions from two machines to one connection:
+    // ICE connected, DTLS never did, and the call carried no audio at all.
+    let sender_device = event_device(payload);
+    let sender_holder = devices.get(sender).cloned().unwrap_or_default();
+    if other_device(&sender_holder, &sender_device) {
+        warn!(
+            "[VOICE][ROUTE] reject signal from a device not in the call sender={} device={} holder={} roomId={}",
+            sender, sender_device, sender_holder, room_id
         );
         return;
     }
@@ -449,6 +698,10 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
 
     let mut signal = payload.clone();
     signal["from"] = serde_json::Value::String(sender.to_string());
+    if let Some(object) = signal.as_object_mut() {
+        // Addressing is the server's to decide, never the sender's.
+        object.remove("targetDevice");
+    }
 
     if let Some(target) = payload["to"]
         .as_str()
@@ -472,15 +725,17 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
             .get(&target)
             .map(|conns| conns.len())
             .unwrap_or(0);
+        let target_device = devices.get(&target).cloned().unwrap_or_default();
         info!(
-            "[VOICE][ROUTE] direct from={} to={} roomId={} signalType={} active_ws={}",
+            "[VOICE][ROUTE] direct from={} to={} roomId={} signalType={} active_ws={} device={}",
             sender,
             target,
             room_id,
             payload["signal"]["type"].as_str().unwrap_or_default(),
-            active_ws
+            active_ws,
+            target_device
         );
-        send_json_to_user(state, &target, signal).await;
+        send_json_to_user(state, &target, targeted(signal, &target_device)).await;
         return;
     }
 
@@ -501,7 +756,8 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
             payload["signal"]["type"].as_str().unwrap_or_default(),
             active_ws
         );
-        send_json_to_user(state, &participant, signal.clone()).await;
+        let device = devices.get(&participant).cloned().unwrap_or_default();
+        send_json_to_user(state, &participant, targeted(signal.clone(), &device)).await;
     }
 }
 
@@ -511,15 +767,17 @@ pub(crate) async fn handle_voice_event(
     payload: &serde_json::Value,
 ) {
     let event_type = payload["type"].as_str().unwrap_or_default();
+    let device = event_device(payload);
     info!(
-        "[VOICE][EVENT] user={} type={} roomId={} roomType={} target={} inviter={} from={}",
+        "[VOICE][EVENT] user={} type={} roomId={} roomType={} target={} inviter={} from={} device={}",
         sender,
         event_type,
         payload["roomId"].as_str().unwrap_or_default(),
         payload["roomType"].as_str().unwrap_or_default(),
         payload["target"].as_str().unwrap_or_default(),
         payload["inviter"].as_str().unwrap_or_default(),
-        payload["from"].as_str().unwrap_or_default()
+        payload["from"].as_str().unwrap_or_default(),
+        device
     );
     match event_type {
         "voice_join" => {
@@ -554,15 +812,13 @@ pub(crate) async fn handle_voice_event(
                             .await
                             .unwrap_or(false)
                         {
-                            send_json_to_user(
+                            send_voice_error(
                                 state,
                                 sender,
-                                serde_json::json!({
-                                    "type": "voice_error",
-                                    "roomId": room_id,
-                                    "code": "channel_forbidden",
-                                    "message": "Нет доступа к голосовому каналу"
-                                }),
+                                &device,
+                                &room_id,
+                                "channel_forbidden",
+                                "Нет доступа к голосовому каналу",
                             )
                             .await;
                             return;
@@ -573,53 +829,44 @@ pub(crate) async fn handle_voice_event(
                             "[VOICE][JOIN] reject channel join without server/channel sender={} roomId={}",
                             sender, room_id
                         );
-                        send_json_to_user(
+                        send_voice_error(
                             state,
                             sender,
-                            serde_json::json!({
-                                "type": "voice_error",
-                                "roomId": room_id,
-                                "code": "bad_request",
-                                "message": "Необходимо указать server_id и channel_id"
-                            }),
+                            &device,
+                            &room_id,
+                            "bad_request",
+                            "Необходимо указать server_id и channel_id",
                         )
                         .await;
                         return;
                     }
                 }
-                // A keepalive re-asserts membership the server already granted; it must
-                // never be what PUTS someone into the room in the first place — that is
-                // an explicit (non-keepalive) join's job, already authorised above by
-                // can_access_channel. Without this check, a client whose local
-                // voice.roomId survived past the 150 s WS-close eviction in realtime.rs
-                // (a laptop sleep, a Wi-Fi roam, any reconnect gap longer than that
-                // window) silently rejoined the channel's call on its very next
-                // presence tick — mic re-captured, call strip back up — with nothing
-                // the user did to ask for it. join_voice_room has no way to tell "known
-                // member reconnecting" from "stranger asking to be let in": both look
-                // like an absent user_voice_rooms entry, so the distinction has to be
-                // made here, same as the dm branch below already does for the same
-                // reason.
-                if keepalive {
-                    let still_member = state
+                // A keepalive for a room that does not list us is either a room the
+                // server forgot (a restart — every deploy — or the 150 s eviction after
+                // a long outage) or one we left on purpose. The first must be recovered:
+                // 0.2b36 refused both with room_not_found, which the client obeys by
+                // hanging up, so every deploy ended every channel call two seconds after
+                // the server came back (production, 2026-09-10 21:10:37). Only the second
+                // is final, and only an explicit leave records it. Channel access itself
+                // was already checked above, same as for a real join.
+                if keepalive
+                    && !state
                         .voice_rooms
                         .get(&room_id)
                         .map(|room| room.participants.contains(sender))
-                        .unwrap_or(false);
-                    if !still_member {
-                        send_json_to_user(
-                            state,
-                            sender,
-                            serde_json::json!({
-                                "type": "voice_error",
-                                "roomId": room_id,
-                                "code": "room_not_found",
-                                "message": "Голосовой канал больше не активен для вас",
-                            }),
-                        )
-                        .await;
-                        return;
-                    }
+                        .unwrap_or(false)
+                    && voice_room_ended(state, &member_end_key(&room_id, sender))
+                {
+                    send_voice_error(
+                        state,
+                        sender,
+                        &device,
+                        &room_id,
+                        "room_not_found",
+                        "Голосовой канал больше не активен для вас",
+                    )
+                    .await;
+                    return;
                 }
             } else if room_type == "dm" {
                 // Three situations, and only the first one used to be handled:
@@ -646,7 +893,15 @@ pub(crate) async fn handle_voice_event(
                 });
                 let allowed = match membership {
                     Some(true) => true,
-                    _ => keepalive && dm_room_claim_authorized(state, sender, &room_id).await,
+                    // Rebuilt when the server forgot it — never after a real hang-up.
+                    None => {
+                        keepalive
+                            && !voice_room_ended(state, &room_id)
+                            && dm_room_claim_authorized(state, sender, &room_id).await
+                    }
+                    Some(false) => {
+                        keepalive && dm_room_claim_authorized(state, sender, &room_id).await
+                    }
                 };
                 if !allowed {
                     let (code, message) = if membership.is_none() {
@@ -654,17 +909,7 @@ pub(crate) async fn handle_voice_event(
                     } else {
                         ("room_forbidden", "Нет доступа к голосовой переписке")
                     };
-                    send_json_to_user(
-                        state,
-                        sender,
-                        serde_json::json!({
-                            "type": "voice_error",
-                            "roomId": room_id,
-                            "code": code,
-                            "message": message,
-                        }),
-                    )
-                    .await;
+                    send_voice_error(state, sender, &device, &room_id, code, message).await;
                     return;
                 }
                 if membership.is_none() {
@@ -675,6 +920,7 @@ pub(crate) async fn handle_voice_event(
             join_voice_room(
                 state,
                 sender,
+                &device,
                 &room_id,
                 room_type,
                 server_id.as_deref(),
@@ -684,8 +930,8 @@ pub(crate) async fn handle_voice_event(
             .await;
         }
         "voice_leave" => {
-            info!("[VOICE][LEAVE] user={} explicit_leave", sender);
-            leave_voice_room(state, sender).await;
+            info!("[VOICE][LEAVE] user={} device={} explicit_leave", sender, device);
+            leave_voice_room_from_device(state, sender, &device, payload).await;
         }
         "voice_signal" => {
             route_voice_signal(state, sender, payload).await;
@@ -714,15 +960,13 @@ pub(crate) async fn handle_voice_event(
             match contact_exists(&state.db, sender, &target).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    send_json_to_user(
+                    send_voice_error(
                         state,
                         sender,
-                        serde_json::json!({
-                            "type": "voice_error",
-                            "roomId": room_key,
-                            "code": "not_a_contact",
-                            "message": "Получатель должен быть в контактах"
-                        }),
+                        &device,
+                        &room_key,
+                        "not_a_contact",
+                        "Получатель должен быть в контактах",
                     )
                     .await;
                     return;
@@ -732,24 +976,24 @@ pub(crate) async fn handle_voice_event(
                         "Ошибка проверки контакта для voice_call_invite sender={} target={}: {}",
                         sender, target, e
                     );
-                    send_json_to_user(
+                    send_voice_error(
                         state,
                         sender,
-                        serde_json::json!({
-                            "type": "voice_error",
-                            "roomId": room_key,
-                            "code": "contact_check_failed",
-                            "message": "Не удалось проверить контакты"
-                        }),
+                        &device,
+                        &room_key,
+                        "contact_check_failed",
+                        "Не удалось проверить контакты",
                     )
                     .await;
                     return;
                 }
             }
             info!(
-                "[VOICE][INVITE] from={} to={} roomId={}",
-                sender, target, room_key
+                "[VOICE][INVITE] from={} to={} roomId={} device={}",
+                sender, target, room_key, device
             );
+            // A new call, even under a reused id, is not the one that ended.
+            state.ended_voice_rooms.remove(&room_key);
             {
                 let mut room = state
                     .voice_rooms
@@ -765,11 +1009,14 @@ pub(crate) async fn handle_voice_event(
                 room.participants.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(target.clone());
+                room.devices.clear();
+                room.initiator_device = (!device.is_empty()).then(|| device.clone());
             }
             // join_voice_room() already broadcasts the current room state (call_state
             // is already "ringing" above, before this call) — a second identical
             // broadcast here just doubled every invite's room-state traffic.
-            join_voice_room(state, sender, &room_key, "dm", None, None, false).await;
+            join_voice_room(state, sender, &device, &room_key, "dm", None, None, false).await;
+            // Rings on every device of the callee — any of them may answer.
             send_json_to_user(
                 state,
                 &target,
@@ -782,15 +1029,19 @@ pub(crate) async fn handle_voice_event(
                 }),
             )
             .await;
+            // But only the device that dialled is "calling".
             send_json_to_user(
                 state,
                 sender,
-                serde_json::json!({
-                    "type": "voice_call_outgoing",
-                    "roomId": room_key,
-                    "roomType": "dm",
-                    "target": target,
-                }),
+                targeted(
+                    serde_json::json!({
+                        "type": "voice_call_outgoing",
+                        "roomId": room_key,
+                        "roomType": "dm",
+                        "target": target,
+                    }),
+                    &device,
+                ),
             )
             .await;
 
@@ -800,11 +1051,12 @@ pub(crate) async fn handle_voice_event(
             let timeout_target = target.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(60)).await;
-                let Some((call_state, participants)) =
+                let Some((call_state, participants, initiator_device)) =
                     timeout_state.voice_rooms.get(&timeout_room_id).map(|room| {
                         (
                             room.call_state.clone(),
                             room.participants.iter().cloned().collect::<Vec<_>>(),
+                            room.initiator_device.clone().unwrap_or_default(),
                         )
                     })
                 else {
@@ -814,16 +1066,25 @@ pub(crate) async fn handle_voice_event(
                     return;
                 }
                 timeout_state.voice_rooms.remove(&timeout_room_id);
+                mark_voice_room_ended(&timeout_state, timeout_room_id.clone());
                 for participant in participants {
+                    let device = if participant == timeout_inviter {
+                        initiator_device.as_str()
+                    } else {
+                        ""
+                    };
                     send_json_to_user(
                         &timeout_state,
                         &participant,
-                        serde_json::json!({
-                            "type": "voice_call_missed",
-                            "roomId": timeout_room_id.clone(),
-                            "from": timeout_inviter.clone(),
-                            "target": timeout_target.clone(),
-                        }),
+                        targeted(
+                            serde_json::json!({
+                                "type": "voice_call_missed",
+                                "roomId": timeout_room_id.clone(),
+                                "from": timeout_inviter.clone(),
+                                "target": timeout_target.clone(),
+                            }),
+                            device,
+                        ),
                     )
                     .await;
                 }
@@ -874,8 +1135,9 @@ pub(crate) async fn handle_voice_event(
                 sender, room_id, inviter
             );
 
-            join_voice_room(state, sender, &room_id, "dm", None, None, false).await;
+            join_voice_room(state, sender, &device, &room_id, "dm", None, None, false).await;
 
+            let mut inviter_device = String::new();
             if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
                 let room = room.value_mut();
                 room.room_type = "dm".to_string();
@@ -887,6 +1149,14 @@ pub(crate) async fn handle_voice_event(
                 room.participants.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(inviter.clone());
+                // The call now lives on exactly two devices: the one that dialled and
+                // the one that answered.
+                room.devices
+                    .retain(|user, _| user.as_str() == sender || *user == inviter);
+                inviter_device = room.initiator_device.clone().unwrap_or_default();
+                if !inviter_device.is_empty() {
+                    room.devices.insert(inviter.clone(), inviter_device.clone());
+                }
             }
 
             state
@@ -901,6 +1171,10 @@ pub(crate) async fn handle_voice_event(
                 room_id, sender, inviter, sender, inviter
             );
             broadcast_voice_room_state(state, &room_id).await;
+            // Addressed per device. The callee's OTHER devices still receive it, see a
+            // targetDevice that is not theirs and stop ringing
+            // (handleVoiceEventForOtherDevice) — instead of all of them entering the
+            // call and negotiating as the same user.
             let accepted_payload = serde_json::json!({
                 "type": "voice_call_accepted",
                 "roomId": room_id,
@@ -908,8 +1182,8 @@ pub(crate) async fn handle_voice_event(
                 "target": inviter,
                 "participants": [sender, inviter],
             });
-            send_json_to_user(state, &inviter, accepted_payload.clone()).await;
-            send_json_to_user(state, sender, accepted_payload).await;
+            send_json_to_user(state, &inviter, targeted(accepted_payload.clone(), &inviter_device)).await;
+            send_json_to_user(state, sender, targeted(accepted_payload, &device)).await;
             let connected_payload = serde_json::json!({
                 "type": "voice_call_connected",
                 "roomId": room_id,
@@ -917,8 +1191,8 @@ pub(crate) async fn handle_voice_event(
                 "target": inviter,
                 "participants": [sender, inviter],
             });
-            send_json_to_user(state, &inviter, connected_payload.clone()).await;
-            send_json_to_user(state, sender, connected_payload).await;
+            send_json_to_user(state, &inviter, targeted(connected_payload.clone(), &inviter_device)).await;
+            send_json_to_user(state, sender, targeted(connected_payload, &device)).await;
             info!(
                 "[VOICE][ACCEPT-DONE] room={} sender={} inviter={}",
                 room_id, sender, inviter
@@ -956,10 +1230,16 @@ pub(crate) async fn handle_voice_event(
                 return;
             }
             info!(
-                "[VOICE][REJECT] from={} to={} roomId={}",
-                sender, inviter, room_id
+                "[VOICE][REJECT] from={} to={} roomId={} device={}",
+                sender, inviter, room_id, device
             );
+            let inviter_device = state
+                .voice_rooms
+                .get(&room_id)
+                .and_then(|room| room.initiator_device.clone())
+                .unwrap_or_default();
             state.voice_rooms.remove(&room_id);
+            mark_voice_room_ended(state, room_id.clone());
             // Only drop a user->room mapping if it actually points at the room being
             // rejected. The reject target may be busy in a *different* active call
             // (voice_call_invite never joins the target, so their mapping still points
@@ -972,17 +1252,18 @@ pub(crate) async fn handle_voice_event(
             state
                 .user_voice_rooms
                 .remove_if(inviter.as_str(), |_, v| v == &room_id);
-            send_json_to_user(
-                state,
-                &inviter,
-                serde_json::json!({
-                    "type": "voice_call_rejected",
-                    "roomId": room_id,
-                    "from": sender,
-                    "target": inviter,
-                }),
-            )
-            .await;
+            let rejected_payload = serde_json::json!({
+                "type": "voice_call_rejected",
+                "roomId": room_id,
+                "from": sender,
+                "target": inviter,
+            });
+            send_json_to_user(state, &inviter, targeted(rejected_payload.clone(), &inviter_device))
+                .await;
+            // And to the callee's own account: its other devices are still ringing for a
+            // call that no longer exists (the room is gone, so not even the missed-call
+            // timeout would stop them). The declining device has already reset.
+            send_json_to_user(state, sender, rejected_payload).await;
         }
         "voice_call_cancel" => {
             let target = payload["target"]
@@ -1020,6 +1301,7 @@ pub(crate) async fn handle_voice_event(
                 sender, target, room_id
             );
             state.voice_rooms.remove(&room_id);
+            mark_voice_room_ended(state, room_id.clone());
             // Same reasoning as the reject branch above: the cancelled invite's target
             // is never joined to the ringing room, so their user->room mapping may well
             // point at a *different* call they are actually in. Removing it
@@ -1044,9 +1326,44 @@ pub(crate) async fn handle_voice_event(
             .await;
         }
         "voice_call_end" => {
-            info!("[VOICE][END] from={} explicit_end", sender);
-            leave_voice_room(state, sender).await;
+            info!("[VOICE][END] from={} device={} explicit_end", sender, device);
+            leave_voice_room_from_device(state, sender, &device, payload).await;
         }
         _ => {}
     }
+}
+
+/// An explicit hang-up (`voice_leave` / `voice_call_end`), checked against which room
+/// and which device it actually speaks for. Both checks were missing: any device of the
+/// account, about any room, removed the account from whatever room it was in NOW.
+async fn leave_voice_room_from_device(
+    state: &Arc<AppState>,
+    sender: &str,
+    device: &str,
+    payload: &serde_json::Value,
+) {
+    let Some(current) = state
+        .user_voice_rooms
+        .get(sender)
+        .map(|room| room.value().clone())
+    else {
+        return;
+    };
+    let named = payload["roomId"].as_str().map(str::trim).unwrap_or_default();
+    if !named.is_empty() && named != current {
+        info!(
+            "[VOICE][LEAVE] ignoring leave for {} from '{}' — the account is in {}",
+            named, sender, current
+        );
+        return;
+    }
+    let holder = member_device(state, &current, sender);
+    if other_device(&holder, device) {
+        warn!(
+            "[VOICE][LEAVE] ignoring leave from '{}' device={} — {} is held by device={}",
+            sender, device, current, holder
+        );
+        return;
+    }
+    leave_voice_room(state, sender, VoiceLeave::Explicit).await;
 }

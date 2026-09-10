@@ -117,7 +117,24 @@ ZaliMixin(ZaliInterface, class {
             ...payload,
             type: payload.type || 'voice_signal',
             vid: `${this.myName() || 'me'}:${Date.now().toString(36)}:${this.voice.eventSeq}`,
+            // Which device this is. The server keeps one device per account in a call
+            // and answers it with `targetDevice`; without this an idle second device of
+            // the same account could leave, re-offer or hang up a call it is not in.
+            device: this.voiceDeviceId(),
         };
+    }
+
+    // Latched for the lifetime of the page. The server compares it on every keepalive,
+    // leave and signal, so it must not change mid-call — and currentDeviceId() can go
+    // from '' to a real id when device registration finishes after login. The
+    // registered device id is preferred because it survives a reload, which is what
+    // lets a reloaded client pick its own call back up from the reconnect snapshot.
+    voiceDeviceId() {
+        if (this._voiceDeviceId) return this._voiceDeviceId;
+        const registered = String(this.currentDeviceId?.() || '').trim();
+        this._voiceDeviceId = registered
+            || `tab_${this.randomBase64(12).replace(/[+/=]/g, '').slice(0, 16)}`;
+        return this._voiceDeviceId;
     }
 
     sendVoiceEvent(payload = {}) {
