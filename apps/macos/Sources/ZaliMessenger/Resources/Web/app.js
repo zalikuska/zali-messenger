@@ -8736,24 +8736,28 @@ ZaliMixin(ZaliInterface, class {
         // could answer a single request with dozens of keys times dozens of devices.
         // The newest candidates are the ones a requester is most likely to be missing;
         // anything older is still reachable by asking again after this batch lands.
-        const candidates = this
-            .conversationKeyCandidates(this.loadStoredConversationKeys(), scope)
+        const held = this
+            .conversationKeyCandidates(this.loadStoredConversationKeys(), scope);
+        // Канал. Активный ключ выводится из scope и у спрашивающего уже есть, так что
+        // слать его незачем. Нечитаемы у него сообщения под СЛУЧАЙНЫМИ ключами канала —
+        // из времён до 0.2b31 или от клиента, который тогда ещё не обновился. Такие ключи
+        // есть только у тех, кто в тот момент был в канале, в виде `alt:`. Ответ на
+        // запрос для канала раньше уходил в заглушку publishConversationKeyToServerMembers
+        // и не отправлял ничего — старая история канала оставалась нечитаемой навсегда
+        // (прод 2026-09-10: все отчёты о расшифровке — каналы, сообщения до 17:07).
+        // Получатель принимает такие ключи только кандидатами (syncIncomingKeyEnvelopes),
+        // активным у него остаётся выводимый, так что инвариант каналов цел. И шлём их
+        // одному спрашивающему, а не всем участникам: веерная рассылка по участникам —
+        // ровно то, от чего каналы ушли.
+        const derived = this.channelFromConversationScope(scope)
+            ? await this.deriveServerChannelKey(scope)
+            : '';
+        const candidates = held
+            .filter(key => key !== derived)
             .slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
         if (!candidates.length) {
-            this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=true`);
+            this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=${!held.length} historical=0`);
             return false;
-        }
-        const channel = this.channelFromConversationScope(scope);
-        if (channel) {
-            // One pass over the membership for all candidates, not one pass per key.
-            await this.publishConversationKeyToServerMembers({
-                serverId: channel.serverId,
-                channelId: channel.channelId,
-                scope,
-                keys: candidates,
-                reason: 'republish_request',
-            });
-            return true;
         }
         const peer = requester || this.peerFromConversationScope(scope);
         // A request from our own account is another of our devices asking for this
@@ -13900,7 +13904,24 @@ ZaliMixin(ZaliInterface, class {
             ...payload,
             type: payload.type || 'voice_signal',
             vid: `${this.myName() || 'me'}:${Date.now().toString(36)}:${this.voice.eventSeq}`,
+            // Which device this is. The server keeps one device per account in a call
+            // and answers it with `targetDevice`; without this an idle second device of
+            // the same account could leave, re-offer or hang up a call it is not in.
+            device: this.voiceDeviceId(),
         };
+    }
+
+    // Latched for the lifetime of the page. The server compares it on every keepalive,
+    // leave and signal, so it must not change mid-call — and currentDeviceId() can go
+    // from '' to a real id when device registration finishes after login. The
+    // registered device id is preferred because it survives a reload, which is what
+    // lets a reloaded client pick its own call back up from the reconnect snapshot.
+    voiceDeviceId() {
+        if (this._voiceDeviceId) return this._voiceDeviceId;
+        const registered = String(this.currentDeviceId?.() || '').trim();
+        this._voiceDeviceId = registered
+            || `tab_${this.randomBase64(12).replace(/[+/=]/g, '').slice(0, 16)}`;
+        return this._voiceDeviceId;
     }
 
     sendVoiceEvent(payload = {}) {
@@ -16407,6 +16428,30 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // The server handed this account's place in the call to another of its devices
+    // (the user joined or answered there). This device is out, but the call is not
+    // over, so: no voice_leave (the server would ignore it from here anyway — the room
+    // is held by the other device — and it must never be what ends that device's
+    // call), and no history record (the device carrying the call writes it).
+    concludeMovedVoiceSession(roomId) {
+        const current = String(this.voice.roomId || '').trim();
+        const reported = String(roomId || '').trim();
+        if (!current || (reported && reported !== current)) return false;
+        this.voiceDiag('call-moved-to-other-device', {
+            roomId: current,
+            roomType: this.voice.roomType || '',
+            status: this.voice.status || '',
+        }, 'WARN');
+        this.addLogEntry({
+            type: 'INFO',
+            msg: 'Звонок продолжен на другом устройстве этого аккаунта',
+            ts: new Date().toLocaleTimeString(),
+        });
+        if (this.voice.callTrack) this.voice.callTrack.recorded = true;
+        void this.leaveVoiceRoom({ announce: false, outcome: 'completed' });
+        return true;
+    }
+
     // Re-asserts room membership. The server evicts a user from their voice room
     // 150 s after their WebSocket closes (the delayed cleanup in realtime.rs — the
     // window has been 12 s and 45 s in the past, and both were shorter than a real
@@ -17626,6 +17671,24 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // An event the server addressed to another device of this account. Almost all of
+    // them are simply not ours; the one that matters is an invite this device is still
+    // ringing for being answered on the other one — without this, this device kept
+    // ringing for a call already in progress elsewhere until the server's missed-call
+    // timeout, and answering it then would have evicted the device that was talking.
+    handleVoiceEventForOtherDevice(eventType, payload = {}) {
+        const roomId = String(payload.roomId || '').trim();
+        this.voiceTrace('event-other-device', { eventType, roomId, targetDevice: payload.targetDevice || '' });
+        const answered = eventType === 'voice_call_accepted' || eventType === 'voice_call_connected';
+        if (!answered || !roomId) return;
+        if (String(this.voice.incomingInvite?.roomId || '').trim() !== roomId) return;
+        this.voiceDiag('invite-answered-elsewhere', { roomId, status: this.voice.status || '' });
+        this.addLogEntry({ type: 'INFO', msg: 'Звонок принят на другом устройстве', ts: new Date().toLocaleTimeString() });
+        // Not recorded in call history here: the device that answered records it.
+        this.resetVoiceState({ preserveInvite: false });
+        this.renderVoicePanel();
+    }
+
     // De-duplicates voice_* events that may now legitimately arrive twice — once
     // over the dedicated voice WebSocket, once over the more reliable main
     // message socket's fallback forwarding (see voiceEventPayload). Keeps a
@@ -17648,6 +17711,15 @@ ZaliMixin(ZaliInterface, class {
         if (!eventType) return;
         if (this.isDuplicateVoiceEvent(payload.vid)) {
             this.voiceTrace('event-dedup', { eventType, vid: payload.vid || '' }, 'INFO');
+            return;
+        }
+        // Addressed to another device of this account (the one actually in the call).
+        // The server still delivers it to every socket of the account, so this is where
+        // it stops: acting on it here made an idle device join, re-offer or tear down a
+        // call it had never been part of.
+        const targetDevice = String(payload.targetDevice || '').trim();
+        if (targetDevice && targetDevice !== this.voiceDeviceId()) {
+            this.handleVoiceEventForOtherDevice(eventType, payload);
             return;
         }
         this.voiceTrace('event-recv', {
@@ -17777,6 +17849,13 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceTrace('outgoing-rejected', { roomId: payload.roomId || '', from: payload.from || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'rejected', endedAt: Date.now() });
                 this.resetVoiceState({ preserveInvite: false });
+            } else if (this.voice.incomingInvite?.roomId === String(payload.roomId || '').trim()) {
+                // Declined on another device of this account — the server tells the
+                // callee's account too, so the rest of its devices stop ringing. The
+                // declining device already reset and records the call itself.
+                this.voiceTrace('incoming-rejected-elsewhere', { roomId: payload.roomId || '' }, 'INFO');
+                this.resetVoiceState({ preserveInvite: false });
+                this.renderVoicePanel();
             }
             return;
         }
@@ -17896,6 +17975,8 @@ ZaliMixin(ZaliInterface, class {
             // wording change would silently detach this from.
             if (code === 'room_not_found') {
                 this.concludeVanishedVoiceRoom(errorRoomId, String(payload.message || ''));
+            } else if (code === 'session_moved') {
+                this.concludeMovedVoiceSession(errorRoomId);
             }
             return;
         }

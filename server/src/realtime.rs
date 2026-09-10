@@ -2,7 +2,7 @@
 
 use crate::{
     constant_time_eq, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
-    AppState, AuthenticatedUser,
+    AppState, AuthenticatedUser, VoiceLeave,
 };
 use axum::{
     extract::{
@@ -161,10 +161,31 @@ pub(crate) async fn publish_announcement(
 pub(crate) async fn send_json_to_user(
     state: &Arc<AppState>,
     username: &str,
-    payload: serde_json::Value,
+    mut payload: serde_json::Value,
 ) {
-    let json = payload.to_string();
     let event_type = payload["type"].as_str().unwrap_or_default().to_string();
+    // Every voice event the server itself produces gets a `vid`, once per call, so
+    // all of this user's sockets receive the SAME one. The native shells forward
+    // voice_* from both their voice socket and their message socket, and the client
+    // drops repeats by `vid` (isDuplicateVoiceEvent) — but only events a client had
+    // sent carried one. Everything the server makes up on its own (invite, accepted,
+    // room state, error, call ended) went through once per socket. Production,
+    // 2026-09-10: one invite answered with twelve busy-rejects, one accept turned
+    // into a burst of offers within the same second.
+    if event_type.starts_with("voice_")
+        && payload["vid"]
+            .as_str()
+            .map(|vid| vid.trim().is_empty())
+            .unwrap_or(true)
+    {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "vid".to_string(),
+                serde_json::Value::String(format!("srv:{}", uuid::Uuid::new_v4())),
+            );
+        }
+    }
+    let json = payload.to_string();
     if let Some(mut conns) = state.user_connections.get_mut(username) {
         conns.retain(|conn| !conn.is_closed());
         if event_type.starts_with("voice_") {
@@ -405,7 +426,7 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                 "[VOICE] delayed cleanup for '{}' after ws close",
                 username_for_cleanup
             );
-            leave_voice_room(&state_for_cleanup, &username_for_cleanup).await;
+            leave_voice_room(&state_for_cleanup, &username_for_cleanup, VoiceLeave::Implicit).await;
         });
     }
 }

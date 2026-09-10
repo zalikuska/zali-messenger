@@ -468,6 +468,30 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // The server handed this account's place in the call to another of its devices
+    // (the user joined or answered there). This device is out, but the call is not
+    // over, so: no voice_leave (the server would ignore it from here anyway — the room
+    // is held by the other device — and it must never be what ends that device's
+    // call), and no history record (the device carrying the call writes it).
+    concludeMovedVoiceSession(roomId) {
+        const current = String(this.voice.roomId || '').trim();
+        const reported = String(roomId || '').trim();
+        if (!current || (reported && reported !== current)) return false;
+        this.voiceDiag('call-moved-to-other-device', {
+            roomId: current,
+            roomType: this.voice.roomType || '',
+            status: this.voice.status || '',
+        }, 'WARN');
+        this.addLogEntry({
+            type: 'INFO',
+            msg: 'Звонок продолжен на другом устройстве этого аккаунта',
+            ts: new Date().toLocaleTimeString(),
+        });
+        if (this.voice.callTrack) this.voice.callTrack.recorded = true;
+        void this.leaveVoiceRoom({ announce: false, outcome: 'completed' });
+        return true;
+    }
+
     // Re-asserts room membership. The server evicts a user from their voice room
     // 150 s after their WebSocket closes (the delayed cleanup in realtime.rs — the
     // window has been 12 s and 45 s in the past, and both were shorter than a real

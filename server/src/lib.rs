@@ -28,7 +28,7 @@ use uuid::Uuid;
 mod voice;
 use voice::{
     get_turn_credentials, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
-    VoiceRoom,
+    VoiceLeave, VoiceRoom,
 };
 
 mod devices;
@@ -475,6 +475,11 @@ pub struct AppState {
     user_connections: DashMap<String, Vec<WsSender>>,
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
+    // Voice rooms (DM: room id; channel: room id + username) that were ended by an
+    // explicit hang-up, with when. A presence keepalive may rebuild a room the server
+    // merely forgot (restart, eviction after a long outage) but never one of these.
+    // See `mark_voice_room_ended` in voice.rs.
+    ended_voice_rooms: DashMap<String, Instant>,
     ws_tickets: DashMap<String, WsTicketRecord>,
     // Coalesces `key_envelope_available` pushes: recipient → when one was last sent.
     // A republish sweep writes one envelope per device per scope, and each write used
@@ -1526,6 +1531,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         user_connections: DashMap::new(),
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
+        ended_voice_rooms: DashMap::new(),
         ws_tickets: DashMap::new(),
         key_envelope_notified_at: DashMap::new(),
         login_attempts: DashMap::new(),

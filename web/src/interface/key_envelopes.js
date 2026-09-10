@@ -221,24 +221,28 @@ ZaliMixin(ZaliInterface, class {
         // could answer a single request with dozens of keys times dozens of devices.
         // The newest candidates are the ones a requester is most likely to be missing;
         // anything older is still reachable by asking again after this batch lands.
-        const candidates = this
-            .conversationKeyCandidates(this.loadStoredConversationKeys(), scope)
+        const held = this
+            .conversationKeyCandidates(this.loadStoredConversationKeys(), scope);
+        // Канал. Активный ключ выводится из scope и у спрашивающего уже есть, так что
+        // слать его незачем. Нечитаемы у него сообщения под СЛУЧАЙНЫМИ ключами канала —
+        // из времён до 0.2b31 или от клиента, который тогда ещё не обновился. Такие ключи
+        // есть только у тех, кто в тот момент был в канале, в виде `alt:`. Ответ на
+        // запрос для канала раньше уходил в заглушку publishConversationKeyToServerMembers
+        // и не отправлял ничего — старая история канала оставалась нечитаемой навсегда
+        // (прод 2026-09-10: все отчёты о расшифровке — каналы, сообщения до 17:07).
+        // Получатель принимает такие ключи только кандидатами (syncIncomingKeyEnvelopes),
+        // активным у него остаётся выводимый, так что инвариант каналов цел. И шлём их
+        // одному спрашивающему, а не всем участникам: веерная рассылка по участникам —
+        // ровно то, от чего каналы ушли.
+        const derived = this.channelFromConversationScope(scope)
+            ? await this.deriveServerChannelKey(scope)
+            : '';
+        const candidates = held
+            .filter(key => key !== derived)
             .slice(0, ZaliInterface.MAX_REPUBLISH_CANDIDATES);
         if (!candidates.length) {
-            this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=true`);
+            this.trace(`handleKeyRepublishRequest scope=${scope} requester=${requester} noLocalKey=${!held.length} historical=0`);
             return false;
-        }
-        const channel = this.channelFromConversationScope(scope);
-        if (channel) {
-            // One pass over the membership for all candidates, not one pass per key.
-            await this.publishConversationKeyToServerMembers({
-                serverId: channel.serverId,
-                channelId: channel.channelId,
-                scope,
-                keys: candidates,
-                reason: 'republish_request',
-            });
-            return true;
         }
         const peer = requester || this.peerFromConversationScope(scope);
         // A request from our own account is another of our devices asking for this
