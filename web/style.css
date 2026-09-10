@@ -697,6 +697,26 @@ body[data-ui-v2="on"] .mode-switch {
     animation: segment-icon-pop .52s cubic-bezier(.2, 1.18, .2, 1) both;
 }
 
+.hub-segment-badge {
+    position: absolute;
+    top: 1px;
+    right: 6px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: var(--lime);
+    color: #050505;
+    font-size: 9px;
+    font-weight: 900;
+    line-height: 1;
+    border: 2px solid var(--sidebar);
+    z-index: 2;
+    animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) both;
+}
+
 .mode-switch {
     display: inline-flex;
     align-items: center;
@@ -1793,20 +1813,157 @@ body[data-nav-mode="servers"] .contacts {
     grid-template-rows: auto auto 1fr;
 }
 
-.server-channel-list {
+/* Server rail: avatars of the servers — in the chat header on desktop, on top of
+   the sidebar on the phone. It scrolls through its own physics (setupServerRail
+   in interface/server_rail.js): native overflow scrolling has no overshoot on
+   desktop and no mouse dragging at all, hence overflow: hidden and a translated
+   track. The mask fades whichever edge still has servers behind it. */
+.server-rail {
+    --rail-fade-l: 0px;
+    --rail-fade-r: 0px;
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--rail-fade-l), #000 calc(100% - var(--rail-fade-r)), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 var(--rail-fade-l), #000 calc(100% - var(--rail-fade-r)), transparent 100%);
+}
+
+.server-rail.can-scroll-left {
+    --rail-fade-l: 24px;
+}
+
+.server-rail.can-scroll-right {
+    --rail-fade-r: 24px;
+}
+
+.server-rail.is-scrollable {
+    cursor: grab;
+}
+
+.server-rail.dragging,
+.server-rail.dragging .server-rail-item {
+    cursor: grabbing;
+}
+
+.server-rail-track {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 12px 2px 28px;
-    margin-right: -2px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(var(--accent-rgb), .35) transparent;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
+    gap: 10px;
+    width: max-content;
+    padding: 7px 6px;
+    will-change: transform;
+}
+
+.server-rail-item {
+    position: relative;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.server-rail-item:focus-visible {
+    outline: none;
+}
+
+.server-rail-item .server-rail-avatar {
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+    transition: border-radius .2s var(--ease-out), box-shadow .2s var(--ease-out), transform .16s var(--ease-out);
+}
+
+.server-rail-item:hover .server-rail-avatar,
+.server-rail-item:focus-visible .server-rail-avatar {
+    border-radius: 14px;
+}
+
+.server-rail-item:active .server-rail-avatar {
+    transform: scale(.94);
+}
+
+.server-rail.dragging .server-rail-item .server-rail-avatar {
+    transform: none;
+}
+
+.server-rail-item.active .server-rail-avatar {
+    border-radius: 14px;
+    box-shadow: 0 0 0 2px var(--lime), 0 0 16px rgba(var(--accent-rgb), .3);
+}
+
+.server-rail-badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: grid;
+    place-items: center;
+    border: 2px solid var(--bg);
+    border-radius: 999px;
+    background: var(--lime);
+    color: #050505;
+    font-size: 9px;
+    font-weight: 900;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.server-rail-sep {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 26px;
+    margin: 0 2px;
+    background: var(--border);
+}
+
+.server-rail-action .server-rail-avatar {
+    background: rgba(255,255,255,.04);
+    color: var(--lime);
+    font-size: 18px;
+    text-shadow: none;
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .28);
+}
+
+.server-rail-action:hover .server-rail-avatar {
+    background: rgba(var(--accent-rgb), .14);
+}
+
+.server-rail-tip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 10000;
+    padding: 6px 10px;
+    border: 1px solid rgba(var(--accent-rgb), .25);
+    border-radius: 10px;
+    background: rgba(12,14,18,.96);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+    box-shadow: 0 10px 24px rgba(0,0,0,.35);
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, 4px);
+    transition: opacity .12s var(--ease-out), transform .12s var(--ease-out);
+}
+
+.server-rail-tip.visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
 }
 
 .chat-hdr.server-mode {
@@ -1814,89 +1971,93 @@ body[data-nav-mode="servers"] .contacts {
     gap: 14px;
 }
 
-.chat-hdr.server-mode .server-channel-list {
-    margin-left: auto;
+/* The rail takes whatever the header has left (basis 0), instead of claiming
+   its full content width and squeezing the title: with `flex: 0 1 auto` a long
+   server list shrank the channel title into two lines under the gear button. */
+.chat-hdr.server-mode .server-rail {
+    flex: 1 1 0;
+    min-width: 0;
     max-width: min(58vw, 860px);
-    padding-top: 14px;
-    padding-bottom: 28px;
+    margin-left: auto;
 }
 
-.server-channel-list::-webkit-scrollbar {
-    height: 8px;
+/* Few servers: sit at the right end, where the channel pills used to be. Once
+   the list overflows, the physics owns the position (measured from the left). */
+.chat-hdr .server-rail:not(.is-scrollable) .server-rail-track {
+    margin-left: auto;
 }
 
-.server-channel-list::-webkit-scrollbar-track {
-    background: transparent;
+/* The sidebar copy exists for the phone's list screen; see the mobile block. */
+.server-rail--sidebar {
+    display: none;
 }
 
-.server-channel-list::-webkit-scrollbar-thumb {
-    background: rgba(var(--accent-rgb), .28);
-    border-radius: 999px;
+/* Channels of the selected server in the sidebar. Same footprint as a dialog
+   row (.contact), so switching ЛС ↔ Сервера does not reflow the column. */
+.sidebar-channel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
-.server-channel {
-    display: inline-flex;
+.sidebar-channel {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
-    min-height: 34px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: rgba(255,255,255,.03);
-    color: var(--text2);
+    gap: 10px;
+    min-width: 0;
+    min-height: 50px;
+    padding: 8px 10px 8px 8px;
+    border-radius: 12px;
     cursor: pointer;
-    flex: 0 0 auto;
-    scroll-snap-align: start;
-    transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
-    /* Здесь НЕ должно быть content-visibility: auto. В вертикальном списке
-       (.contact) заглушка подменяет высоту, ширину задаёт контейнер — там это
-       безопасно. Канал же лежит в ГОРИЗОНТАЛЬНОЙ ленте, где ширина зависит от
-       длины названия: у пропущенного отрисовку канала она становится
-       заглушечной (44px вместо 66–160), и стоит ему въехать в видимую часть,
-       как он меняет ширину и сдвигает все следующие. У края ленты это
-       зацикливается — чип раздался, уехал за границу, снова пропущен, снова
-       сжался, — и лента дёргается сама по себе. Внутри чипа нет ничего
-       дорогого (иконка, строка, счётчик), так что экономить тут нечего. */
+    transition: background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
+    contain: layout style;
 }
 
-.server-channel:hover {
-    color: var(--text);
-    border-color: rgba(var(--accent-rgb), .18);
-    background: rgba(255,255,255,.05);
+.sidebar-channel:hover {
+    background: rgba(255,255,255,.03);
 }
 
-.server-channel.active {
-    color: #050505;
-    background: linear-gradient(180deg, rgba(var(--accent-rgb), .98), rgba(var(--accent-rgb), .82));
-    border-color: rgba(var(--accent-rgb), .36);
-    box-shadow: 0 8px 20px rgba(var(--accent-rgb), .22);
+.sidebar-channel.active {
+    background: rgba(var(--accent-rgb), .10);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
 }
 
-.server-channel-hash {
-    display: inline-grid;
+.sidebar-channel-icon {
+    width: 34px;
+    height: 34px;
+    display: grid;
     place-items: center;
-    width: 14px;
-    height: 14px;
-    font-size: 11px;
-    font-weight: 900;
-    opacity: .8;
+    border-radius: 10px;
+    background: rgba(var(--accent-rgb), .12);
+    color: var(--accent);
 }
 
-.server-channel-list-icon {
-    width: 13px;
-    height: 13px;
+.sidebar-channel-icon.voice {
+    background: rgba(31, 167, 255, .14);
+    color: #4ab9ff;
 }
 
-.server-channel-name {
-    font-size: 11px;
-    font-weight: 900;
-    letter-spacing: .02em;
-    text-transform: uppercase;
-}
-
-.server-channel-hash.voice {
+.sidebar-channel.in-call .sidebar-channel-icon {
+    background: rgba(var(--accent-rgb), .2);
     color: var(--lime);
-    font-size: 12px;
+    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .35);
+}
+
+.sidebar-channel-glyph {
+    width: 16px;
+    height: 16px;
+}
+
+.sidebar-channel .contact-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sidebar-channel-empty {
+    padding: 28px 8px;
+    text-align: center;
 }
 
 .voice-panel {
@@ -2672,6 +2833,125 @@ body[data-nav-mode="servers"] .contacts {
 
 #viewChat .voice-panel {
     padding: 0 18px 4px;
+}
+
+/* Active-call strip: pinned to the top of .main, above whatever tab is open
+   (another channel, a DM, Hub, Settings), and pushing that tab down by its own
+   height instead of covering its header. Hidden while the call's own voice
+   channel is on screen — that view is the call itself. */
+.main {
+    --call-strip-h: 38px;
+}
+
+.voice-call-strip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 45;
+    height: var(--call-strip-h);
+}
+
+.voice-call-strip .voice-callbar {
+    height: 100%;
+    box-sizing: border-box;
+    padding: 0 16px;
+    border-bottom: 1px solid rgba(var(--accent-rgb), .22);
+}
+
+.voice-call-strip .voice-callbar-btn {
+    width: 26px;
+    height: 26px;
+}
+
+.voice-call-strip .voice-callbar-btn .call-ctrl-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.voice-call-strip .voice-callbar-title {
+    font-size: 13px;
+}
+
+.main.has-call-strip > .view,
+.main.has-call-strip > #viewChat {
+    top: var(--call-strip-h);
+}
+
+/* A voice channel has no text chat, so opening one shows only the call: the
+   message list and composer are gone and the panel takes all the room under
+   the header. */
+#viewChat.voice-channel-view {
+    grid-template-rows: auto minmax(0, 1fr);
+}
+
+#viewChat.voice-channel-view .msgs,
+#viewChat.voice-channel-view .input-area {
+    display: none;
+}
+
+#viewChat.voice-channel-view .voice-panel {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    margin-top: 0;
+    padding-bottom: 16px;
+    align-content: start;
+    overflow-y: auto;
+}
+
+/* The embedded call must be bounded by the panel's row, not size it: with an
+   `auto` row, height:100% resolved against the content and pushed the control
+   bar below the window. */
+#viewChat.voice-channel-view .voice-panel.call-room-mode {
+    grid-template-rows: minmax(0, 1fr);
+    align-content: stretch;
+    overflow: hidden;
+}
+
+#viewChat.voice-channel-view .voice-panel.call-room-mode .voice-call-expanded {
+    height: auto;
+    min-height: 0;
+}
+
+/* Tiles keep a sane size: one participant is one tile, not a 16:9 rectangle
+   the width of the whole window. */
+.voice-call-expanded.embedded .voice-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 340px));
+    justify-content: center;
+    align-content: center;
+    min-height: 100%;
+    height: auto;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.voice-call-expanded.embedded {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 4px 0 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-header {
+    cursor: default;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-actions {
+    flex: 0 0 auto;
+    justify-content: center;
 }
 
 #viewChat .msgs {
@@ -3488,7 +3768,11 @@ body[data-nav-mode="servers"] .contacts {
     padding: 10px;
 }
 
+/* Head and body stack as rows. Open, this used to inherit --compact's
+   112px + 1fr columns, which squeezed the whole head (title, sub, toggle)
+   into the 112px wheel column where they overlapped. */
 .color-picker--collapsible {
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     align-items: stretch;
 }
@@ -4398,135 +4682,179 @@ body[data-nav-mode="servers"] .contacts {
     padding-right: 4px;
 }
 
-.server-channel-card {
+/* Channel settings: one row per channel, saved as you go. The row is the drag
+   handle (the grip is only a hint), the name and topic are text that turns into
+   an input on click, the square on the right flips text ↔ voice. */
+.server-channel-row {
+    position: relative;
     display: grid;
-    gap: 8px;
-    padding: 10px 12px;
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 60px;
+    padding: 8px 10px 8px 8px;
     border: 1px solid var(--border);
-    border-radius: 20px;
+    border-radius: 16px;
     background:
         linear-gradient(180deg, rgba(255,255,255,.028), rgba(255,255,255,.015)),
         rgba(255,255,255,.02);
-    content-visibility: auto;
-    contain-intrinsic-size: 180px;
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.035),
-        0 12px 28px rgba(0,0,0,.08);
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
-.server-channel-head {
-    display: grid;
-    grid-template-columns: 18px minmax(0, 1fr) 132px auto auto;
-    gap: 10px;
-    align-items: center;
-    min-height: 40px;
+.server-channel-row:hover {
+    border-color: rgba(var(--accent-rgb), .18);
 }
 
-.server-channel-chip {
-    width: 18px;
-    height: 18px;
+.server-channels-list.is-dragging {
+    cursor: grabbing;
+}
+
+.server-channels-list.is-dragging .server-channel-row:not(.dragging) {
+    transition: transform .18s var(--ease-out);
+}
+
+.server-channel-row.dragging {
+    z-index: 2;
+    cursor: grabbing;
+    border-color: rgba(var(--accent-rgb), .45);
+    background: #16181d;
+    box-shadow: 0 18px 38px rgba(0,0,0,.45), 0 0 0 1px rgba(var(--accent-rgb), .2);
+}
+
+.server-channel-grip {
     display: grid;
     place-items: center;
-    border-radius: 999px;
-    background: rgba(var(--accent-rgb), .18);
-    color: var(--accent);
+    color: var(--text3);
+}
+
+.server-channel-grip svg {
+    width: 16px;
+    height: 16px;
+}
+
+.server-channel-row-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+    justify-items: start;
+}
+
+.server-channel-row-name,
+.server-channel-row-topic {
+    max-width: 100%;
+    margin-left: -5px;
+    padding: 1px 5px;
+    border-radius: 7px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: text;
+    transition: background .14s var(--ease-out);
+}
+
+.server-channel-row-name:hover,
+.server-channel-row-topic:hover {
+    background: rgba(255,255,255,.07);
+}
+
+.server-channel-row-name {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.server-channel-row-topic {
+    color: var(--text2);
     font-size: 12px;
-    font-weight: 900;
 }
 
-.server-channel-chip-icon {
-    width: 12px;
-    height: 12px;
+.server-channel-row-topic.empty {
+    color: var(--text3);
+    font-style: italic;
 }
 
-.server-channel-chip.voice {
-    background: rgba(31, 167, 255, .18);
+.server-channel-row-input.settings-input {
+    width: 100%;
+    min-height: 30px;
+    height: 30px;
+    margin: 0;
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 13px;
+    box-sizing: border-box;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
+
+.server-channel-row-input.name {
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.server-channel-kind-toggle {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(var(--accent-rgb), .24);
+    border-radius: 12px;
+    background: rgba(var(--accent-rgb), .12);
+    color: var(--accent);
+    cursor: pointer;
+    transition: transform .14s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out), border-color .18s var(--ease-out);
+}
+
+.server-channel-kind-toggle.voice {
+    border-color: rgba(31, 167, 255, .32);
+    background: rgba(31, 167, 255, .14);
     color: #4ab9ff;
 }
 
-.server-channel-copy {
-    min-width: 0;
+.server-channel-kind-toggle:hover {
+    transform: scale(1.06);
+}
+
+.server-channel-kind-toggle:active {
+    transform: scale(.92);
+}
+
+.server-channels-list.is-dragging .server-channel-kind-toggle {
+    cursor: grabbing;
+}
+
+.server-channel-kind-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.server-channel-row-delete {
+    width: 36px;
+    height: 36px;
     display: grid;
-    gap: 4px;
-}
-
-.server-channel-name-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 132px;
-    gap: 8px;
-    align-items: stretch;
-}
-
-.server-channel-kind-select {
-    min-width: 132px;
-    height: var(--control-h);
-    padding-top: 0;
-    padding-bottom: 0;
-    justify-self: stretch;
-}
-
-.server-channel-meta {
-    color: var(--text2);
-    font-size: 11px;
-    line-height: 1.2;
-}
-
-.server-channel-controls {
-    display: grid;
-    grid-auto-flow: column;
-    gap: 8px;
-    justify-content: flex-end;
-    align-self: center;
-    align-items: center;
-}
-
-.server-channel-controls .btn-flat {
-    min-height: var(--control-h);
-    height: var(--control-h);
-    align-self: center;
-}
-
-.server-channel-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: center;
-}
-
-.server-channel-position {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 6px;
-    align-self: center;
-}
-
-.server-channel-position-label {
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
     color: var(--text3);
-    font-size: 9px;
-    font-weight: 900;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    white-space: nowrap;
+    cursor: pointer;
+    transition: color .16s var(--ease-out), background .16s var(--ease-out), border-color .16s var(--ease-out);
 }
 
-.server-channel-position .settings-input {
-    width: 92px;
-    min-height: var(--control-h);
-    height: var(--control-h);
-    padding-inline: 10px 8px;
+.server-channel-row-delete:hover {
+    color: #ff5c76;
+    background: rgba(255, 92, 118, .1);
+    border-color: rgba(255, 92, 118, .25);
 }
 
-.server-channel-card .settings-input,
-.server-channel-card .btn-flat,
-.server-channel-card .server-channel-kind-select {
-    box-sizing: border-box;
-}
-
-.server-channel-card .settings-input,
-.server-channel-card .server-channel-kind-select {
-    margin: 0;
+.server-channel-row-delete-icon {
+    width: 16px;
+    height: 16px;
 }
 
 .server-role-card {
@@ -6468,11 +6796,6 @@ body[data-nav-mode="servers"] .contacts {
         flex-wrap: wrap;
     }
 
-    .chat-hdr.server-mode .server-channel-list {
-        margin-left: 0;
-        max-width: 100%;
-        width: 100%;
-    }
 
     .settings-control-row {
         grid-template-columns: 1fr;
@@ -7114,15 +7437,6 @@ body[data-nav-mode="servers"] .contacts {
         display: none;
     }
 
-    .server-channel {
-        min-height: 32px;
-        padding: 0 10px;
-    }
-
-    .server-channel-name {
-        font-size: 10px;
-    }
-
     .contact {
         grid-template-columns: 38px;
         justify-content: center;
@@ -7432,14 +7746,10 @@ body[data-nav-mode="servers"] .contacts {
         min-width: 0;
     }
 
-    .server-channel-list {
-        padding-bottom: 22px;
-    }
-
     /* ── Touch ergonomics ─────────────────────────────────────── */
     /* Remove the 300ms tap delay + the grey/blue tap flash, and the
        iOS long-press text callout on interactive controls. */
-    button, a, [role="button"], .contact, .server-item, .server-channel,
+    button, a, [role="button"], .contact, .server-item, .sidebar-channel, .server-rail-item,
     .mobile-dock-btn, .hub-segment-btn, .settings-input, .search-input {
         -webkit-tap-highlight-color: transparent;
         touch-action: manipulation;
@@ -7449,7 +7759,7 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     /* Momentum scrolling; keep overscroll from bouncing the whole page. */
-    .contacts, .msgs, .settings-body, .sidebar, .server-channel-list,
+    .contacts, .msgs, .settings-body, .sidebar,
     .server-modal-content, .color-picker-body {
         -webkit-overflow-scrolling: touch;
         overscroll-behavior: contain;
@@ -7573,7 +7883,6 @@ body[data-experimental-design="on"] .search-input {
 /* Lime/accent solid fills (were gradients) */
 body[data-experimental-design="on"] .mode-btn.active,
 body[data-experimental-design="on"] .contact-add-btn,
-body[data-experimental-design="on"] .server-channel.active,
 body[data-experimental-design="on"] .voice-btn,
 body[data-experimental-design="on"] .voice-meter-fill,
 body[data-experimental-design="on"] .server-avatar-preview,
@@ -7660,7 +7969,7 @@ body[data-experimental-design="on"] .server-modal-sidebar,
 body[data-experimental-design="on"] .server-modal-card,
 body[data-experimental-design="on"] .server-asset-card,
 body[data-experimental-design="on"] .server-link-card,
-body[data-experimental-design="on"] .server-channel-card,
+body[data-experimental-design="on"] .server-channel-row,
 body[data-experimental-design="on"] .server-role-card,
 body[data-experimental-design="on"] .server-channel-create,
 body[data-experimental-design="on"] .server-role-create {
@@ -8554,13 +8863,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 /* Hide custom scrollbars on mobile scroll areas — native mobile lists auto-hide
    their scrollbars; the desktop lime scrollbar looks out of place on a phone. */
 @media (max-width: 760px) {
-    .contacts, #viewChat .msgs, .server-channel-list {
+    .contacts, #viewChat .msgs {
         scrollbar-width: none;
         -ms-overflow-style: none;
     }
     .contacts::-webkit-scrollbar,
-    #viewChat .msgs::-webkit-scrollbar,
-    .server-channel-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+    #viewChat .msgs::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+    /* The server rail moves to the list screen (top of the sidebar): that is
+       where a server is chosen on the phone, and the chat header has no room. */
+    .chat-hdr .server-rail {
+        display: none !important;
+    }
+    body[data-nav-mode="servers"] .server-rail--sidebar:not([hidden]) {
+        display: block;
+        margin: 0 12px 6px;
+    }
 }
 
 /* ============================================================================
@@ -8585,13 +8903,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
        обратной связи такое нажатие неотличимо от подвисшего тапа — человек
        отпускает палец раньше, чем меню успевает появиться.
 
-       Только transform: у .contact и .server-channel уже объявлен собственный
+       Только transform: у .contact и .sidebar-channel уже объявлен собственный
        transition (строки ~1560 и ~1850), и он включает transform вместе с
        цветом, фоном и тенью. Дописать здесь свой `transition` значило бы
        заменить их шорткат целиком и молча выключить на мобильном всю остальную
        анимацию этих строк. */
     .contact.press-hold,
-    .server-channel.press-hold { transform: scale(.975); }
+    .sidebar-channel.press-hold { transform: scale(.975); }
 
     /* Reaction menu: bigger touch targets on a phone. */
     /* Шесть эмодзи, разделитель и три действия — это девять кнопок в один

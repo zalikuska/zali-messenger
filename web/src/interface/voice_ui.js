@@ -96,7 +96,7 @@ ZaliMixin(ZaliInterface, class {
                     <button class="voice-callbar-btn ${this.voice.deafened ? 'danger' : ''}" type="button" id="voiceDeafenBtn" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
                 </div>
                 <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-timer" id="voiceCallTimer">0:00</div>
+                <div class="voice-callbar-timer" id="voiceCallTimer">${this.voiceCallClockLabel()}</div>
             </div>
         `;
     }
@@ -106,14 +106,22 @@ ZaliMixin(ZaliInterface, class {
     // as-is so a participant's camera feed replaces their tile exactly like it
     // already does in the collapsed layout — nothing about tile mounting changes,
     // only where the tiles are shown.
-    renderVoiceCallExpanded({ title, actionButtons }) {
-        return `
-            <div class="voice-call-expanded" id="voiceCallExpanded">
-                <div class="voice-call-expanded-header" id="voiceCollapseBar" role="button" tabindex="0" aria-label="Свернуть звонок">
+    // `embedded` is the voice channel's own view: the call is the whole screen
+    // there already, so there is nothing to collapse back to.
+    renderVoiceCallExpanded({ title, actionButtons, embedded = false }) {
+        const header = embedded
+            ? `<div class="voice-call-expanded-header">
+                    <div class="voice-call-expanded-title">${this.esc(title)}</div>
+                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">${this.voiceCallClockLabel()}</div>
+                </div>`
+            : `<div class="voice-call-expanded-header" id="voiceCollapseBar" role="button" tabindex="0" aria-label="Свернуть звонок">
                     <button class="voice-call-collapse-btn" type="button" id="voiceCollapseBtn" title="Свернуть" aria-label="Свернуть">${this.voiceIcon('chevron-down')}</button>
                     <div class="voice-call-expanded-title">${this.esc(title)}</div>
-                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">0:00</div>
-                </div>
+                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">${this.voiceCallClockLabel()}</div>
+                </div>`;
+        return `
+            <div class="voice-call-expanded ${embedded ? 'embedded' : ''}" id="voiceCallExpanded">
+                ${header}
                 ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
                 <div class="voice-stage" id="voiceStage"></div>
                 <div class="voice-call-expanded-grid">${this.renderVoiceTiles()}</div>
@@ -139,7 +147,13 @@ ZaliMixin(ZaliInterface, class {
         // missed. Ringing/calling states must render as pending, not active.
         const pendingDmCall = this.voice.status === 'incoming' || this.voice.status === 'calling';
         const connectedDmRoom = this.voice.roomType === 'dm' && !!String(this.voice.roomId || '').trim() && !pendingDmCall && (this.voice.status === 'connected' || participantMatch);
-        const activeRoom = isVoice ? !!this.voice.roomId && participantMatch : connectedDmRoom;
+        // For a voice channel, "active" means active in THIS channel's room. Being
+        // in a call elsewhere used to render this channel as the live call — with
+        // the other room's participants on its tiles.
+        const isThisVoiceRoom = isVoice && this.isViewingVoiceCallRoom({ requireChatView: false });
+        // 'connecting' counts: between the join click and the server's room state
+        // the channel should already show the call, not the «Присоединиться» card.
+        const activeRoom = isVoice ? isThisVoiceRoom && this.voiceLiveCallType() === 'channel' : connectedDmRoom;
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
         const voiceHealth = this.voiceTraceEnabled ? this.getVoiceHealthSnapshot() : [];
@@ -185,34 +199,32 @@ ZaliMixin(ZaliInterface, class {
         }
         const actionsBarClass = activeRoom ? 'voice-room-actions call-ctrl-bar' : 'voice-room-actions';
 
-        // A live call (as opposed to ringing/dialing/idle-selected) collapses to a
-        // slim top bar by default and only shows the full participant grid when
-        // the user taps it — the old always-expanded card ate half the chat
-        // window for the entire duration of every call.
+        // A live call never renders a bar here any more: the slim bar lives in
+        // #voiceCallStrip above every tab (renderVoiceCallStrip). Inside its own
+        // voice channel the call is the whole view; a DM call only takes over the
+        // chat when the user opened the fullscreen grid.
+        // The call timer is owned by renderVoiceCallStrip, which runs on every
+        // renderVoicePanel — not here, where a non-call view used to stop it.
         if (activeRoom) {
-            if (!this.voice.activeSince) {
-                this.voice.activeSince = Number(this.voice.callTrack?.connectedAt) || Date.now();
-            }
-            this.startVoiceCallBarTimer();
-            return this.voice.expanded
-                ? this.renderVoiceCallExpanded({ title, actionButtons })
-                : this.renderVoiceCallBar({ title });
+            if (isVoice) return this.renderVoiceCallExpanded({ title, actionButtons, embedded: true });
+            return this.voice.expanded ? this.renderVoiceCallExpanded({ title, actionButtons }) : '';
         }
-        this.voice.activeSince = 0;
-        this.stopVoiceCallBarTimer();
 
+        const sub = isVoice
+            ? 'Нажмите «Присоединиться», чтобы войти в канал'
+            : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
         return `
             <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
-                        <div class="voice-room-sub">${this.esc(this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов')}</div>
+                        <div class="voice-room-sub">${this.esc(sub)}</div>
                     </div>
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
                 ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
                 <div class="voice-stage" id="voiceStage"></div>
-                ${this.renderVoiceTiles()}
+                ${isVoice ? '' : this.renderVoiceTiles()}
                 <div class="${actionsBarClass}">${actionButtons.join('')}</div>
                 <div class="voice-meter-grid">
                     <div class="voice-meter" id="voiceMicMeter">
@@ -285,36 +297,153 @@ ZaliMixin(ZaliInterface, class {
         } else {
             this.stopRingtone();
         }
+        this.renderVoicePanelBody();
+        // After the panel: whether the strip shows depends on what the panel
+        // just decided to cover (a voice channel's own view, a DM's fullscreen grid).
+        this.renderVoiceCallStrip();
+    }
+
+    renderVoicePanelBody() {
         const panel = document.getElementById('voicePanel');
         if (!panel) return;
         const isServers = this.S.navMode === 'servers';
         const isVoiceChannel = isServers && this.isVoiceChannel(this.currentChannel());
+        // A voice channel has no text chat: its view is the call (or the join
+        // card), with the message list and composer hidden by this class.
+        document.getElementById('viewChat')?.classList.toggle('voice-channel-view', isVoiceChannel);
         const hasDmCall = this.voice.roomType === 'dm' || this.voice.status === 'incoming' || this.voice.status === 'calling';
         const hasIncoming = this.voice.status === 'incoming';
-        const showPanel = isVoiceChannel || hasDmCall || hasIncoming;
-        panel.hidden = !showPanel;
-        if (!showPanel) {
+        const html = (isVoiceChannel || hasDmCall || hasIncoming) ? this.renderVoiceRoomView() : '';
+        if (!html) {
+            panel.hidden = true;
             panel.innerHTML = '';
+            panel.classList.remove('has-stage', 'call-bar-mode', 'call-expanded-mode', 'call-room-mode');
+            this._voiceTileNodes = null;
             return;
         }
+        panel.hidden = false;
         // An active screen share needs more than the normal half-screen cap
         // (see .voice-panel.has-stage in style.css) — the stage tiles alone can
         // run well past that at their 16:9 aspect ratio.
         const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
         panel.classList.toggle('has-stage', hasStage);
-        if (isVoiceChannel || hasDmCall || hasIncoming || this.voice.roomType === 'dm') {
-            panel.innerHTML = this.renderVoiceRoomView();
-            // Bar/expanded modes need layout rules (fixed slim bar vs. a fullscreen
-            // overlay) that don't fit the normal embedded-card sizing in
-            // .voice-panel, hence dedicated classes rather than relying on
-            // .has-stage/max-height alone.
-            panel.classList.toggle('call-bar-mode', !!panel.querySelector('#voiceCallBar'));
-            panel.classList.toggle('call-expanded-mode', !!panel.querySelector('#voiceCallExpanded'));
-            this.mountVoiceVideoElements();
+        panel.innerHTML = html;
+        // The fullscreen DM grid is an overlay over the whole chat; a voice
+        // channel's embedded call just fills the panel's own grid row.
+        panel.classList.remove('call-bar-mode');
+        panel.classList.toggle('call-expanded-mode', !!panel.querySelector('#voiceCallExpanded:not(.embedded)'));
+        panel.classList.toggle('call-room-mode', !!panel.querySelector('#voiceCallExpanded.embedded'));
+        this.mountVoiceVideoElements();
+    }
+
+    voiceCallClockLabel() {
+        const since = Number(this.voice.activeSince || 0);
+        return since ? this.formatCallClock(Date.now() - since) : '0:00';
+    }
+
+    // The call the strip stands for: 'channel' for a voice channel room we are
+    // in (or joining), 'dm' for a DM call past ringing, '' for none.
+    voiceLiveCallType() {
+        const roomId = String(this.voice.roomId || '').trim();
+        if (!roomId) return '';
+        const status = String(this.voice.status || '');
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const joined = !!me && (Array.isArray(this.voice.participants) ? this.voice.participants : [])
+            .some(name => String(name || '').trim().toLowerCase() === me);
+        if (this.voice.roomType === 'channel') {
+            return (joined || status === 'connecting' || status === 'connected') ? 'channel' : '';
+        }
+        if (this.voice.roomType === 'dm') {
+            if (status === 'incoming' || status === 'calling') return '';
+            return (joined || status === 'connected') ? 'dm' : '';
+        }
+        return '';
+    }
+
+    // Whether the selected channel is the voice channel whose room we are in.
+    // With requireChatView, also that the chat view (not Hub/Settings) is on screen.
+    isViewingVoiceCallRoom({ requireChatView = true } = {}) {
+        const roomId = String(this.voice.roomId || '').trim();
+        if (!roomId || this.voice.roomType !== 'channel' || this.S.navMode !== 'servers') return false;
+        const server = this.currentServer();
+        const channel = this.currentChannel();
+        if (!server || !channel || !this.isVoiceChannel(channel)) return false;
+        if (this.voiceRoomKeyForChannel(server.id, channel.id) !== roomId) return false;
+        return !requireChatView || !!document.getElementById('viewChat')?.classList.contains('active');
+    }
+
+    voiceDmCallPeer() {
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const candidates = [
+            this.voice.callTrack?.peer,
+            ...(Array.isArray(this.voice.participants) ? this.voice.participants : []),
+            this.voice.outgoingInvite?.target,
+            this.voice.targetUser,
+            this.voice.inviter,
+        ];
+        for (const candidate of candidates) {
+            const name = String(candidate || '').trim();
+            if (name && name.toLowerCase() !== me) return name;
+        }
+        return '';
+    }
+
+    // Named after the call's own room, not the selected channel — the strip is
+    // shown precisely while the user is somewhere else.
+    voiceLiveCallTitle(type) {
+        if (type === 'channel') {
+            const server = (this.S.servers || []).find(item => item.id === this.voice.serverId);
+            const channel = (server?.channels || []).find(item => item.id === this.voice.channelId);
+            return `Голосовой канал: ${channel?.name || 'room'}`;
+        }
+        const peer = this.voiceDmCallPeer();
+        return peer ? `Звонок с ${peer}` : 'Звонок';
+    }
+
+    // The slim bar above every tab while a call is live. Hidden only where the
+    // call itself is already on screen: its voice channel, or a DM's open grid.
+    renderVoiceCallStrip() {
+        const type = this.voiceLiveCallType();
+        // The sidebar marks the voice channel we are in. This runs on every
+        // voice-panel render, so the list is refreshed only when that changes.
+        const sidebarCallKey = type === 'channel' ? String(this.voice.roomId || '') : '';
+        if (sidebarCallKey !== this._sidebarCallKey) {
+            this._sidebarCallKey = sidebarCallKey;
+            if (this.S.navMode === 'servers') this.renderContacts();
+        }
+        // The call clock lives here because this runs on every renderVoicePanel
+        // whatever tab is open; the room views are not always rendered.
+        if (type) {
+            if (!this.voice.activeSince) {
+                this.voice.activeSince = Number(this.voice.callTrack?.connectedAt) || Date.now();
+            }
+            this.startVoiceCallBarTimer();
+        } else {
+            this.voice.activeSince = 0;
+            this.stopVoiceCallBarTimer();
+        }
+        const strip = document.getElementById('voiceCallStrip');
+        if (!strip) return;
+        const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
+        const coveredByCall = type === 'channel'
+            ? this.isViewingVoiceCallRoom()
+            : type === 'dm' && chatOpen && !!this.voice.expanded;
+        const show = !!type && !coveredByCall;
+        strip.parentElement?.classList.toggle('has-call-strip', show);
+        if (!show) {
+            strip.hidden = true;
+            if (this._voiceStripHtml) {
+                strip.innerHTML = '';
+                this._voiceStripHtml = '';
+            }
             return;
         }
-        panel.classList.remove('call-bar-mode', 'call-expanded-mode');
-        panel.innerHTML = '';
+        const html = this.renderVoiceCallBar({ title: this.voiceLiveCallTitle(type) });
+        if (html !== this._voiceStripHtml) {
+            strip.innerHTML = html;
+            this._voiceStripHtml = html;
+        }
+        strip.hidden = false;
     }
 
     mountVoiceVideoElements() {

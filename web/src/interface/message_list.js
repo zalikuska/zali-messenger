@@ -68,6 +68,45 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // Mirror of ensureConversationLoaded() for server channels. applySession()
+    // already bulk-restores S.serverChats from the same persisted cache at login,
+    // but it does that once, synchronously, from whatever the cache held at that
+    // exact moment — it is not consulted again afterward. Anything that reaches
+    // S.serverChats[key] empty at render time (a channel switch racing that
+    // restore, a key that only later gets recognized once the server/channel list
+    // itself finishes loading) fell straight through to the "Нет сообщений в
+    // канале" empty state with nothing to catch it, then re-rendered a moment
+    // later once loadServerMessages()'s network round-trip landed — the
+    // empty-then-full flash ("промигивание") reported when opening a channel.
+    ensureServerConversationLoaded(serverId = null, channelId = null) {
+        const sid = String(serverId || this.S.activeServer || '').trim();
+        const cid = String(channelId || this.S.activeChannel || '').trim();
+        if (!sid || !cid) return false;
+        const key = `${sid}:${cid}`;
+        const currentMsgs = this.S.serverChats[key];
+        if (Array.isArray(currentMsgs) && currentMsgs.length > 0) {
+            return true;
+        }
+
+        let rawCache = null;
+        try {
+            rawCache = localStorage.getItem(this.messageCacheStorageKey());
+        } catch (e) {
+            rawCache = null;
+        }
+        if (rawCache && !this.persistedCacheMightHavePeer(rawCache, key)) {
+            return false;
+        }
+
+        const cache = this.loadStoredMessageCache();
+        const cachedMsgs = Array.isArray(cache?.serverChats?.[key]) ? cache.serverChats[key] : [];
+        if (cachedMsgs.length === 0) return false;
+
+        this.S.serverChats[key] = cachedMsgs.filter(msg => msg && typeof msg === 'object');
+        this.trace(`ensureServerConversationLoaded key=${key} restored=${this.S.serverChats[key].length}`);
+        return true;
+    }
+
     scheduleRenderMessages() {
         if (this.messageRenderRaf) return;
         this.messageRenderRaf = requestAnimationFrame(() => {
@@ -106,6 +145,15 @@ ZaliMixin(ZaliInterface, class {
             const restored = this.ensureConversationLoaded(this.S.current);
             if (restored) {
                 this.trace(`renderMessages rerender restored peer=${String(this.S.current || '').trim()}`);
+                this.scheduleRenderMessages();
+                return;
+            }
+        }
+
+        if (isServers && (!Array.isArray(msgs) || msgs.length === 0) && !this.S.loading) {
+            const restored = this.ensureServerConversationLoaded(this.S.activeServer, this.S.activeChannel);
+            if (restored) {
+                this.trace(`renderMessages rerender restored server key=${this.currentServerChatKey()}`);
                 this.scheduleRenderMessages();
                 return;
             }

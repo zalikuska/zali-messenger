@@ -90,7 +90,11 @@ pub(crate) async fn download_release_file(
     match fs::File::open(&path).await {
         Ok(file) => {
             info!("RELEASE download file={}", filename);
-            (
+            // Без Content-Length потоковое тело уходит chunked, и ни один апдейтер
+            // не может посчитать процент: macOS смотрит expectedContentLength,
+            // Windows — content_length(). Полоса стояла на 0% до самого конца.
+            let len = file.metadata().await.ok().map(|meta| meta.len());
+            let mut response = (
                 [
                     (
                         axum::http::header::CONTENT_TYPE,
@@ -104,7 +108,13 @@ pub(crate) async fn download_release_file(
                 ],
                 Body::from_stream(ReaderStream::new(file)),
             )
-                .into_response()
+                .into_response();
+            if let Some(len) = len {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::CONTENT_LENGTH, HeaderValue::from(len));
+            }
+            response
         }
         Err(e) => {
             warn!("Файл релиза не найден {}: {}", path.display(), e);

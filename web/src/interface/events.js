@@ -33,31 +33,14 @@ ZaliMixin(ZaliInterface, class {
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {
             contactsEl.addEventListener('click', (e) => {
-                const serverBtn = e.target.closest('.server-item[data-server-id]');
-                if (serverBtn) {
-                    const serverId = serverBtn.getAttribute('data-server-id');
-                    if (serverId) {
+                // In servers mode the sidebar lists the selected server's channels.
+                const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
+                if (channelRow) {
+                    const channelId = channelRow.getAttribute('data-channel-id');
+                    if (channelId) {
                         this.closeChatPanelModals();
-                        this.setActiveServer(serverId);
+                        this.setActiveChannel(channelId);
                     }
-                    e.stopPropagation();
-                    return;
-                }
-                const createBtn = e.target.closest('.server-create');
-                if (createBtn) {
-                    this.openServerModal('create');
-                    e.stopPropagation();
-                    return;
-                }
-                const joinBtn = e.target.closest('.server-join');
-                if (joinBtn) {
-                    this.openJoinCodeModal();
-                    e.stopPropagation();
-                    return;
-                }
-                const publicBtn = e.target.closest('.server-public');
-                if (publicBtn) {
-                    this.openPublicServersModal();
                     e.stopPropagation();
                     return;
                 }
@@ -86,6 +69,15 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
             contactsEl.addEventListener('contextmenu', (e) => {
+                const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
+                if (channelRow) {
+                    if (channelRow.getAttribute('data-channel-kind') === 'voice') return;
+                    e.preventDefault();
+                    const sid = channelRow.getAttribute('data-server-id');
+                    const cid = channelRow.getAttribute('data-channel-id');
+                    if (sid && cid) this.toggleMuteChannel(sid, cid);
+                    return;
+                }
                 const row = e.target.closest('.contact');
                 if (!row || !row.dataset.name) return;
                 e.preventDefault();
@@ -93,24 +85,8 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
-        const serverChannelList = document.getElementById('serverChannelList');
-        if (serverChannelList) {
-            serverChannelList.addEventListener('click', (e) => {
-                const channelBtn = e.target.closest('.server-channel[data-channel-id]');
-                if (!channelBtn) return;
-                const channelId = channelBtn.getAttribute('data-channel-id');
-                if (channelId) this.setActiveChannel(channelId);
-            });
-            serverChannelList.addEventListener('contextmenu', (e) => {
-                const channelBtn = e.target.closest('.server-channel[data-channel-id]');
-                if (!channelBtn) return;
-                const sid = channelBtn.getAttribute('data-server-id');
-                const cid = channelBtn.getAttribute('data-channel-id');
-                if (channelBtn.getAttribute('data-channel-kind') === 'voice') return;
-                e.preventDefault();
-                if (sid && cid) this.toggleMuteChannel(sid, cid);
-            });
-        }
+        // Servers: avatars in the rail (header on desktop, sidebar on the phone).
+        this.bindServerRailEvents();
 
     }
 
@@ -202,6 +178,33 @@ ZaliMixin(ZaliInterface, class {
                 if (e.target.closest('#voiceCallBar, #voiceCollapseBar')) {
                     e.preventDefault();
                     this.toggleVoiceCallExpanded();
+                }
+            });
+        }
+
+        // The strip above every tab: its mute/deafen act in place, anywhere else
+        // on it goes back to the call.
+        const voiceCallStrip = document.getElementById('voiceCallStrip');
+        if (voiceCallStrip) {
+            voiceCallStrip.addEventListener('click', (e) => {
+                if (e.target.closest('#voiceMuteBtn')) {
+                    this.toggleVoiceMute();
+                    return;
+                }
+                if (e.target.closest('#voiceDeafenBtn')) {
+                    this.toggleVoiceDeafen();
+                    return;
+                }
+                if (e.target.closest('#voiceCallBar')) {
+                    this.openActiveVoiceCall();
+                }
+            });
+            voiceCallStrip.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                if (e.target.closest('#voiceMuteBtn, #voiceDeafenBtn')) return;
+                if (e.target.closest('#voiceCallBar')) {
+                    e.preventDefault();
+                    this.openActiveVoiceCall();
                 }
             });
         }
@@ -989,33 +992,8 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        const serverChannelsList = document.getElementById('serverChannelsList');
-        if (serverChannelsList) {
-            serverChannelsList.addEventListener('click', async (e) => {
-                const saveBtn = e.target.closest('[data-channel-save]');
-                if (saveBtn) {
-                    const channelId = saveBtn.getAttribute('data-channel-save');
-                    try {
-                        await this.saveServerChannel(channelId);
-                    } catch (err) {
-                        this.setServerModalState({ error: err?.message || 'Не удалось сохранить канал' });
-                        this.renderServerModal();
-                    }
-                    return;
-                }
-                const deleteBtn = e.target.closest('[data-channel-delete]');
-                if (deleteBtn) {
-                    const channelId = deleteBtn.getAttribute('data-channel-delete');
-                    if (!channelId) return;
-                    try {
-                        await this.deleteServerChannel(channelId);
-                    } catch (err) {
-                        this.setServerModalState({ error: err?.message || 'Не удалось удалить канал' });
-                        this.renderServerModal();
-                    }
-                }
-            });
-        }
+        // Channel rows: rename and retopic in place, flip kind, delete, drag to reorder.
+        this.bindServerChannelsList();
         if (serverJoinLinkGenerateBtn) {
             serverJoinLinkGenerateBtn.addEventListener('click', async () => {
                 try {
@@ -1740,7 +1718,8 @@ ZaliMixin(ZaliInterface, class {
     // the glide carries the view away from the bottom.
     setupScrollInertia() {
         if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
-        const SELECTOR = '.msgs, .contacts, .sidebar, .server-channel-list, .settings-body, .server-modal-content, .color-picker-body';
+        // The server rail is not here: it runs its own physics (interface/server_rail.js).
+        const SELECTOR = '.msgs, .contacts, .sidebar, .settings-body, .server-modal-content, .color-picker-body';
         const FRICTION = 0.72;
         const MIN_VELOCITY = 0.5;
         const MAX_VELOCITY = 6;

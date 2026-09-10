@@ -21,7 +21,14 @@
     "и из размеров файлов в кеше: индекс остановки слайдера, длина статического",
     "списка остановок, процент заполнения (Math.round) и сравнение двух",
     "локальных строк режима. Ни одно значение не приходит от другого",
-    "пользователя и не пересекает сеть."
+    "пользователя и не пересекает сеть.",
+    "",
+    "2026-09-10: пилюли каналов в шапке заменены лентой серверов (server_rail.js),",
+    "а каналы переехали в сайдбар (render_shell.js renderServers). Две записи",
+    "server_messages.js ушли вместе со старой лентой. Новые четыре — имена классов:",
+    "active — это ' active' или '' из сравнения id с S.activeServer, cls — литерал",
+    "из трёх вызовов action() в том же методе, kind — результат",
+    "normalizeChannelKind(), который возвращает только 'text' или 'voice'."
   ],
   "reviewed": [
     "web/src/interface/attachments.js|class|gifClass",
@@ -65,8 +72,10 @@
     "web/src/interface/profile_ui.js|aria-selected|tab.key === active",
     "web/src/interface/profile_ui.js|data-profile-link-index|index",
     "web/src/interface/render_shell.js|class|active",
-    "web/src/interface/server_messages.js|class|active",
-    "web/src/interface/server_messages.js|class|kind",
+    "web/src/interface/render_shell.js|class|kind",
+    "web/src/interface/render_shell.js|data-channel-kind|kind",
+    "web/src/interface/server_rail.js|class|active",
+    "web/src/interface/server_rail.js|class|cls",
     "web/src/interface/server_modal.js|class|kind",
     "web/src/interface/voice_ui.js|class|actionsBarClass",
     "web/src/interface/voice_ui.js|class|cls",

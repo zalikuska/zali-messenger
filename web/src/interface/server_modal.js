@@ -348,6 +348,8 @@ ZaliMixin(ZaliInterface, class {
             if (createPicker) createPicker.classList.toggle('is-collapsed', !createPickerOpen);
             const createPickerToggle = createPicker?.querySelector('[data-color-picker-toggle="server-role-create"]');
             if (createPickerToggle) createPickerToggle.textContent = createPickerOpen ? 'Свернуть' : 'Развернуть';
+            const createPickerSub = createPicker?.querySelector('.color-picker-sub');
+            if (createPickerSub) createPickerSub.textContent = createPickerOpen ? 'Колесо открыто' : 'Свернуто по умолчанию';
             if (activeSection === 'roles') {
                 this.applyColorWheelValue({
                     wheel: document.getElementById('serverRoleColorWheel'),
@@ -371,6 +373,10 @@ ZaliMixin(ZaliInterface, class {
             serverColorPicker.classList.toggle('is-collapsed', !open);
             const toggle = serverColorPicker.querySelector('[data-color-picker-toggle="server-basics"]');
             if (toggle) toggle.textContent = open ? 'Свернуть' : 'Развернуть';
+            // The markup is static in index.html, so the sub line has to be kept in
+            // step here too — it read «Свернуто по умолчанию» with the wheel open.
+            const sub = serverColorPicker.querySelector('.color-picker-sub');
+            if (sub) sub.textContent = open ? 'Колесо открыто' : 'Свернуто по умолчанию';
         }
         if (activeSection === 'overview') {
             this.renderServerJoinLink();
@@ -689,13 +695,22 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
-    renderServerChannels() {
+    renderServerChannels({ force = false } = {}) {
         const list = document.getElementById('serverChannelsList');
         const count = document.getElementById('serverChannelsCount');
         const isEdit = this.S.serverModal.mode === 'edit';
         const channels = isEdit ? this.normalizeServerChannels(this.S.serverModal.channels || []) : [];
         if (count) count.textContent = String(channels.length || 0);
         if (!list) return;
+        // A rename in progress or a row being dragged owns the list's DOM: any of
+        // the many renderServerModal() calls (a loadServers landing, an avatar)
+        // would otherwise replace the input under the caret or the row under the
+        // pointer. Deferred, not dropped — the edit or drag re-renders on its end.
+        if (!force && (this._serverChannelDrag || list.querySelector('.server-channel-row-input'))) {
+            this._serverChannelsRenderDeferred = true;
+            return;
+        }
+        this._serverChannelsRenderDeferred = false;
         if (this.S.serverModal.loading && channels.length === 0) {
             list.innerHTML = `<div class="empty-state">
                 <div class="empty-ttl">Загрузка каналов</div>
@@ -714,32 +729,23 @@ ZaliMixin(ZaliInterface, class {
             </div>`;
             return;
         }
+        // One row per channel, saved as you go: the row itself drags to reorder,
+        // the name and topic edit in place on click, the icon on the right flips
+        // the channel between text and voice. See bindServerChannelsList().
+        const grip = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
         list.innerHTML = channels.map(channel => {
-            const safeId = String(channel.id || '').replace(/[^a-z0-9_-]/gi, '_');
             const kind = this.normalizeChannelKind(channel.kind);
-            return `<div class="server-channel-card" data-channel-card="${this.esc(channel.id)}">
-                <div class="server-channel-head">
-                    <span class="server-channel-chip ${kind}">${this.channelKindIcon(kind, 'server-channel-chip-icon')}</span>
-                    <div class="server-channel-copy">
-                        <input class="settings-input" data-channel-name="${this.esc(channel.id)}" value="${this.esc(channel.name || '')}" placeholder="Название канала">
-                        <div class="server-channel-meta">ID: ${this.esc(channel.id || safeId)} · ${this.esc(this.channelKindLabel(kind))}</div>
-                    </div>
-                    <select class="settings-input server-channel-kind-select" data-channel-kind="${this.esc(channel.id)}">
-                        <option value="text"${kind === 'text' ? ' selected' : ''}>Текстовый</option>
-                        <option value="voice"${kind === 'voice' ? ' selected' : ''}>Голосовой</option>
-                    </select>
-                    <div class="server-channel-controls">
-                        <button class="btn-flat" type="button" data-channel-save="${this.esc(channel.id)}">Сохранить</button>
-                        <button class="btn-flat" type="button" data-channel-delete="${this.esc(channel.id)}">Удалить</button>
-                    </div>
+            const kindLabel = this.channelKindLabel(kind);
+            const nextLabel = kind === 'voice' ? 'текстовым' : 'голосовым';
+            const name = String(channel.name || '');
+            return `<div class="server-channel-row" data-channel-card="${this.esc(channel.id)}">
+                <span class="server-channel-grip">${grip}</span>
+                <div class="server-channel-row-copy">
+                    <span class="server-channel-row-name" data-channel-rename="${this.esc(channel.id)}" title="Нажмите, чтобы переименовать">${this.esc(name)}</span>
+                    <span class="server-channel-row-topic${channel.topic ? '' : ' empty'}" data-channel-retopic="${this.esc(channel.id)}" title="Нажмите, чтобы изменить тему">${this.esc(channel.topic || 'Добавить тему')}</span>
                 </div>
-                <div class="server-channel-body">
-                    <input class="settings-input" data-channel-topic="${this.esc(channel.id)}" value="${this.esc(channel.topic || '')}" placeholder="Тема или описание">
-                    <label class="server-channel-position">
-                        <span class="server-channel-position-label">Позиция</span>
-                        <input class="settings-input" data-channel-position="${this.esc(channel.id)}" type="number" min="0" step="1" value="${this.esc(String(Number.isFinite(Number(channel.position)) ? Number(channel.position) : 0))}" placeholder="0">
-                    </label>
-                </div>
+                <button class="server-channel-kind-toggle ${kind}" type="button" data-channel-kind-toggle="${this.esc(channel.id)}" title="${this.esc(`${kindLabel} канал — нажмите, чтобы сделать ${nextLabel}`)}" aria-label="${this.esc(`${kindLabel} канал ${name}: сделать ${nextLabel}`)}">${this.channelKindIcon(kind, 'server-channel-kind-icon')}</button>
+                <button class="server-channel-row-delete" type="button" data-channel-delete="${this.esc(channel.id)}" title="Удалить канал" aria-label="${this.esc(`Удалить канал ${name}`)}">${this.uiIcon('trash', 'server-channel-row-delete-icon')}</button>
             </div>`;
         }).join('');
     }
@@ -1292,20 +1298,353 @@ ZaliMixin(ZaliInterface, class {
         };
     }
 
-    channelPayloadFromCard(channelId) {
-        const card = document.querySelector(`[data-channel-card="${CSS.escape(String(channelId || ''))}"]`);
-        if (!card) return null;
-        const name = String(card.querySelector(`[data-channel-name="${CSS.escape(String(channelId || ''))}"]`)?.value || '').trim();
-        const topic = String(card.querySelector(`[data-channel-topic="${CSS.escape(String(channelId || ''))}"]`)?.value || '').trim();
-        const kind = this.normalizeChannelKind(card.querySelector(`[data-channel-kind="${CSS.escape(String(channelId || ''))}"]`)?.value || 'text');
-        const positionValue = String(card.querySelector(`[data-channel-position="${CSS.escape(String(channelId || ''))}"]`)?.value || '').trim();
-        const position = positionValue === '' ? undefined : Number(positionValue);
-        return {
-            name,
-            topic,
-            kind,
-            position: Number.isFinite(position) ? position : undefined,
+    // The sidebar list and the rail read S.servers, which only loadServers
+    // refreshes — so every landed channel change ends here.
+    async refreshServersAfterChannelChange(serverId) {
+        try {
+            await this.loadServers({ silent: true });
+        } catch (_) {}
+        if (this.S.activeServer === serverId) {
+            this.renderServerInterface();
+            this.renderContacts();
+        }
+    }
+
+    // Optimistic: the row shows the new value at once and goes back to what it
+    // was if the server refuses (a duplicate name, no rights, no network).
+    async updateServerChannel(channelId, patch) {
+        const serverId = this.S.serverModal.serverId;
+        const cid = String(channelId || '').trim();
+        if (!serverId || !cid || this.S.serverModal.mode !== 'edit') return false;
+        const previous = this.S.serverModal.channels || [];
+        this.setServerModalState({
+            channels: previous.map(channel => (String(channel.id) === cid ? { ...channel, ...patch } : channel)),
+            error: '',
+        });
+        this.renderServerChannels({ force: true });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, cid), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (!res.ok) {
+                throw new Error(await res.text() || 'Не удалось сохранить канал');
+            }
+            const data = await res.json().catch(() => null);
+            if (Array.isArray(data)) {
+                this.setServerModalState({ channels: this.normalizeServerChannels(data) });
+            }
+            this.renderServerChannels();
+            await this.refreshServersAfterChannelChange(serverId);
+            return true;
+        } catch (e) {
+            this.setServerModalState({ channels: previous, error: e?.message || 'Не удалось сохранить канал' });
+            this.renderServerModal();
+            return false;
+        }
+    }
+
+    toggleServerChannelKind(channelId) {
+        const cid = String(channelId || '').trim();
+        const channel = (this.S.serverModal.channels || []).find(item => String(item.id) === cid);
+        if (!channel) return;
+        const kind = this.normalizeChannelKind(channel.kind) === 'voice' ? 'text' : 'voice';
+        void this.updateServerChannel(cid, { kind });
+    }
+
+    // The API has no bulk reorder, so every channel whose stored position differs
+    // gets its own PATCH. Positions are rewritten as 0..n-1 on the way: older
+    // servers carry duplicates and gaps, which is why the list showed «позиция 2»
+    // above «позиция 1».
+    async persistServerChannelOrder(orderedIds) {
+        const serverId = this.S.serverModal.serverId;
+        if (!serverId || this.S.serverModal.mode !== 'edit') return;
+        const previous = this.normalizeServerChannels(this.S.serverModal.channels || []);
+        const byId = new Map(previous.map(channel => [String(channel.id), channel]));
+        const next = orderedIds
+            .map(id => byId.get(String(id)))
+            .filter(Boolean)
+            .map((channel, index) => ({ ...channel, position: index }));
+        if (next.length !== previous.length) {
+            this.renderServerChannels({ force: true });
+            return;
+        }
+        const changed = next.filter(channel => Number(byId.get(String(channel.id))?.position) !== channel.position);
+        this.setServerModalState({ channels: next, error: '' });
+        this.renderServerChannels({ force: true });
+        if (!changed.length) return;
+        try {
+            let latest = null;
+            for (const channel of changed) {
+                const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, channel.id), {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ position: channel.position }),
+                });
+                if (!res.ok) {
+                    throw new Error(await res.text() || 'Не удалось изменить порядок каналов');
+                }
+                latest = await res.json().catch(() => null);
+            }
+            if (Array.isArray(latest)) {
+                this.setServerModalState({ channels: this.normalizeServerChannels(latest) });
+            }
+            this.renderServerChannels();
+            await this.refreshServersAfterChannelChange(serverId);
+        } catch (e) {
+            // Some of the PATCHes may have landed, so the order comes back from the
+            // server rather than from the snapshot.
+            this.setServerModalState({ error: e?.message || 'Не удалось изменить порядок каналов' });
+            await this.loadServerChannels(serverId).catch(() => {});
+            this.renderServerModal();
+        }
+    }
+
+    // Swaps the name (or topic) text for an input. Enter or leaving the field
+    // saves, Escape puts the old value back.
+    beginServerChannelFieldEdit(span, field) {
+        const row = span?.closest('[data-channel-card]');
+        const cid = row?.getAttribute('data-channel-card');
+        if (!cid) return;
+        const channel = (this.S.serverModal.channels || []).find(item => String(item.id) === cid);
+        const original = String((field === 'name' ? channel?.name : channel?.topic) || '');
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = `settings-input server-channel-row-input ${field}`;
+        input.maxLength = field === 'name' ? 64 : 180;
+        input.value = original;
+        input.placeholder = field === 'name' ? 'Название канала' : 'Тема канала';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        span.replaceWith(input);
+        input.focus();
+        input.select();
+        let finished = false;
+        const finish = (commit) => {
+            if (finished) return;
+            finished = true;
+            const value = input.value.trim();
+            if (commit && value !== original && (field !== 'name' || value)) {
+                void this.updateServerChannel(cid, { [field]: value });
+            } else {
+                this.renderServerChannels({ force: true });
+            }
         };
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                finish(true);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                finish(false);
+            }
+        });
+        input.addEventListener('blur', () => finish(true));
+    }
+
+    bindServerChannelsList() {
+        const list = document.getElementById('serverChannelsList');
+        if (!list || list.__channelRowsBound) return;
+        list.__channelRowsBound = true;
+
+        const THRESHOLD = 5;
+        const TOUCH_HOLD_MS = 280;
+        const EDGE = 44;
+        let press = null;
+        let drag = null;
+        let suppressClick = false;
+
+        // The pointerup that ends a drag is followed by a click on whatever the
+        // pointer was over — the kind icon, a name. That click is not a choice.
+        list.addEventListener('click', (e) => {
+            if (!suppressClick) return;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+
+        list.addEventListener('click', (e) => {
+            const toggle = e.target.closest('[data-channel-kind-toggle]');
+            if (toggle) {
+                this.toggleServerChannelKind(toggle.getAttribute('data-channel-kind-toggle'));
+                return;
+            }
+            const deleteBtn = e.target.closest('[data-channel-delete]');
+            if (deleteBtn) {
+                const channelId = deleteBtn.getAttribute('data-channel-delete');
+                if (!channelId) return;
+                this.deleteServerChannel(channelId).catch((err) => {
+                    this.setServerModalState({ error: err?.message || 'Не удалось удалить канал' });
+                    this.renderServerModal();
+                });
+                return;
+            }
+            const rename = e.target.closest('[data-channel-rename]');
+            if (rename) {
+                this.beginServerChannelFieldEdit(rename, 'name');
+                return;
+            }
+            const retopic = e.target.closest('[data-channel-retopic]');
+            if (retopic) this.beginServerChannelFieldEdit(retopic, 'topic');
+        });
+
+        const scrollerFor = () => [list, list.closest('.server-modal-content')]
+            .find(el => el && el.scrollHeight > el.clientHeight + 1) || null;
+
+        // Geometry is captured once, at the start, in "content" coordinates: the
+        // scroller's movement since then is added back, so autoscrolling while
+        // dragging never invalidates the measured row positions.
+        const layout = () => {
+            const scrolled = drag.scroller ? drag.scroller.scrollTop - drag.scroll0 : 0;
+            const origin = drag.rects[drag.originIndex];
+            const first = drag.rects[0];
+            const last = drag.rects[drag.rects.length - 1];
+            const offset = Math.max(
+                first.top - origin.top - 8,
+                Math.min(last.bottom - origin.bottom + 8, drag.clientY - drag.startY + scrolled),
+            );
+            drag.rows[drag.originIndex].style.transform = `translate3d(0, ${offset.toFixed(1)}px, 0)`;
+            const center = origin.top + origin.height / 2 + offset;
+            let index = 0;
+            drag.rects.forEach((rect, i) => {
+                if (i !== drag.originIndex && center > rect.top + rect.height / 2) index += 1;
+            });
+            if (index === drag.index) return;
+            drag.index = index;
+            drag.rows.forEach((row, i) => {
+                if (i === drag.originIndex) return;
+                let shift = 0;
+                if (drag.originIndex < index && i > drag.originIndex && i <= index) shift = -drag.step;
+                if (drag.originIndex > index && i >= index && i < drag.originIndex) shift = drag.step;
+                row.style.transform = shift ? `translate3d(0, ${shift}px, 0)` : '';
+            });
+        };
+
+        const autoscroll = () => {
+            if (!drag) return;
+            const scroller = drag.scroller;
+            if (scroller) {
+                const box = scroller.getBoundingClientRect();
+                let speed = 0;
+                if (drag.clientY < box.top + EDGE) speed = -Math.ceil((box.top + EDGE - drag.clientY) / 4);
+                else if (drag.clientY > box.bottom - EDGE) speed = Math.ceil((drag.clientY - box.bottom + EDGE) / 4);
+                if (speed) {
+                    scroller.scrollTop += speed;
+                    layout();
+                }
+            }
+            drag.raf = requestAnimationFrame(autoscroll);
+        };
+
+        const startDrag = () => {
+            if (!press || drag) return;
+            const rows = Array.from(list.querySelectorAll('.server-channel-row'));
+            const originIndex = rows.indexOf(press.row);
+            if (originIndex < 0 || rows.length < 2) {
+                press = null;
+                return;
+            }
+            const rects = rows.map(row => row.getBoundingClientRect());
+            const scroller = scrollerFor();
+            drag = {
+                rows,
+                rects,
+                originIndex,
+                index: originIndex,
+                pointerId: press.pointerId,
+                startY: press.startY,
+                clientY: press.startY,
+                scroller,
+                scroll0: scroller ? scroller.scrollTop : 0,
+                step: rects[originIndex].height + Math.max(0, rects[1].top - rects[0].bottom),
+                raf: 0,
+            };
+            this._serverChannelDrag = true;
+            list.classList.add('is-dragging');
+            press.row.classList.add('dragging');
+            try { list.setPointerCapture(drag.pointerId); } catch (_) {}
+            autoscroll();
+        };
+
+        const endDrag = (commit) => {
+            if (!drag) return;
+            cancelAnimationFrame(drag.raf);
+            const { rows, originIndex, index } = drag;
+            drag = null;
+            this._serverChannelDrag = false;
+            list.classList.remove('is-dragging');
+            rows.forEach((row) => {
+                row.classList.remove('dragging');
+                row.style.transform = '';
+            });
+            suppressClick = true;
+            setTimeout(() => { suppressClick = false; }, 0);
+            if (commit && index !== originIndex) {
+                const ids = rows.map(row => row.getAttribute('data-channel-card'));
+                const [moved] = ids.splice(originIndex, 1);
+                ids.splice(index, 0, moved);
+                // Re-renders the list in the new order synchronously, in the same
+                // task as the transforms are cleared above — no frame in between.
+                void this.persistServerChannelOrder(ids);
+            } else if (this._serverChannelsRenderDeferred) {
+                this.renderServerChannels({ force: true });
+            }
+        };
+
+        list.addEventListener('pointerdown', (e) => {
+            if (drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+            const row = e.target.closest('.server-channel-row');
+            if (!row || e.target.closest('input, textarea, select')) return;
+            // An open rename commits on this very press (blur) and re-renders the
+            // list, which would pull the row out from under the pointer.
+            if (list.querySelector('.server-channel-row-input')) return;
+            press = { row, pointerId: e.pointerId, pointerType: e.pointerType, startX: e.clientX, startY: e.clientY, holdTimer: 0 };
+            if (e.pointerType === 'touch') {
+                // On touch a plain drag is the list's own scroll; picking a row up
+                // takes a short hold, like every native reorderable list.
+                press.holdTimer = setTimeout(startDrag, TOUCH_HOLD_MS);
+            }
+        });
+
+        list.addEventListener('pointermove', (e) => {
+            if (drag) {
+                if (e.pointerId !== drag.pointerId) return;
+                drag.clientY = e.clientY;
+                layout();
+                return;
+            }
+            if (!press || e.pointerId !== press.pointerId) return;
+            const moved = Math.hypot(e.clientX - press.startX, e.clientY - press.startY);
+            if (press.pointerType === 'touch') {
+                if (moved > 8) {
+                    clearTimeout(press.holdTimer);
+                    press = null;
+                }
+                return;
+            }
+            if (moved >= THRESHOLD) {
+                startDrag();
+                if (drag) {
+                    drag.clientY = e.clientY;
+                    layout();
+                }
+            }
+        });
+
+        const release = (e, commit) => {
+            if (press && e.pointerId === press.pointerId) {
+                clearTimeout(press.holdTimer);
+                press = null;
+            }
+            if (drag && e.pointerId === drag.pointerId) endDrag(commit);
+        };
+        list.addEventListener('pointerup', (e) => release(e, true));
+        list.addEventListener('pointercancel', (e) => release(e, false));
+        // Once a row is picked up by touch, the finger must move the row, not the page.
+        list.addEventListener('touchmove', (e) => {
+            if (drag && e.cancelable) e.preventDefault();
+        }, { passive: false });
     }
 
     async createServerChannel() {
@@ -1342,43 +1681,6 @@ ZaliMixin(ZaliInterface, class {
             this.renderServerModal();
         } catch (e) {
             this.setServerModalState({ error: e?.message || 'Не удалось создать канал' });
-            this.renderServerModal();
-        } finally {
-            this.setServerModalState({ saving: false });
-        }
-    }
-
-    async saveServerChannel(channelId) {
-        const serverId = this.S.serverModal.serverId;
-        if (!serverId || this.S.serverModal.mode !== 'edit') return;
-        const cid = String(channelId || '').trim();
-        const payload = this.channelPayloadFromCard(cid);
-        if (!payload || !payload.name) {
-            this.setServerModalState({ error: 'Введите название канала' });
-            this.renderServerModal();
-            return;
-        }
-        this.setServerModalState({ saving: true, error: '' });
-        this.renderServerModal();
-        try {
-            const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, cid), {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            if (!res.ok) {
-                throw new Error(await res.text() || 'Не удалось сохранить канал');
-            }
-            const data = await res.json();
-            const channels = this.normalizeServerChannels(Array.isArray(data) ? data : (Array.isArray(data?.channels) ? data.channels : []));
-            this.setServerModalState({ channels, error: '' });
-            await this.loadServers({ silent: true });
-            if (this.S.activeServer === serverId) {
-                this.setActiveServer(serverId, { persist: true });
-            }
-            this.renderServerModal();
-        } catch (e) {
-            this.setServerModalState({ error: e?.message || 'Не удалось сохранить канал' });
             this.renderServerModal();
         } finally {
             this.setServerModalState({ saving: false });

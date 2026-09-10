@@ -35,6 +35,14 @@ async fn release_artifact_downloads_without_authentication() {
             .and_then(|v| v.to_str().ok()),
         Some("application/octet-stream")
     );
+    // Both updaters compute download progress from Content-Length; a chunked
+    // response leaves the progress bar at 0% until the download is finished.
+    assert_eq!(
+        res.headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()),
+        Some(b"MZ fake windows binary".len().to_string().as_str())
+    );
     assert_eq!(
         res.bytes().await.expect("release body").as_ref(),
         b"MZ fake windows binary"

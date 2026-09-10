@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260910-rev18">
+    <link rel="stylesheet" href="style.css?v=20260910-rev28">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -182,6 +182,8 @@
                     </div>
                     <button class="contact-add-btn" id="contactAddBtn" type="button" title="Добавить контакт">+</button>
                 </div>
+                <!-- Phone-only copy of the server rail: the list screen has no chat header. -->
+                <div class="server-rail server-rail--sidebar" id="serverRailSidebar" hidden><div class="server-rail-track"></div></div>
                 <div class="contact-status" id="contactStatus" aria-live="polite"></div>
                 <div class="contacts-suggest-wrap" id="contactSuggestionsWrap" hidden>
                     <div class="contacts-suggest" id="contactSuggestions" hidden></div>
@@ -215,6 +217,11 @@
             <!-- CONTENT -->
             <div class="main">
 
+                <!-- ACTIVE CALL STRIP: pinned above every tab while a call is live and
+                     its own voice channel is not the thing on screen. Filled by
+                     renderVoiceCallStrip() in web/src/interface/voice_ui.js. -->
+                <div class="voice-call-strip" id="voiceCallStrip" hidden></div>
+
                 <!-- CHAT VIEW -->
                 <div id="viewChat" class="view active">
                     <div class="chat-hdr" id="chatHdr">
@@ -246,7 +253,9 @@
                                 </svg>
                             </button>
                         </div>
-                        <div class="server-channel-list" id="serverChannelList" hidden></div>
+                        <!-- Server rail: avatars of the servers (renderServerRails, interface/server_rail.js).
+                             The selected server's channels are the sidebar list. -->
+                        <div class="server-rail server-rail--header" id="serverRail" hidden><div class="server-rail-track"></div></div>
                     </div>
 
                     <div class="voice-panel" id="voicePanel" hidden></div>
@@ -1035,6 +1044,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260910-rev18"></script>
+    <script src="app.js?v=20260910-rev28"></script>
 </body>
 </html>

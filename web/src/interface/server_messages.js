@@ -528,7 +528,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     renderServerToolbar() {
-        const channelList = document.getElementById('serverChannelList');
         const chatHdr = document.getElementById('chatHdr');
         const chatHdrAva = document.getElementById('chatHdrAva');
         const chatHdrName = document.getElementById('chatHdrName');
@@ -543,7 +542,8 @@ ZaliMixin(ZaliInterface, class {
         const canManage = this.canManageServer(server);
 
         if (chatHdr) chatHdr.classList.toggle('server-mode', isServers);
-        if (channelList) channelList.hidden = !isServers;
+        // Servers are the rail of avatars; it hides itself outside servers mode.
+        this.renderServerRails();
         if (chatCallBtn) {
             chatCallBtn.hidden = isServers || !this.S.current;
         }
@@ -555,7 +555,6 @@ ZaliMixin(ZaliInterface, class {
             serverSettingsBtn.disabled = !canManage;
         }
         if (!isServers) {
-            if (channelList) channelList.innerHTML = '';
             if (chatHdrAva) {
                 chatHdrAva.style.background = '';
                 const who = this.S.current || this.myName();
@@ -574,7 +573,8 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (!server) {
-            if (channelList) channelList.innerHTML = '';
+            // The sidebar shows the «выберите сервер» / «серверов нет» state.
+            this.renderContacts();
             return;
         }
 
@@ -603,44 +603,10 @@ ZaliMixin(ZaliInterface, class {
                 : server.name;
         }
 
-        if (channelList) {
-            const channels = Array.isArray(server.channels) ? server.channels : [];
-            const channelsHTML = channels.map(ch => {
-            const active = ch.id === this.S.activeChannel ? 'active' : '';
-            const kind = String(ch.kind || 'text').trim().toLowerCase();
-            const title = kind === 'voice' ? 'Голосовой канал' : 'Текстовый канал';
-            const chKey = `${server.id}:${ch.id}`;
-            const cnt = kind === 'voice' ? 0 : Number(this.S.channelUnread?.[chKey] || 0);
-            const badge = cnt > 0 ? `<span class="badge">${cnt > 99 ? '99+' : cnt}</span>` : '';
-            const muted = kind !== 'voice' && this.isChannelMuted(server.id, ch.id);
-            const muteToggle = muted ? `<span class="channel-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : '';
-            return `<div class="server-channel ${active}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${this.esc(kind)}" title="${this.esc(title)}">
-                    <span class="server-channel-hash ${kind}">${this.channelKindIcon(kind, 'server-channel-list-icon')}</span>
-                    <span class="server-channel-name">${this.esc(ch.name)}</span>
-                    ${muteToggle}
-                    ${badge}
-                </div>`;
-        }).join('');
-
-            this.commitListHTML(channelList, `channels:${server.id}`, channelsHTML);
-
-            // renderServerToolbar() runs on every avatar that finishes loading, every
-            // nav refresh and every toolbar sync. Firing a *smooth* scrollIntoView on
-            // each of those made the channel rail (and, since scrollIntoView walks
-            // every scrollable ancestor, whatever else was scrollable around it) drift
-            // on its own — the unexplained jumps while just reading a channel. Only
-            // scroll when the selected channel actually changed.
-            const activeChannelKey = `${server.id}:${String(this.S.activeChannel || '')}`;
-            if (this._lastScrolledChannelKey !== activeChannelKey) {
-                this._lastScrolledChannelKey = activeChannelKey;
-                const activeChannel = channelList.querySelector('.server-channel.active');
-                if (activeChannel && typeof activeChannel.scrollIntoView === 'function') {
-                    requestAnimationFrame(() => {
-                        activeChannel.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-                    });
-                }
-            }
-        }
+        // This server's channels are the sidebar list now (renderServers). Every
+        // toolbar sync is also where unread and mute changes land, so keep the list
+        // in step from here; commitListHTML makes an unchanged list a string compare.
+        this.renderContacts();
     }
 
     setActiveChannel(channelId, { persist = true } = {}) {
@@ -660,12 +626,9 @@ ZaliMixin(ZaliInterface, class {
         // clickable outside the chat screen.
         this.ensureChatViewOpen();
         this.collapseActiveCallView();
-        if (this.voice.roomType === 'channel' && this.voice.roomId) {
-            const currentChannelId = String(this.voice.channelId || '').trim();
-            if (currentChannelId && currentChannelId !== next) {
-                this.leaveVoiceRoom({ announce: true });
-            }
-        }
+        // Switching channels no longer leaves a channel call: the call keeps
+        // running and follows the user as the strip at the top of the window
+        // (renderVoiceCallStrip). Leaving is an explicit «Покинуть».
         this.cancelComposerContext();
         this.S.activeChannel = next;
         // Selecting the channel makes it visible again — clear whatever unread
@@ -680,11 +643,17 @@ ZaliMixin(ZaliInterface, class {
         this.requestMessagesScroll('bottom');
         this.scheduleRenderMessages();
         this.updateSendButtonState();
+        // The sidebar highlights the selected channel.
+        this.renderContacts();
         if (this.isVoiceChannel(channel)) {
             // Selecting a voice channel only opens its panel (with a "Присоединиться"
             // button) — it must NOT auto-connect the call. Auto-joining on click also
             // left the panel stuck rendering the connected-call state after switching
             // to any other channel, since nothing ever re-rendered it away from there.
+            // Leaves the phone's list screen like a text channel does: the channel
+            // rows are in the sidebar now, and tapping one must open it.
+            this.closeMobileSidebar();
+            this.syncMobileChrome();
             this.renderVoicePanel();
             return;
         }

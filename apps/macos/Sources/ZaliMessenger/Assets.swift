@@ -723,6 +723,26 @@ body[data-ui-v2="on"] .mode-switch {
     animation: segment-icon-pop .52s cubic-bezier(.2, 1.18, .2, 1) both;
 }
 
+.hub-segment-badge {
+    position: absolute;
+    top: 1px;
+    right: 6px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: var(--lime);
+    color: #050505;
+    font-size: 9px;
+    font-weight: 900;
+    line-height: 1;
+    border: 2px solid var(--sidebar);
+    z-index: 2;
+    animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) both;
+}
+
 .mode-switch {
     display: inline-flex;
     align-items: center;
@@ -1819,20 +1839,157 @@ body[data-nav-mode="servers"] .contacts {
     grid-template-rows: auto auto 1fr;
 }
 
-.server-channel-list {
+/* Server rail: avatars of the servers — in the chat header on desktop, on top of
+   the sidebar on the phone. It scrolls through its own physics (setupServerRail
+   in interface/server_rail.js): native overflow scrolling has no overshoot on
+   desktop and no mouse dragging at all, hence overflow: hidden and a translated
+   track. The mask fades whichever edge still has servers behind it. */
+.server-rail {
+    --rail-fade-l: 0px;
+    --rail-fade-r: 0px;
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--rail-fade-l), #000 calc(100% - var(--rail-fade-r)), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 var(--rail-fade-l), #000 calc(100% - var(--rail-fade-r)), transparent 100%);
+}
+
+.server-rail.can-scroll-left {
+    --rail-fade-l: 24px;
+}
+
+.server-rail.can-scroll-right {
+    --rail-fade-r: 24px;
+}
+
+.server-rail.is-scrollable {
+    cursor: grab;
+}
+
+.server-rail.dragging,
+.server-rail.dragging .server-rail-item {
+    cursor: grabbing;
+}
+
+.server-rail-track {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 12px 2px 28px;
-    margin-right: -2px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(var(--accent-rgb), .35) transparent;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
+    gap: 10px;
+    width: max-content;
+    padding: 7px 6px;
+    will-change: transform;
+}
+
+.server-rail-item {
+    position: relative;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.server-rail-item:focus-visible {
+    outline: none;
+}
+
+.server-rail-item .server-rail-avatar {
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+    transition: border-radius .2s var(--ease-out), box-shadow .2s var(--ease-out), transform .16s var(--ease-out);
+}
+
+.server-rail-item:hover .server-rail-avatar,
+.server-rail-item:focus-visible .server-rail-avatar {
+    border-radius: 14px;
+}
+
+.server-rail-item:active .server-rail-avatar {
+    transform: scale(.94);
+}
+
+.server-rail.dragging .server-rail-item .server-rail-avatar {
+    transform: none;
+}
+
+.server-rail-item.active .server-rail-avatar {
+    border-radius: 14px;
+    box-shadow: 0 0 0 2px var(--lime), 0 0 16px rgba(var(--accent-rgb), .3);
+}
+
+.server-rail-badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: grid;
+    place-items: center;
+    border: 2px solid var(--bg);
+    border-radius: 999px;
+    background: var(--lime);
+    color: #050505;
+    font-size: 9px;
+    font-weight: 900;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.server-rail-sep {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 26px;
+    margin: 0 2px;
+    background: var(--border);
+}
+
+.server-rail-action .server-rail-avatar {
+    background: rgba(255,255,255,.04);
+    color: var(--lime);
+    font-size: 18px;
+    text-shadow: none;
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .28);
+}
+
+.server-rail-action:hover .server-rail-avatar {
+    background: rgba(var(--accent-rgb), .14);
+}
+
+.server-rail-tip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 10000;
+    padding: 6px 10px;
+    border: 1px solid rgba(var(--accent-rgb), .25);
+    border-radius: 10px;
+    background: rgba(12,14,18,.96);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+    box-shadow: 0 10px 24px rgba(0,0,0,.35);
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, 4px);
+    transition: opacity .12s var(--ease-out), transform .12s var(--ease-out);
+}
+
+.server-rail-tip.visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
 }
 
 .chat-hdr.server-mode {
@@ -1840,89 +1997,93 @@ body[data-nav-mode="servers"] .contacts {
     gap: 14px;
 }
 
-.chat-hdr.server-mode .server-channel-list {
-    margin-left: auto;
+/* The rail takes whatever the header has left (basis 0), instead of claiming
+   its full content width and squeezing the title: with `flex: 0 1 auto` a long
+   server list shrank the channel title into two lines under the gear button. */
+.chat-hdr.server-mode .server-rail {
+    flex: 1 1 0;
+    min-width: 0;
     max-width: min(58vw, 860px);
-    padding-top: 14px;
-    padding-bottom: 28px;
+    margin-left: auto;
 }
 
-.server-channel-list::-webkit-scrollbar {
-    height: 8px;
+/* Few servers: sit at the right end, where the channel pills used to be. Once
+   the list overflows, the physics owns the position (measured from the left). */
+.chat-hdr .server-rail:not(.is-scrollable) .server-rail-track {
+    margin-left: auto;
 }
 
-.server-channel-list::-webkit-scrollbar-track {
-    background: transparent;
+/* The sidebar copy exists for the phone's list screen; see the mobile block. */
+.server-rail--sidebar {
+    display: none;
 }
 
-.server-channel-list::-webkit-scrollbar-thumb {
-    background: rgba(var(--accent-rgb), .28);
-    border-radius: 999px;
+/* Channels of the selected server in the sidebar. Same footprint as a dialog
+   row (.contact), so switching ЛС ↔ Сервера does not reflow the column. */
+.sidebar-channel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
-.server-channel {
-    display: inline-flex;
+.sidebar-channel {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
-    min-height: 34px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: rgba(255,255,255,.03);
-    color: var(--text2);
+    gap: 10px;
+    min-width: 0;
+    min-height: 50px;
+    padding: 8px 10px 8px 8px;
+    border-radius: 12px;
     cursor: pointer;
-    flex: 0 0 auto;
-    scroll-snap-align: start;
-    transition: transform .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
-    /* Здесь НЕ должно быть content-visibility: auto. В вертикальном списке
-       (.contact) заглушка подменяет высоту, ширину задаёт контейнер — там это
-       безопасно. Канал же лежит в ГОРИЗОНТАЛЬНОЙ ленте, где ширина зависит от
-       длины названия: у пропущенного отрисовку канала она становится
-       заглушечной (44px вместо 66–160), и стоит ему въехать в видимую часть,
-       как он меняет ширину и сдвигает все следующие. У края ленты это
-       зацикливается — чип раздался, уехал за границу, снова пропущен, снова
-       сжался, — и лента дёргается сама по себе. Внутри чипа нет ничего
-       дорогого (иконка, строка, счётчик), так что экономить тут нечего. */
+    transition: background .18s var(--ease-out), box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
+    contain: layout style;
 }
 
-.server-channel:hover {
-    color: var(--text);
-    border-color: rgba(var(--accent-rgb), .18);
-    background: rgba(255,255,255,.05);
+.sidebar-channel:hover {
+    background: rgba(255,255,255,.03);
 }
 
-.server-channel.active {
-    color: #050505;
-    background: linear-gradient(180deg, rgba(var(--accent-rgb), .98), rgba(var(--accent-rgb), .82));
-    border-color: rgba(var(--accent-rgb), .36);
-    box-shadow: 0 8px 20px rgba(var(--accent-rgb), .22);
+.sidebar-channel.active {
+    background: rgba(var(--accent-rgb), .10);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .18);
 }
 
-.server-channel-hash {
-    display: inline-grid;
+.sidebar-channel-icon {
+    width: 34px;
+    height: 34px;
+    display: grid;
     place-items: center;
-    width: 14px;
-    height: 14px;
-    font-size: 11px;
-    font-weight: 900;
-    opacity: .8;
+    border-radius: 10px;
+    background: rgba(var(--accent-rgb), .12);
+    color: var(--accent);
 }
 
-.server-channel-list-icon {
-    width: 13px;
-    height: 13px;
+.sidebar-channel-icon.voice {
+    background: rgba(31, 167, 255, .14);
+    color: #4ab9ff;
 }
 
-.server-channel-name {
-    font-size: 11px;
-    font-weight: 900;
-    letter-spacing: .02em;
-    text-transform: uppercase;
-}
-
-.server-channel-hash.voice {
+.sidebar-channel.in-call .sidebar-channel-icon {
+    background: rgba(var(--accent-rgb), .2);
     color: var(--lime);
-    font-size: 12px;
+    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .35);
+}
+
+.sidebar-channel-glyph {
+    width: 16px;
+    height: 16px;
+}
+
+.sidebar-channel .contact-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sidebar-channel-empty {
+    padding: 28px 8px;
+    text-align: center;
 }
 
 .voice-panel {
@@ -2698,6 +2859,125 @@ body[data-nav-mode="servers"] .contacts {
 
 #viewChat .voice-panel {
     padding: 0 18px 4px;
+}
+
+/* Active-call strip: pinned to the top of .main, above whatever tab is open
+   (another channel, a DM, Hub, Settings), and pushing that tab down by its own
+   height instead of covering its header. Hidden while the call's own voice
+   channel is on screen — that view is the call itself. */
+.main {
+    --call-strip-h: 38px;
+}
+
+.voice-call-strip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 45;
+    height: var(--call-strip-h);
+}
+
+.voice-call-strip .voice-callbar {
+    height: 100%;
+    box-sizing: border-box;
+    padding: 0 16px;
+    border-bottom: 1px solid rgba(var(--accent-rgb), .22);
+}
+
+.voice-call-strip .voice-callbar-btn {
+    width: 26px;
+    height: 26px;
+}
+
+.voice-call-strip .voice-callbar-btn .call-ctrl-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.voice-call-strip .voice-callbar-title {
+    font-size: 13px;
+}
+
+.main.has-call-strip > .view,
+.main.has-call-strip > #viewChat {
+    top: var(--call-strip-h);
+}
+
+/* A voice channel has no text chat, so opening one shows only the call: the
+   message list and composer are gone and the panel takes all the room under
+   the header. */
+#viewChat.voice-channel-view {
+    grid-template-rows: auto minmax(0, 1fr);
+}
+
+#viewChat.voice-channel-view .msgs,
+#viewChat.voice-channel-view .input-area {
+    display: none;
+}
+
+#viewChat.voice-channel-view .voice-panel {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    margin-top: 0;
+    padding-bottom: 16px;
+    align-content: start;
+    overflow-y: auto;
+}
+
+/* The embedded call must be bounded by the panel's row, not size it: with an
+   `auto` row, height:100% resolved against the content and pushed the control
+   bar below the window. */
+#viewChat.voice-channel-view .voice-panel.call-room-mode {
+    grid-template-rows: minmax(0, 1fr);
+    align-content: stretch;
+    overflow: hidden;
+}
+
+#viewChat.voice-channel-view .voice-panel.call-room-mode .voice-call-expanded {
+    height: auto;
+    min-height: 0;
+}
+
+/* Tiles keep a sane size: one participant is one tile, not a 16:9 rectangle
+   the width of the whole window. */
+.voice-call-expanded.embedded .voice-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 340px));
+    justify-content: center;
+    align-content: center;
+    min-height: 100%;
+    height: auto;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.voice-call-expanded.embedded {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 4px 0 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-header {
+    cursor: default;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.voice-call-expanded.embedded .voice-call-expanded-actions {
+    flex: 0 0 auto;
+    justify-content: center;
 }
 
 #viewChat .msgs {
@@ -3514,7 +3794,11 @@ body[data-nav-mode="servers"] .contacts {
     padding: 10px;
 }
 
+/* Head and body stack as rows. Open, this used to inherit --compact's
+   112px + 1fr columns, which squeezed the whole head (title, sub, toggle)
+   into the 112px wheel column where they overlapped. */
 .color-picker--collapsible {
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     align-items: stretch;
 }
@@ -4424,135 +4708,179 @@ body[data-nav-mode="servers"] .contacts {
     padding-right: 4px;
 }
 
-.server-channel-card {
+/* Channel settings: one row per channel, saved as you go. The row is the drag
+   handle (the grip is only a hint), the name and topic are text that turns into
+   an input on click, the square on the right flips text ↔ voice. */
+.server-channel-row {
+    position: relative;
     display: grid;
-    gap: 8px;
-    padding: 10px 12px;
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 60px;
+    padding: 8px 10px 8px 8px;
     border: 1px solid var(--border);
-    border-radius: 20px;
+    border-radius: 16px;
     background:
         linear-gradient(180deg, rgba(255,255,255,.028), rgba(255,255,255,.015)),
         rgba(255,255,255,.02);
-    content-visibility: auto;
-    contain-intrinsic-size: 180px;
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.035),
-        0 12px 28px rgba(0,0,0,.08);
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: border-color .18s var(--ease-out), background .18s var(--ease-out);
 }
 
-.server-channel-head {
-    display: grid;
-    grid-template-columns: 18px minmax(0, 1fr) 132px auto auto;
-    gap: 10px;
-    align-items: center;
-    min-height: 40px;
+.server-channel-row:hover {
+    border-color: rgba(var(--accent-rgb), .18);
 }
 
-.server-channel-chip {
-    width: 18px;
-    height: 18px;
+.server-channels-list.is-dragging {
+    cursor: grabbing;
+}
+
+.server-channels-list.is-dragging .server-channel-row:not(.dragging) {
+    transition: transform .18s var(--ease-out);
+}
+
+.server-channel-row.dragging {
+    z-index: 2;
+    cursor: grabbing;
+    border-color: rgba(var(--accent-rgb), .45);
+    background: #16181d;
+    box-shadow: 0 18px 38px rgba(0,0,0,.45), 0 0 0 1px rgba(var(--accent-rgb), .2);
+}
+
+.server-channel-grip {
     display: grid;
     place-items: center;
-    border-radius: 999px;
-    background: rgba(var(--accent-rgb), .18);
-    color: var(--accent);
+    color: var(--text3);
+}
+
+.server-channel-grip svg {
+    width: 16px;
+    height: 16px;
+}
+
+.server-channel-row-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+    justify-items: start;
+}
+
+.server-channel-row-name,
+.server-channel-row-topic {
+    max-width: 100%;
+    margin-left: -5px;
+    padding: 1px 5px;
+    border-radius: 7px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: text;
+    transition: background .14s var(--ease-out);
+}
+
+.server-channel-row-name:hover,
+.server-channel-row-topic:hover {
+    background: rgba(255,255,255,.07);
+}
+
+.server-channel-row-name {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.server-channel-row-topic {
+    color: var(--text2);
     font-size: 12px;
-    font-weight: 900;
 }
 
-.server-channel-chip-icon {
-    width: 12px;
-    height: 12px;
+.server-channel-row-topic.empty {
+    color: var(--text3);
+    font-style: italic;
 }
 
-.server-channel-chip.voice {
-    background: rgba(31, 167, 255, .18);
+.server-channel-row-input.settings-input {
+    width: 100%;
+    min-height: 30px;
+    height: 30px;
+    margin: 0;
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 13px;
+    box-sizing: border-box;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
+
+.server-channel-row-input.name {
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.server-channel-kind-toggle {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(var(--accent-rgb), .24);
+    border-radius: 12px;
+    background: rgba(var(--accent-rgb), .12);
+    color: var(--accent);
+    cursor: pointer;
+    transition: transform .14s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out), border-color .18s var(--ease-out);
+}
+
+.server-channel-kind-toggle.voice {
+    border-color: rgba(31, 167, 255, .32);
+    background: rgba(31, 167, 255, .14);
     color: #4ab9ff;
 }
 
-.server-channel-copy {
-    min-width: 0;
+.server-channel-kind-toggle:hover {
+    transform: scale(1.06);
+}
+
+.server-channel-kind-toggle:active {
+    transform: scale(.92);
+}
+
+.server-channels-list.is-dragging .server-channel-kind-toggle {
+    cursor: grabbing;
+}
+
+.server-channel-kind-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.server-channel-row-delete {
+    width: 36px;
+    height: 36px;
     display: grid;
-    gap: 4px;
-}
-
-.server-channel-name-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 132px;
-    gap: 8px;
-    align-items: stretch;
-}
-
-.server-channel-kind-select {
-    min-width: 132px;
-    height: var(--control-h);
-    padding-top: 0;
-    padding-bottom: 0;
-    justify-self: stretch;
-}
-
-.server-channel-meta {
-    color: var(--text2);
-    font-size: 11px;
-    line-height: 1.2;
-}
-
-.server-channel-controls {
-    display: grid;
-    grid-auto-flow: column;
-    gap: 8px;
-    justify-content: flex-end;
-    align-self: center;
-    align-items: center;
-}
-
-.server-channel-controls .btn-flat {
-    min-height: var(--control-h);
-    height: var(--control-h);
-    align-self: center;
-}
-
-.server-channel-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: center;
-}
-
-.server-channel-position {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 6px;
-    align-self: center;
-}
-
-.server-channel-position-label {
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
     color: var(--text3);
-    font-size: 9px;
-    font-weight: 900;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    white-space: nowrap;
+    cursor: pointer;
+    transition: color .16s var(--ease-out), background .16s var(--ease-out), border-color .16s var(--ease-out);
 }
 
-.server-channel-position .settings-input {
-    width: 92px;
-    min-height: var(--control-h);
-    height: var(--control-h);
-    padding-inline: 10px 8px;
+.server-channel-row-delete:hover {
+    color: #ff5c76;
+    background: rgba(255, 92, 118, .1);
+    border-color: rgba(255, 92, 118, .25);
 }
 
-.server-channel-card .settings-input,
-.server-channel-card .btn-flat,
-.server-channel-card .server-channel-kind-select {
-    box-sizing: border-box;
-}
-
-.server-channel-card .settings-input,
-.server-channel-card .server-channel-kind-select {
-    margin: 0;
+.server-channel-row-delete-icon {
+    width: 16px;
+    height: 16px;
 }
 
 .server-role-card {
@@ -6494,11 +6822,6 @@ body[data-nav-mode="servers"] .contacts {
         flex-wrap: wrap;
     }
 
-    .chat-hdr.server-mode .server-channel-list {
-        margin-left: 0;
-        max-width: 100%;
-        width: 100%;
-    }
 
     .settings-control-row {
         grid-template-columns: 1fr;
@@ -7140,15 +7463,6 @@ body[data-nav-mode="servers"] .contacts {
         display: none;
     }
 
-    .server-channel {
-        min-height: 32px;
-        padding: 0 10px;
-    }
-
-    .server-channel-name {
-        font-size: 10px;
-    }
-
     .contact {
         grid-template-columns: 38px;
         justify-content: center;
@@ -7458,14 +7772,10 @@ body[data-nav-mode="servers"] .contacts {
         min-width: 0;
     }
 
-    .server-channel-list {
-        padding-bottom: 22px;
-    }
-
     /* ── Touch ergonomics ─────────────────────────────────────── */
     /* Remove the 300ms tap delay + the grey/blue tap flash, and the
        iOS long-press text callout on interactive controls. */
-    button, a, [role="button"], .contact, .server-item, .server-channel,
+    button, a, [role="button"], .contact, .server-item, .sidebar-channel, .server-rail-item,
     .mobile-dock-btn, .hub-segment-btn, .settings-input, .search-input {
         -webkit-tap-highlight-color: transparent;
         touch-action: manipulation;
@@ -7475,7 +7785,7 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     /* Momentum scrolling; keep overscroll from bouncing the whole page. */
-    .contacts, .msgs, .settings-body, .sidebar, .server-channel-list,
+    .contacts, .msgs, .settings-body, .sidebar,
     .server-modal-content, .color-picker-body {
         -webkit-overflow-scrolling: touch;
         overscroll-behavior: contain;
@@ -7599,7 +7909,6 @@ body[data-experimental-design="on"] .search-input {
 /* Lime/accent solid fills (were gradients) */
 body[data-experimental-design="on"] .mode-btn.active,
 body[data-experimental-design="on"] .contact-add-btn,
-body[data-experimental-design="on"] .server-channel.active,
 body[data-experimental-design="on"] .voice-btn,
 body[data-experimental-design="on"] .voice-meter-fill,
 body[data-experimental-design="on"] .server-avatar-preview,
@@ -7686,7 +7995,7 @@ body[data-experimental-design="on"] .server-modal-sidebar,
 body[data-experimental-design="on"] .server-modal-card,
 body[data-experimental-design="on"] .server-asset-card,
 body[data-experimental-design="on"] .server-link-card,
-body[data-experimental-design="on"] .server-channel-card,
+body[data-experimental-design="on"] .server-channel-row,
 body[data-experimental-design="on"] .server-role-card,
 body[data-experimental-design="on"] .server-channel-create,
 body[data-experimental-design="on"] .server-role-create {
@@ -8191,6 +8500,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     /* Section switching lives in the bottom dock on mobile — hide the
        in-sidebar duplicate switches. */
     .sidebar-head .mode-switch,
+"""#,
+    #"""
     .sidebar-head .hub-segment-nav { display: none !important; }
     /* Settings live in the dock too — drop the desktop "me" footer row. */
     .sidebar .me { display: none !important; }
@@ -8393,8 +8704,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .msg.out .bubble { border-radius: 19px; }
     .msg.in.group-start  .bubble { border-bottom-left-radius: 7px; }
     .msg.in.group-mid    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
-"""#,
-    #"""
     .msg.in.group-end    .bubble { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
     .msg.in.group-single .bubble { border-bottom-left-radius: 7px; }
     .msg.out.group-start  .bubble { border-bottom-right-radius: 7px; }
@@ -8582,13 +8891,22 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 /* Hide custom scrollbars on mobile scroll areas — native mobile lists auto-hide
    their scrollbars; the desktop lime scrollbar looks out of place on a phone. */
 @media (max-width: 760px) {
-    .contacts, #viewChat .msgs, .server-channel-list {
+    .contacts, #viewChat .msgs {
         scrollbar-width: none;
         -ms-overflow-style: none;
     }
     .contacts::-webkit-scrollbar,
-    #viewChat .msgs::-webkit-scrollbar,
-    .server-channel-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+    #viewChat .msgs::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+    /* The server rail moves to the list screen (top of the sidebar): that is
+       where a server is chosen on the phone, and the chat header has no room. */
+    .chat-hdr .server-rail {
+        display: none !important;
+    }
+    body[data-nav-mode="servers"] .server-rail--sidebar:not([hidden]) {
+        display: block;
+        margin: 0 12px 6px;
+    }
 }
 
 /* ============================================================================
@@ -8613,13 +8931,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
        обратной связи такое нажатие неотличимо от подвисшего тапа — человек
        отпускает палец раньше, чем меню успевает появиться.
 
-       Только transform: у .contact и .server-channel уже объявлен собственный
+       Только transform: у .contact и .sidebar-channel уже объявлен собственный
        transition (строки ~1560 и ~1850), и он включает transform вместе с
        цветом, фоном и тенью. Дописать здесь свой `transition` значило бы
        заменить их шорткат целиком и молча выключить на мобильном всю остальную
        анимацию этих строк. */
     .contact.press-hold,
-    .server-channel.press-hold { transform: scale(.975); }
+    .sidebar-channel.press-hold { transform: scale(.975); }
 
     /* Reaction menu: bigger touch targets on a phone. */
     /* Шесть эмодзи, разделитель и три действия — это девять кнопок в один
@@ -10125,6 +10443,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     </div>
                     <button class="contact-add-btn" id="contactAddBtn" type="button" title="Добавить контакт">+</button>
                 </div>
+                <!-- Phone-only copy of the server rail: the list screen has no chat header. -->
+                <div class="server-rail server-rail--sidebar" id="serverRailSidebar" hidden><div class="server-rail-track"></div></div>
                 <div class="contact-status" id="contactStatus" aria-live="polite"></div>
                 <div class="contacts-suggest-wrap" id="contactSuggestionsWrap" hidden>
                     <div class="contacts-suggest" id="contactSuggestions" hidden></div>
@@ -10158,6 +10478,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             <!-- CONTENT -->
             <div class="main">
 
+                <!-- ACTIVE CALL STRIP: pinned above every tab while a call is live and
+                     its own voice channel is not the thing on screen. Filled by
+                     renderVoiceCallStrip() in web/src/interface/voice_ui.js. -->
+                <div class="voice-call-strip" id="voiceCallStrip" hidden></div>
+
                 <!-- CHAT VIEW -->
                 <div id="viewChat" class="view active">
                     <div class="chat-hdr" id="chatHdr">
@@ -10189,7 +10514,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </svg>
                             </button>
                         </div>
-                        <div class="server-channel-list" id="serverChannelList" hidden></div>
+                        <!-- Server rail: avatars of the servers (renderServerRails, interface/server_rail.js).
+                             The selected server's channels are the sidebar list. -->
+                        <div class="server-rail server-rail--header" id="serverRail" hidden><div class="server-rail-track"></div></div>
                     </div>
 
                     <div class="voice-panel" id="voicePanel" hidden></div>
@@ -14312,7 +14639,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Mobile touch gestures, delegated on the persistent containers (#msgs /
-    // #contacts / #serverChannelList) so they survive the innerHTML re-renders
+    // #contacts, which holds channels too in servers mode) so they survive the innerHTML re-renders
     // those lists do.
     //
     //  • Long-press a message  → opens the existing reaction menu.
@@ -14341,21 +14668,21 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // One binding for both kinds of sidebar row: bindMobileLongPress binds a
+        // container only once, and #contacts holds dialogs in ЛС and channels in
+        // servers mode.
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {
-            this.bindMobileLongPress(contactsEl, '.contact', (row, x, y) => {
+            this.bindMobileLongPress(contactsEl, '.contact, .sidebar-channel[data-channel-id]', (row, x, y) => {
+                if (row.classList.contains('sidebar-channel')) {
+                    if (row.getAttribute('data-channel-kind') === 'voice') return;
+                    const sid = row.getAttribute('data-server-id');
+                    const cid = row.getAttribute('data-channel-id');
+                    if (sid && cid) this.toggleMuteChannel(sid, cid);
+                    return;
+                }
                 if (!row.dataset.name) return;
                 this.openContactContextMenu(row.dataset.name, x, y);
-            });
-        }
-
-        const channelsEl = document.getElementById('serverChannelList');
-        if (channelsEl) {
-            this.bindMobileLongPress(channelsEl, '.server-channel[data-channel-id]', (btn) => {
-                if (btn.getAttribute('data-channel-kind') === 'voice') return;
-                const sid = btn.getAttribute('data-server-id');
-                const cid = btn.getAttribute('data-channel-id');
-                if (sid && cid) this.toggleMuteChannel(sid, cid);
             });
         }
     }
@@ -14513,6 +14840,8 @@ ZaliMixin(ZaliInterface, class {
         this.renderServerToolbar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
     }
 
     openSettingsView() {
@@ -14541,6 +14870,8 @@ ZaliMixin(ZaliInterface, class {
         this.closeMobileSidebar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
     }
 
     openHubView() {
@@ -14559,6 +14890,8 @@ ZaliMixin(ZaliInterface, class {
         this.renderHub();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
     }
 
     openZaliCoinView() {
@@ -14576,6 +14909,8 @@ ZaliMixin(ZaliInterface, class {
         this.closeMobileSidebar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
         this.refreshZaliCoinView();
     }
 });
@@ -15298,15 +15633,58 @@ ZaliMixin(ZaliInterface, class {
             && nav.querySelectorAll('.hub-segment-btn').length === items.length;
         if (hasStableButtons) {
             this.updateHubSegmentNavActive(active);
+            this.syncHubSegmentBadges();
             return;
         }
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
                 ${this.hubSegmentIcon(item.id)}
+                <span class="hub-segment-badge" hidden></span>
             </button>
         `).join('');
         nav.dataset.segmentSignature = signature;
         this.syncHubSegmentIndicator(null);
+        this.syncHubSegmentBadges();
+    }
+
+    // "Разделы" (ЛС/Сервера) accrue unread the same way the DM list and the
+    // server list already do — this just surfaces the existing totals (see
+    // computeTotalUnreadCount/renderServers' per-server sum) on the segment
+    // buttons themselves, which previously showed no indicator at all. Other
+    // segments (ZaliCoin, Хаб) have no unread concept and stay at 0.
+    hubSegmentUnreadCount(id) {
+        if (id === 'dm') {
+            return Object.values(this.S.unread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        }
+        if (id === 'servers') {
+            return Object.values(this.S.channelUnread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        }
+        return 0;
+    }
+
+    // Called on every unread increment/reset (via syncTaskbarBadge, the
+    // existing single choke point for both) as well as after a full nav
+    // rebuild — cheap enough to run unconditionally since it only ever
+    // touches up to 4 buttons and never rebuilds the nav itself.
+    syncHubSegmentBadges() {
+        const nav = document.getElementById('hubSegmentNav');
+        if (!nav) return;
+        nav.querySelectorAll('.hub-segment-btn[data-hub-segment]').forEach(btn => {
+            const id = btn.getAttribute('data-hub-segment');
+            const count = this.hubSegmentUnreadCount(id);
+            let badge = btn.querySelector('.hub-segment-badge');
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'hub-segment-badge';
+                btn.appendChild(badge);
+            }
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : String(count);
+                badge.hidden = false;
+            } else {
+                badge.hidden = true;
+            }
+        });
     }
 
     updateHubSegmentNavActive(active) {
@@ -16028,6 +16406,8 @@ const ZALI_CACHE_STAT_FLUSH_MS = 4000;
 const ZALI_CACHE_LIGHT_MAX_BYTES = 2 * 1024 * 1024;
 
 // Сколько blob:-ссылок разрешено создать при прогреве. Прогрев существует ради
+"""#,
+    #"""
 // первого кадра, а не ради полноты: остальное подтянется обычным путём по мере
 // обращения. Без потолка аккаунт с тысячей контактов создавал бы тысячу
 // object URL'ов до того, как нарисован первый экран.
@@ -16085,8 +16465,6 @@ ZaliMixin(ZaliInterface, class {
             },
             {
                 id: 'light',
-"""#,
-    #"""
                 label: 'Кешировать легковесное',
                 note: 'default',
                 hint: 'Всё необходимое плюс стикеры и медиа до 2 МБ. Тяжёлые вложения качаются заново.',
@@ -20032,6 +20410,8 @@ ZaliMixin(ZaliInterface, class {
                 method: 'POST',
                 includeDeviceId: true,
                 body: JSON.stringify({
+"""#,
+    #"""
                     deviceId: identity.deviceId,
                     label: identity.label,
                     publicKey: identity.publicKey,
@@ -20076,8 +20456,6 @@ ZaliMixin(ZaliInterface, class {
         // had not happened to open in that session.
         this.queueForceClaimScopes(
             Object.keys(this.loadStoredConversationKeys())
-"""#,
-    #"""
                 .filter(scope => scope.startsWith('dm:') || scope.startsWith('server:'))
         );
         // Every scope is about to get a brand-new key of our own making, so no scope
@@ -22135,7 +22513,7 @@ ZaliMixin(ZaliInterface, class {
     updateSidebarModeLabel() {
         const label = document.querySelector('.nav-label');
         if (label) {
-            label.textContent = this.S.navMode === 'servers' ? 'Сервера' : 'Диалоги';
+            label.textContent = this.S.navMode === 'servers' ? 'Каналы' : 'Диалоги';
         }
     }
 
@@ -22465,13 +22843,17 @@ ZaliMixin(ZaliInterface, class {
         if (!wheel) return;
         const normalized = this.normalizeColorValue(value);
         const { h } = this.rgbToHsl(...Object.values(this.hexToRgb(normalized)));
-        const rect = wheel.getBoundingClientRect();
-        const radius = Math.max(20, Math.min(rect.width, rect.height) * 0.36);
+        // Percent of the wheel's own box, not pixels from getBoundingClientRect():
+        // the value is applied while the picker is still collapsed (display:none,
+        // a 0×0 rect), and the pixel version then parked the thumb at (0, -20px),
+        // outside the wheel, for good. 44 % lands on the middle of the hue ring
+        // for every wheel size (ring inset 14px of 112/128, 8px of 64).
+        const RING_RADIUS_PERCENT = 44;
         const angle = ((h - 90) * Math.PI) / 180;
-        const x = (rect.width / 2) + Math.cos(angle) * radius;
-        const y = (rect.height / 2) + Math.sin(angle) * radius;
-        wheel.style.setProperty('--thumb-x', `${x}px`);
-        wheel.style.setProperty('--thumb-y', `${y}px`);
+        const x = 50 + Math.cos(angle) * RING_RADIUS_PERCENT;
+        const y = 50 + Math.sin(angle) * RING_RADIUS_PERCENT;
+        wheel.style.setProperty('--thumb-x', `${x.toFixed(2)}%`);
+        wheel.style.setProperty('--thumb-y', `${y.toFixed(2)}%`);
         wheel.style.setProperty('--wheel-color', normalized);
         if (hidden && hidden.value !== normalized) hidden.value = normalized;
         if (hexInput && hexInput.value.toLowerCase() !== normalized) hexInput.value = normalized;
@@ -22830,6 +23212,8 @@ ZaliMixin(ZaliInterface, class {
             if (createPicker) createPicker.classList.toggle('is-collapsed', !createPickerOpen);
             const createPickerToggle = createPicker?.querySelector('[data-color-picker-toggle="server-role-create"]');
             if (createPickerToggle) createPickerToggle.textContent = createPickerOpen ? 'Свернуть' : 'Развернуть';
+            const createPickerSub = createPicker?.querySelector('.color-picker-sub');
+            if (createPickerSub) createPickerSub.textContent = createPickerOpen ? 'Колесо открыто' : 'Свернуто по умолчанию';
             if (activeSection === 'roles') {
                 this.applyColorWheelValue({
                     wheel: document.getElementById('serverRoleColorWheel'),
@@ -22853,6 +23237,10 @@ ZaliMixin(ZaliInterface, class {
             serverColorPicker.classList.toggle('is-collapsed', !open);
             const toggle = serverColorPicker.querySelector('[data-color-picker-toggle="server-basics"]');
             if (toggle) toggle.textContent = open ? 'Свернуть' : 'Развернуть';
+            // The markup is static in index.html, so the sub line has to be kept in
+            // step here too — it read «Свернуто по умолчанию» with the wheel open.
+            const sub = serverColorPicker.querySelector('.color-picker-sub');
+            if (sub) sub.textContent = open ? 'Колесо открыто' : 'Свернуто по умолчанию';
         }
         if (activeSection === 'overview') {
             this.renderServerJoinLink();
@@ -23171,13 +23559,22 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
-    renderServerChannels() {
+    renderServerChannels({ force = false } = {}) {
         const list = document.getElementById('serverChannelsList');
         const count = document.getElementById('serverChannelsCount');
         const isEdit = this.S.serverModal.mode === 'edit';
         const channels = isEdit ? this.normalizeServerChannels(this.S.serverModal.channels || []) : [];
         if (count) count.textContent = String(channels.length || 0);
         if (!list) return;
+        // A rename in progress or a row being dragged owns the list's DOM: any of
+        // the many renderServerModal() calls (a loadServers landing, an avatar)
+        // would otherwise replace the input under the caret or the row under the
+        // pointer. Deferred, not dropped — the edit or drag re-renders on its end.
+        if (!force && (this._serverChannelDrag || list.querySelector('.server-channel-row-input'))) {
+            this._serverChannelsRenderDeferred = true;
+            return;
+        }
+        this._serverChannelsRenderDeferred = false;
         if (this.S.serverModal.loading && channels.length === 0) {
             list.innerHTML = `<div class="empty-state">
                 <div class="empty-ttl">Загрузка каналов</div>
@@ -23196,32 +23593,23 @@ ZaliMixin(ZaliInterface, class {
             </div>`;
             return;
         }
+        // One row per channel, saved as you go: the row itself drags to reorder,
+        // the name and topic edit in place on click, the icon on the right flips
+        // the channel between text and voice. See bindServerChannelsList().
+        const grip = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
         list.innerHTML = channels.map(channel => {
-            const safeId = String(channel.id || '').replace(/[^a-z0-9_-]/gi, '_');
             const kind = this.normalizeChannelKind(channel.kind);
-            return `<div class="server-channel-card" data-channel-card="${this.esc(channel.id)}">
-                <div class="server-channel-head">
-                    <span class="server-channel-chip ${kind}">${this.channelKindIcon(kind, 'server-channel-chip-icon')}</span>
-                    <div class="server-channel-copy">
-                        <input class="settings-input" data-channel-name="${this.esc(channel.id)}" value="${this.esc(channel.name || '')}" placeholder="Название канала">
-                        <div class="server-channel-meta">ID: ${this.esc(channel.id || safeId)} · ${this.esc(this.channelKindLabel(kind))}</div>
-                    </div>
-                    <select class="settings-input server-channel-kind-select" data-channel-kind="${this.esc(channel.id)}">
-                        <option value="text"${kind === 'text' ? ' selected' : ''}>Текстовый</option>
-                        <option value="voice"${kind === 'voice' ? ' selected' : ''}>Голосовой</option>
-                    </select>
-                    <div class="server-channel-controls">
-                        <button class="btn-flat" type="button" data-channel-save="${this.esc(channel.id)}">Сохранить</button>
-                        <button class="btn-flat" type="button" data-channel-delete="${this.esc(channel.id)}">Удалить</button>
-                    </div>
+            const kindLabel = this.channelKindLabel(kind);
+            const nextLabel = kind === 'voice' ? 'текстовым' : 'голосовым';
+            const name = String(channel.name || '');
+            return `<div class="server-channel-row" data-channel-card="${this.esc(channel.id)}">
+                <span class="server-channel-grip">${grip}</span>
+                <div class="server-channel-row-copy">
+                    <span class="server-channel-row-name" data-channel-rename="${this.esc(channel.id)}" title="Нажмите, чтобы переименовать">${this.esc(name)}</span>
+                    <span class="server-channel-row-topic${channel.topic ? '' : ' empty'}" data-channel-retopic="${this.esc(channel.id)}" title="Нажмите, чтобы изменить тему">${this.esc(channel.topic || 'Добавить тему')}</span>
                 </div>
-                <div class="server-channel-body">
-                    <input class="settings-input" data-channel-topic="${this.esc(channel.id)}" value="${this.esc(channel.topic || '')}" placeholder="Тема или описание">
-                    <label class="server-channel-position">
-                        <span class="server-channel-position-label">Позиция</span>
-                        <input class="settings-input" data-channel-position="${this.esc(channel.id)}" type="number" min="0" step="1" value="${this.esc(String(Number.isFinite(Number(channel.position)) ? Number(channel.position) : 0))}" placeholder="0">
-                    </label>
-                </div>
+                <button class="server-channel-kind-toggle ${kind}" type="button" data-channel-kind-toggle="${this.esc(channel.id)}" title="${this.esc(`${kindLabel} канал — нажмите, чтобы сделать ${nextLabel}`)}" aria-label="${this.esc(`${kindLabel} канал ${name}: сделать ${nextLabel}`)}">${this.channelKindIcon(kind, 'server-channel-kind-icon')}</button>
+                <button class="server-channel-row-delete" type="button" data-channel-delete="${this.esc(channel.id)}" title="Удалить канал" aria-label="${this.esc(`Удалить канал ${name}`)}">${this.uiIcon('trash', 'server-channel-row-delete-icon')}</button>
             </div>`;
         }).join('');
     }
@@ -23774,20 +24162,353 @@ ZaliMixin(ZaliInterface, class {
         };
     }
 
-    channelPayloadFromCard(channelId) {
-        const card = document.querySelector(`[data-channel-card="${CSS.escape(String(channelId || ''))}"]`);
-        if (!card) return null;
-        const name = String(card.querySelector(`[data-channel-name="${CSS.escape(String(channelId || ''))}"]`)?.value || '').trim();
-        const topic = String(card.querySelector(`[data-channel-topic="${CSS.escape(String(channelId || ''))}"]`)?.value || '').trim();
-        const kind = this.normalizeChannelKind(card.querySelector(`[data-channel-kind="${CSS.escape(String(channelId || ''))}"]`)?.value || 'text');
-        const positionValue = String(card.querySelector(`[data-channel-position="${CSS.escape(String(channelId || ''))}"]`)?.value || '').trim();
-        const position = positionValue === '' ? undefined : Number(positionValue);
-        return {
-            name,
-            topic,
-            kind,
-            position: Number.isFinite(position) ? position : undefined,
+    // The sidebar list and the rail read S.servers, which only loadServers
+    // refreshes — so every landed channel change ends here.
+    async refreshServersAfterChannelChange(serverId) {
+        try {
+            await this.loadServers({ silent: true });
+        } catch (_) {}
+        if (this.S.activeServer === serverId) {
+            this.renderServerInterface();
+            this.renderContacts();
+        }
+    }
+
+    // Optimistic: the row shows the new value at once and goes back to what it
+    // was if the server refuses (a duplicate name, no rights, no network).
+    async updateServerChannel(channelId, patch) {
+        const serverId = this.S.serverModal.serverId;
+        const cid = String(channelId || '').trim();
+        if (!serverId || !cid || this.S.serverModal.mode !== 'edit') return false;
+        const previous = this.S.serverModal.channels || [];
+        this.setServerModalState({
+            channels: previous.map(channel => (String(channel.id) === cid ? { ...channel, ...patch } : channel)),
+            error: '',
+        });
+        this.renderServerChannels({ force: true });
+        try {
+            const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, cid), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (!res.ok) {
+                throw new Error(await res.text() || 'Не удалось сохранить канал');
+            }
+            const data = await res.json().catch(() => null);
+            if (Array.isArray(data)) {
+                this.setServerModalState({ channels: this.normalizeServerChannels(data) });
+            }
+            this.renderServerChannels();
+            await this.refreshServersAfterChannelChange(serverId);
+            return true;
+        } catch (e) {
+            this.setServerModalState({ channels: previous, error: e?.message || 'Не удалось сохранить канал' });
+            this.renderServerModal();
+            return false;
+        }
+    }
+
+    toggleServerChannelKind(channelId) {
+        const cid = String(channelId || '').trim();
+        const channel = (this.S.serverModal.channels || []).find(item => String(item.id) === cid);
+        if (!channel) return;
+        const kind = this.normalizeChannelKind(channel.kind) === 'voice' ? 'text' : 'voice';
+        void this.updateServerChannel(cid, { kind });
+    }
+
+    // The API has no bulk reorder, so every channel whose stored position differs
+    // gets its own PATCH. Positions are rewritten as 0..n-1 on the way: older
+    // servers carry duplicates and gaps, which is why the list showed «позиция 2»
+    // above «позиция 1».
+    async persistServerChannelOrder(orderedIds) {
+        const serverId = this.S.serverModal.serverId;
+        if (!serverId || this.S.serverModal.mode !== 'edit') return;
+        const previous = this.normalizeServerChannels(this.S.serverModal.channels || []);
+        const byId = new Map(previous.map(channel => [String(channel.id), channel]));
+        const next = orderedIds
+            .map(id => byId.get(String(id)))
+            .filter(Boolean)
+            .map((channel, index) => ({ ...channel, position: index }));
+        if (next.length !== previous.length) {
+            this.renderServerChannels({ force: true });
+            return;
+        }
+        const changed = next.filter(channel => Number(byId.get(String(channel.id))?.position) !== channel.position);
+        this.setServerModalState({ channels: next, error: '' });
+        this.renderServerChannels({ force: true });
+        if (!changed.length) return;
+        try {
+            let latest = null;
+            for (const channel of changed) {
+                const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, channel.id), {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ position: channel.position }),
+                });
+                if (!res.ok) {
+                    throw new Error(await res.text() || 'Не удалось изменить порядок каналов');
+                }
+                latest = await res.json().catch(() => null);
+            }
+            if (Array.isArray(latest)) {
+                this.setServerModalState({ channels: this.normalizeServerChannels(latest) });
+            }
+            this.renderServerChannels();
+            await this.refreshServersAfterChannelChange(serverId);
+        } catch (e) {
+            // Some of the PATCHes may have landed, so the order comes back from the
+            // server rather than from the snapshot.
+            this.setServerModalState({ error: e?.message || 'Не удалось изменить порядок каналов' });
+            await this.loadServerChannels(serverId).catch(() => {});
+            this.renderServerModal();
+        }
+    }
+
+    // Swaps the name (or topic) text for an input. Enter or leaving the field
+    // saves, Escape puts the old value back.
+    beginServerChannelFieldEdit(span, field) {
+        const row = span?.closest('[data-channel-card]');
+        const cid = row?.getAttribute('data-channel-card');
+        if (!cid) return;
+        const channel = (this.S.serverModal.channels || []).find(item => String(item.id) === cid);
+        const original = String((field === 'name' ? channel?.name : channel?.topic) || '');
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = `settings-input server-channel-row-input ${field}`;
+        input.maxLength = field === 'name' ? 64 : 180;
+        input.value = original;
+        input.placeholder = field === 'name' ? 'Название канала' : 'Тема канала';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        span.replaceWith(input);
+        input.focus();
+        input.select();
+        let finished = false;
+        const finish = (commit) => {
+            if (finished) return;
+            finished = true;
+            const value = input.value.trim();
+            if (commit && value !== original && (field !== 'name' || value)) {
+                void this.updateServerChannel(cid, { [field]: value });
+            } else {
+                this.renderServerChannels({ force: true });
+            }
         };
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                finish(true);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                finish(false);
+            }
+        });
+        input.addEventListener('blur', () => finish(true));
+    }
+
+    bindServerChannelsList() {
+        const list = document.getElementById('serverChannelsList');
+        if (!list || list.__channelRowsBound) return;
+        list.__channelRowsBound = true;
+
+        const THRESHOLD = 5;
+        const TOUCH_HOLD_MS = 280;
+        const EDGE = 44;
+        let press = null;
+        let drag = null;
+        let suppressClick = false;
+
+        // The pointerup that ends a drag is followed by a click on whatever the
+        // pointer was over — the kind icon, a name. That click is not a choice.
+        list.addEventListener('click', (e) => {
+            if (!suppressClick) return;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+
+        list.addEventListener('click', (e) => {
+            const toggle = e.target.closest('[data-channel-kind-toggle]');
+            if (toggle) {
+                this.toggleServerChannelKind(toggle.getAttribute('data-channel-kind-toggle'));
+                return;
+            }
+            const deleteBtn = e.target.closest('[data-channel-delete]');
+            if (deleteBtn) {
+                const channelId = deleteBtn.getAttribute('data-channel-delete');
+                if (!channelId) return;
+                this.deleteServerChannel(channelId).catch((err) => {
+                    this.setServerModalState({ error: err?.message || 'Не удалось удалить канал' });
+                    this.renderServerModal();
+                });
+                return;
+            }
+            const rename = e.target.closest('[data-channel-rename]');
+            if (rename) {
+                this.beginServerChannelFieldEdit(rename, 'name');
+                return;
+            }
+            const retopic = e.target.closest('[data-channel-retopic]');
+            if (retopic) this.beginServerChannelFieldEdit(retopic, 'topic');
+        });
+
+        const scrollerFor = () => [list, list.closest('.server-modal-content')]
+            .find(el => el && el.scrollHeight > el.clientHeight + 1) || null;
+
+        // Geometry is captured once, at the start, in "content" coordinates: the
+        // scroller's movement since then is added back, so autoscrolling while
+        // dragging never invalidates the measured row positions.
+        const layout = () => {
+            const scrolled = drag.scroller ? drag.scroller.scrollTop - drag.scroll0 : 0;
+            const origin = drag.rects[drag.originIndex];
+            const first = drag.rects[0];
+            const last = drag.rects[drag.rects.length - 1];
+            const offset = Math.max(
+                first.top - origin.top - 8,
+                Math.min(last.bottom - origin.bottom + 8, drag.clientY - drag.startY + scrolled),
+            );
+            drag.rows[drag.originIndex].style.transform = `translate3d(0, ${offset.toFixed(1)}px, 0)`;
+            const center = origin.top + origin.height / 2 + offset;
+            let index = 0;
+            drag.rects.forEach((rect, i) => {
+                if (i !== drag.originIndex && center > rect.top + rect.height / 2) index += 1;
+            });
+            if (index === drag.index) return;
+            drag.index = index;
+            drag.rows.forEach((row, i) => {
+                if (i === drag.originIndex) return;
+                let shift = 0;
+                if (drag.originIndex < index && i > drag.originIndex && i <= index) shift = -drag.step;
+                if (drag.originIndex > index && i >= index && i < drag.originIndex) shift = drag.step;
+                row.style.transform = shift ? `translate3d(0, ${shift}px, 0)` : '';
+            });
+        };
+
+        const autoscroll = () => {
+            if (!drag) return;
+            const scroller = drag.scroller;
+            if (scroller) {
+                const box = scroller.getBoundingClientRect();
+                let speed = 0;
+                if (drag.clientY < box.top + EDGE) speed = -Math.ceil((box.top + EDGE - drag.clientY) / 4);
+                else if (drag.clientY > box.bottom - EDGE) speed = Math.ceil((drag.clientY - box.bottom + EDGE) / 4);
+                if (speed) {
+                    scroller.scrollTop += speed;
+                    layout();
+                }
+            }
+            drag.raf = requestAnimationFrame(autoscroll);
+        };
+
+        const startDrag = () => {
+            if (!press || drag) return;
+            const rows = Array.from(list.querySelectorAll('.server-channel-row'));
+            const originIndex = rows.indexOf(press.row);
+            if (originIndex < 0 || rows.length < 2) {
+                press = null;
+                return;
+            }
+            const rects = rows.map(row => row.getBoundingClientRect());
+            const scroller = scrollerFor();
+            drag = {
+                rows,
+                rects,
+                originIndex,
+                index: originIndex,
+                pointerId: press.pointerId,
+                startY: press.startY,
+                clientY: press.startY,
+                scroller,
+                scroll0: scroller ? scroller.scrollTop : 0,
+                step: rects[originIndex].height + Math.max(0, rects[1].top - rects[0].bottom),
+                raf: 0,
+            };
+            this._serverChannelDrag = true;
+            list.classList.add('is-dragging');
+            press.row.classList.add('dragging');
+            try { list.setPointerCapture(drag.pointerId); } catch (_) {}
+            autoscroll();
+        };
+
+        const endDrag = (commit) => {
+            if (!drag) return;
+            cancelAnimationFrame(drag.raf);
+            const { rows, originIndex, index } = drag;
+            drag = null;
+            this._serverChannelDrag = false;
+            list.classList.remove('is-dragging');
+            rows.forEach((row) => {
+                row.classList.remove('dragging');
+                row.style.transform = '';
+            });
+            suppressClick = true;
+            setTimeout(() => { suppressClick = false; }, 0);
+            if (commit && index !== originIndex) {
+                const ids = rows.map(row => row.getAttribute('data-channel-card'));
+                const [moved] = ids.splice(originIndex, 1);
+                ids.splice(index, 0, moved);
+                // Re-renders the list in the new order synchronously, in the same
+                // task as the transforms are cleared above — no frame in between.
+                void this.persistServerChannelOrder(ids);
+            } else if (this._serverChannelsRenderDeferred) {
+                this.renderServerChannels({ force: true });
+            }
+        };
+
+        list.addEventListener('pointerdown', (e) => {
+            if (drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+            const row = e.target.closest('.server-channel-row');
+            if (!row || e.target.closest('input, textarea, select')) return;
+            // An open rename commits on this very press (blur) and re-renders the
+            // list, which would pull the row out from under the pointer.
+            if (list.querySelector('.server-channel-row-input')) return;
+            press = { row, pointerId: e.pointerId, pointerType: e.pointerType, startX: e.clientX, startY: e.clientY, holdTimer: 0 };
+            if (e.pointerType === 'touch') {
+                // On touch a plain drag is the list's own scroll; picking a row up
+                // takes a short hold, like every native reorderable list.
+                press.holdTimer = setTimeout(startDrag, TOUCH_HOLD_MS);
+            }
+        });
+
+        list.addEventListener('pointermove', (e) => {
+            if (drag) {
+                if (e.pointerId !== drag.pointerId) return;
+                drag.clientY = e.clientY;
+                layout();
+                return;
+            }
+            if (!press || e.pointerId !== press.pointerId) return;
+            const moved = Math.hypot(e.clientX - press.startX, e.clientY - press.startY);
+            if (press.pointerType === 'touch') {
+                if (moved > 8) {
+                    clearTimeout(press.holdTimer);
+                    press = null;
+                }
+                return;
+            }
+            if (moved >= THRESHOLD) {
+                startDrag();
+                if (drag) {
+                    drag.clientY = e.clientY;
+                    layout();
+                }
+            }
+        });
+
+        const release = (e, commit) => {
+            if (press && e.pointerId === press.pointerId) {
+                clearTimeout(press.holdTimer);
+                press = null;
+            }
+            if (drag && e.pointerId === drag.pointerId) endDrag(commit);
+        };
+        list.addEventListener('pointerup', (e) => release(e, true));
+        list.addEventListener('pointercancel', (e) => release(e, false));
+        // Once a row is picked up by touch, the finger must move the row, not the page.
+        list.addEventListener('touchmove', (e) => {
+            if (drag && e.cancelable) e.preventDefault();
+        }, { passive: false });
     }
 
     async createServerChannel() {
@@ -23830,43 +24551,6 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async saveServerChannel(channelId) {
-        const serverId = this.S.serverModal.serverId;
-        if (!serverId || this.S.serverModal.mode !== 'edit') return;
-        const cid = String(channelId || '').trim();
-        const payload = this.channelPayloadFromCard(cid);
-        if (!payload || !payload.name) {
-            this.setServerModalState({ error: 'Введите название канала' });
-            this.renderServerModal();
-            return;
-        }
-        this.setServerModalState({ saving: true, error: '' });
-        this.renderServerModal();
-        try {
-            const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, cid), {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            if (!res.ok) {
-                throw new Error(await res.text() || 'Не удалось сохранить канал');
-            }
-            const data = await res.json();
-            const channels = this.normalizeServerChannels(Array.isArray(data) ? data : (Array.isArray(data?.channels) ? data.channels : []));
-            this.setServerModalState({ channels, error: '' });
-            await this.loadServers({ silent: true });
-            if (this.S.activeServer === serverId) {
-                this.setActiveServer(serverId, { persist: true });
-            }
-            this.renderServerModal();
-        } catch (e) {
-            this.setServerModalState({ error: e?.message || 'Не удалось сохранить канал' });
-            this.renderServerModal();
-        } finally {
-            this.setServerModalState({ saving: false });
-        }
-    }
-
     async deleteServerChannel(channelId) {
         const serverId = this.S.serverModal.serverId;
         if (!serverId || this.S.serverModal.mode !== 'edit') return;
@@ -23898,6 +24582,8 @@ ZaliMixin(ZaliInterface, class {
             this.setServerModalState({ error: e?.message || 'Не удалось удалить канал' });
             this.renderServerModal();
         } finally {
+"""#,
+    #"""
             this.setServerModalState({ saving: false });
         }
     }
@@ -23932,6 +24618,367 @@ ZaliMixin(ZaliInterface, class {
             this.saveStoredActiveServer(null);
             this.saveStoredActiveChannel(null);
         }
+    }
+});
+
+
+// --- MODULE: interface/server_rail.js ---
+// --- ZaliInterface: Лента серверов — аватарки с подсказкой и инерционной прокруткой. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Лента живёт в двух местах:
+// в шапке чата (десктоп, там, где раньше были пилюли каналов) и наверху сайдбара
+// (телефон: у экрана-списка нет шапки чата, а выбирать сервер надо именно там).
+// Каналы активного сервера при этом — список в левой колонке (renderServers).
+ZaliMixin(ZaliInterface, class {
+
+    serverRailElements() {
+        return ['serverRail', 'serverRailSidebar']
+            .map(id => document.getElementById(id))
+            .filter(Boolean);
+    }
+
+    serverRailHTML() {
+        this.ensureServersState();
+        const servers = (this.S.servers || []).filter(Boolean);
+        const items = servers.map(server => {
+            const active = server.id === this.S.activeServer ? ' active' : '';
+            // Same aggregate the old server list showed, minus voice channels: they
+            // never accrue unread (see renderServerToolbar history), so counting them
+            // only ever added stale zeros.
+            const unread = (server.channels || []).reduce((sum, ch) => (
+                this.normalizeChannelKind(ch.kind) === 'voice'
+                    ? sum
+                    : sum + Number(this.S.channelUnread?.[`${server.id}:${ch.id}`] || 0)
+            ), 0);
+            const badge = unread > 0 ? `<span class="server-rail-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+            return `<button class="server-rail-item${active}" type="button" data-server-id="${this.esc(server.id)}" data-rail-tip="${this.esc(server.name || 'Сервер')}" aria-label="${this.esc(server.name || 'Сервер')}">${this.renderServerAvatarHTML(server, 'server-rail-avatar')}${badge}</button>`;
+        }).join('');
+        const action = (cls, glyph, label) => `<button class="server-rail-item server-rail-action ${cls}" type="button" data-rail-tip="${this.esc(label)}" aria-label="${this.esc(label)}"><span class="server-avatar server-rail-avatar">${glyph}</span></button>`;
+        return items
+            + (servers.length ? '<span class="server-rail-sep" aria-hidden="true"></span>' : '')
+            + action('server-create', '+', 'Создать сервер')
+            + action('server-join', '↗', 'Войти по коду')
+            + action('server-public', '☰', 'Публичные серверы');
+    }
+
+    // Called from renderServerToolbar (the choke point for server/channel/unread
+    // changes) and renderServers. commitListHTML makes the common case a string
+    // compare, and the track element itself is never replaced — so the scroll
+    // offset, which lives in its transform, survives every re-render.
+    renderServerRails() {
+        const isServers = this.S.navMode === 'servers';
+        const html = isServers ? this.serverRailHTML() : '';
+        for (const rail of this.serverRailElements()) {
+            rail.hidden = !isServers;
+            const track = rail.querySelector('.server-rail-track');
+            if (!track) continue;
+            this.setupServerRail(rail);
+            const changed = this.commitListHTML(track, `server-rail:${rail.id}`, html);
+            const state = rail.__rail;
+            if (!state) continue;
+            if (changed) state.measure();
+            const activeKey = String(this.S.activeServer || '');
+            if (isServers && state.lastActive !== activeKey) {
+                state.lastActive = activeKey;
+                requestAnimationFrame(() => state.revealActive());
+            }
+        }
+    }
+
+    bindServerRailEvents() {
+        for (const rail of this.serverRailElements()) {
+            if (rail.__railEventsBound) continue;
+            rail.__railEventsBound = true;
+            rail.addEventListener('click', (e) => {
+                const item = e.target.closest('.server-rail-item');
+                if (!item) return;
+                this.hideServerRailTip();
+                if (item.classList.contains('server-create')) { this.openServerModal('create'); return; }
+                if (item.classList.contains('server-join')) { this.openJoinCodeModal(); return; }
+                if (item.classList.contains('server-public')) { this.openPublicServersModal(); return; }
+                const serverId = item.getAttribute('data-server-id');
+                if (!serverId) return;
+                this.closeChatPanelModals();
+                // On the phone the sidebar rail sits on the list screen: picking a
+                // server there should show its channels, not jump into a chat.
+                this.setActiveServer(serverId, { keepMobileList: rail.id === 'serverRailSidebar' });
+            });
+        }
+    }
+
+    // --- tooltip -------------------------------------------------------------
+    // One element on <body>, positioned fixed: the rail clips its own overflow
+    // (that is how it scrolls), so a tooltip inside it would be cut off.
+
+    serverRailTipElement() {
+        let tip = document.getElementById('serverRailTip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'serverRailTip';
+            tip.className = 'server-rail-tip';
+            tip.setAttribute('role', 'tooltip');
+            document.body.appendChild(tip);
+        }
+        return tip;
+    }
+
+    showServerRailTip(item) {
+        const label = item?.getAttribute('data-rail-tip');
+        if (!label) return;
+        const tip = this.serverRailTipElement();
+        tip.textContent = label;
+        const rect = item.getBoundingClientRect();
+        const width = tip.offsetWidth;
+        const half = width / 2;
+        const center = Math.max(half + 8, Math.min(window.innerWidth - half - 8, rect.left + rect.width / 2));
+        tip.style.left = `${Math.round(center)}px`;
+        tip.style.top = `${Math.round(rect.bottom + 8)}px`;
+        tip.classList.add('visible');
+    }
+
+    hideServerRailTip() {
+        document.getElementById('serverRailTip')?.classList.remove('visible');
+    }
+
+    // --- physics -------------------------------------------------------------
+    // The rail does not use native overflow scrolling: native scroll has no
+    // overshoot on desktop and no mouse dragging at all. Position lives in the
+    // track's transform; a rAF loop coasts it with friction and springs it back
+    // when it has flown past an edge.
+
+    setupServerRail(rail) {
+        if (!rail || rail.__rail) return;
+        const track = rail.querySelector('.server-rail-track');
+        if (!track) return;
+        const reduceMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+
+        // The wheel coasts a little and barely flies past the edge; a mouse or
+        // finger fling carries noticeably further and stretches further.
+        const WHEEL = { friction: 0.86, overshoot: 26 };
+        const DRAG = { friction: 0.94, overshoot: 70 };
+        const SPRING = 0.16;
+        const EDGE_DAMPING = 0.62;
+        const DRAG_THRESHOLD = 4;
+        const MAX_VELOCITY = 70;
+
+        const st = {
+            x: 0,
+            v: 0,
+            max: 0,
+            raf: 0,
+            lastTs: 0,
+            mode: WHEEL,
+            target: null,
+            lastActive: null,
+            press: null,
+            dragging: false,
+            suppressClick: false,
+        };
+
+        const apply = () => {
+            track.style.transform = `translate3d(${(-st.x).toFixed(2)}px, 0, 0)`;
+            rail.classList.toggle('can-scroll-left', st.x > 1);
+            rail.classList.toggle('can-scroll-right', st.x < st.max - 1);
+        };
+
+        st.measure = () => {
+            st.max = Math.max(0, track.scrollWidth - rail.clientWidth);
+            rail.classList.toggle('is-scrollable', st.max > 0);
+            if (!st.raf && !st.dragging) {
+                st.x = Math.max(0, Math.min(st.max, st.x));
+            }
+            apply();
+        };
+
+        // Past an edge the finger pulls with diminishing effect, so the track can
+        // be stretched but never dragged away.
+        const rubber = (value, limit) => {
+            if (value >= 0 && value <= st.max) return value;
+            const over = value < 0 ? -value : value - st.max;
+            const eased = limit * (1 - 1 / (over / limit * 0.55 + 1));
+            return value < 0 ? -eased : st.max + eased;
+        };
+
+        const step = (ts) => {
+            const dt = st.lastTs ? Math.min(48, ts - st.lastTs) : 16.67;
+            st.lastTs = ts;
+            const k = dt / 16.67;
+
+            if (st.target !== null) {
+                const diff = st.target - st.x;
+                st.x += diff * Math.min(1, 0.2 * k);
+                if (Math.abs(diff) < 0.5) {
+                    st.x = st.target;
+                    st.target = null;
+                }
+            } else {
+                const past = st.x < 0 ? st.x : (st.x > st.max ? st.x - st.max : 0);
+                if (past !== 0) {
+                    st.v *= Math.pow(EDGE_DAMPING, k);
+                    st.v -= past * SPRING * k;
+                } else {
+                    st.v *= Math.pow(st.mode.friction, k);
+                }
+                const before = st.x;
+                st.x += st.v * k;
+                // Hard cap on how far the momentum may carry past an edge.
+                const limit = st.mode.overshoot;
+                if (st.x < -limit) { st.x = -limit; st.v = Math.max(0, st.v); }
+                if (st.x > st.max + limit) { st.x = st.max + limit; st.v = Math.min(0, st.v); }
+                // Coming back from past an edge, stop AT the edge. The spring's return
+                // velocity otherwise carried on under ordinary friction and parked the
+                // rail tens of pixels inside, as if it had bounced off the wall.
+                if (before > st.max && st.x <= st.max) { st.x = st.max; st.v = 0; }
+                if (before < 0 && st.x >= 0) { st.x = 0; st.v = 0; }
+                const nowPast = st.x < 0 ? st.x : (st.x > st.max ? st.x - st.max : 0);
+                if (Math.abs(st.v) < 0.05 && Math.abs(nowPast) < 0.5) {
+                    st.x = Math.max(0, Math.min(st.max, st.x));
+                    st.v = 0;
+                }
+            }
+            apply();
+            // Keep running while the rail is past an edge even at zero velocity: the
+            // overshoot cap zeroes it right at the peak, and stopping there left the
+            // rail stuck beyond its end with no spring to bring it back.
+            const pastEdge = st.x < 0 || st.x > st.max;
+            if (st.target !== null || st.v !== 0 || pastEdge) {
+                st.raf = requestAnimationFrame(step);
+            } else {
+                st.raf = 0;
+                st.lastTs = 0;
+            }
+        };
+
+        const run = () => {
+            if (reduceMotion) {
+                st.x = Math.max(0, Math.min(st.max, st.target ?? (st.x + st.v * 8)));
+                st.v = 0;
+                st.target = null;
+                apply();
+                return;
+            }
+            if (!st.raf) {
+                st.lastTs = 0;
+                st.raf = requestAnimationFrame(step);
+            }
+        };
+
+        st.revealActive = () => {
+            st.measure();
+            const item = track.querySelector('.server-rail-item.active');
+            if (!item || st.max <= 0 || st.dragging) return;
+            const pad = 16;
+            const left = item.offsetLeft;
+            const right = left + item.offsetWidth;
+            const view = rail.clientWidth;
+            let target = null;
+            if (left - pad < st.x) target = left - pad;
+            else if (right + pad > st.x + view) target = right + pad - view;
+            if (target === null) return;
+            st.v = 0;
+            st.target = Math.max(0, Math.min(st.max, target));
+            run();
+        };
+
+        rail.addEventListener('wheel', (e) => {
+            st.measure();
+            if (st.max <= 0) return;
+            const unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? rail.clientWidth : 1);
+            const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * unit;
+            if (!delta) return;
+            e.preventDefault();
+            this.hideServerRailTip();
+            st.target = null;
+            st.mode = WHEEL;
+            st.v = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, st.v + delta * 0.16));
+            run();
+        }, { passive: false });
+
+        rail.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            // Measured while a coast is still running, so a rail caught past its
+            // edge is not first snapped back (measure only clamps a resting rail).
+            st.measure();
+            // Grabbing a coasting rail stops it where it is, like a real one — and
+            // it has to stop HERE, not once the drag threshold is crossed: the
+            // offset and pointer origin are fixed at this moment, and a drag
+            // measured from a later origin loses every pixel travelled before it.
+            if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; st.lastTs = 0; }
+            st.v = 0;
+            st.target = null;
+            st.press = {
+                id: e.pointerId,
+                startX: e.clientX,
+                startOffset: st.x,
+                samples: [{ t: e.timeStamp, x: e.clientX }],
+            };
+        });
+
+        rail.addEventListener('pointermove', (e) => {
+            if (e.pointerType === 'mouse' && !st.press) {
+                const item = e.target.closest?.('.server-rail-item');
+                if (item && !st.dragging) this.showServerRailTip(item);
+            }
+            const press = st.press;
+            if (!press || press.id !== e.pointerId) return;
+            const dx = e.clientX - press.startX;
+            if (!st.dragging) {
+                if (Math.abs(dx) < DRAG_THRESHOLD || st.max <= 0) return;
+                // Origin and offset stay where pointerdown put them (the coast was
+                // stopped there too): the pixels travelled before the threshold
+                // belong to the drag, and resetting here dropped them.
+                st.dragging = true;
+                rail.classList.add('dragging');
+                this.hideServerRailTip();
+                try { rail.setPointerCapture(e.pointerId); } catch (_) {}
+            }
+            st.x = rubber(press.startOffset - (e.clientX - press.startX), DRAG.overshoot);
+            apply();
+            press.samples.push({ t: e.timeStamp, x: e.clientX });
+            while (press.samples.length > 2 && e.timeStamp - press.samples[0].t > 90) press.samples.shift();
+        });
+
+        const release = (e, fling) => {
+            const press = st.press;
+            if (!press || press.id !== e.pointerId) return;
+            st.press = null;
+            if (!st.dragging) return;
+            st.dragging = false;
+            rail.classList.remove('dragging');
+            try { rail.releasePointerCapture(e.pointerId); } catch (_) {}
+            // The pointerup of a drag is followed by a click on whatever avatar the
+            // pointer ended on; that click is not a choice.
+            st.suppressClick = true;
+            setTimeout(() => { st.suppressClick = false; }, 0);
+            const first = press.samples[0];
+            const last = press.samples[press.samples.length - 1];
+            const dt = Math.max(1, last.t - first.t);
+            const pxPerFrame = fling && e.timeStamp - last.t < 80 ? -((last.x - first.x) / dt) * 16.67 : 0;
+            st.mode = DRAG;
+            st.v = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, pxPerFrame));
+            run();
+        };
+        rail.addEventListener('pointerup', (e) => release(e, true));
+        rail.addEventListener('pointercancel', (e) => release(e, false));
+        rail.addEventListener('click', (e) => {
+            if (!st.suppressClick) return;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+
+        rail.addEventListener('pointerleave', (e) => {
+            if (e.pointerType === 'mouse') this.hideServerRailTip();
+        });
+        rail.addEventListener('focusin', (e) => {
+            const item = e.target.closest?.('.server-rail-item');
+            if (item && e.target.matches?.(':focus-visible')) this.showServerRailTip(item);
+        });
+        rail.addEventListener('focusout', () => this.hideServerRailTip());
+
+        if (typeof ResizeObserver === 'function') {
+            new ResizeObserver(() => st.measure()).observe(rail);
+        }
+        rail.__rail = st;
+        st.measure();
     }
 });
 
@@ -24257,8 +25304,6 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceDiag('socket-open', { generation, url: url.toString() }, 'SUCCESS');
                 this.addLogEntry({ type: 'SUCCESS', msg: 'Browser voice socket connected', ts: new Date().toLocaleTimeString() });
                 // This socket doubles as the pure-browser client's only realtime connection
-"""#,
-    #"""
                 // (messages + voice signaling both ride it — see onmessage below), so its
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
@@ -27121,6 +28166,33 @@ ZaliMixin(ZaliInterface, class {
         this.renderVoicePanel();
     }
 
+    // Way back to the call from the strip. A channel call lives in its voice
+    // channel, whose view IS the call interface. A DM call has no room view of
+    // its own, so it opens the conversation with the fullscreen grid on top.
+    openActiveVoiceCall() {
+        const roomType = String(this.voice.roomType || '').trim();
+        if (roomType === 'channel') {
+            const sid = String(this.voice.serverId || '').trim();
+            const cid = String(this.voice.channelId || '').trim();
+            if (!sid || !cid) return;
+            if (this.S.navMode !== 'servers' || this.S.activeServer !== sid) {
+                this.setActiveServer(sid);
+            }
+            this.setActiveChannel(cid);
+            this.ensureChatViewOpen();
+            this.renderVoicePanel();
+            return;
+        }
+        if (roomType === 'dm') {
+            const peer = this.voiceDmCallPeer();
+            if (peer) this.switchChat(peer);
+            else this.ensureChatViewOpen();
+            // After switchChat: it collapses the grid on the way in.
+            this.voice.expanded = true;
+            this.renderVoicePanel();
+        }
+    }
+
     formatCallClock(ms) {
         const total = Math.max(0, Math.round(Number(ms) || 0) / 1000) | 0;
         const mm = Math.floor(total / 60);
@@ -27511,6 +28583,8 @@ ZaliMixin(ZaliInterface, class {
             // is whoever renegotiates (a camera toggle, an ICE restart), not who
             // placed the call — writing it here flipped the caller's inviter to the
             // callee on the first mid-call renegotiation, and inviter is exactly the
+"""#,
+    #"""
             // rung shouldInitiateVoiceOffer/isPoliteVoicePeer fall back to once
             // callTrack is gone: nobody owned the offer and both sides were polite.
             // Only downgrade to 'connecting' for the initial call setup offer.
@@ -28116,8 +29190,6 @@ ZaliMixin(ZaliInterface, class {
             // reload, app restart mid-call) has no callTrack, so its offer-owner
             // ladder falls through to voice.inviter; left empty it fell further, to
             // name order, while the other end still decided by callTrack.direction.
-"""#,
-    #"""
             // For every pair whose callee sorts before the caller the two ends then
             // disagreed: both owned the offer and both were impolite, or neither.
             // A room rebuilt by restore_dm_room carries no initiator — keep ours.
@@ -28333,7 +29405,7 @@ ZaliMixin(ZaliInterface, class {
                     <button class="voice-callbar-btn ${this.voice.deafened ? 'danger' : ''}" type="button" id="voiceDeafenBtn" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
                 </div>
                 <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-timer" id="voiceCallTimer">0:00</div>
+                <div class="voice-callbar-timer" id="voiceCallTimer">${this.voiceCallClockLabel()}</div>
             </div>
         `;
     }
@@ -28343,14 +29415,22 @@ ZaliMixin(ZaliInterface, class {
     // as-is so a participant's camera feed replaces their tile exactly like it
     // already does in the collapsed layout — nothing about tile mounting changes,
     // only where the tiles are shown.
-    renderVoiceCallExpanded({ title, actionButtons }) {
-        return `
-            <div class="voice-call-expanded" id="voiceCallExpanded">
-                <div class="voice-call-expanded-header" id="voiceCollapseBar" role="button" tabindex="0" aria-label="Свернуть звонок">
+    // `embedded` is the voice channel's own view: the call is the whole screen
+    // there already, so there is nothing to collapse back to.
+    renderVoiceCallExpanded({ title, actionButtons, embedded = false }) {
+        const header = embedded
+            ? `<div class="voice-call-expanded-header">
+                    <div class="voice-call-expanded-title">${this.esc(title)}</div>
+                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">${this.voiceCallClockLabel()}</div>
+                </div>`
+            : `<div class="voice-call-expanded-header" id="voiceCollapseBar" role="button" tabindex="0" aria-label="Свернуть звонок">
                     <button class="voice-call-collapse-btn" type="button" id="voiceCollapseBtn" title="Свернуть" aria-label="Свернуть">${this.voiceIcon('chevron-down')}</button>
                     <div class="voice-call-expanded-title">${this.esc(title)}</div>
-                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">0:00</div>
-                </div>
+                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">${this.voiceCallClockLabel()}</div>
+                </div>`;
+        return `
+            <div class="voice-call-expanded ${embedded ? 'embedded' : ''}" id="voiceCallExpanded">
+                ${header}
                 ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
                 <div class="voice-stage" id="voiceStage"></div>
                 <div class="voice-call-expanded-grid">${this.renderVoiceTiles()}</div>
@@ -28376,7 +29456,13 @@ ZaliMixin(ZaliInterface, class {
         // missed. Ringing/calling states must render as pending, not active.
         const pendingDmCall = this.voice.status === 'incoming' || this.voice.status === 'calling';
         const connectedDmRoom = this.voice.roomType === 'dm' && !!String(this.voice.roomId || '').trim() && !pendingDmCall && (this.voice.status === 'connected' || participantMatch);
-        const activeRoom = isVoice ? !!this.voice.roomId && participantMatch : connectedDmRoom;
+        // For a voice channel, "active" means active in THIS channel's room. Being
+        // in a call elsewhere used to render this channel as the live call — with
+        // the other room's participants on its tiles.
+        const isThisVoiceRoom = isVoice && this.isViewingVoiceCallRoom({ requireChatView: false });
+        // 'connecting' counts: between the join click and the server's room state
+        // the channel should already show the call, not the «Присоединиться» card.
+        const activeRoom = isVoice ? isThisVoiceRoom && this.voiceLiveCallType() === 'channel' : connectedDmRoom;
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
         const voiceHealth = this.voiceTraceEnabled ? this.getVoiceHealthSnapshot() : [];
@@ -28422,34 +29508,32 @@ ZaliMixin(ZaliInterface, class {
         }
         const actionsBarClass = activeRoom ? 'voice-room-actions call-ctrl-bar' : 'voice-room-actions';
 
-        // A live call (as opposed to ringing/dialing/idle-selected) collapses to a
-        // slim top bar by default and only shows the full participant grid when
-        // the user taps it — the old always-expanded card ate half the chat
-        // window for the entire duration of every call.
+        // A live call never renders a bar here any more: the slim bar lives in
+        // #voiceCallStrip above every tab (renderVoiceCallStrip). Inside its own
+        // voice channel the call is the whole view; a DM call only takes over the
+        // chat when the user opened the fullscreen grid.
+        // The call timer is owned by renderVoiceCallStrip, which runs on every
+        // renderVoicePanel — not here, where a non-call view used to stop it.
         if (activeRoom) {
-            if (!this.voice.activeSince) {
-                this.voice.activeSince = Number(this.voice.callTrack?.connectedAt) || Date.now();
-            }
-            this.startVoiceCallBarTimer();
-            return this.voice.expanded
-                ? this.renderVoiceCallExpanded({ title, actionButtons })
-                : this.renderVoiceCallBar({ title });
+            if (isVoice) return this.renderVoiceCallExpanded({ title, actionButtons, embedded: true });
+            return this.voice.expanded ? this.renderVoiceCallExpanded({ title, actionButtons }) : '';
         }
-        this.voice.activeSince = 0;
-        this.stopVoiceCallBarTimer();
 
+        const sub = isVoice
+            ? 'Нажмите «Присоединиться», чтобы войти в канал'
+            : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
         return `
             <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
-                        <div class="voice-room-sub">${this.esc(this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов')}</div>
+                        <div class="voice-room-sub">${this.esc(sub)}</div>
                     </div>
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
                 ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
                 <div class="voice-stage" id="voiceStage"></div>
-                ${this.renderVoiceTiles()}
+                ${isVoice ? '' : this.renderVoiceTiles()}
                 <div class="${actionsBarClass}">${actionButtons.join('')}</div>
                 <div class="voice-meter-grid">
                     <div class="voice-meter" id="voiceMicMeter">
@@ -28522,36 +29606,153 @@ ZaliMixin(ZaliInterface, class {
         } else {
             this.stopRingtone();
         }
+        this.renderVoicePanelBody();
+        // After the panel: whether the strip shows depends on what the panel
+        // just decided to cover (a voice channel's own view, a DM's fullscreen grid).
+        this.renderVoiceCallStrip();
+    }
+
+    renderVoicePanelBody() {
         const panel = document.getElementById('voicePanel');
         if (!panel) return;
         const isServers = this.S.navMode === 'servers';
         const isVoiceChannel = isServers && this.isVoiceChannel(this.currentChannel());
+        // A voice channel has no text chat: its view is the call (or the join
+        // card), with the message list and composer hidden by this class.
+        document.getElementById('viewChat')?.classList.toggle('voice-channel-view', isVoiceChannel);
         const hasDmCall = this.voice.roomType === 'dm' || this.voice.status === 'incoming' || this.voice.status === 'calling';
         const hasIncoming = this.voice.status === 'incoming';
-        const showPanel = isVoiceChannel || hasDmCall || hasIncoming;
-        panel.hidden = !showPanel;
-        if (!showPanel) {
+        const html = (isVoiceChannel || hasDmCall || hasIncoming) ? this.renderVoiceRoomView() : '';
+        if (!html) {
+            panel.hidden = true;
             panel.innerHTML = '';
+            panel.classList.remove('has-stage', 'call-bar-mode', 'call-expanded-mode', 'call-room-mode');
+            this._voiceTileNodes = null;
             return;
         }
+        panel.hidden = false;
         // An active screen share needs more than the normal half-screen cap
         // (see .voice-panel.has-stage in style.css) — the stage tiles alone can
         // run well past that at their 16:9 aspect ratio.
         const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
         panel.classList.toggle('has-stage', hasStage);
-        if (isVoiceChannel || hasDmCall || hasIncoming || this.voice.roomType === 'dm') {
-            panel.innerHTML = this.renderVoiceRoomView();
-            // Bar/expanded modes need layout rules (fixed slim bar vs. a fullscreen
-            // overlay) that don't fit the normal embedded-card sizing in
-            // .voice-panel, hence dedicated classes rather than relying on
-            // .has-stage/max-height alone.
-            panel.classList.toggle('call-bar-mode', !!panel.querySelector('#voiceCallBar'));
-            panel.classList.toggle('call-expanded-mode', !!panel.querySelector('#voiceCallExpanded'));
-            this.mountVoiceVideoElements();
+        panel.innerHTML = html;
+        // The fullscreen DM grid is an overlay over the whole chat; a voice
+        // channel's embedded call just fills the panel's own grid row.
+        panel.classList.remove('call-bar-mode');
+        panel.classList.toggle('call-expanded-mode', !!panel.querySelector('#voiceCallExpanded:not(.embedded)'));
+        panel.classList.toggle('call-room-mode', !!panel.querySelector('#voiceCallExpanded.embedded'));
+        this.mountVoiceVideoElements();
+    }
+
+    voiceCallClockLabel() {
+        const since = Number(this.voice.activeSince || 0);
+        return since ? this.formatCallClock(Date.now() - since) : '0:00';
+    }
+
+    // The call the strip stands for: 'channel' for a voice channel room we are
+    // in (or joining), 'dm' for a DM call past ringing, '' for none.
+    voiceLiveCallType() {
+        const roomId = String(this.voice.roomId || '').trim();
+        if (!roomId) return '';
+        const status = String(this.voice.status || '');
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const joined = !!me && (Array.isArray(this.voice.participants) ? this.voice.participants : [])
+            .some(name => String(name || '').trim().toLowerCase() === me);
+        if (this.voice.roomType === 'channel') {
+            return (joined || status === 'connecting' || status === 'connected') ? 'channel' : '';
+        }
+        if (this.voice.roomType === 'dm') {
+            if (status === 'incoming' || status === 'calling') return '';
+            return (joined || status === 'connected') ? 'dm' : '';
+        }
+        return '';
+    }
+
+    // Whether the selected channel is the voice channel whose room we are in.
+    // With requireChatView, also that the chat view (not Hub/Settings) is on screen.
+    isViewingVoiceCallRoom({ requireChatView = true } = {}) {
+        const roomId = String(this.voice.roomId || '').trim();
+        if (!roomId || this.voice.roomType !== 'channel' || this.S.navMode !== 'servers') return false;
+        const server = this.currentServer();
+        const channel = this.currentChannel();
+        if (!server || !channel || !this.isVoiceChannel(channel)) return false;
+        if (this.voiceRoomKeyForChannel(server.id, channel.id) !== roomId) return false;
+        return !requireChatView || !!document.getElementById('viewChat')?.classList.contains('active');
+    }
+
+    voiceDmCallPeer() {
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const candidates = [
+            this.voice.callTrack?.peer,
+            ...(Array.isArray(this.voice.participants) ? this.voice.participants : []),
+            this.voice.outgoingInvite?.target,
+            this.voice.targetUser,
+            this.voice.inviter,
+        ];
+        for (const candidate of candidates) {
+            const name = String(candidate || '').trim();
+            if (name && name.toLowerCase() !== me) return name;
+        }
+        return '';
+    }
+
+    // Named after the call's own room, not the selected channel — the strip is
+    // shown precisely while the user is somewhere else.
+    voiceLiveCallTitle(type) {
+        if (type === 'channel') {
+            const server = (this.S.servers || []).find(item => item.id === this.voice.serverId);
+            const channel = (server?.channels || []).find(item => item.id === this.voice.channelId);
+            return `Голосовой канал: ${channel?.name || 'room'}`;
+        }
+        const peer = this.voiceDmCallPeer();
+        return peer ? `Звонок с ${peer}` : 'Звонок';
+    }
+
+    // The slim bar above every tab while a call is live. Hidden only where the
+    // call itself is already on screen: its voice channel, or a DM's open grid.
+    renderVoiceCallStrip() {
+        const type = this.voiceLiveCallType();
+        // The sidebar marks the voice channel we are in. This runs on every
+        // voice-panel render, so the list is refreshed only when that changes.
+        const sidebarCallKey = type === 'channel' ? String(this.voice.roomId || '') : '';
+        if (sidebarCallKey !== this._sidebarCallKey) {
+            this._sidebarCallKey = sidebarCallKey;
+            if (this.S.navMode === 'servers') this.renderContacts();
+        }
+        // The call clock lives here because this runs on every renderVoicePanel
+        // whatever tab is open; the room views are not always rendered.
+        if (type) {
+            if (!this.voice.activeSince) {
+                this.voice.activeSince = Number(this.voice.callTrack?.connectedAt) || Date.now();
+            }
+            this.startVoiceCallBarTimer();
+        } else {
+            this.voice.activeSince = 0;
+            this.stopVoiceCallBarTimer();
+        }
+        const strip = document.getElementById('voiceCallStrip');
+        if (!strip) return;
+        const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
+        const coveredByCall = type === 'channel'
+            ? this.isViewingVoiceCallRoom()
+            : type === 'dm' && chatOpen && !!this.voice.expanded;
+        const show = !!type && !coveredByCall;
+        strip.parentElement?.classList.toggle('has-call-strip', show);
+        if (!show) {
+            strip.hidden = true;
+            if (this._voiceStripHtml) {
+                strip.innerHTML = '';
+                this._voiceStripHtml = '';
+            }
             return;
         }
-        panel.classList.remove('call-bar-mode', 'call-expanded-mode');
-        panel.innerHTML = '';
+        const html = this.renderVoiceCallBar({ title: this.voiceLiveCallTitle(type) });
+        if (html !== this._voiceStripHtml) {
+            strip.innerHTML = html;
+            this._voiceStripHtml = html;
+        }
+        strip.hidden = false;
     }
 
     mountVoiceVideoElements() {
@@ -29164,7 +30365,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     renderServerToolbar() {
-        const channelList = document.getElementById('serverChannelList');
         const chatHdr = document.getElementById('chatHdr');
         const chatHdrAva = document.getElementById('chatHdrAva');
         const chatHdrName = document.getElementById('chatHdrName');
@@ -29179,7 +30379,8 @@ ZaliMixin(ZaliInterface, class {
         const canManage = this.canManageServer(server);
 
         if (chatHdr) chatHdr.classList.toggle('server-mode', isServers);
-        if (channelList) channelList.hidden = !isServers;
+        // Servers are the rail of avatars; it hides itself outside servers mode.
+        this.renderServerRails();
         if (chatCallBtn) {
             chatCallBtn.hidden = isServers || !this.S.current;
         }
@@ -29191,7 +30392,6 @@ ZaliMixin(ZaliInterface, class {
             serverSettingsBtn.disabled = !canManage;
         }
         if (!isServers) {
-            if (channelList) channelList.innerHTML = '';
             if (chatHdrAva) {
                 chatHdrAva.style.background = '';
                 const who = this.S.current || this.myName();
@@ -29210,7 +30410,8 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (!server) {
-            if (channelList) channelList.innerHTML = '';
+            // The sidebar shows the «выберите сервер» / «серверов нет» state.
+            this.renderContacts();
             return;
         }
 
@@ -29239,44 +30440,10 @@ ZaliMixin(ZaliInterface, class {
                 : server.name;
         }
 
-        if (channelList) {
-            const channels = Array.isArray(server.channels) ? server.channels : [];
-            const channelsHTML = channels.map(ch => {
-            const active = ch.id === this.S.activeChannel ? 'active' : '';
-            const kind = String(ch.kind || 'text').trim().toLowerCase();
-            const title = kind === 'voice' ? 'Голосовой канал' : 'Текстовый канал';
-            const chKey = `${server.id}:${ch.id}`;
-            const cnt = kind === 'voice' ? 0 : Number(this.S.channelUnread?.[chKey] || 0);
-            const badge = cnt > 0 ? `<span class="badge">${cnt > 99 ? '99+' : cnt}</span>` : '';
-            const muted = kind !== 'voice' && this.isChannelMuted(server.id, ch.id);
-            const muteToggle = muted ? `<span class="channel-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : '';
-            return `<div class="server-channel ${active}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${this.esc(kind)}" title="${this.esc(title)}">
-                    <span class="server-channel-hash ${kind}">${this.channelKindIcon(kind, 'server-channel-list-icon')}</span>
-                    <span class="server-channel-name">${this.esc(ch.name)}</span>
-                    ${muteToggle}
-                    ${badge}
-                </div>`;
-        }).join('');
-
-            this.commitListHTML(channelList, `channels:${server.id}`, channelsHTML);
-
-            // renderServerToolbar() runs on every avatar that finishes loading, every
-            // nav refresh and every toolbar sync. Firing a *smooth* scrollIntoView on
-            // each of those made the channel rail (and, since scrollIntoView walks
-            // every scrollable ancestor, whatever else was scrollable around it) drift
-            // on its own — the unexplained jumps while just reading a channel. Only
-            // scroll when the selected channel actually changed.
-            const activeChannelKey = `${server.id}:${String(this.S.activeChannel || '')}`;
-            if (this._lastScrolledChannelKey !== activeChannelKey) {
-                this._lastScrolledChannelKey = activeChannelKey;
-                const activeChannel = channelList.querySelector('.server-channel.active');
-                if (activeChannel && typeof activeChannel.scrollIntoView === 'function') {
-                    requestAnimationFrame(() => {
-                        activeChannel.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-                    });
-                }
-            }
-        }
+        // This server's channels are the sidebar list now (renderServers). Every
+        // toolbar sync is also where unread and mute changes land, so keep the list
+        // in step from here; commitListHTML makes an unchanged list a string compare.
+        this.renderContacts();
     }
 
     setActiveChannel(channelId, { persist = true } = {}) {
@@ -29296,12 +30463,9 @@ ZaliMixin(ZaliInterface, class {
         // clickable outside the chat screen.
         this.ensureChatViewOpen();
         this.collapseActiveCallView();
-        if (this.voice.roomType === 'channel' && this.voice.roomId) {
-            const currentChannelId = String(this.voice.channelId || '').trim();
-            if (currentChannelId && currentChannelId !== next) {
-                this.leaveVoiceRoom({ announce: true });
-            }
-        }
+        // Switching channels no longer leaves a channel call: the call keeps
+        // running and follows the user as the strip at the top of the window
+        // (renderVoiceCallStrip). Leaving is an explicit «Покинуть».
         this.cancelComposerContext();
         this.S.activeChannel = next;
         // Selecting the channel makes it visible again — clear whatever unread
@@ -29316,11 +30480,17 @@ ZaliMixin(ZaliInterface, class {
         this.requestMessagesScroll('bottom');
         this.scheduleRenderMessages();
         this.updateSendButtonState();
+        // The sidebar highlights the selected channel.
+        this.renderContacts();
         if (this.isVoiceChannel(channel)) {
             // Selecting a voice channel only opens its panel (with a "Присоединиться"
             // button) — it must NOT auto-connect the call. Auto-joining on click also
             // left the panel stuck rendering the connected-call state after switching
             // to any other channel, since nothing ever re-rendered it away from there.
+            // Leaves the phone's list screen like a text channel does: the channel
+            // rows are in the sidebar now, and tapping one must open it.
+            this.closeMobileSidebar();
+            this.syncMobileChrome();
             this.renderVoicePanel();
             return;
         }
@@ -31377,6 +32547,8 @@ ZaliMixin(ZaliInterface, class {
             if (mode === 'register') {
                 this.addLogEntry({
                     type: 'ERROR',
+"""#,
+    #"""
                     msg: `Ошибка регистрации для ${username}: ${friendly}`,
                     ts: new Date().toLocaleTimeString()
                 });
@@ -32258,8 +33430,6 @@ ZaliMixin(ZaliInterface, class {
             </a>`;
         }
 
-"""#,
-    #"""
         return `<a class="file-message" href="${this.esc(src)}" download="${this.esc(attachment.name)}">
             ${fileIcon}
             <span class="file-message-info">
@@ -33563,77 +34733,51 @@ ZaliMixin(ZaliInterface, class {
         const target = el || document.getElementById('contacts');
         if (!target) return;
         this.ensureServersState();
-        const q = this.S.searchQ.toLowerCase();
-        const list = (this.S.servers || [])
+        // The servers themselves are the rail (interface/server_rail.js); the
+        // sidebar lists the selected server's channels.
+        this.renderServerRails();
+        const server = this.currentServer();
+        const empty = (title, sub) => `<div class="server-empty sidebar-channel-empty">
+            <div class="empty-ttl">${title}</div>
+            <div class="empty-sub">${sub}</div>
+        </div>`;
+        if (!server) {
+            const hasServers = (this.S.servers || []).some(Boolean);
+            this.commitListHTML(target, 'servers', hasServers
+                ? empty('Выберите сервер', 'Серверы — в ленте сверху')
+                : empty('Серверов пока нет', 'Создайте сервер или войдите по коду — кнопки в ленте сверху'));
+            return;
+        }
+        const q = String(this.S.searchQ || '').toLowerCase();
+        const inCallRoomId = this.voiceLiveCallType?.() === 'channel' ? String(this.voice.roomId || '') : '';
+        const rows = (server.channels || [])
             .filter(Boolean)
-            .filter(server => {
-                const haystack = `${server.name || ''} ${server.description || server.hint || ''}`.toLowerCase();
-                return !q || haystack.includes(q);
-            });
-
-        const createTile = `
-            <button class="server-item server-create" type="button" id="createServerBtn" title="Создать сервер" aria-label="Создать сервер">
-                <span class="server-avatar server-create-plus">+</span>
-                <div class="server-meta">
-                    <div class="server-name">Создать сервер</div>
-                    <div class="server-prev">Новый сервер, команда или сообщество</div>
-                </div>
-            </button>
-        `;
-        const joinTile = `
-            <button class="server-item server-join" type="button" id="joinServerBtn" title="Войти по коду" aria-label="Войти по коду">
-                <span class="server-avatar server-create-plus">↗</span>
-                <div class="server-meta">
-                    <div class="server-name">Войти по коду</div>
-                    <div class="server-prev">Введите код или ссылку сервера</div>
-                </div>
-            </button>
-        `;
-        const publicTile = `
-            <button class="server-item server-public" type="button" id="publicServersBtn" title="Открыть публичные серверы" aria-label="Открыть публичные серверы">
-                <span class="server-avatar server-create-plus">☰</span>
-                <div class="server-meta">
-                    <div class="server-name">Публичные серверы</div>
-                    <div class="server-prev">Просмотр и вход из меню</div>
-                </div>
-            </button>
-        `;
-
-        const html = `
-            <div class="server-list">
-                ${list.length === 0 ? `<div class="server-empty">
-                    <div class="empty-ttl">Сервера не найдены</div>
-                    <div class="empty-sub">Попробуйте другой запрос</div>
-                </div>` : list.map(server => {
-                    const active = server.id === this.S.activeServer ? 'active' : '';
-                    // server.unread is never populated by the backend — the real
-                    // per-channel counts live in S.channelUnread, so sum those up
-                    // for the aggregate badge instead of reading a field that's
-                    // always undefined.
-                    const serverUnreadCount = (server.channels || []).reduce(
-                        (sum, ch) => sum + Number(this.S.channelUnread?.[`${server.id}:${ch.id}`] || 0),
-                        0
-                    );
-                    const badge = serverUnreadCount > 0
-                        ? `<div class="badge server-badge">${serverUnreadCount > 99 ? '99+' : serverUnreadCount}</div>`
-                        : '';
-                    const preview = server.description || server.hint || 'Сервер';
-                    return `
-                        <button class="server-item ${active}" type="button" data-server-id="${this.esc(server.id)}" title="${this.esc(server.name)}" aria-label="${this.esc(server.name)}">
-                            ${this.renderServerAvatarHTML(server)}
-                            <div class="server-meta">
-                                <div class="server-name">${this.esc(server.name)}</div>
-                                <div class="server-prev">${this.esc(preview)}</div>
-                            </div>
-                            ${badge}
-                        </button>
-                    `;
-                }).join('')}
-                ${createTile}
-                ${joinTile}
-                ${publicTile}
-            </div>
-        `;
+            .filter(ch => !q || String(ch.name || '').toLowerCase().includes(q))
+            .map(ch => {
+                const kind = this.normalizeChannelKind(ch.kind);
+                const active = ch.id === this.S.activeChannel ? ' active' : '';
+                const inCall = kind === 'voice' && !!inCallRoomId && inCallRoomId === this.voiceRoomKeyForChannel(server.id, ch.id);
+                const count = kind === 'voice' ? 0 : Number(this.S.channelUnread?.[`${server.id}:${ch.id}`] || 0);
+                const badge = count > 0 ? `<div class="badge">${count > 99 ? '99+' : count}</div>` : '';
+                const muted = kind !== 'voice' && this.isChannelMuted(server.id, ch.id);
+                const sub = ch.topic
+                    ? this.esc(ch.topic)
+                    : (kind === 'voice' ? (inCall ? 'Вы в канале' : 'Голосовой канал') : 'Текстовый канал');
+                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
+                    <span class="sidebar-channel-icon ${kind}">${this.channelKindIcon(kind, 'sidebar-channel-glyph')}</span>
+                    <div class="contact-info">
+                        <div class="contact-name">${this.esc(ch.name)}</div>
+                        <div class="contact-prev">${sub}</div>
+                    </div>
+                    <div class="contact-actions">
+                        ${badge}
+                        ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        const html = rows
+            ? `<div class="sidebar-channel-list">${rows}</div>`
+            : empty(q ? 'Ничего не найдено' : 'Каналов нет', q ? 'Попробуйте другой запрос' : 'Создайте канал в настройках сервера');
         this.commitListHTML(target, 'servers', html);
     }
 
@@ -33645,25 +34789,33 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
-    setActiveServer(serverId, { persist = true } = {}) {
+    // keepMobileList: picked from the rail on the phone's list screen, where the
+    // point is to see that server's channels — not to be pushed into its chat.
+    setActiveServer(serverId, { persist = true, keepMobileList = false } = {}) {
         const next = String(serverId || '').trim();
         if (!next) return;
         this.ensureServersState();
         if (!this.S.servers.some(server => server.id === next)) return;
-        const previousVoiceServer = String(this.voice.serverId || '').trim();
-        const previousVoiceChannel = String(this.voice.channelId || '').trim();
+        const stayOnMobileList = keepMobileList && this.isMobileLayout();
+        const openChatScreen = () => {
+            if (!stayOnMobileList) {
+                this.ensureChatViewOpen();
+            } else if (!document.getElementById('viewChat')?.classList.contains('active')) {
+                this.openChatView({ showList: true });
+            }
+        };
         const current = this.currentServer();
         const currentChannel = this.currentChannel();
         if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) {
             // Same reasoning as setActiveChannel's identical guard: state is
             // already correct, but the click may be asking to return to the chat
             // screen from Hub/ZaliCoin/Settings — see ensureChatViewOpen().
-            this.ensureChatViewOpen();
+            openChatScreen();
             return;
         }
-        // The server list in the sidebar stays clickable outside the chat screen
-        // too (see switchChat's identical call for the DM list).
-        this.ensureChatViewOpen();
+        // The server rail stays clickable outside the chat screen too (see
+        // switchChat's identical call for the DM list).
+        openChatScreen();
         this.collapseActiveCallView();
         this.S.activeServer = next;
         this.S.activeConversationType = 'servers';
@@ -33681,12 +34833,7 @@ ZaliMixin(ZaliInterface, class {
             this.saveStoredActiveServer(next);
             this.saveStoredActiveChannel(this.S.activeChannel);
         }
-        if (this.voice.roomType === 'channel' && previousVoiceServer && previousVoiceChannel) {
-            const nextVoiceChannel = String(this.S.activeChannel || '').trim();
-            if (previousVoiceServer !== next || previousVoiceChannel !== nextVoiceChannel) {
-                this.leaveVoiceRoom({ announce: true });
-            }
-        }
+        // A channel call survives switching servers too — see setActiveChannel.
         this.updateNavModeButtons();
         this.renderServerToolbar();
         this.requestMessagesScroll('bottom');
@@ -33698,8 +34845,13 @@ ZaliMixin(ZaliInterface, class {
             this.requestMessagesScroll('bottom');
             this.loadServerMessages(this.S.activeServer, this.S.activeChannel, { silent: true });
         }
-        this.closeMobileSidebar();
+        if (!stayOnMobileList) this.closeMobileSidebar();
         this.syncMobileChrome();
+        // The sidebar lists this server's channels.
+        this.renderContacts();
+        // The new server's channel may or may not be a voice channel, and the
+        // strip/voice view depend on exactly that.
+        this.renderVoicePanel();
     }
 });
 
@@ -34039,6 +35191,45 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // Mirror of ensureConversationLoaded() for server channels. applySession()
+    // already bulk-restores S.serverChats from the same persisted cache at login,
+    // but it does that once, synchronously, from whatever the cache held at that
+    // exact moment — it is not consulted again afterward. Anything that reaches
+    // S.serverChats[key] empty at render time (a channel switch racing that
+    // restore, a key that only later gets recognized once the server/channel list
+    // itself finishes loading) fell straight through to the "Нет сообщений в
+    // канале" empty state with nothing to catch it, then re-rendered a moment
+    // later once loadServerMessages()'s network round-trip landed — the
+    // empty-then-full flash ("промигивание") reported when opening a channel.
+    ensureServerConversationLoaded(serverId = null, channelId = null) {
+        const sid = String(serverId || this.S.activeServer || '').trim();
+        const cid = String(channelId || this.S.activeChannel || '').trim();
+        if (!sid || !cid) return false;
+        const key = `${sid}:${cid}`;
+        const currentMsgs = this.S.serverChats[key];
+        if (Array.isArray(currentMsgs) && currentMsgs.length > 0) {
+            return true;
+        }
+
+        let rawCache = null;
+        try {
+            rawCache = localStorage.getItem(this.messageCacheStorageKey());
+        } catch (e) {
+            rawCache = null;
+        }
+        if (rawCache && !this.persistedCacheMightHavePeer(rawCache, key)) {
+            return false;
+        }
+
+        const cache = this.loadStoredMessageCache();
+        const cachedMsgs = Array.isArray(cache?.serverChats?.[key]) ? cache.serverChats[key] : [];
+        if (cachedMsgs.length === 0) return false;
+
+        this.S.serverChats[key] = cachedMsgs.filter(msg => msg && typeof msg === 'object');
+        this.trace(`ensureServerConversationLoaded key=${key} restored=${this.S.serverChats[key].length}`);
+        return true;
+    }
+
     scheduleRenderMessages() {
         if (this.messageRenderRaf) return;
         this.messageRenderRaf = requestAnimationFrame(() => {
@@ -34077,6 +35268,15 @@ ZaliMixin(ZaliInterface, class {
             const restored = this.ensureConversationLoaded(this.S.current);
             if (restored) {
                 this.trace(`renderMessages rerender restored peer=${String(this.S.current || '').trim()}`);
+                this.scheduleRenderMessages();
+                return;
+            }
+        }
+
+        if (isServers && (!Array.isArray(msgs) || msgs.length === 0) && !this.S.loading) {
+            const restored = this.ensureServerConversationLoaded(this.S.activeServer, this.S.activeChannel);
+            if (restored) {
+                this.trace(`renderMessages rerender restored server key=${this.currentServerChatKey()}`);
                 this.scheduleRenderMessages();
                 return;
             }
@@ -35463,6 +36663,8 @@ ZaliMixin(ZaliInterface, class {
         const flipX = x + width + pad > window.innerWidth && x - width > pad;
         const flipY = y + height + pad > window.innerHeight && y - height > pad;
         const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
+"""#,
+    #"""
         const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
@@ -35875,6 +37077,13 @@ ZaliMixin(ZaliInterface, class {
     }
 
     syncTaskbarBadge() {
+        // Every unread increment/reset already routes through here (see
+        // notifyBackgroundMessage, switchChat, setActiveChannel, setNavMode) —
+        // the segment nav badges piggyback on that same choke point instead of
+        // needing their own call site at every one of those spots. Must run
+        // unconditionally, before the native-only branch below: a browser/PWA
+        // session has no taskbar at all but still has the segment nav.
+        this.syncHubSegmentBadges();
         if (!this.nativeSupports('taskbarBadge')) return;
         this.postNativeMessage({
             type: NativeMessageTypes.SET_UNREAD_BADGE,
@@ -36270,8 +37479,6 @@ ZaliMixin(ZaliInterface, class {
         if (connected) {
             // Connection (re)established — drain the outbox immediately instead of
             // waiting out each message's retry backoff (which grows up to 30s). This
-"""#,
-    #"""
             // was the cause of the long send delay after an account switch / blip.
             this.kickPendingOutboxNow('reconnect');
             // Don't wait out the keepalive tick to get back into the voice room: if
@@ -39212,31 +40419,14 @@ ZaliMixin(ZaliInterface, class {
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {
             contactsEl.addEventListener('click', (e) => {
-                const serverBtn = e.target.closest('.server-item[data-server-id]');
-                if (serverBtn) {
-                    const serverId = serverBtn.getAttribute('data-server-id');
-                    if (serverId) {
+                // In servers mode the sidebar lists the selected server's channels.
+                const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
+                if (channelRow) {
+                    const channelId = channelRow.getAttribute('data-channel-id');
+                    if (channelId) {
                         this.closeChatPanelModals();
-                        this.setActiveServer(serverId);
+                        this.setActiveChannel(channelId);
                     }
-                    e.stopPropagation();
-                    return;
-                }
-                const createBtn = e.target.closest('.server-create');
-                if (createBtn) {
-                    this.openServerModal('create');
-                    e.stopPropagation();
-                    return;
-                }
-                const joinBtn = e.target.closest('.server-join');
-                if (joinBtn) {
-                    this.openJoinCodeModal();
-                    e.stopPropagation();
-                    return;
-                }
-                const publicBtn = e.target.closest('.server-public');
-                if (publicBtn) {
-                    this.openPublicServersModal();
                     e.stopPropagation();
                     return;
                 }
@@ -39265,6 +40455,15 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
             contactsEl.addEventListener('contextmenu', (e) => {
+                const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
+                if (channelRow) {
+                    if (channelRow.getAttribute('data-channel-kind') === 'voice') return;
+                    e.preventDefault();
+                    const sid = channelRow.getAttribute('data-server-id');
+                    const cid = channelRow.getAttribute('data-channel-id');
+                    if (sid && cid) this.toggleMuteChannel(sid, cid);
+                    return;
+                }
                 const row = e.target.closest('.contact');
                 if (!row || !row.dataset.name) return;
                 e.preventDefault();
@@ -39272,24 +40471,8 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
-        const serverChannelList = document.getElementById('serverChannelList');
-        if (serverChannelList) {
-            serverChannelList.addEventListener('click', (e) => {
-                const channelBtn = e.target.closest('.server-channel[data-channel-id]');
-                if (!channelBtn) return;
-                const channelId = channelBtn.getAttribute('data-channel-id');
-                if (channelId) this.setActiveChannel(channelId);
-            });
-            serverChannelList.addEventListener('contextmenu', (e) => {
-                const channelBtn = e.target.closest('.server-channel[data-channel-id]');
-                if (!channelBtn) return;
-                const sid = channelBtn.getAttribute('data-server-id');
-                const cid = channelBtn.getAttribute('data-channel-id');
-                if (channelBtn.getAttribute('data-channel-kind') === 'voice') return;
-                e.preventDefault();
-                if (sid && cid) this.toggleMuteChannel(sid, cid);
-            });
-        }
+        // Servers: avatars in the rail (header on desktop, sidebar on the phone).
+        this.bindServerRailEvents();
 
     }
 
@@ -39381,6 +40564,33 @@ ZaliMixin(ZaliInterface, class {
                 if (e.target.closest('#voiceCallBar, #voiceCollapseBar')) {
                     e.preventDefault();
                     this.toggleVoiceCallExpanded();
+                }
+            });
+        }
+
+        // The strip above every tab: its mute/deafen act in place, anywhere else
+        // on it goes back to the call.
+        const voiceCallStrip = document.getElementById('voiceCallStrip');
+        if (voiceCallStrip) {
+            voiceCallStrip.addEventListener('click', (e) => {
+                if (e.target.closest('#voiceMuteBtn')) {
+                    this.toggleVoiceMute();
+                    return;
+                }
+                if (e.target.closest('#voiceDeafenBtn')) {
+                    this.toggleVoiceDeafen();
+                    return;
+                }
+                if (e.target.closest('#voiceCallBar')) {
+                    this.openActiveVoiceCall();
+                }
+            });
+            voiceCallStrip.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                if (e.target.closest('#voiceMuteBtn, #voiceDeafenBtn')) return;
+                if (e.target.closest('#voiceCallBar')) {
+                    e.preventDefault();
+                    this.openActiveVoiceCall();
                 }
             });
         }
@@ -39503,6 +40713,8 @@ ZaliMixin(ZaliInterface, class {
         // lets the default navigation happen) outside a native shell.
         document.addEventListener('click', (e) => {
             const link = e.target.closest('a[target="_blank"]');
+"""#,
+    #"""
             if (!link) return;
             const href = link.getAttribute('href') || '';
             if (this.openExternalLink(href)) {
@@ -40168,33 +41380,8 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        const serverChannelsList = document.getElementById('serverChannelsList');
-        if (serverChannelsList) {
-            serverChannelsList.addEventListener('click', async (e) => {
-                const saveBtn = e.target.closest('[data-channel-save]');
-                if (saveBtn) {
-                    const channelId = saveBtn.getAttribute('data-channel-save');
-                    try {
-                        await this.saveServerChannel(channelId);
-                    } catch (err) {
-                        this.setServerModalState({ error: err?.message || 'Не удалось сохранить канал' });
-                        this.renderServerModal();
-                    }
-                    return;
-                }
-                const deleteBtn = e.target.closest('[data-channel-delete]');
-                if (deleteBtn) {
-                    const channelId = deleteBtn.getAttribute('data-channel-delete');
-                    if (!channelId) return;
-                    try {
-                        await this.deleteServerChannel(channelId);
-                    } catch (err) {
-                        this.setServerModalState({ error: err?.message || 'Не удалось удалить канал' });
-                        this.renderServerModal();
-                    }
-                }
-            });
-        }
+        // Channel rows: rename and retopic in place, flip kind, delete, drag to reorder.
+        this.bindServerChannelsList();
         if (serverJoinLinkGenerateBtn) {
             serverJoinLinkGenerateBtn.addEventListener('click', async () => {
                 try {
@@ -40356,8 +41543,6 @@ ZaliMixin(ZaliInterface, class {
                 try {
                     await this.removeServerAsset('avatar');
                 } catch (e) {
-"""#,
-    #"""
                     this.setServerModalState({ error: e?.message || 'Не удалось удалить аватар' });
                     this.renderServerModal();
                 }
@@ -40921,7 +42106,8 @@ ZaliMixin(ZaliInterface, class {
     // the glide carries the view away from the bottom.
     setupScrollInertia() {
         if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
-        const SELECTOR = '.msgs, .contacts, .sidebar, .server-channel-list, .settings-body, .server-modal-content, .color-picker-body';
+        // The server rail is not here: it runs its own physics (interface/server_rail.js).
+        const SELECTOR = '.msgs, .contacts, .sidebar, .settings-body, .server-modal-content, .color-picker-body';
         const FRICTION = 0.72;
         const MIN_VELOCITY = 0.5;
         const MAX_VELOCITY = 6;

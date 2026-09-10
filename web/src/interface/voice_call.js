@@ -258,6 +258,33 @@ ZaliMixin(ZaliInterface, class {
         this.renderVoicePanel();
     }
 
+    // Way back to the call from the strip. A channel call lives in its voice
+    // channel, whose view IS the call interface. A DM call has no room view of
+    // its own, so it opens the conversation with the fullscreen grid on top.
+    openActiveVoiceCall() {
+        const roomType = String(this.voice.roomType || '').trim();
+        if (roomType === 'channel') {
+            const sid = String(this.voice.serverId || '').trim();
+            const cid = String(this.voice.channelId || '').trim();
+            if (!sid || !cid) return;
+            if (this.S.navMode !== 'servers' || this.S.activeServer !== sid) {
+                this.setActiveServer(sid);
+            }
+            this.setActiveChannel(cid);
+            this.ensureChatViewOpen();
+            this.renderVoicePanel();
+            return;
+        }
+        if (roomType === 'dm') {
+            const peer = this.voiceDmCallPeer();
+            if (peer) this.switchChat(peer);
+            else this.ensureChatViewOpen();
+            // After switchChat: it collapses the grid on the way in.
+            this.voice.expanded = true;
+            this.renderVoicePanel();
+        }
+    }
+
     formatCallClock(ms) {
         const total = Math.max(0, Math.round(Number(ms) || 0) / 1000) | 0;
         const mm = Math.floor(total / 60);

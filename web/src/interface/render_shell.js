@@ -346,77 +346,51 @@ ZaliMixin(ZaliInterface, class {
         const target = el || document.getElementById('contacts');
         if (!target) return;
         this.ensureServersState();
-        const q = this.S.searchQ.toLowerCase();
-        const list = (this.S.servers || [])
+        // The servers themselves are the rail (interface/server_rail.js); the
+        // sidebar lists the selected server's channels.
+        this.renderServerRails();
+        const server = this.currentServer();
+        const empty = (title, sub) => `<div class="server-empty sidebar-channel-empty">
+            <div class="empty-ttl">${title}</div>
+            <div class="empty-sub">${sub}</div>
+        </div>`;
+        if (!server) {
+            const hasServers = (this.S.servers || []).some(Boolean);
+            this.commitListHTML(target, 'servers', hasServers
+                ? empty('Выберите сервер', 'Серверы — в ленте сверху')
+                : empty('Серверов пока нет', 'Создайте сервер или войдите по коду — кнопки в ленте сверху'));
+            return;
+        }
+        const q = String(this.S.searchQ || '').toLowerCase();
+        const inCallRoomId = this.voiceLiveCallType?.() === 'channel' ? String(this.voice.roomId || '') : '';
+        const rows = (server.channels || [])
             .filter(Boolean)
-            .filter(server => {
-                const haystack = `${server.name || ''} ${server.description || server.hint || ''}`.toLowerCase();
-                return !q || haystack.includes(q);
-            });
-
-        const createTile = `
-            <button class="server-item server-create" type="button" id="createServerBtn" title="Создать сервер" aria-label="Создать сервер">
-                <span class="server-avatar server-create-plus">+</span>
-                <div class="server-meta">
-                    <div class="server-name">Создать сервер</div>
-                    <div class="server-prev">Новый сервер, команда или сообщество</div>
-                </div>
-            </button>
-        `;
-        const joinTile = `
-            <button class="server-item server-join" type="button" id="joinServerBtn" title="Войти по коду" aria-label="Войти по коду">
-                <span class="server-avatar server-create-plus">↗</span>
-                <div class="server-meta">
-                    <div class="server-name">Войти по коду</div>
-                    <div class="server-prev">Введите код или ссылку сервера</div>
-                </div>
-            </button>
-        `;
-        const publicTile = `
-            <button class="server-item server-public" type="button" id="publicServersBtn" title="Открыть публичные серверы" aria-label="Открыть публичные серверы">
-                <span class="server-avatar server-create-plus">☰</span>
-                <div class="server-meta">
-                    <div class="server-name">Публичные серверы</div>
-                    <div class="server-prev">Просмотр и вход из меню</div>
-                </div>
-            </button>
-        `;
-
-        const html = `
-            <div class="server-list">
-                ${list.length === 0 ? `<div class="server-empty">
-                    <div class="empty-ttl">Сервера не найдены</div>
-                    <div class="empty-sub">Попробуйте другой запрос</div>
-                </div>` : list.map(server => {
-                    const active = server.id === this.S.activeServer ? 'active' : '';
-                    // server.unread is never populated by the backend — the real
-                    // per-channel counts live in S.channelUnread, so sum those up
-                    // for the aggregate badge instead of reading a field that's
-                    // always undefined.
-                    const serverUnreadCount = (server.channels || []).reduce(
-                        (sum, ch) => sum + Number(this.S.channelUnread?.[`${server.id}:${ch.id}`] || 0),
-                        0
-                    );
-                    const badge = serverUnreadCount > 0
-                        ? `<div class="badge server-badge">${serverUnreadCount > 99 ? '99+' : serverUnreadCount}</div>`
-                        : '';
-                    const preview = server.description || server.hint || 'Сервер';
-                    return `
-                        <button class="server-item ${active}" type="button" data-server-id="${this.esc(server.id)}" title="${this.esc(server.name)}" aria-label="${this.esc(server.name)}">
-                            ${this.renderServerAvatarHTML(server)}
-                            <div class="server-meta">
-                                <div class="server-name">${this.esc(server.name)}</div>
-                                <div class="server-prev">${this.esc(preview)}</div>
-                            </div>
-                            ${badge}
-                        </button>
-                    `;
-                }).join('')}
-                ${createTile}
-                ${joinTile}
-                ${publicTile}
-            </div>
-        `;
+            .filter(ch => !q || String(ch.name || '').toLowerCase().includes(q))
+            .map(ch => {
+                const kind = this.normalizeChannelKind(ch.kind);
+                const active = ch.id === this.S.activeChannel ? ' active' : '';
+                const inCall = kind === 'voice' && !!inCallRoomId && inCallRoomId === this.voiceRoomKeyForChannel(server.id, ch.id);
+                const count = kind === 'voice' ? 0 : Number(this.S.channelUnread?.[`${server.id}:${ch.id}`] || 0);
+                const badge = count > 0 ? `<div class="badge">${count > 99 ? '99+' : count}</div>` : '';
+                const muted = kind !== 'voice' && this.isChannelMuted(server.id, ch.id);
+                const sub = ch.topic
+                    ? this.esc(ch.topic)
+                    : (kind === 'voice' ? (inCall ? 'Вы в канале' : 'Голосовой канал') : 'Текстовый канал');
+                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
+                    <span class="sidebar-channel-icon ${kind}">${this.channelKindIcon(kind, 'sidebar-channel-glyph')}</span>
+                    <div class="contact-info">
+                        <div class="contact-name">${this.esc(ch.name)}</div>
+                        <div class="contact-prev">${sub}</div>
+                    </div>
+                    <div class="contact-actions">
+                        ${badge}
+                        ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        const html = rows
+            ? `<div class="sidebar-channel-list">${rows}</div>`
+            : empty(q ? 'Ничего не найдено' : 'Каналов нет', q ? 'Попробуйте другой запрос' : 'Создайте канал в настройках сервера');
         this.commitListHTML(target, 'servers', html);
     }
 
@@ -428,25 +402,33 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
-    setActiveServer(serverId, { persist = true } = {}) {
+    // keepMobileList: picked from the rail on the phone's list screen, where the
+    // point is to see that server's channels — not to be pushed into its chat.
+    setActiveServer(serverId, { persist = true, keepMobileList = false } = {}) {
         const next = String(serverId || '').trim();
         if (!next) return;
         this.ensureServersState();
         if (!this.S.servers.some(server => server.id === next)) return;
-        const previousVoiceServer = String(this.voice.serverId || '').trim();
-        const previousVoiceChannel = String(this.voice.channelId || '').trim();
+        const stayOnMobileList = keepMobileList && this.isMobileLayout();
+        const openChatScreen = () => {
+            if (!stayOnMobileList) {
+                this.ensureChatViewOpen();
+            } else if (!document.getElementById('viewChat')?.classList.contains('active')) {
+                this.openChatView({ showList: true });
+            }
+        };
         const current = this.currentServer();
         const currentChannel = this.currentChannel();
         if (this.S.navMode === 'servers' && this.S.activeServer === next && current && currentChannel) {
             // Same reasoning as setActiveChannel's identical guard: state is
             // already correct, but the click may be asking to return to the chat
             // screen from Hub/ZaliCoin/Settings — see ensureChatViewOpen().
-            this.ensureChatViewOpen();
+            openChatScreen();
             return;
         }
-        // The server list in the sidebar stays clickable outside the chat screen
-        // too (see switchChat's identical call for the DM list).
-        this.ensureChatViewOpen();
+        // The server rail stays clickable outside the chat screen too (see
+        // switchChat's identical call for the DM list).
+        openChatScreen();
         this.collapseActiveCallView();
         this.S.activeServer = next;
         this.S.activeConversationType = 'servers';
@@ -464,12 +446,7 @@ ZaliMixin(ZaliInterface, class {
             this.saveStoredActiveServer(next);
             this.saveStoredActiveChannel(this.S.activeChannel);
         }
-        if (this.voice.roomType === 'channel' && previousVoiceServer && previousVoiceChannel) {
-            const nextVoiceChannel = String(this.S.activeChannel || '').trim();
-            if (previousVoiceServer !== next || previousVoiceChannel !== nextVoiceChannel) {
-                this.leaveVoiceRoom({ announce: true });
-            }
-        }
+        // A channel call survives switching servers too — see setActiveChannel.
         this.updateNavModeButtons();
         this.renderServerToolbar();
         this.requestMessagesScroll('bottom');
@@ -481,7 +458,12 @@ ZaliMixin(ZaliInterface, class {
             this.requestMessagesScroll('bottom');
             this.loadServerMessages(this.S.activeServer, this.S.activeChannel, { silent: true });
         }
-        this.closeMobileSidebar();
+        if (!stayOnMobileList) this.closeMobileSidebar();
         this.syncMobileChrome();
+        // The sidebar lists this server's channels.
+        this.renderContacts();
+        // The new server's channel may or may not be a voice channel, and the
+        // strip/voice view depend on exactly that.
+        this.renderVoicePanel();
     }
 });

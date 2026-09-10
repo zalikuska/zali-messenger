@@ -441,15 +441,58 @@ ZaliMixin(ZaliInterface, class {
             && nav.querySelectorAll('.hub-segment-btn').length === items.length;
         if (hasStableButtons) {
             this.updateHubSegmentNavActive(active);
+            this.syncHubSegmentBadges();
             return;
         }
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
                 ${this.hubSegmentIcon(item.id)}
+                <span class="hub-segment-badge" hidden></span>
             </button>
         `).join('');
         nav.dataset.segmentSignature = signature;
         this.syncHubSegmentIndicator(null);
+        this.syncHubSegmentBadges();
+    }
+
+    // "Разделы" (ЛС/Сервера) accrue unread the same way the DM list and the
+    // server list already do — this just surfaces the existing totals (see
+    // computeTotalUnreadCount/renderServers' per-server sum) on the segment
+    // buttons themselves, which previously showed no indicator at all. Other
+    // segments (ZaliCoin, Хаб) have no unread concept and stay at 0.
+    hubSegmentUnreadCount(id) {
+        if (id === 'dm') {
+            return Object.values(this.S.unread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        }
+        if (id === 'servers') {
+            return Object.values(this.S.channelUnread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        }
+        return 0;
+    }
+
+    // Called on every unread increment/reset (via syncTaskbarBadge, the
+    // existing single choke point for both) as well as after a full nav
+    // rebuild — cheap enough to run unconditionally since it only ever
+    // touches up to 4 buttons and never rebuilds the nav itself.
+    syncHubSegmentBadges() {
+        const nav = document.getElementById('hubSegmentNav');
+        if (!nav) return;
+        nav.querySelectorAll('.hub-segment-btn[data-hub-segment]').forEach(btn => {
+            const id = btn.getAttribute('data-hub-segment');
+            const count = this.hubSegmentUnreadCount(id);
+            let badge = btn.querySelector('.hub-segment-badge');
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'hub-segment-badge';
+                btn.appendChild(badge);
+            }
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : String(count);
+                badge.hidden = false;
+            } else {
+                badge.hidden = true;
+            }
+        });
     }
 
     updateHubSegmentNavActive(active) {

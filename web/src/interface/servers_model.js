@@ -47,7 +47,7 @@ ZaliMixin(ZaliInterface, class {
     updateSidebarModeLabel() {
         const label = document.querySelector('.nav-label');
         if (label) {
-            label.textContent = this.S.navMode === 'servers' ? 'Сервера' : 'Диалоги';
+            label.textContent = this.S.navMode === 'servers' ? 'Каналы' : 'Диалоги';
         }
     }
 
@@ -377,13 +377,17 @@ ZaliMixin(ZaliInterface, class {
         if (!wheel) return;
         const normalized = this.normalizeColorValue(value);
         const { h } = this.rgbToHsl(...Object.values(this.hexToRgb(normalized)));
-        const rect = wheel.getBoundingClientRect();
-        const radius = Math.max(20, Math.min(rect.width, rect.height) * 0.36);
+        // Percent of the wheel's own box, not pixels from getBoundingClientRect():
+        // the value is applied while the picker is still collapsed (display:none,
+        // a 0×0 rect), and the pixel version then parked the thumb at (0, -20px),
+        // outside the wheel, for good. 44 % lands on the middle of the hue ring
+        // for every wheel size (ring inset 14px of 112/128, 8px of 64).
+        const RING_RADIUS_PERCENT = 44;
         const angle = ((h - 90) * Math.PI) / 180;
-        const x = (rect.width / 2) + Math.cos(angle) * radius;
-        const y = (rect.height / 2) + Math.sin(angle) * radius;
-        wheel.style.setProperty('--thumb-x', `${x}px`);
-        wheel.style.setProperty('--thumb-y', `${y}px`);
+        const x = 50 + Math.cos(angle) * RING_RADIUS_PERCENT;
+        const y = 50 + Math.sin(angle) * RING_RADIUS_PERCENT;
+        wheel.style.setProperty('--thumb-x', `${x.toFixed(2)}%`);
+        wheel.style.setProperty('--thumb-y', `${y.toFixed(2)}%`);
         wheel.style.setProperty('--wheel-color', normalized);
         if (hidden && hidden.value !== normalized) hidden.value = normalized;
         if (hexInput && hexInput.value.toLowerCase() !== normalized) hexInput.value = normalized;

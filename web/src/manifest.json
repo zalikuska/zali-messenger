@@ -54,6 +54,7 @@
     "interface/network_config.js",
     "interface/servers_model.js",
     "interface/server_modal.js",
+    "interface/server_rail.js",
     "interface/voice_transport.js",
     "interface/voice_media.js",
     "interface/voice_negotiation.js",

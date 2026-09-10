@@ -401,7 +401,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Mobile touch gestures, delegated on the persistent containers (#msgs /
-    // #contacts / #serverChannelList) so they survive the innerHTML re-renders
+    // #contacts, which holds channels too in servers mode) so they survive the innerHTML re-renders
     // those lists do.
     //
     //  • Long-press a message  → opens the existing reaction menu.
@@ -430,21 +430,21 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // One binding for both kinds of sidebar row: bindMobileLongPress binds a
+        // container only once, and #contacts holds dialogs in ЛС and channels in
+        // servers mode.
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {
-            this.bindMobileLongPress(contactsEl, '.contact', (row, x, y) => {
+            this.bindMobileLongPress(contactsEl, '.contact, .sidebar-channel[data-channel-id]', (row, x, y) => {
+                if (row.classList.contains('sidebar-channel')) {
+                    if (row.getAttribute('data-channel-kind') === 'voice') return;
+                    const sid = row.getAttribute('data-server-id');
+                    const cid = row.getAttribute('data-channel-id');
+                    if (sid && cid) this.toggleMuteChannel(sid, cid);
+                    return;
+                }
                 if (!row.dataset.name) return;
                 this.openContactContextMenu(row.dataset.name, x, y);
-            });
-        }
-
-        const channelsEl = document.getElementById('serverChannelList');
-        if (channelsEl) {
-            this.bindMobileLongPress(channelsEl, '.server-channel[data-channel-id]', (btn) => {
-                if (btn.getAttribute('data-channel-kind') === 'voice') return;
-                const sid = btn.getAttribute('data-server-id');
-                const cid = btn.getAttribute('data-channel-id');
-                if (sid && cid) this.toggleMuteChannel(sid, cid);
             });
         }
     }
@@ -602,6 +602,8 @@ ZaliMixin(ZaliInterface, class {
         this.renderServerToolbar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
     }
 
     openSettingsView() {
@@ -630,6 +632,8 @@ ZaliMixin(ZaliInterface, class {
         this.closeMobileSidebar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
     }
 
     openHubView() {
@@ -648,6 +652,8 @@ ZaliMixin(ZaliInterface, class {
         this.renderHub();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
     }
 
     openZaliCoinView() {
@@ -665,6 +671,8 @@ ZaliMixin(ZaliInterface, class {
         this.closeMobileSidebar();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
+        // Whether the call strip shows depends on which tab is on screen.
+        this.renderVoiceCallStrip();
         this.refreshZaliCoinView();
     }
 });

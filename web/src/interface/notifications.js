@@ -551,6 +551,13 @@ ZaliMixin(ZaliInterface, class {
     }
 
     syncTaskbarBadge() {
+        // Every unread increment/reset already routes through here (see
+        // notifyBackgroundMessage, switchChat, setActiveChannel, setNavMode) —
+        // the segment nav badges piggyback on that same choke point instead of
+        // needing their own call site at every one of those spots. Must run
+        // unconditionally, before the native-only branch below: a browser/PWA
+        // session has no taskbar at all but still has the segment nav.
+        this.syncHubSegmentBadges();
         if (!this.nativeSupports('taskbarBadge')) return;
         this.postNativeMessage({
             type: NativeMessageTypes.SET_UNREAD_BADGE,
