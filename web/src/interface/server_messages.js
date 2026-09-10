@@ -534,12 +534,10 @@ ZaliMixin(ZaliInterface, class {
         const chatHdrSub = document.getElementById('chatHdrSub');
         const chatCallBtn = document.getElementById('chatCallBtn');
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
-        const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         const tbChat = document.getElementById('tbChat');
         const server = this.currentServer();
         const channel = this.currentChannel();
         const isServers = this.S.navMode === 'servers';
-        const canManage = this.canManageServer(server);
 
         if (chatHdr) chatHdr.classList.toggle('server-mode', isServers);
         // Servers are the rail of avatars; it hides itself outside servers mode.
@@ -549,10 +547,6 @@ ZaliMixin(ZaliInterface, class {
         }
         if (chatVideoCallBtn) {
             chatVideoCallBtn.hidden = isServers || !this.S.current;
-        }
-        if (serverSettingsBtn) {
-            serverSettingsBtn.hidden = !isServers || !server || !canManage;
-            serverSettingsBtn.disabled = !canManage;
         }
         if (!isServers) {
             if (chatHdrAva) {
