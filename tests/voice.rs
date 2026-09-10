@@ -25,6 +25,50 @@ async fn connect_ws(app: &TestApp, user: &RegisteredUser) -> Ws {
     stream
 }
 
+async fn create_server(app: &TestApp, owner: &RegisteredUser, name: &str) -> String {
+    let resp = app
+        .http
+        .post(app.url("/api/servers"))
+        .header("Authorization", owner.auth_header())
+        .json(&serde_json::json!({ "name": name, "is_public": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "create_server({}) failed", name);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["id"].as_str().unwrap().to_string()
+}
+
+/// Creates a voice channel and returns its id. Channel creation replies with the
+/// full channel list, not the one just created, so the new channel is picked out by
+/// kind + name.
+async fn create_voice_channel(
+    app: &TestApp,
+    owner: &RegisteredUser,
+    server_id: &str,
+    name: &str,
+) -> String {
+    let resp = app
+        .http
+        .post(app.url(&format!("/api/servers/{}/channels", server_id)))
+        .header("Authorization", owner.auth_header())
+        .json(&serde_json::json!({ "name": name, "kind": "voice" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "create_voice_channel failed: {}", resp.status());
+    let channels: serde_json::Value = resp.json().await.unwrap();
+    channels
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name && c["kind"] == "voice")
+        .expect("created voice channel must be in the list")["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 async fn add_contact(app: &TestApp, user: &RegisteredUser, other: &str) {
     let resp = app
         .http
@@ -206,6 +250,118 @@ async fn dm_join_without_keepalive_still_reports_a_missing_room() {
     let events = drain_voice_events(&mut alice_ws, 400).await;
     let error = find_event(&events, "voice_error").expect("plain join must still report it");
     assert_eq!(error["code"], "room_not_found");
+}
+
+/// A channel keepalive is a membership *re-assert*, not a way to get put into the
+/// room in the first place — that distinction is what the dm_keepalive tests above
+/// already check for DM rooms, via contact/room-id authorisation. Channel rooms have
+/// no such check: `can_access_channel` alone gates a real join, and until this test
+/// existed a keepalive rode the same permission through `join_voice_room`, which
+/// cannot tell "known member reconnecting" from "stranger asking to be let in" — both
+/// look like an absent `user_voice_rooms` entry. A client whose local `voice.roomId`
+/// survived past the server's 150 s WS-close eviction (a laptop sleep, a Wi-Fi roam,
+/// any reconnect gap longer than that window) would silently rejoin the channel call
+/// on its very next presence tick, with nothing the user did to ask for it.
+#[tokio::test]
+async fn channel_keepalive_does_not_resurrect_a_room_you_left() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let room_id = format!("voice:channel:{}:{}", server_id, channel_id);
+
+    let mut ws = connect_ws(&app, &alice).await;
+
+    // A real join is always allowed and puts alice in the room.
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+        }),
+    )
+    .await;
+    let events = drain_voice_events(&mut ws, 400).await;
+    let state = find_event(&events, "voice_room_state").expect("real join must succeed");
+    assert_eq!(state["participants"], serde_json::json!(["alice"]));
+
+    // She leaves explicitly — the same call the 150 s WS-close cleanup makes on a
+    // real timeout, so this exercises the exact server-side state a stale reconnect
+    // would find.
+    send(&mut ws, serde_json::json!({ "type": "voice_leave" })).await;
+    let _ = drain_voice_events(&mut ws, 200).await;
+
+    // Her client's local voice.roomId is still this room (nothing told it otherwise),
+    // so its presence timer keeps firing — a keepalive for a room she is no longer
+    // a member of must be refused, not silently grant her membership back.
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+            "keepalive": true,
+        }),
+    )
+    .await;
+    let events = drain_voice_events(&mut ws, 400).await;
+    assert!(
+        find_event(&events, "voice_room_state").is_none(),
+        "keepalive must not resurrect membership after an explicit leave: {events:?}"
+    );
+    let error = find_event(&events, "voice_error").expect("must be told the room is gone");
+    assert_eq!(error["code"], "room_not_found");
+}
+
+/// The self-heal a channel keepalive exists for: a still-current member's presence
+/// tick must keep working, refreshing their own membership without needing to
+/// rejoin explicitly.
+#[tokio::test]
+async fn channel_keepalive_refreshes_membership_while_still_in_the_room() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let room_id = format!("voice:channel:{}:{}", server_id, channel_id);
+
+    let mut ws = connect_ws(&app, &alice).await;
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+        }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": room_id,
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+            "keepalive": true,
+        }),
+    )
+    .await;
+    let events = drain_voice_events(&mut ws, 400).await;
+    assert!(
+        find_event(&events, "voice_error").is_none(),
+        "a keepalive from a still-current member must not be refused: {events:?}"
+    );
+    let state = find_event(&events, "voice_room_state").expect("membership must be reaffirmed");
+    assert_eq!(state["participants"], serde_json::json!(["alice"]));
 }
 
 /// Every `voice_error` carries a machine-readable `code`. The client ends a call on

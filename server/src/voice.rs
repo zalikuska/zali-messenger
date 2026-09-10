@@ -587,6 +587,40 @@ pub(crate) async fn handle_voice_event(
                         return;
                     }
                 }
+                // A keepalive re-asserts membership the server already granted; it must
+                // never be what PUTS someone into the room in the first place — that is
+                // an explicit (non-keepalive) join's job, already authorised above by
+                // can_access_channel. Without this check, a client whose local
+                // voice.roomId survived past the 150 s WS-close eviction in realtime.rs
+                // (a laptop sleep, a Wi-Fi roam, any reconnect gap longer than that
+                // window) silently rejoined the channel's call on its very next
+                // presence tick — mic re-captured, call strip back up — with nothing
+                // the user did to ask for it. join_voice_room has no way to tell "known
+                // member reconnecting" from "stranger asking to be let in": both look
+                // like an absent user_voice_rooms entry, so the distinction has to be
+                // made here, same as the dm branch below already does for the same
+                // reason.
+                if keepalive {
+                    let still_member = state
+                        .voice_rooms
+                        .get(&room_id)
+                        .map(|room| room.participants.contains(sender))
+                        .unwrap_or(false);
+                    if !still_member {
+                        send_json_to_user(
+                            state,
+                            sender,
+                            serde_json::json!({
+                                "type": "voice_error",
+                                "roomId": room_id,
+                                "code": "room_not_found",
+                                "message": "Голосовой канал больше не активен для вас",
+                            }),
+                        )
+                        .await;
+                        return;
+                    }
+                }
             } else if room_type == "dm" {
                 // Three situations, and only the first one used to be handled:
                 //   - the room exists and lists us: ordinary re-join;

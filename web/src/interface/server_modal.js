@@ -750,7 +750,7 @@ ZaliMixin(ZaliInterface, class {
         }).join('');
     }
 
-    async openServerModal(mode = 'create', serverId = null) {
+    async openServerModal(mode = 'create', serverId = null, section = null) {
         const nextMode = mode === 'edit' ? 'edit' : 'create';
         const sid = nextMode === 'edit' ? String(serverId || this.S.activeServer || '').trim() : null;
         const server = sid ? (this.S.servers || []).find(item => item.id === sid) : null;
@@ -760,11 +760,15 @@ ZaliMixin(ZaliInterface, class {
         const selectedChannelId = nextMode === 'edit'
             ? ((this.S.activeServer === sid ? this.S.activeChannel : null) || server?.channels?.[0]?.id || null)
             : null;
+        const requestedSection = String(section || '').trim();
+        const openSection = nextMode === 'edit' && this.serverModalSectionsForMode('edit').includes(requestedSection)
+            ? requestedSection
+            : 'overview';
 
         this.setServerModalState({
             mode: nextMode,
             serverId: sid,
-            activeSection: nextMode === 'edit' ? 'overview' : 'overview',
+            activeSection: nextMode === 'edit' ? openSection : 'overview',
             colorPickers: {},
             roleCreateOpen: false,
             channelCreateOpen: false,

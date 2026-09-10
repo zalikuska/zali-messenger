@@ -12298,7 +12298,7 @@ ZaliMixin(ZaliInterface, class {
         }).join('');
     }
 
-    async openServerModal(mode = 'create', serverId = null) {
+    async openServerModal(mode = 'create', serverId = null, section = null) {
         const nextMode = mode === 'edit' ? 'edit' : 'create';
         const sid = nextMode === 'edit' ? String(serverId || this.S.activeServer || '').trim() : null;
         const server = sid ? (this.S.servers || []).find(item => item.id === sid) : null;
@@ -12308,11 +12308,15 @@ ZaliMixin(ZaliInterface, class {
         const selectedChannelId = nextMode === 'edit'
             ? ((this.S.activeServer === sid ? this.S.activeChannel : null) || server?.channels?.[0]?.id || null)
             : null;
+        const requestedSection = String(section || '').trim();
+        const openSection = nextMode === 'edit' && this.serverModalSectionsForMode('edit').includes(requestedSection)
+            ? requestedSection
+            : 'overview';
 
         this.setServerModalState({
             mode: nextMode,
             serverId: sid,
-            activeSection: nextMode === 'edit' ? 'overview' : 'overview',
+            activeSection: nextMode === 'edit' ? openSection : 'overview',
             colorPickers: {},
             roleCreateOpen: false,
             channelCreateOpen: false,
@@ -13384,7 +13388,118 @@ ZaliMixin(ZaliInterface, class {
                 // server there should show its channels, not jump into a chat.
                 this.setActiveServer(serverId, { keepMobileList: rail.id === 'serverRailSidebar' });
             });
+            // Настройки сервера и список участников переехали сюда с
+            // одиночной кнопки-шестерёнки в шапке (та стояла посреди верхней
+            // полосы и терялась там). ПКМ по аватарке сервера — то же место,
+            // где пользователь уже ищет действия над сервером.
+            rail.addEventListener('contextmenu', (e) => {
+                const item = e.target.closest('.server-rail-item[data-server-id]');
+                if (!item) return;
+                e.preventDefault();
+                this.hideServerRailTip();
+                const serverId = item.getAttribute('data-server-id');
+                if (serverId) this.openServerRailContextMenu(serverId, e.clientX, e.clientY);
+            });
         }
+    }
+
+    closeServerRailContextMenu() {
+        const existing = document.getElementById('serverRailContextMenu');
+        if (existing) existing.remove();
+        if (this._serverRailContextMenuOutsideHandler) {
+            document.removeEventListener('click', this._serverRailContextMenuOutsideHandler);
+            document.removeEventListener('contextmenu', this._serverRailContextMenuOutsideHandler);
+            this._serverRailContextMenuOutsideHandler = null;
+        }
+        if (this._serverRailContextMenuKeyHandler) {
+            document.removeEventListener('keydown', this._serverRailContextMenuKeyHandler, true);
+            this._serverRailContextMenuKeyHandler = null;
+        }
+    }
+
+    // Только для владельца/админа — ровно та же граница, что раньше решала,
+    // виден ли #serverSettingsBtn вообще (renderServerToolbar). У остальных
+    // участников ПКМ по серверу молча ничего не делает.
+    openServerRailContextMenu(serverId, x, y) {
+        this.closeServerRailContextMenu();
+        const sid = String(serverId || '').trim();
+        if (!sid) return;
+        const server = (this.S.servers || []).find(s => s.id === sid);
+        if (!server || !this.canManageServer(server)) return;
+
+        const menu = document.createElement('div');
+        menu.id = 'serverRailContextMenu';
+        menu.className = 'peer-context-menu';
+        menu.setAttribute('role', 'menu');
+        menu.tabIndex = -1;
+        menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="settings">
+                ${this.uiIcon('gear')}<span>Настройки сервера</span>
+            </button>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="members">
+                ${this.uiIcon('user')}<span>Список участников</span>
+            </button>
+        `;
+        document.body.appendChild(menu);
+
+        // Тот же разворот от курсора с зажимом в окно, что у контекстного
+        // меню контакта (openContactContextMenu) — offsetWidth/Height, а не
+        // getBoundingClientRect(), по той же причине: первый кадр ещё под
+        // анимацией появления (scale(.965)).
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        const pad = 8;
+        const flipX = x + width + pad > window.innerWidth && x - width > pad;
+        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
+        const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
+
+        menu.querySelector('[data-action="settings"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.openServerModal('edit', sid, 'overview');
+        });
+        menu.querySelector('[data-action="members"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.openServerModal('edit', sid, 'members');
+        });
+
+        const items = () => Array.from(menu.querySelectorAll('.peer-context-menu-item'));
+        const keyHandler = (evt) => {
+            if (!menu.isConnected) return;
+            if (evt.key === 'Escape') {
+                evt.preventDefault();
+                this.closeServerRailContextMenu();
+                return;
+            }
+            if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp') return;
+            const list = items();
+            if (!list.length) return;
+            evt.preventDefault();
+            const current = list.indexOf(document.activeElement);
+            const step = evt.key === 'ArrowDown' ? 1 : -1;
+            const next = current < 0
+                ? (step > 0 ? 0 : list.length - 1)
+                : (current + step + list.length) % list.length;
+            list[next].focus();
+        };
+        this._serverRailContextMenuKeyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler, true);
+        menu.focus({ preventScroll: true });
+
+        const outsideHandler = (evt) => {
+            if (menu.contains(evt.target)) return;
+            this.closeServerRailContextMenu();
+        };
+        this._serverRailContextMenuOutsideHandler = outsideHandler;
+        // Тик отложен по той же причине, что у openContactContextMenu: иначе
+        // тот же contextmenu, что открыл меню, сразу же его и закрывает.
+        setTimeout(() => {
+            document.addEventListener('click', outsideHandler);
+            document.addEventListener('contextmenu', outsideHandler);
+        }, 0);
     }
 
     // --- tooltip -------------------------------------------------------------
@@ -19051,12 +19166,10 @@ ZaliMixin(ZaliInterface, class {
         const chatHdrSub = document.getElementById('chatHdrSub');
         const chatCallBtn = document.getElementById('chatCallBtn');
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
-        const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         const tbChat = document.getElementById('tbChat');
         const server = this.currentServer();
         const channel = this.currentChannel();
         const isServers = this.S.navMode === 'servers';
-        const canManage = this.canManageServer(server);
 
         if (chatHdr) chatHdr.classList.toggle('server-mode', isServers);
         // Servers are the rail of avatars; it hides itself outside servers mode.
@@ -19066,10 +19179,6 @@ ZaliMixin(ZaliInterface, class {
         }
         if (chatVideoCallBtn) {
             chatVideoCallBtn.hidden = isServers || !this.S.current;
-        }
-        if (serverSettingsBtn) {
-            serverSettingsBtn.hidden = !isServers || !server || !canManage;
-            serverSettingsBtn.disabled = !canManage;
         }
         if (!isServers) {
             if (chatHdrAva) {
@@ -24303,8 +24412,6 @@ ZaliMixin(ZaliInterface, class {
         if (chatCallBtn) chatCallBtn.hidden = !this.S.current;
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
         if (chatVideoCallBtn) chatVideoCallBtn.hidden = !this.S.current;
-        const serverSettingsBtn = document.getElementById('serverSettingsBtn');
-        if (serverSettingsBtn) serverSettingsBtn.hidden = true;
 
         if (wasServers) {
             this.renderServerInterface();
@@ -29740,7 +29847,6 @@ ZaliMixin(ZaliInterface, class {
     /** Настройки, сетевая конфигурация и модалка сервера. Вызывается только из bindEvents(). */
     bindSettingsEvents() {
         const settingsBtn = document.getElementById('settingsBtn');
-        const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         const serverOverlay = document.getElementById('serverOverlay');
         const serverModalClose = document.getElementById('serverModalClose');
         const serverModalCancel = document.getElementById('serverModalCancel');
@@ -29956,13 +30062,6 @@ ZaliMixin(ZaliInterface, class {
                 const revokeBtn = e.target.closest('[data-device-revoke]');
                 if (revokeBtn) {
                     this.revokeTrustedDevice(revokeBtn.getAttribute('data-device-revoke'));
-                }
-            });
-        }
-        if (serverSettingsBtn) {
-            serverSettingsBtn.addEventListener('click', () => {
-                if (this.canManageServer()) {
-                    this.openServerModal('edit', this.S.activeServer);
                 }
             });
         }

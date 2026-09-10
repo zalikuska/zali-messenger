@@ -678,7 +678,6 @@ ZaliMixin(ZaliInterface, class {
     /** Настройки, сетевая конфигурация и модалка сервера. Вызывается только из bindEvents(). */
     bindSettingsEvents() {
         const settingsBtn = document.getElementById('settingsBtn');
-        const serverSettingsBtn = document.getElementById('serverSettingsBtn');
         const serverOverlay = document.getElementById('serverOverlay');
         const serverModalClose = document.getElementById('serverModalClose');
         const serverModalCancel = document.getElementById('serverModalCancel');
@@ -894,13 +893,6 @@ ZaliMixin(ZaliInterface, class {
                 const revokeBtn = e.target.closest('[data-device-revoke]');
                 if (revokeBtn) {
                     this.revokeTrustedDevice(revokeBtn.getAttribute('data-device-revoke'));
-                }
-            });
-        }
-        if (serverSettingsBtn) {
-            serverSettingsBtn.addEventListener('click', () => {
-                if (this.canManageServer()) {
-                    this.openServerModal('edit', this.S.activeServer);
                 }
             });
         }

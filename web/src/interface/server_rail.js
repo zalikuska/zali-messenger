@@ -77,7 +77,118 @@ ZaliMixin(ZaliInterface, class {
                 // server there should show its channels, not jump into a chat.
                 this.setActiveServer(serverId, { keepMobileList: rail.id === 'serverRailSidebar' });
             });
+            // Настройки сервера и список участников переехали сюда с
+            // одиночной кнопки-шестерёнки в шапке (та стояла посреди верхней
+            // полосы и терялась там). ПКМ по аватарке сервера — то же место,
+            // где пользователь уже ищет действия над сервером.
+            rail.addEventListener('contextmenu', (e) => {
+                const item = e.target.closest('.server-rail-item[data-server-id]');
+                if (!item) return;
+                e.preventDefault();
+                this.hideServerRailTip();
+                const serverId = item.getAttribute('data-server-id');
+                if (serverId) this.openServerRailContextMenu(serverId, e.clientX, e.clientY);
+            });
         }
+    }
+
+    closeServerRailContextMenu() {
+        const existing = document.getElementById('serverRailContextMenu');
+        if (existing) existing.remove();
+        if (this._serverRailContextMenuOutsideHandler) {
+            document.removeEventListener('click', this._serverRailContextMenuOutsideHandler);
+            document.removeEventListener('contextmenu', this._serverRailContextMenuOutsideHandler);
+            this._serverRailContextMenuOutsideHandler = null;
+        }
+        if (this._serverRailContextMenuKeyHandler) {
+            document.removeEventListener('keydown', this._serverRailContextMenuKeyHandler, true);
+            this._serverRailContextMenuKeyHandler = null;
+        }
+    }
+
+    // Только для владельца/админа — ровно та же граница, что раньше решала,
+    // виден ли #serverSettingsBtn вообще (renderServerToolbar). У остальных
+    // участников ПКМ по серверу молча ничего не делает.
+    openServerRailContextMenu(serverId, x, y) {
+        this.closeServerRailContextMenu();
+        const sid = String(serverId || '').trim();
+        if (!sid) return;
+        const server = (this.S.servers || []).find(s => s.id === sid);
+        if (!server || !this.canManageServer(server)) return;
+
+        const menu = document.createElement('div');
+        menu.id = 'serverRailContextMenu';
+        menu.className = 'peer-context-menu';
+        menu.setAttribute('role', 'menu');
+        menu.tabIndex = -1;
+        menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="settings">
+                ${this.uiIcon('gear')}<span>Настройки сервера</span>
+            </button>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="members">
+                ${this.uiIcon('user')}<span>Список участников</span>
+            </button>
+        `;
+        document.body.appendChild(menu);
+
+        // Тот же разворот от курсора с зажимом в окно, что у контекстного
+        // меню контакта (openContactContextMenu) — offsetWidth/Height, а не
+        // getBoundingClientRect(), по той же причине: первый кадр ещё под
+        // анимацией появления (scale(.965)).
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        const pad = 8;
+        const flipX = x + width + pad > window.innerWidth && x - width > pad;
+        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
+        const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
+
+        menu.querySelector('[data-action="settings"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.openServerModal('edit', sid, 'overview');
+        });
+        menu.querySelector('[data-action="members"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.openServerModal('edit', sid, 'members');
+        });
+
+        const items = () => Array.from(menu.querySelectorAll('.peer-context-menu-item'));
+        const keyHandler = (evt) => {
+            if (!menu.isConnected) return;
+            if (evt.key === 'Escape') {
+                evt.preventDefault();
+                this.closeServerRailContextMenu();
+                return;
+            }
+            if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp') return;
+            const list = items();
+            if (!list.length) return;
+            evt.preventDefault();
+            const current = list.indexOf(document.activeElement);
+            const step = evt.key === 'ArrowDown' ? 1 : -1;
+            const next = current < 0
+                ? (step > 0 ? 0 : list.length - 1)
+                : (current + step + list.length) % list.length;
+            list[next].focus();
+        };
+        this._serverRailContextMenuKeyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler, true);
+        menu.focus({ preventScroll: true });
+
+        const outsideHandler = (evt) => {
+            if (menu.contains(evt.target)) return;
+            this.closeServerRailContextMenu();
+        };
+        this._serverRailContextMenuOutsideHandler = outsideHandler;
+        // Тик отложен по той же причине, что у openContactContextMenu: иначе
+        // тот же contextmenu, что открыл меню, сразу же его и закрывает.
+        setTimeout(() => {
+            document.addEventListener('click', outsideHandler);
+            document.addEventListener('contextmenu', outsideHandler);
+        }, 0);
     }
 
     // --- tooltip -------------------------------------------------------------

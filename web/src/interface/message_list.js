@@ -502,8 +502,6 @@ ZaliMixin(ZaliInterface, class {
         if (chatCallBtn) chatCallBtn.hidden = !this.S.current;
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
         if (chatVideoCallBtn) chatVideoCallBtn.hidden = !this.S.current;
-        const serverSettingsBtn = document.getElementById('serverSettingsBtn');
-        if (serverSettingsBtn) serverSettingsBtn.hidden = true;
 
         if (wasServers) {
             this.renderServerInterface();
