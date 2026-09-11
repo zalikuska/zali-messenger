@@ -180,6 +180,7 @@ ZaliMixin(ZaliInterface, class {
         }
         const cached = state.data ? null : await this.loadCachedProfile(name);
         if (cached && this.ensureProfileState().username === name && !this.ensureProfileState().data) {
+            if (this.rememberSenderDisplayName(name, cached.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
                 error: '',
@@ -211,6 +212,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json();
             void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
+            if (this.rememberSenderDisplayName(name, data?.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
                 error: '',
@@ -351,6 +353,7 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const data = await res.json();
+            if (this.rememberSenderDisplayName(state.username, data?.displayName)) this.scheduleRenderMessages();
             const kept = Array.isArray(data?.links) ? data.links.length : 0;
             const dropped = outgoingLinks.length - kept;
             if (dropped > 0) {
