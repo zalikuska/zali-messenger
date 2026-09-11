@@ -254,11 +254,11 @@ ZaliMixin(ZaliInterface, class {
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
             msgsEl.addEventListener('click', (e) => {
-                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
-                if (avaTarget) {
+                const profileTarget = e.target.closest('[data-profile-open]');
+                if (profileTarget) {
                     e.preventDefault();
                     e.stopPropagation();
-                    const name = avaTarget.getAttribute('data-profile-open');
+                    const name = profileTarget.getAttribute('data-profile-open');
                     if (name) void this.openProfile(name);
                     return;
                 }
@@ -290,11 +290,11 @@ ZaliMixin(ZaliInterface, class {
                 this.hideReactionMenu();
             });
             msgsEl.addEventListener('contextmenu', (e) => {
-                // ПКМ по аватарке — меню человека (подписаться, в друзья),
-                // а не меню сообщения: реакция к аватарке отношения не имеет.
-                const avaTarget = e.target.closest('.msg-ava[data-profile-open]');
-                if (avaTarget) {
-                    const name = avaTarget.getAttribute('data-profile-open');
+                // ПКМ по аватарке или нику — меню человека (подписаться, в друзья),
+                // а не меню сообщения: реакция к отправителю отношения не имеет.
+                const profileTarget = e.target.closest('[data-profile-open]');
+                if (profileTarget) {
+                    const name = profileTarget.getAttribute('data-profile-open');
                     if (name) {
                         e.preventDefault();
                         e.stopPropagation();

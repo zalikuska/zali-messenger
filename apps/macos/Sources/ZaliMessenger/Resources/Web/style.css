@@ -5425,6 +5425,36 @@ body[data-nav-mode="servers"] .contacts {
     align-items: flex-end;
 }
 
+.msg-sender {
+    display: block;
+    max-width: 100%;
+    margin: 0 2px 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--lime);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+    letter-spacing: .01em;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.msg.out .msg-sender {
+    text-align: right;
+    color: var(--text2);
+}
+
+.msg-sender:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
 .msg-time-anchor {
     position: relative;
 }
@@ -6396,11 +6426,27 @@ body[data-nav-mode="servers"] .contacts {
     margin: 10px 0;
 }
 
+.notice-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    max-width: min(560px, 84%);
+}
+
+.msg.notice .msg-sender {
+    margin: 0;
+    color: var(--text2);
+    font-size: 11px;
+    font-weight: 800;
+    text-align: center;
+}
+
 .notice-pill {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    max-width: min(560px, 84%);
+    max-width: 100%;
     padding: 7px 14px;
     border-radius: 999px;
     border: 1px dashed rgba(255,255,255,.14);

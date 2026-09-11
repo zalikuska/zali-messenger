@@ -282,6 +282,15 @@ ZaliMixin(ZaliInterface, class {
             // bubble so they read as distinct from a human-written message with the
             // same wording. See detectSystemNotice() for the caveat on what this
             // does and doesn't guarantee.
+            const showSender = this.shouldShowMessageSender(msg, {
+                isOut,
+                isCall,
+                isNotice,
+                groupPos: item.groupPos,
+                isServers,
+            });
+            const senderLabelHtml = showSender ? this.renderMessageSenderLabel(msg) : '';
+
             if (isNotice) {
                 if (noticeType === 'decrypt-error') {
                     // Queued, not awaited-and-fired here: see
@@ -299,9 +308,12 @@ ZaliMixin(ZaliInterface, class {
                     });
                 }
                 html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
-                    <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
-                        <span class="notice-icon" aria-hidden="true">${noticeType === 'transfer' ? '💸' : '🔐'}</span>
-                        <span class="notice-text">${this.renderMessageText(msg.text)}</span>
+                    <div class="notice-stack">
+                        ${senderLabelHtml}
+                        <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
+                            <span class="notice-icon" aria-hidden="true">${noticeType === 'transfer' ? '💸' : '🔐'}</span>
+                            <span class="notice-text">${this.renderMessageText(msg.text)}</span>
+                        </div>
                     </div>
                 </div>`;
                 return;
@@ -322,6 +334,7 @@ ZaliMixin(ZaliInterface, class {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
                 html += `<div class="bwrap image-caption-wrap">
+                    ${senderLabelHtml}
                     <div class="image-caption-media">${mediaHtml}</div>
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageReactions(msg)}
@@ -338,6 +351,7 @@ ZaliMixin(ZaliInterface, class {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
+                ${senderLabelHtml}
                 ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;

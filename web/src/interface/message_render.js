@@ -369,6 +369,47 @@ ZaliMixin(ZaliInterface, class {
         return '';
     }
 
+    // Ник над пузырём. Логин всегда есть в msg.sender; отображаемое имя
+    // подставляется, только если профиль уже открывали или сохраняли на этом
+    // устройстве — отдельный запрос на каждое сообщение в ленте не делается.
+    messageSenderLabel(username) {
+        const name = String(username || '').trim();
+        if (!name) return '';
+        const mapped = this._senderDisplayNames?.get(name.toLowerCase());
+        return mapped || name;
+    }
+
+    rememberSenderDisplayName(username, displayName) {
+        const name = String(username || '').trim();
+        if (!name) return false;
+        this._senderDisplayNames = this._senderDisplayNames || new Map();
+        const key = name.toLowerCase();
+        const label = String(displayName || '').trim();
+        const next = label && label !== name ? label : '';
+        const prev = this._senderDisplayNames.get(key) || '';
+        if (next) this._senderDisplayNames.set(key, next);
+        else this._senderDisplayNames.delete(key);
+        return prev !== next;
+    }
+
+    shouldShowMessageSender(msg, { isOut = false, isCall = false, isNotice = false, groupPos = 'single', isServers = false } = {}) {
+        if (isCall) return false;
+        const sender = String(msg?.sender || '').trim();
+        if (!sender) return false;
+        if (isNotice) return true;
+        if (groupPos !== 'single' && groupPos !== 'start') return false;
+        if (isOut && !isServers) return false;
+        return true;
+    }
+
+    renderMessageSenderLabel(msg) {
+        const sender = String(msg?.sender || '').trim();
+        if (!sender) return '';
+        const label = this.messageSenderLabel(sender);
+        const title = label === sender ? `Профиль: ${sender}` : `${label} (@${sender})`;
+        return `<button type="button" class="msg-sender" data-profile-open="${this.esc(sender)}" title="${this.esc(title)}">${this.esc(label)}</button>`;
+    }
+
     renderMessageBody(msg) {
         if (msg?.kind === 'call') {
             return this.renderCallMessage(msg);
