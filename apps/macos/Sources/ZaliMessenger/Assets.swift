@@ -5418,10 +5418,12 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .msg-ava {
-    width: 28px;
-    height: 28px;
+    /* 42px = same box height as a single-line .bubble: 2×10px padding +
+       2×1px border + 14px font × 1.45 line-height (all from .bubble above). */
+    width: 42px;
+    height: 42px;
     margin-top: 0;
-    font-size: 11px;
+    font-size: 16px;
 }
 
 .server-msg-ava {
@@ -8515,6 +8517,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border: 0;
         background: var(--bg);
         display: flex;
+"""#,
+    #"""
         flex-direction: column;
         padding: 0;
         box-shadow: none;
@@ -8522,8 +8526,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     body.mobile-list-visible .sidebar { box-shadow: none; }
 
     .sidebar-head {
-"""#,
-    #"""
         position: sticky;
         top: 0;
         z-index: 5;
@@ -8777,8 +8779,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .msg.out .msg-time { color: rgba(15,20,0,.5); }
     .msg.time-visible .msg-time { opacity: .6; }
 
-    /* Received-message avatar sits at the bottom of the last bubble in a group. */
-    #viewChat .msg-ava { width: 30px; height: 30px; font-size: 12px; }
+    /* Received-message avatar sits at the bottom of the last bubble in a group.
+       36px = single-line mobile .bubble height: 7px+6px padding + 2px border +
+       14px font × 1.45 line-height (mobile only overrides bubble padding above). */
+    #viewChat .msg-ava { width: 36px; height: 36px; font-size: 14px; }
 
     /* Composer becomes a single rounded pill: round attach / coin / send inside. */
     #viewChat .input-bar {

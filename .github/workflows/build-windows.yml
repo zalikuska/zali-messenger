@@ -28,6 +28,14 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      # Caches ~/.cargo/registry, ~/.cargo/git and apps/windows/target, keyed off
+      # Cargo.lock — without this every run re-downloads and rebuilds the whole
+      # dependency tree (wry, tao, tokio, windows-sys, ...) from scratch.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/windows -> target"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
