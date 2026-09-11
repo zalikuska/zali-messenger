@@ -2962,13 +2962,19 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 #viewChat .input-area {
+    /* Full-bleed: the blurred backdrop must cover the whole dock (edge to
+       edge, down to the window's bottom) — it used to be a floating card
+       inset 12px on both sides and sitting 12px above the bottom edge, so
+       the underlying (unblurred) chat content showed through those margins
+       instead of being blurred. The old 12px side inset moves into padding
+       so .input-bar's content still sits the same distance from the edges. */
     position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: var(--footer-dock-gap);
+    left: 0;
+    right: 0;
+    bottom: 0;
     min-height: var(--footer-dock-h);
     margin: 0;
-    padding: 7px 0;
+    padding: 7px 12px;
     border-top: 0;
     z-index: 2;
     background: transparent;
@@ -9189,7 +9195,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     color: var(--profile-accent);
 }
 
-.profile-head-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+/* border-radius: inherit + its own overflow:hidden, not just reliance on the
+   parent's clip: .profile-head-ava's box height comes from `aspect-ratio: 1`
+   resolving against a `height: 100%` that itself depends on a sibling grid
+   column (see the comment above .profile-head-ava) — a resize path some
+   WebKit builds don't re-run the ancestor's rounded clip mask for, leaving a
+   frame around an image whose corners poke past the border arc. Clipping the
+   img directly makes it correct regardless of how the parent's box resolved. */
+.profile-head-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; overflow: hidden; }
 
 .profile-name { margin: 0; font-size: 24px; line-height: 1.2; }
 .profile-handle { color: var(--text2); font-size: 13px; margin-top: 2px; }

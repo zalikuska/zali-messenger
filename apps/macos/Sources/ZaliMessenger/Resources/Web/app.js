@@ -21275,7 +21275,7 @@ ZaliMixin(ZaliInterface, class {
         })();
     }
 
-    async executeAuth(mode, username, password, { logAttempt = true } = {}) {
+    async executeAuth(mode, username, password, { logAttempt = true, silent = false } = {}) {
         const errorBox = document.getElementById('authError');
         this.S.auth.loading = true;
         this.updateAuthView();
@@ -21335,7 +21335,7 @@ ZaliMixin(ZaliInterface, class {
                             ts: new Date().toLocaleTimeString()
                         });
 
-                        const recovered = await this.executeAuth('login', username, password, { logAttempt: false });
+                        const recovered = await this.executeAuth('login', username, password, { logAttempt: false, silent: true });
                         if (recovered) {
                             this.addLogEntry({
                                 type: 'SUCCESS',
@@ -21412,8 +21412,17 @@ ZaliMixin(ZaliInterface, class {
             const friendly = /load failed|failed to fetch|network error|abort/i.test(raw)
                 ? `Не удалось связаться с сервером (${apiBaseUrl}). Проверь адрес или запусти backend.`
                 : raw;
-            this.S.auth.error = friendly;
-            if (errorBox) errorBox.textContent = friendly;
+            // silent: this is the register-flow's internal "maybe it's already my
+            // account" login probe, not a user-facing login attempt — its own
+            // generic "Неверный логин или пароль" (deliberately the same wording
+            // for a wrong password AND an unknown username, see login()'s comment
+            // in server/src/auth.rs) must never reach the visible error box: it
+            // would mask the real, more useful "логин уже занят" that the outer
+            // register call is about to show once this recovery attempt fails.
+            if (!silent) {
+                this.S.auth.error = friendly;
+                if (errorBox) errorBox.textContent = friendly;
+            }
             if (mode === 'register') {
                 this.addLogEntry({
                     type: 'ERROR',

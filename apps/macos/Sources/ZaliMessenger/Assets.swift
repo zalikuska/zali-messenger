@@ -2988,13 +2988,19 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 #viewChat .input-area {
+    /* Full-bleed: the blurred backdrop must cover the whole dock (edge to
+       edge, down to the window's bottom) — it used to be a floating card
+       inset 12px on both sides and sitting 12px above the bottom edge, so
+       the underlying (unblurred) chat content showed through those margins
+       instead of being blurred. The old 12px side inset moves into padding
+       so .input-bar's content still sits the same distance from the edges. */
     position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: var(--footer-dock-gap);
+    left: 0;
+    right: 0;
+    bottom: 0;
     min-height: var(--footer-dock-h);
     margin: 0;
-    padding: 7px 0;
+    padding: 7px 12px;
     border-top: 0;
     z-index: 2;
     background: transparent;
@@ -8501,6 +8507,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
            .main's background is already transparent on mobile, so there is
            nothing left for the blur to do anyway. */
         backdrop-filter: none;
+"""#,
+    #"""
         -webkit-backdrop-filter: none;
         box-shadow: none;
     }
@@ -8517,8 +8525,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         border: 0;
         background: var(--bg);
         display: flex;
-"""#,
-    #"""
         flex-direction: column;
         padding: 0;
         box-shadow: none;
@@ -9217,7 +9223,14 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     color: var(--profile-accent);
 }
 
-.profile-head-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+/* border-radius: inherit + its own overflow:hidden, not just reliance on the
+   parent's clip: .profile-head-ava's box height comes from `aspect-ratio: 1`
+   resolving against a `height: 100%` that itself depends on a sibling grid
+   column (see the comment above .profile-head-ava) — a resize path some
+   WebKit builds don't re-run the ancestor's rounded clip mask for, leaving a
+   frame around an image whose corners poke past the border arc. Clipping the
+   img directly makes it correct regardless of how the parent's box resolved. */
+.profile-head-ava .avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; overflow: hidden; }
 
 .profile-name { margin: 0; font-size: 24px; line-height: 1.2; }
 .profile-handle { color: var(--text2); font-size: 13px; margin-top: 2px; }
@@ -32641,7 +32654,7 @@ ZaliMixin(ZaliInterface, class {
         })();
     }
 
-    async executeAuth(mode, username, password, { logAttempt = true } = {}) {
+    async executeAuth(mode, username, password, { logAttempt = true, silent = false } = {}) {
         const errorBox = document.getElementById('authError');
         this.S.auth.loading = true;
         this.updateAuthView();
@@ -32701,7 +32714,7 @@ ZaliMixin(ZaliInterface, class {
                             ts: new Date().toLocaleTimeString()
                         });
 
-                        const recovered = await this.executeAuth('login', username, password, { logAttempt: false });
+                        const recovered = await this.executeAuth('login', username, password, { logAttempt: false, silent: true });
                         if (recovered) {
                             this.addLogEntry({
                                 type: 'SUCCESS',
@@ -32778,8 +32791,17 @@ ZaliMixin(ZaliInterface, class {
             const friendly = /load failed|failed to fetch|network error|abort/i.test(raw)
                 ? `Не удалось связаться с сервером (${apiBaseUrl}). Проверь адрес или запусти backend.`
                 : raw;
-            this.S.auth.error = friendly;
-            if (errorBox) errorBox.textContent = friendly;
+            // silent: this is the register-flow's internal "maybe it's already my
+            // account" login probe, not a user-facing login attempt — its own
+            // generic "Неверный логин или пароль" (deliberately the same wording
+            // for a wrong password AND an unknown username, see login()'s comment
+            // in server/src/auth.rs) must never reach the visible error box: it
+            // would mask the real, more useful "логин уже занят" that the outer
+            // register call is about to show once this recovery attempt fails.
+            if (!silent) {
+                this.S.auth.error = friendly;
+                if (errorBox) errorBox.textContent = friendly;
+            }
             if (mode === 'register') {
                 this.addLogEntry({
                     type: 'ERROR',
@@ -36676,6 +36698,8 @@ ZaliMixin(ZaliInterface, class {
                 : msgs.findIndex(m =>
                     m.sender === sender &&
                     m.text === incomingText &&
+"""#,
+    #"""
                     this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey
                 );
             if (existingIndex >= 0) {
@@ -36688,8 +36712,6 @@ ZaliMixin(ZaliInterface, class {
                     receiver: receiver || prev.receiver || '',
                     text: incomingText || prev.text || '',
                     attachments: incomingAttachments.length ? incomingAttachments : this.normalizeAttachments(prev.attachments),
-"""#,
-    #"""
                     reactions: incomingReactions.length ? incomingReactions : this.normalizeReactions(prev.reactions),
                     myReactions: this.normalizeMyReactions(myReactions?.length ? myReactions : prev.myReactions),
                     timestamp: ts || prev.timestamp || new Date().toISOString(),
@@ -40693,6 +40715,8 @@ ZaliMixin(ZaliInterface, class {
         this.bindContactAddEvents();                      // добавление контакта и подсказки
         this.bindComposerEvents();                        // композер, вложения, перевод ZaliCoin, модалка обновления
         this.bindMessageInputEvents();                    // поле ввода: ввод, вставка, drag-and-drop
+"""#,
+    #"""
         this.bindSearchAndModeEvents();                   // поиск, переключение режима и сегментов хаба
         this.bindAuthEvents();                            // экран входа: форма, сеть, гость
         this.bindSettingsEvents();                        // настройки, сетевая конфигурация и модалка сервера
@@ -40703,8 +40727,6 @@ ZaliMixin(ZaliInterface, class {
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
     }
 
-"""#,
-    #"""
     /** Списки контактов и каналов сервера. Вызывается только из bindEvents(). */
     bindContactListEvents() {
         // 1. Click on contacts

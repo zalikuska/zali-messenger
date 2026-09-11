@@ -485,11 +485,12 @@ pub(crate) async fn register(
         .await
     {
         Ok(Some(_)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "Такой логин уже занят"})),
-            )
-                .into_response();
+            // Plain text, not Json(...) — every other rejection in this handler
+            // (empty/too-long/invalid username, weak password) responds with a
+            // plain string, and the client reads the body via res.text() without
+            // parsing JSON. A JSON body here used to surface to the user as the
+            // literal string `{"error":"..."}` instead of readable text.
+            return (StatusCode::CONFLICT, "Такой логин уже занят").into_response();
         }
         Ok(None) => {}
         Err(e) => {

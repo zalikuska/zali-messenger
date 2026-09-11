@@ -22,8 +22,8 @@ android {
         // (MAJOR.MINOR{a|b|r}BUILD) в него не укладывается — считаем как
         // MAJOR*10000 + MINOR*1000 + BUILD: 0.2b33 → 2033. Порядок сохраняется, пока
         // BUILD < 1000, чего с запасом хватает.
-        versionCode = 2038
-        versionName = "0.2b38"
+        versionCode = 2040
+        versionName = "0.2b40"
     }
 
     buildTypes {
