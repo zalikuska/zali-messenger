@@ -46,7 +46,15 @@ async fn assert_supply_conserved(app: &TestApp, viewer: &RegisteredUser) {
         .map(|h| h["balance"].as_i64().unwrap())
         .sum();
     let held = body["held"].as_i64().unwrap();
-    assert_eq!(holders + held, SUPPLY, "supply leaked: holders={} held={}", holders, held);
+    let treasuries = body["treasuries"].as_i64().unwrap();
+    assert_eq!(
+        holders + held + treasuries,
+        SUPPLY,
+        "supply leaked: holders={} held={} treasuries={}",
+        holders,
+        held,
+        treasuries
+    );
 }
 
 /// Приватный сервер zalikus'а с участниками `members`; возвращает (server_id, channel_id).

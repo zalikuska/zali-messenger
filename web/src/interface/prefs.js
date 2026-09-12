@@ -163,7 +163,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     loadAudioPrefs() {
-        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, peerVolumePercents: {} };
+        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {} };
         try {
             const raw = localStorage.getItem(this.audioPrefsStorageKey());
             if (!raw) return fallback;
@@ -172,6 +172,11 @@ ZaliMixin(ZaliInterface, class {
                 micDeviceId: String(parsed?.micDeviceId || ''),
                 speakerDeviceId: String(parsed?.speakerDeviceId || ''),
                 masterVolumePercent: Number.isFinite(parsed?.masterVolumePercent) ? Math.max(0, Math.min(200, parsed.masterVolumePercent)) : 100,
+                // Отдельная от masterVolumePercent громкость: та живёт на графе
+                // звонка (remote <audio>.volume), эта — на synth-графе звука
+                // уведомлений (soundBus). Один и тот же процент на оба означал
+                // бы, что звонок и звук нового сообщения нельзя развести.
+                notificationVolumePercent: Number.isFinite(parsed?.notificationVolumePercent) ? Math.max(0, Math.min(200, parsed.notificationVolumePercent)) : 100,
                 peerVolumePercents: (parsed?.peerVolumePercents && typeof parsed.peerVolumePercents === 'object') ? parsed.peerVolumePercents : {},
             };
         } catch (e) {
@@ -208,6 +213,33 @@ ZaliMixin(ZaliInterface, class {
         this.applyMasterVolume();
         const label = document.getElementById('masterVolumeValue');
         if (label) label.textContent = `${clamped}%`;
+    }
+
+    notificationVolumeFactor() {
+        const percent = Number.isFinite(this.audioPrefs?.notificationVolumePercent) ? this.audioPrefs.notificationVolumePercent : 100;
+        return Math.max(0, Math.min(2, percent / 100));
+    }
+
+    setNotificationVolumePercent(percent) {
+        const clamped = Math.max(0, Math.min(200, Math.round(Number(percent) || 0)));
+        this.audioPrefs.notificationVolumePercent = clamped;
+        this.saveAudioPrefs();
+        this.applyNotificationVolume();
+        const label = document.getElementById('notificationVolumeValue');
+        if (label) label.textContent = `${clamped}%`;
+    }
+
+    // soundBus() кеширует узел master на этом графе, поэтому смена настройки
+    // между двумя звуками не пересоздаёт граф — она обязана дотянуться до
+    // уже существующего gain-узла и переставить его прямо во время игры.
+    applyNotificationVolume() {
+        const bus = this.sound?.bus;
+        // Прямое присваивание, а не setValueAtTime(..., ctx.currentTime): это
+        // не звуковая автоматизация внутри ноты (там нужна точность до сэмпла
+        // при currentTime), а мгновенная реакция на слайдер настроек — и на
+        // движке, где currentTime не продвигается, пока рендер-граф не
+        // "тикнул", запланированное на "сейчас" значение молча не подхватится.
+        if (bus?.master) bus.master.gain.value = 0.9 * this.notificationVolumeFactor();
     }
 
     // Both sliders end up as one element volume. HTMLMediaElement.volume saturates
@@ -268,6 +300,75 @@ ZaliMixin(ZaliInterface, class {
         const volumeLabel = document.getElementById('masterVolumeValue');
         if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.masterVolumePercent}%`;
         this.refreshAudioDeviceOptions();
+    }
+
+    renderNotificationVolumeSettings() {
+        const volumeInput = document.getElementById('inputNotificationVolume');
+        if (volumeInput) volumeInput.value = String(this.audioPrefs.notificationVolumePercent);
+        const volumeLabel = document.getElementById('notificationVolumeValue');
+        if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.notificationVolumePercent}%`;
+    }
+
+    // ============================================================
+    // Карточка «Обновления» в настройках: текущая версия + ручная проверка.
+    // Автопроверка (checkForAppUpdate, updates.js) идёт при каждом входе и
+    // сама решает, показывать ли модалку; этой кнопке при этом ЕЩЁ нужно
+    // самой сообщить результат — «версия последняя» — иначе тишина в ответ
+    // на явный клик читалась бы как «не сработало».
+    // ============================================================
+
+    currentAppVersionLabel() {
+        const version = String(window.__ZALI_NATIVE_APP_VERSION || '').trim();
+        return version ? `v${version}` : 'веб-версия';
+    }
+
+    renderUpdateSettings() {
+        const note = document.getElementById('appVersionNote');
+        if (note) note.textContent = this.currentAppVersionLabel();
+        const statusText = document.getElementById('appUpdateStatusText');
+        const btn = document.getElementById('checkForUpdatesBtn');
+        const supported = this.hasNativeBridge() && this.nativeSupports('appUpdate');
+        if (btn) btn.disabled = !supported || !!this._checkingForUpdates;
+        if (!statusText) return;
+        if (this._checkingForUpdates) {
+            statusText.textContent = 'Проверяем…';
+            return;
+        }
+        if (!supported) {
+            statusText.textContent = 'Проверка версии доступна в приложении для macOS и Windows.';
+            return;
+        }
+        const status = this.S.updateStatus || {};
+        if (status.available) {
+            statusText.textContent = `Доступно обновление v${status.version}. Открыть карточку в Хабе, чтобы установить.`;
+        } else if (this._lastUpdateCheckFailed) {
+            statusText.textContent = 'Не удалось проверить обновления — нет связи с сервером. Попробуйте ещё раз.';
+        } else if (this._lastUpdateCheckAt) {
+            statusText.textContent = 'У вас установлена последняя версия.';
+        } else {
+            statusText.textContent = 'Нажмите «Проверить обновления», чтобы узнать, есть ли новая версия.';
+        }
+    }
+
+    // Обёртка над checkForAppUpdate() специально для явного клика: сама
+    // функция молчит, если обновления нет (она рассчитана на тихую проверку
+    // при каждом входе) — здесь же нужен видимый ответ на «не пришло
+    // ничего», иначе кнопка выглядела бы сломанной.
+    async checkForAppUpdateFromSettings() {
+        if (this._checkingForUpdates) return;
+        this._checkingForUpdates = true;
+        this.renderUpdateSettings();
+        // checkForAppUpdate() глотает сбои сети и сервера, поэтому «версия
+        // последняя» можно показывать только после определённого ответа.
+        let checked = false;
+        try {
+            checked = (await this.checkForAppUpdate()) === true;
+        } finally {
+            this._checkingForUpdates = false;
+            this._lastUpdateCheckFailed = !checked;
+            if (checked) this._lastUpdateCheckAt = Date.now();
+            this.renderUpdateSettings();
+        }
     }
 
     async setAudioInputDevice(deviceId) {

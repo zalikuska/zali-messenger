@@ -199,6 +199,9 @@ const DefaultApiRoutes = Object.freeze({
         role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
         invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
         permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
+        treasury: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury`),
+        treasuryDeposit: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/deposit`),
+        treasuryPayout: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/payout`),
     },
     profiles: {
         byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
@@ -226,6 +229,8 @@ const DefaultApiRoutes = Object.freeze({
         myGifts: apiRoute('/coins/gifts/mine'),
         giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
         giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
+        managedTreasuries: apiRoute('/coins/treasuries/managed'),
+        serverPayouts: apiRoute('/coins/server-payouts'),
     },
 });
 
@@ -244,7 +249,8 @@ const DefaultApiRoutes = Object.freeze({
  *   native_bridge.js        300 /  24  Мост к нативной оболочке: доступность, IPC, разрешения, трассировка.
  *   viewport.js             324 /  17  Окно прокрутки списка сообщений, класс производительности, якоря скролла.
  *   mobile.js               575 /  20  Мобильная раскладка, жесты навигации, переключение экранов.
- *   zalicoin.js             993 /  49  Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах.
+ *   zalicoin.js            1040 /  51  Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах.
+ *   treasury.js             430 /  18  Казна сервера: пополнение, выплаты людям/серверам/ролям.
  *   prefs.js                452 /  39  Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба.
  *   storage.js              405 /  31  Ключи localStorage, кэш сообщений, персист контактов.
  *   conversation_keys.js    762 /  44  Реестр ключей разговоров и облачный vault-снапшот.

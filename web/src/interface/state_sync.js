@@ -65,6 +65,16 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Казна сервера (server/src/treasury.rs): новый остаток и выплата вам с сервера.
+        if (type === 'server_treasury_updated') {
+            this.handleTreasuryRealtime(payload);
+            return true;
+        }
+        if (type === 'coin_server_payout') {
+            this.handleServerPayoutRealtime(payload);
+            return true;
+        }
+
         if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
             // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
             // событие в каждое соединение аккаунта. Голосовой сокет пропускает

@@ -63,6 +63,8 @@ mod push;
 pub(crate) use push::*;
 mod coins;
 pub(crate) use coins::*;
+mod treasury;
+pub(crate) use treasury::*;
 mod updates;
 pub(crate) use updates::*;
 mod diagnostics;
@@ -1094,6 +1096,20 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         );
         sqlx::query(&query).execute(&pool).await.ok();
     }
+    // Право «Казна» (treasury.rs). Админ распоряжается казной независимо от флага,
+    // но у его встроенной роли флаг ставится, чтобы редактор ролей не показывал
+    // выключенную галочку. Только в момент появления колонки — повторный старт
+    // ALTER'а падает, и настройки, сделанные руками, не перетираются.
+    if sqlx::query("ALTER TABLE server_roles ADD COLUMN can_manage_treasury INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await
+        .is_ok()
+    {
+        sqlx::query("UPDATE server_roles SET can_manage_treasury = 1 WHERE role_id = 'admin'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS server_invites (
@@ -1373,6 +1389,68 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы coin_gift_claims");
+
+    // ---- Казна серверов (treasury.rs) ----
+    // Отдельная таблица, а не строка в coin_balances под особым именем: id
+    // сервера делил бы пространство имён с логинами пользователей.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS server_treasuries (
+            server_id TEXT PRIMARY KEY,
+            balance INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы server_treasuries");
+    // Журнал операций казны. Имена источника и адресата — снимок на момент
+    // операции, чтобы история не теряла смысл после переименования/удаления.
+    // UNIQUE(actor, idempotency_key) — повтор запроса не проводит операцию дважды.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS treasury_operations (
+            id TEXT PRIMARY KEY,
+            actor TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            target_name TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            recipients INTEGER NOT NULL DEFAULT 0,
+            total INTEGER NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            idempotency_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(actor, idempotency_key)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы treasury_operations");
+    for index in [
+        "CREATE INDEX IF NOT EXISTS idx_treasury_operations_source ON treasury_operations (source_kind, source_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_treasury_operations_target ON treasury_operations (target_kind, target_id, created_at)",
+    ] {
+        sqlx::query(index).execute(&pool).await.ok();
+    }
+    // Выплаты с сервера людям — раздел «От серверов» на экране ZaliCoin.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS treasury_payouts (
+            operation_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (operation_id, username)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы treasury_payouts");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_treasury_payouts_username ON treasury_payouts (username, created_at)")
+        .execute(&pool)
+        .await
+        .ok();
 
     // ---- Профили, подписки, дружба, комментарии и автографы ----
     // Строка в user_profiles создаётся лениво, при первом сохранении: до этого
@@ -1802,6 +1880,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/coins/gifts/mine", get(get_my_active_coin_gifts))
         .route("/api/coins/gifts/:gift_id/claim", post(claim_coin_gift))
         .route("/api/coins/gifts/:gift_id/cancel", post(cancel_coin_gift))
+        .route("/api/coins/treasuries/managed", get(get_managed_treasuries))
+        .route("/api/coins/server-payouts", get(get_my_server_payouts))
+        .route("/api/servers/:server_id/treasury", get(get_server_treasury))
+        .route("/api/servers/:server_id/treasury/deposit", post(deposit_to_treasury))
+        .route("/api/servers/:server_id/treasury/payout", post(payout_from_treasury))
         .route("/api/version", get(get_latest_version).post(publish_version))
         .route("/api/announcement", post(publish_announcement))
         .route("/health", get(health_check))

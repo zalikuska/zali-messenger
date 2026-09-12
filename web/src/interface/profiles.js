@@ -180,6 +180,7 @@ ZaliMixin(ZaliInterface, class {
         }
         const cached = state.data ? null : await this.loadCachedProfile(name);
         if (cached && this.ensureProfileState().username === name && !this.ensureProfileState().data) {
+            this.rememberContactRelation(name, cached);
             if (this.rememberSenderDisplayName(name, cached.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
@@ -212,6 +213,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json();
             void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
+            this.rememberContactRelation(name, data);
             if (this.rememberSenderDisplayName(name, data?.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
@@ -400,6 +402,7 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const data = await res.json();
+            this.rememberContactRelation(name, data);
             if (this.ensureProfileState().username === name) {
                 this.setProfileState({ busy: '', data, error: '' });
             } else {
@@ -431,6 +434,13 @@ ZaliMixin(ZaliInterface, class {
                     : `Не удалось изменить подписку на ${name}`,
                 ts: new Date().toLocaleTimeString(),
             });
+            if (res.ok) {
+                // Действие вызывается из контекстного меню, которое к этому
+                // моменту уже закрыто, — но новое состояние подписки точно
+                // известно уже сейчас. Без этого следующее открытие меню
+                // снова показывало бы старую подпись до ответа сервера.
+                this.rememberContactRelation(name, { ...this.getCachedContactRelation(name), isFollowing: !unfollow });
+            }
             if (res.ok && this.ensureProfileState().username === name) await this.refreshProfile();
         } catch (e) {
             this.addLogEntry({ type: 'ERROR', msg: `Не удалось изменить подписку на ${name}`, ts: new Date().toLocaleTimeString() });
@@ -464,6 +474,9 @@ ZaliMixin(ZaliInterface, class {
                 msg: body?.status === 'accepted' ? `Теперь вы друзья с ${name}` : `Заявка в друзья отправлена: ${name}`,
                 ts: new Date().toLocaleTimeString(),
             });
+            this.rememberContactRelation(name, body?.status === 'accepted'
+                ? { ...this.getCachedContactRelation(name), isFriend: true, friendRequest: null }
+                : { ...this.getCachedContactRelation(name), friendRequest: { direction: 'outgoing' } });
             this.setProfileState({ busy: '' });
             if (this.ensureProfileState().username === name) await this.refreshProfile();
             void this.loadFriendRequests();
@@ -489,6 +502,7 @@ ZaliMixin(ZaliInterface, class {
             const body = await res.json().catch(() => ({}));
             if (body?.status === 'accepted' && body?.friend) {
                 this.addLogEntry({ type: 'SUCCESS', msg: `Теперь вы друзья с ${body.friend}`, ts: new Date().toLocaleTimeString() });
+                this.rememberContactRelation(body.friend, { ...this.getCachedContactRelation(body.friend), isFriend: true, friendRequest: null });
             }
             await this.loadFriendRequests();
             if (this.ensureProfileState().username) await this.refreshProfile();
@@ -506,6 +520,7 @@ ZaliMixin(ZaliInterface, class {
                 interactive: true,
             });
             if (!res.ok) return;
+            this.rememberContactRelation(name, { ...this.getCachedContactRelation(name), isFriend: false, friendRequest: null });
             await this.loadFriendRequests();
             if (this.ensureProfileState().username) await this.refreshProfile();
         } catch (e) {

@@ -1,9 +1,10 @@
 //! ZaliCoin: a fixed-supply (100 000) in-app currency ledger. Coins only ever
 //! move between existing users via `transfer_coins` and channel gift cards
-//! (`coin_gifts`) — nothing mints or burns them after `seed_zalicoin` grants
-//! the whole supply to `zalikus` on first run (see `storage.rs`), so
-//! `SUM(balance)` in `coin_balances` plus everything on hold in active gift
-//! cards is invariant.
+//! (`coin_gifts`) and server treasuries (`treasury.rs`) — nothing mints or
+//! burns them after `seed_zalicoin` grants the whole supply to `zalikus` on
+//! first run (see `storage.rs`), so `SUM(balance)` in `coin_balances` plus
+//! every server treasury plus everything on hold in active gift cards is
+//! invariant.
 //!
 //! Anti-dupe: every transfer is wrapped in a single `BEGIN IMMEDIATE`
 //! transaction (balance check + both-side balance mutation + ledger insert),
@@ -74,6 +75,9 @@ pub(crate) struct CoinDistributionResponse {
     /// Всё, что сейчас лежит на удержании в активных карточках, — отдельной
     /// строкой, иначе эти монеты выглядели бы в статистике «нераспределёнными».
     held: i64,
+    /// Сумма всех казн серверов (treasury.rs). Одной строкой, без разбивки: имена
+    /// чужих приватных серверов в общую статистику не выносим.
+    treasuries: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,18 +144,22 @@ pub(crate) async fn get_coin_distribution(
     )
     .fetch_one(&state.db)
     .await;
+    let treasuries = sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(balance), 0) FROM server_treasuries")
+        .fetch_one(&state.db)
+        .await;
 
-    match (rows, held) {
-        (Ok(rows), Ok(held)) => Json(CoinDistributionResponse {
+    match (rows, held, treasuries) {
+        (Ok(rows), Ok(held), Ok(treasuries)) => Json(CoinDistributionResponse {
             total_supply: ZALICOIN_TOTAL_SUPPLY,
             holders: rows
                 .into_iter()
                 .map(|(username, balance)| CoinHolder { username, balance })
                 .collect(),
             held,
+            treasuries,
         })
         .into_response(),
-        (Err(e), _) | (_, Err(e)) => {
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
             error!("Ошибка чтения распределения ZaliCoin: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -463,7 +471,7 @@ fn coin_gift_error(status: StatusCode, code: &str, message: &str, gift: Option<C
 
 /// Результат транзакции: коммитить ли её. Отказы (нет денег, уже активировано)
 /// откатываются, чтобы не оставлять после себя ни одной частичной записи.
-trait CoinTxOutcome {
+pub(crate) trait CoinTxOutcome {
     fn commits(&self) -> bool;
 }
 
@@ -472,7 +480,7 @@ trait CoinTxOutcome {
 /// Отдельная задача — не украшение: axum роняет future хендлера, когда клиент
 /// рвёт соединение, и такой drop между `BEGIN IMMEDIATE` и `COMMIT` вернул бы в
 /// пул соединение с удерживаемой блокировкой записи sqlite (см. hash_chain.rs).
-async fn run_immediate_tx<T, F, Fut>(pool: SqlitePool, body: F) -> Result<T, sqlx::Error>
+pub(crate) async fn run_immediate_tx<T, F, Fut>(pool: SqlitePool, body: F) -> Result<T, sqlx::Error>
 where
     T: CoinTxOutcome + Send + 'static,
     F: FnOnce(PoolConnection<Sqlite>) -> Fut + Send + 'static,

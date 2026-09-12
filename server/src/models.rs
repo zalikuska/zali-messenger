@@ -126,6 +126,7 @@ pub(crate) struct ServerRoleRecord {
     pub(crate) can_voice: i64,
     pub(crate) can_kick: i64,
     pub(crate) can_ban: i64,
+    pub(crate) can_manage_treasury: i64,
     pub(crate) position: i64,
     pub(crate) created_at: DateTime<Utc>,
 }
@@ -165,6 +166,9 @@ pub(crate) struct ServerRoleResponse {
     pub(crate) can_kick: bool,
     #[serde(rename = "canBan")]
     pub(crate) can_ban: bool,
+    /// Распоряжаться казной сервера (treasury.rs). Владелец и админ могут всегда.
+    #[serde(rename = "canManageTreasury")]
+    pub(crate) can_manage_treasury: bool,
     pub(crate) position: i64,
 }
 
@@ -393,6 +397,7 @@ pub(crate) struct ServerRolePayload {
     pub(crate) can_voice: Option<bool>,
     pub(crate) can_kick: Option<bool>,
     pub(crate) can_ban: Option<bool>,
+    pub(crate) can_manage_treasury: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

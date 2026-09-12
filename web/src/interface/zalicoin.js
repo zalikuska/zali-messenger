@@ -27,7 +27,12 @@ ZaliMixin(ZaliInterface, class {
     static get COIN_CHARGE_POP_STAGGER_MS() { return 90; }
 
     async refreshZaliCoinView() {
-        await Promise.all([this.loadZaliCoinBalance(), this.loadZaliCoinDistribution(), this.loadMyCoinGifts()]);
+        await Promise.all([
+            this.loadZaliCoinBalance(),
+            this.loadZaliCoinDistribution(),
+            this.loadMyCoinGifts(),
+            this.loadServerPayouts(),
+        ]);
         this.renderZaliCoinView();
     }
 
@@ -51,6 +56,7 @@ ZaliMixin(ZaliInterface, class {
             this.S.zaliCoinTotalSupply = Number(data.totalSupply) || 100000;
             this.S.zaliCoinHolders = Array.isArray(data.holders) ? data.holders : [];
             this.S.zaliCoinHeldTotal = Number(data.held) || 0;
+            this.S.zaliCoinTreasuriesTotal = Number(data.treasuries) || 0;
         } catch (e) {
             this.trace(`loadZaliCoinDistribution error=${e}`);
         }
@@ -98,6 +104,7 @@ ZaliMixin(ZaliInterface, class {
         const balance = this.S.zaliCoinBalance || 0;
         const holders = Array.isArray(this.S.zaliCoinHolders) ? this.S.zaliCoinHolders : [];
         const heldTotal = Math.max(0, Number(this.S.zaliCoinHeldTotal) || 0);
+        const treasuriesTotal = Math.max(0, Number(this.S.zaliCoinTreasuriesTotal) || 0);
         const me = this.myName();
 
         const balanceValue = document.getElementById('zaliCoinBalanceValue');
@@ -132,7 +139,7 @@ ZaliMixin(ZaliInterface, class {
         const restTotal = rest.reduce((sum, h) => sum + (Number(h.balance) || 0), 0);
         // Удержанное — не чей-то баланс, но и не «ничьё»: без него эти монеты
         // попадали бы в «Не распределено», хотя у них есть хозяин и назначение.
-        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal;
+        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal + treasuriesTotal;
         const unassigned = Math.max(0, totalSupply - accounted);
 
         const segments = top.map((holder, index) => ({
@@ -146,6 +153,10 @@ ZaliMixin(ZaliInterface, class {
         }
         if (heldTotal > 0) {
             segments.push({ label: 'На удержании', value: heldTotal, isMe: false, color: 'var(--zc-series-held)' });
+        }
+        // Казны — одной строкой: сервер не раскрывает, какие серверы сколько держат.
+        if (treasuriesTotal > 0) {
+            segments.push({ label: 'Казны серверов', value: treasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)' });
         }
         if (unassigned > 0) {
             segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)' });
@@ -174,6 +185,7 @@ ZaliMixin(ZaliInterface, class {
         }
 
         this.renderMyCoinGifts();
+        this.renderServerPayouts();
     }
 
     renderMyCoinGifts() {
@@ -200,6 +212,55 @@ ZaliMixin(ZaliInterface, class {
                     <span class="zc-gift-row-meta">${this.esc(meta)}</span>
                 </div>
                 <button type="button" class="zc-card-btn zc-gift-row-btn ${confirming ? 'is-confirm' : 'is-ghost'}" data-zc-gift-cancel="${this.esc(id)}"${pending ? ' disabled' : ''}><span>${label}</span></button>
+            </div>`;
+        }).join('');
+    }
+
+    // Выплаты из казны серверов (server/src/treasury.rs) — отдельный раздел, чтобы
+    // деньги «от сервера» не терялись среди переводов от людей.
+    async loadServerPayouts() {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.coins.serverPayouts, { interactive: true });
+            if (!res.ok) return;
+            const data = await res.json();
+            this.S.zaliCoinServerPayouts = Array.isArray(data.payouts) ? data.payouts : [];
+        } catch (e) {
+            this.trace(`loadServerPayouts error=${e}`);
+        }
+    }
+
+    renderServerPayouts() {
+        const list = document.getElementById('zaliCoinPayoutsList');
+        const total = document.getElementById('zaliCoinPayoutsTotal');
+        if (!list) return;
+        const payouts = Array.isArray(this.S.zaliCoinServerPayouts) ? this.S.zaliCoinServerPayouts : [];
+        if (total) {
+            const sum = payouts.reduce((acc, payout) => acc + (Number(payout.amount) || 0), 0);
+            total.textContent = sum > 0 ? `+${this.formatCoinAmount(sum)} ZC` : '';
+        }
+        if (!payouts.length) {
+            list.innerHTML = '<div class="zc-payouts-empty">Серверы пока ничего вам не перечисляли. Выплаты из казны сервера появятся здесь.</div>';
+            return;
+        }
+        list.innerHTML = payouts.map(payout => {
+            const server = (this.S.servers || []).find(item => item.id === payout.serverId);
+            const serverName = payout.serverName || server?.name || 'Сервер';
+            const avatar = server
+                ? this.renderServerAvatarHTML(server, 'zc-payout-avatar')
+                : `<span class="server-avatar zc-payout-avatar">${this.esc(serverName.slice(0, 1).toUpperCase())}</span>`;
+            const meta = [
+                payout.roleName ? `роль «${payout.roleName}»` : '',
+                payout.actor ? `выдал(а) ${payout.actor}` : '',
+                this.formatTreasuryTime(payout.createdAt),
+            ].filter(Boolean).join(' · ');
+            return `<div class="zc-payout-row">
+                ${avatar}
+                <div class="zc-gift-row-main">
+                    <span class="zc-payout-server">${this.esc(serverName)}</span>
+                    <span class="zc-gift-row-meta">${this.esc(meta)}</span>
+                    ${payout.note ? `<span class="zc-payout-note">${this.esc(payout.note)}</span>` : ''}
+                </div>
+                <span class="zc-payout-amount">+${this.formatCoinAmount(payout.amount)} ZC</span>
             </div>`;
         }).join('');
     }

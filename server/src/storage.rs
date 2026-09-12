@@ -552,6 +552,12 @@ pub(crate) async fn ensure_default_server_roles(
         .execute(pool)
         .await?;
     }
+    // Встроенный админ распоряжается казной всегда (treasury.rs::can_manage_treasury);
+    // флаг ставится, чтобы редактор ролей не показывал ему выключенную галочку.
+    sqlx::query("UPDATE server_roles SET can_manage_treasury = 1 WHERE server_id = ? AND role_id = 'admin'")
+        .bind(server_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

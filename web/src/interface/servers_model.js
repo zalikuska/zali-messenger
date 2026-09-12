@@ -129,6 +129,7 @@ ZaliMixin(ZaliInterface, class {
             { key: 'can_mention', label: '@everyone', hint: 'Упоминать всех участников', group: 'Управление', defaultCreate: false },
             { key: 'can_kick', label: 'Исключать', hint: 'Кикать участников из сервера', group: 'Управление', defaultCreate: false },
             { key: 'can_ban', label: 'Бан', hint: 'Блокировать участников', group: 'Управление', defaultCreate: false },
+            { key: 'can_manage_treasury', label: 'Казна', hint: 'Выплачивать ZaliCoin из казны сервера', group: 'Управление', defaultCreate: false },
         ];
     }
 
