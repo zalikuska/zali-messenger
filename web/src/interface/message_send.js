@@ -4,25 +4,34 @@
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
-    async sendInputMessage() {
+    async sendInputMessage(options = {}) {
+        // `systemText` — сообщение, которое приложение отправляет от имени
+        // пользователя (карточка ZaliCoin). Композер при этом не участвует вовсе:
+        // ни набранный черновик, ни прикреплённые файлы, ни открытая цитата не
+        // должны уехать вместе с карточкой или пропасть после неё.
+        const systemText = typeof options?.systemText === 'string' ? options.systemText.trim() : '';
+        const isSystemPost = !!systemText;
         // Editing takes over the composer, so the send control saves instead of
         // sending a new message.
-        if (this.S.editDraft) {
+        if (this.S.editDraft && !isSystemPost) {
             await this.submitMessageEdit();
             return;
         }
         const inp = document.getElementById('msgInput');
-        const textValue = (inp && inp.value) || '';
+        const textValue = isSystemPost ? systemText : ((inp && inp.value) || '');
         const text = textValue.trim();
-        const attachments = this.normalizeAttachments(this.S.draftAttachments);
+        const attachments = isSystemPost ? [] : this.normalizeAttachments(this.S.draftAttachments);
         if (!text && attachments.length === 0) return;
 
         // Snapshotted before the first await: the user can dismiss the reply bar
         // (or start another reply) while the key resolution below is in flight.
-        const replyQuote = this.S.replyDraft;
+        const replyQuote = isSystemPost ? null : this.S.replyDraft;
         const replyPayload = replyQuote ? JSON.stringify(replyQuote) : '';
 
-        const clientId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        // Карточка перевода ZaliCoin приходит со своим clientId: сервер привязал к нему
+        // перевод, и квитанция подтверждает только сообщение ровно с этим id.
+        const presetClientId = isSystemPost ? String(options?.clientId || '').trim() : '';
+        const clientId = presetClientId || ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
         const payloadAttachments = attachments.map(att => ({ ...att }));
         const ts = new Date().toISOString();
         const activeMode = this.currentConversationMode();
@@ -150,14 +159,7 @@ ZaliMixin(ZaliInterface, class {
             this.scheduleRenderMessages();
             this.renderContacts();
             this.renderServerInterface();
-            if (inp) {
-                inp.value = '';
-                this.resizeComposer();
-            }
-            this.clearDraftAttachments();
-            this.clearComposerReply(replyQuote);
-            this.updateSendButtonState();
-            inp && inp.focus();
+            if (!isSystemPost) this.resetComposerAfterSend(inp, replyQuote);
 
             // No native shell (macOS/Windows) around this WebView — we're running as a
             // plain browser tab. Pack the .zali archive ourselves via the WASM build of
@@ -217,15 +219,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderContacts();
         this.renderServerInterface();
 
-        if (inp) {
-            inp.value = '';
-            this.resizeComposer();
-        }
-
-        this.clearDraftAttachments();
-        this.clearComposerReply(replyQuote);
-        this.updateSendButtonState();
-        inp && inp.focus();
+        if (!isSystemPost) this.resetComposerAfterSend(inp, replyQuote);
 
         this.cachePendingOutboxAttachments(clientId, payloadAttachments);
         this.enqueuePendingOutbox({
@@ -268,6 +262,18 @@ ZaliMixin(ZaliInterface, class {
             this.addLogEntry({ type: 'WARN', msg: 'Native bridge не принял сообщение, оставлено в очереди повтора', ts: new Date().toLocaleTimeString() });
             this.scheduleFlushPendingOutbox(1000);
         }
+    }
+
+    /** Композер после отправки его содержимого: пустое поле, без вложений и цитаты. */
+    resetComposerAfterSend(inp, replyQuote) {
+        if (inp) {
+            inp.value = '';
+            this.resizeComposer();
+        }
+        this.clearDraftAttachments();
+        this.clearComposerReply(replyQuote);
+        this.updateSendButtonState();
+        inp && inp.focus();
     }
 
     // --- Browser-only (no native shell) send/receive path, backed by the WASM build

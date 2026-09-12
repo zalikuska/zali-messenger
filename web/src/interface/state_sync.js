@@ -57,6 +57,14 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Карточку ZaliCoin активировали или отменили (server/src/coins.rs).
+        // Без дедупликации: у одной карточки много разных обновлений, а
+        // applyCoinGiftState сам отбрасывает устаревшие.
+        if (type === 'coin_gift_updated') {
+            this.handleCoinGiftRealtime(payload);
+            return true;
+        }
+
         if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
             // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
             // событие в каждое соединение аккаунта. Голосовой сокет пропускает

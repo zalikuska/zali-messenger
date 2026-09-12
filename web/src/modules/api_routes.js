@@ -92,6 +92,12 @@
             balance: apiRoute('/coins/balance'),
             distribution: apiRoute('/coins/distribution'),
             transfer: apiRoute('/coins/transfer'),
+            transferReceipt: (id) => apiRoute(`/coins/transfers/${encodeURIComponent(id)}`),
+            gifts: apiRoute('/coins/gifts'),
+            giftsLookup: (ids) => apiRoute(`/coins/gifts?ids=${ids.map(encodeURIComponent).join(',')}`),
+            myGifts: apiRoute('/coins/gifts/mine'),
+            giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
+            giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
         },
         diagnostics: {
             decryptFailure: apiRoute('/diagnostics/decrypt-failure'),

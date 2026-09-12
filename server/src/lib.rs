@@ -1325,6 +1325,54 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    // clientId сообщения-карточки о переводе (см. coins.rs::CoinTransferRequest).
+    // NULL — перевод сделан до появления привязки, '' — карточки не было (кошелёк).
+    sqlx::query("ALTER TABLE coin_transactions ADD COLUMN card_client_id TEXT")
+        .execute(&pool)
+        .await
+        .ok();
+    // ZaliCoin-карточки в каналах: деньги уходят с баланса отправителя на
+    // удержание при создании и возвращаются ему только за неактивированные
+    // заряды (см. coins.rs). Удерживаемое = amount * (total_claims - claimed_count)
+    // у карточек в статусе 'active', поэтому отдельной колонки под него нет —
+    // её пришлось бы держать согласованной руками.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS coin_gifts (
+            id TEXT PRIMARY KEY,
+            sender TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            total_claims INTEGER NOT NULL,
+            claimed_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            idempotency_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            UNIQUE(sender, idempotency_key)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы coin_gifts");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_coin_gifts_sender_status ON coin_gifts (sender, status)")
+        .execute(&pool)
+        .await
+        .ok();
+    // PRIMARY KEY (gift_id, username) — это и есть «один заряд на аккаунт»:
+    // вторая активация тем же аккаунтом упирается в ключ даже в обход проверок.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS coin_gift_claims (
+            gift_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            claimed_at TEXT NOT NULL,
+            PRIMARY KEY (gift_id, username)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы coin_gift_claims");
 
     // ---- Профили, подписки, дружба, комментарии и автографы ----
     // Строка в user_profiles создаётся лениво, при первом сохранении: до этого
@@ -1749,6 +1797,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/coins/balance", get(get_coin_balance))
         .route("/api/coins/distribution", get(get_coin_distribution))
         .route("/api/coins/transfer", post(transfer_coins))
+        .route("/api/coins/transfers/:transfer_id", get(get_coin_transfer))
+        .route("/api/coins/gifts", get(lookup_coin_gifts).post(create_coin_gift))
+        .route("/api/coins/gifts/mine", get(get_my_active_coin_gifts))
+        .route("/api/coins/gifts/:gift_id/claim", post(claim_coin_gift))
+        .route("/api/coins/gifts/:gift_id/cancel", post(cancel_coin_gift))
         .route("/api/version", get(get_latest_version).post(publish_version))
         .route("/api/announcement", post(publish_announcement))
         .route("/health", get(health_check))

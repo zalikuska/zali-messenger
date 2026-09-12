@@ -220,6 +220,12 @@ const DefaultApiRoutes = Object.freeze({
         balance: apiRoute('/coins/balance'),
         distribution: apiRoute('/coins/distribution'),
         transfer: apiRoute('/coins/transfer'),
+        transferReceipt: (id) => apiRoute(`/coins/transfers/${encodeURIComponent(id)}`),
+        gifts: apiRoute('/coins/gifts'),
+        giftsLookup: (ids) => apiRoute(`/coins/gifts?ids=${ids.map(encodeURIComponent).join(',')}`),
+        myGifts: apiRoute('/coins/gifts/mine'),
+        giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
+        giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
     },
 });
 
@@ -238,7 +244,7 @@ const DefaultApiRoutes = Object.freeze({
  *   native_bridge.js        300 /  24  Мост к нативной оболочке: доступность, IPC, разрешения, трассировка.
  *   viewport.js             324 /  17  Окно прокрутки списка сообщений, класс производительности, якоря скролла.
  *   mobile.js               575 /  20  Мобильная раскладка, жесты навигации, переключение экранов.
- *   zalicoin.js             270 /  10  Экран ZaliCoin: баланс, распределение, переводы.
+ *   zalicoin.js             993 /  49  Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах.
  *   prefs.js                452 /  39  Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба.
  *   storage.js              405 /  31  Ключи localStorage, кэш сообщений, персист контактов.
  *   conversation_keys.js    762 /  44  Реестр ключей разговоров и облачный vault-снапшот.

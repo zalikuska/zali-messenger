@@ -556,6 +556,9 @@ ZaliMixin(ZaliInterface, class {
             if (outcome === 'cancelled') return `Отменённый звонок${peer ? ` · ${peer}` : ''}`;
             return `Звонок${peer ? ` · ${peer}` : ''}${duration ? ` · ${duration}` : ''}`;
         }
+        // Без этого превью показывало бы служебную строку с id операции.
+        const coinSummary = this.coinCardSummary(msg?.text);
+        if (coinSummary) return coinSummary;
         const attachments = this.normalizeAttachments(msg.attachments);
         if (attachments.length) {
             const first = attachments[0];
