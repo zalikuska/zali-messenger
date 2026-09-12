@@ -46,6 +46,10 @@ name = "coin_gifts"
 path = "../tests/coin_gifts.rs"
 
 [[test]]
+name = "treasury"
+path = "../tests/treasury.rs"
+
+[[test]]
 name = "profiles"
 path = "../tests/profiles.rs"
 

@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260912-rev35">
+    <link rel="stylesheet" href="style.css?v=20260912-rev37">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -334,6 +334,17 @@
                             <div class="zc-gifts-list" id="zaliCoinGiftsList"></div>
                         </section>
 
+                        <section class="settings-card zc-gifts-card zc-payouts-card" id="zaliCoinPayoutsCard">
+                            <div class="settings-card-head">
+                                <div>
+                                    <span class="settings-kicker">От серверов</span>
+                                    <h3 class="settings-card-title">Выплаты из казны серверов</h3>
+                                </div>
+                                <span class="zc-payouts-total" id="zaliCoinPayoutsTotal"></span>
+                            </div>
+                            <div class="zc-gifts-list" id="zaliCoinPayoutsList"></div>
+                        </section>
+
                         <section class="settings-card zc-distribution-card">
                             <div class="settings-card-head">
                                 <div>
@@ -478,6 +489,37 @@
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
                                     </label>
                                     <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Notifications</span>
+                                        <h3 class="settings-card-title">Звук уведомлений</h3>
+                                    </div>
+                                    <span class="settings-card-note">sound</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="settings-field">
+                                        <span>Громкость уведомлений: <span id="notificationVolumeValue">100%</span></span>
+                                        <input type="range" min="0" max="200" step="5" value="100" id="inputNotificationVolume" class="settings-range">
+                                    </label>
+                                    <p class="settings-help">Звук нового сообщения и рингтон входящего звонка. Не влияет на громкость собеседника в разговоре — та настраивается отдельно, в блоке «Микрофон и динамики».</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">App</span>
+                                        <h3 class="settings-card-title">Обновления</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="appVersionNote">—</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <p class="settings-help" id="appUpdateStatusText">Проверка версии доступна в приложении для macOS и Windows.</p>
+                                    <button class="btn-flat" id="checkForUpdatesBtn" type="button">Проверить обновления</button>
                                 </div>
                             </section>
 
@@ -648,6 +690,80 @@
                         <div class="coin-transfer-actions">
                             <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
                             <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="coin-transfer-modal treasury-modal" id="treasuryModal" role="dialog" aria-modal="true" aria-labelledby="treasuryTitle" hidden>
+                    <div class="coin-transfer-box treasury-box">
+                        <div class="coin-transfer-head">
+                            <div class="treasury-head-copy">
+                                <span class="settings-kicker" id="treasuryServerName">Сервер</span>
+                                <h2 id="treasuryTitle">Казна</h2>
+                            </div>
+                            <button class="avatar-crop-close" id="treasuryCloseBtn" type="button" aria-label="Закрыть">×</button>
+                        </div>
+                        <div class="treasury-balance">
+                            <span class="treasury-balance-value" id="treasuryBalanceValue">—</span>
+                            <span class="treasury-balance-unit">ZC</span>
+                            <span class="treasury-balance-label">в казне</span>
+                        </div>
+                        <div class="treasury-tabs" role="tablist">
+                            <button type="button" class="treasury-tab is-active" role="tab" data-treasury-tab="deposit">Пополнить</button>
+                            <button type="button" class="treasury-tab" role="tab" data-treasury-tab="payout" id="treasuryPayoutTab" hidden>Выплатить</button>
+                            <button type="button" class="treasury-tab" role="tab" data-treasury-tab="history">История</button>
+                        </div>
+                        <div class="treasury-pane" data-treasury-pane="deposit">
+                            <label class="coin-transfer-field">
+                                <span>Откуда</span>
+                                <select id="treasuryDepositSource"></select>
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span>Сумма (ZC)</span>
+                                <input type="number" id="treasuryDepositAmount" min="1" step="1" placeholder="0">
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span>Комментарий</span>
+                                <input type="text" id="treasuryDepositNote" maxlength="140" placeholder="Необязательно" autocomplete="off">
+                            </label>
+                            <p class="treasury-hint" id="treasuryDepositHint" hidden>Пополнить казну может любой участник. Выплачивают из неё владелец, админы и роли с правом «Казна».</p>
+                        </div>
+                        <div class="treasury-pane" data-treasury-pane="payout" hidden>
+                            <div class="treasury-seg" role="group" aria-label="Кому выплатить">
+                                <button type="button" class="is-active" data-treasury-target="user" aria-pressed="true">Человеку</button>
+                                <button type="button" data-treasury-target="server" aria-pressed="false">Серверу</button>
+                                <button type="button" data-treasury-target="role" aria-pressed="false">Роли</button>
+                            </div>
+                            <label class="coin-transfer-field" id="treasuryUserField">
+                                <span>Получатель</span>
+                                <input type="text" id="treasuryUserInput" list="treasuryMembersList" placeholder="username" autocomplete="off">
+                                <datalist id="treasuryMembersList"></datalist>
+                            </label>
+                            <label class="coin-transfer-field" id="treasuryServerField" hidden>
+                                <span>Сервер</span>
+                                <select id="treasuryServerSelect"></select>
+                            </label>
+                            <label class="coin-transfer-field" id="treasuryRoleField" hidden>
+                                <span>Роль</span>
+                                <select id="treasuryRoleSelect"></select>
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span id="treasuryPayoutAmountLabel">Сумма (ZC)</span>
+                                <input type="number" id="treasuryPayoutAmount" min="1" step="1" placeholder="0">
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span>Комментарий</span>
+                                <input type="text" id="treasuryPayoutNote" maxlength="140" placeholder="Необязательно — его увидят получатели" autocomplete="off">
+                            </label>
+                            <p class="coin-gift-summary" id="treasuryPayoutSummary" hidden></p>
+                        </div>
+                        <div class="treasury-pane" data-treasury-pane="history" hidden>
+                            <div class="treasury-history" id="treasuryHistory"></div>
+                        </div>
+                        <p class="coin-transfer-status" id="treasuryStatus" hidden></p>
+                        <div class="coin-transfer-actions">
+                            <button class="btn-flat" id="treasuryCancelBtn" type="button">Закрыть</button>
+                            <button class="auth-btn primary" id="treasurySubmitBtn" type="button">Пополнить</button>
                         </div>
                     </div>
                 </div>
@@ -1058,6 +1174,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260912-rev35"></script>
+    <script src="app.js?v=20260912-rev37"></script>
 </body>
 </html>

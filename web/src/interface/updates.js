@@ -106,6 +106,9 @@ ZaliMixin(ZaliInterface, class {
     // published well after this date) are compared normally regardless.
     static VERSION_SCHEME_MIGRATION_CUTOFF_UNIX = 1785542400; // 2026-08-01T00:00:00Z
 
+    // Возвращает true, только если сервер дал определённый ответ о версии.
+    // Любой сбой по-прежнему глотается молча — ручной проверке из настроек
+    // (checkForAppUpdateFromSettings) нужно отличить его от «версия последняя».
     async checkForAppUpdate() {
         if (!this.hasNativeBridge() || !this.nativeSupports('appUpdate')) return;
         const platform = String(window.__ZALI_NATIVE_PLATFORM || '').trim();
@@ -122,12 +125,12 @@ ZaliMixin(ZaliInterface, class {
                 && publishedAt > 0
                 && publishedAt <= ZaliInterface.VERSION_SCHEME_MIGRATION_CUTOFF_UNIX;
             if (isLegacyMigrationBump && this.isNewSchemeVersion(currentVersion)) {
-                return;
+                return true;
             }
             if (!latestVersion || this.compareVersions(latestVersion, currentVersion) <= 0) {
                 // We are running it — any earlier failed-install bookkeeping is stale.
                 this.clearUpdateInstallAttempts();
-                return;
+                return true;
             }
             // Reaching here after having already installed this exact version means the
             // install did not take. Keep the update reachable from the Hub, but stop
@@ -154,11 +157,12 @@ ZaliMixin(ZaliInterface, class {
             })();
             if (installKeepsFailing) {
                 this.trace(`checkForAppUpdate install keeps failing version=${latestVersion} attempts=${attempts.count}`);
-                return;
+                return true;
             }
             if (this.S.updateStatus.mandatory || declined !== latestVersion) {
                 this.openUpdateModal();
             }
+            return true;
         } catch (e) {
             this.trace(`checkForAppUpdate failed err=${e?.message || e}`);
         }

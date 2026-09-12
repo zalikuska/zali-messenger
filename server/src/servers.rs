@@ -3,7 +3,8 @@
 use crate::{
     channel_allows_action, create_server_role_record, ensure_default_server_roles,
     load_channels_for_server, load_server_role_permissions, load_server_role_record,
-    load_visible_channels_for_server, set_server_asset, AppState, AuthenticatedUser,
+    load_visible_channels_for_server, refund_treasury_to_owner, set_server_asset, AppState,
+    AuthenticatedUser,
     ChannelPermissionMap, ChannelRecord, ChannelResponse, InvitePayload, JoinInvitePayload,
     JoinServerLinkPayload, ServerInviteRecord, ServerInviteResponse, ServerListResponse,
     ServerMemberPayload, ServerMemberRecord, ServerMemberResponse, ServerPayload, ServerRecord,
@@ -440,7 +441,15 @@ pub(crate) async fn upsert_server_member(
     username: &str,
     role: &str,
 ) -> Result<(), sqlx::Error> {
-    let role = normalize_server_role(Some(role)).unwrap_or_else(|| "member".to_string());
+    // Кастомная роль приходит сюда уже проверенной (resolve_member_role_input), и
+    // нормализация не должна её стирать: раньше любая своя роль молча становилась
+    // `member`, то есть назначить её участнику было нельзя вовсе — ни права роли,
+    // ни выплата казны «всем с ролью» до участника не доходили.
+    let role = match normalize_server_role(Some(role)) {
+        Some(builtin) => builtin,
+        None if role.trim().is_empty() => "member".to_string(),
+        None => role.trim().to_string(),
+    };
     sqlx::query(
         "INSERT INTO server_members (server_id, username, role, joined_at)
          VALUES (?, ?, ?, ?)
@@ -1116,6 +1125,13 @@ pub(crate) async fn delete_server(
     {
         let _ = tx.rollback().await;
         error!("Ошибка удаления сообщений сервера {}: {}", server_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    // Казна не сгорает вместе с сервером: остаток уходит владельцу в этой же
+    // транзакции (treasury.rs), иначе монеты выпали бы из эмиссии навсегда.
+    if let Err(e) = refund_treasury_to_owner(&mut *tx, &server_id, &server.name, &server.owner).await {
+        let _ = tx.rollback().await;
+        error!("Ошибка возврата казны сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     if let Err(e) = sqlx::query(

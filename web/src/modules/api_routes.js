@@ -71,6 +71,9 @@
             role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
             permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
+            treasury: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury`),
+            treasuryDeposit: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/deposit`),
+            treasuryPayout: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/payout`),
         },
         profiles: {
             byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
@@ -98,6 +101,8 @@
             myGifts: apiRoute('/coins/gifts/mine'),
             giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
             giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
+            managedTreasuries: apiRoute('/coins/treasuries/managed'),
+            serverPayouts: apiRoute('/coins/server-payouts'),
         },
         diagnostics: {
             decryptFailure: apiRoute('/diagnostics/decrypt-failure'),

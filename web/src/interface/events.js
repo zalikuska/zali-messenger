@@ -759,6 +759,8 @@ ZaliMixin(ZaliInterface, class {
         const inputAudioMic = document.getElementById('inputAudioMic');
         const inputAudioSpeaker = document.getElementById('inputAudioSpeaker');
         const inputMasterVolume = document.getElementById('inputMasterVolume');
+        const inputNotificationVolume = document.getElementById('inputNotificationVolume');
+        const checkForUpdatesBtn = document.getElementById('checkForUpdatesBtn');
 
         const openAvatarPicker = () => {
             const input = document.createElement('input');
@@ -815,6 +817,8 @@ ZaliMixin(ZaliInterface, class {
             this.applyNetworkConfigToInputs();
             this.renderUiV2Settings();
             this.renderAudioDeviceSettings();
+            this.renderNotificationVolumeSettings();
+            this.renderUpdateSettings();
             // Карточку кеша рисует openSettingsView() — там же, где остальные
             // разделы настроек. Здесь её быть не должно: в настройки попадают
             // ещё и через нижнюю панель и через сегмент Хаба, и карточка,
@@ -835,6 +839,16 @@ ZaliMixin(ZaliInterface, class {
         if (inputMasterVolume) {
             inputMasterVolume.addEventListener('input', () => {
                 this.setMasterVolumePercent(inputMasterVolume.value);
+            });
+        }
+        if (inputNotificationVolume) {
+            inputNotificationVolume.addEventListener('input', () => {
+                this.setNotificationVolumePercent(inputNotificationVolume.value);
+            });
+        }
+        if (checkForUpdatesBtn) {
+            checkForUpdatesBtn.addEventListener('click', () => {
+                void this.checkForAppUpdateFromSettings();
             });
         }
         if (navigator.mediaDevices?.addEventListener) {

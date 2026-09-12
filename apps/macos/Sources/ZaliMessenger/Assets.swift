@@ -8221,6 +8221,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     /* Удержание — не держатель, а монеты «в пути» к получателям карточек:
        та же акцентная гамма, но штриховкой, чтобы не спутать с балансом. */
     --zc-series-held: repeating-linear-gradient(135deg, rgba(var(--accent-rgb), .55) 0 3px, rgba(var(--accent-rgb), .16) 3px 6px);
+    /* Казны серверов — у монет есть хозяин, но это не человек: штриховка
+       в другую сторону и мельче, чтобы не слиться с удержанием. */
+    --zc-series-treasury: repeating-linear-gradient(45deg, rgba(var(--accent-rgb), .42) 0 2px, rgba(var(--accent-rgb), .1) 2px 5px);
 }
 
 .zc-view {
@@ -8563,6 +8566,278 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     padding: 0 14px;
 }
 
+/* ---- «От серверов»: выплаты из казны ---- */
+.zc-payouts-total {
+    align-self: center;
+    color: rgb(var(--accent-rgb));
+    font-weight: 800;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+"""#,
+    #"""
+/* .zc-view — flex-колонка ограниченной высоты: без flex:none карточка
+   сжималась под соседей, и её собственный скролл срезал даже одну строку. */
+.zc-payouts-card {
+    flex: none;
+}
+
+.zc-payouts-card .zc-gifts-list {
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.zc-payouts-empty {
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.zc-payout-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.025);
+}
+
+.server-avatar.zc-payout-avatar {
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: 11px;
+    font-size: 14px;
+}
+
+.zc-payout-server {
+    color: var(--text);
+    font-weight: 700;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zc-payout-note {
+    color: var(--text2);
+    font-size: 12px;
+    font-style: italic;
+    overflow-wrap: anywhere;
+}
+
+.zc-payout-amount {
+    flex: none;
+    color: rgb(var(--accent-rgb));
+    font-weight: 800;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Казна сервера (ПКМ по серверу → «Казна») ----
+   Модалка переносится в <body> (treasury.js), поэтому fixed, а не absolute
+   внутри .main, как у модалки перевода. */
+.coin-transfer-modal.treasury-modal {
+    position: fixed;
+    z-index: 1300;
+}
+
+.treasury-box {
+    width: min(100%, 440px);
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+}
+
+.treasury-head-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.treasury-head-copy .settings-kicker {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.treasury-balance {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.025);
+}
+
+.treasury-balance-value {
+    color: var(--text);
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.treasury-balance-unit {
+    color: rgb(var(--accent-rgb));
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.treasury-balance-label {
+    margin-left: auto;
+    color: var(--text2);
+    font-size: 12px;
+}
+
+.treasury-tabs,
+.treasury-seg {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 13px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+}
+
+.treasury-tab,
+.treasury-seg button {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.treasury-tab:hover,
+.treasury-seg button:hover {
+    color: var(--text);
+}
+
+.treasury-tab.is-active,
+.treasury-seg button.is-active {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+}
+
+.treasury-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.treasury-pane[hidden],
+.treasury-tab[hidden],
+.coin-transfer-field[hidden] {
+    display: none;
+}
+
+.coin-transfer-field select {
+    height: var(--control-h);
+    padding: 0 12px;
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.coin-transfer-field select:focus {
+    outline: none;
+    border-color: var(--lime);
+    box-shadow: 0 0 0 2px var(--lime-dim);
+}
+
+.coin-transfer-field select option {
+    background: #15171b;
+    color: var(--text);
+}
+
+.coin-transfer-status.is-ok {
+    color: rgb(var(--accent-rgb));
+}
+
+.treasury-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text2);
+}
+
+.treasury-history {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.treasury-history-empty {
+    padding: 8px 2px;
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.treasury-op {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.02);
+}
+
+.treasury-op-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.treasury-op-title {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.treasury-op-meta {
+    color: var(--text2);
+    font-size: 11.5px;
+}
+
+.treasury-op-note {
+    color: var(--text2);
+    font-size: 12px;
+    font-style: italic;
+    overflow-wrap: anywhere;
+}
+
+.treasury-op-amount {
+    flex: none;
+    color: var(--text2);
+    font-size: 14px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.treasury-op.is-in .treasury-op-amount {
+    color: rgb(var(--accent-rgb));
+}
+
 /* ---- Карточка ZaliCoin в ленте ------------------------------------------
    Спокойная нейтральная рамка; акцент — только монета, «ZC», заполненные
    заряды и главное действие. Отменённая карточка приглушается, а не
@@ -8577,8 +8852,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     width: 256px;
     max-width: 100%;
     box-sizing: border-box;
-"""#,
-    #"""
     display: flex;
     flex-direction: column;
     padding: 14px 16px 16px;
@@ -11226,6 +11499,17 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                             <div class="zc-gifts-list" id="zaliCoinGiftsList"></div>
                         </section>
 
+                        <section class="settings-card zc-gifts-card zc-payouts-card" id="zaliCoinPayoutsCard">
+                            <div class="settings-card-head">
+                                <div>
+                                    <span class="settings-kicker">От серверов</span>
+                                    <h3 class="settings-card-title">Выплаты из казны серверов</h3>
+                                </div>
+                                <span class="zc-payouts-total" id="zaliCoinPayoutsTotal"></span>
+                            </div>
+                            <div class="zc-gifts-list" id="zaliCoinPayoutsList"></div>
+                        </section>
+
                         <section class="settings-card zc-distribution-card">
                             <div class="settings-card-head">
                                 <div>
@@ -11370,6 +11654,37 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
                                     </label>
                                     <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Notifications</span>
+                                        <h3 class="settings-card-title">Звук уведомлений</h3>
+                                    </div>
+                                    <span class="settings-card-note">sound</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="settings-field">
+                                        <span>Громкость уведомлений: <span id="notificationVolumeValue">100%</span></span>
+                                        <input type="range" min="0" max="200" step="5" value="100" id="inputNotificationVolume" class="settings-range">
+                                    </label>
+                                    <p class="settings-help">Звук нового сообщения и рингтон входящего звонка. Не влияет на громкость собеседника в разговоре — та настраивается отдельно, в блоке «Микрофон и динамики».</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">App</span>
+                                        <h3 class="settings-card-title">Обновления</h3>
+                                    </div>
+                                    <span class="settings-card-note" id="appVersionNote">—</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <p class="settings-help" id="appUpdateStatusText">Проверка версии доступна в приложении для macOS и Windows.</p>
+                                    <button class="btn-flat" id="checkForUpdatesBtn" type="button">Проверить обновления</button>
                                 </div>
                             </section>
 
@@ -11540,6 +11855,80 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                         <div class="coin-transfer-actions">
                             <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
                             <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="coin-transfer-modal treasury-modal" id="treasuryModal" role="dialog" aria-modal="true" aria-labelledby="treasuryTitle" hidden>
+                    <div class="coin-transfer-box treasury-box">
+                        <div class="coin-transfer-head">
+                            <div class="treasury-head-copy">
+                                <span class="settings-kicker" id="treasuryServerName">Сервер</span>
+                                <h2 id="treasuryTitle">Казна</h2>
+                            </div>
+                            <button class="avatar-crop-close" id="treasuryCloseBtn" type="button" aria-label="Закрыть">×</button>
+                        </div>
+                        <div class="treasury-balance">
+                            <span class="treasury-balance-value" id="treasuryBalanceValue">—</span>
+                            <span class="treasury-balance-unit">ZC</span>
+                            <span class="treasury-balance-label">в казне</span>
+                        </div>
+                        <div class="treasury-tabs" role="tablist">
+                            <button type="button" class="treasury-tab is-active" role="tab" data-treasury-tab="deposit">Пополнить</button>
+                            <button type="button" class="treasury-tab" role="tab" data-treasury-tab="payout" id="treasuryPayoutTab" hidden>Выплатить</button>
+                            <button type="button" class="treasury-tab" role="tab" data-treasury-tab="history">История</button>
+                        </div>
+                        <div class="treasury-pane" data-treasury-pane="deposit">
+                            <label class="coin-transfer-field">
+                                <span>Откуда</span>
+                                <select id="treasuryDepositSource"></select>
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span>Сумма (ZC)</span>
+                                <input type="number" id="treasuryDepositAmount" min="1" step="1" placeholder="0">
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span>Комментарий</span>
+                                <input type="text" id="treasuryDepositNote" maxlength="140" placeholder="Необязательно" autocomplete="off">
+                            </label>
+                            <p class="treasury-hint" id="treasuryDepositHint" hidden>Пополнить казну может любой участник. Выплачивают из неё владелец, админы и роли с правом «Казна».</p>
+                        </div>
+                        <div class="treasury-pane" data-treasury-pane="payout" hidden>
+                            <div class="treasury-seg" role="group" aria-label="Кому выплатить">
+                                <button type="button" class="is-active" data-treasury-target="user" aria-pressed="true">Человеку</button>
+                                <button type="button" data-treasury-target="server" aria-pressed="false">Серверу</button>
+                                <button type="button" data-treasury-target="role" aria-pressed="false">Роли</button>
+                            </div>
+                            <label class="coin-transfer-field" id="treasuryUserField">
+                                <span>Получатель</span>
+                                <input type="text" id="treasuryUserInput" list="treasuryMembersList" placeholder="username" autocomplete="off">
+                                <datalist id="treasuryMembersList"></datalist>
+                            </label>
+                            <label class="coin-transfer-field" id="treasuryServerField" hidden>
+                                <span>Сервер</span>
+                                <select id="treasuryServerSelect"></select>
+                            </label>
+                            <label class="coin-transfer-field" id="treasuryRoleField" hidden>
+                                <span>Роль</span>
+                                <select id="treasuryRoleSelect"></select>
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span id="treasuryPayoutAmountLabel">Сумма (ZC)</span>
+                                <input type="number" id="treasuryPayoutAmount" min="1" step="1" placeholder="0">
+                            </label>
+                            <label class="coin-transfer-field">
+                                <span>Комментарий</span>
+                                <input type="text" id="treasuryPayoutNote" maxlength="140" placeholder="Необязательно — его увидят получатели" autocomplete="off">
+                            </label>
+                            <p class="coin-gift-summary" id="treasuryPayoutSummary" hidden></p>
+                        </div>
+                        <div class="treasury-pane" data-treasury-pane="history" hidden>
+                            <div class="treasury-history" id="treasuryHistory"></div>
+                        </div>
+                        <p class="coin-transfer-status" id="treasuryStatus" hidden></p>
+                        <div class="coin-transfer-actions">
+                            <button class="btn-flat" id="treasuryCancelBtn" type="button">Закрыть</button>
+                            <button class="auth-btn primary" id="treasurySubmitBtn" type="button">Пополнить</button>
                         </div>
                     </div>
                 </div>
@@ -12082,6 +12471,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
             permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
+            treasury: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury`),
+            treasuryDeposit: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/deposit`),
+            treasuryPayout: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/payout`),
         },
         profiles: {
             byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
@@ -12109,6 +12501,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             myGifts: apiRoute('/coins/gifts/mine'),
             giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
             giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
+            managedTreasuries: apiRoute('/coins/treasuries/managed'),
+            serverPayouts: apiRoute('/coins/server-payouts'),
         },
         diagnostics: {
             decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
@@ -12707,6 +13101,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                         const distanceSymbol = decodeSymbol(distanceTable);
                         if (distanceSymbol >= DIST_BASE.length) throw new Error('tgs: invalid distance code');
                         const distance = DIST_BASE[distanceSymbol] + takeBits(DIST_EXTRA[distanceSymbol]);
+"""#,
+    #"""
                         if (distance > outLen) throw new Error('tgs: distance beyond output');
                         grow(length);
                         let from = outLen - distance;
@@ -12718,8 +13114,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     }
                 }
             } else {
-"""#,
-    #"""
                 throw new Error('tgs: invalid block type');
             }
 
@@ -13812,6 +14206,9 @@ const DefaultApiRoutes = Object.freeze({
         role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
         invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),
         permissions: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`),
+        treasury: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury`),
+        treasuryDeposit: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/deposit`),
+        treasuryPayout: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/treasury/payout`),
     },
     profiles: {
         byUsername: (username) => apiRoute(`/profile/${encodeURIComponent(username)}`),
@@ -13839,6 +14236,8 @@ const DefaultApiRoutes = Object.freeze({
         myGifts: apiRoute('/coins/gifts/mine'),
         giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
         giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
+        managedTreasuries: apiRoute('/coins/treasuries/managed'),
+        serverPayouts: apiRoute('/coins/server-payouts'),
     },
 });
 
@@ -13857,7 +14256,8 @@ const DefaultApiRoutes = Object.freeze({
  *   native_bridge.js        300 /  24  Мост к нативной оболочке: доступность, IPC, разрешения, трассировка.
  *   viewport.js             324 /  17  Окно прокрутки списка сообщений, класс производительности, якоря скролла.
  *   mobile.js               575 /  20  Мобильная раскладка, жесты навигации, переключение экранов.
- *   zalicoin.js             993 /  49  Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах.
+ *   zalicoin.js            1040 /  51  Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах.
+ *   treasury.js             430 /  18  Казна сервера: пополнение, выплаты людям/серверам/ролям.
  *   prefs.js                452 /  39  Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба.
  *   storage.js              405 /  31  Ключи localStorage, кэш сообщений, персист контактов.
  *   conversation_keys.js    762 /  44  Реестр ключей разговоров и облачный vault-снапшот.
@@ -14170,6 +14570,8 @@ ZaliMixin(ZaliInterface, class {
             'eye-off': `<svg ${attrs} fill="none"><path d="M6.4 6.9C4.2 8.4 2.9 12 2.9 12s3.8 6.1 9.1 6.1c1.7 0 3.2-.63 4.45-1.5M9.6 5.35A8.9 8.9 0 0 1 12 5.9c5.3 0 9.1 6.1 9.1 6.1s-.86 1.4-2.35 2.85" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.98 9.98a2.85 2.85 0 0 0 4.04 4.04" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M4.6 4.6l14.8 14.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             reply: `<svg ${attrs} fill="none"><path d="M9.4 6.6 4.2 11.8l5.2 5.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.8 11.8h8.9a5.9 5.9 0 0 1 5.9 5.9v.9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`,
             pencil: `<svg ${attrs} fill="none"><path d="M15.05 5.5 18.5 8.95" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m16.05 4.5 1.5 1.5a1.6 1.6 0 0 1 0 2.26L9.4 16.4l-3.4 1.1 1.1-3.4 8.14-8.15a1.6 1.6 0 0 1 2.26 0Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4.9 20.3h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+            // Монета ZaliCoin — тот же «Ƶ», что в coinGiftIcon и на кнопке композера.
+            coin: `<svg ${attrs} fill="none"><circle cx="12" cy="12" r="8.6" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9h5l-5 6h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 12h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
             trash: `<svg ${attrs} fill="none"><path d="M4.9 6.9h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.7 6.9V5.5a1.4 1.4 0 0 1 1.4-1.4h1.8a1.4 1.4 0 0 1 1.4 1.4v1.4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m6.8 6.9.75 11.5a1.6 1.6 0 0 0 1.6 1.5h5.7a1.6 1.6 0 0 0 1.6-1.5l.75-11.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
         };
         return icons[name] || '';
@@ -15516,6 +15918,8 @@ ZaliMixin(ZaliInterface, class {
         this.applyNetworkConfigToInputs();
         this.renderUiV2Settings();
         this.renderAudioDeviceSettings();
+        this.renderNotificationVolumeSettings();
+        this.renderUpdateSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         // Индекс сводок кеша поднимается лениво, первым обращением. Открытие
@@ -15603,7 +16007,12 @@ ZaliMixin(ZaliInterface, class {
     static get COIN_CHARGE_POP_STAGGER_MS() { return 90; }
 
     async refreshZaliCoinView() {
-        await Promise.all([this.loadZaliCoinBalance(), this.loadZaliCoinDistribution(), this.loadMyCoinGifts()]);
+        await Promise.all([
+            this.loadZaliCoinBalance(),
+            this.loadZaliCoinDistribution(),
+            this.loadMyCoinGifts(),
+            this.loadServerPayouts(),
+        ]);
         this.renderZaliCoinView();
     }
 
@@ -15627,6 +16036,7 @@ ZaliMixin(ZaliInterface, class {
             this.S.zaliCoinTotalSupply = Number(data.totalSupply) || 100000;
             this.S.zaliCoinHolders = Array.isArray(data.holders) ? data.holders : [];
             this.S.zaliCoinHeldTotal = Number(data.held) || 0;
+            this.S.zaliCoinTreasuriesTotal = Number(data.treasuries) || 0;
         } catch (e) {
             this.trace(`loadZaliCoinDistribution error=${e}`);
         }
@@ -15674,6 +16084,7 @@ ZaliMixin(ZaliInterface, class {
         const balance = this.S.zaliCoinBalance || 0;
         const holders = Array.isArray(this.S.zaliCoinHolders) ? this.S.zaliCoinHolders : [];
         const heldTotal = Math.max(0, Number(this.S.zaliCoinHeldTotal) || 0);
+        const treasuriesTotal = Math.max(0, Number(this.S.zaliCoinTreasuriesTotal) || 0);
         const me = this.myName();
 
         const balanceValue = document.getElementById('zaliCoinBalanceValue');
@@ -15708,7 +16119,7 @@ ZaliMixin(ZaliInterface, class {
         const restTotal = rest.reduce((sum, h) => sum + (Number(h.balance) || 0), 0);
         // Удержанное — не чей-то баланс, но и не «ничьё»: без него эти монеты
         // попадали бы в «Не распределено», хотя у них есть хозяин и назначение.
-        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal;
+        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal + treasuriesTotal;
         const unassigned = Math.max(0, totalSupply - accounted);
 
         const segments = top.map((holder, index) => ({
@@ -15722,6 +16133,10 @@ ZaliMixin(ZaliInterface, class {
         }
         if (heldTotal > 0) {
             segments.push({ label: 'На удержании', value: heldTotal, isMe: false, color: 'var(--zc-series-held)' });
+        }
+        // Казны — одной строкой: сервер не раскрывает, какие серверы сколько держат.
+        if (treasuriesTotal > 0) {
+            segments.push({ label: 'Казны серверов', value: treasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)' });
         }
         if (unassigned > 0) {
             segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)' });
@@ -15750,6 +16165,7 @@ ZaliMixin(ZaliInterface, class {
         }
 
         this.renderMyCoinGifts();
+        this.renderServerPayouts();
     }
 
     renderMyCoinGifts() {
@@ -15776,6 +16192,55 @@ ZaliMixin(ZaliInterface, class {
                     <span class="zc-gift-row-meta">${this.esc(meta)}</span>
                 </div>
                 <button type="button" class="zc-card-btn zc-gift-row-btn ${confirming ? 'is-confirm' : 'is-ghost'}" data-zc-gift-cancel="${this.esc(id)}"${pending ? ' disabled' : ''}><span>${label}</span></button>
+            </div>`;
+        }).join('');
+    }
+
+    // Выплаты из казны серверов (server/src/treasury.rs) — отдельный раздел, чтобы
+    // деньги «от сервера» не терялись среди переводов от людей.
+    async loadServerPayouts() {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.coins.serverPayouts, { interactive: true });
+            if (!res.ok) return;
+            const data = await res.json();
+            this.S.zaliCoinServerPayouts = Array.isArray(data.payouts) ? data.payouts : [];
+        } catch (e) {
+            this.trace(`loadServerPayouts error=${e}`);
+        }
+    }
+
+    renderServerPayouts() {
+        const list = document.getElementById('zaliCoinPayoutsList');
+        const total = document.getElementById('zaliCoinPayoutsTotal');
+        if (!list) return;
+        const payouts = Array.isArray(this.S.zaliCoinServerPayouts) ? this.S.zaliCoinServerPayouts : [];
+        if (total) {
+            const sum = payouts.reduce((acc, payout) => acc + (Number(payout.amount) || 0), 0);
+            total.textContent = sum > 0 ? `+${this.formatCoinAmount(sum)} ZC` : '';
+        }
+        if (!payouts.length) {
+            list.innerHTML = '<div class="zc-payouts-empty">Серверы пока ничего вам не перечисляли. Выплаты из казны сервера появятся здесь.</div>';
+            return;
+        }
+        list.innerHTML = payouts.map(payout => {
+            const server = (this.S.servers || []).find(item => item.id === payout.serverId);
+            const serverName = payout.serverName || server?.name || 'Сервер';
+            const avatar = server
+                ? this.renderServerAvatarHTML(server, 'zc-payout-avatar')
+                : `<span class="server-avatar zc-payout-avatar">${this.esc(serverName.slice(0, 1).toUpperCase())}</span>`;
+            const meta = [
+                payout.roleName ? `роль «${payout.roleName}»` : '',
+                payout.actor ? `выдал(а) ${payout.actor}` : '',
+                this.formatTreasuryTime(payout.createdAt),
+            ].filter(Boolean).join(' · ');
+            return `<div class="zc-payout-row">
+                ${avatar}
+                <div class="zc-gift-row-main">
+                    <span class="zc-payout-server">${this.esc(serverName)}</span>
+                    <span class="zc-gift-row-meta">${this.esc(meta)}</span>
+                    ${payout.note ? `<span class="zc-payout-note">${this.esc(payout.note)}</span>` : ''}
+                </div>
+                <span class="zc-payout-amount">+${this.formatCoinAmount(payout.amount)} ZC</span>
             </div>`;
         }).join('');
     }
@@ -16677,6 +17142,459 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
+// --- MODULE: interface/treasury.js ---
+// --- ZaliInterface: Казна сервера: баланс, пополнение, выплаты людям, серверам и ролям. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Всё решает сервер
+// (server/src/treasury.rs): права, остаток, состав роли, повтор запроса. Здесь —
+// модалка из ПКМ по серверу, ключ идемпотентности и живое обновление по
+// server_treasury_updated / coin_server_payout.
+ZaliMixin(ZaliInterface, class {
+
+    static get TREASURY_NOTE_MAX_CHARS() { return 140; }
+
+    async openTreasuryModal(serverId) {
+        const sid = String(serverId || '').trim();
+        const modal = document.getElementById('treasuryModal');
+        if (!sid || !modal) return;
+        // Модалка живёт в <body>, а не внутри .main: ПКМ по серверу на телефоне
+        // открывается с экрана-списка, где .main уехал за край вместе со всем, что в нём.
+        if (modal.parentElement !== document.body) document.body.appendChild(modal);
+        this.bindTreasuryModalEvents();
+        const server = (this.S.servers || []).find(item => item.id === sid);
+        this._treasury = {
+            serverId: sid,
+            name: server?.name || 'Сервер',
+            data: null,
+            managed: [],
+            tab: 'deposit',
+            target: 'user',
+            key: this.zaliCoinNewIdempotencyKey(),
+            lastPayload: '',
+            inFlight: false,
+            loadSeq: 0,
+        };
+        ['treasuryDepositAmount', 'treasuryDepositNote', 'treasuryPayoutAmount', 'treasuryPayoutNote', 'treasuryUserInput']
+            .forEach(id => { const input = document.getElementById(id); if (input) input.value = ''; });
+        const submit = document.getElementById('treasurySubmitBtn');
+        if (submit) submit.disabled = false;
+        this.setTreasuryStatus('');
+        this.renderTreasuryModal();
+        modal.hidden = false;
+        document.getElementById('treasuryDepositAmount')?.focus({ preventScroll: true });
+
+        const t = this._treasury;
+        // Источники пополнения — казны, которыми распоряжаюсь, и свой баланс для подписи.
+        const extras = Promise.all([
+            this.loadZaliCoinBalance(),
+            this.apiFetch(this.apiRoutes.coins.managedTreasuries, { interactive: true })
+                .then(res => (res.ok ? res.json() : null))
+                .then(data => { if (data && this._treasury === t) t.managed = Array.isArray(data.treasuries) ? data.treasuries : []; })
+                .catch(e => this.trace(`treasury managed error=${e}`)),
+        ]).then(() => { if (this._treasury === t) this.renderTreasuryModal(); });
+        await Promise.all([this.loadTreasury(), extras]);
+    }
+
+    closeTreasuryModal() {
+        const modal = document.getElementById('treasuryModal');
+        if (modal) modal.hidden = true;
+        clearTimeout(this._treasuryReloadTimer);
+        this._treasury = null;
+    }
+
+    async loadTreasury() {
+        const t = this._treasury;
+        if (!t) return;
+        const seq = ++t.loadSeq;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.servers.treasury(t.serverId), { interactive: true });
+            // Опоздавший ответ не должен перетирать более свежий — и чужую, уже закрытую модалку.
+            if (this._treasury !== t || seq !== t.loadSeq) return;
+            if (!res.ok) {
+                this.setTreasuryStatus(await this.treasuryErrorMessage(res, 'Не удалось загрузить казну'));
+                return;
+            }
+            const data = await res.json();
+            if (this._treasury !== t || seq !== t.loadSeq) return;
+            t.data = data;
+            if (data?.name) t.name = data.name;
+            this.renderTreasuryModal();
+        } catch (e) {
+            if (this._treasury !== t) return;
+            this.trace(`loadTreasury error=${e}`);
+            this.setTreasuryStatus('Не удалось связаться с сервером');
+        }
+    }
+
+    async treasuryErrorMessage(res, fallback) {
+        const text = await res.text().catch(() => '');
+        try {
+            const data = JSON.parse(text);
+            if (data?.message) return String(data.message);
+        } catch (_) {}
+        return text && text.length < 200 ? text : fallback;
+    }
+
+    setTreasuryStatus(message, tone = '') {
+        const status = document.getElementById('treasuryStatus');
+        if (!status) return;
+        status.textContent = message || '';
+        status.hidden = !message;
+        status.classList.toggle('is-ok', tone === 'ok');
+    }
+
+    formatTreasuryTime(iso) {
+        const date = new Date(iso);
+        if (!iso || Number.isNaN(date.getTime())) return '';
+        return date.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Селекты пересобираются только при изменении набора: иначе живое обновление
+    // казны сбрасывало бы раскрытый список прямо под рукой.
+    setTreasuryOptions(select, html, fallbackValue) {
+        if (!select) return;
+        const previous = select.value;
+        if (select.__treasuryHtml !== html) {
+            select.innerHTML = html;
+            select.__treasuryHtml = html;
+        }
+        const values = Array.from(select.options).filter(option => !option.disabled).map(option => option.value);
+        select.value = values.includes(previous) ? previous : (values.includes(fallbackValue) ? fallbackValue : (values[0] || ''));
+    }
+
+    renderTreasuryModal() {
+        const t = this._treasury;
+        if (!t) return;
+        const data = t.data;
+        const canManage = !!data?.canManage;
+        if (!canManage && t.tab === 'payout') t.tab = 'deposit';
+
+        const name = document.getElementById('treasuryServerName');
+        if (name) name.textContent = t.name;
+        const balance = document.getElementById('treasuryBalanceValue');
+        if (balance) balance.textContent = data ? this.formatCoinAmount(data.balance) : '—';
+        const payoutTab = document.getElementById('treasuryPayoutTab');
+        if (payoutTab) payoutTab.hidden = !canManage;
+        document.querySelectorAll('#treasuryModal [data-treasury-tab]').forEach(tab => {
+            const active = tab.getAttribute('data-treasury-tab') === t.tab;
+            tab.classList.toggle('is-active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('#treasuryModal [data-treasury-pane]').forEach(pane => {
+            pane.hidden = pane.getAttribute('data-treasury-pane') !== t.tab;
+        });
+        const hint = document.getElementById('treasuryDepositHint');
+        if (hint) hint.hidden = !data || canManage;
+        const submit = document.getElementById('treasurySubmitBtn');
+        if (submit) {
+            submit.hidden = t.tab === 'history';
+            submit.textContent = t.tab === 'payout' ? 'Выплатить' : 'Пополнить';
+        }
+
+        this.renderTreasuryDepositSources();
+        this.renderTreasuryPayoutTargets();
+        this.renderTreasuryHistory();
+        this.updateTreasurySummary();
+    }
+
+    renderTreasuryDepositSources() {
+        const t = this._treasury;
+        if (!t) return;
+        const own = `<option value="user">Мои ZaliCoin · ${this.formatCoinAmount(this.S.zaliCoinBalance)} ZC</option>`;
+        const servers = t.managed
+            .filter(item => item.serverId !== t.serverId)
+            .map(item => `<option value="server:${this.esc(item.serverId)}">Казна «${this.esc(item.name)}» · ${this.formatCoinAmount(item.balance)} ZC</option>`)
+            .join('');
+        this.setTreasuryOptions(document.getElementById('treasuryDepositSource'), own + servers, 'user');
+    }
+
+"""#,
+    #"""
+    renderTreasuryPayoutTargets() {
+        const t = this._treasury;
+        if (!t) return;
+        const data = t.data || {};
+        document.querySelectorAll('#treasuryModal [data-treasury-target]').forEach(button => {
+            const active = button.getAttribute('data-treasury-target') === t.target;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        const fields = { user: 'treasuryUserField', server: 'treasuryServerField', role: 'treasuryRoleField' };
+        Object.entries(fields).forEach(([kind, id]) => {
+            const field = document.getElementById(id);
+            if (field) field.hidden = t.target !== kind;
+        });
+        const amountLabel = document.getElementById('treasuryPayoutAmountLabel');
+        if (amountLabel) amountLabel.textContent = t.target === 'role' ? 'Сумма каждому (ZC)' : 'Сумма (ZC)';
+
+        const datalist = document.getElementById('treasuryMembersList');
+        if (datalist) {
+            const html = (Array.isArray(data.members) ? data.members : [])
+                .map(username => `<option value="${this.esc(username)}"></option>`)
+                .join('');
+            if (datalist.__treasuryHtml !== html) {
+                datalist.innerHTML = html;
+                datalist.__treasuryHtml = html;
+            }
+        }
+        const otherServers = (this.S.servers || []).filter(server => server && server.id !== t.serverId);
+        const serverOptions = otherServers.length
+            ? otherServers.map(server => `<option value="${this.esc(server.id)}">${this.esc(server.name || 'Сервер')}</option>`).join('')
+            : '<option value="" disabled>Других серверов у вас нет</option>';
+        this.setTreasuryOptions(document.getElementById('treasuryServerSelect'), serverOptions, '');
+        const roles = Array.isArray(data.roles) ? data.roles : [];
+        const roleOptions = roles.map(role => {
+            const count = Number(role.members) || 0;
+            return `<option value="${this.esc(role.roleId)}">${this.esc(role.name)} · ${count} ${this.coinPlural(count, ['участник', 'участника', 'участников'])}</option>`;
+        }).join('');
+        this.setTreasuryOptions(document.getElementById('treasuryRoleSelect'), roleOptions, '*');
+    }
+
+    renderTreasuryHistory() {
+        const t = this._treasury;
+        const list = document.getElementById('treasuryHistory');
+        if (!t || !list) return;
+        const operations = Array.isArray(t.data?.operations) ? t.data.operations : [];
+        if (!t.data) {
+            list.innerHTML = '<div class="treasury-history-empty">Загрузка…</div>';
+            return;
+        }
+        if (!operations.length) {
+            list.innerHTML = '<div class="treasury-history-empty">Операций с казной пока не было</div>';
+            return;
+        }
+        list.innerHTML = operations.map(op => {
+            const incoming = op.targetKind === 'server' && op.targetId === t.serverId;
+            let title;
+            if (incoming) {
+                title = op.sourceKind === 'user' ? `${op.sourceName} пополнил(а) казну` : `Из казны «${op.sourceName}»`;
+            } else if (op.targetKind === 'user') {
+                title = `Выплата ${op.targetName}`;
+            } else if (op.targetKind === 'server') {
+                title = `В казну «${op.targetName}»`;
+            } else {
+                const count = Number(op.recipients) || 0;
+                title = `Роли «${op.targetName}»: ${count} ${this.coinPlural(count, ['участнику', 'участникам', 'участникам'])} по ${this.formatCoinAmount(op.amount)} ZC`;
+            }
+            const byActor = incoming && op.sourceKind === 'user' ? '' : op.actor;
+            const meta = [byActor, this.formatTreasuryTime(op.createdAt)].filter(Boolean).join(' · ');
+            return `<div class="treasury-op ${incoming ? 'is-in' : 'is-out'}">
+                <div class="treasury-op-main">
+                    <span class="treasury-op-title">${this.esc(title)}</span>
+                    <span class="treasury-op-meta">${this.esc(meta)}</span>
+                    ${op.note ? `<span class="treasury-op-note">${this.esc(op.note)}</span>` : ''}
+                </div>
+                <span class="treasury-op-amount">${incoming ? '+' : '−'}${this.formatCoinAmount(op.total)} ZC</span>
+            </div>`;
+        }).join('');
+    }
+
+    updateTreasurySummary() {
+        const t = this._treasury;
+        const summary = document.getElementById('treasuryPayoutSummary');
+        if (!summary) return;
+        const roles = Array.isArray(t?.data?.roles) ? t.data.roles : [];
+        const role = roles.find(item => item.roleId === document.getElementById('treasuryRoleSelect')?.value);
+        if (!t || t.tab !== 'payout' || t.target !== 'role' || !role) {
+            summary.hidden = true;
+            return;
+        }
+        const count = Number(role.members) || 0;
+        const amount = Math.trunc(Number(document.getElementById('treasuryPayoutAmount')?.value));
+        const people = this.coinPlural(count, ['участник', 'участника', 'участников']);
+        if (count === 0) {
+            summary.textContent = 'У этой роли пока нет участников — выплачивать некому.';
+        } else if (Number.isFinite(amount) && amount > 0) {
+            const total = amount * count;
+            const short = total > (Number(t.data?.balance) || 0) ? ' Столько в казне нет.' : '';
+            summary.textContent = `Получат ${count} ${people} — по ${this.formatCoinAmount(amount)} ZC, всего ${this.formatCoinAmount(total)} ZC из казны.${short}`;
+        } else {
+            summary.textContent = `Получат ${count} ${people}, каждому — указанная сумма.`;
+        }
+        summary.hidden = false;
+    }
+
+    async submitTreasury() {
+        const t = this._treasury;
+        if (!t || t.inFlight || t.tab === 'history') return;
+        const isPayout = t.tab === 'payout';
+        const amountInput = document.getElementById(isPayout ? 'treasuryPayoutAmount' : 'treasuryDepositAmount');
+        const noteInput = document.getElementById(isPayout ? 'treasuryPayoutNote' : 'treasuryDepositNote');
+        const amount = Math.trunc(Number(amountInput?.value));
+        const note = String(noteInput?.value || '').trim().slice(0, ZaliInterface.TREASURY_NOTE_MAX_CHARS);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            this.setTreasuryStatus('Укажите сумму больше нуля');
+            return;
+        }
+
+        let path;
+        let payload;
+        if (!isPayout) {
+            const source = document.getElementById('treasuryDepositSource')?.value || 'user';
+            payload = source.startsWith('server:')
+                ? { source: 'server', sourceServerId: source.slice('server:'.length), amount, note }
+                : { source: 'user', amount, note };
+            path = this.apiRoutes.servers.treasuryDeposit(t.serverId);
+        } else {
+            const to = t.target === 'user'
+                ? String(document.getElementById('treasuryUserInput')?.value || '').trim()
+                : String(document.getElementById(t.target === 'server' ? 'treasuryServerSelect' : 'treasuryRoleSelect')?.value || '');
+            if (!to) {
+                this.setTreasuryStatus({ user: 'Укажите получателя', server: 'Выберите сервер', role: 'Выберите роль' }[t.target]);
+                return;
+            }
+            payload = { target: t.target, to, amount, note };
+            path = this.apiRoutes.servers.treasuryPayout(t.serverId);
+        }
+
+        // Ключ описывает один точный запрос (как в submitCoinTransfer): изменили
+        // получателя или сумму после сетевой ошибки — ключ новый, иначе повтор
+        // вернул бы как «успех» ту операцию, что прошла со старыми данными.
+        const signature = JSON.stringify([t.tab, payload]);
+        if (t.lastPayload && t.lastPayload !== signature) t.key = this.zaliCoinNewIdempotencyKey();
+        t.lastPayload = signature;
+
+        const submit = document.getElementById('treasurySubmitBtn');
+        t.inFlight = true;
+        if (submit) submit.disabled = true;
+        this.setTreasuryStatus('Отправка...');
+        let res;
+        try {
+            res = await this.coinPostWithRetry(path, { ...payload, idempotencyKey: t.key });
+        } catch (e) {
+            this.trace(`submitTreasury transport_error=${e}`);
+            if (this._treasury !== t) return;
+            t.inFlight = false;
+            if (submit) submit.disabled = false;
+            this.setTreasuryStatus('Не удалось связаться с сервером, попробуйте ещё раз');
+            return;
+        }
+        if (this._treasury === t) {
+            t.inFlight = false;
+            if (submit) submit.disabled = false;
+        }
+        if (!res.ok) {
+            const message = await this.treasuryErrorMessage(res, isPayout ? 'Не удалось выполнить выплату' : 'Не удалось пополнить казну');
+            if (this._treasury === t) this.setTreasuryStatus(message);
+            return;
+        }
+
+        // Операция проведена — дальше ничто не должно выглядеть как её провал.
+        const data = await res.json().catch(() => null);
+        const operation = data?.operation || null;
+        if (Number.isFinite(Number(data?.balance))) this.S.zaliCoinBalance = Number(data.balance);
+        this.scheduleZaliCoinRefresh();
+        const logMessage = isPayout
+            ? `Казна «${t.name}»: выплачено ${operation?.total ?? amount} ZaliCoin`
+            : `Казна «${t.name}» пополнена на ${amount} ZaliCoin`;
+        this.addLogEntry({ type: 'INFO', msg: logMessage, ts: new Date().toLocaleTimeString() });
+        if (this._treasury !== t) return;
+
+        t.key = this.zaliCoinNewIdempotencyKey();
+        t.lastPayload = '';
+        (Array.isArray(data?.treasuries) ? data.treasuries : []).forEach(item => {
+            if (item.serverId === t.serverId && t.data) t.data.balance = Number(item.balance) || 0;
+            const managed = t.managed.find(entry => entry.serverId === item.serverId);
+            if (managed) managed.balance = Number(item.balance) || 0;
+        });
+        if (operation && t.data) {
+            const operations = Array.isArray(t.data.operations) ? t.data.operations : [];
+            if (!operations.some(op => op.id === operation.id)) t.data.operations = [operation, ...operations];
+        }
+        if (amountInput) amountInput.value = '';
+        if (noteInput) noteInput.value = '';
+        let done;
+        if (!isPayout) {
+            done = `Казна пополнена на ${this.formatCoinAmount(amount)} ZC`;
+        } else if (operation?.targetKind === 'role') {
+            const count = Number(operation.recipients) || 0;
+            done = `Выплачено ${count} ${this.coinPlural(count, ['участнику', 'участникам', 'участникам'])} — всего ${this.formatCoinAmount(operation.total)} ZC`;
+        } else {
+            done = `Выплачено ${this.formatCoinAmount(amount)} ZC`;
+        }
+        this.renderTreasuryModal();
+        this.setTreasuryStatus(done, 'ok');
+    }
+
+    // Новый остаток казны. Событие несёт только баланс, поэтому история
+    // перечитывается — схлопнуто, пачка операций даёт один запрос.
+    handleTreasuryRealtime(payload) {
+        const serverId = String(payload?.serverId || '');
+        const balance = Number(payload?.balance);
+        const t = this._treasury;
+        if (!t || !serverId || !Number.isFinite(balance)) return;
+        const managed = t.managed.find(entry => entry.serverId === serverId);
+        if (managed) managed.balance = balance;
+        if (t.serverId === serverId) {
+            if (t.data) t.data.balance = balance;
+            clearTimeout(this._treasuryReloadTimer);
+            this._treasuryReloadTimer = setTimeout(() => void this.loadTreasury(), 400);
+        }
+        this.renderTreasuryModal();
+    }
+
+    // Сервер перечислил вам ZaliCoin из казны — раздел «От серверов».
+    handleServerPayoutRealtime(payload) {
+        const payout = payload?.payout;
+        if (!payout?.operationId) return;
+        const list = Array.isArray(this.S.zaliCoinServerPayouts) ? this.S.zaliCoinServerPayouts : [];
+        if (list.some(item => item.operationId === payout.operationId)) return;
+        this.S.zaliCoinServerPayouts = [payout, ...list];
+        this.addLogEntry({
+            type: 'INFO',
+            msg: `Сервер «${payout.serverName}» перечислил вам ${payout.amount} ZaliCoin`,
+            ts: new Date().toLocaleTimeString(),
+        });
+        if (this.isZaliCoinViewActive()) {
+            this.renderServerPayouts();
+            this.scheduleZaliCoinRefresh();
+        }
+    }
+
+    bindTreasuryModalEvents() {
+        const modal = document.getElementById('treasuryModal');
+        if (!modal || modal.__treasuryBound) return;
+        modal.__treasuryBound = true;
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) { this.closeTreasuryModal(); return; }
+            const t = this._treasury;
+            if (!t) return;
+            const tab = e.target.closest('[data-treasury-tab]');
+            if (tab) {
+                t.tab = tab.getAttribute('data-treasury-tab') || 'deposit';
+                this.setTreasuryStatus('');
+                this.renderTreasuryModal();
+                return;
+            }
+            const target = e.target.closest('[data-treasury-target]');
+            if (target) {
+                t.target = target.getAttribute('data-treasury-target') || 'user';
+                this.setTreasuryStatus('');
+                this.renderTreasuryModal();
+            }
+        });
+        document.getElementById('treasuryCloseBtn')?.addEventListener('click', () => this.closeTreasuryModal());
+        document.getElementById('treasuryCancelBtn')?.addEventListener('click', () => this.closeTreasuryModal());
+        document.getElementById('treasurySubmitBtn')?.addEventListener('click', () => this.submitTreasury());
+        const refreshSummary = (e) => {
+            if (e.target.matches?.('#treasuryPayoutAmount, #treasuryRoleSelect')) this.updateTreasurySummary();
+        };
+        modal.addEventListener('input', refreshSummary);
+        modal.addEventListener('change', refreshSummary);
+        modal.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this.closeTreasuryModal();
+                return;
+            }
+            if (e.key === 'Enter' && e.target.matches?.('input')) {
+                e.preventDefault();
+                this.submitTreasury();
+            }
+        });
+    }
+});
+
+
 // --- MODULE: interface/prefs.js ---
 // --- ZaliInterface: Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
@@ -16843,7 +17761,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     loadAudioPrefs() {
-        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, peerVolumePercents: {} };
+        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {} };
         try {
             const raw = localStorage.getItem(this.audioPrefsStorageKey());
             if (!raw) return fallback;
@@ -16852,6 +17770,11 @@ ZaliMixin(ZaliInterface, class {
                 micDeviceId: String(parsed?.micDeviceId || ''),
                 speakerDeviceId: String(parsed?.speakerDeviceId || ''),
                 masterVolumePercent: Number.isFinite(parsed?.masterVolumePercent) ? Math.max(0, Math.min(200, parsed.masterVolumePercent)) : 100,
+                // Отдельная от masterVolumePercent громкость: та живёт на графе
+                // звонка (remote <audio>.volume), эта — на synth-графе звука
+                // уведомлений (soundBus). Один и тот же процент на оба означал
+                // бы, что звонок и звук нового сообщения нельзя развести.
+                notificationVolumePercent: Number.isFinite(parsed?.notificationVolumePercent) ? Math.max(0, Math.min(200, parsed.notificationVolumePercent)) : 100,
                 peerVolumePercents: (parsed?.peerVolumePercents && typeof parsed.peerVolumePercents === 'object') ? parsed.peerVolumePercents : {},
             };
         } catch (e) {
@@ -16888,6 +17811,33 @@ ZaliMixin(ZaliInterface, class {
         this.applyMasterVolume();
         const label = document.getElementById('masterVolumeValue');
         if (label) label.textContent = `${clamped}%`;
+    }
+
+    notificationVolumeFactor() {
+        const percent = Number.isFinite(this.audioPrefs?.notificationVolumePercent) ? this.audioPrefs.notificationVolumePercent : 100;
+        return Math.max(0, Math.min(2, percent / 100));
+    }
+
+    setNotificationVolumePercent(percent) {
+        const clamped = Math.max(0, Math.min(200, Math.round(Number(percent) || 0)));
+        this.audioPrefs.notificationVolumePercent = clamped;
+        this.saveAudioPrefs();
+        this.applyNotificationVolume();
+        const label = document.getElementById('notificationVolumeValue');
+        if (label) label.textContent = `${clamped}%`;
+    }
+
+    // soundBus() кеширует узел master на этом графе, поэтому смена настройки
+    // между двумя звуками не пересоздаёт граф — она обязана дотянуться до
+    // уже существующего gain-узла и переставить его прямо во время игры.
+    applyNotificationVolume() {
+        const bus = this.sound?.bus;
+        // Прямое присваивание, а не setValueAtTime(..., ctx.currentTime): это
+        // не звуковая автоматизация внутри ноты (там нужна точность до сэмпла
+        // при currentTime), а мгновенная реакция на слайдер настроек — и на
+        // движке, где currentTime не продвигается, пока рендер-граф не
+        // "тикнул", запланированное на "сейчас" значение молча не подхватится.
+        if (bus?.master) bus.master.gain.value = 0.9 * this.notificationVolumeFactor();
     }
 
     // Both sliders end up as one element volume. HTMLMediaElement.volume saturates
@@ -16950,14 +17900,81 @@ ZaliMixin(ZaliInterface, class {
         this.refreshAudioDeviceOptions();
     }
 
+    renderNotificationVolumeSettings() {
+        const volumeInput = document.getElementById('inputNotificationVolume');
+        if (volumeInput) volumeInput.value = String(this.audioPrefs.notificationVolumePercent);
+        const volumeLabel = document.getElementById('notificationVolumeValue');
+        if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.notificationVolumePercent}%`;
+    }
+
+    // ============================================================
+    // Карточка «Обновления» в настройках: текущая версия + ручная проверка.
+    // Автопроверка (checkForAppUpdate, updates.js) идёт при каждом входе и
+    // сама решает, показывать ли модалку; этой кнопке при этом ЕЩЁ нужно
+    // самой сообщить результат — «версия последняя» — иначе тишина в ответ
+    // на явный клик читалась бы как «не сработало».
+    // ============================================================
+
+    currentAppVersionLabel() {
+        const version = String(window.__ZALI_NATIVE_APP_VERSION || '').trim();
+        return version ? `v${version}` : 'веб-версия';
+    }
+
+    renderUpdateSettings() {
+        const note = document.getElementById('appVersionNote');
+        if (note) note.textContent = this.currentAppVersionLabel();
+        const statusText = document.getElementById('appUpdateStatusText');
+        const btn = document.getElementById('checkForUpdatesBtn');
+        const supported = this.hasNativeBridge() && this.nativeSupports('appUpdate');
+        if (btn) btn.disabled = !supported || !!this._checkingForUpdates;
+        if (!statusText) return;
+        if (this._checkingForUpdates) {
+            statusText.textContent = 'Проверяем…';
+            return;
+        }
+        if (!supported) {
+            statusText.textContent = 'Проверка версии доступна в приложении для macOS и Windows.';
+            return;
+        }
+        const status = this.S.updateStatus || {};
+        if (status.available) {
+            statusText.textContent = `Доступно обновление v${status.version}. Открыть карточку в Хабе, чтобы установить.`;
+        } else if (this._lastUpdateCheckFailed) {
+            statusText.textContent = 'Не удалось проверить обновления — нет связи с сервером. Попробуйте ещё раз.';
+        } else if (this._lastUpdateCheckAt) {
+            statusText.textContent = 'У вас установлена последняя версия.';
+        } else {
+            statusText.textContent = 'Нажмите «Проверить обновления», чтобы узнать, есть ли новая версия.';
+        }
+    }
+
+    // Обёртка над checkForAppUpdate() специально для явного клика: сама
+    // функция молчит, если обновления нет (она рассчитана на тихую проверку
+    // при каждом входе) — здесь же нужен видимый ответ на «не пришло
+    // ничего», иначе кнопка выглядела бы сломанной.
+    async checkForAppUpdateFromSettings() {
+        if (this._checkingForUpdates) return;
+        this._checkingForUpdates = true;
+        this.renderUpdateSettings();
+        // checkForAppUpdate() глотает сбои сети и сервера, поэтому «версия
+        // последняя» можно показывать только после определённого ответа.
+        let checked = false;
+        try {
+            checked = (await this.checkForAppUpdate()) === true;
+        } finally {
+            this._checkingForUpdates = false;
+            this._lastUpdateCheckFailed = !checked;
+            if (checked) this._lastUpdateCheckAt = Date.now();
+            this.renderUpdateSettings();
+        }
+    }
+
     async setAudioInputDevice(deviceId) {
         this.audioPrefs.micDeviceId = String(deviceId || '');
         this.saveAudioPrefs();
         if (!this.voice.localStream) return;
         try {
             const constraints = this.audioPrefs.micDeviceId
-"""#,
-    #"""
                 ? { audio: { deviceId: { exact: this.audioPrefs.micDeviceId } }, video: false }
                 : { audio: true, video: false };
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -20511,6 +21528,8 @@ ZaliMixin(ZaliInterface, class {
             // worth waiting for, same as a known claim.
             //
             // Which is why this asks canonicalLookupSucceeded() rather than looking at
+"""#,
+    #"""
             // the cache: an absent cache entry is produced BOTH by "the registry has no
             // claim" and by "we never got an answer", so testing the cache would have
             // reported "unknown" every single time and this whole branch would have
@@ -21170,8 +22189,6 @@ ZaliMixin(ZaliInterface, class {
         }, Math.max(0, Number(delayMs) || 0));
     }
 
-"""#,
-    #"""
     async syncCloudVaultPackage({ passphrase = null, reason = 'auto' } = {}) {
         if (!this.S.session?.token) return false;
         if (!this.isVaultCloudSyncEnabled()) {
@@ -24087,6 +25104,7 @@ ZaliMixin(ZaliInterface, class {
             { key: 'can_mention', label: '@everyone', hint: 'Упоминать всех участников', group: 'Управление', defaultCreate: false },
             { key: 'can_kick', label: 'Исключать', hint: 'Кикать участников из сервера', group: 'Управление', defaultCreate: false },
             { key: 'can_ban', label: 'Бан', hint: 'Блокировать участников', group: 'Управление', defaultCreate: false },
+            { key: 'can_manage_treasury', label: 'Казна', hint: 'Выплачивать ZaliCoin из казны сервера', group: 'Управление', defaultCreate: false },
         ];
     }
 
@@ -24567,6 +25585,8 @@ ZaliMixin(ZaliInterface, class {
         const serverRoleColorInput = document.getElementById('serverRoleColorInput');
         const serverRolePermView = document.getElementById('serverRolePermView');
         const serverRolePermSend = document.getElementById('serverRolePermSend');
+"""#,
+    #"""
         const serverRolePermManage = document.getElementById('serverRolePermManage');
         const serverRoleCreate = document.querySelector('[data-server-role-create]');
         const serverRoleCreateBody = document.querySelector('[data-server-role-create-body]');
@@ -25100,8 +26120,6 @@ ZaliMixin(ZaliInterface, class {
                     <span class="server-channel-row-name" data-channel-rename="${this.esc(channel.id)}" title="Нажмите, чтобы переименовать">${this.esc(name)}</span>
                     <span class="server-channel-row-topic${channel.topic ? '' : ' empty'}" data-channel-retopic="${this.esc(channel.id)}" title="Нажмите, чтобы изменить тему">${this.esc(channel.topic || 'Добавить тему')}</span>
                 </div>
-"""#,
-    #"""
                 <button class="server-channel-kind-toggle ${kind}" type="button" data-channel-kind-toggle="${this.esc(channel.id)}" title="${this.esc(`${kindLabel} канал — нажмите, чтобы сделать ${nextLabel}`)}" aria-label="${this.esc(`${kindLabel} канал ${name}: сделать ${nextLabel}`)}">${this.channelKindIcon(kind, 'server-channel-kind-icon')}</button>
                 <button class="server-channel-row-delete" type="button" data-channel-delete="${this.esc(channel.id)}" title="Удалить канал" aria-label="${this.esc(`Удалить канал ${name}`)}">${this.uiIcon('trash', 'server-channel-row-delete-icon')}</button>
             </div>`;
@@ -26227,15 +27245,16 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Только для владельца/админа — ровно та же граница, что раньше решала,
-    // виден ли #serverSettingsBtn вообще (renderServerToolbar). У остальных
-    // участников ПКМ по серверу молча ничего не делает.
+    // «Казна» — всем участникам (пополнить может любой, распоряжаться — по праву,
+    // это решает сервер). Настройки и участники — только владельцу/админу, ровно
+    // та же граница, что раньше решала, виден ли #serverSettingsBtn вообще.
     openServerRailContextMenu(serverId, x, y) {
         this.closeServerRailContextMenu();
         const sid = String(serverId || '').trim();
         if (!sid) return;
         const server = (this.S.servers || []).find(s => s.id === sid);
-        if (!server || !this.canManageServer(server)) return;
+        if (!server) return;
+        const canManage = this.canManageServer(server);
 
         const menu = document.createElement('div');
         menu.id = 'serverRailContextMenu';
@@ -26243,12 +27262,16 @@ ZaliMixin(ZaliInterface, class {
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
         menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="treasury">
+                ${this.uiIcon('coin')}<span>Казна</span>
+            </button>
+            ${canManage ? `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="settings">
                 ${this.uiIcon('gear')}<span>Настройки сервера</span>
             </button>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="members">
                 ${this.uiIcon('user')}<span>Список участников</span>
-            </button>
+            </button>` : ''}
         `;
         document.body.appendChild(menu);
 
@@ -26267,6 +27290,10 @@ ZaliMixin(ZaliInterface, class {
         menu.style.top = `${top}px`;
         menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
 
+        menu.querySelector('[data-action="treasury"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.openTreasuryModal(sid);
+        });
         menu.querySelector('[data-action="settings"]')?.addEventListener('click', () => {
             this.closeServerRailContextMenu();
             this.openServerModal('edit', sid, 'overview');
@@ -28541,6 +29568,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Mesh means every video track is encoded and uploaded once per peer, and
+"""#,
+    #"""
     // nothing capped that at all: five people with cameras on asked each machine for
     // four unconstrained 720p encodes, i.e. 4–10 Mbit/s upstream. The browser's own
     // congestion control reacts to loss, which on an already-saturated uplink means
@@ -29171,8 +30200,6 @@ ZaliMixin(ZaliInterface, class {
             // Not awaited: the supervisor tick must not be held up by one peer, and
             // restartVoicePeer re-entrancy is already guarded by entry.negotiating.
             Promise.resolve(this.restartVoicePeer(name)).catch(error => {
-"""#,
-    #"""
                 this.voiceTrace('link-recovery-failed', { peer: name, error: error?.message || String(error) }, 'WARN');
             });
         }
@@ -32366,6 +33393,8 @@ ZaliMixin(ZaliInterface, class {
                 if (!force) {
                     const cached = await this.cacheGet('server_asset', key);
                     if (cached) {
+"""#,
+    #"""
                         if (this.serverAssetFetchSeq.get(key) !== seq) return null;
                         const cachedUrl = URL.createObjectURL(cached);
                         this.serverAssetRetryAt.delete(key);
@@ -33063,8 +34092,6 @@ ZaliMixin(ZaliInterface, class {
                 const factor = Math.exp(-e.deltaY * 0.0015);
                 setScale(state.scale * factor, focalX, focalY);
                 const t = (state.scale - state.minScale) / (state.maxScale - state.minScale || 1);
-"""#,
-    #"""
                 zoomInput.value = String(Math.round(clamp(t, 0, 1) * 1000));
             }, { passive: false });
 
@@ -36650,6 +37677,8 @@ ZaliMixin(ZaliInterface, class {
         const channeled = str.match(/^(\d+)\.(\d+)([abr])(\d+)$/i);
         if (channeled) {
             const channelRank = { a: 0, b: 1, r: 2 };
+"""#,
+    #"""
             return {
                 major: parseInt(channeled[1], 10) || 0,
                 minor: parseInt(channeled[2], 10) || 0,
@@ -36696,6 +37725,9 @@ ZaliMixin(ZaliInterface, class {
     // published well after this date) are compared normally regardless.
     static VERSION_SCHEME_MIGRATION_CUTOFF_UNIX = 1785542400; // 2026-08-01T00:00:00Z
 
+    // Возвращает true, только если сервер дал определённый ответ о версии.
+    // Любой сбой по-прежнему глотается молча — ручной проверке из настроек
+    // (checkForAppUpdateFromSettings) нужно отличить его от «версия последняя».
     async checkForAppUpdate() {
         if (!this.hasNativeBridge() || !this.nativeSupports('appUpdate')) return;
         const platform = String(window.__ZALI_NATIVE_PLATFORM || '').trim();
@@ -36712,12 +37744,12 @@ ZaliMixin(ZaliInterface, class {
                 && publishedAt > 0
                 && publishedAt <= ZaliInterface.VERSION_SCHEME_MIGRATION_CUTOFF_UNIX;
             if (isLegacyMigrationBump && this.isNewSchemeVersion(currentVersion)) {
-                return;
+                return true;
             }
             if (!latestVersion || this.compareVersions(latestVersion, currentVersion) <= 0) {
                 // We are running it — any earlier failed-install bookkeeping is stale.
                 this.clearUpdateInstallAttempts();
-                return;
+                return true;
             }
             // Reaching here after having already installed this exact version means the
             // install did not take. Keep the update reachable from the Hub, but stop
@@ -36744,11 +37776,12 @@ ZaliMixin(ZaliInterface, class {
             })();
             if (installKeepsFailing) {
                 this.trace(`checkForAppUpdate install keeps failing version=${latestVersion} attempts=${attempts.count}`);
-                return;
+                return true;
             }
             if (this.S.updateStatus.mandatory || declined !== latestVersion) {
                 this.openUpdateModal();
             }
+            return true;
         } catch (e) {
             this.trace(`checkForAppUpdate failed err=${e?.message || e}`);
         }
@@ -37276,8 +38309,6 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.messageWindow.conversationKey = conversationKey;
-"""#,
-    #"""
         this.messageWindow.start = windowInfo.useWindow ? windowInfo.start : 0;
         this.messageWindow.end = windowInfo.useWindow ? windowInfo.end : msgs.length;
         this.messageWindow.count = msgs.length;
@@ -38364,6 +39395,72 @@ ZaliMixin(ZaliInterface, class {
         this.renderContacts();
     }
 
+    ensureContactRelationCache() {
+        if (!this._contactRelationCache) this._contactRelationCache = new Map();
+        return this._contactRelationCache;
+    }
+
+    // Единая точка правды о «подписан/друг» для контакта — читают и пишут её
+    // контекстное меню, и профиль (refreshProfile), и прямые действия из меню
+    // (followUserDirect и т.д.). Без неё каждое открытие меню начинало с нуля
+    // и всегда показывало нейтральную подпись до ответа сети, даже для
+    // контакта, чей профиль только что смотрели.
+    getCachedContactRelation(name) {
+        const key = String(name || '').trim().toLowerCase();
+        if (!key) return null;
+        return this.ensureContactRelationCache().get(key) || null;
+    }
+
+    rememberContactRelation(name, data) {
+        const key = String(name || '').trim().toLowerCase();
+        if (!key) return;
+        this.ensureContactRelationCache().set(key, {
+            isFollowing: !!data?.isFollowing,
+            isFriend: !!data?.isFriend,
+            friendRequest: data?.friendRequest || null,
+        });
+    }
+
+    contactFollowLabel(relation) {
+        return relation?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
+    }
+
+    contactFollowIcon(relation) {
+        return relation?.isFollowing ? 'eye-off' : 'eye';
+    }
+
+    contactFriendLabel(relation) {
+        if (relation?.isFriend) return 'Вы друзья';
+        if (relation?.friendRequest?.direction === 'outgoing') return 'Заявка отправлена';
+        if (relation?.friendRequest?.direction === 'incoming') return 'Принять заявку в друзья';
+        return 'Попроситься в друзья';
+    }
+
+    // Пишет relation в уже открытое меню, но трогает DOM только там, где
+    // значение реально другое — иначе повторное совпадение с кешем само
+    // стало бы лишней перерисовкой и тем же перемигом, который чинится.
+    applyContactRelationToMenu(menu, relation) {
+        if (!menu) return;
+        const followLabel = menu.querySelector('#contactFollowLabel');
+        const wantFollowLabel = this.contactFollowLabel(relation);
+        if (followLabel && followLabel.textContent !== wantFollowLabel) followLabel.textContent = wantFollowLabel;
+        const followBtn = menu.querySelector('[data-action="follow"]');
+        const wantIcon = this.contactFollowIcon(relation);
+        if (followBtn && followBtn.dataset.icon !== wantIcon) {
+            const followIcon = followBtn.querySelector('.ui-icon');
+            if (followIcon) followIcon.outerHTML = this.uiIcon(wantIcon);
+            followBtn.dataset.icon = wantIcon;
+        }
+        const friendLabel = menu.querySelector('#contactFriendLabel');
+        const wantFriendLabel = this.contactFriendLabel(relation);
+        if (friendLabel && friendLabel.textContent !== wantFriendLabel) friendLabel.textContent = wantFriendLabel;
+        menu.dataset.following = relation?.isFollowing ? '1' : '0';
+        menu.dataset.friend = relation?.isFriend ? '1' : '0';
+        if (relation?.friendRequest?.direction === 'incoming' && relation.friendRequest.id) {
+            menu.querySelector('[data-action="friend"]')?.setAttribute('data-request-id', relation.friendRequest.id);
+        }
+    }
+
     closeContactContextMenu() {
         const existing = document.getElementById('contactContextMenu');
         if (existing) existing.remove();
@@ -38389,13 +39486,15 @@ ZaliMixin(ZaliInterface, class {
         const muted = !!(this.S.mutedChats || {})[name];
         const percent = this.getPeerVolumePercent(name);
         const isSelf = name === this.myName();
+        // Известное по кешу отношение (уже видели этот профиль/меню/действие
+        // над ним в этой сессии) идёт в разметку сразу — так контакт, с
+        // которым уже взаимодействовали, не мигает нейтральной подписью,
+        // пока не придёт сеть. Для контакта, увиденного впервые, relation
+        // пуст, и подписи остаются прежними нейтральными.
+        const relation = this.getCachedContactRelation(name);
         const menu = document.createElement('div');
         menu.id = 'contactContextMenu';
         menu.className = 'peer-context-menu';
-        // Подписка и дружба идут первыми: это то, ради чего сюда чаще всего
-        // и жмут ПКМ. Их подписи зависят от текущих отношений, которых мы ещё
-        // не знаем, — они уточняются ниже, когда придёт профиль. До ответа
-        // пункты показывают нейтральное действие, а не мигают пустотой.
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
         menu.innerHTML = `
@@ -38404,10 +39503,10 @@ ZaliMixin(ZaliInterface, class {
             </button>
             ${isSelf ? '' : `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="follow">
-                ${this.uiIcon('eye')}<span id="contactFollowLabel">Отслеживать</span>
+                ${this.uiIcon(this.contactFollowIcon(relation))}<span id="contactFollowLabel">${this.contactFollowLabel(relation)}</span>
             </button>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="friend">
-                ${this.uiIcon('user-plus')}<span id="contactFriendLabel">Попроситься в друзья</span>
+                ${this.uiIcon('user-plus')}<span id="contactFriendLabel">${this.contactFriendLabel(relation)}</span>
             </button>`}
             <div class="peer-context-menu-sep" aria-hidden="true"></div>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
@@ -38419,6 +39518,7 @@ ZaliMixin(ZaliInterface, class {
                        class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
         `;
+        if (!isSelf) this.applyContactRelationToMenu(menu, relation);
         document.body.appendChild(menu);
 
         // Меню разворачивается ОТ курсора, а не на ближайший свободный край:
@@ -38527,29 +39627,29 @@ ZaliMixin(ZaliInterface, class {
      * до сервера. Если меню успели закрыть — ответ просто выбрасывается.
      */
     async decorateContactContextMenu(menu, name) {
+        // Диск — прежде сети: он отвечает за миллисекунды и почти всегда уже
+        // содержит то же самое, что вернёт сервер, поэтому обычно это и есть
+        // тот единственный кадр, где подписи меняются, а сетевой ответ ниже
+        // просто молча подтверждает их (см. сравнение внутри
+        // applyContactRelationToMenu — трогает DOM только при реальной
+        // разнице).
+        try {
+            const diskCached = await this.loadCachedProfile(name);
+            if (diskCached && menu.isConnected) {
+                this.rememberContactRelation(name, diskCached);
+                this.applyContactRelationToMenu(menu, this.getCachedContactRelation(name));
+            }
+        } catch (e) {}
         try {
             const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
             if (!res.ok) return;
             if (!menu.isConnected) return;
             const data = await res.json();
-            menu.dataset.following = data?.isFollowing ? '1' : '0';
-            menu.dataset.friend = data?.isFriend ? '1' : '0';
-            const followLabel = menu.querySelector('#contactFollowLabel');
-            if (followLabel) followLabel.textContent = data?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
-            const followIcon = menu.querySelector('[data-action="follow"] .ui-icon');
-            if (followIcon) followIcon.outerHTML = this.uiIcon(data?.isFollowing ? 'eye-off' : 'eye');
-            const friendLabel = menu.querySelector('#contactFriendLabel');
-            if (friendLabel) {
-                if (data?.isFriend) friendLabel.textContent = 'Вы друзья';
-                else if (data?.friendRequest?.direction === 'outgoing') friendLabel.textContent = 'Заявка отправлена';
-                else if (data?.friendRequest?.direction === 'incoming') friendLabel.textContent = 'Принять заявку в друзья';
-                else friendLabel.textContent = 'Попроситься в друзья';
-            }
-            if (data?.friendRequest?.direction === 'incoming') {
-                menu.querySelector('[data-action="friend"]')?.setAttribute('data-request-id', data.friendRequest.id);
-            }
+            this.rememberContactRelation(name, data);
+            void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
+            this.applyContactRelationToMenu(menu, this.getCachedContactRelation(name));
         } catch (e) {
-            // Подписи останутся нейтральными — меню всё равно рабочее.
+            // Подписи останутся тем, что уже показано, — кешем или нейтралью.
         }
     }
 
@@ -38615,7 +39715,12 @@ ZaliMixin(ZaliInterface, class {
     soundBus(ctx) {
         if (this.sound.bus && this.sound.bus.ctx === ctx) return this.sound.bus.input;
         const master = ctx.createGain();
-        master.gain.value = 0.9;
+        // 0.9 — заданный вручную запас громкости до отсечки в компрессоре
+        // (см. комментарий класса ниже); пользовательская громкость
+        // уведомлений (settings, applyNotificationVolume) — множитель поверх
+        // него, а не замена, иначе 100% на слайдере звучал бы громче, чем
+        // рассчитан этот граф.
+        master.gain.value = 0.9 * this.notificationVolumeFactor();
         const compressor = ctx.createDynamicsCompressor();
         compressor.threshold.setValueAtTime(-18, ctx.currentTime);
         compressor.knee.setValueAtTime(20, ctx.currentTime);
@@ -38624,7 +39729,7 @@ ZaliMixin(ZaliInterface, class {
         compressor.release.setValueAtTime(0.25, ctx.currentTime);
         master.connect(compressor);
         compressor.connect(ctx.destination);
-        this.sound.bus = { ctx, input: master };
+        this.sound.bus = { ctx, input: master, master };
         return master;
     }
 
@@ -38955,6 +40060,16 @@ ZaliMixin(ZaliInterface, class {
         // applyCoinGiftState сам отбрасывает устаревшие.
         if (type === 'coin_gift_updated') {
             this.handleCoinGiftRealtime(payload);
+            return true;
+        }
+
+        // Казна сервера (server/src/treasury.rs): новый остаток и выплата вам с сервера.
+        if (type === 'server_treasury_updated') {
+            this.handleTreasuryRealtime(payload);
+            return true;
+        }
+        if (type === 'coin_server_payout') {
+            this.handleServerPayoutRealtime(payload);
             return true;
         }
 
@@ -40118,6 +41233,7 @@ ZaliMixin(ZaliInterface, class {
         }
         const cached = state.data ? null : await this.loadCachedProfile(name);
         if (cached && this.ensureProfileState().username === name && !this.ensureProfileState().data) {
+            this.rememberContactRelation(name, cached);
             if (this.rememberSenderDisplayName(name, cached.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
@@ -40150,6 +41266,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json();
             void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
+            this.rememberContactRelation(name, data);
             if (this.rememberSenderDisplayName(name, data?.displayName)) this.scheduleRenderMessages();
             this.setProfileState({
                 loading: false,
@@ -40338,6 +41455,7 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const data = await res.json();
+            this.rememberContactRelation(name, data);
             if (this.ensureProfileState().username === name) {
                 this.setProfileState({ busy: '', data, error: '' });
             } else {
@@ -40369,6 +41487,13 @@ ZaliMixin(ZaliInterface, class {
                     : `Не удалось изменить подписку на ${name}`,
                 ts: new Date().toLocaleTimeString(),
             });
+            if (res.ok) {
+                // Действие вызывается из контекстного меню, которое к этому
+                // моменту уже закрыто, — но новое состояние подписки точно
+                // известно уже сейчас. Без этого следующее открытие меню
+                // снова показывало бы старую подпись до ответа сервера.
+                this.rememberContactRelation(name, { ...this.getCachedContactRelation(name), isFollowing: !unfollow });
+            }
             if (res.ok && this.ensureProfileState().username === name) await this.refreshProfile();
         } catch (e) {
             this.addLogEntry({ type: 'ERROR', msg: `Не удалось изменить подписку на ${name}`, ts: new Date().toLocaleTimeString() });
@@ -40402,6 +41527,9 @@ ZaliMixin(ZaliInterface, class {
                 msg: body?.status === 'accepted' ? `Теперь вы друзья с ${name}` : `Заявка в друзья отправлена: ${name}`,
                 ts: new Date().toLocaleTimeString(),
             });
+            this.rememberContactRelation(name, body?.status === 'accepted'
+                ? { ...this.getCachedContactRelation(name), isFriend: true, friendRequest: null }
+                : { ...this.getCachedContactRelation(name), friendRequest: { direction: 'outgoing' } });
             this.setProfileState({ busy: '' });
             if (this.ensureProfileState().username === name) await this.refreshProfile();
             void this.loadFriendRequests();
@@ -40427,6 +41555,7 @@ ZaliMixin(ZaliInterface, class {
             const body = await res.json().catch(() => ({}));
             if (body?.status === 'accepted' && body?.friend) {
                 this.addLogEntry({ type: 'SUCCESS', msg: `Теперь вы друзья с ${body.friend}`, ts: new Date().toLocaleTimeString() });
+                this.rememberContactRelation(body.friend, { ...this.getCachedContactRelation(body.friend), isFriend: true, friendRequest: null });
             }
             await this.loadFriendRequests();
             if (this.ensureProfileState().username) await this.refreshProfile();
@@ -40444,6 +41573,7 @@ ZaliMixin(ZaliInterface, class {
                 interactive: true,
             });
             if (!res.ok) return;
+            this.rememberContactRelation(name, { ...this.getCachedContactRelation(name), isFriend: false, friendRequest: null });
             await this.loadFriendRequests();
             if (this.ensureProfileState().username) await this.refreshProfile();
         } catch (e) {
@@ -40570,6 +41700,8 @@ ZaliMixin(ZaliInterface, class {
                 commentDraft: '',
                 commentError: '',
                 comments: Array.isArray(payload?.comments) ? payload.comments : state.comments,
+"""#,
+    #"""
             });
         } catch (e) {
             this.setProfileState({ busy: '', commentError: 'Не удалось отправить комментарий' });
@@ -41255,8 +42387,6 @@ ZaliMixin(ZaliInterface, class {
 
         const linkIndex = target.getAttribute?.('data-profile-link-index');
         const linkField = target.getAttribute?.('data-profile-link-field');
-"""#,
-    #"""
         if (linkIndex !== null && linkIndex !== undefined && linkField) {
             this.updateProfileDraftLink(Number(linkIndex), linkField, target.value);
             return;
@@ -42932,6 +44062,8 @@ ZaliMixin(ZaliInterface, class {
         const inputAudioMic = document.getElementById('inputAudioMic');
         const inputAudioSpeaker = document.getElementById('inputAudioSpeaker');
         const inputMasterVolume = document.getElementById('inputMasterVolume');
+        const inputNotificationVolume = document.getElementById('inputNotificationVolume');
+        const checkForUpdatesBtn = document.getElementById('checkForUpdatesBtn');
 
         const openAvatarPicker = () => {
             const input = document.createElement('input');
@@ -42988,6 +44120,8 @@ ZaliMixin(ZaliInterface, class {
             this.applyNetworkConfigToInputs();
             this.renderUiV2Settings();
             this.renderAudioDeviceSettings();
+            this.renderNotificationVolumeSettings();
+            this.renderUpdateSettings();
             // Карточку кеша рисует openSettingsView() — там же, где остальные
             // разделы настроек. Здесь её быть не должно: в настройки попадают
             // ещё и через нижнюю панель и через сегмент Хаба, и карточка,
@@ -43008,6 +44142,16 @@ ZaliMixin(ZaliInterface, class {
         if (inputMasterVolume) {
             inputMasterVolume.addEventListener('input', () => {
                 this.setMasterVolumePercent(inputMasterVolume.value);
+            });
+        }
+        if (inputNotificationVolume) {
+            inputNotificationVolume.addEventListener('input', () => {
+                this.setNotificationVolumePercent(inputNotificationVolume.value);
+            });
+        }
+        if (checkForUpdatesBtn) {
+            checkForUpdatesBtn.addEventListener('click', () => {
+                void this.checkForAppUpdateFromSettings();
             });
         }
         if (navigator.mediaDevices?.addEventListener) {

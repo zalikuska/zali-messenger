@@ -106,15 +106,16 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Только для владельца/админа — ровно та же граница, что раньше решала,
-    // виден ли #serverSettingsBtn вообще (renderServerToolbar). У остальных
-    // участников ПКМ по серверу молча ничего не делает.
+    // «Казна» — всем участникам (пополнить может любой, распоряжаться — по праву,
+    // это решает сервер). Настройки и участники — только владельцу/админу, ровно
+    // та же граница, что раньше решала, виден ли #serverSettingsBtn вообще.
     openServerRailContextMenu(serverId, x, y) {
         this.closeServerRailContextMenu();
         const sid = String(serverId || '').trim();
         if (!sid) return;
         const server = (this.S.servers || []).find(s => s.id === sid);
-        if (!server || !this.canManageServer(server)) return;
+        if (!server) return;
+        const canManage = this.canManageServer(server);
 
         const menu = document.createElement('div');
         menu.id = 'serverRailContextMenu';
@@ -122,12 +123,16 @@ ZaliMixin(ZaliInterface, class {
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
         menu.innerHTML = `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="treasury">
+                ${this.uiIcon('coin')}<span>Казна</span>
+            </button>
+            ${canManage ? `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="settings">
                 ${this.uiIcon('gear')}<span>Настройки сервера</span>
             </button>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="members">
                 ${this.uiIcon('user')}<span>Список участников</span>
-            </button>
+            </button>` : ''}
         `;
         document.body.appendChild(menu);
 
@@ -146,6 +151,10 @@ ZaliMixin(ZaliInterface, class {
         menu.style.top = `${top}px`;
         menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
 
+        menu.querySelector('[data-action="treasury"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.openTreasuryModal(sid);
+        });
         menu.querySelector('[data-action="settings"]')?.addEventListener('click', () => {
             this.closeServerRailContextMenu();
             this.openServerModal('edit', sid, 'overview');

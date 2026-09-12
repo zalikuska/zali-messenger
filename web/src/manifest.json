@@ -43,6 +43,7 @@
     "interface/viewport.js",
     "interface/mobile.js",
     "interface/zalicoin.js",
+    "interface/treasury.js",
     "interface/prefs.js",
     "interface/storage.js",
     "interface/cache.js",

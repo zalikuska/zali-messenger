@@ -8195,6 +8195,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     /* Удержание — не держатель, а монеты «в пути» к получателям карточек:
        та же акцентная гамма, но штриховкой, чтобы не спутать с балансом. */
     --zc-series-held: repeating-linear-gradient(135deg, rgba(var(--accent-rgb), .55) 0 3px, rgba(var(--accent-rgb), .16) 3px 6px);
+    /* Казны серверов — у монет есть хозяин, но это не человек: штриховка
+       в другую сторону и мельче, чтобы не слиться с удержанием. */
+    --zc-series-treasury: repeating-linear-gradient(45deg, rgba(var(--accent-rgb), .42) 0 2px, rgba(var(--accent-rgb), .1) 2px 5px);
 }
 
 .zc-view {
@@ -8535,6 +8538,276 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     flex: none;
     margin-top: 0;
     padding: 0 14px;
+}
+
+/* ---- «От серверов»: выплаты из казны ---- */
+.zc-payouts-total {
+    align-self: center;
+    color: rgb(var(--accent-rgb));
+    font-weight: 800;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* .zc-view — flex-колонка ограниченной высоты: без flex:none карточка
+   сжималась под соседей, и её собственный скролл срезал даже одну строку. */
+.zc-payouts-card {
+    flex: none;
+}
+
+.zc-payouts-card .zc-gifts-list {
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.zc-payouts-empty {
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.zc-payout-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.025);
+}
+
+.server-avatar.zc-payout-avatar {
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: 11px;
+    font-size: 14px;
+}
+
+.zc-payout-server {
+    color: var(--text);
+    font-weight: 700;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zc-payout-note {
+    color: var(--text2);
+    font-size: 12px;
+    font-style: italic;
+    overflow-wrap: anywhere;
+}
+
+.zc-payout-amount {
+    flex: none;
+    color: rgb(var(--accent-rgb));
+    font-weight: 800;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Казна сервера (ПКМ по серверу → «Казна») ----
+   Модалка переносится в <body> (treasury.js), поэтому fixed, а не absolute
+   внутри .main, как у модалки перевода. */
+.coin-transfer-modal.treasury-modal {
+    position: fixed;
+    z-index: 1300;
+}
+
+.treasury-box {
+    width: min(100%, 440px);
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+}
+
+.treasury-head-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.treasury-head-copy .settings-kicker {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.treasury-balance {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.025);
+}
+
+.treasury-balance-value {
+    color: var(--text);
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.treasury-balance-unit {
+    color: rgb(var(--accent-rgb));
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.treasury-balance-label {
+    margin-left: auto;
+    color: var(--text2);
+    font-size: 12px;
+}
+
+.treasury-tabs,
+.treasury-seg {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 13px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.03);
+}
+
+.treasury-tab,
+.treasury-seg button {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.treasury-tab:hover,
+.treasury-seg button:hover {
+    color: var(--text);
+}
+
+.treasury-tab.is-active,
+.treasury-seg button.is-active {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+}
+
+.treasury-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.treasury-pane[hidden],
+.treasury-tab[hidden],
+.coin-transfer-field[hidden] {
+    display: none;
+}
+
+.coin-transfer-field select {
+    height: var(--control-h);
+    padding: 0 12px;
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.coin-transfer-field select:focus {
+    outline: none;
+    border-color: var(--lime);
+    box-shadow: 0 0 0 2px var(--lime-dim);
+}
+
+.coin-transfer-field select option {
+    background: #15171b;
+    color: var(--text);
+}
+
+.coin-transfer-status.is-ok {
+    color: rgb(var(--accent-rgb));
+}
+
+.treasury-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text2);
+}
+
+.treasury-history {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.treasury-history-empty {
+    padding: 8px 2px;
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.treasury-op {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.02);
+}
+
+.treasury-op-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.treasury-op-title {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.treasury-op-meta {
+    color: var(--text2);
+    font-size: 11.5px;
+}
+
+.treasury-op-note {
+    color: var(--text2);
+    font-size: 12px;
+    font-style: italic;
+    overflow-wrap: anywhere;
+}
+
+.treasury-op-amount {
+    flex: none;
+    color: var(--text2);
+    font-size: 14px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.treasury-op.is-in .treasury-op-amount {
+    color: rgb(var(--accent-rgb));
 }
 
 /* ---- Карточка ZaliCoin в ленте ------------------------------------------

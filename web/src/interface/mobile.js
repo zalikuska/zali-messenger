@@ -621,6 +621,8 @@ ZaliMixin(ZaliInterface, class {
         this.applyNetworkConfigToInputs();
         this.renderUiV2Settings();
         this.renderAudioDeviceSettings();
+        this.renderNotificationVolumeSettings();
+        this.renderUpdateSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         // Индекс сводок кеша поднимается лениво, первым обращением. Открытие

@@ -69,6 +69,72 @@ ZaliMixin(ZaliInterface, class {
         this.renderContacts();
     }
 
+    ensureContactRelationCache() {
+        if (!this._contactRelationCache) this._contactRelationCache = new Map();
+        return this._contactRelationCache;
+    }
+
+    // Единая точка правды о «подписан/друг» для контакта — читают и пишут её
+    // контекстное меню, и профиль (refreshProfile), и прямые действия из меню
+    // (followUserDirect и т.д.). Без неё каждое открытие меню начинало с нуля
+    // и всегда показывало нейтральную подпись до ответа сети, даже для
+    // контакта, чей профиль только что смотрели.
+    getCachedContactRelation(name) {
+        const key = String(name || '').trim().toLowerCase();
+        if (!key) return null;
+        return this.ensureContactRelationCache().get(key) || null;
+    }
+
+    rememberContactRelation(name, data) {
+        const key = String(name || '').trim().toLowerCase();
+        if (!key) return;
+        this.ensureContactRelationCache().set(key, {
+            isFollowing: !!data?.isFollowing,
+            isFriend: !!data?.isFriend,
+            friendRequest: data?.friendRequest || null,
+        });
+    }
+
+    contactFollowLabel(relation) {
+        return relation?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
+    }
+
+    contactFollowIcon(relation) {
+        return relation?.isFollowing ? 'eye-off' : 'eye';
+    }
+
+    contactFriendLabel(relation) {
+        if (relation?.isFriend) return 'Вы друзья';
+        if (relation?.friendRequest?.direction === 'outgoing') return 'Заявка отправлена';
+        if (relation?.friendRequest?.direction === 'incoming') return 'Принять заявку в друзья';
+        return 'Попроситься в друзья';
+    }
+
+    // Пишет relation в уже открытое меню, но трогает DOM только там, где
+    // значение реально другое — иначе повторное совпадение с кешем само
+    // стало бы лишней перерисовкой и тем же перемигом, который чинится.
+    applyContactRelationToMenu(menu, relation) {
+        if (!menu) return;
+        const followLabel = menu.querySelector('#contactFollowLabel');
+        const wantFollowLabel = this.contactFollowLabel(relation);
+        if (followLabel && followLabel.textContent !== wantFollowLabel) followLabel.textContent = wantFollowLabel;
+        const followBtn = menu.querySelector('[data-action="follow"]');
+        const wantIcon = this.contactFollowIcon(relation);
+        if (followBtn && followBtn.dataset.icon !== wantIcon) {
+            const followIcon = followBtn.querySelector('.ui-icon');
+            if (followIcon) followIcon.outerHTML = this.uiIcon(wantIcon);
+            followBtn.dataset.icon = wantIcon;
+        }
+        const friendLabel = menu.querySelector('#contactFriendLabel');
+        const wantFriendLabel = this.contactFriendLabel(relation);
+        if (friendLabel && friendLabel.textContent !== wantFriendLabel) friendLabel.textContent = wantFriendLabel;
+        menu.dataset.following = relation?.isFollowing ? '1' : '0';
+        menu.dataset.friend = relation?.isFriend ? '1' : '0';
+        if (relation?.friendRequest?.direction === 'incoming' && relation.friendRequest.id) {
+            menu.querySelector('[data-action="friend"]')?.setAttribute('data-request-id', relation.friendRequest.id);
+        }
+    }
+
     closeContactContextMenu() {
         const existing = document.getElementById('contactContextMenu');
         if (existing) existing.remove();
@@ -94,13 +160,15 @@ ZaliMixin(ZaliInterface, class {
         const muted = !!(this.S.mutedChats || {})[name];
         const percent = this.getPeerVolumePercent(name);
         const isSelf = name === this.myName();
+        // Известное по кешу отношение (уже видели этот профиль/меню/действие
+        // над ним в этой сессии) идёт в разметку сразу — так контакт, с
+        // которым уже взаимодействовали, не мигает нейтральной подписью,
+        // пока не придёт сеть. Для контакта, увиденного впервые, relation
+        // пуст, и подписи остаются прежними нейтральными.
+        const relation = this.getCachedContactRelation(name);
         const menu = document.createElement('div');
         menu.id = 'contactContextMenu';
         menu.className = 'peer-context-menu';
-        // Подписка и дружба идут первыми: это то, ради чего сюда чаще всего
-        // и жмут ПКМ. Их подписи зависят от текущих отношений, которых мы ещё
-        // не знаем, — они уточняются ниже, когда придёт профиль. До ответа
-        // пункты показывают нейтральное действие, а не мигают пустотой.
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
         menu.innerHTML = `
@@ -109,10 +177,10 @@ ZaliMixin(ZaliInterface, class {
             </button>
             ${isSelf ? '' : `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="follow">
-                ${this.uiIcon('eye')}<span id="contactFollowLabel">Отслеживать</span>
+                ${this.uiIcon(this.contactFollowIcon(relation))}<span id="contactFollowLabel">${this.contactFollowLabel(relation)}</span>
             </button>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="friend">
-                ${this.uiIcon('user-plus')}<span id="contactFriendLabel">Попроситься в друзья</span>
+                ${this.uiIcon('user-plus')}<span id="contactFriendLabel">${this.contactFriendLabel(relation)}</span>
             </button>`}
             <div class="peer-context-menu-sep" aria-hidden="true"></div>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
@@ -124,6 +192,7 @@ ZaliMixin(ZaliInterface, class {
                        class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
         `;
+        if (!isSelf) this.applyContactRelationToMenu(menu, relation);
         document.body.appendChild(menu);
 
         // Меню разворачивается ОТ курсора, а не на ближайший свободный край:
@@ -232,29 +301,29 @@ ZaliMixin(ZaliInterface, class {
      * до сервера. Если меню успели закрыть — ответ просто выбрасывается.
      */
     async decorateContactContextMenu(menu, name) {
+        // Диск — прежде сети: он отвечает за миллисекунды и почти всегда уже
+        // содержит то же самое, что вернёт сервер, поэтому обычно это и есть
+        // тот единственный кадр, где подписи меняются, а сетевой ответ ниже
+        // просто молча подтверждает их (см. сравнение внутри
+        // applyContactRelationToMenu — трогает DOM только при реальной
+        // разнице).
+        try {
+            const diskCached = await this.loadCachedProfile(name);
+            if (diskCached && menu.isConnected) {
+                this.rememberContactRelation(name, diskCached);
+                this.applyContactRelationToMenu(menu, this.getCachedContactRelation(name));
+            }
+        } catch (e) {}
         try {
             const res = await this.apiFetch(this.apiRoutes.profiles.byUsername(name), { interactive: true });
             if (!res.ok) return;
             if (!menu.isConnected) return;
             const data = await res.json();
-            menu.dataset.following = data?.isFollowing ? '1' : '0';
-            menu.dataset.friend = data?.isFriend ? '1' : '0';
-            const followLabel = menu.querySelector('#contactFollowLabel');
-            if (followLabel) followLabel.textContent = data?.isFollowing ? 'Не отслеживать' : 'Отслеживать';
-            const followIcon = menu.querySelector('[data-action="follow"] .ui-icon');
-            if (followIcon) followIcon.outerHTML = this.uiIcon(data?.isFollowing ? 'eye-off' : 'eye');
-            const friendLabel = menu.querySelector('#contactFriendLabel');
-            if (friendLabel) {
-                if (data?.isFriend) friendLabel.textContent = 'Вы друзья';
-                else if (data?.friendRequest?.direction === 'outgoing') friendLabel.textContent = 'Заявка отправлена';
-                else if (data?.friendRequest?.direction === 'incoming') friendLabel.textContent = 'Принять заявку в друзья';
-                else friendLabel.textContent = 'Попроситься в друзья';
-            }
-            if (data?.friendRequest?.direction === 'incoming') {
-                menu.querySelector('[data-action="friend"]')?.setAttribute('data-request-id', data.friendRequest.id);
-            }
+            this.rememberContactRelation(name, data);
+            void this.cachePut('profile', String(name).trim().toLowerCase(), JSON.stringify(data), { contentType: 'application/json' });
+            this.applyContactRelationToMenu(menu, this.getCachedContactRelation(name));
         } catch (e) {
-            // Подписи останутся нейтральными — меню всё равно рабочее.
+            // Подписи останутся тем, что уже показано, — кешем или нейтралью.
         }
     }
 
@@ -320,7 +389,12 @@ ZaliMixin(ZaliInterface, class {
     soundBus(ctx) {
         if (this.sound.bus && this.sound.bus.ctx === ctx) return this.sound.bus.input;
         const master = ctx.createGain();
-        master.gain.value = 0.9;
+        // 0.9 — заданный вручную запас громкости до отсечки в компрессоре
+        // (см. комментарий класса ниже); пользовательская громкость
+        // уведомлений (settings, applyNotificationVolume) — множитель поверх
+        // него, а не замена, иначе 100% на слайдере звучал бы громче, чем
+        // рассчитан этот граф.
+        master.gain.value = 0.9 * this.notificationVolumeFactor();
         const compressor = ctx.createDynamicsCompressor();
         compressor.threshold.setValueAtTime(-18, ctx.currentTime);
         compressor.knee.setValueAtTime(20, ctx.currentTime);
@@ -329,7 +403,7 @@ ZaliMixin(ZaliInterface, class {
         compressor.release.setValueAtTime(0.25, ctx.currentTime);
         master.connect(compressor);
         compressor.connect(ctx.destination);
-        this.sound.bus = { ctx, input: master };
+        this.sound.bus = { ctx, input: master, master };
         return master;
     }
 
