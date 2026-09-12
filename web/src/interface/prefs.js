@@ -421,7 +421,7 @@ ZaliMixin(ZaliInterface, class {
             servers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 4.6h11.6a2 2 0 0 1 2 2v2.8a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2V6.6a2 2 0 0 1 2-2Z"/><path d="M6.2 12.6h11.6a2 2 0 0 1 2 2v2.8a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2v-2.8a2 2 0 0 1 2-2Z"/><path d="M7.6 8h.05M7.6 16h.05M10.4 8h6M10.4 16h6"/></svg>',
             settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h8.2"/><path d="M16.8 7H19"/><path d="M15 5.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/><path d="M5 17h2.2"/><path d="M10.8 17H19"/><path d="M9 15.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/><path d="M5 12h4.2"/><path d="M12.8 12H19"/><path d="M11 10.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/></svg>',
             hub: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.75 20.25 9v9.25a2 2 0 0 1-2 2h-4.1v-5.35h-4.3v5.35h-4.1a2 2 0 0 1-2-2V9L12 3.75Z"/></svg>',
-            zalicoin: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.25"/><path d="M12 7.4v9.2M14.6 9.4c0-1.05-1.16-1.9-2.6-1.9-1.44 0-2.6.85-2.6 1.9 0 1.05 1.16 1.55 2.6 1.9 1.44.35 2.6.85 2.6 1.9 0 1.05-1.16 1.9-2.6 1.9-1.44 0-2.6-.85-2.6-1.9"/></svg>',
+            zalicoin: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.25"/><path d="M9.5 9h5l-5 6h5M10.4 12h3.2"/></svg>',
         };
         return icons[key] || icons.hub;
     }

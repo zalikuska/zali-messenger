@@ -2982,7 +2982,16 @@ body[data-nav-mode="servers"] .contacts {
 
 #viewChat .msgs {
     min-height: 0;
-    padding: 16px 16px calc(var(--footer-dock-h) + var(--footer-dock-gap) + 16px);
+    /* Pull the scrollable box past #viewChat's own 16px right padding so the
+       scrollbar sits close to the panel's true edge instead of 32px in (16px
+       #viewChat padding + this element's own 16px). An auto-width box grows
+       to compensate for a negative margin, so this widens .msgs by 12px on
+       the right without touching #viewChat's padding (which the header/
+       voice-panel rows above still use) — leaving a small 4px gap to the
+       true edge. The right padding shrinks to keep bubbles clear of the
+       scrollbar itself; the other sides are unchanged. */
+    margin-right: -12px;
+    padding: 16px 6px calc(var(--footer-dock-h) + var(--footer-dock-gap) + 16px) 16px;
     overflow-y: auto;
     scroll-padding-bottom: calc(var(--footer-dock-h) + var(--footer-dock-gap) + 16px);
 }
@@ -2990,17 +2999,22 @@ body[data-nav-mode="servers"] .contacts {
 #viewChat .input-area {
     /* Full-bleed: the blurred backdrop must cover the whole dock (edge to
        edge, down to the window's bottom) — it used to be a floating card
-       inset 12px on both sides and sitting 12px above the bottom edge, so
-       the underlying (unblurred) chat content showed through those margins
-       instead of being blurred. The old 12px side inset moves into padding
-       so .input-bar's content still sits the same distance from the edges. */
+       inset 12px on both sides and sitting var(--footer-dock-gap) above the
+       bottom edge, so the underlying (unblurred) chat content showed through
+       those margins instead of being blurred. Both insets move into padding
+       instead of being dropped, so .input-bar's content — and the ::before
+       divider line, which sits at this box's own top edge — land exactly
+       where they did before; only the box (and its blur) now reaches past
+       them to the true edges. Dropping the bottom inset outright (an earlier
+       version of this fix did) shifted the whole dock, divider included,
+       down by var(--footer-dock-gap). */
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
     min-height: var(--footer-dock-h);
     margin: 0;
-    padding: 7px 12px;
+    padding: 7px 12px calc(7px + var(--footer-dock-gap));
     border-top: 0;
     z-index: 2;
     background: transparent;
@@ -3012,8 +3026,12 @@ body[data-nav-mode="servers"] .contacts {
 #viewChat .input-area::before {
     content: "";
     position: absolute;
-    left: 0;
-    right: 0;
+    /* Inset 12px like every other --footer-line divider (.me's, above the
+       settings row) — .input-area itself is full-bleed now (see above), but
+       left:0/right:0 here would stretch this one line edge to edge with it,
+       out of step with the rest of the UI's footer lines. */
+    left: 12px;
+    right: 12px;
     top: 0;
     height: var(--footer-line-size);
     background: var(--footer-line-color);
@@ -8200,6 +8218,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     --zc-series-8: rgba(var(--accent-rgb), .12);
     --zc-series-other: rgba(255,255,255,.14);
     --zc-series-unassigned: rgba(255,255,255,.05);
+    /* Удержание — не держатель, а монеты «в пути» к получателям карточек:
+       та же акцентная гамма, но штриховкой, чтобы не спутать с балансом. */
+    --zc-series-held: repeating-linear-gradient(135deg, rgba(var(--accent-rgb), .55) 0 3px, rgba(var(--accent-rgb), .16) 3px 6px);
 }
 
 .zc-view {
@@ -8211,6 +8232,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .zc-orb {
     font-weight: 800;
     letter-spacing: -.03em;
+}
+
+.zc-orb svg {
+    width: 58%;
+    height: 58%;
 }
 
 .zc-balance-card {
@@ -8426,6 +8452,550 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     gap: 10px;
 }
 
+.coin-gift-summary {
+    margin: -4px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text2);
+}
+
+.zc-stepper {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.coin-transfer-field .zc-stepper input {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+}
+
+.zc-stepper input::-webkit-outer-spin-button,
+.zc-stepper input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.zc-stepper-btn {
+    flex: none;
+    width: var(--control-h);
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color .15s var(--ease-out), background .15s var(--ease-out);
+}
+
+.zc-stepper-btn:hover {
+    border-color: rgba(var(--accent-rgb), .45);
+    background: rgba(255,255,255,.07);
+}
+
+.zc-balance-held {
+    color: var(--text2);
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px dashed rgba(var(--accent-rgb), .3);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-gifts-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.zc-gifts-card > * {
+    position: relative;
+    z-index: 1;
+}
+
+.zc-gifts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.zc-gift-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.025);
+}
+
+.zc-gift-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.zc-gift-row-amount {
+    color: var(--text);
+    font-weight: 800;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-gift-row-meta {
+    color: var(--text2);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zc-card-btn.zc-gift-row-btn {
+    width: auto;
+    flex: none;
+    margin-top: 0;
+    padding: 0 14px;
+}
+
+/* ---- Карточка ZaliCoin в ленте ------------------------------------------
+   Спокойная нейтральная рамка; акцент — только монета, «ZC», заполненные
+   заряды и главное действие. Отменённая карточка приглушается, а не
+   перекрашивается. Композиция: шапка (монета · название · время) → сумма
+   крупно → пояснение → заряды со счётчиком → действие. */
+.msg.coin-card-msg .bwrap {
+    width: fit-content;
+    max-width: min(300px, 86%);
+}
+
+.zc-card {
+    width: 256px;
+    max-width: 100%;
+    box-sizing: border-box;
+"""#,
+    #"""
+    display: flex;
+    flex-direction: column;
+    padding: 14px 16px 16px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,.08);
+    background:
+        radial-gradient(100% 70% at 0% 0%, rgba(var(--accent-rgb), .045), transparent 62%),
+        linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 14px 34px -24px rgba(0,0,0,.75);
+    color: var(--text);
+}
+
+.zc-card.is-cancelled,
+.zc-card.is-missing {
+    border-color: rgba(255,255,255,.06);
+    background: rgba(255,255,255,.02);
+}
+
+.zc-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.zc-card-coin {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: rgba(var(--accent-rgb), .88);
+    background: radial-gradient(circle at 34% 28%, rgba(var(--accent-rgb), .17), rgba(var(--accent-rgb), .04) 70%);
+}
+
+.zc-card-coin svg {
+    width: 22px;
+    height: 22px;
+}
+
+.zc-card.is-cancelled .zc-card-coin,
+.zc-card.is-missing .zc-card-coin {
+    color: var(--text3);
+    background: rgba(255,255,255,.04);
+}
+
+.zc-card-titles {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.zc-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.15;
+    color: var(--text);
+}
+
+.zc-card-caption {
+    font-size: 11px;
+    line-height: 1.15;
+    color: var(--text3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.zc-card-time {
+    align-self: flex-start;
+    margin-left: auto;
+    padding-top: 1px;
+    font-size: 11px;
+    color: var(--text3);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-card-amount {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-top: 18px;
+}
+
+.zc-card-value {
+    font-size: 34px;
+    line-height: .95;
+    font-weight: 800;
+    letter-spacing: -.035em;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.zc-card-unit {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    color: rgba(var(--accent-rgb), .82);
+}
+
+.zc-card.is-cancelled .zc-card-value,
+.zc-card.is-missing .zc-card-value {
+    color: var(--text2);
+    text-decoration: line-through;
+    text-decoration-thickness: 1.5px;
+    text-decoration-color: rgba(255,255,255,.25);
+}
+
+.zc-card.is-cancelled .zc-card-unit,
+.zc-card.is-missing .zc-card-unit {
+    color: var(--text3);
+}
+
+.zc-card-sub {
+    margin-top: 7px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--text2);
+    overflow-wrap: anywhere;
+}
+
+.zc-card-arrow {
+    margin: 0 6px;
+    color: var(--text3);
+}
+
+/* ---- Заряды: тонкие полоски с зазором. Сама полоска — ::before внутри
+   прозрачного блока 12px высотой: нарисовать 3px, а навести курсор на 12px. */
+.zc-charges {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.zc-charges-track {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    gap: 4px;
+}
+
+.zc-charge,
+.zc-charges-meter {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 12px;
+    outline: none;
+}
+
+.zc-charge::before,
+.zc-charges-meter::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 3px;
+    margin-top: -1.5px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.09);
+    transition: background .25s var(--ease-out), transform .2s var(--ease-out);
+}
+
+.zc-charge.is-on::before {
+    background: rgba(var(--accent-rgb), .85);
+}
+
+.zc-card.is-cancelled .zc-charge.is-on::before {
+    background: rgba(var(--accent-rgb), .45);
+}
+
+.zc-charge[data-zc-tip]:hover::before,
+.zc-charge[data-zc-tip]:focus::before {
+    background: var(--lime);
+    transform: scaleY(1.7);
+}
+
+.zc-charges-meter i {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 3px;
+    margin-top: -1.5px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb), .85);
+}
+
+/* Заполнение: полоска коротко раздувается и вспыхивает, потом оседает.
+   backwards, а не both: до своей очереди в каскаде полоска остаётся пустой,
+   а после анимации возвращается к обычным стилям — и наведение снова работает. */
+.zc-charge.is-pop::before {
+    animation: zc-charge-pop .62s cubic-bezier(.3, 1.4, .4, 1) backwards;
+    animation-delay: var(--zc-pop-delay, 0ms);
+}
+
+.zc-charges-meter.is-pop i {
+    animation: zc-charge-pop .62s cubic-bezier(.3, 1.4, .4, 1) backwards;
+    animation-delay: var(--zc-pop-delay, 0ms);
+}
+
+@keyframes zc-charge-pop {
+    0% {
+        background: rgba(255,255,255,.09);
+        transform: scale(1, 1);
+        box-shadow: 0 0 0 rgba(var(--accent-rgb), 0);
+    }
+    38% {
+        background: var(--lime);
+        transform: scale(1.06, 2.5);
+        box-shadow: 0 0 10px rgba(var(--accent-rgb), .45);
+    }
+    100% {
+        background: rgba(var(--accent-rgb), .85);
+        transform: scale(1, 1);
+        box-shadow: 0 0 0 rgba(var(--accent-rgb), 0);
+    }
+}
+
+.zc-charges-count {
+    flex: none;
+    display: inline-block;
+    min-width: 22px;
+    text-align: right;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-charges-count.is-bump {
+    animation: zc-count-bump .5s var(--ease-out) backwards;
+    animation-delay: var(--zc-pop-delay, 0ms);
+}
+
+@keyframes zc-count-bump {
+    40% {
+        transform: scale(1.2);
+        color: var(--lime);
+    }
+}
+
+/* Подсказка «кому ушло» — над полоской, в стиле всплывающих меню. Крайние
+   прижимаются к краю, чтобы не вылезать за карточку. */
+.zc-charge[data-zc-tip]::after,
+.zc-charges-meter[data-zc-tip]::after {
+    content: attr(data-zc-tip);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    z-index: 5;
+    max-width: 220px;
+    padding: 5px 9px;
+    border-radius: 9px;
+    border: 1px solid var(--menu-border);
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    -webkit-backdrop-filter: var(--menu-blur);
+    backdrop-filter: var(--menu-blur);
+    color: var(--text);
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, 3px);
+    transition: opacity .14s var(--ease-out), transform .14s var(--ease-out);
+}
+
+.zc-charge[data-zc-tip]:hover::after,
+.zc-charge[data-zc-tip]:focus::after,
+.zc-charges-meter[data-zc-tip]:hover::after,
+.zc-charges-meter[data-zc-tip]:focus::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.zc-charge:first-child[data-zc-tip]::after,
+.zc-charges-meter[data-zc-tip]::after {
+    left: 0;
+    transform: translate(0, 3px);
+}
+
+.zc-charge:last-child:not(:first-child)[data-zc-tip]::after {
+    left: auto;
+    right: 0;
+    transform: translate(0, 3px);
+}
+
+.zc-charge:first-child[data-zc-tip]:hover::after,
+.zc-charge:first-child[data-zc-tip]:focus::after,
+.zc-charge:last-child:not(:first-child)[data-zc-tip]:hover::after,
+.zc-charge:last-child:not(:first-child)[data-zc-tip]:focus::after,
+.zc-charges-meter[data-zc-tip]:hover::after,
+.zc-charges-meter[data-zc-tip]:focus::after {
+    transform: translate(0, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .zc-charge.is-pop::before,
+    .zc-charges-meter.is-pop i,
+    .zc-charges-count.is-bump {
+        animation: none;
+    }
+}
+
+/* ---- Действие и подписи ---- */
+.zc-card-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    height: 38px;
+    margin-top: 14px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .12s var(--ease-out), filter .15s var(--ease-out), background .15s var(--ease-out), border-color .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.zc-card-btn:not(:disabled):active {
+    transform: scale(.97);
+}
+
+.zc-card-btn.is-primary {
+    background: var(--lime);
+    color: #050505;
+}
+
+.zc-card-btn.is-primary:hover {
+    filter: brightness(1.06);
+}
+
+.zc-card-btn.is-ghost {
+    background: rgba(255,255,255,.045);
+    border-color: rgba(255,255,255,.08);
+    color: var(--text);
+}
+
+.zc-card-btn.is-ghost:hover {
+    border-color: rgba(255,77,109,.35);
+    color: var(--red);
+}
+
+.zc-card-btn.is-confirm {
+    background: rgba(255,77,109,.09);
+    border-color: rgba(255,77,109,.4);
+    color: var(--red);
+}
+
+.zc-card-btn:disabled {
+    cursor: default;
+    background: rgba(255,255,255,.035);
+    border-color: rgba(255,255,255,.06);
+    color: var(--text2);
+}
+
+.zc-card-btn.is-busy:disabled {
+    color: var(--text3);
+}
+
+.zc-card-btn.is-done:disabled {
+    background: rgba(var(--accent-rgb), .07);
+    border-color: rgba(var(--accent-rgb), .2);
+    color: rgba(var(--accent-rgb), .95);
+}
+
+.zc-card-check {
+    width: 14px;
+    height: 14px;
+    flex: none;
+}
+
+.zc-card-note {
+    margin-top: 10px;
+    font-size: 11.5px;
+    line-height: 1.35;
+    text-align: center;
+    color: var(--text3);
+    overflow-wrap: anywhere;
+}
+
+.zc-card-note.is-error {
+    color: var(--red);
+}
+
+.zc-card-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,.06);
+    font-size: 12px;
+    color: var(--text3);
+    overflow-wrap: anywhere;
+}
+
+.zc-card-status.is-warn {
+    color: var(--red);
+}
+
+.zc-card-status.is-ok {
+    color: rgba(var(--accent-rgb), .95);
+    font-weight: 700;
+}
+
 /* ============================================================================
    MOBILE REDESIGN 2026 — Telegram-class shell, Zali brand (dark + neon-lime)
    Scoped to <=760px and appended last so it wins equal-specificity cascades.
@@ -8507,8 +9077,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
            .main's background is already transparent on mobile, so there is
            nothing left for the blur to do anyway. */
         backdrop-filter: none;
-"""#,
-    #"""
         -webkit-backdrop-filter: none;
         box-shadow: none;
     }
@@ -10596,7 +11164,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                             <button class="attach-btn coin-transfer-btn" id="coinTransferBtn" type="button" title="Перевести ZaliCoin" aria-label="Перевести ZaliCoin">
                                 <svg class="ui-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.8"/>
-                                    <path d="M12 7.4v9.2M14.6 9.4c0-1.05-1.16-1.9-2.6-1.9-1.44 0-2.6.85-2.6 1.9 0 1.05 1.16 1.55 2.6 1.9 1.44.35 2.6.85 2.6 1.9 0 1.05-1.16 1.9-2.6 1.9-1.44 0-2.6-.85-2.6-1.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <path d="M9.5 9h5l-5 6h5M10.4 12h3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                                 </svg>
                             </button>
                             <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
@@ -10632,9 +11200,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                             <div>
                                 <span class="settings-kicker">ZaliCoin</span>
                                 <h2>Ваш баланс ZaliCoin</h2>
-                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата.</p>
+                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата, а в каналах раздавайте их карточками.</p>
                             </div>
-                            <div class="hub-orb zc-orb" aria-hidden="true">ZC</div>
+                            <div class="hub-orb zc-orb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width=".9" opacity=".4"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg></div>
                         </section>
 
                         <section class="settings-card zc-balance-card">
@@ -10644,7 +11212,18 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 <span class="zc-balance-unit">ZC</span>
                             </div>
                             <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
+                            <span class="zc-balance-held" id="zaliCoinHeldValue" hidden></span>
                             <button class="btn-flat" id="zaliCoinSendBtn" type="button">Отправить ZaliCoin</button>
+                        </section>
+
+                        <section class="settings-card zc-gifts-card" id="zaliCoinGiftsCard" hidden>
+                            <div class="settings-card-head">
+                                <div>
+                                    <span class="settings-kicker">На удержании</span>
+                                    <h3 class="settings-card-title">Ваши активные карточки</h3>
+                                </div>
+                            </div>
+                            <div class="zc-gifts-list" id="zaliCoinGiftsList"></div>
                         </section>
 
                         <section class="settings-card zc-distribution-card">
@@ -10940,14 +11519,23 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                             <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
                             <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
                         </div>
-                        <label class="coin-transfer-field">
+                        <label class="coin-transfer-field" id="coinTransferRecipientField">
                             <span>Получатель</span>
                             <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
                         </label>
                         <label class="coin-transfer-field">
-                            <span>Сумма (ZC)</span>
+                            <span id="coinTransferAmountLabel">Сумма (ZC)</span>
                             <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
                         </label>
+                        <div class="coin-transfer-field" id="coinGiftClaimsField" hidden>
+                            <span id="coinGiftClaimsLabel">Сколько человек смогут получить</span>
+                            <div class="zc-stepper">
+                                <button class="zc-stepper-btn" type="button" data-zc-step="-1" aria-label="Меньше">−</button>
+                                <input type="number" id="coinGiftClaimsInput" min="1" max="100" step="1" value="1" aria-labelledby="coinGiftClaimsLabel">
+                                <button class="zc-stepper-btn" type="button" data-zc-step="1" aria-label="Больше">+</button>
+                            </div>
+                        </div>
+                        <p class="coin-gift-summary" id="coinGiftSummary" hidden></p>
                         <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
                         <div class="coin-transfer-actions">
                             <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
@@ -11515,6 +12103,12 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             balance: apiRoute('/coins/balance'),
             distribution: apiRoute('/coins/distribution'),
             transfer: apiRoute('/coins/transfer'),
+            transferReceipt: (id) => apiRoute(`/coins/transfers/${encodeURIComponent(id)}`),
+            gifts: apiRoute('/coins/gifts'),
+            giftsLookup: (ids) => apiRoute(`/coins/gifts?ids=${ids.map(encodeURIComponent).join(',')}`),
+            myGifts: apiRoute('/coins/gifts/mine'),
+            giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
+            giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
         },
         diagnostics: {
             decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
@@ -12124,6 +12718,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     }
                 }
             } else {
+"""#,
+    #"""
                 throw new Error('tgs: invalid block type');
             }
 
@@ -12139,8 +12735,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         if (bytes[2] !== 8) throw new Error('tgs: unsupported gzip compression method');
         const flags = bytes[3];
         let pos = 10;
-"""#,
-    #"""
         if (flags & 0x04) {
             const extraLen = bytes[pos] | (bytes[pos + 1] << 8);
             pos += 2 + extraLen;
@@ -13239,6 +13833,12 @@ const DefaultApiRoutes = Object.freeze({
         balance: apiRoute('/coins/balance'),
         distribution: apiRoute('/coins/distribution'),
         transfer: apiRoute('/coins/transfer'),
+        transferReceipt: (id) => apiRoute(`/coins/transfers/${encodeURIComponent(id)}`),
+        gifts: apiRoute('/coins/gifts'),
+        giftsLookup: (ids) => apiRoute(`/coins/gifts?ids=${ids.map(encodeURIComponent).join(',')}`),
+        myGifts: apiRoute('/coins/gifts/mine'),
+        giftClaim: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/claim`),
+        giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
     },
 });
 
@@ -13257,7 +13857,7 @@ const DefaultApiRoutes = Object.freeze({
  *   native_bridge.js        300 /  24  Мост к нативной оболочке: доступность, IPC, разрешения, трассировка.
  *   viewport.js             324 /  17  Окно прокрутки списка сообщений, класс производительности, якоря скролла.
  *   mobile.js               575 /  20  Мобильная раскладка, жесты навигации, переключение экранов.
- *   zalicoin.js             270 /  10  Экран ZaliCoin: баланс, распределение, переводы.
+ *   zalicoin.js             993 /  49  Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах.
  *   prefs.js                452 /  39  Пользовательские настройки: тема, звук, устройства ввода/вывода, сегменты хаба.
  *   storage.js              405 /  31  Ключи localStorage, кэш сообщений, персист контактов.
  *   conversation_keys.js    762 /  44  Реестр ключей разговоров и облачный vault-снапшот.
@@ -14974,7 +15574,7 @@ ZaliMixin(ZaliInterface, class {
 
 
 // --- MODULE: interface/zalicoin.js ---
-// --- ZaliInterface: Экран ZaliCoin: баланс, распределение, переводы. ---
+// --- ZaliInterface: Экран ZaliCoin: баланс, распределение, переводы, карточки в чатах. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
@@ -14985,10 +15585,25 @@ ZaliMixin(ZaliInterface, class {
     // come from /api/coins/*; transfers are server-authoritative (balance
     // checks + double-spend protection live in server/src/coins.rs), this is
     // just presentation + the idempotency key that makes a retried submit safe.
+    //
+    // Карточки. В канале (где собеседников много) ZaliCoin уходит не переводом, а
+    // карточкой: сервер снимает сумму на удержание и выдаёт её по одному заряду на
+    // аккаунт по кнопке «Получить». В личном чате карточка лишь сообщает о
+    // переводе, который уже состоялся. В зашифрованном сообщении едет только
+    // человекочитаемая строка и id операции (parseCoinCard) — суммы, остаток и
+    // статус карточка берёт с сервера, поэтому напечатать «поддельную» карточку
+    // можно, а получить по ней деньги или выдать чужой перевод за свой — нет.
     // ============================================================
 
+    static get COIN_GIFT_MAX_CLAIMS() { return 100; }
+    /** Больше полосок в карточку не помещается — дальше один общий индикатор. */
+    static get COIN_CHARGE_SEGMENTS_MAX() { return 20; }
+    /** Длительность «вспышки» заполнившегося заряда и шаг между соседними. */
+    static get COIN_CHARGE_POP_MS() { return 620; }
+    static get COIN_CHARGE_POP_STAGGER_MS() { return 90; }
+
     async refreshZaliCoinView() {
-        await Promise.all([this.loadZaliCoinBalance(), this.loadZaliCoinDistribution()]);
+        await Promise.all([this.loadZaliCoinBalance(), this.loadZaliCoinDistribution(), this.loadMyCoinGifts()]);
         this.renderZaliCoinView();
     }
 
@@ -14998,6 +15613,7 @@ ZaliMixin(ZaliInterface, class {
             if (!res.ok) return;
             const data = await res.json();
             this.S.zaliCoinBalance = Number(data.balance) || 0;
+            this.S.zaliCoinHeld = Number(data.held) || 0;
         } catch (e) {
             this.trace(`loadZaliCoinBalance error=${e}`);
         }
@@ -15010,9 +15626,37 @@ ZaliMixin(ZaliInterface, class {
             const data = await res.json();
             this.S.zaliCoinTotalSupply = Number(data.totalSupply) || 100000;
             this.S.zaliCoinHolders = Array.isArray(data.holders) ? data.holders : [];
+            this.S.zaliCoinHeldTotal = Number(data.held) || 0;
         } catch (e) {
             this.trace(`loadZaliCoinDistribution error=${e}`);
         }
+    }
+
+    // Активные карточки отправителя — страховка для удержанного: если сообщение с
+    // карточкой не дошло до чата или его удалили, вернуть деньги можно отсюда.
+    async loadMyCoinGifts() {
+        try {
+            const res = await this.apiFetch(this.apiRoutes.coins.myGifts, { interactive: true });
+            if (!res.ok) return;
+            const data = await res.json();
+            const gifts = Array.isArray(data.gifts) ? data.gifts : [];
+            gifts.forEach(gift => this.applyCoinGiftState(gift, { patch: false }));
+            this.S.zaliCoinMyGifts = gifts.map(gift => gift.id).filter(Boolean);
+        } catch (e) {
+            this.trace(`loadMyCoinGifts error=${e}`);
+        }
+    }
+
+    isZaliCoinViewActive() {
+        return !!document.getElementById('viewZaliCoin')?.classList.contains('active');
+    }
+
+    // Карточку активировали/отменили — балансы и «На удержании» на открытом
+    // экране ZaliCoin устарели. Схлопывается: пачка событий даёт один запрос.
+    scheduleZaliCoinRefresh() {
+        if (!this.isZaliCoinViewActive()) return;
+        clearTimeout(this._zaliCoinRefreshTimer);
+        this._zaliCoinRefreshTimer = setTimeout(() => void this.refreshZaliCoinView(), 400);
     }
 
     // Fixed categorical order (never reassigned by rank) — a holder keeps its
@@ -15029,6 +15673,7 @@ ZaliMixin(ZaliInterface, class {
         const totalSupply = this.S.zaliCoinTotalSupply || 100000;
         const balance = this.S.zaliCoinBalance || 0;
         const holders = Array.isArray(this.S.zaliCoinHolders) ? this.S.zaliCoinHolders : [];
+        const heldTotal = Math.max(0, Number(this.S.zaliCoinHeldTotal) || 0);
         const me = this.myName();
 
         const balanceValue = document.getElementById('zaliCoinBalanceValue');
@@ -15050,12 +15695,20 @@ ZaliMixin(ZaliInterface, class {
             }
             balanceShare.textContent = `${shareText}% от эмиссии`;
         }
+        const heldValue = document.getElementById('zaliCoinHeldValue');
+        if (heldValue) {
+            const held = Math.max(0, Number(this.S.zaliCoinHeld) || 0);
+            heldValue.textContent = `На удержании ${held.toLocaleString('ru-RU')} ZC`;
+            heldValue.hidden = held <= 0;
+        }
 
         const MAX_SEGMENTS = 8;
         const top = holders.slice(0, MAX_SEGMENTS);
         const rest = holders.slice(MAX_SEGMENTS);
         const restTotal = rest.reduce((sum, h) => sum + (Number(h.balance) || 0), 0);
-        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal;
+        // Удержанное — не чей-то баланс, но и не «ничьё»: без него эти монеты
+        // попадали бы в «Не распределено», хотя у них есть хозяин и назначение.
+        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal;
         const unassigned = Math.max(0, totalSupply - accounted);
 
         const segments = top.map((holder, index) => ({
@@ -15066,6 +15719,9 @@ ZaliMixin(ZaliInterface, class {
         }));
         if (restTotal > 0) {
             segments.push({ label: `Остальные (${rest.length})`, value: restTotal, isMe: false, color: 'var(--zc-series-other)' });
+        }
+        if (heldTotal > 0) {
+            segments.push({ label: 'На удержании', value: heldTotal, isMe: false, color: 'var(--zc-series-held)' });
         }
         if (unassigned > 0) {
             segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)' });
@@ -15092,39 +15748,162 @@ ZaliMixin(ZaliInterface, class {
                 </div>`;
             }).join('') || '<div class="zc-legend-empty">Пока никто не держит ZaliCoin</div>';
         }
+
+        this.renderMyCoinGifts();
+    }
+
+    renderMyCoinGifts() {
+        const card = document.getElementById('zaliCoinGiftsCard');
+        const list = document.getElementById('zaliCoinGiftsList');
+        if (!card || !list) return;
+        const store = this.coinGiftStore();
+        const me = this.myName();
+        const gifts = (this.S.zaliCoinMyGifts || [])
+            .map(id => store.states.get(id)?.state)
+            .filter(gift => gift && gift.sender === me && gift.status === 'active');
+        card.hidden = gifts.length === 0;
+        list.innerHTML = gifts.map(gift => {
+            const id = String(gift.id);
+            const total = Number(gift.totalClaims) || 1;
+            const remaining = Math.max(0, total - (Number(gift.claimedCount) || 0));
+            const meta = `${this.formatCoinAmount(gift.amount)} ZC × ${remaining}${total > 1 ? ` из ${total}` : ''} · ${this.coinGiftChannelLabel(gift)}`;
+            const pending = store.pending.get(id);
+            const confirming = store.confirmId === id;
+            const label = pending === 'cancel' ? 'Отмена…' : (confirming ? 'Точно отменить?' : 'Отменить');
+            return `<div class="zc-gift-row">
+                <div class="zc-gift-row-main">
+                    <span class="zc-gift-row-amount">${this.formatCoinAmount(gift.held)} ZC</span>
+                    <span class="zc-gift-row-meta">${this.esc(meta)}</span>
+                </div>
+                <button type="button" class="zc-card-btn zc-gift-row-btn ${confirming ? 'is-confirm' : 'is-ghost'}" data-zc-gift-cancel="${this.esc(id)}"${pending ? ' disabled' : ''}><span>${label}</span></button>
+            </div>`;
+        }).join('');
+    }
+
+    coinGiftChannelLabel(gift) {
+        const server = (this.S.servers || []).find(item => item.id === gift?.serverId);
+        const channel = (server?.channels || []).find(item => item.id === gift?.channelId);
+        if (!server) return 'канал';
+        return channel ? `${server.name} · #${channel.name}` : server.name;
+    }
+
+    formatCoinAmount(value) {
+        return (Number(value) || 0).toLocaleString('ru-RU');
+    }
+
+    coinPlural(n, forms) {
+        const abs = Math.abs(Number(n) || 0) % 100;
+        const last = abs % 10;
+        if (abs > 10 && abs < 20) return forms[2];
+        if (last > 1 && last < 5) return forms[1];
+        if (last === 1) return forms[0];
+        return forms[2];
     }
 
     zaliCoinNewIdempotencyKey() {
         return this.randomBase64(16).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     }
 
+    // ---- Модалка: перевод (личный чат, кошелёк) и карточка (канал) ----
+
     openCoinTransferModal(prefillRecipient = '') {
+        this.openCoinModal({ mode: 'transfer', recipient: prefillRecipient });
+    }
+
+    openCoinGiftModal() {
+        const server = this.currentServer();
+        const channel = this.currentChannel();
+        if (!server || !channel || this.isVoiceChannel(channel)) {
+            this.openCoinTransferModal();
+            return;
+        }
+        this.openCoinModal({ mode: 'gift', serverId: server.id, channelId: channel.id });
+    }
+
+    openCoinModal({ mode = 'transfer', recipient = '', serverId = '', channelId = '' } = {}) {
         const modal = document.getElementById('coinTransferModal');
         if (!modal) return;
+        const isGift = mode === 'gift';
+        this._coinModal = { mode, serverId, channelId, fromWallet: !isGift && !recipient };
         this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
-        // The key above is only valid for one exact (to, amount) payload — see
+        // clientId будущей карточки перевода. Живёт в паре с ключом: повтор того же
+        // перевода обязан сослаться на ту же карточку, иначе сервер вернёт перевод,
+        // привязанный к одному id, а в чат уйдёт сообщение с другим.
+        this._coinTransferCardClientId = this.zaliCoinNewIdempotencyKey();
+        // The key above is only valid for one exact payload — see
         // submitCoinTransfer, which rotates it whenever the payload changes.
         this._coinTransferLastPayload = '';
         this._coinTransferInFlight = false;
-        this._coinTransferFromWallet = !prefillRecipient;
+        const title = document.getElementById('coinTransferTitle');
+        const recipientField = document.getElementById('coinTransferRecipientField');
         const recipientInput = document.getElementById('coinTransferRecipientInput');
+        const amountLabel = document.getElementById('coinTransferAmountLabel');
         const amountInput = document.getElementById('coinTransferAmountInput');
+        const claimsField = document.getElementById('coinGiftClaimsField');
+        const claimsInput = document.getElementById('coinGiftClaimsInput');
         const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const status = document.getElementById('coinTransferStatus');
+        if (title) title.textContent = isGift ? 'ZaliCoin-карточка' : 'Перевести ZaliCoin';
+        if (recipientField) recipientField.hidden = isGift;
         if (recipientInput) {
-            recipientInput.value = prefillRecipient || '';
-            recipientInput.disabled = !!prefillRecipient;
+            recipientInput.value = recipient || '';
+            recipientInput.disabled = !!recipient;
         }
+        if (amountLabel) amountLabel.textContent = isGift ? 'Сумма на одного (ZC)' : 'Сумма (ZC)';
         if (amountInput) amountInput.value = '';
-        if (submitBtn) submitBtn.disabled = false;
+        if (claimsField) claimsField.hidden = !isGift;
+        if (claimsInput) {
+            claimsInput.value = '1';
+            claimsInput.max = String(ZaliInterface.COIN_GIFT_MAX_CLAIMS);
+        }
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = isGift ? 'Отправить карточку' : 'Отправить';
+        }
         if (status) { status.textContent = ''; status.hidden = true; }
+        this.updateCoinGiftSummary();
         modal.hidden = false;
-        (prefillRecipient ? amountInput : recipientInput)?.focus();
+        (isGift || recipient ? amountInput : recipientInput)?.focus();
     }
 
     closeCoinTransferModal() {
         const modal = document.getElementById('coinTransferModal');
         if (modal) modal.hidden = true;
+    }
+
+    coinGiftClaimsValue() {
+        const raw = Math.trunc(Number(document.getElementById('coinGiftClaimsInput')?.value));
+        if (!Number.isFinite(raw)) return 1;
+        return Math.min(ZaliInterface.COIN_GIFT_MAX_CLAIMS, Math.max(1, raw));
+    }
+
+    stepCoinGiftClaims(delta) {
+        const input = document.getElementById('coinGiftClaimsInput');
+        if (!input) return;
+        input.value = String(Math.min(ZaliInterface.COIN_GIFT_MAX_CLAIMS, Math.max(1, this.coinGiftClaimsValue() + delta)));
+        this.updateCoinGiftSummary();
+    }
+
+    updateCoinGiftSummary() {
+        const summary = document.getElementById('coinGiftSummary');
+        if (!summary) return;
+        if (this._coinModal?.mode !== 'gift') {
+            summary.hidden = true;
+            return;
+        }
+        const amount = Math.trunc(Number(document.getElementById('coinTransferAmountInput')?.value));
+        const claims = this.coinGiftClaimsValue();
+        const people = this.coinPlural(claims, ['человек', 'человека', 'человек']);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            summary.textContent = claims > 1
+                ? `Карточку смогут получить ${claims} ${people} — по одному разу на аккаунт.`
+                : 'Карточку сможет получить один человек.';
+        } else if (claims > 1) {
+            summary.textContent = `Каждый из ${claims} получит ${this.formatCoinAmount(amount)} ZC. На удержание уйдёт ${this.formatCoinAmount(amount * claims)} ZC — неполученное вернётся, если отменить карточку.`;
+        } else {
+            summary.textContent = `На удержание уйдёт ${this.formatCoinAmount(amount)} ZC — они вернутся, если отменить карточку до того, как её получат.`;
+        }
+        summary.hidden = false;
     }
 
     async submitCoinTransfer() {
@@ -15135,11 +15914,14 @@ ZaliMixin(ZaliInterface, class {
         // submits (server-side idempotency makes the money safe, but the client
         // would close/re-log/post the chat notice once per call).
         if (this._coinTransferInFlight) return;
+        if (this._coinModal?.mode === 'gift') {
+            await this.submitCoinGift();
+            return;
+        }
         const recipientInput = document.getElementById('coinTransferRecipientInput');
         const amountInput = document.getElementById('coinTransferAmountInput');
         const submitBtn = document.getElementById('coinTransferSubmitBtn');
-        const status = document.getElementById('coinTransferStatus');
-        const setStatus = (msg) => { if (status) { status.textContent = msg; status.hidden = !msg; } };
+        const setStatus = (msg) => this.setCoinModalStatus(msg);
 
         const to = String(recipientInput?.value || '').trim();
         const amount = Math.trunc(Number(amountInput?.value));
@@ -15156,6 +15938,7 @@ ZaliMixin(ZaliInterface, class {
         const payloadSignature = `${to}\0${amount}`;
         if (this._coinTransferLastPayload && this._coinTransferLastPayload !== payloadSignature) {
             this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
+            this._coinTransferCardClientId = this.zaliCoinNewIdempotencyKey();
         }
         this._coinTransferLastPayload = payloadSignature;
 
@@ -15195,53 +15978,701 @@ ZaliMixin(ZaliInterface, class {
         if (data && Number.isFinite(Number(data.balance))) {
             this.S.zaliCoinBalance = Number(data.balance);
         }
+        const transactionId = String(data?.transactionId || '').trim();
+        const fromWallet = !!this._coinModal?.fromWallet;
+        const cardClientId = this._coinTransferCardClientId;
         this._coinTransferInFlight = false;
         if (submitBtn) submitBtn.disabled = false;
+        setStatus('');
         this.closeCoinTransferModal();
         this.addLogEntry({ type: 'INFO', msg: `Отправлено ${amount} ZaliCoin пользователю ${to}`, ts: new Date().toLocaleTimeString() });
         this.refreshZaliCoinView();
 
-        // Post a normal chat message so the transfer shows up in the
-        // conversation — only when it's the peer of the chat the button
-        // was opened from; a wallet-tab transfer to an arbitrary user may
-        // have no open conversation to post into, so it's skipped there.
-        // Its own failure (e.g. a flaky send right after) is logged, not
-        // surfaced as a transfer error — the money already moved.
-        if (!this._coinTransferFromWallet && to === this.S.current) {
-            const input = document.getElementById('msgInput');
-            // A half-typed draft may be sitting in the composer — the transfer
-            // notice must not silently destroy (or worse, replace-and-send) it.
-            const draft = input ? input.value : '';
-            try {
-                if (input) {
-                    // Named explicitly: this renders as a centered system pill
-                    // (detectSystemNotice), not a left/right bubble, so there's no
-                    // avatar or sender-side layout to imply who sent it — without
-                    // the name in the text itself it read as anonymous.
-                    input.value = `💰 ${this.myName()} перевёл(а) ${amount} ZaliCoin`;
-                    this.updateSendButtonState?.();
-                    await this.sendInputMessage();
-                }
-            } catch (e) {
-                this.trace(`submitCoinTransfer chat_message_post_failed=${e}`);
-                this.addLogEntry({ type: 'WARN', msg: 'ZaliCoin переведён, но не удалось отправить сообщение об этом в чат', ts: new Date().toLocaleTimeString() });
-            } finally {
-                if (input && draft) {
-                    input.value = draft;
-                    this.updateSendButtonState?.();
-                }
-            }
+        // Post a transfer card so the transfer shows up in the conversation —
+        // only when it's the peer of the chat the button was opened from; a
+        // wallet-tab transfer to an arbitrary user may have no open conversation
+        // to post into, so it's skipped there. Its own failure (e.g. a flaky send
+        // right after) is logged, not surfaced as a transfer error — the money
+        // already moved.
+        if (!fromWallet && to === this.S.current && this.currentConversationMode() !== 'servers') {
+            await this.postCoinCardMessage(
+                this.coinTransferCardText(amount, transactionId),
+                'ZaliCoin переведён, но не удалось отправить сообщение об этом в чат',
+                cardClientId,
+            );
+        }
+    }
+
+    async submitCoinGift() {
+        const ctx = this._coinModal || {};
+        const amountInput = document.getElementById('coinTransferAmountInput');
+        const submitBtn = document.getElementById('coinTransferSubmitBtn');
+        const setStatus = (msg) => this.setCoinModalStatus(msg);
+
+        const amount = Math.trunc(Number(amountInput?.value));
+        const claims = this.coinGiftClaimsValue();
+        if (!ctx.serverId || !ctx.channelId) { setStatus('Откройте текстовый канал'); return; }
+        if (!Number.isFinite(amount) || amount <= 0) { setStatus('Укажите сумму больше нуля'); return; }
+        if (amount * claims > (this.S.zaliCoinTotalSupply || 100000)) { setStatus('Это больше, чем всего существует ZaliCoin'); return; }
+
+        // Same rule as the transfer above: one idempotency key per exact payload.
+        const payloadSignature = `gift\0${ctx.serverId}\0${ctx.channelId}\0${amount}\0${claims}`;
+        if (this._coinTransferLastPayload && this._coinTransferLastPayload !== payloadSignature) {
+            this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
+        }
+        this._coinTransferLastPayload = payloadSignature;
+
+        this._coinTransferInFlight = true;
+        if (submitBtn) submitBtn.disabled = true;
+        setStatus('Отправка...');
+
+        let res;
+        try {
+            res = await this.coinPostWithRetry(this.apiRoutes.coins.gifts, {
+                serverId: ctx.serverId,
+                channelId: ctx.channelId,
+                amount,
+                claims,
+                idempotencyKey: this._coinTransferIdempotencyKey,
+            });
+        } catch (e) {
+            setStatus('Не удалось связаться с сервером, попробуйте ещё раз');
+            this.trace(`submitCoinGift transport_error=${e}`);
+            this._coinTransferInFlight = false;
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+        const data = await res.json().catch(() => null);
+        const gift = data?.gift;
+        if (!res.ok || !gift?.id) {
+            setStatus(data?.message || 'Не удалось создать карточку');
+            this._coinTransferInFlight = false;
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+
+        // Деньги уже на удержании — дальше ничто не должно выглядеть как неудача.
+        this.applyCoinGiftState(gift);
+        if (Number.isFinite(Number(data.balance))) this.S.zaliCoinBalance = Number(data.balance);
+        if (Number.isFinite(Number(data.held))) this.S.zaliCoinHeld = Number(data.held);
+        this._coinTransferInFlight = false;
+        if (submitBtn) submitBtn.disabled = false;
+        setStatus('');
+        this.closeCoinTransferModal();
+        this.addLogEntry({ type: 'INFO', msg: `Карточка ZaliCoin: ${amount} ZC × ${claims}`, ts: new Date().toLocaleTimeString() });
+        this.scheduleZaliCoinRefresh();
+
+        // sendInputMessage пишет в канал, открытый СЕЙЧАС. Если пользователь успел
+        // переключиться, карточка ушла бы не туда — а получить её могут только те,
+        // кто видит исходный канал. Удержанное при этом не теряется: карточка
+        // живёт на сервере и отменяется с экрана ZaliCoin.
+        const stillHere = this.currentConversationMode() === 'servers'
+            && this.S.activeServer === ctx.serverId
+            && this.S.activeChannel === ctx.channelId;
+        if (!stillHere) {
+            this.addLogEntry({ type: 'WARN', msg: 'Карточка ZaliCoin создана, но канал сменился — сообщение не отправлено. Отменить карточку можно на экране ZaliCoin', ts: new Date().toLocaleTimeString() });
+            return;
+        }
+        await this.postCoinCardMessage(
+            this.coinGiftCardText(gift),
+            'Карточка ZaliCoin создана, но не отправлена в чат — отменить её можно на экране ZaliCoin',
+        );
+    }
+
+    setCoinModalStatus(msg) {
+        const status = document.getElementById('coinTransferStatus');
+        if (!status) return;
+        status.textContent = msg;
+        status.hidden = !msg;
+    }
+
+    async postCoinCardMessage(text, failureMessage, clientId = '') {
+        try {
+            await this.sendInputMessage({ systemText: text, clientId });
+            return true;
+        } catch (e) {
+            this.trace(`postCoinCardMessage failed=${e}`);
+            this.addLogEntry({ type: 'WARN', msg: failureMessage, ts: new Date().toLocaleTimeString() });
+            return false;
         }
     }
 
     async transferCoinsRequest(to, amount) {
-        const body = JSON.stringify({ to, amount, idempotencyKey: this._coinTransferIdempotencyKey });
+        return this.coinPostWithRetry(this.apiRoutes.coins.transfer, {
+            to,
+            amount,
+            idempotencyKey: this._coinTransferIdempotencyKey,
+            // Из кошелька карточка в чат не уходит — и привязывать перевод не к чему.
+            cardClientId: this._coinModal?.fromWallet ? '' : this._coinTransferCardClientId,
+        });
+    }
+
+    // One automatic retry after a transport error. Safe for every ZaliCoin POST:
+    // transfers and gift creation carry an idempotency key, a claim is one per
+    // account and a cancel of a cancelled card is a no-op on the server.
+    async coinPostWithRetry(path, payload) {
+        const body = JSON.stringify(payload || {});
         try {
-            return await this.apiFetch(this.apiRoutes.coins.transfer, { method: 'POST', body });
+            return await this.apiFetch(path, { method: 'POST', body, interactive: true });
         } catch (firstError) {
-            this.trace(`transferCoinsRequest retrying after transport error=${firstError}`);
-            return await this.apiFetch(this.apiRoutes.coins.transfer, { method: 'POST', body });
+            this.trace(`coinPostWithRetry retrying after transport error=${firstError}`);
+            return await this.apiFetch(path, { method: 'POST', body, interactive: true });
         }
+    }
+
+    // ---- Карточки в ленте сообщений ----
+
+    // Первая строка — для людей и для клиентов, которые карточек ещё не знают
+    // (они покажут её обычным текстом); вторая — id операции на сервере.
+    coinGiftCardText(gift) {
+        return `🎁 ${this.myName()} отправил(а) ZaliCoin: ${gift.amount} ZC × ${gift.totalClaims}\n[zc-gift:${gift.id}]`;
+    }
+
+    coinTransferCardText(amount, transactionId) {
+        const head = `💰 ${this.myName()} перевёл(а) ${amount} ZaliCoin`;
+        return transactionId ? `${head}\n[zc-tx:${transactionId}]` : head;
+    }
+
+    /**
+     * Узнаёт в тексте сообщения карточку ZaliCoin. Имя из текста не используется:
+     * отправитель берётся из самого сообщения (его ставит сервер), суммы и статус
+     * карточки — с сервера. Старое уведомление о переводе без id тоже карточка,
+     * просто без сверки.
+     */
+    parseCoinCard(text) {
+        const value = String(text || '').trim();
+        if (!value) return null;
+        if (value.startsWith('🎁')) {
+            const match = value.match(/^🎁[^\n]*?(\d+)\s+ZC\s+×\s+(\d+)\n\[zc-gift:([A-Za-z0-9-]{8,64})\]$/u);
+            if (match) return { kind: 'gift', amount: Number(match[1]), claims: Number(match[2]), id: match[3] };
+            return null;
+        }
+        if (value.startsWith('💰')) {
+            const match = value.match(/^💰\s*(?:\S+\s+)?[Пп]еревёл\(а\)\s+(\d+)\s+ZaliCoin(?:\n\[zc-tx:([A-Za-z0-9-]{8,64})\])?$/u);
+            if (match) return { kind: 'transfer', amount: Number(match[1]), id: match[2] || '' };
+        }
+        return null;
+    }
+
+    /** Строка карточки для превью в списке чатов, цитаты ответа и уведомления. */
+    coinCardSummary(text) {
+        const card = this.parseCoinCard(text);
+        if (!card) return '';
+        return card.kind === 'gift'
+            ? `🎁 ZaliCoin-карточка · ${this.formatCoinAmount(card.amount)} ZC`
+            : `💸 Перевод · ${this.formatCoinAmount(card.amount)} ZC`;
+    }
+
+    renderCoinCard(card, msg) {
+        const time = msg?.timestamp ? this.fmtTime(msg.timestamp) : '';
+        const sender = String(msg?.sender || '').trim();
+        if (card.kind === 'gift') {
+            // Лента всегда рисует текущую переписку, так что при отсутствии полей в
+            // самом сообщении канал берётся из неё. В личке канала нет вовсе.
+            const inChannel = this.currentConversationMode() === 'servers';
+            const serverId = String(msg?.serverId || (inChannel ? this.S.activeServer : '') || '');
+            const channelId = String(msg?.channelId || (inChannel ? this.S.activeChannel : '') || '');
+            const desc = { id: card.id, amount: card.amount, claims: card.claims, sender, serverId, channelId, time };
+            this.ensureCoinGiftState(card.id);
+            const parts = this.coinGiftCardParts(desc);
+            return `<div class="${this.esc(parts.className)}" data-zc-gift="${this.esc(card.id)}" data-zc-amount="${this.esc(card.amount)}" data-zc-claims="${this.esc(card.claims)}" data-zc-sender="${this.esc(sender)}" data-zc-server="${this.esc(serverId)}" data-zc-channel="${this.esc(channelId)}" data-zc-time="${this.esc(time)}">${parts.inner}</div>`;
+        }
+        // В канале receiver — это id канала, а не человек.
+        const to = msg?.serverId ? '' : String(msg?.receiver || '').trim();
+        const clientId = String(msg?.clientId || '').trim();
+        const desc = { id: card.id, amount: card.amount, from: sender, to, time, clientId };
+        if (card.id) this.ensureCoinTransferReceipt(card.id);
+        return `<div class="zc-card zc-card--transfer" data-zc-tx="${this.esc(card.id)}" data-zc-amount="${this.esc(card.amount)}" data-zc-from="${this.esc(sender)}" data-zc-to="${this.esc(to)}" data-zc-time="${this.esc(time)}" data-zc-client="${this.esc(clientId)}">${this.coinTransferCardInner(desc)}</div>`;
+    }
+
+    coinGiftStore() {
+        if (!this._coinGifts) {
+            this._coinGifts = {
+                states: new Map(),      // id -> { state, missing, fetchedAt }
+                queue: new Set(),
+                inFlight: new Set(),
+                flushTimer: null,
+                pending: new Map(),     // id -> 'claim' | 'cancel'
+                notes: new Map(),       // id -> ошибка, показываемая в карточке
+                confirmId: null,
+                confirmTimer: null,
+                receipts: new Map(),    // transfer id -> { ok, ...receipt, fetchedAt }
+                receiptsInFlight: new Set(),
+                seenClaims: new Map(),  // id -> сколько зарядов было заполнено при прошлой отрисовке
+                pops: new Map(),        // id -> { from, to, at } — заряды, которые сейчас «вспыхивают»
+            };
+        }
+        return this._coinGifts;
+    }
+
+    coinCardNodes(attribute, id) {
+        if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return [];
+        return Array.from(document.querySelectorAll(`[${attribute}="${id}"]`));
+    }
+
+    // Монета ZaliCoin: кольцо, тонкий внутренний ободок и «Ƶ» — Z с перечёркивающей
+    // чертой, как у знаков валют. Тот же глиф, что у кнопки в композере
+    // (index.html), у сегмента хаба (prefs.js) и на экране ZaliCoin.
+    coinGiftIcon() {
+        return '<span class="zc-card-coin" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width="1" opacity=".32"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg></span>';
+    }
+
+    coinCheckIcon() {
+        return '<svg class="zc-card-check" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false"><path d="M3.5 8.4 6.6 11.4 12.5 4.8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    }
+
+    coinCardHead(caption, time) {
+        return `<div class="zc-card-head">${this.coinGiftIcon()}<div class="zc-card-titles"><span class="zc-card-title">ZaliCoin</span><span class="zc-card-caption">${this.esc(caption)}</span></div>${time ? `<span class="zc-card-time">${this.esc(time)}</span>` : ''}</div>`;
+    }
+
+    coinGiftView(desc) {
+        const me = this.myName();
+        const entry = this.coinGiftStore().states.get(desc.id);
+        const state = entry?.state;
+        // Карточка — это ссылка из сообщения на операцию на сервере. Если операцию
+        // создал не автор сообщения или она из другого канала, это чужая карточка,
+        // переотправленная от своего имени: показываем её недоступной.
+        const foreign = !!state && (state.sender !== desc.sender
+            || state.serverId !== desc.serverId
+            || state.channelId !== desc.channelId);
+        if (state && !foreign) {
+            const claims = Array.isArray(state.claims) ? state.claims : [];
+            const claimers = claims.map(claim => claim.username);
+            return {
+                loaded: true,
+                missing: false,
+                amount: Number(state.amount) || 0,
+                total: Math.max(1, Number(state.totalClaims) || 1),
+                claimed: Number(state.claimedCount) || 0,
+                status: String(state.status || 'active'),
+                claims,
+                claimers,
+                claimedByMe: claimers.includes(me),
+                isSender: state.sender === me,
+                refunded: Number(state.refunded) || 0,
+            };
+        }
+        return {
+            loaded: false,
+            missing: !!entry?.missing || foreign,
+            amount: desc.amount,
+            total: Math.max(1, desc.claims),
+            claimed: 0,
+            status: 'unknown',
+            claims: [],
+            claimers: [],
+            claimedByMe: false,
+            isSender: desc.sender === me,
+            refunded: 0,
+        };
+    }
+
+    // Какие заряды сейчас «вспыхивают». Анимация играет только при РОСТЕ числа
+    // активаций, увиденном этим клиентом: первая отрисовка карточки (история,
+    // перезагрузка) заполняет полоски молча. Перерисовка ленты посреди анимации
+    // пересоздаёт узел — отрицательная задержка продолжает её с того же места,
+    // а не запускает заново.
+    coinChargePop(id, claimed) {
+        const store = this.coinGiftStore();
+        const now = Date.now();
+        const seen = store.seenClaims.get(id);
+        store.seenClaims.set(id, Math.max(claimed, seen || 0));
+        if (seen !== undefined && claimed > seen) {
+            store.pops.set(id, { from: seen, to: claimed, at: now });
+        }
+        const pop = store.pops.get(id);
+        if (!pop) return null;
+        const lasts = ZaliInterface.COIN_CHARGE_POP_MS + (pop.to - pop.from) * ZaliInterface.COIN_CHARGE_POP_STAGGER_MS;
+        if (now - pop.at > lasts) {
+            store.pops.delete(id);
+            return null;
+        }
+        return { ...pop, elapsed: now - pop.at };
+    }
+
+    coinChargesHtml(desc, view) {
+        const total = view.total;
+        const claimed = Math.min(view.claimed, total);
+        const pop = view.loaded ? this.coinChargePop(desc.id, claimed) : null;
+        const stagger = ZaliInterface.COIN_CHARGE_POP_STAGGER_MS;
+        let counter = '';
+        if (total > 1) {
+            const bumpDelay = pop ? Math.round((pop.to - pop.from - 1) * stagger - pop.elapsed) : 0;
+            counter = `<span class="${this.esc(pop ? 'zc-charges-count is-bump' : 'zc-charges-count')}"${pop ? ` style="--zc-pop-delay:${this.esc(bumpDelay)}ms"` : ''}>${claimed}/${total}</span>`;
+        }
+
+        if (total > ZaliInterface.COIN_CHARGE_SEGMENTS_MAX) {
+            const names = view.claims.slice(0, 6).map(claim => this.messageSenderLabel(claim.username));
+            const more = claimed - names.length;
+            const tip = claimed ? `Получили: ${names.join(', ')}${more > 0 ? ` и ещё ${more}` : ''}` : '';
+            const pct = ((claimed / total) * 100).toFixed(2);
+            const popDelay = pop ? Math.round(-pop.elapsed) : 0;
+            return `<div class="zc-charges"><span class="${this.esc(pop ? 'zc-charges-meter is-pop' : 'zc-charges-meter')}"${tip ? ` tabindex="0" data-zc-tip="${this.esc(tip)}"` : ''}${pop ? ` style="--zc-pop-delay:${this.esc(popDelay)}ms"` : ''}><i style="width:${this.esc(pct)}%"></i></span>${counter}</div>`;
+        }
+
+        // Заряды заполняются в порядке активаций, поэтому i-я полоска — это i-я
+        // запись в claims (сервер отдаёт их по времени), и подсказка знает, кому ушло.
+        const segments = Array.from({ length: total }, (_, i) => {
+            if (i >= claimed) return '<span class="zc-charge"></span>';
+            const claim = view.claims[i];
+            const tip = claim ? `${this.messageSenderLabel(claim.username)} · ${this.formatCoinAmount(claim.amount)} ZC` : '';
+            const popping = !!pop && i >= pop.from && i < pop.to;
+            const delay = popping ? Math.round((i - pop.from) * stagger - pop.elapsed) : 0;
+            return `<span class="${this.esc(popping ? 'zc-charge is-on is-pop' : 'zc-charge is-on')}"${tip ? ` tabindex="0" data-zc-tip="${this.esc(tip)}" aria-label="${this.esc(`Заряд ${i + 1}: ${tip}`)}"` : ''}${popping ? ` style="--zc-pop-delay:${this.esc(delay)}ms"` : ''}></span>`;
+        }).join('');
+        return `<div class="zc-charges"><div class="zc-charges-track">${segments}</div>${counter}</div>`;
+    }
+
+    coinGiftCardParts(desc) {
+        const view = this.coinGiftView(desc);
+        const store = this.coinGiftStore();
+        const multi = view.total > 1;
+        const pending = store.pending.get(desc.id) || '';
+        const note = store.notes.get(desc.id)?.text || '';
+        const button = (label, tone, { claim = '', cancel = '', disabled = false, icon = '' } = {}) =>
+            `<button type="button" class="zc-card-btn ${this.esc(tone)}"${claim ? ` data-zc-gift-claim="${this.esc(claim)}"` : ''}${cancel ? ` data-zc-gift-cancel="${this.esc(cancel)}"` : ''}${disabled ? ' disabled' : ''}>${icon}<span>${this.esc(label)}</span></button>`;
+
+        let action;
+        if (pending === 'claim') action = button('Получение…', 'is-busy', { disabled: true });
+        else if (pending === 'cancel') action = button('Отмена…', 'is-busy', { disabled: true });
+        else if (!view.loaded) action = view.missing
+            ? button('Недоступна', 'is-off', { disabled: true })
+            : button(view.isSender ? 'Отменить' : 'Получить', 'is-busy', { disabled: true });
+        else if (view.claimedByMe) action = button('Получено', 'is-done', { disabled: true, icon: this.coinCheckIcon() });
+        else if (view.status === 'cancelled') action = button('Отменено', 'is-off', { disabled: true });
+        else if (view.status === 'exhausted') action = button('Активировано', 'is-off', { disabled: true, icon: this.coinCheckIcon() });
+        else if (view.isSender) {
+            const confirming = store.confirmId === desc.id;
+            action = button(confirming ? 'Точно отменить?' : 'Отменить', confirming ? 'is-confirm' : 'is-ghost', { cancel: desc.id });
+        } else action = button('Получить', 'is-primary', { claim: desc.id });
+
+        // Подсказка на полоске работает только наведением; на телефоне «кому ушло»
+        // у одноразовой карточки должно читаться и без него.
+        let footnote = '';
+        if (note) {
+            footnote = `<div class="zc-card-note is-error">${this.esc(note)}</div>`;
+        } else if (view.missing) {
+            footnote = '<div class="zc-card-note">Карточка не найдена или вам недоступна</div>';
+        } else if (view.loaded && !multi && view.status === 'exhausted' && view.claimers[0] && !view.claimedByMe) {
+            footnote = `<div class="zc-card-note">Получил(а) ${this.esc(this.messageSenderLabel(view.claimers[0]))}</div>`;
+        } else if (view.loaded && view.status === 'cancelled' && view.isSender && view.refunded > 0) {
+            footnote = `<div class="zc-card-note">Возвращено ${this.formatCoinAmount(view.refunded)} ZC</div>`;
+        }
+
+        const caption = multi
+            ? `карточка · ${view.total} ${this.coinPlural(view.total, ['заряд', 'заряда', 'зарядов'])}`
+            : 'карточка · один заряд';
+        const sub = multi
+            ? `каждому · всего ${this.formatCoinAmount(view.amount * view.total)} ZC`
+            : 'одному получателю';
+        const stateClass = view.loaded ? `is-${view.status}` : (view.missing ? 'is-missing' : 'is-loading');
+        const inner = `${this.coinCardHead(caption, desc.time)}
+            <div class="zc-card-amount"><span class="zc-card-value">${this.formatCoinAmount(view.amount)}</span><span class="zc-card-unit">ZC</span></div>
+            <div class="zc-card-sub">${this.esc(sub)}</div>
+            ${this.coinChargesHtml(desc, view)}
+            ${action}
+            ${footnote}`;
+        return {
+            className: `zc-card zc-card--gift ${stateClass}${view.claimedByMe ? ' is-mine' : ''}`,
+            inner,
+        };
+    }
+
+    coinTransferCardInner(desc) {
+        let status = '';
+        if (!desc.id) {
+            // Без id сверять не с чем: такой текст мог набрать кто угодно.
+            status = '<div class="zc-card-status is-warn">Не подтверждён сервером</div>';
+        } else {
+            const receipt = this.coinGiftStore().receipts.get(desc.id);
+            if (receipt?.ok === true) {
+                // Квитанция подтверждает ровно одно сообщение: то, чей clientId сервер
+                // запомнил при переводе. Повтор текста получает новый clientId, а второе
+                // сообщение с тем же id в ту же переписку сервер не пропустит. Пустая или
+                // отсутствующая привязка (перевод из кошелька или до привязки) карточек
+                // не порождала — такую карточку мог нарисовать только кто-то руками.
+                const matches = Number(receipt.amount) === Number(desc.amount)
+                    && receipt.from === desc.from
+                    && receipt.to === desc.to
+                    && !!receipt.cardClientId
+                    && receipt.cardClientId === desc.clientId;
+                status = matches
+                    ? `<div class="zc-card-status is-ok">${this.coinCheckIcon()}<span>Зачислено</span></div>`
+                    : '<div class="zc-card-status is-warn">Не совпадает с переводом на сервере</div>';
+            } else if (receipt?.ok === false) {
+                status = '<div class="zc-card-status is-warn">Перевод не подтверждён сервером</div>';
+            } else if (!receipt) {
+                status = '<div class="zc-card-status">Проверка…</div>';
+            }
+        }
+        const route = desc.from && desc.to
+            ? `<div class="zc-card-sub">${this.esc(this.messageSenderLabel(desc.from))}<span class="zc-card-arrow" aria-hidden="true">→</span>${this.esc(this.messageSenderLabel(desc.to))}</div>`
+            : '';
+        return `${this.coinCardHead('перевод', desc.time)}
+            <div class="zc-card-amount"><span class="zc-card-value">${this.formatCoinAmount(desc.amount)}</span><span class="zc-card-unit">ZC</span></div>
+            ${route}
+            ${status}`;
+    }
+
+    // Состояние карточек запрашивается пачкой: отрисовка ленты ставит id в
+    // очередь, а один таймер собирает всё, что набралось за кадр, в один запрос.
+    ensureCoinGiftState(id) {
+        if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return;
+        const store = this.coinGiftStore();
+        if (store.inFlight.has(id) || store.queue.has(id)) return;
+        const entry = store.states.get(id);
+        if (entry) {
+            const status = entry.state?.status;
+            // Отменённая и исчерпанная карточка больше не меняется.
+            if (status && status !== 'active') return;
+            // Живые изменения приходят по WS (coin_gift_updated); перезапрос — только
+            // страховка на случай пропущенного события.
+            const ttl = entry.state ? 60000 : (entry.missing ? 300000 : 15000);
+            if (Date.now() - entry.fetchedAt < ttl) return;
+        }
+        store.queue.add(id);
+        if (!store.flushTimer) {
+            store.flushTimer = setTimeout(() => {
+                store.flushTimer = null;
+                void this.flushCoinGiftQueue();
+            }, 40);
+        }
+    }
+
+    async flushCoinGiftQueue() {
+        const store = this.coinGiftStore();
+        const ids = Array.from(store.queue).slice(0, 50);
+        if (!ids.length) return;
+        ids.forEach(id => { store.queue.delete(id); store.inFlight.add(id); });
+        let ok = false;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.coins.giftsLookup(ids));
+            if (res.ok) {
+                const data = await res.json();
+                const found = new Set();
+                (Array.isArray(data?.gifts) ? data.gifts : []).forEach(gift => {
+                    if (!gift?.id) return;
+                    found.add(gift.id);
+                    this.applyCoinGiftState(gift, { patch: false });
+                });
+                const now = Date.now();
+                ids.forEach(id => {
+                    if (!found.has(id)) store.states.set(id, { state: null, missing: true, fetchedAt: now });
+                });
+                ok = true;
+            }
+        } catch (e) {
+            this.trace(`flushCoinGiftQueue error=${e}`);
+        }
+        ids.forEach(id => store.inFlight.delete(id));
+        if (!ok) {
+            const now = Date.now();
+            ids.forEach(id => {
+                const entry = store.states.get(id);
+                if (entry) entry.fetchedAt = now;
+                else store.states.set(id, { state: null, missing: false, fetchedAt: now });
+            });
+            // Лента может больше не перерисоваться сама — повтор не должен от неё зависеть.
+            setTimeout(() => ids.forEach(id => {
+                if (this.coinCardNodes('data-zc-gift', id).length) this.ensureCoinGiftState(id);
+            }), 16000);
+        }
+        ids.forEach(id => this.patchCoinGiftCards(id));
+        if (store.queue.size && !store.flushTimer) {
+            store.flushTimer = setTimeout(() => {
+                store.flushTimer = null;
+                void this.flushCoinGiftQueue();
+            }, 40);
+        }
+    }
+
+    // Состояние карточки только движется вперёд: активная → исчерпана/отменена,
+    // и число активаций не убывает. Иначе опоздавший ответ lookup, пришедший
+    // после WS-события, вернул бы карточке кнопку «Получить».
+    isNewerCoinGiftState(previous, next) {
+        const rank = (state) => (String(state?.status || 'active') === 'active' ? 0 : 1);
+        if (rank(next) !== rank(previous)) return rank(next) > rank(previous);
+        return (Number(next?.claimedCount) || 0) >= (Number(previous?.claimedCount) || 0);
+    }
+
+    applyCoinGiftState(gift, { patch = true } = {}) {
+        if (!gift?.id) return;
+        const store = this.coinGiftStore();
+        const id = String(gift.id);
+        const entry = store.states.get(id);
+        const now = Date.now();
+        if (entry?.state && !this.isNewerCoinGiftState(entry.state, gift)) {
+            entry.fetchedAt = now;
+            return;
+        }
+        store.states.set(id, { state: gift, missing: false, fetchedAt: now });
+        if (gift.sender === this.myName() && gift.status === 'active') {
+            if (!Array.isArray(this.S.zaliCoinMyGifts)) this.S.zaliCoinMyGifts = [];
+            if (!this.S.zaliCoinMyGifts.includes(id)) this.S.zaliCoinMyGifts.unshift(id);
+        }
+        if (patch) this.patchCoinGiftCards(id);
+    }
+
+    // Точечная замена карточек в DOM вместо перерисовки всей ленты: полный
+    // рендер пересобирает каждый пузырь и перезапускает гидратацию медиа, а
+    // здесь изменилась одна кнопка. Следующий обычный рендер соберёт ту же
+    // разметку из того же кэша, так что расхождения не будет.
+    patchCoinGiftCards(id) {
+        this.coinCardNodes('data-zc-gift', id).forEach(node => {
+            const data = node.dataset;
+            const parts = this.coinGiftCardParts({
+                id,
+                amount: Number(data.zcAmount) || 0,
+                claims: Number(data.zcClaims) || 1,
+                sender: data.zcSender || '',
+                serverId: data.zcServer || '',
+                channelId: data.zcChannel || '',
+                time: data.zcTime || '',
+            });
+            if (node.className !== parts.className) node.className = parts.className;
+            node.innerHTML = parts.inner;
+        });
+        if (this.isZaliCoinViewActive()) this.renderMyCoinGifts();
+    }
+
+    handleCoinGiftRealtime(payload) {
+        const gift = payload?.gift;
+        if (!gift?.id) return;
+        this.applyCoinGiftState(gift);
+        this.scheduleZaliCoinRefresh();
+    }
+
+    setCoinGiftNote(id, text) {
+        const store = this.coinGiftStore();
+        const note = { text, at: Date.now() };
+        store.notes.set(id, note);
+        setTimeout(() => {
+            if (store.notes.get(id) === note) {
+                store.notes.delete(id);
+                this.patchCoinGiftCards(id);
+            }
+        }, 6000);
+    }
+
+    async claimCoinGift(id) {
+        const store = this.coinGiftStore();
+        if (!id || store.pending.has(id)) return;
+        store.pending.set(id, 'claim');
+        store.notes.delete(id);
+        this.patchCoinGiftCards(id);
+        try {
+            const res = await this.coinPostWithRetry(this.apiRoutes.coins.giftClaim(id), {});
+            const data = await res.json().catch(() => null);
+            if (data?.gift) this.applyCoinGiftState(data.gift, { patch: false });
+            if (res.ok) {
+                if (Number.isFinite(Number(data?.balance))) this.S.zaliCoinBalance = Number(data.balance);
+                this.addLogEntry({ type: 'SUCCESS', msg: `Получено ${this.formatCoinAmount(data?.gift?.amount)} ZaliCoin`, ts: new Date().toLocaleTimeString() });
+            } else if (data?.code !== 'already_claimed') {
+                // already_claimed после потерянного ответа — это успех прошлой
+                // попытки: состояние в data.gift уже показывает «Получено».
+                this.setCoinGiftNote(id, data?.message || 'Не удалось получить ZaliCoin');
+            }
+        } catch (e) {
+            this.trace(`claimCoinGift transport_error=${e}`);
+            this.setCoinGiftNote(id, 'Нет связи с сервером, попробуйте ещё раз');
+        } finally {
+            store.pending.delete(id);
+            this.patchCoinGiftCards(id);
+            this.scheduleZaliCoinRefresh();
+        }
+    }
+
+    // Отмена необратима для получателей, поэтому в два нажатия: первое превращает
+    // кнопку в «Точно отменить?» на 4 секунды.
+    onCoinGiftCancelClick(id) {
+        const store = this.coinGiftStore();
+        if (!id || store.pending.has(id)) return;
+        clearTimeout(store.confirmTimer);
+        if (store.confirmId !== id) {
+            const previous = store.confirmId;
+            store.confirmId = id;
+            store.confirmTimer = setTimeout(() => {
+                if (store.confirmId !== id) return;
+                store.confirmId = null;
+                this.patchCoinGiftCards(id);
+                this.renderMyCoinGifts();
+            }, 4000);
+            if (previous) this.patchCoinGiftCards(previous);
+            this.patchCoinGiftCards(id);
+            this.renderMyCoinGifts();
+            return;
+        }
+        store.confirmId = null;
+        void this.cancelCoinGift(id);
+    }
+
+    async cancelCoinGift(id) {
+        const store = this.coinGiftStore();
+        if (!id || store.pending.has(id)) return;
+        store.pending.set(id, 'cancel');
+        store.notes.delete(id);
+        this.patchCoinGiftCards(id);
+        this.renderMyCoinGifts();
+        try {
+            const res = await this.coinPostWithRetry(this.apiRoutes.coins.giftCancel(id), {});
+            const data = await res.json().catch(() => null);
+            if (data?.gift) this.applyCoinGiftState(data.gift, { patch: false });
+            if (res.ok) {
+                if (Number.isFinite(Number(data?.balance))) this.S.zaliCoinBalance = Number(data.balance);
+                if (Number.isFinite(Number(data?.held))) this.S.zaliCoinHeld = Number(data.held);
+                this.addLogEntry({ type: 'INFO', msg: `Карточка ZaliCoin отменена, возвращено ${this.formatCoinAmount(data?.refunded)} ZC`, ts: new Date().toLocaleTimeString() });
+            } else if (data?.code !== 'gift_cancelled') {
+                this.setCoinGiftNote(id, data?.message || 'Не удалось отменить карточку');
+            }
+        } catch (e) {
+            this.trace(`cancelCoinGift transport_error=${e}`);
+            this.setCoinGiftNote(id, 'Нет связи с сервером, попробуйте ещё раз');
+        } finally {
+            store.pending.delete(id);
+            this.patchCoinGiftCards(id);
+            this.renderMyCoinGifts();
+            this.scheduleZaliCoinRefresh();
+        }
+    }
+
+    // Квитанция перевода: карточка в личном чате сверяет свою сумму и отправителя
+    // с записью на сервере. Нет записи (или она чужая) — карточка так и говорит.
+    ensureCoinTransferReceipt(id) {
+        if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return;
+        const store = this.coinGiftStore();
+        if (store.receiptsInFlight.has(id)) return;
+        const cached = store.receipts.get(id);
+        if (cached && (cached.ok !== null || Date.now() - cached.fetchedAt < 30000)) return;
+        store.receiptsInFlight.add(id);
+        void (async () => {
+            try {
+                const res = await this.apiFetch(this.apiRoutes.coins.transferReceipt(id));
+                if (res.ok) {
+                    const data = await res.json();
+                    store.receipts.set(id, { ...data, ok: true, fetchedAt: Date.now() });
+                } else if (res.status === 404) {
+                    store.receipts.set(id, { ok: false, fetchedAt: Date.now() });
+                } else {
+                    store.receipts.set(id, { ok: null, fetchedAt: Date.now() });
+                }
+            } catch (e) {
+                this.trace(`ensureCoinTransferReceipt error=${e}`);
+                store.receipts.set(id, { ok: null, fetchedAt: Date.now() });
+            } finally {
+                store.receiptsInFlight.delete(id);
+                this.coinCardNodes('data-zc-tx', id).forEach(node => {
+                    const data = node.dataset;
+                    node.innerHTML = this.coinTransferCardInner({
+                        id,
+                        amount: Number(data.zcAmount) || 0,
+                        from: data.zcFrom || '',
+                        to: data.zcTo || '',
+                        time: data.zcTime || '',
+                        clientId: data.zcClient || '',
+                    });
+                });
+            }
+        })();
     }
 });
 
@@ -15525,6 +16956,8 @@ ZaliMixin(ZaliInterface, class {
         if (!this.voice.localStream) return;
         try {
             const constraints = this.audioPrefs.micDeviceId
+"""#,
+    #"""
                 ? { audio: { deviceId: { exact: this.audioPrefs.micDeviceId } }, video: false }
                 : { audio: true, video: false };
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -15670,7 +17103,7 @@ ZaliMixin(ZaliInterface, class {
             servers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 4.6h11.6a2 2 0 0 1 2 2v2.8a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2V6.6a2 2 0 0 1 2-2Z"/><path d="M6.2 12.6h11.6a2 2 0 0 1 2 2v2.8a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2v-2.8a2 2 0 0 1 2-2Z"/><path d="M7.6 8h.05M7.6 16h.05M10.4 8h6M10.4 16h6"/></svg>',
             settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h8.2"/><path d="M16.8 7H19"/><path d="M15 5.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/><path d="M5 17h2.2"/><path d="M10.8 17H19"/><path d="M9 15.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/><path d="M5 12h4.2"/><path d="M12.8 12H19"/><path d="M11 10.1a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"/></svg>',
             hub: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.75 20.25 9v9.25a2 2 0 0 1-2 2h-4.1v-5.35h-4.3v5.35h-4.1a2 2 0 0 1-2-2V9L12 3.75Z"/></svg>',
-            zalicoin: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.25"/><path d="M12 7.4v9.2M14.6 9.4c0-1.05-1.16-1.9-2.6-1.9-1.44 0-2.6.85-2.6 1.9 0 1.05 1.16 1.55 2.6 1.9 1.44.35 2.6.85 2.6 1.9 0 1.05-1.16 1.9-2.6 1.9-1.44 0-2.6-.85-2.6-1.9"/></svg>',
+            zalicoin: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.25"/><path d="M9.5 9h5l-5 6h5M10.4 12h3.2"/></svg>',
         };
         return icons[key] || icons.hub;
     }
@@ -16463,8 +17896,6 @@ const ZALI_CACHE_STAT_FLUSH_MS = 4000;
 const ZALI_CACHE_LIGHT_MAX_BYTES = 2 * 1024 * 1024;
 
 // Сколько blob:-ссылок разрешено создать при прогреве. Прогрев существует ради
-"""#,
-    #"""
 // первого кадра, а не ради полноты: остальное подтянется обычным путём по мере
 // обращения. Без потолка аккаунт с тысячей контактов создавал бы тысячу
 // object URL'ов до того, как нарисован первый экран.
@@ -19739,6 +21170,8 @@ ZaliMixin(ZaliInterface, class {
         }, Math.max(0, Number(delayMs) || 0));
     }
 
+"""#,
+    #"""
     async syncCloudVaultPackage({ passphrase = null, reason = 'auto' } = {}) {
         if (!this.S.session?.token) return false;
         if (!this.isVaultCloudSyncEnabled()) {
@@ -20460,8 +21893,6 @@ ZaliMixin(ZaliInterface, class {
 
     async bootstrapDeviceTrust() {
         if (!this.S.session?.token) return;
-"""#,
-    #"""
         const identity = await this.timeStage('  ├ ensureDeviceCryptoIdentity', () => this.ensureDeviceCryptoIdentity());
         this.S.deviceTrust.current = identity;
         // Persist to the native shell now that the user is authenticated: ensureDeviceCryptoIdentity
@@ -23669,6 +25100,8 @@ ZaliMixin(ZaliInterface, class {
                     <span class="server-channel-row-name" data-channel-rename="${this.esc(channel.id)}" title="Нажмите, чтобы переименовать">${this.esc(name)}</span>
                     <span class="server-channel-row-topic${channel.topic ? '' : ' empty'}" data-channel-retopic="${this.esc(channel.id)}" title="Нажмите, чтобы изменить тему">${this.esc(channel.topic || 'Добавить тему')}</span>
                 </div>
+"""#,
+    #"""
                 <button class="server-channel-kind-toggle ${kind}" type="button" data-channel-kind-toggle="${this.esc(channel.id)}" title="${this.esc(`${kindLabel} канал — нажмите, чтобы сделать ${nextLabel}`)}" aria-label="${this.esc(`${kindLabel} канал ${name}: сделать ${nextLabel}`)}">${this.channelKindIcon(kind, 'server-channel-kind-icon')}</button>
                 <button class="server-channel-row-delete" type="button" data-channel-delete="${this.esc(channel.id)}" title="Удалить канал" aria-label="${this.esc(`Удалить канал ${name}`)}">${this.uiIcon('trash', 'server-channel-row-delete-icon')}</button>
             </div>`;
@@ -24626,8 +26059,6 @@ ZaliMixin(ZaliInterface, class {
         this.setServerModalState({ saving: true, error: '' });
         this.renderServerModal();
         try {
-"""#,
-    #"""
             const res = await this.apiFetch(this.apiRoutes.servers.channel(serverId, cid), {
                 method: 'DELETE',
             });
@@ -27740,6 +29171,8 @@ ZaliMixin(ZaliInterface, class {
             // Not awaited: the supervisor tick must not be held up by one peer, and
             // restartVoicePeer re-entrancy is already guarded by entry.negotiating.
             Promise.resolve(this.restartVoicePeer(name)).catch(error => {
+"""#,
+    #"""
                 this.voiceTrace('link-recovery-failed', { peer: name, error: error?.message || String(error) }, 'WARN');
             });
         }
@@ -28652,8 +30085,6 @@ ZaliMixin(ZaliInterface, class {
         // branch below writes roomId/roomType/targetUser/inviter straight from the
         // signal — so one late offer/ICE packet from a room we already left (a
         // cancelled invite, a call the peer restarted) re-pointed the live session at
-"""#,
-    #"""
         // a dead room and killed the call in progress. Only the room we are actually
         // in may drive negotiation.
         const currentRoomId = String(this.voice.roomId || '').trim();
@@ -31632,6 +33063,8 @@ ZaliMixin(ZaliInterface, class {
                 const factor = Math.exp(-e.deltaY * 0.0015);
                 setScale(state.scale * factor, focalX, focalY);
                 const t = (state.scale - state.minScale) / (state.maxScale - state.minScale || 1);
+"""#,
+    #"""
                 zoomInput.value = String(Math.round(clamp(t, 0, 1) * 1000));
             }, { passive: false });
 
@@ -32580,8 +34013,6 @@ ZaliMixin(ZaliInterface, class {
             this.postAuthSetupInFlight = true;
             const tStart = this.nowMs();
             try {
-"""#,
-    #"""
                 let code = String(passphrase || this.S.auth?.vaultPassphrase || '').trim();
                 if (!code && restoreStoredUnlockSecret) {
                     code = await this.timeStage('loadVaultUnlockSecret', () => this.loadVaultUnlockSecret(token));
@@ -34256,6 +35687,9 @@ ZaliMixin(ZaliInterface, class {
             if (outcome === 'cancelled') return `Отменённый звонок${peer ? ` · ${peer}` : ''}`;
             return `Звонок${peer ? ` · ${peer}` : ''}${duration ? ` · ${duration}` : ''}`;
         }
+        // Без этого превью показывало бы служебную строку с id операции.
+        const coinSummary = this.coinCardSummary(msg?.text);
+        if (coinSummary) return coinSummary;
         const attachments = this.normalizeAttachments(msg.attachments);
         if (attachments.length) {
             const first = attachments[0];
@@ -35643,7 +37077,7 @@ ZaliMixin(ZaliInterface, class {
 
         let activeGroup = null;
         items.forEach((item) => {
-            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
@@ -35678,7 +37112,8 @@ ZaliMixin(ZaliInterface, class {
             const msg = item.msg;
             const isOut = this.isOutgoingMessage(msg);
             const isCall = msg.kind === 'call';
-            const noticeType = !isCall ? this.detectSystemNotice(msg.text) : null;
+            const coinCard = !isCall ? this.parseCoinCard(msg.text) : null;
+            const noticeType = !isCall && !coinCard ? this.detectSystemNotice(msg.text) : null;
             const isNotice = !!noticeType;
             const isImageCaption = !isCall && !isNotice && this.messageIsImageCaption(msg);
             const dateStr = this.fmtDate(msg.timestamp);
@@ -35710,6 +37145,25 @@ ZaliMixin(ZaliInterface, class {
                 isServers,
             });
             const senderLabelHtml = showSender ? this.renderMessageSenderLabel(msg) : '';
+
+            // Карточка ZaliCoin (zalicoin.js) стоит в ряду обычного пузыря — слева
+            // или справа, с аватаркой, — а не центрированной плашкой, как было у
+            // уведомления о переводе: у карточки есть кнопка, и «системная» плашка
+            // читалась бы как то, на что нажимать не нужно.
+            if (coinCard) {
+                html += `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                if (!isOut && showAvatar) {
+                    html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                } else if (!isOut) {
+                    html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
+                }
+                html += `<div class="bwrap coin-card-wrap">
+                    ${senderLabelHtml}
+                    ${this.renderCoinCard(coinCard, msg)}
+                    ${this.renderMessageReactions(msg)}
+                </div></div>`;
+                return;
+            }
 
             if (isNotice) {
                 if (noticeType === 'decrypt-error') {
@@ -35822,6 +37276,8 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.messageWindow.conversationKey = conversationKey;
+"""#,
+    #"""
         this.messageWindow.start = windowInfo.useWindow ? windowInfo.start : 0;
         this.messageWindow.end = windowInfo.useWindow ? windowInfo.end : msgs.length;
         this.messageWindow.count = msgs.length;
@@ -35961,25 +37417,34 @@ ZaliMixin(ZaliInterface, class {
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
-    async sendInputMessage() {
+    async sendInputMessage(options = {}) {
+        // `systemText` — сообщение, которое приложение отправляет от имени
+        // пользователя (карточка ZaliCoin). Композер при этом не участвует вовсе:
+        // ни набранный черновик, ни прикреплённые файлы, ни открытая цитата не
+        // должны уехать вместе с карточкой или пропасть после неё.
+        const systemText = typeof options?.systemText === 'string' ? options.systemText.trim() : '';
+        const isSystemPost = !!systemText;
         // Editing takes over the composer, so the send control saves instead of
         // sending a new message.
-        if (this.S.editDraft) {
+        if (this.S.editDraft && !isSystemPost) {
             await this.submitMessageEdit();
             return;
         }
         const inp = document.getElementById('msgInput');
-        const textValue = (inp && inp.value) || '';
+        const textValue = isSystemPost ? systemText : ((inp && inp.value) || '');
         const text = textValue.trim();
-        const attachments = this.normalizeAttachments(this.S.draftAttachments);
+        const attachments = isSystemPost ? [] : this.normalizeAttachments(this.S.draftAttachments);
         if (!text && attachments.length === 0) return;
 
         // Snapshotted before the first await: the user can dismiss the reply bar
         // (or start another reply) while the key resolution below is in flight.
-        const replyQuote = this.S.replyDraft;
+        const replyQuote = isSystemPost ? null : this.S.replyDraft;
         const replyPayload = replyQuote ? JSON.stringify(replyQuote) : '';
 
-        const clientId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        // Карточка перевода ZaliCoin приходит со своим clientId: сервер привязал к нему
+        // перевод, и квитанция подтверждает только сообщение ровно с этим id.
+        const presetClientId = isSystemPost ? String(options?.clientId || '').trim() : '';
+        const clientId = presetClientId || ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
         const payloadAttachments = attachments.map(att => ({ ...att }));
         const ts = new Date().toISOString();
         const activeMode = this.currentConversationMode();
@@ -36107,14 +37572,7 @@ ZaliMixin(ZaliInterface, class {
             this.scheduleRenderMessages();
             this.renderContacts();
             this.renderServerInterface();
-            if (inp) {
-                inp.value = '';
-                this.resizeComposer();
-            }
-            this.clearDraftAttachments();
-            this.clearComposerReply(replyQuote);
-            this.updateSendButtonState();
-            inp && inp.focus();
+            if (!isSystemPost) this.resetComposerAfterSend(inp, replyQuote);
 
             // No native shell (macOS/Windows) around this WebView — we're running as a
             // plain browser tab. Pack the .zali archive ourselves via the WASM build of
@@ -36174,15 +37632,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderContacts();
         this.renderServerInterface();
 
-        if (inp) {
-            inp.value = '';
-            this.resizeComposer();
-        }
-
-        this.clearDraftAttachments();
-        this.clearComposerReply(replyQuote);
-        this.updateSendButtonState();
-        inp && inp.focus();
+        if (!isSystemPost) this.resetComposerAfterSend(inp, replyQuote);
 
         this.cachePendingOutboxAttachments(clientId, payloadAttachments);
         this.enqueuePendingOutbox({
@@ -36225,6 +37675,18 @@ ZaliMixin(ZaliInterface, class {
             this.addLogEntry({ type: 'WARN', msg: 'Native bridge не принял сообщение, оставлено в очереди повтора', ts: new Date().toLocaleTimeString() });
             this.scheduleFlushPendingOutbox(1000);
         }
+    }
+
+    /** Композер после отправки его содержимого: пустое поле, без вложений и цитаты. */
+    resetComposerAfterSend(inp, replyQuote) {
+        if (inp) {
+            inp.value = '';
+            this.resizeComposer();
+        }
+        this.clearDraftAttachments();
+        this.clearComposerReply(replyQuote);
+        this.updateSendButtonState();
+        inp && inp.focus();
     }
 
     // --- Browser-only (no native shell) send/receive path, backed by the WASM build
@@ -36698,8 +38160,6 @@ ZaliMixin(ZaliInterface, class {
                 : msgs.findIndex(m =>
                     m.sender === sender &&
                     m.text === incomingText &&
-"""#,
-    #"""
                     this.normalizeAttachments(m.attachments).map(att => `${att.name}:${att.kind}:${att.size}`).join('|') === attachmentKey
                 );
             if (existingIndex >= 0) {
@@ -37282,6 +38742,8 @@ ZaliMixin(ZaliInterface, class {
     notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null }) {
         const from = String(sender || '').trim();
         if (!from || from === this.myName()) return;
+        // Карточка ZaliCoin — в уведомлении по-человечески, без служебного id.
+        text = this.coinCardSummary(text) || text;
         const isChannel = !!(serverId && channelId);
         const muteKey = isChannel ? `${serverId}:${channelId}` : String(peer || '').trim();
         if (!muteKey) return;
@@ -37485,6 +38947,14 @@ ZaliMixin(ZaliInterface, class {
 
         if (type === 'titlebar_announcement') {
             this.showTitlebarAnnouncement(payload);
+            return true;
+        }
+
+        // Карточку ZaliCoin активировали или отменили (server/src/coins.rs).
+        // Без дедупликации: у одной карточки много разных обновлений, а
+        // applyCoinGiftState сам отбрасывает устаревшие.
+        if (type === 'coin_gift_updated') {
+            this.handleCoinGiftRealtime(payload);
             return true;
         }
 
@@ -38102,7 +39572,7 @@ ZaliMixin(ZaliInterface, class {
         const sender = String(msg.sender || '').trim();
         if (!id || !sender) return null;
         const attachments = this.normalizeAttachments(msg.attachments);
-        const text = String(msg.text || '').trim().slice(0, ZaliInterface.REPLY_QUOTE_MAX_CHARS);
+        const text = String(this.coinCardSummary(msg.text) || msg.text || '').trim().slice(0, ZaliInterface.REPLY_QUOTE_MAX_CHARS);
         return { id, sender, text, attachmentCount: attachments.length };
     }
 
@@ -38202,6 +39672,9 @@ ZaliMixin(ZaliInterface, class {
      */
     canEditMessage(msg) {
         if (!msg || msg.kind === 'call') return false;
+        // Карточка ZaliCoin ссылается на операцию на сервере: правка текста не
+        // меняет ни суммы, ни остатка, а только отрывает сообщение от операции.
+        if (this.parseCoinCard(msg.text)) return false;
         if (String(msg.sender || '').trim() !== this.myName()) return false;
         const id = String(msg.id || '').trim();
         if (!id) return false;
@@ -39782,6 +41255,8 @@ ZaliMixin(ZaliInterface, class {
 
         const linkIndex = target.getAttribute?.('data-profile-link-index');
         const linkField = target.getAttribute?.('data-profile-link-field');
+"""#,
+    #"""
         if (linkIndex !== null && linkIndex !== undefined && linkField) {
             this.updateProfileDraftLink(Number(linkIndex), linkField, target.value);
             return;
@@ -40715,8 +42190,6 @@ ZaliMixin(ZaliInterface, class {
         this.bindContactAddEvents();                      // добавление контакта и подсказки
         this.bindComposerEvents();                        // композер, вложения, перевод ZaliCoin, модалка обновления
         this.bindMessageInputEvents();                    // поле ввода: ввод, вставка, drag-and-drop
-"""#,
-    #"""
         this.bindSearchAndModeEvents();                   // поиск, переключение режима и сегментов хаба
         this.bindAuthEvents();                            // экран входа: форма, сеть, гость
         this.bindSettingsEvents();                        // настройки, сетевая конфигурация и модалка сервера
@@ -40977,6 +42450,20 @@ ZaliMixin(ZaliInterface, class {
                     this.scrollToMessage(quote.getAttribute('data-reply-target'));
                     return;
                 }
+                const giftClaimBtn = e.target.closest('[data-zc-gift-claim]');
+                if (giftClaimBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void this.claimCoinGift(giftClaimBtn.getAttribute('data-zc-gift-claim'));
+                    return;
+                }
+                const giftCancelBtn = e.target.closest('[data-zc-gift-cancel]');
+                if (giftCancelBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.onCoinGiftCancelClick(giftCancelBtn.getAttribute('data-zc-gift-cancel'));
+                    return;
+                }
                 const reactionBtn = e.target.closest('[data-message-reaction]');
                 if (reactionBtn) {
                     const messageId = reactionBtn.getAttribute('data-message-id');
@@ -41093,16 +42580,40 @@ ZaliMixin(ZaliInterface, class {
         const coinTransferBtn = document.getElementById('coinTransferBtn');
         if (coinTransferBtn) {
             coinTransferBtn.addEventListener('click', () => {
-                // In a DM the peer is the obvious recipient; in a server channel
-                // (or with no active chat) there is no single peer — open the
-                // wallet-style modal with a free recipient field instead of
-                // silently doing nothing.
-                const isDm = this.currentConversationMode() !== 'servers';
-                this.openCoinTransferModal(isDm && this.S.current ? this.S.current : '');
+                // In a DM the peer is the obvious recipient. In a server channel
+                // there is no single peer — ZaliCoin goes out as a gift card that
+                // members claim (openCoinGiftModal falls back to the wallet-style
+                // modal when no text channel is open).
+                if (this.currentConversationMode() === 'servers') {
+                    this.openCoinGiftModal();
+                    return;
+                }
+                this.openCoinTransferModal(this.S.current || '');
             });
         }
         const zaliCoinSendBtn = document.getElementById('zaliCoinSendBtn');
         if (zaliCoinSendBtn) zaliCoinSendBtn.addEventListener('click', () => this.openCoinTransferModal());
+        const zaliCoinGiftsList = document.getElementById('zaliCoinGiftsList');
+        if (zaliCoinGiftsList) {
+            zaliCoinGiftsList.addEventListener('click', (e) => {
+                const cancelBtn = e.target.closest('[data-zc-gift-cancel]');
+                if (cancelBtn) this.onCoinGiftCancelClick(cancelBtn.getAttribute('data-zc-gift-cancel'));
+            });
+        }
+        const coinGiftClaimsField = document.getElementById('coinGiftClaimsField');
+        if (coinGiftClaimsField) {
+            coinGiftClaimsField.addEventListener('click', (e) => {
+                const stepBtn = e.target.closest('[data-zc-step]');
+                if (stepBtn) this.stepCoinGiftClaims(Number(stepBtn.getAttribute('data-zc-step')) || 0);
+            });
+        }
+        const coinGiftClaimsInput = document.getElementById('coinGiftClaimsInput');
+        if (coinGiftClaimsInput) {
+            coinGiftClaimsInput.addEventListener('input', () => this.updateCoinGiftSummary());
+            coinGiftClaimsInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
+            });
+        }
         const coinTransferModal = document.getElementById('coinTransferModal');
         const coinTransferCloseBtn = document.getElementById('coinTransferCloseBtn');
         const coinTransferCancelBtn = document.getElementById('coinTransferCancelBtn');
@@ -41124,6 +42635,7 @@ ZaliMixin(ZaliInterface, class {
             coinTransferAmountInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
+            coinTransferAmountInput.addEventListener('input', () => this.updateCoinGiftSummary());
         }
         const coinTransferRecipientInput = document.getElementById('coinTransferRecipientInput');
         if (coinTransferRecipientInput) {

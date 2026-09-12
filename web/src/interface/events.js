@@ -277,6 +277,20 @@ ZaliMixin(ZaliInterface, class {
                     this.scrollToMessage(quote.getAttribute('data-reply-target'));
                     return;
                 }
+                const giftClaimBtn = e.target.closest('[data-zc-gift-claim]');
+                if (giftClaimBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void this.claimCoinGift(giftClaimBtn.getAttribute('data-zc-gift-claim'));
+                    return;
+                }
+                const giftCancelBtn = e.target.closest('[data-zc-gift-cancel]');
+                if (giftCancelBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.onCoinGiftCancelClick(giftCancelBtn.getAttribute('data-zc-gift-cancel'));
+                    return;
+                }
                 const reactionBtn = e.target.closest('[data-message-reaction]');
                 if (reactionBtn) {
                     const messageId = reactionBtn.getAttribute('data-message-id');
@@ -393,16 +407,40 @@ ZaliMixin(ZaliInterface, class {
         const coinTransferBtn = document.getElementById('coinTransferBtn');
         if (coinTransferBtn) {
             coinTransferBtn.addEventListener('click', () => {
-                // In a DM the peer is the obvious recipient; in a server channel
-                // (or with no active chat) there is no single peer — open the
-                // wallet-style modal with a free recipient field instead of
-                // silently doing nothing.
-                const isDm = this.currentConversationMode() !== 'servers';
-                this.openCoinTransferModal(isDm && this.S.current ? this.S.current : '');
+                // In a DM the peer is the obvious recipient. In a server channel
+                // there is no single peer — ZaliCoin goes out as a gift card that
+                // members claim (openCoinGiftModal falls back to the wallet-style
+                // modal when no text channel is open).
+                if (this.currentConversationMode() === 'servers') {
+                    this.openCoinGiftModal();
+                    return;
+                }
+                this.openCoinTransferModal(this.S.current || '');
             });
         }
         const zaliCoinSendBtn = document.getElementById('zaliCoinSendBtn');
         if (zaliCoinSendBtn) zaliCoinSendBtn.addEventListener('click', () => this.openCoinTransferModal());
+        const zaliCoinGiftsList = document.getElementById('zaliCoinGiftsList');
+        if (zaliCoinGiftsList) {
+            zaliCoinGiftsList.addEventListener('click', (e) => {
+                const cancelBtn = e.target.closest('[data-zc-gift-cancel]');
+                if (cancelBtn) this.onCoinGiftCancelClick(cancelBtn.getAttribute('data-zc-gift-cancel'));
+            });
+        }
+        const coinGiftClaimsField = document.getElementById('coinGiftClaimsField');
+        if (coinGiftClaimsField) {
+            coinGiftClaimsField.addEventListener('click', (e) => {
+                const stepBtn = e.target.closest('[data-zc-step]');
+                if (stepBtn) this.stepCoinGiftClaims(Number(stepBtn.getAttribute('data-zc-step')) || 0);
+            });
+        }
+        const coinGiftClaimsInput = document.getElementById('coinGiftClaimsInput');
+        if (coinGiftClaimsInput) {
+            coinGiftClaimsInput.addEventListener('input', () => this.updateCoinGiftSummary());
+            coinGiftClaimsInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
+            });
+        }
         const coinTransferModal = document.getElementById('coinTransferModal');
         const coinTransferCloseBtn = document.getElementById('coinTransferCloseBtn');
         const coinTransferCancelBtn = document.getElementById('coinTransferCancelBtn');
@@ -424,6 +462,7 @@ ZaliMixin(ZaliInterface, class {
             coinTransferAmountInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
+            coinTransferAmountInput.addEventListener('input', () => this.updateCoinGiftSummary());
         }
         const coinTransferRecipientInput = document.getElementById('coinTransferRecipientInput');
         if (coinTransferRecipientInput) {

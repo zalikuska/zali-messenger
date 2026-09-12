@@ -223,7 +223,7 @@ ZaliMixin(ZaliInterface, class {
 
         let activeGroup = null;
         items.forEach((item) => {
-            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
@@ -258,7 +258,8 @@ ZaliMixin(ZaliInterface, class {
             const msg = item.msg;
             const isOut = this.isOutgoingMessage(msg);
             const isCall = msg.kind === 'call';
-            const noticeType = !isCall ? this.detectSystemNotice(msg.text) : null;
+            const coinCard = !isCall ? this.parseCoinCard(msg.text) : null;
+            const noticeType = !isCall && !coinCard ? this.detectSystemNotice(msg.text) : null;
             const isNotice = !!noticeType;
             const isImageCaption = !isCall && !isNotice && this.messageIsImageCaption(msg);
             const dateStr = this.fmtDate(msg.timestamp);
@@ -290,6 +291,25 @@ ZaliMixin(ZaliInterface, class {
                 isServers,
             });
             const senderLabelHtml = showSender ? this.renderMessageSenderLabel(msg) : '';
+
+            // Карточка ZaliCoin (zalicoin.js) стоит в ряду обычного пузыря — слева
+            // или справа, с аватаркой, — а не центрированной плашкой, как было у
+            // уведомления о переводе: у карточки есть кнопка, и «системная» плашка
+            // читалась бы как то, на что нажимать не нужно.
+            if (coinCard) {
+                html += `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                if (!isOut && showAvatar) {
+                    html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                } else if (!isOut) {
+                    html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
+                }
+                html += `<div class="bwrap coin-card-wrap">
+                    ${senderLabelHtml}
+                    ${this.renderCoinCard(coinCard, msg)}
+                    ${this.renderMessageReactions(msg)}
+                </div></div>`;
+                return;
+            }
 
             if (isNotice) {
                 if (noticeType === 'decrypt-error') {

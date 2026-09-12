@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260910-rev29">
+    <link rel="stylesheet" href="style.css?v=20260912-rev35">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -272,7 +272,7 @@
                             <button class="attach-btn coin-transfer-btn" id="coinTransferBtn" type="button" title="Перевести ZaliCoin" aria-label="Перевести ZaliCoin">
                                 <svg class="ui-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.8"/>
-                                    <path d="M12 7.4v9.2M14.6 9.4c0-1.05-1.16-1.9-2.6-1.9-1.44 0-2.6.85-2.6 1.9 0 1.05 1.16 1.55 2.6 1.9 1.44.35 2.6.85 2.6 1.9 0 1.05-1.16 1.9-2.6 1.9-1.44 0-2.6-.85-2.6-1.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <path d="M9.5 9h5l-5 6h5M10.4 12h3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                                 </svg>
                             </button>
                             <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
@@ -308,9 +308,9 @@
                             <div>
                                 <span class="settings-kicker">ZaliCoin</span>
                                 <h2>Ваш баланс ZaliCoin</h2>
-                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата.</p>
+                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата, а в каналах раздавайте их карточками.</p>
                             </div>
-                            <div class="hub-orb zc-orb" aria-hidden="true">ZC</div>
+                            <div class="hub-orb zc-orb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width=".9" opacity=".4"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg></div>
                         </section>
 
                         <section class="settings-card zc-balance-card">
@@ -320,7 +320,18 @@
                                 <span class="zc-balance-unit">ZC</span>
                             </div>
                             <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
+                            <span class="zc-balance-held" id="zaliCoinHeldValue" hidden></span>
                             <button class="btn-flat" id="zaliCoinSendBtn" type="button">Отправить ZaliCoin</button>
+                        </section>
+
+                        <section class="settings-card zc-gifts-card" id="zaliCoinGiftsCard" hidden>
+                            <div class="settings-card-head">
+                                <div>
+                                    <span class="settings-kicker">На удержании</span>
+                                    <h3 class="settings-card-title">Ваши активные карточки</h3>
+                                </div>
+                            </div>
+                            <div class="zc-gifts-list" id="zaliCoinGiftsList"></div>
                         </section>
 
                         <section class="settings-card zc-distribution-card">
@@ -616,14 +627,23 @@
                             <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
                             <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
                         </div>
-                        <label class="coin-transfer-field">
+                        <label class="coin-transfer-field" id="coinTransferRecipientField">
                             <span>Получатель</span>
                             <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
                         </label>
                         <label class="coin-transfer-field">
-                            <span>Сумма (ZC)</span>
+                            <span id="coinTransferAmountLabel">Сумма (ZC)</span>
                             <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
                         </label>
+                        <div class="coin-transfer-field" id="coinGiftClaimsField" hidden>
+                            <span id="coinGiftClaimsLabel">Сколько человек смогут получить</span>
+                            <div class="zc-stepper">
+                                <button class="zc-stepper-btn" type="button" data-zc-step="-1" aria-label="Меньше">−</button>
+                                <input type="number" id="coinGiftClaimsInput" min="1" max="100" step="1" value="1" aria-labelledby="coinGiftClaimsLabel">
+                                <button class="zc-stepper-btn" type="button" data-zc-step="1" aria-label="Больше">+</button>
+                            </div>
+                        </div>
+                        <p class="coin-gift-summary" id="coinGiftSummary" hidden></p>
                         <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
                         <div class="coin-transfer-actions">
                             <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
@@ -1038,6 +1058,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260910-rev29"></script>
+    <script src="app.js?v=20260912-rev35"></script>
 </body>
 </html>

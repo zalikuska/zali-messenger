@@ -447,6 +447,8 @@ ZaliMixin(ZaliInterface, class {
     notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null }) {
         const from = String(sender || '').trim();
         if (!from || from === this.myName()) return;
+        // Карточка ZaliCoin — в уведомлении по-человечески, без служебного id.
+        text = this.coinCardSummary(text) || text;
         const isChannel = !!(serverId && channelId);
         const muteKey = isChannel ? `${serverId}:${channelId}` : String(peer || '').trim();
         if (!muteKey) return;

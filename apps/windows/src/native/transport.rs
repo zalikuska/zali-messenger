@@ -141,8 +141,21 @@ pub(crate) fn dispatch_voice_log(proxy: &EventLoopProxy<AppEvent>, level: &str, 
     );
 }
 
+/// Карточка ZaliCoin несёт последней строкой служебный id операции
+/// (`[zc-gift:…]` / `[zc-tx:…]`, см. web/src/interface/zalicoin.js). В тосте он
+/// ничего не значит — хватает первой, человекочитаемой строки.
+fn strip_coin_card_marker(text: &str) -> &str {
+    if let Some((head, last)) = text.rsplit_once('\n') {
+        let last = last.trim();
+        if (last.starts_with("[zc-gift:") || last.starts_with("[zc-tx:")) && last.ends_with(']') {
+            return head.trim_end();
+        }
+    }
+    text
+}
+
 pub(crate) fn notification_body(text: &str, attachment_count: usize) -> String {
-    let trimmed = text.trim();
+    let trimmed = strip_coin_card_marker(text.trim());
     if !trimmed.is_empty() {
         return trimmed.chars().take(180).collect();
     }
@@ -933,5 +946,19 @@ mod tests {
         assert_eq!(notification_body("", 0), "Новое сообщение");
         assert_eq!(notification_body("   ", 1), "Вложение");
         assert_eq!(notification_body("", 3), "Вложения: 3");
+    }
+
+    #[test]
+    fn notification_body_hides_coin_card_operation_id() {
+        assert_eq!(
+            notification_body("🎁 alice отправил(а) ZaliCoin: 100 ZC × 3\n[zc-gift:0f6c2b1e-1111-2222-3333-444455556666]", 0),
+            "🎁 alice отправил(а) ZaliCoin: 100 ZC × 3"
+        );
+        assert_eq!(
+            notification_body("💰 alice перевёл(а) 5 ZaliCoin\n[zc-tx:0f6c2b1e-1111-2222-3333-444455556666]", 0),
+            "💰 alice перевёл(а) 5 ZaliCoin"
+        );
+        // Обычный текст с похожей последней строкой, но не закрытой скобкой, не трогаем.
+        assert_eq!(notification_body("line\n[zc-tx:abc", 0), "line\n[zc-tx:abc");
     }
 }

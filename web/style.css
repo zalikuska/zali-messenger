@@ -2956,7 +2956,16 @@ body[data-nav-mode="servers"] .contacts {
 
 #viewChat .msgs {
     min-height: 0;
-    padding: 16px 16px calc(var(--footer-dock-h) + var(--footer-dock-gap) + 16px);
+    /* Pull the scrollable box past #viewChat's own 16px right padding so the
+       scrollbar sits close to the panel's true edge instead of 32px in (16px
+       #viewChat padding + this element's own 16px). An auto-width box grows
+       to compensate for a negative margin, so this widens .msgs by 12px on
+       the right without touching #viewChat's padding (which the header/
+       voice-panel rows above still use) — leaving a small 4px gap to the
+       true edge. The right padding shrinks to keep bubbles clear of the
+       scrollbar itself; the other sides are unchanged. */
+    margin-right: -12px;
+    padding: 16px 6px calc(var(--footer-dock-h) + var(--footer-dock-gap) + 16px) 16px;
     overflow-y: auto;
     scroll-padding-bottom: calc(var(--footer-dock-h) + var(--footer-dock-gap) + 16px);
 }
@@ -2964,17 +2973,22 @@ body[data-nav-mode="servers"] .contacts {
 #viewChat .input-area {
     /* Full-bleed: the blurred backdrop must cover the whole dock (edge to
        edge, down to the window's bottom) — it used to be a floating card
-       inset 12px on both sides and sitting 12px above the bottom edge, so
-       the underlying (unblurred) chat content showed through those margins
-       instead of being blurred. The old 12px side inset moves into padding
-       so .input-bar's content still sits the same distance from the edges. */
+       inset 12px on both sides and sitting var(--footer-dock-gap) above the
+       bottom edge, so the underlying (unblurred) chat content showed through
+       those margins instead of being blurred. Both insets move into padding
+       instead of being dropped, so .input-bar's content — and the ::before
+       divider line, which sits at this box's own top edge — land exactly
+       where they did before; only the box (and its blur) now reaches past
+       them to the true edges. Dropping the bottom inset outright (an earlier
+       version of this fix did) shifted the whole dock, divider included,
+       down by var(--footer-dock-gap). */
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
     min-height: var(--footer-dock-h);
     margin: 0;
-    padding: 7px 12px;
+    padding: 7px 12px calc(7px + var(--footer-dock-gap));
     border-top: 0;
     z-index: 2;
     background: transparent;
@@ -2986,8 +3000,12 @@ body[data-nav-mode="servers"] .contacts {
 #viewChat .input-area::before {
     content: "";
     position: absolute;
-    left: 0;
-    right: 0;
+    /* Inset 12px like every other --footer-line divider (.me's, above the
+       settings row) — .input-area itself is full-bleed now (see above), but
+       left:0/right:0 here would stretch this one line edge to edge with it,
+       out of step with the rest of the UI's footer lines. */
+    left: 12px;
+    right: 12px;
     top: 0;
     height: var(--footer-line-size);
     background: var(--footer-line-color);
@@ -8174,6 +8192,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     --zc-series-8: rgba(var(--accent-rgb), .12);
     --zc-series-other: rgba(255,255,255,.14);
     --zc-series-unassigned: rgba(255,255,255,.05);
+    /* Удержание — не держатель, а монеты «в пути» к получателям карточек:
+       та же акцентная гамма, но штриховкой, чтобы не спутать с балансом. */
+    --zc-series-held: repeating-linear-gradient(135deg, rgba(var(--accent-rgb), .55) 0 3px, rgba(var(--accent-rgb), .16) 3px 6px);
 }
 
 .zc-view {
@@ -8185,6 +8206,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .zc-orb {
     font-weight: 800;
     letter-spacing: -.03em;
+}
+
+.zc-orb svg {
+    width: 58%;
+    height: 58%;
 }
 
 .zc-balance-card {
@@ -8398,6 +8424,548 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     display: flex;
     justify-content: flex-end;
     gap: 10px;
+}
+
+.coin-gift-summary {
+    margin: -4px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text2);
+}
+
+.zc-stepper {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.coin-transfer-field .zc-stepper input {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+}
+
+.zc-stepper input::-webkit-outer-spin-button,
+.zc-stepper input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.zc-stepper-btn {
+    flex: none;
+    width: var(--control-h);
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color .15s var(--ease-out), background .15s var(--ease-out);
+}
+
+.zc-stepper-btn:hover {
+    border-color: rgba(var(--accent-rgb), .45);
+    background: rgba(255,255,255,.07);
+}
+
+.zc-balance-held {
+    color: var(--text2);
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px dashed rgba(var(--accent-rgb), .3);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-gifts-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.zc-gifts-card > * {
+    position: relative;
+    z-index: 1;
+}
+
+.zc-gifts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.zc-gift-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.025);
+}
+
+.zc-gift-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.zc-gift-row-amount {
+    color: var(--text);
+    font-weight: 800;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-gift-row-meta {
+    color: var(--text2);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zc-card-btn.zc-gift-row-btn {
+    width: auto;
+    flex: none;
+    margin-top: 0;
+    padding: 0 14px;
+}
+
+/* ---- Карточка ZaliCoin в ленте ------------------------------------------
+   Спокойная нейтральная рамка; акцент — только монета, «ZC», заполненные
+   заряды и главное действие. Отменённая карточка приглушается, а не
+   перекрашивается. Композиция: шапка (монета · название · время) → сумма
+   крупно → пояснение → заряды со счётчиком → действие. */
+.msg.coin-card-msg .bwrap {
+    width: fit-content;
+    max-width: min(300px, 86%);
+}
+
+.zc-card {
+    width: 256px;
+    max-width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 16px 16px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,.08);
+    background:
+        radial-gradient(100% 70% at 0% 0%, rgba(var(--accent-rgb), .045), transparent 62%),
+        linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 14px 34px -24px rgba(0,0,0,.75);
+    color: var(--text);
+}
+
+.zc-card.is-cancelled,
+.zc-card.is-missing {
+    border-color: rgba(255,255,255,.06);
+    background: rgba(255,255,255,.02);
+}
+
+.zc-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.zc-card-coin {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: rgba(var(--accent-rgb), .88);
+    background: radial-gradient(circle at 34% 28%, rgba(var(--accent-rgb), .17), rgba(var(--accent-rgb), .04) 70%);
+}
+
+.zc-card-coin svg {
+    width: 22px;
+    height: 22px;
+}
+
+.zc-card.is-cancelled .zc-card-coin,
+.zc-card.is-missing .zc-card-coin {
+    color: var(--text3);
+    background: rgba(255,255,255,.04);
+}
+
+.zc-card-titles {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.zc-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.15;
+    color: var(--text);
+}
+
+.zc-card-caption {
+    font-size: 11px;
+    line-height: 1.15;
+    color: var(--text3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.zc-card-time {
+    align-self: flex-start;
+    margin-left: auto;
+    padding-top: 1px;
+    font-size: 11px;
+    color: var(--text3);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-card-amount {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-top: 18px;
+}
+
+.zc-card-value {
+    font-size: 34px;
+    line-height: .95;
+    font-weight: 800;
+    letter-spacing: -.035em;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.zc-card-unit {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    color: rgba(var(--accent-rgb), .82);
+}
+
+.zc-card.is-cancelled .zc-card-value,
+.zc-card.is-missing .zc-card-value {
+    color: var(--text2);
+    text-decoration: line-through;
+    text-decoration-thickness: 1.5px;
+    text-decoration-color: rgba(255,255,255,.25);
+}
+
+.zc-card.is-cancelled .zc-card-unit,
+.zc-card.is-missing .zc-card-unit {
+    color: var(--text3);
+}
+
+.zc-card-sub {
+    margin-top: 7px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--text2);
+    overflow-wrap: anywhere;
+}
+
+.zc-card-arrow {
+    margin: 0 6px;
+    color: var(--text3);
+}
+
+/* ---- Заряды: тонкие полоски с зазором. Сама полоска — ::before внутри
+   прозрачного блока 12px высотой: нарисовать 3px, а навести курсор на 12px. */
+.zc-charges {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.zc-charges-track {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    gap: 4px;
+}
+
+.zc-charge,
+.zc-charges-meter {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 12px;
+    outline: none;
+}
+
+.zc-charge::before,
+.zc-charges-meter::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 3px;
+    margin-top: -1.5px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.09);
+    transition: background .25s var(--ease-out), transform .2s var(--ease-out);
+}
+
+.zc-charge.is-on::before {
+    background: rgba(var(--accent-rgb), .85);
+}
+
+.zc-card.is-cancelled .zc-charge.is-on::before {
+    background: rgba(var(--accent-rgb), .45);
+}
+
+.zc-charge[data-zc-tip]:hover::before,
+.zc-charge[data-zc-tip]:focus::before {
+    background: var(--lime);
+    transform: scaleY(1.7);
+}
+
+.zc-charges-meter i {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 3px;
+    margin-top: -1.5px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb), .85);
+}
+
+/* Заполнение: полоска коротко раздувается и вспыхивает, потом оседает.
+   backwards, а не both: до своей очереди в каскаде полоска остаётся пустой,
+   а после анимации возвращается к обычным стилям — и наведение снова работает. */
+.zc-charge.is-pop::before {
+    animation: zc-charge-pop .62s cubic-bezier(.3, 1.4, .4, 1) backwards;
+    animation-delay: var(--zc-pop-delay, 0ms);
+}
+
+.zc-charges-meter.is-pop i {
+    animation: zc-charge-pop .62s cubic-bezier(.3, 1.4, .4, 1) backwards;
+    animation-delay: var(--zc-pop-delay, 0ms);
+}
+
+@keyframes zc-charge-pop {
+    0% {
+        background: rgba(255,255,255,.09);
+        transform: scale(1, 1);
+        box-shadow: 0 0 0 rgba(var(--accent-rgb), 0);
+    }
+    38% {
+        background: var(--lime);
+        transform: scale(1.06, 2.5);
+        box-shadow: 0 0 10px rgba(var(--accent-rgb), .45);
+    }
+    100% {
+        background: rgba(var(--accent-rgb), .85);
+        transform: scale(1, 1);
+        box-shadow: 0 0 0 rgba(var(--accent-rgb), 0);
+    }
+}
+
+.zc-charges-count {
+    flex: none;
+    display: inline-block;
+    min-width: 22px;
+    text-align: right;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-charges-count.is-bump {
+    animation: zc-count-bump .5s var(--ease-out) backwards;
+    animation-delay: var(--zc-pop-delay, 0ms);
+}
+
+@keyframes zc-count-bump {
+    40% {
+        transform: scale(1.2);
+        color: var(--lime);
+    }
+}
+
+/* Подсказка «кому ушло» — над полоской, в стиле всплывающих меню. Крайние
+   прижимаются к краю, чтобы не вылезать за карточку. */
+.zc-charge[data-zc-tip]::after,
+.zc-charges-meter[data-zc-tip]::after {
+    content: attr(data-zc-tip);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    z-index: 5;
+    max-width: 220px;
+    padding: 5px 9px;
+    border-radius: 9px;
+    border: 1px solid var(--menu-border);
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    -webkit-backdrop-filter: var(--menu-blur);
+    backdrop-filter: var(--menu-blur);
+    color: var(--text);
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, 3px);
+    transition: opacity .14s var(--ease-out), transform .14s var(--ease-out);
+}
+
+.zc-charge[data-zc-tip]:hover::after,
+.zc-charge[data-zc-tip]:focus::after,
+.zc-charges-meter[data-zc-tip]:hover::after,
+.zc-charges-meter[data-zc-tip]:focus::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.zc-charge:first-child[data-zc-tip]::after,
+.zc-charges-meter[data-zc-tip]::after {
+    left: 0;
+    transform: translate(0, 3px);
+}
+
+.zc-charge:last-child:not(:first-child)[data-zc-tip]::after {
+    left: auto;
+    right: 0;
+    transform: translate(0, 3px);
+}
+
+.zc-charge:first-child[data-zc-tip]:hover::after,
+.zc-charge:first-child[data-zc-tip]:focus::after,
+.zc-charge:last-child:not(:first-child)[data-zc-tip]:hover::after,
+.zc-charge:last-child:not(:first-child)[data-zc-tip]:focus::after,
+.zc-charges-meter[data-zc-tip]:hover::after,
+.zc-charges-meter[data-zc-tip]:focus::after {
+    transform: translate(0, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .zc-charge.is-pop::before,
+    .zc-charges-meter.is-pop i,
+    .zc-charges-count.is-bump {
+        animation: none;
+    }
+}
+
+/* ---- Действие и подписи ---- */
+.zc-card-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    height: 38px;
+    margin-top: 14px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .12s var(--ease-out), filter .15s var(--ease-out), background .15s var(--ease-out), border-color .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.zc-card-btn:not(:disabled):active {
+    transform: scale(.97);
+}
+
+.zc-card-btn.is-primary {
+    background: var(--lime);
+    color: #050505;
+}
+
+.zc-card-btn.is-primary:hover {
+    filter: brightness(1.06);
+}
+
+.zc-card-btn.is-ghost {
+    background: rgba(255,255,255,.045);
+    border-color: rgba(255,255,255,.08);
+    color: var(--text);
+}
+
+.zc-card-btn.is-ghost:hover {
+    border-color: rgba(255,77,109,.35);
+    color: var(--red);
+}
+
+.zc-card-btn.is-confirm {
+    background: rgba(255,77,109,.09);
+    border-color: rgba(255,77,109,.4);
+    color: var(--red);
+}
+
+.zc-card-btn:disabled {
+    cursor: default;
+    background: rgba(255,255,255,.035);
+    border-color: rgba(255,255,255,.06);
+    color: var(--text2);
+}
+
+.zc-card-btn.is-busy:disabled {
+    color: var(--text3);
+}
+
+.zc-card-btn.is-done:disabled {
+    background: rgba(var(--accent-rgb), .07);
+    border-color: rgba(var(--accent-rgb), .2);
+    color: rgba(var(--accent-rgb), .95);
+}
+
+.zc-card-check {
+    width: 14px;
+    height: 14px;
+    flex: none;
+}
+
+.zc-card-note {
+    margin-top: 10px;
+    font-size: 11.5px;
+    line-height: 1.35;
+    text-align: center;
+    color: var(--text3);
+    overflow-wrap: anywhere;
+}
+
+.zc-card-note.is-error {
+    color: var(--red);
+}
+
+.zc-card-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,.06);
+    font-size: 12px;
+    color: var(--text3);
+    overflow-wrap: anywhere;
+}
+
+.zc-card-status.is-warn {
+    color: var(--red);
+}
+
+.zc-card-status.is-ok {
+    color: rgba(var(--accent-rgb), .95);
+    font-weight: 700;
 }
 
 /* ============================================================================

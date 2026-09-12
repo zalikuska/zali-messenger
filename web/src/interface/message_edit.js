@@ -22,7 +22,7 @@ ZaliMixin(ZaliInterface, class {
         const sender = String(msg.sender || '').trim();
         if (!id || !sender) return null;
         const attachments = this.normalizeAttachments(msg.attachments);
-        const text = String(msg.text || '').trim().slice(0, ZaliInterface.REPLY_QUOTE_MAX_CHARS);
+        const text = String(this.coinCardSummary(msg.text) || msg.text || '').trim().slice(0, ZaliInterface.REPLY_QUOTE_MAX_CHARS);
         return { id, sender, text, attachmentCount: attachments.length };
     }
 
@@ -122,6 +122,9 @@ ZaliMixin(ZaliInterface, class {
      */
     canEditMessage(msg) {
         if (!msg || msg.kind === 'call') return false;
+        // Карточка ZaliCoin ссылается на операцию на сервере: правка текста не
+        // меняет ни суммы, ни остатка, а только отрывает сообщение от операции.
+        if (this.parseCoinCard(msg.text)) return false;
         if (String(msg.sender || '').trim() !== this.myName()) return false;
         const id = String(msg.id || '').trim();
         if (!id) return false;
