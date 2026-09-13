@@ -107,6 +107,9 @@ class MainActivity : ComponentActivity() {
     /** Нажатие на уведомление, ждущее моста (MessageNotifier кладёт переписку в extras). */
     private var pendingNotificationIntent: Intent? = null
 
+    /** index.html загружен (onPageFinished) — до этого переход из уведомления ждёт. */
+    private var webPageReady = false
+
     // Latest safe-area insets in dp, pushed into the web UI as CSS custom
     // properties (see applySafeAreaInsets). Kept as an Activity field because
     // they also have to be re-applied after every page load — a fresh document
@@ -381,7 +384,6 @@ class MainActivity : ComponentActivity() {
                         val nativeBridge = NativeBridge(ctx, wv)
                         bridge = nativeBridge
                         nativeBridge.setAppVisible(PushSession.appVisible)
-                        consumeNotificationIntent()
                         webView = wv
                         nativeBridge.onMobileNavProgress = { progress, animate ->
                             navAnimate = animate
@@ -528,6 +530,10 @@ class MainActivity : ComponentActivity() {
                                 override fun onPageFinished(view: WebView, url: String?) {
                                     // A fresh document has no inline style on <html> yet.
                                     applySafeAreaInsets(view)
+                                    // Переход из уведомления — только в загруженный документ: скрипт,
+                                    // выполненный до загрузки, живёт в пустой странице и умирает с ней.
+                                    webPageReady = true
+                                    consumeNotificationIntent()
                                     view.postDelayed({
                                         val root = view.rootView
                                         root.invalidate()
@@ -606,6 +612,7 @@ class MainActivity : ComponentActivity() {
     private fun consumeNotificationIntent() {
         val intent = pendingNotificationIntent ?: return
         val nativeBridge = bridge ?: return
+        if (!webPageReady) return
         pendingNotificationIntent = null
         val sender = intent.getStringExtra(MessageNotifier.EXTRA_SENDER)
         val serverId = intent.getStringExtra(MessageNotifier.EXTRA_SERVER_ID)
