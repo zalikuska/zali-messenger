@@ -1272,18 +1272,20 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
             "WS deliver_to_user skipped username={} message_id={} reason=no_connections",
             username, msg.id
         );
-        // No live WS connection got this — the recipient's tab/PWA is fully closed,
-        // so this is exactly the case Web Push exists for. Never push to the sender's
-        // own echo (msg.sender == username here means we're delivering to the sender).
-        if msg.sender != username {
-            send_web_push(
-                state,
-                username,
-                "ZaliMessenger",
-                &format!("Новое сообщение от {}", msg.sender),
-            )
-            .await;
-        }
+    }
+    // Web Push decides per subscription (push.rs::push_suppressed_for). A live socket is no
+    // longer a reason to stay silent: it may be the app on another device, or a frozen
+    // background tab that cannot show anything itself — pushing only when there were zero
+    // connections silenced every browser of a user whose Mac app happened to be open.
+    // Spawned: each push is an HTTP round trip to a push service, and this runs inside the
+    // sender's /api/upload. Never push the sender their own echo.
+    if msg.sender != username {
+        let state = Arc::clone(state);
+        let username = username.to_string();
+        let notification = crate::PushNotification::direct_message(&msg.sender, &msg.id);
+        tokio::spawn(async move {
+            send_web_push(&state, &username, &notification).await;
+        });
     }
 }
 
@@ -1431,9 +1433,9 @@ pub(crate) async fn deliver_server_message(state: &Arc<AppState>, msg: &Message)
         }
     }
 
-    // Web Push for members whose tab/PWA is closed. Fanned out on a background task:
-    // this runs inside the /api/upload request, and awaiting one push-service HTTP
-    // round-trip per offline member would put all of that latency on the sender's send.
+    // Web Push for channel members. Fanned out on a background task: this runs inside
+    // the /api/upload request, and awaiting one push-service HTTP round-trip per member
+    // would put all of that latency on the sender's send.
     let state = Arc::clone(state);
     let server = server.clone();
     let channel_id = channel_id.to_string();
@@ -1455,26 +1457,25 @@ pub(crate) async fn deliver_server_message(state: &Arc<AppState>, msg: &Message)
             return;
         }
         info!(
-            "PUSH deliver_server_message message_id={} channel={} offline_targets={}",
+            "PUSH deliver_server_message message_id={} channel={} targets={}",
             message_id,
             channel_id,
             targets.len()
         );
+        let notification =
+            crate::PushNotification::channel_message(&sender, &server.id, &channel_id, &message_id);
         for target in targets {
-            send_web_push(
-                &state,
-                &target,
-                "ZaliMessenger",
-                &format!("Новое сообщение в канале от {}", sender),
-            )
-            .await;
+            send_web_push(&state, &target, &notification).await;
         }
     });
 }
 
-/// Members of `server` who should get a Web Push for a new message in `channel_id`:
-/// everyone with view access to the channel, minus the sender, minus anyone who still
-/// holds a live WebSocket (they already got the message over it).
+/// Members of `server` who may get a Web Push for a new message in `channel_id`: everyone
+/// with view access to the channel who holds at least one push subscription, minus the
+/// sender. Whether each of their subscriptions is actually pushed is decided per device
+/// in push.rs (`push_suppressed_for`). A live WebSocket used to exclude the member right
+/// here, which let any open client of theirs — the Mac app, a frozen background tab —
+/// silence every one of their devices.
 ///
 /// Membership comes from the DB rather than `user_connections` on purpose — that is the
 /// whole point. `deliver_server_message`'s WS loop can only ever reach users who are
@@ -1490,29 +1491,21 @@ pub(crate) async fn resolve_channel_push_targets(
     channel_id: &str,
     sender: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
-    let members: Vec<String> =
-        sqlx::query_scalar::<_, String>("SELECT username FROM server_members WHERE server_id = ?")
-            .bind(&server.id)
-            .fetch_all(&state.db)
-            .await?;
-
-    let offline_members: Vec<String> = members
-        .into_iter()
-        .filter(|member| member != sender)
-        .filter(|member| {
-            state
-                .user_connections
-                .get(member)
-                .map(|conns| conns.len())
-                .unwrap_or(0)
-                == 0
-        })
-        .collect();
-    if offline_members.is_empty() {
+    let candidates: Vec<String> = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT sm.username
+         FROM server_members sm
+         JOIN push_subscriptions ps ON ps.username = sm.username
+         WHERE sm.server_id = ? AND sm.username != ?",
+    )
+    .bind(&server.id)
+    .bind(sender)
+    .fetch_all(&state.db)
+    .await?;
+    if candidates.is_empty() {
         return Ok(Vec::new());
     }
 
-    resolve_server_message_viewers(state, server, channel_id, &offline_members).await
+    resolve_server_message_viewers(state, server, channel_id, &candidates).await
 }
 
 pub(crate) async fn can_access_message(
@@ -2083,8 +2076,22 @@ mod tests {
         (server, channel_id)
     }
 
+    async fn add_push_subscription(state: &Arc<AppState>, username: &str) {
+        sqlx::query(
+            "INSERT INTO push_subscriptions (id, username, endpoint, p256dh, auth, device_id)
+             VALUES (?, ?, ?, 'p256dh', 'auth', ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(username)
+        .bind(format!("https://push.example/{}", uuid::Uuid::new_v4()))
+        .bind(format!("dev-{}", username))
+        .execute(&state.db)
+        .await
+        .expect("insert push subscription");
+    }
+
     #[tokio::test]
-    async fn channel_push_targets_exclude_the_sender_and_include_other_offline_members() {
+    async fn channel_push_targets_exclude_the_sender_and_include_other_subscribed_members() {
         let state = test_state().await;
         let (server, channel_id) = seed_server(
             &state,
@@ -2092,6 +2099,9 @@ mod tests {
             &[("owner", "owner"), ("alice", "member"), ("bob", "member")],
         )
         .await;
+        for member in ["owner", "alice", "bob"] {
+            add_push_subscription(&state, member).await;
+        }
 
         let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
             .await
@@ -2107,7 +2117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn channel_push_targets_skip_members_that_still_hold_a_live_connection() {
+    async fn channel_push_targets_keep_members_that_hold_a_live_connection() {
         let state = test_state().await;
         let (server, channel_id) = seed_server(
             &state,
@@ -2115,9 +2125,10 @@ mod tests {
             &[("owner", "owner"), ("alice", "member"), ("bob", "member")],
         )
         .await;
+        add_push_subscription(&state, "bob").await;
 
-        // bob is online: he already got the message over the WebSocket, so pushing
-        // would be a duplicate notification.
+        // bob's Mac app is open. That must not silence his phone: whether a given
+        // subscription is pushed is decided per device in push.rs.
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
         state
             .user_connections
@@ -2129,12 +2140,25 @@ mod tests {
             .await
             .expect("resolve targets");
 
-        assert!(
-            !targets.contains(&"bob".to_string()),
-            "a member with a live WS must not be pushed, got {:?}",
-            targets
-        );
-        assert!(targets.contains(&"owner".to_string()), "got {:?}", targets);
+        assert_eq!(targets, vec!["bob".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn channel_push_targets_skip_members_without_a_subscription() {
+        let state = test_state().await;
+        let (server, channel_id) = seed_server(
+            &state,
+            "owner",
+            &[("owner", "owner"), ("alice", "member"), ("bob", "member")],
+        )
+        .await;
+        add_push_subscription(&state, "owner").await;
+
+        let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
+            .await
+            .expect("resolve targets");
+
+        assert_eq!(targets, vec!["owner".to_string()]);
     }
 
     #[tokio::test]
@@ -2142,6 +2166,9 @@ mod tests {
         let state = test_state().await;
         let (server, channel_id) =
             seed_server(&state, "owner", &[("owner", "owner"), ("alice", "member")]).await;
+        for username in ["owner", "alice", "stranger"] {
+            add_push_subscription(&state, username).await;
+        }
 
         let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
             .await

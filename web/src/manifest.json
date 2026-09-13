@@ -73,6 +73,7 @@
     "interface/message_list.js",
     "interface/message_send.js",
     "interface/notifications.js",
+    "interface/web_push.js",
     "interface/state_sync.js",
     "interface/message_edit.js",
     "interface/profiles.js",

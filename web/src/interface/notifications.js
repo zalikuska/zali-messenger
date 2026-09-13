@@ -45,6 +45,61 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // «Пользователь сейчас смотрит в приложение», а не только «чат выбран».
+    //
+    // isDmChatVisible/isServerChatVisible отвечают на вопрос вёрстки — какая
+    // переписка нарисована в окне, — и для отрисовки и сброса счётчика это верный
+    // вопрос. Для уведомления нет: свёрнутое окно, окно в трее и окно под другим
+    // приложением продолжают «показывать» выбранный чат. Самый частый сценарий
+    // мессенджера — переписывались, ушли в другое приложение, собеседник ответил —
+    // давал ровно ноль: ни уведомления, ни звука, ни счётчика непрочитанного.
+    //
+    // hasFocus() не спрашиваем в мобильной раскладке: на телефоне приложение на
+    // экране и есть приложение в руках, а фокус вида у Android WebView зависит от
+    // того, куда последним ушло касание (нативная нижняя панель его забирает).
+    isAppAttended() {
+        if (typeof document === 'undefined') return true;
+        if (document.visibilityState === 'hidden') return false;
+        if (this.isMobileLayout?.()) return true;
+        return typeof document.hasFocus !== 'function' || document.hasFocus();
+    }
+
+    // Входящее не требует уведомления, только если его чат на экране И пользователь
+    // на экран смотрит. Отрисовку этим не гейтить — она обязана идти и в фоне.
+    isServerChatAttended(key) {
+        return this.isServerChatVisible(key) && this.isAppAttended();
+    }
+
+    isDmChatAttended(peer) {
+        return this.isDmChatVisible(peer) && this.isAppAttended();
+    }
+
+    // Пара к isAppAttended. Сообщение, пришедшее в открытый чат, пока окно было в
+    // фоне, копит счётчик (notifyBackgroundMessage). Когда пользователь вернулся,
+    // этот чат снова у него перед глазами — счётчик снимается так же, как его
+    // снимают switchChat / setActiveChannel / setNavMode при выборе чата.
+    clearAttendedConversationUnread() {
+        if (!this.isAppAttended()) return;
+        let changed = false;
+        if (this.S.navMode === 'servers') {
+            const key = this.currentServerChatKey();
+            if (key && this.isServerChatVisible(key) && Number(this.S.channelUnread?.[key] || 0) > 0) {
+                this.S.channelUnread[key] = 0;
+                changed = true;
+            }
+        } else {
+            const peer = this.S.current;
+            if (peer && this.isDmChatVisible(peer) && Number(this.S.unread?.[peer] || 0) > 0) {
+                this.S.unread[peer] = 0;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        this.syncTaskbarBadge();
+        this.renderContacts();
+        if (this.S.navMode === 'servers') this.renderServerInterface();
+    }
+
     isPeerMuted(peer) {
         return !!(this.S.mutedChats || {})[String(peer || '').trim()];
     }
@@ -518,7 +573,7 @@ ZaliMixin(ZaliInterface, class {
     // no notification and no unread badge, which was the root cause of notifications
     // being rare and arriving with a huge delay: most messages land via catch-up
     // after a WS drop, not via the live push that used to be the only notify trigger.
-    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null }) {
+    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null, messageId = '' }) {
         const from = String(sender || '').trim();
         if (!from || from === this.myName()) return;
         // Карточка ZaliCoin — в уведомлении по-человечески, без служебного id.
@@ -557,6 +612,7 @@ ZaliMixin(ZaliInterface, class {
             attachmentCount,
             serverId,
             channelId,
+            messageId,
         });
     }
 
@@ -571,22 +627,24 @@ ZaliMixin(ZaliInterface, class {
         return 'Новое сообщение';
     }
 
-    // Browser/PWA only — the one notification path nothing else covered.
-    // postNativeMessage(SHOW_NOTIFICATION) above returns false immediately when there
-    // is no native bridge, and the server only sends a Web Push when deliver_to_user
-    // finds ZERO live WS connections. A tab that is merely *hidden* (backgrounded,
-    // minimized, screen locked) has a live WS, so it fell straight through the gap
-    // between the two and produced no notification at all — just the chime, which
-    // browsers throttle in background tabs anyway.
+    // Browser/PWA only. postNativeMessage(SHOW_NOTIFICATION) above returns false
+    // immediately when there is no native bridge, so a live tab shows its own
+    // notification here — with the message text, which a Web Push can never carry.
     //
-    // Only fires while the document is hidden: with the app actually on screen the
-    // in-app unread badges already cover it. Notifications are tagged per conversation
-    // with renotify, so a long-backgrounded tab alerts on each message without piling
-    // up one entry per message in the OS notification centre.
-    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null }) {
+    // Only fires while the user isn't looking at the app (isAppAttended): with the app
+    // in front of them the in-app unread badges already cover it. A window that is
+    // visible but sits behind another app used to count as "looking" here too.
+    //
+    // The server pushes such a tab as well (server/src/push.rs): it cannot tell whether
+    // a background tab's JS still runs. Both notifications share the conversation tag
+    // and carry messageId, and whichever lands second stays quiet — here by skipping,
+    // in service-worker.js by re-showing silently. Tagged per conversation with
+    // renotify, so a long-backgrounded tab alerts on each message without piling up
+    // one entry per message in the OS notification centre.
+    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null, messageId = '' }) {
         if (this.hasNativeBridge()) return;
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-        if (typeof document !== 'undefined' && document.visibilityState !== 'hidden') return;
+        if (this.isAppAttended()) return;
 
         const from = String(sender || '').trim();
         if (!from) return;
@@ -598,7 +656,12 @@ ZaliMixin(ZaliInterface, class {
             badge: './icon-192.png',
             tag: isChannel ? `zali:${serverId}:${channelId}` : `zali:dm:${from}`,
             renotify: true,
-            data: { sender: from, serverId: serverId || null, channelId: channelId || null },
+            data: {
+                sender: from,
+                serverId: serverId || null,
+                channelId: channelId || null,
+                messageId: String(messageId || ''),
+            },
         };
 
         try {
@@ -607,7 +670,14 @@ ZaliMixin(ZaliInterface, class {
             // allowed, and it is also what the installed PWA needs.
             if (navigator.serviceWorker?.ready) {
                 navigator.serviceWorker.ready
-                    .then(registration => registration.showNotification(title, options))
+                    .then(async registration => {
+                        const id = options.data.messageId;
+                        if (id && typeof registration.getNotifications === 'function') {
+                            const existing = await registration.getNotifications({ tag: options.tag });
+                            if (existing.some(notification => notification.data?.messageId === id)) return;
+                        }
+                        return registration.showNotification(title, options);
+                    })
                     .catch(e => this.trace(`showBrowserNotification failed: ${e?.message || e}`));
             } else {
                 new Notification(title, options);

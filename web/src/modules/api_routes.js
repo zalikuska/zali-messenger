@@ -54,6 +54,8 @@
         messages: {
             direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
             reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
+            remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
+            edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
             download: (id) => apiRoute(`/download/${encodeURIComponent(id)}`),
             upload: apiRoute('/upload'),
         },

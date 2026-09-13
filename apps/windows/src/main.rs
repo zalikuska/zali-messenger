@@ -64,18 +64,83 @@ fn ensure_single_instance_or_focus_existing() {
     std::process::exit(0);
 }
 
+/// Must match the `app_id` toasts are sent under (`show_message_notification` in
+/// native/transport.rs) and the installer's `AppUserModelID` in ZaliMessenger.iss.
+#[cfg(target_os = "windows")]
+const WINDOWS_APP_USER_MODEL_ID: &str = "com.zali.messenger";
+
 #[cfg(target_os = "windows")]
 fn set_windows_app_user_model_id() {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 
-    let app_id: Vec<u16> = OsStr::new("com.zali.messenger")
+    register_windows_app_user_model_id();
+    let app_id: Vec<u16> = OsStr::new(WINDOWS_APP_USER_MODEL_ID)
         .encode_wide()
         .chain(Some(0))
         .collect();
     unsafe {
         let _ = SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
+    }
+}
+
+/// Naming the process with an AUMID is not enough for toasts: Windows shows a toast
+/// from an unpackaged Win32 app only when that AUMID is also *registered*, and until
+/// now the only thing registering it was the Start-menu shortcut the installer
+/// creates. Anyone running the exe directly — downloaded by hand, or installed before
+/// the online installer existed — got no notifications at all, and silently:
+/// `ToastNotifier::Show` succeeds and the toast is dropped, so even the trace log
+/// stayed clean. This per-user key is the shortcut-free registration for unpackaged
+/// apps (the Windows App SDK writes the same one). HKCU needs no elevation, and
+/// rewriting one string value per launch costs nothing.
+#[cfg(target_os = "windows")]
+fn register_windows_app_user_model_id() {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE,
+        REG_OPTION_NON_VOLATILE, REG_SZ,
+    };
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(Some(0)).collect()
+    }
+
+    let subkey = wide(&format!(
+        "Software\\Classes\\AppUserModelId\\{}",
+        WINDOWS_APP_USER_MODEL_ID
+    ));
+    let value_name = wide("DisplayName");
+    let display_name = wide("Zali Messenger");
+    let mut key: HKEY = std::ptr::null_mut();
+    unsafe {
+        let status = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut key,
+            std::ptr::null_mut(),
+        );
+        if status != ERROR_SUCCESS {
+            error!("AUMID registration failed: RegCreateKeyExW status={}", status);
+            return;
+        }
+        let status = RegSetValueExW(
+            key,
+            value_name.as_ptr(),
+            0,
+            REG_SZ,
+            display_name.as_ptr() as *const u8,
+            (display_name.len() * std::mem::size_of::<u16>()) as u32,
+        );
+        if status != ERROR_SUCCESS {
+            error!("AUMID registration failed: RegSetValueExW status={}", status);
+        }
+        RegCloseKey(key);
     }
 }
 
@@ -537,6 +602,18 @@ fn main() -> wry::Result<()> {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
+        // Windows only in practice: `tao` 0.24's Win32 backend can panic inside its own
+        // window-proc trampoline while computing monitor info (GetMonitorInfo) for an
+        // undecorated window — hit by `window.set_maximized()` below on some multi-monitor
+        // / mixed-DPI setups, reported as the whole app silently closing on a maximize
+        // click. tao catches panics inside its own wndproc and re-raises them once control
+        // returns to this closure (mirroring winit's approach), so they land here as a
+        // normal, catchable panic rather than aborting mid-callback. Upstream fix is tao
+        // 0.34.6 (monitor-handle panic guard), but that's a breaking multi-version bump
+        // (winit/tao moved to an ApplicationHandler-style event loop API since) that needs
+        // a real Windows machine to verify — this keeps affected users' sessions alive in
+        // the meantime instead of losing the whole client to one bad SetWindowPos call.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match event {
             Event::UserEvent(AppEvent::EvaluateScript(script)) => {
                 if let Err(error) = webview.evaluate_script(&script) {
@@ -606,7 +683,24 @@ fn main() -> wry::Result<()> {
             }
             _ => {}
         }
+        }));
+        if let Err(payload) = outcome {
+            error!("Recovered from window event-loop panic: {}", panic_message(&payload));
+        }
     })
+}
+
+/// Best-effort extraction of a human-readable message from a caught panic payload —
+/// `std::panic::catch_unwind` only guarantees `Box<dyn Any + Send>`, and panics raised
+/// via `panic!("{}", x)` / `.unwrap()` box either `&'static str` or `String`.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> Cow<'static, str> {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        Cow::Borrowed(*s)
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        Cow::Owned(s.clone())
+    } else {
+        Cow::Borrowed("<non-string panic payload>")
+    }
 }
 
 /// Shared by the OS close button (when decorations are on) and the in-app close

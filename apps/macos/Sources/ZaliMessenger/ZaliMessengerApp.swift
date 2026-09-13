@@ -26,7 +26,7 @@ import UserNotifications
 // hidden title bar, the minimum size, the dark appearance, the window background colour,
 // and the main menu (without it Cmd+C/V/X/A/Q do not work in a WKWebView — the same
 // reason the Rust shell builds a menu with `muda`).
-class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     private var window: NSWindow?
     private let webViewFactory = WebView()
     private var coordinator: WebView.Coordinator?
@@ -53,11 +53,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         NativeNotificationService.shared.recheckAuthorizationStatus()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Closing the window does not quit. Whether an incoming message deserves a
+    // notification is decided inside the WebView (receiveMessage → SHOW_NOTIFICATION),
+    // so an app that exits on the red button stopped notifying the moment the user did
+    // what every other macOS messenger allows. The window is hidden instead (see
+    // windowShouldClose) and comes back from the Dock or a notification; Cmd+Q quits.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { window?.makeKeyAndOrderFront(nil) }
+        if !flag { showMainWindow() }
         return true
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // orderOut on a fullscreen window leaves an empty black Space behind; hiding the
+        // app gives the same "gone, but still running" result there.
+        if sender.styleMask.contains(.fullScreen) {
+            NSApp.hide(nil)
+        } else {
+            sender.orderOut(nil)
+        }
+        return false
+    }
+
+    private func showMainWindow() {
+        if NSApp.isHidden { NSApp.unhide(nil) }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func userNotificationCenter(
@@ -66,6 +88,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound, .list])
+    }
+
+    // Clicking a notification only activates the app — with the window closed that
+    // would leave the user looking at nothing.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        DispatchQueue.main.async {
+            self.showMainWindow()
+            completionHandler()
+        }
     }
 
     // MARK: - Window
@@ -91,6 +126,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Restoration would otherwise reopen whatever size the window was left at, and
         // maximizeMainWindow() below already picks the frame on every launch.
         window.isRestorable = false
+        // Close hides instead of quitting — see windowShouldClose.
+        window.delegate = self
 
         let container = NSView(frame: window.contentLayoutRect)
         container.autoresizingMask = [.width, .height]

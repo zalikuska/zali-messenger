@@ -339,6 +339,9 @@ ZaliMixin(ZaliInterface, class {
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
                 this.setConnectionStatus(true);
+                // Серверу — смотрит ли пользователь в приложение: от этого зависит, уйдёт
+                // ли Web Push на это устройство (web_push.js, reportClientPresence).
+                this.reportClientPresence({ force: true });
                 // The browser-side counterpart of the native shells'
                 // voice_transport_state:'up'. iOS and Android both declare
                 // `voice: false` and therefore run on THIS socket, so without it

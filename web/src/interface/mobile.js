@@ -447,6 +447,19 @@ ZaliMixin(ZaliInterface, class {
                 this.openContactContextMenu(row.dataset.name, x, y);
             });
         }
+
+        // Казна, настройки и участники сервера живут только в меню по аватарке
+        // сервера (openServerRailContextMenu), а с 0.2b36 оно висело на одном
+        // contextmenu. На тач-экране его нет — WKWebView и мобильный Safari по
+        // долгому нажатию его не шлют, — и все три пункта были с телефона
+        // недостижимы: шестерёнку из шапки убрали, другого входа не осталось.
+        for (const rail of this.serverRailElements()) {
+            this.bindMobileLongPress(rail, '.server-rail-item[data-server-id]', (item, x, y) => {
+                this.hideServerRailTip();
+                const serverId = item.getAttribute('data-server-id');
+                if (serverId) this.openServerRailContextMenu(serverId, x, y);
+            });
+        }
     }
 
     /**

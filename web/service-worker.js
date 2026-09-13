@@ -33,6 +33,24 @@ self.addEventListener('activate', (event) => {
     );
 });
 
+// Одно сообщение — одно уведомление. О сообщении могут сообщить двое: пуш с сервера и
+// живая, но не активная вкладка (showBrowserNotification). Сервер шлёт пуш и такой вкладке
+// — он не может знать, исполняется ли у неё JS (фоновую вкладку браузер замораживает).
+// Обе стороны ставят один tag (переписка) и messageId в data: если уведомление об этом
+// сообщении уже висит, пуш переподнимает его молча. Совсем не показывать нельзя — подписка
+// оформлена с userVisibleOnly, и браузер сам покажет «сайт обновлён в фоне».
+async function showMessageNotification(title, options) {
+    const tag = options.tag || '';
+    const messageId = options.data && options.data.messageId;
+    if (tag && messageId) {
+        const existing = await self.registration.getNotifications({ tag });
+        if (existing.some((notification) => notification.data && notification.data.messageId === messageId)) {
+            return self.registration.showNotification(title, { ...options, renotify: false, silent: true });
+        }
+    }
+    return self.registration.showNotification(title, options);
+}
+
 self.addEventListener('push', (event) => {
     let data = {};
     try {
@@ -45,19 +63,38 @@ self.addEventListener('push', (event) => {
         badge: './icon-192.png',
         data: data.data || {},
     };
-    event.waitUntil(self.registration.showNotification(title, options));
+    if (data.tag) {
+        // Одна запись на переписку в центре уведомлений, но каждое новое сообщение звучит.
+        options.tag = data.tag;
+        options.renotify = true;
+    }
+    event.waitUntil(showMessageNotification(title, options));
 });
 
+// Клик ведёт в переписку уведомления, а не просто на главную: открытой вкладке уходит
+// postMessage (web/src/interface/web_push.js, installWebPushClickRouting), новая
+// открывается с ?open=… в адресе.
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
-    const targetUrl = self.registration.scope;
+    const data = event.notification.data || {};
+    const target = {
+        sender: data.sender || '',
+        serverId: data.serverId || '',
+        channelId: data.channelId || '',
+    };
+    const hasTarget = !!(target.sender || (target.serverId && target.channelId));
     event.waitUntil(
         self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
             for (const client of clientList) {
-                if ('focus' in client) return client.focus();
+                if ('focus' in client) {
+                    if (hasTarget) client.postMessage({ type: 'zali:open-conversation', ...target });
+                    return client.focus();
+                }
             }
-            if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
-            return undefined;
+            if (!self.clients.openWindow) return undefined;
+            const url = new URL(self.registration.scope);
+            if (hasTarget) url.searchParams.set('open', JSON.stringify(target));
+            return self.clients.openWindow(url.toString());
         })
     );
 });

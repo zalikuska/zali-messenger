@@ -12454,6 +12454,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         messages: {
             direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
             reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
+            remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
+            edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
             download: (id) => apiRoute(`/download/${encodeURIComponent(id)}`),
             upload: apiRoute('/upload'),
         },
@@ -13100,9 +13102,9 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                         const length = LENGTH_BASE[lengthIndex] + takeBits(LENGTH_EXTRA[lengthIndex]);
                         const distanceSymbol = decodeSymbol(distanceTable);
                         if (distanceSymbol >= DIST_BASE.length) throw new Error('tgs: invalid distance code');
-                        const distance = DIST_BASE[distanceSymbol] + takeBits(DIST_EXTRA[distanceSymbol]);
 """#,
     #"""
+                        const distance = DIST_BASE[distanceSymbol] + takeBits(DIST_EXTRA[distanceSymbol]);
                         if (distance > outLen) throw new Error('tgs: distance beyond output');
                         grow(length);
                         let from = outLen - distance;
@@ -14191,6 +14193,7 @@ const DefaultApiRoutes = Object.freeze({
         remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         download: (id) => apiRoute(`/download/${encodeURIComponent(id)}`),
+        upload: apiRoute('/upload'),
     },
     servers: {
         list: apiRoute('/servers'),
@@ -14238,6 +14241,9 @@ const DefaultApiRoutes = Object.freeze({
         giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
         managedTreasuries: apiRoute('/coins/treasuries/managed'),
         serverPayouts: apiRoute('/coins/server-payouts'),
+    },
+    diagnostics: {
+        decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
     },
 });
 
@@ -14729,6 +14735,7 @@ ZaliMixin(ZaliInterface, class {
         if (this.hasNativeBridge()) return;
         if (!('serviceWorker' in navigator)) return;
         if (!this.S.session?.token) return;
+        this.installWebPushClickRouting();
         const granted = await this.ensureNotificationPermission();
         if (!('PushManager' in window)) return;
         if (!granted) return;
@@ -14746,9 +14753,16 @@ ZaliMixin(ZaliInterface, class {
                     applicationServerKey: this.urlBase64ToUint8Array(publicKey),
                 });
             }
+            // Устройство подписки — чтобы сервер не слал пуш туда, где сейчас смотрят в
+            // приложение (server/src/push.rs::push_suppressed_for). Без него подписка живёт
+            // по старому правилу «есть ли у пользователя хоть один сокет». currentDeviceId()
+            // не бывает пустым: loadDeviceIdentity() сама заводит идентичность с deviceId.
+            // ensureDeviceCryptoIdentity() здесь звать нельзя — параллельно с
+            // bootstrapDeviceTrust она сгенерировала бы второй ключ устройства.
             await this.apiFetch('/api/push/subscribe', {
                 method: 'POST',
-                body: JSON.stringify(subscription.toJSON()),
+                includeDeviceId: true,
+                body: JSON.stringify({ ...subscription.toJSON(), deviceId: this.currentDeviceId() }),
             });
             this.trace('subscribeWebPush ok');
         } catch (e) {
@@ -14809,6 +14823,9 @@ ZaliMixin(ZaliInterface, class {
                     void this.flushCacheStats();
                     return;
                 }
+                // Окно снова перед пользователем: открытый чат мог накопить счётчик,
+                // пока окно было в фоне (см. isAppAttended).
+                this.clearAttendedConversationUnread();
                 this.refreshVisibleAvatars();
                 this.syncActiveConversation({ force: !this.nativeSupports('sendMessage') });
                 if (this.voice.roomId || this.voice.localStream || this.voice.peerConnections.size > 0) {
@@ -15742,6 +15759,19 @@ ZaliMixin(ZaliInterface, class {
                 }
                 if (!row.dataset.name) return;
                 this.openContactContextMenu(row.dataset.name, x, y);
+            });
+        }
+
+        // Казна, настройки и участники сервера живут только в меню по аватарке
+        // сервера (openServerRailContextMenu), а с 0.2b36 оно висело на одном
+        // contextmenu. На тач-экране его нет — WKWebView и мобильный Safari по
+        // долгому нажатию его не шлют, — и все три пункта были с телефона
+        // недостижимы: шестерёнку из шапки убрали, другого входа не осталось.
+        for (const rail of this.serverRailElements()) {
+            this.bindMobileLongPress(rail, '.server-rail-item[data-server-id]', (item, x, y) => {
+                this.hideServerRailTip();
+                const serverId = item.getAttribute('data-server-id');
+                if (serverId) this.openServerRailContextMenu(serverId, x, y);
             });
         }
     }
@@ -17270,6 +17300,8 @@ ZaliMixin(ZaliInterface, class {
 
         const name = document.getElementById('treasuryServerName');
         if (name) name.textContent = t.name;
+"""#,
+    #"""
         const balance = document.getElementById('treasuryBalanceValue');
         if (balance) balance.textContent = data ? this.formatCoinAmount(data.balance) : '—';
         const payoutTab = document.getElementById('treasuryPayoutTab');
@@ -17307,8 +17339,6 @@ ZaliMixin(ZaliInterface, class {
         this.setTreasuryOptions(document.getElementById('treasuryDepositSource'), own + servers, 'user');
     }
 
-"""#,
-    #"""
     renderTreasuryPayoutTargets() {
         const t = this._treasury;
         if (!t) return;
@@ -21499,6 +21529,8 @@ ZaliMixin(ZaliInterface, class {
             // before giving up, instead of inventing on the very first empty result.
             // Does a canonical key already exist for this scope? If so, inventing
             // one here would be strictly wrong — the answer is to make the holders
+"""#,
+    #"""
             // republish an envelope for this device, not to fork the conversation.
             await this.fetchCanonicalKeyIds([scope]);
             const knownCanonical = this.canonicalKeyIdCache().get(scope) || '';
@@ -21528,8 +21560,6 @@ ZaliMixin(ZaliInterface, class {
             // worth waiting for, same as a known claim.
             //
             // Which is why this asks canonicalLookupSucceeded() rather than looking at
-"""#,
-    #"""
             // the cache: an absent cache entry is produced BOTH by "the registry has no
             // claim" and by "we never got an answer", so testing the cache would have
             // reported "unknown" every single time and this whole branch would have
@@ -25563,6 +25593,8 @@ ZaliMixin(ZaliInterface, class {
         const nameInput = document.getElementById('serverNameInput');
         const descInput = document.getElementById('serverDescriptionInput');
         const iconInput = document.getElementById('serverIconInput');
+"""#,
+    #"""
         const colorInput = document.getElementById('serverColorInput');
         const publicInput = document.getElementById('serverPublicInput');
         const serverMembersList = document.getElementById('serverMembersList');
@@ -25585,8 +25617,6 @@ ZaliMixin(ZaliInterface, class {
         const serverRoleColorInput = document.getElementById('serverRoleColorInput');
         const serverRolePermView = document.getElementById('serverRolePermView');
         const serverRolePermSend = document.getElementById('serverRolePermSend');
-"""#,
-    #"""
         const serverRolePermManage = document.getElementById('serverRolePermManage');
         const serverRoleCreate = document.querySelector('[data-server-role-create]');
         const serverRoleCreateBody = document.querySelector('[data-server-role-create-body]');
@@ -27959,6 +27989,9 @@ ZaliMixin(ZaliInterface, class {
                 // lifecycle IS the connection-status badge in that mode, same as native
                 // shells driving it via SET_CONNECTION_STATUS over their own transport.
                 this.setConnectionStatus(true);
+                // Серверу — смотрит ли пользователь в приложение: от этого зависит, уйдёт
+                // ли Web Push на это устройство (web_push.js, reportClientPresence).
+                this.reportClientPresence({ force: true });
                 // The browser-side counterpart of the native shells'
                 // voice_transport_state:'up'. iOS and Android both declare
                 // `voice: false` and therefore run on THIS socket, so without it
@@ -29528,6 +29561,8 @@ ZaliMixin(ZaliInterface, class {
 
         let remoteLevel = 0;
         // Per-peer levels feed the tiles' speaking ring; the aggregate max still
+"""#,
+    #"""
         // feeds the single "с сервера" meter below them.
         const tileLevels = {};
         for (const item of remoteMeters) {
@@ -29568,8 +29603,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Mesh means every video track is encoded and uploaded once per peer, and
-"""#,
-    #"""
     // nothing capped that at all: five people with cameras on asked each machine for
     // four unconstrained 720p encodes, i.e. 4–10 Mbit/s upstream. The browser's own
     // congestion control reacts to loss, which on an already-saturated uplink means
@@ -32636,7 +32669,7 @@ ZaliMixin(ZaliInterface, class {
         const alreadyPrimed = this._historyPrimedChannels.has(key);
         if (!alreadyPrimed) {
             this._historyPrimedChannels.add(key);
-        } else if (newlyInserted.length && !this.isServerChatVisible(key)) {
+        } else if (newlyInserted.length && !this.isServerChatAttended(key)) {
             newlyInserted.forEach(msg => {
                 this.notifyBackgroundMessage({
                     sender: msg.sender,
@@ -32644,6 +32677,7 @@ ZaliMixin(ZaliInterface, class {
                     attachmentCount: this.normalizeAttachments(msg.attachments).length,
                     serverId: msg.serverId,
                     channelId: msg.channelId,
+                    messageId: msg.id,
                 });
             });
             this.renderServerInterface();
@@ -33346,6 +33380,8 @@ ZaliMixin(ZaliInterface, class {
         } else if (src) {
             const classes = String(className || '')
                 .split(/\s+/)
+"""#,
+    #"""
                 .filter(Boolean)
                 .concat('avatar-img')
                 .filter((v, i, arr) => arr.indexOf(v) === i)
@@ -33393,8 +33429,6 @@ ZaliMixin(ZaliInterface, class {
                 if (!force) {
                     const cached = await this.cacheGet('server_asset', key);
                     if (cached) {
-"""#,
-    #"""
                         if (this.serverAssetFetchSeq.get(key) !== seq) return null;
                         const cachedUrl = URL.createObjectURL(cached);
                         this.serverAssetRetryAt.delete(key);
@@ -35460,6 +35494,13 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async logout() {
+        // До стирания токена: отписке нужен Authorization (заголовки она берёт синхронно).
+        // Сеть не должна держать выход дольше 3 с — не успела, и подписка этого браузера
+        // перейдёт к следующему вошедшему, когда он оформит свою.
+        await Promise.race([
+            this.unsubscribeWebPush(),
+            new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
         this.S.auth.dismissed = false;
         this.S.auth.error = '';
         this.setAuthMode('login', { clearInputs: true, focus: false });
@@ -37618,6 +37659,8 @@ ZaliMixin(ZaliInterface, class {
 // --- ZaliInterface: Встроенный апдейтер клиента. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
+"""#,
+    #"""
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
@@ -37677,8 +37720,6 @@ ZaliMixin(ZaliInterface, class {
         const channeled = str.match(/^(\d+)\.(\d+)([abr])(\d+)$/i);
         if (channeled) {
             const channelRank = { a: 0, b: 1, r: 2 };
-"""#,
-    #"""
             return {
                 major: parseInt(channeled[1], 10) || 0,
                 minor: parseInt(channeled[2], 10) || 0,
@@ -39167,6 +39208,10 @@ ZaliMixin(ZaliInterface, class {
                     clientId,
                     attachments: this.normalizeAttachments(attachments),
                 });
+                // ...and an edit — see adoptEditedContent().
+                if (this.adoptEditedContent(store, { msgId: id, text, reply })) {
+                    this.scheduleSaveStoredMessageCache();
+                }
                 if (serverId && channelId) {
                     this.renderServerInterface();
                 } else {
@@ -39228,10 +39273,10 @@ ZaliMixin(ZaliInterface, class {
                 // "Visible" requires both the matching channel AND the servers view being
                 // active — currentServerChatKey() keeps returning the selected channel
                 // even while the user is looking at DMs, which used to swallow the
-                // notification for messages arriving in that channel.
-                const channelVisible = this.isServerChatVisible(key);
-                if (!channelVisible) {
-                    this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId });
+                // notification for messages arriving in that channel. The window itself
+                // must also be in front of the user — see isAppAttended().
+                if (!this.isServerChatAttended(key)) {
+                    this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId, messageId });
                 }
             }
             this.scheduleSaveStoredMessageCache();
@@ -39301,10 +39346,10 @@ ZaliMixin(ZaliInterface, class {
             });
             // A DM is only truly visible when its chat is selected AND the DM view is
             // active — while the user is in the servers view the selected DM peer is
-            // off-screen, and this notification used to be swallowed for it.
-            const dmVisible = this.isDmChatVisible(peer);
-            if (!dmVisible) {
-                this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, peer });
+            // off-screen, and this notification used to be swallowed for it. The window
+            // itself must also be in front of the user — see isAppAttended().
+            if (!this.isDmChatAttended(peer)) {
+                this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, peer, messageId });
             }
         }
         this.scheduleSaveStoredMessageCache();
@@ -39369,6 +39414,61 @@ ZaliMixin(ZaliInterface, class {
         if (document.getElementById('viewHub')?.classList.contains('active')) return false;
         if (document.getElementById('viewSettings')?.classList.contains('active')) return false;
         return true;
+    }
+
+    // «Пользователь сейчас смотрит в приложение», а не только «чат выбран».
+    //
+    // isDmChatVisible/isServerChatVisible отвечают на вопрос вёрстки — какая
+    // переписка нарисована в окне, — и для отрисовки и сброса счётчика это верный
+    // вопрос. Для уведомления нет: свёрнутое окно, окно в трее и окно под другим
+    // приложением продолжают «показывать» выбранный чат. Самый частый сценарий
+    // мессенджера — переписывались, ушли в другое приложение, собеседник ответил —
+    // давал ровно ноль: ни уведомления, ни звука, ни счётчика непрочитанного.
+    //
+    // hasFocus() не спрашиваем в мобильной раскладке: на телефоне приложение на
+    // экране и есть приложение в руках, а фокус вида у Android WebView зависит от
+    // того, куда последним ушло касание (нативная нижняя панель его забирает).
+    isAppAttended() {
+        if (typeof document === 'undefined') return true;
+        if (document.visibilityState === 'hidden') return false;
+        if (this.isMobileLayout?.()) return true;
+        return typeof document.hasFocus !== 'function' || document.hasFocus();
+    }
+
+    // Входящее не требует уведомления, только если его чат на экране И пользователь
+    // на экран смотрит. Отрисовку этим не гейтить — она обязана идти и в фоне.
+    isServerChatAttended(key) {
+        return this.isServerChatVisible(key) && this.isAppAttended();
+    }
+
+    isDmChatAttended(peer) {
+        return this.isDmChatVisible(peer) && this.isAppAttended();
+    }
+
+    // Пара к isAppAttended. Сообщение, пришедшее в открытый чат, пока окно было в
+    // фоне, копит счётчик (notifyBackgroundMessage). Когда пользователь вернулся,
+    // этот чат снова у него перед глазами — счётчик снимается так же, как его
+    // снимают switchChat / setActiveChannel / setNavMode при выборе чата.
+    clearAttendedConversationUnread() {
+        if (!this.isAppAttended()) return;
+        let changed = false;
+        if (this.S.navMode === 'servers') {
+            const key = this.currentServerChatKey();
+            if (key && this.isServerChatVisible(key) && Number(this.S.channelUnread?.[key] || 0) > 0) {
+                this.S.channelUnread[key] = 0;
+                changed = true;
+            }
+        } else {
+            const peer = this.S.current;
+            if (peer && this.isDmChatVisible(peer) && Number(this.S.unread?.[peer] || 0) > 0) {
+                this.S.unread[peer] = 0;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        this.syncTaskbarBadge();
+        this.renderContacts();
+        if (this.S.navMode === 'servers') this.renderServerInterface();
     }
 
     isPeerMuted(peer) {
@@ -39844,7 +39944,7 @@ ZaliMixin(ZaliInterface, class {
     // no notification and no unread badge, which was the root cause of notifications
     // being rare and arriving with a huge delay: most messages land via catch-up
     // after a WS drop, not via the live push that used to be the only notify trigger.
-    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null }) {
+    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null, messageId = '' }) {
         const from = String(sender || '').trim();
         if (!from || from === this.myName()) return;
         // Карточка ZaliCoin — в уведомлении по-человечески, без служебного id.
@@ -39883,6 +39983,7 @@ ZaliMixin(ZaliInterface, class {
             attachmentCount,
             serverId,
             channelId,
+            messageId,
         });
     }
 
@@ -39897,22 +39998,24 @@ ZaliMixin(ZaliInterface, class {
         return 'Новое сообщение';
     }
 
-    // Browser/PWA only — the one notification path nothing else covered.
-    // postNativeMessage(SHOW_NOTIFICATION) above returns false immediately when there
-    // is no native bridge, and the server only sends a Web Push when deliver_to_user
-    // finds ZERO live WS connections. A tab that is merely *hidden* (backgrounded,
-    // minimized, screen locked) has a live WS, so it fell straight through the gap
-    // between the two and produced no notification at all — just the chime, which
-    // browsers throttle in background tabs anyway.
+    // Browser/PWA only. postNativeMessage(SHOW_NOTIFICATION) above returns false
+    // immediately when there is no native bridge, so a live tab shows its own
+    // notification here — with the message text, which a Web Push can never carry.
     //
-    // Only fires while the document is hidden: with the app actually on screen the
-    // in-app unread badges already cover it. Notifications are tagged per conversation
-    // with renotify, so a long-backgrounded tab alerts on each message without piling
-    // up one entry per message in the OS notification centre.
-    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null }) {
+    // Only fires while the user isn't looking at the app (isAppAttended): with the app
+    // in front of them the in-app unread badges already cover it. A window that is
+    // visible but sits behind another app used to count as "looking" here too.
+    //
+    // The server pushes such a tab as well (server/src/push.rs): it cannot tell whether
+    // a background tab's JS still runs. Both notifications share the conversation tag
+    // and carry messageId, and whichever lands second stays quiet — here by skipping,
+    // in service-worker.js by re-showing silently. Tagged per conversation with
+    // renotify, so a long-backgrounded tab alerts on each message without piling up
+    // one entry per message in the OS notification centre.
+    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null, messageId = '' }) {
         if (this.hasNativeBridge()) return;
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-        if (typeof document !== 'undefined' && document.visibilityState !== 'hidden') return;
+        if (this.isAppAttended()) return;
 
         const from = String(sender || '').trim();
         if (!from) return;
@@ -39924,7 +40027,12 @@ ZaliMixin(ZaliInterface, class {
             badge: './icon-192.png',
             tag: isChannel ? `zali:${serverId}:${channelId}` : `zali:dm:${from}`,
             renotify: true,
-            data: { sender: from, serverId: serverId || null, channelId: channelId || null },
+            data: {
+                sender: from,
+                serverId: serverId || null,
+                channelId: channelId || null,
+                messageId: String(messageId || ''),
+            },
         };
 
         try {
@@ -39933,7 +40041,14 @@ ZaliMixin(ZaliInterface, class {
             // allowed, and it is also what the installed PWA needs.
             if (navigator.serviceWorker?.ready) {
                 navigator.serviceWorker.ready
-                    .then(registration => registration.showNotification(title, options))
+                    .then(async registration => {
+                        const id = options.data.messageId;
+                        if (id && typeof registration.getNotifications === 'function') {
+                            const existing = await registration.getNotifications({ tag: options.tag });
+                            if (existing.some(notification => notification.data?.messageId === id)) return;
+                        }
+                        return registration.showNotification(title, options);
+                    })
                     .catch(e => this.trace(`showBrowserNotification failed: ${e?.message || e}`));
             } else {
                 new Notification(title, options);
@@ -39995,6 +40110,121 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
+// --- MODULE: interface/web_push.js ---
+// --- ZaliInterface: Web Push браузера/PWA — присутствие для сервера, отписка, переход из уведомления. ---
+// Подписка (subscribeWebPush) и разрешение на уведомления живут в native_bridge.js.
+ZaliMixin(ZaliInterface, class {
+
+    // Сервер шлёт Web Push в подписку устройства, только если на нём сейчас не смотрят в
+    // приложение (server/src/push.rs::push_suppressed_for). Узнать это ему не от кого,
+    // кроме самой вкладки. Раньше правило было «ни одного живого сокета»: открытое
+    // приложение на Mac или замороженная фоновая вкладка на телефоне глушили пуш на все
+    // устройства пользователя.
+    //
+    // `attended` можно передать явно — pagehide сообщает «ухожу» до того, как сокет
+    // закроется, иначе пуш о сообщении, пришедшем в эти секунды, был бы подавлен.
+    reportClientPresence({ force = false, attended = null } = {}) {
+        if (this.hasNativeBridge()) return;
+        this.installClientPresenceReporting();
+        const socket = this.voice?.socket;
+        if (!socket || typeof WebSocket === 'undefined' || socket.readyState !== WebSocket.OPEN) return;
+        const nextAttended = attended === null ? this.isAppAttended() : !!attended;
+        const deviceId = String(this.currentDeviceId?.() || '');
+        const key = `${nextAttended}:${deviceId}`;
+        if (!force && this._lastReportedClientPresence === key) return;
+        try {
+            socket.send(JSON.stringify({ type: 'client_presence', attended: nextAttended, deviceId }));
+            this._lastReportedClientPresence = key;
+        } catch (e) {}
+    }
+
+    installClientPresenceReporting() {
+        if (this._clientPresenceReportingInstalled) return;
+        if (typeof window === 'undefined' || typeof document === 'undefined') return;
+        this._clientPresenceReportingInstalled = true;
+        const report = () => this.reportClientPresence();
+        document.addEventListener('visibilitychange', report);
+        window.addEventListener('focus', report);
+        // На blur document.hasFocus() уже false — фокус ушёл до вызова обработчика.
+        window.addEventListener('blur', report);
+        window.addEventListener('pagehide', () => this.reportClientPresence({ force: true, attended: false }));
+    }
+
+    // Выход из аккаунта обязан снять подписку этого браузера: иначе пуши о переписке
+    // ушедшего пользователя продолжали бы приходить тому, кто войдёт следующим. Заголовки
+    // берутся синхронно, до первого await, — logout() сразу после этого стирает токен.
+    async unsubscribeWebPush() {
+        if (this.hasNativeBridge()) return;
+        if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+        const headers = this.apiHeaders({ 'Content-Type': 'application/json' });
+        if (!headers.Authorization) return;
+        const url = this.apiUrl('/api/push/unsubscribe');
+        try {
+            const registration = await navigator.serviceWorker.getRegistration();
+            const subscription = await registration?.pushManager?.getSubscription();
+            if (!subscription) return;
+            await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ endpoint: subscription.endpoint }),
+            }).catch(() => {});
+            await subscription.unsubscribe().catch(() => {});
+            this.trace('unsubscribeWebPush ok');
+        } catch (e) {
+            this.trace(`unsubscribeWebPush failed: ${e?.message || e}`);
+        }
+    }
+
+    // Клик по уведомлению (web/service-worker.js, notificationclick): открытой вкладке
+    // приходит postMessage, новая открывается с ?open=… в адресе.
+    installWebPushClickRouting() {
+        if (this.hasNativeBridge() || this._webPushClickRoutingInstalled) return;
+        this._webPushClickRoutingInstalled = true;
+        try {
+            navigator.serviceWorker?.addEventListener?.('message', (event) => {
+                const data = event?.data;
+                if (data && data.type === 'zali:open-conversation') {
+                    void this.openConversationFromNotification(data);
+                }
+            });
+        } catch (e) {}
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const raw = params.get('open');
+            if (!raw) return;
+            params.delete('open');
+            const query = params.toString();
+            window.history?.replaceState?.(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`);
+            void this.openConversationFromNotification(JSON.parse(raw));
+        } catch (e) {
+            this.trace(`installWebPushClickRouting: bad open target: ${e?.message || e}`);
+        }
+    }
+
+    async openConversationFromNotification(target = {}) {
+        if (!this.S.session?.token) return;
+        const sender = String(target?.sender || '').trim();
+        const serverId = String(target?.serverId || '').trim();
+        const channelId = String(target?.channelId || '').trim();
+        if (serverId && channelId) {
+            // На холодном старте список серверов приходит позже сессии — ждём его, но
+            // недолго: уведомление могло указывать на сервер, из которого уже вышли.
+            for (let attempt = 0; attempt < 20; attempt += 1) {
+                const server = (this.S.servers || []).find(item => item?.id === serverId);
+                if (server && (server.channels || []).some(channel => channel?.id === channelId)) {
+                    this.setActiveServer(serverId);
+                    this.setActiveChannel(channelId);
+                    return;
+                }
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            return;
+        }
+        if (sender && sender !== this.myName()) this.switchChat(sender);
+    }
+});
+
+
 // --- MODULE: interface/state_sync.js ---
 // --- ZaliInterface: Приём состояния от нативного слоя: пользователи, история, статус связи. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
@@ -40027,6 +40257,34 @@ ZaliMixin(ZaliInterface, class {
         const local = this.normalizeAttachments(store[index].attachments);
         if (!local.length || local.some(att => att.dataUrl)) return false;
         store[index] = { ...store[index], attachments };
+        return true;
+    }
+
+    // Второе, что сверка обязана взять из входящей копии, — правку.
+    //
+    // finalizePendingMessage находит запись по clientId, а после загрузки истории
+    // clientId есть у ЛЮБОГО сообщения, полученного тоже. Поэтому receiveMessage
+    // уходил в ветку сверки и выходил, не глядя на содержимое: отредактированное
+    // сообщение приезжало новым архивом, расшифровывалось и выбрасывалось. У
+    // получателя в браузере/PWA и на iOS текст «до правки» оставался навсегда —
+    // перезагрузка не помогала, старый текст жил в кэше сообщений.
+    //
+    // Берутся только текст и цитата (вложения правка сохраняет как есть), и никогда
+    // — системная пилюля: заглушка «не удалось расшифровать» с устройства без ключа
+    // не должна затирать уже читаемый текст.
+    adoptEditedContent(store, { msgId = '', text = '', reply = '' } = {}) {
+        if (!Array.isArray(store) || !store.length) return false;
+        const id = String(msgId || '').trim();
+        if (!id) return false;
+        const incoming = this.sanitizeDecryptionErrorText(text);
+        if (!String(incoming || '').trim() || this.detectSystemNotice(incoming)) return false;
+        const index = store.findIndex(m => String(m.id || '').trim() === id);
+        if (index < 0) return false;
+        const prev = store[index];
+        const nextReply = String(reply || '') || prev.reply || '';
+        if (prev.text === incoming && (prev.reply || '') === nextReply) return false;
+        // editRev — иначе правка той же длины не перерисовалась бы (messageStableSignature).
+        store[index] = { ...prev, text: incoming, reply: nextReply, editRev: Number(prev.editRev || 0) + 1 };
         return true;
     }
 
@@ -40203,6 +40461,33 @@ ZaliMixin(ZaliInterface, class {
         this.refreshAfterKey();
     }
 
+    // Собеседник, к переписке с которым относится запись истории личных сообщений.
+    historyMessagePeer(msg) {
+        return msg.kind === 'call'
+            ? String(msg.call?.peer || msg.receiver || msg.sender || '').trim()
+            : (msg.sender === this.myName() ? msg.receiver : msg.sender);
+    }
+
+    // Следующий кусок разбора loadHistory.
+    //
+    // Кадр — чтобы разбор длинной истории не подвешивал прокрутку. Но в свёрнутом
+    // окне, в трее и в фоновой вкладке кадров нет вовсе: продолжение ждало, пока окно
+    // откроют, и уведомления о сообщениях из догрузки приходили пачкой при открытии —
+    // или не приходили, если до того успевал прийти следующий вызов. Таймер-страховка
+    // будит кусок и без кадра, а в скрытом документе кусок уже идёт без бюджета до
+    // конца (см. `budgeted` в loadHistory), так что ждать приходится не больше одного
+    // раза.
+    scheduleHistorySlice(callback) {
+        let ran = false;
+        const run = () => {
+            if (ran) return;
+            ran = true;
+            callback();
+        };
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+        setTimeout(run, 250);
+    }
+
     loadHistory(messages) {
         const queue = Array.isArray(messages) ? messages.filter(msg => msg && typeof msg === 'object') : [];
         const seq = ++this.historyLoadSeq;
@@ -40218,21 +40503,44 @@ ZaliMixin(ZaliInterface, class {
         // message would treat everything after the first message of a brand new
         // peer as "already primed" and notify for the rest of that same initial load.
         const peersPrimedBeforeThisCall = new Set(this._historyPrimedPeers);
+        // Свежесть — по собеседнику, а не по вызову.
+        //
+        // Раньше любой следующий loadHistory объявлял устаревшим весь недоразобранный
+        // предыдущий. Но нативные шеллы присылают историю по одной переписке на вызов,
+        // а догрузка после обрыва WS шлёт их пачкой: вызов для второго контакта обрывал
+        // разбор первого, и до его новых сообщений (они в конце — история идёт по
+        // возрастанию времени) дело не доходило никогда. Ни уведомления, ни счётчика.
+        // Устаревает только то, что более новый вызов принёс для ТОГО ЖЕ собеседника.
+        if (!this._historyLoadSeqByPeer) this._historyLoadSeqByPeer = new Map();
+        const ownPeers = new Set();
+        for (const msg of queue) {
+            const peer = this.historyMessagePeer(msg);
+            if (peer) ownPeers.add(peer);
+        }
+        ownPeers.forEach(peer => this._historyLoadSeqByPeer.set(peer, seq));
+        const ownsPeer = peer => this._historyLoadSeqByPeer.get(peer) === seq;
+        const isStale = () => (ownPeers.size
+            ? !Array.from(ownPeers).some(ownsPeer)
+            : seq !== this.historyLoadSeq);
         const processBatch = (startIndex = 0) => {
-            if (seq !== this.historyLoadSeq) {
+            if (isStale()) {
                 this.trace(`loadHistory stale seq=${seq} current=${this.historyLoadSeq}`);
                 return;
             }
             const startedAt = performance.now();
+            // Бюджет кадра нужен, пока на разбор кто-то смотрит. В скрытом документе
+            // (свёрнутое окно, трей, фоновая вкладка) подтормаживать нечему, а кадров,
+            // которых ждёт продолжение, там нет вовсе, — разбор идёт до конца сразу.
+            const budgeted = !(typeof document !== 'undefined' && document.hidden);
             let index = startIndex;
             for (; index < queue.length; index += 1) {
-                if ((index - startIndex) >= 120) break;
-                if ((performance.now() - startedAt) >= 8) break;
+                if (budgeted && (index - startIndex) >= 120) break;
+                if (budgeted && (performance.now() - startedAt) >= 8) break;
                 const msg = queue[index];
-                const peer = msg.kind === 'call'
-                    ? String(msg.call?.peer || msg.receiver || msg.sender || '').trim()
-                    : (msg.sender === this.myName() ? msg.receiver : msg.sender);
+                const peer = this.historyMessagePeer(msg);
                 if (!peer) continue;
+                // Этого собеседника уже принёс более новый вызов — разбирает он.
+                if (!ownsPeer(peer)) continue;
                 touchedPeers.add(peer);
                 const peerAlreadyPrimed = peersPrimedBeforeThisCall.has(peer);
                 this._historyPrimedPeers.add(peer);
@@ -40288,19 +40596,20 @@ ZaliMixin(ZaliInterface, class {
                     // arrived while the socket was down. Skip the peer's very first
                     // sync this session (peerAlreadyPrimed=false) so opening a chat
                     // with existing history doesn't replay it as a notification flood.
-                    if (peerAlreadyPrimed && msg.kind !== 'call' && !this.isDmChatVisible(peer)) {
+                    if (peerAlreadyPrimed && msg.kind !== 'call' && !this.isDmChatAttended(peer)) {
                         this.notifyBackgroundMessage({
                             sender: msg.sender,
                             text: this.sanitizeDecryptionErrorText(msg.text),
                             attachmentCount: normalizedAttachments.length,
                             peer,
+                            messageId: msgId,
                         });
                     }
                 }
                 this.markMessageSeen(msg);
             }
             if (index < queue.length) {
-                requestAnimationFrame(() => processBatch(index));
+                this.scheduleHistorySlice(() => processBatch(index));
                 return;
             }
             touchedPeers.forEach(peer => {
@@ -41002,6 +41311,11 @@ ZaliMixin(ZaliInterface, class {
         const found = this.findMessageById(messageId);
         if (!found) return;
         this.trace(`onMessageEdited id=${messageId} peer=${found.serverKey || found.peer}`);
+        // Браузерный аналог forgetDecryptedMessage у нативных оболочек. Под этим id
+        // теперь другой архив, а handleIncomingBrowserMessage пропускает id, уже
+        // расшифрованные на этой странице, — без сброса синхронизация ниже честно
+        // перечитывала историю и оставляла текст «до правки» до перезагрузки.
+        this._decodedBrowserMessageIds?.delete(messageId);
         // Bumped so the render signature changes even if the new text happens to
         // be the same length as the old one.
         const list = found.serverKey ? this.S.serverChats[found.serverKey] : this.S.chats[found.peer];
@@ -41335,6 +41649,8 @@ ZaliMixin(ZaliInterface, class {
     updateProfileDraftLink(index, field, value) {
         const state = this.ensureProfileState();
         const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
+"""#,
+    #"""
         const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
         if (!links[index]) return;
         links[index][field] = value;
@@ -41700,8 +42016,6 @@ ZaliMixin(ZaliInterface, class {
                 commentDraft: '',
                 commentError: '',
                 comments: Array.isArray(payload?.comments) ? payload.comments : state.comments,
-"""#,
-    #"""
             });
         } catch (e) {
             this.setProfileState({ busy: '', commentError: 'Не удалось отправить комментарий' });

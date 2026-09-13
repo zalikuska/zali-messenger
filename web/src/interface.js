@@ -184,6 +184,7 @@ const DefaultApiRoutes = Object.freeze({
         remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         download: (id) => apiRoute(`/download/${encodeURIComponent(id)}`),
+        upload: apiRoute('/upload'),
     },
     servers: {
         list: apiRoute('/servers'),
@@ -231,6 +232,9 @@ const DefaultApiRoutes = Object.freeze({
         giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
         managedTreasuries: apiRoute('/coins/treasuries/managed'),
         serverPayouts: apiRoute('/coins/server-payouts'),
+    },
+    diagnostics: {
+        decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
     },
 });
 
