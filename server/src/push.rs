@@ -176,6 +176,34 @@ impl PushNotification {
         }
     }
 
+    /// The same notification as FCM `data` for the native Android app (fcm.rs): flat
+    /// string values only, which is all an FCM data message carries. `recipient` lets the
+    /// app drop a push addressed to an account that is no longer signed in on it.
+    pub(crate) fn native_data(&self, recipient: &str) -> serde_json::Map<String, serde_json::Value> {
+        let field = |name: &str| {
+            self.data
+                .get(name)
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let mut data = serde_json::Map::new();
+        for (key, value) in [
+            ("kind", "message".to_string()),
+            ("title", self.title.clone()),
+            ("body", self.body.clone()),
+            ("tag", self.tag.clone()),
+            ("recipient", recipient.to_string()),
+            ("sender", field("sender")),
+            ("serverId", field("serverId")),
+            ("channelId", field("channelId")),
+            ("messageId", field("messageId")),
+        ] {
+            data.insert(key.to_string(), serde_json::Value::String(value));
+        }
+        data
+    }
+
     pub(crate) fn channel_message(
         sender: &str,
         server_id: &str,
@@ -323,6 +351,13 @@ pub(crate) async fn push_targets_for(
             auth,
         })
         .collect())
+}
+
+/// Every push channel of `username`: Web Push subscriptions of their browsers and FCM
+/// tokens of their Android devices. Each decides per device on its own.
+pub(crate) async fn send_push(state: &Arc<AppState>, username: &str, notification: &PushNotification) {
+    send_web_push(state, username, notification).await;
+    crate::send_fcm_push(state, username, notification).await;
 }
 
 /// Sends `notification` to every subscription of `username` that should get it

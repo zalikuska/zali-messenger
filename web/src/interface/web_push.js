@@ -62,6 +62,21 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Нативный Android получает пуши через FCM (server/src/fcm.rs), токен на сервере
+    // привязан к устройству — и после выхода телефон продолжал бы получать пуши ушедшего
+    // аккаунта. Заголовки берутся синхронно, до первого await: logout() следом стирает
+    // токен, а apiFetch собирает свои заголовки уже после ожидания слота.
+    async unregisterNativePushDevice() {
+        if (!this.nativeSupports('pushDevice')) return;
+        const headers = this.apiHeaders({}, { includeDeviceId: true });
+        if (!headers.Authorization) return;
+        try {
+            await this.apiFetch('/api/push/device/unregister', { method: 'POST', headers, includeDeviceId: true });
+        } catch (e) {
+            this.trace(`unregisterNativePushDevice failed: ${e?.message || e}`);
+        }
+    }
+
     // Клик по уведомлению (web/service-worker.js, notificationclick): открытой вкладке
     // приходит postMessage, новая открывается с ?open=… в адресе.
     installWebPushClickRouting() {

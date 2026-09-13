@@ -104,6 +104,9 @@ class MainActivity : ComponentActivity() {
 
     private var bridge: NativeBridge? = null
 
+    /** Нажатие на уведомление, ждущее моста (MessageNotifier кладёт переписку в extras). */
+    private var pendingNotificationIntent: Intent? = null
+
     // Latest safe-area insets in dp, pushed into the web UI as CSS custom
     // properties (see applySafeAreaInsets). Kept as an Activity field because
     // they also have to be re-applied after every page load — a fresh document
@@ -311,6 +314,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingNotificationIntent = intent
+        // Сессия, сохранённая на прошлом запуске, регистрирует FCM-токен и без нового входа.
+        PushSession.syncRegistration(this)
         requestHighestRefreshRate()
 
         // Lets `chrome://inspect` on a desktop Chrome attach to this WebView over
@@ -374,6 +380,8 @@ class MainActivity : ComponentActivity() {
                         )
                         val nativeBridge = NativeBridge(ctx, wv)
                         bridge = nativeBridge
+                        nativeBridge.setAppVisible(PushSession.appVisible)
+                        consumeNotificationIntent()
                         webView = wv
                         nativeBridge.onMobileNavProgress = { progress, animate ->
                             navAnimate = animate
@@ -574,6 +582,36 @@ class MainActivity : ComponentActivity() {
             """.trimIndent(),
             null,
         )
+    }
+
+    override fun onStart() {
+        super.onStart()
+        PushSession.appVisible = true
+        bridge?.setAppVisible(true)
+    }
+
+    override fun onStop() {
+        PushSession.appVisible = false
+        bridge?.setAppVisible(false)
+        super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingNotificationIntent = intent
+        consumeNotificationIntent()
+    }
+
+    private fun consumeNotificationIntent() {
+        val intent = pendingNotificationIntent ?: return
+        val nativeBridge = bridge ?: return
+        pendingNotificationIntent = null
+        val sender = intent.getStringExtra(MessageNotifier.EXTRA_SENDER)
+        val serverId = intent.getStringExtra(MessageNotifier.EXTRA_SERVER_ID)
+        val channelId = intent.getStringExtra(MessageNotifier.EXTRA_CHANNEL_ID)
+        if (sender.isNullOrBlank() && (serverId.isNullOrBlank() || channelId.isNullOrBlank())) return
+        nativeBridge.openConversationFromNotification(sender, serverId, channelId)
     }
 
     override fun onDestroy() {

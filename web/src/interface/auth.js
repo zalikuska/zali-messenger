@@ -1016,7 +1016,7 @@ ZaliMixin(ZaliInterface, class {
         // Сеть не должна держать выход дольше 3 с — не успела, и подписка этого браузера
         // перейдёт к следующему вошедшему, когда он оформит свою.
         await Promise.race([
-            this.unsubscribeWebPush(),
+            Promise.all([this.unsubscribeWebPush(), this.unregisterNativePushDevice()]),
             new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
         this.S.auth.dismissed = false;

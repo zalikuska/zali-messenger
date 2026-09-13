@@ -61,6 +61,8 @@ mod realtime;
 pub(crate) use realtime::*;
 mod push;
 pub(crate) use push::*;
+mod fcm;
+pub(crate) use fcm::*;
 mod coins;
 pub(crate) use coins::*;
 mod treasury;
@@ -116,6 +118,10 @@ pub struct Config {
     vapid_public_key: Option<String>,
     vapid_private_key: Option<String>,
     vapid_subject: String,
+    // Firebase Cloud Messaging for the native Android app (fcm.rs). Unset
+    // FCM_SERVICE_ACCOUNT_FILE (the default) disables it: /api/push/fcm/register 404s
+    // and send_fcm_push no-ops.
+    fcm_service_account: Option<FcmServiceAccount>,
     // Unset (the default) disables POST /api/version entirely (always 403s) — same
     // opt-in-per-deployment shape as the VAPID keys above.
     release_admin_token: Option<String>,
@@ -322,6 +328,7 @@ impl Config {
             vapid_public_key: vapid_public_key.filter(|_| vapid_private_key.is_some()),
             vapid_private_key,
             vapid_subject,
+            fcm_service_account: load_fcm_service_account(),
             release_admin_token,
             hash_chain_key,
             turn_static_auth_secret: turn_static_auth_secret.filter(|_| !turn_urls.is_empty()),
@@ -1282,6 +1289,24 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .await
     .ok();
 
+    // FCM tokens of the native Android app, one per device of an account (fcm.rs).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS fcm_tokens (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы fcm_tokens");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_fcm_tokens_username ON fcm_tokens (username)")
+        .execute(&pool)
+        .await
+        .ok();
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS decrypt_failure_reports (
             id TEXT PRIMARY KEY,
@@ -1844,6 +1869,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/push/vapid-public-key", get(get_vapid_public_key))
         .route("/api/push/subscribe", post(subscribe_push))
         .route("/api/push/unsubscribe", post(unsubscribe_push))
+        .route("/api/push/fcm/register", post(register_fcm_token))
+        .route("/api/push/device/unregister", post(unregister_push_device))
         .route(
             "/api/diagnostics/decrypt-failure",
             post(report_decrypt_failure),
