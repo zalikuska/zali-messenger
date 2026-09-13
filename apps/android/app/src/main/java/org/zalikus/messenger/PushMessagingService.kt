@@ -77,9 +77,17 @@ class PushMessagingService : FirebaseMessagingService() {
         channelId: String?,
     ): ZaliCoreBridge.MessagePayload? {
         if (!ZaliCoreBridge.isAvailable) return null
+        val conversationKeys = readConversationKeys(session.username).toMutableMap()
+        // Ключ канала выводится из scope (deriveServerChannelKey в вебе) и попадает в файл,
+        // только когда канал открывали на этом устройстве, — выводим его сами.
+        if (serverId != null && channelId != null) {
+            ZaliCoreBridge.serverConversationScope(serverId, channelId)?.let { scope ->
+                if (conversationKeys[scope].isNullOrBlank()) conversationKeys[scope] = derivedChannelKey(scope)
+            }
+        }
         val keys = ZaliCoreBridge.candidateMessageKeys(
             currentKey = "",
-            conversationKeys = readConversationKeys(session.username),
+            conversationKeys = conversationKeys,
             participantA = sender,
             participantB = recipient,
             serverId = serverId,
@@ -116,6 +124,15 @@ class PushMessagingService : FirebaseMessagingService() {
             archiveFile.delete()
             tempDir.deleteRecursively()
         }
+    }
+
+    /** base64url без паддинга от SHA-256("zali-channel-key-v1:" + scope) — как в вебе. */
+    private fun derivedChannelKey(scope: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("zali-channel-key-v1:$scope".toByteArray(Charsets.UTF_8))
+        return android.util.Base64.encodeToString(
+            digest, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+        )
     }
 
     /** Те же ключи, что NativeBridge зеркалит из вебвью (`persistConversationKeys`). */
