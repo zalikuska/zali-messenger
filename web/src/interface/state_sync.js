@@ -32,6 +32,34 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // Второе, что сверка обязана взять из входящей копии, — правку.
+    //
+    // finalizePendingMessage находит запись по clientId, а после загрузки истории
+    // clientId есть у ЛЮБОГО сообщения, полученного тоже. Поэтому receiveMessage
+    // уходил в ветку сверки и выходил, не глядя на содержимое: отредактированное
+    // сообщение приезжало новым архивом, расшифровывалось и выбрасывалось. У
+    // получателя в браузере/PWA и на iOS текст «до правки» оставался навсегда —
+    // перезагрузка не помогала, старый текст жил в кэше сообщений.
+    //
+    // Берутся только текст и цитата (вложения правка сохраняет как есть), и никогда
+    // — системная пилюля: заглушка «не удалось расшифровать» с устройства без ключа
+    // не должна затирать уже читаемый текст.
+    adoptEditedContent(store, { msgId = '', text = '', reply = '' } = {}) {
+        if (!Array.isArray(store) || !store.length) return false;
+        const id = String(msgId || '').trim();
+        if (!id) return false;
+        const incoming = this.sanitizeDecryptionErrorText(text);
+        if (!String(incoming || '').trim() || this.detectSystemNotice(incoming)) return false;
+        const index = store.findIndex(m => String(m.id || '').trim() === id);
+        if (index < 0) return false;
+        const prev = store[index];
+        const nextReply = String(reply || '') || prev.reply || '';
+        if (prev.text === incoming && (prev.reply || '') === nextReply) return false;
+        // editRev — иначе правка той же длины не перерисовалась бы (messageStableSignature).
+        store[index] = { ...prev, text: incoming, reply: nextReply, editRev: Number(prev.editRev || 0) + 1 };
+        return true;
+    }
+
     /**
      * Единый маршрутизатор WS-событий, общий для браузера и нативных оболочек.
      *
@@ -205,6 +233,33 @@ ZaliMixin(ZaliInterface, class {
         this.refreshAfterKey();
     }
 
+    // Собеседник, к переписке с которым относится запись истории личных сообщений.
+    historyMessagePeer(msg) {
+        return msg.kind === 'call'
+            ? String(msg.call?.peer || msg.receiver || msg.sender || '').trim()
+            : (msg.sender === this.myName() ? msg.receiver : msg.sender);
+    }
+
+    // Следующий кусок разбора loadHistory.
+    //
+    // Кадр — чтобы разбор длинной истории не подвешивал прокрутку. Но в свёрнутом
+    // окне, в трее и в фоновой вкладке кадров нет вовсе: продолжение ждало, пока окно
+    // откроют, и уведомления о сообщениях из догрузки приходили пачкой при открытии —
+    // или не приходили, если до того успевал прийти следующий вызов. Таймер-страховка
+    // будит кусок и без кадра, а в скрытом документе кусок уже идёт без бюджета до
+    // конца (см. `budgeted` в loadHistory), так что ждать приходится не больше одного
+    // раза.
+    scheduleHistorySlice(callback) {
+        let ran = false;
+        const run = () => {
+            if (ran) return;
+            ran = true;
+            callback();
+        };
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+        setTimeout(run, 250);
+    }
+
     loadHistory(messages) {
         const queue = Array.isArray(messages) ? messages.filter(msg => msg && typeof msg === 'object') : [];
         const seq = ++this.historyLoadSeq;
@@ -220,21 +275,44 @@ ZaliMixin(ZaliInterface, class {
         // message would treat everything after the first message of a brand new
         // peer as "already primed" and notify for the rest of that same initial load.
         const peersPrimedBeforeThisCall = new Set(this._historyPrimedPeers);
+        // Свежесть — по собеседнику, а не по вызову.
+        //
+        // Раньше любой следующий loadHistory объявлял устаревшим весь недоразобранный
+        // предыдущий. Но нативные шеллы присылают историю по одной переписке на вызов,
+        // а догрузка после обрыва WS шлёт их пачкой: вызов для второго контакта обрывал
+        // разбор первого, и до его новых сообщений (они в конце — история идёт по
+        // возрастанию времени) дело не доходило никогда. Ни уведомления, ни счётчика.
+        // Устаревает только то, что более новый вызов принёс для ТОГО ЖЕ собеседника.
+        if (!this._historyLoadSeqByPeer) this._historyLoadSeqByPeer = new Map();
+        const ownPeers = new Set();
+        for (const msg of queue) {
+            const peer = this.historyMessagePeer(msg);
+            if (peer) ownPeers.add(peer);
+        }
+        ownPeers.forEach(peer => this._historyLoadSeqByPeer.set(peer, seq));
+        const ownsPeer = peer => this._historyLoadSeqByPeer.get(peer) === seq;
+        const isStale = () => (ownPeers.size
+            ? !Array.from(ownPeers).some(ownsPeer)
+            : seq !== this.historyLoadSeq);
         const processBatch = (startIndex = 0) => {
-            if (seq !== this.historyLoadSeq) {
+            if (isStale()) {
                 this.trace(`loadHistory stale seq=${seq} current=${this.historyLoadSeq}`);
                 return;
             }
             const startedAt = performance.now();
+            // Бюджет кадра нужен, пока на разбор кто-то смотрит. В скрытом документе
+            // (свёрнутое окно, трей, фоновая вкладка) подтормаживать нечему, а кадров,
+            // которых ждёт продолжение, там нет вовсе, — разбор идёт до конца сразу.
+            const budgeted = !(typeof document !== 'undefined' && document.hidden);
             let index = startIndex;
             for (; index < queue.length; index += 1) {
-                if ((index - startIndex) >= 120) break;
-                if ((performance.now() - startedAt) >= 8) break;
+                if (budgeted && (index - startIndex) >= 120) break;
+                if (budgeted && (performance.now() - startedAt) >= 8) break;
                 const msg = queue[index];
-                const peer = msg.kind === 'call'
-                    ? String(msg.call?.peer || msg.receiver || msg.sender || '').trim()
-                    : (msg.sender === this.myName() ? msg.receiver : msg.sender);
+                const peer = this.historyMessagePeer(msg);
                 if (!peer) continue;
+                // Этого собеседника уже принёс более новый вызов — разбирает он.
+                if (!ownsPeer(peer)) continue;
                 touchedPeers.add(peer);
                 const peerAlreadyPrimed = peersPrimedBeforeThisCall.has(peer);
                 this._historyPrimedPeers.add(peer);
@@ -290,19 +368,20 @@ ZaliMixin(ZaliInterface, class {
                     // arrived while the socket was down. Skip the peer's very first
                     // sync this session (peerAlreadyPrimed=false) so opening a chat
                     // with existing history doesn't replay it as a notification flood.
-                    if (peerAlreadyPrimed && msg.kind !== 'call' && !this.isDmChatVisible(peer)) {
+                    if (peerAlreadyPrimed && msg.kind !== 'call' && !this.isDmChatAttended(peer)) {
                         this.notifyBackgroundMessage({
                             sender: msg.sender,
                             text: this.sanitizeDecryptionErrorText(msg.text),
                             attachmentCount: normalizedAttachments.length,
                             peer,
+                            messageId: msgId,
                         });
                     }
                 }
                 this.markMessageSeen(msg);
             }
             if (index < queue.length) {
-                requestAnimationFrame(() => processBatch(index));
+                this.scheduleHistorySlice(() => processBatch(index));
                 return;
             }
             touchedPeers.forEach(peer => {

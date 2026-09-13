@@ -1308,6 +1308,18 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "reaction_updated" -> {
                 webView.evaluateJavascript("window.receiveReactionUpdate && window.receiveReactionUpdate($raw);", null)
             }
+            "message_edited" -> {
+                // Под этим id теперь другой архив, а оба кэша расшифровки ключуются
+                // id: без сброса перечитанная история отвечала бы текстом «до правки»
+                // до перезапуска приложения. forgetDecryptedMessage звался только у
+                // автора (handleEditMessage), то есть получатель правок не видел
+                // никогда. Обновление запускаем сами и ПОСЛЕ сброса: браузерный сокет
+                // вебвью присылает то же событие и может успеть раньше этого кадра.
+                // Зеркало Windows (native/transport.rs) и macOS (NetworkService.swift).
+                val editedId = raw.optString("messageId", "")
+                if (editedId.isNotEmpty()) forgetDecryptedMessage(editedId)
+                webView.evaluateJavascript("window.receiveMessageEdited && window.receiveMessageEdited($raw);", null)
+            }
             "key_envelope_available" -> {
                 webView.evaluateJavascript("window.refreshAfterKey && window.refreshAfterKey();", null)
             }
@@ -1368,25 +1380,95 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     // opened or refreshed (`syncActiveConversation()`, `refreshAfterKey()`) — until
     // this handler existed, it was silently dropped here, so DM history never loaded
     // on Android ("Начните диалог" for every real contact).
-    private var historyReloadToken = 0
+    // Токен перезагрузки — свой у каждой переписки, а не один на все.
+    //
+    // Раньше один счётчик делили ВСЕ личные чаты и каналы: каждый новый
+    // REFRESH_HISTORY / LOAD_SERVER_HISTORY молча отменял предыдущий. Догрузка после
+    // обрыва WS (catchUpBackgroundContactsAfterReconnect и ...ChannelsAfterReconnect
+    // в state_sync.js) шлёт их пачкой, по одному на контакт и канал, — и загружалась
+    // только последняя переписка пачки. Сообщения, пришедшие за время обрыва во все
+    // остальные, не давали ни уведомления, ни счётчика, пока чат не откроешь руками.
+    // Отменять имеет смысл только более старую загрузку ТОЙ ЖЕ переписки.
+    private val historyReloadSeq = java.util.concurrent.atomic.AtomicInteger(0)
+    private val historyReloadTokens = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    private fun claimHistoryReload(reloadKey: String): Int {
+        val token = historyReloadSeq.incrementAndGet()
+        historyReloadTokens[reloadKey] = token
+        return token
+    }
+
+    private fun isCurrentHistoryReload(reloadKey: String, token: Int): Boolean =
+        historyReloadTokens[reloadKey] == token
+
+    // ...а раз загрузки больше не гасят друг друга, их число ограничено здесь.
+    // Метаданные истории идут через httpClient с maxRequestsPerHost = 2 — тот же, что
+    // у всех мелких API-запросов, — и пачка параллельных цепочек держала бы оба слота
+    // всю догрузку. Одна загрузка за раз, самая свежая заявка первой (LIFO): чат,
+    // который пользователь только что открыл, не ждёт хвоста фоновой догрузки.
+    private val historyReloadGateLock = Any()
+    private val pendingHistoryReloads = ArrayDeque<(() -> Unit) -> Unit>()
+    private var runningHistoryReloads = 0
+
+    private fun scheduleHistoryReload(job: (done: () -> Unit) -> Unit) {
+        synchronized(historyReloadGateLock) {
+            if (runningHistoryReloads >= MAX_CONCURRENT_HISTORY_RELOADS) {
+                pendingHistoryReloads.addLast(job)
+                return
+            }
+            runningHistoryReloads += 1
+        }
+        startHistoryReload(job)
+    }
+
+    /** `done` обязан прозвучать на любом пути выхода из `job` — иначе слот не
+     * освободится, и история перестанет грузиться вовсе. Повторный вызов безвреден. */
+    private fun startHistoryReload(job: (done: () -> Unit) -> Unit) {
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+        val done: () -> Unit = release@{
+            if (!finished.compareAndSet(false, true)) return@release
+            val next = synchronized(historyReloadGateLock) {
+                pendingHistoryReloads.removeLastOrNull().also { if (it == null) runningHistoryReloads -= 1 }
+            }
+            if (next != null) startHistoryReload(next)
+        }
+        try {
+            job(done)
+        } catch (e: Exception) {
+            done()
+        }
+    }
 
     private fun handleRefreshHistory(dict: JSONObject) {
         val key = dict.optString("key", "").trim()
         if (key.isNotEmpty()) currentE2eKey = key
         val peer = dict.optString("peer", "").trim()
         if (peer.isEmpty()) return
-        val token = ++historyReloadToken
-        fetchMessagesPage(peer, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
-            if (token != historyReloadToken) return@fetchMessagesPage // a newer reload superseded this one
-            if (!ok) return@fetchMessagesPage // transient fetch failure — keep whatever's already shown, don't blank it
-            if (records.isEmpty()) {
-                mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory([]);", null) }
-                return@fetchMessagesPage
+        val reloadKey = "dm:$peer"
+        val token = claimHistoryReload(reloadKey)
+        val isCurrent = { isCurrentHistoryReload(reloadKey, token) }
+        scheduleHistoryReload { done ->
+            if (!isCurrent()) {
+                done() // a newer reload of this chat superseded this one while it waited
+                return@scheduleHistoryReload
             }
-            renderHistoryRecords(records, peer, token) { rendered ->
-                if (token != historyReloadToken) return@renderHistoryRecords
-                val json = JSONArray(rendered)
-                mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory($json);", null) }
+            fetchMessagesPage(peer, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
+                // Superseded, or a transient fetch failure — keep whatever's already shown, don't blank it.
+                if (!isCurrent() || !ok) {
+                    done()
+                    return@fetchMessagesPage
+                }
+                if (records.isEmpty()) {
+                    done()
+                    mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory([]);", null) }
+                    return@fetchMessagesPage
+                }
+                renderHistoryRecords(records, peer, isCurrent) { rendered ->
+                    done()
+                    if (rendered == null || !isCurrent()) return@renderHistoryRecords
+                    val json = JSONArray(rendered)
+                    mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory($json);", null) }
+                }
             }
         }
     }
@@ -1409,18 +1491,30 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val key = dict.optString("key", "").trim()
         if (key.isNotEmpty()) currentE2eKey = key
 
-        val token = ++historyReloadToken
-        fetchChannelMessagesPage(serverId, channelId, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
-            if (token != historyReloadToken) return@fetchChannelMessagesPage
-            // Неудача выборки не бланкует канал: пустой пуш стёр бы то, что уже видно.
-            if (!ok) return@fetchChannelMessagesPage
-            if (records.isEmpty()) {
-                emitServerHistory(serverId, channelId, JSONArray())
-                return@fetchChannelMessagesPage
+        val reloadKey = "server:$serverId:$channelId"
+        val token = claimHistoryReload(reloadKey)
+        val isCurrent = { isCurrentHistoryReload(reloadKey, token) }
+        scheduleHistoryReload { done ->
+            if (!isCurrent()) {
+                done()
+                return@scheduleHistoryReload
             }
-            renderHistoryRecords(records, peer = "", token = token, serverId = serverId, channelId = channelId) { rendered ->
-                if (token != historyReloadToken) return@renderHistoryRecords
-                emitServerHistory(serverId, channelId, JSONArray(rendered))
+            fetchChannelMessagesPage(serverId, channelId, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
+                // Неудача выборки не бланкует канал: пустой пуш стёр бы то, что уже видно.
+                if (!isCurrent() || !ok) {
+                    done()
+                    return@fetchChannelMessagesPage
+                }
+                if (records.isEmpty()) {
+                    done()
+                    emitServerHistory(serverId, channelId, JSONArray())
+                    return@fetchChannelMessagesPage
+                }
+                renderHistoryRecords(records, peer = "", isCurrent = isCurrent, serverId = serverId, channelId = channelId) { rendered ->
+                    done()
+                    if (rendered == null || !isCurrent()) return@renderHistoryRecords
+                    emitServerHistory(serverId, channelId, JSONArray(rendered))
+                }
             }
         }
     }
@@ -1589,14 +1683,20 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     private fun renderHistoryRecords(
         records: List<JSONObject>,
         peer: String,
-        token: Int,
+        isCurrent: () -> Boolean,
         serverId: String? = null,
         channelId: String? = null,
-        completion: (List<JSONObject>) -> Unit,
+        completion: (List<JSONObject>?) -> Unit,
     ) {
         val rendered = mutableListOf<JSONObject>()
         fun next(index: Int) {
-            if (token != historyReloadToken) return
+            // null = эту загрузку перебила более новая загрузка той же переписки.
+            // Молча выйти, как раньше, нельзя: completion освобождает слот
+            // scheduleHistoryReload.
+            if (!isCurrent()) {
+                completion(null)
+                return
+            }
             if (index >= records.size) {
                 completion(rendered)
                 return
@@ -1916,6 +2016,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         private const val DECRYPTED_CACHE_MAX_ENTRY_CHARS = 512 * 1024
 
         private const val REQUEST_CODE_NOTIFICATIONS = 4201
+        /** См. scheduleHistoryReload: одна загрузка истории за раз. */
+        private const val MAX_CONCURRENT_HISTORY_RELOADS = 1
         /** Feature-checked at the call site before using [androidx.webkit.WebViewCompat.addDocumentStartJavaScript]. */
         val documentStartScriptSupported: Boolean
             get() = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)

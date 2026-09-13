@@ -1012,6 +1012,13 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async logout() {
+        // До стирания токена: отписке нужен Authorization (заголовки она берёт синхронно).
+        // Сеть не должна держать выход дольше 3 с — не успела, и подписка этого браузера
+        // перейдёт к следующему вошедшему, когда он оформит свою.
+        await Promise.race([
+            this.unsubscribeWebPush(),
+            new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
         this.S.auth.dismissed = false;
         this.S.auth.error = '';
         this.setAuthMode('login', { clearInputs: true, focus: false });

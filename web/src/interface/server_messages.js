@@ -88,7 +88,7 @@ ZaliMixin(ZaliInterface, class {
         const alreadyPrimed = this._historyPrimedChannels.has(key);
         if (!alreadyPrimed) {
             this._historyPrimedChannels.add(key);
-        } else if (newlyInserted.length && !this.isServerChatVisible(key)) {
+        } else if (newlyInserted.length && !this.isServerChatAttended(key)) {
             newlyInserted.forEach(msg => {
                 this.notifyBackgroundMessage({
                     sender: msg.sender,
@@ -96,6 +96,7 @@ ZaliMixin(ZaliInterface, class {
                     attachmentCount: this.normalizeAttachments(msg.attachments).length,
                     serverId: msg.serverId,
                     channelId: msg.channelId,
+                    messageId: msg.id,
                 });
             });
             this.renderServerInterface();

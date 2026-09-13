@@ -475,6 +475,9 @@ pub struct AppState {
     // holds user attachments and must stay behind per-message authorization.
     releases_dir: PathBuf,
     user_connections: DashMap<String, Vec<WsSender>>,
+    // Per-socket presence for the Web Push decision, keyed by connection id — see
+    // push.rs::push_suppressed_for.
+    push_presence: DashMap<u64, ConnectionPresence>,
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
     // Voice rooms (DM: room id; channel: room id + username) that were ended by an
@@ -1259,12 +1262,19 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
             endpoint TEXT NOT NULL UNIQUE,
             p256dh TEXT NOT NULL,
             auth TEXT NOT NULL,
+            device_id TEXT,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы push_subscriptions");
+    // Existing databases predate device_id (push.rs::push_suppressed_for); fails harmlessly
+    // once the column is there.
+    sqlx::query("ALTER TABLE push_subscriptions ADD COLUMN device_id TEXT")
+        .execute(&pool)
+        .await
+        .ok();
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_username ON push_subscriptions (username)",
     )
@@ -1655,6 +1665,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         uploads_dir,
         releases_dir,
         user_connections: DashMap::new(),
+        push_presence: DashMap::new(),
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
         ended_voice_rooms: DashMap::new(),

@@ -21,6 +21,36 @@ class ZaliNativeWebView: WKWebView {
     }
 }
 
+/// Bounds how many history reloads run at once (see Coordinator.historyReloadGate).
+///
+/// LIFO on purpose: the newest request is usually the chat the user just opened, and it
+/// must not wait behind the tail of a background catch-up burst. A reload superseded
+/// while it waited returns right after acquiring, so draining stale waiters is cheap.
+fileprivate actor HistoryReloadGate {
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        available = limit
+    }
+
+    func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if let next = waiters.popLast() {
+            next.resume()
+        } else {
+            available += 1
+        }
+    }
+}
+
 struct WebView {
     class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         // In-flight SEND_MESSAGE clientId guard, mirroring Windows' in_flight_send_client_ids
@@ -44,10 +74,27 @@ struct WebView {
         }
 
         weak var webView: WKWebView?
-        private var directHistoryReloadToken = UUID()
-        private var serverHistoryReloadToken = UUID()
-        private var reloadHistoryTask: Task<Void, Never>?
-        private var reloadServerHistoryTask: Task<Void, Never>?
+        /// Reload tokens and tasks are per conversation (peer / "serverId:channelId"),
+        /// not one shared slot. With a single slot every reload superseded the previous
+        /// one, and the reconnect catch-up (catchUpBackgroundContactsAfterReconnect /
+        /// catchUpBackgroundChannelsAfterReconnect in state_sync.js) sends one
+        /// REFRESH_HISTORY per contact and one LOAD_SERVER_HISTORY per channel in a
+        /// burst — so only the LAST conversation of the burst was ever reloaded.
+        /// Messages that arrived anywhere else while the socket was down produced no
+        /// notification and no unread badge until that chat was opened by hand. Only an
+        /// older reload of the SAME conversation may be superseded. Guarded by
+        /// historyReloadLock: the tokens are read from the reload Tasks, off main.
+        private let historyReloadLock = NSLock()
+        private var directHistoryReloadTokens: [String: UUID] = [:]
+        private var serverHistoryReloadTokens: [String: UUID] = [:]
+        private var reloadHistoryTasks: [String: Task<Void, Never>] = [:]
+        private var reloadServerHistoryTasks: [String: Task<Void, Never>] = [:]
+        /// ...and since reloads no longer cancel each other, the burst is bounded here
+        /// instead. Each reload pages the whole history through httpSession, where a
+        /// queued request already ages against timeoutIntervalForRequest (see
+        /// renderHistoryRecords): a catch-up of dozens of chats started all at once
+        /// would time itself out, along with the live traffic sharing that pool.
+        fileprivate static let historyReloadGate = HistoryReloadGate(limit: 2)
         /// Successful decryptions, keyed by message id. Archives are immutable once
         /// stored, so a hit is always valid (an edit replaces the archive behind the
         /// id and explicitly evicts it — see forgetDecryptedMessage).
@@ -752,49 +799,68 @@ struct WebView {
         private func reloadHistory(for username: String) {
             print("[ZALI][WEBVIEW] reloadHistory start user=\(username) keySet=\(!NetworkService.shared.currentKey.isEmpty)")
             let reloadToken = UUID()
-            directHistoryReloadToken = reloadToken
-            reloadHistoryTask?.cancel()
-            reloadHistoryTask = Task { [weak self] in
-                guard let self = self else { return }
-                let (records, ok) = await self.fetchMessagesAsync(for: username)
-                guard self.directHistoryReloadToken == reloadToken else { return }
-                print("[ZALI][WEBVIEW] reloadHistory fetched user=\(username) count=\(records.count) ok=\(ok)")
-
-                guard ok else {
-                    // Fetch failed (auth/HTTP/decode). Do NOT overwrite the view with an
-                    // empty history — that made a transient error look like "no messages".
-                    print("[ZALI][WEBVIEW] reloadHistory fetch failed user=\(username) — keeping existing view")
-                    DispatchQueue.main.async {
-                        guard self.directHistoryReloadToken == reloadToken else { return }
-                        self.addLog(level: "ERROR", text: "Не удалось загрузить историю переписки с \(username). Показаны ранее загруженные сообщения.")
-                    }
-                    return
-                }
-
-                guard !records.isEmpty else {
-                    DispatchQueue.main.async {
-                        guard self.directHistoryReloadToken == reloadToken else { return }
-                        self.loadHistory("[]")
-                    }
-                    print("[ZALI][WEBVIEW] reloadHistory empty user=\(username)")
-                    return
-                }
-
-                let renderedMessages = await self.renderHistoryRecords(
-                    records: records,
-                    serverId: nil,
-                    channelId: nil,
-                    logPrefix: "reloadHistory"
-                )
-
-                guard self.directHistoryReloadToken == reloadToken else { return }
-                let encodedHistory = WebView.javascriptLiteral(renderedMessages)
-                DispatchQueue.main.async {
-                    guard self.directHistoryReloadToken == reloadToken else { return }
-                    self.loadHistory(encodedHistory)
-                }
-                print("[ZALI][WEBVIEW] reloadHistory dispatch user=\(username) rendered=\(renderedMessages.count)")
+            historyReloadLock.lock()
+            directHistoryReloadTokens[username] = reloadToken
+            reloadHistoryTasks[username]?.cancel()
+            historyReloadLock.unlock()
+            let task = Task { [weak self] in
+                let gate = WebView.Coordinator.historyReloadGate
+                await gate.acquire()
+                await self?.performReloadHistory(for: username, reloadToken: reloadToken)
+                await gate.release()
             }
+            historyReloadLock.lock()
+            if directHistoryReloadTokens[username] == reloadToken { reloadHistoryTasks[username] = task }
+            historyReloadLock.unlock()
+        }
+
+        private func isCurrentDirectHistoryReload(_ username: String, _ token: UUID) -> Bool {
+            historyReloadLock.lock()
+            defer { historyReloadLock.unlock() }
+            return directHistoryReloadTokens[username] == token
+        }
+
+        private func performReloadHistory(for username: String, reloadToken: UUID) async {
+            // Superseded while waiting for the gate: a newer reload of this chat is queued.
+            guard isCurrentDirectHistoryReload(username, reloadToken) else { return }
+            let (records, ok) = await fetchMessagesAsync(for: username)
+            guard isCurrentDirectHistoryReload(username, reloadToken) else { return }
+            print("[ZALI][WEBVIEW] reloadHistory fetched user=\(username) count=\(records.count) ok=\(ok)")
+
+            guard ok else {
+                // Fetch failed (auth/HTTP/decode). Do NOT overwrite the view with an
+                // empty history — that made a transient error look like "no messages".
+                print("[ZALI][WEBVIEW] reloadHistory fetch failed user=\(username) — keeping existing view")
+                DispatchQueue.main.async {
+                    guard self.isCurrentDirectHistoryReload(username, reloadToken) else { return }
+                    self.addLog(level: "ERROR", text: "Не удалось загрузить историю переписки с \(username). Показаны ранее загруженные сообщения.")
+                }
+                return
+            }
+
+            guard !records.isEmpty else {
+                DispatchQueue.main.async {
+                    guard self.isCurrentDirectHistoryReload(username, reloadToken) else { return }
+                    self.loadHistory("[]")
+                }
+                print("[ZALI][WEBVIEW] reloadHistory empty user=\(username)")
+                return
+            }
+
+            let renderedMessages = await renderHistoryRecords(
+                records: records,
+                serverId: nil,
+                channelId: nil,
+                logPrefix: "reloadHistory"
+            )
+
+            guard isCurrentDirectHistoryReload(username, reloadToken) else { return }
+            let encodedHistory = WebView.javascriptLiteral(renderedMessages)
+            DispatchQueue.main.async {
+                guard self.isCurrentDirectHistoryReload(username, reloadToken) else { return }
+                self.loadHistory(encodedHistory)
+            }
+            print("[ZALI][WEBVIEW] reloadHistory dispatch user=\(username) rendered=\(renderedMessages.count)")
         }
 
         private func syncCryptoKeyFromWebUI(reason: String, completion: @escaping () -> Void) {
@@ -1248,49 +1314,69 @@ struct WebView {
         private func reloadServerHistory(serverId: String, channelId: String) {
             print("[ZALI][WEBVIEW] reloadServerHistory start server=\(serverId) channel=\(channelId)")
             let reloadToken = UUID()
-            serverHistoryReloadToken = reloadToken
-            reloadServerHistoryTask?.cancel()
-            reloadServerHistoryTask = Task { [weak self] in
-                guard let self = self else { return }
-                let (records, ok) = await self.fetchServerMessagesAsync(serverId: serverId, channelId: channelId)
-                guard self.serverHistoryReloadToken == reloadToken else { return }
-                print("[ZALI][WEBVIEW] reloadServerHistory fetched server=\(serverId) channel=\(channelId) count=\(records.count) ok=\(ok)")
-
-                guard ok else {
-                    // Fetch failed — keep whatever is already shown instead of blanking
-                    // the channel, which is what an empty "[]" push would do here.
-                    print("[ZALI][WEBVIEW] reloadServerHistory fetch failed server=\(serverId) channel=\(channelId) — keeping existing view")
-                    DispatchQueue.main.async {
-                        guard self.serverHistoryReloadToken == reloadToken else { return }
-                        self.addLog(level: "ERROR", text: "Не удалось загрузить историю канала. Показаны ранее загруженные сообщения.")
-                    }
-                    return
-                }
-
-                guard !records.isEmpty else {
-                    DispatchQueue.main.async {
-                        guard self.serverHistoryReloadToken == reloadToken else { return }
-                        self.loadServerHistory(serverId: serverId, channelId: channelId, encodedHistory: "[]")
-                    }
-                    print("[ZALI][WEBVIEW] reloadServerHistory empty server=\(serverId) channel=\(channelId)")
-                    return
-                }
-
-                let renderedMessages = await self.renderHistoryRecords(
-                    records: records,
-                    serverId: serverId,
-                    channelId: channelId,
-                    logPrefix: "reloadServerHistory"
-                )
-
-                guard self.serverHistoryReloadToken == reloadToken else { return }
-                let encodedHistory = WebView.javascriptLiteral(renderedMessages)
-                DispatchQueue.main.async {
-                    guard self.serverHistoryReloadToken == reloadToken else { return }
-                    self.loadServerHistory(serverId: serverId, channelId: channelId, encodedHistory: encodedHistory)
-                }
-                print("[ZALI][WEBVIEW] reloadServerHistory dispatch server=\(serverId) channel=\(channelId) rendered=\(renderedMessages.count)")
+            let reloadKey = "\(serverId):\(channelId)"
+            historyReloadLock.lock()
+            serverHistoryReloadTokens[reloadKey] = reloadToken
+            reloadServerHistoryTasks[reloadKey]?.cancel()
+            historyReloadLock.unlock()
+            let task = Task { [weak self] in
+                let gate = WebView.Coordinator.historyReloadGate
+                await gate.acquire()
+                await self?.performReloadServerHistory(serverId: serverId, channelId: channelId, reloadToken: reloadToken)
+                await gate.release()
             }
+            historyReloadLock.lock()
+            if serverHistoryReloadTokens[reloadKey] == reloadToken { reloadServerHistoryTasks[reloadKey] = task }
+            historyReloadLock.unlock()
+        }
+
+        private func isCurrentServerHistoryReload(_ serverId: String, _ channelId: String, _ token: UUID) -> Bool {
+            historyReloadLock.lock()
+            defer { historyReloadLock.unlock() }
+            return serverHistoryReloadTokens["\(serverId):\(channelId)"] == token
+        }
+
+        private func performReloadServerHistory(serverId: String, channelId: String, reloadToken: UUID) async {
+            // Superseded while waiting for the gate: a newer reload of this channel is queued.
+            guard isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+            let (records, ok) = await fetchServerMessagesAsync(serverId: serverId, channelId: channelId)
+            guard isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+            print("[ZALI][WEBVIEW] reloadServerHistory fetched server=\(serverId) channel=\(channelId) count=\(records.count) ok=\(ok)")
+
+            guard ok else {
+                // Fetch failed — keep whatever is already shown instead of blanking
+                // the channel, which is what an empty "[]" push would do here.
+                print("[ZALI][WEBVIEW] reloadServerHistory fetch failed server=\(serverId) channel=\(channelId) — keeping existing view")
+                DispatchQueue.main.async {
+                    guard self.isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+                    self.addLog(level: "ERROR", text: "Не удалось загрузить историю канала. Показаны ранее загруженные сообщения.")
+                }
+                return
+            }
+
+            guard !records.isEmpty else {
+                DispatchQueue.main.async {
+                    guard self.isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+                    self.loadServerHistory(serverId: serverId, channelId: channelId, encodedHistory: "[]")
+                }
+                print("[ZALI][WEBVIEW] reloadServerHistory empty server=\(serverId) channel=\(channelId)")
+                return
+            }
+
+            let renderedMessages = await renderHistoryRecords(
+                records: records,
+                serverId: serverId,
+                channelId: channelId,
+                logPrefix: "reloadServerHistory"
+            )
+
+            guard isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+            let encodedHistory = WebView.javascriptLiteral(renderedMessages)
+            DispatchQueue.main.async {
+                guard self.isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+                self.loadServerHistory(serverId: serverId, channelId: channelId, encodedHistory: encodedHistory)
+            }
+            print("[ZALI][WEBVIEW] reloadServerHistory dispatch server=\(serverId) channel=\(channelId) rendered=\(renderedMessages.count)")
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

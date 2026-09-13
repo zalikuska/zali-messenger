@@ -723,6 +723,10 @@ ZaliMixin(ZaliInterface, class {
                     clientId,
                     attachments: this.normalizeAttachments(attachments),
                 });
+                // ...and an edit — see adoptEditedContent().
+                if (this.adoptEditedContent(store, { msgId: id, text, reply })) {
+                    this.scheduleSaveStoredMessageCache();
+                }
                 if (serverId && channelId) {
                     this.renderServerInterface();
                 } else {
@@ -784,10 +788,10 @@ ZaliMixin(ZaliInterface, class {
                 // "Visible" requires both the matching channel AND the servers view being
                 // active — currentServerChatKey() keeps returning the selected channel
                 // even while the user is looking at DMs, which used to swallow the
-                // notification for messages arriving in that channel.
-                const channelVisible = this.isServerChatVisible(key);
-                if (!channelVisible) {
-                    this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId });
+                // notification for messages arriving in that channel. The window itself
+                // must also be in front of the user — see isAppAttended().
+                if (!this.isServerChatAttended(key)) {
+                    this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId, messageId });
                 }
             }
             this.scheduleSaveStoredMessageCache();
@@ -857,10 +861,10 @@ ZaliMixin(ZaliInterface, class {
             });
             // A DM is only truly visible when its chat is selected AND the DM view is
             // active — while the user is in the servers view the selected DM peer is
-            // off-screen, and this notification used to be swallowed for it.
-            const dmVisible = this.isDmChatVisible(peer);
-            if (!dmVisible) {
-                this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, peer });
+            // off-screen, and this notification used to be swallowed for it. The window
+            // itself must also be in front of the user — see isAppAttended().
+            if (!this.isDmChatAttended(peer)) {
+                this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, peer, messageId });
             }
         }
         this.scheduleSaveStoredMessageCache();

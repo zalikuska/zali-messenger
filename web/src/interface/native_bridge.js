@@ -75,6 +75,7 @@ ZaliMixin(ZaliInterface, class {
         if (this.hasNativeBridge()) return;
         if (!('serviceWorker' in navigator)) return;
         if (!this.S.session?.token) return;
+        this.installWebPushClickRouting();
         const granted = await this.ensureNotificationPermission();
         if (!('PushManager' in window)) return;
         if (!granted) return;
@@ -92,9 +93,16 @@ ZaliMixin(ZaliInterface, class {
                     applicationServerKey: this.urlBase64ToUint8Array(publicKey),
                 });
             }
+            // Устройство подписки — чтобы сервер не слал пуш туда, где сейчас смотрят в
+            // приложение (server/src/push.rs::push_suppressed_for). Без него подписка живёт
+            // по старому правилу «есть ли у пользователя хоть один сокет». currentDeviceId()
+            // не бывает пустым: loadDeviceIdentity() сама заводит идентичность с deviceId.
+            // ensureDeviceCryptoIdentity() здесь звать нельзя — параллельно с
+            // bootstrapDeviceTrust она сгенерировала бы второй ключ устройства.
             await this.apiFetch('/api/push/subscribe', {
                 method: 'POST',
-                body: JSON.stringify(subscription.toJSON()),
+                includeDeviceId: true,
+                body: JSON.stringify({ ...subscription.toJSON(), deviceId: this.currentDeviceId() }),
             });
             this.trace('subscribeWebPush ok');
         } catch (e) {
@@ -155,6 +163,9 @@ ZaliMixin(ZaliInterface, class {
                     void this.flushCacheStats();
                     return;
                 }
+                // Окно снова перед пользователем: открытый чат мог накопить счётчик,
+                // пока окно было в фоне (см. isAppAttended).
+                this.clearAttendedConversationUnread();
                 this.refreshVisibleAvatars();
                 this.syncActiveConversation({ force: !this.nativeSupports('sendMessage') });
                 if (this.voice.roomId || this.voice.localStream || this.voice.peerConnections.size > 0) {

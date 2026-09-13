@@ -337,6 +337,11 @@ ZaliMixin(ZaliInterface, class {
         const found = this.findMessageById(messageId);
         if (!found) return;
         this.trace(`onMessageEdited id=${messageId} peer=${found.serverKey || found.peer}`);
+        // Браузерный аналог forgetDecryptedMessage у нативных оболочек. Под этим id
+        // теперь другой архив, а handleIncomingBrowserMessage пропускает id, уже
+        // расшифрованные на этой странице, — без сброса синхронизация ниже честно
+        // перечитывала историю и оставляла текст «до правки» до перезагрузки.
+        this._decodedBrowserMessageIds?.delete(messageId);
         // Bumped so the render signature changes even if the new text happens to
         // be the same length as the old one.
         const list = found.serverKey ? this.S.serverChats[found.serverKey] : this.S.chats[found.peer];

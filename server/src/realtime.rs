@@ -262,6 +262,8 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
         .entry(username.clone())
         .or_default()
         .push(tx.clone());
+    // Для решения «слать ли Web Push на это устройство» — см. push.rs::push_suppressed_for.
+    let presence_id = crate::register_connection_presence(&state, &username);
 
     info!(
         "[WS] '{}' подключился (voice_rooms={}, active_ws={})",
@@ -307,6 +309,10 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                 }
             }
             result = socket.recv() => {
+                if matches!(result, Some(Ok(_))) {
+                    // Proof of life for this socket's push presence (a pong counts).
+                    crate::note_connection_inbound(&state, presence_id);
+                }
                 match result {
                     Some(Ok(WsMessage::Text(text))) => {
                         trace!("WS inbound username={} text_bytes={}", username, text.len());
@@ -328,6 +334,15 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                                             .unwrap_or_default(),
                                     );
                                     handle_voice_event(&state, &username, &value).await;
+                                } else if event_type == "client_presence" {
+                                    // The tab says whether the user is looking at the app
+                                    // (web/src/interface/web_push.js) — see push.rs.
+                                    crate::update_connection_presence(
+                                        &state,
+                                        presence_id,
+                                        value["attended"].as_bool().unwrap_or(false),
+                                        value["deviceId"].as_str(),
+                                    );
                                 } else if event_type == "ping" {
                                     let pong = serde_json::json!({
                                         "type": "pong",
@@ -367,6 +382,8 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
             }
         }
     }
+
+    crate::remove_connection_presence(&state, presence_id);
 
     // Clean up closed senders
     if let Some(mut conns) = state.user_connections.get_mut(&username) {

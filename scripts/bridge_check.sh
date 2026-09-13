@@ -30,6 +30,36 @@ for key in sorted(messages.keys()):
     if key not in app_js:
         missing.append(f"web/app.js missing {key}")
 
+# Маршруты API объявлены дважды: modules/api_routes.js (window.ZaliApiRoutes) и
+# DefaultApiRoutes в interface.js, а побеждает всегда первый. Правка/удаление
+# сообщения были вписаны только во второй — и с 2026-08-18 удаление молча не работало
+# ни на одной платформе, а правка — в браузере и на iOS (ошибка уходила в журнал).
+import re
+
+def route_group_keys(source, group):
+    start = re.search(r"\b" + group + r"\s*:\s*\{", source)
+    if not start:
+        return set()
+    depth, i = 1, start.end()
+    while i < len(source) and depth:
+        depth += {"{": 1, "}": -1}.get(source[i], 0)
+        i += 1
+    body = source[start.end():i - 1]
+    return set(re.findall(r"^\s*([A-Za-z_]\w*)\s*:", body, re.M))
+
+web_src = root / "web" / "src"
+tables = {
+    "modules/api_routes.js": (web_src / "modules" / "api_routes.js").read_text(encoding="utf-8"),
+    "interface.js DefaultApiRoutes": (web_src / "interface.js").read_text(encoding="utf-8").split("const DefaultApiRoutes", 1)[-1],
+}
+used = set()
+for path in web_src.rglob("*.js"):
+    used.update(re.findall(r"apiRoutes\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)", path.read_text(encoding="utf-8")))
+for group, name in sorted(used):
+    for label, source in tables.items():
+        if name not in route_group_keys(source, group):
+            missing.append(f"{label} missing apiRoutes.{group}.{name}")
+
 if "if type ==" in webview or "type == \"" in webview:
     missing.append("macOS WebView.swift still contains string-based type dispatch")
 
