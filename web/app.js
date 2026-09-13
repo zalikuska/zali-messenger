@@ -23142,7 +23142,7 @@ ZaliMixin(ZaliInterface, class {
         // Сеть не должна держать выход дольше 3 с — не успела, и подписка этого браузера
         // перейдёт к следующему вошедшему, когда он оформит свою.
         await Promise.race([
-            this.unsubscribeWebPush(),
+            Promise.all([this.unsubscribeWebPush(), this.unregisterNativePushDevice()]),
             new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
         this.S.auth.dismissed = false;
@@ -27618,6 +27618,9 @@ ZaliMixin(ZaliInterface, class {
             attachmentCount,
             serverId: serverId || null,
             channelId: channelId || null,
+            // Android выводит из него id уведомления: живая доставка и FCM-пуш об одном
+            // сообщении дают одно уведомление, а не два (MessageNotifier.kt).
+            messageId: String(messageId || ''),
         });
         this.showBrowserNotification({
             sender: from,
@@ -27814,6 +27817,21 @@ ZaliMixin(ZaliInterface, class {
             this.trace('unsubscribeWebPush ok');
         } catch (e) {
             this.trace(`unsubscribeWebPush failed: ${e?.message || e}`);
+        }
+    }
+
+    // Нативный Android получает пуши через FCM (server/src/fcm.rs), токен на сервере
+    // привязан к устройству — и после выхода телефон продолжал бы получать пуши ушедшего
+    // аккаунта. Заголовки берутся синхронно, до первого await: logout() следом стирает
+    // токен, а apiFetch собирает свои заголовки уже после ожидания слота.
+    async unregisterNativePushDevice() {
+        if (!this.nativeSupports('pushDevice')) return;
+        const headers = this.apiHeaders({}, { includeDeviceId: true });
+        if (!headers.Authorization) return;
+        try {
+            await this.apiFetch('/api/push/device/unregister', { method: 'POST', headers, includeDeviceId: true });
+        } catch (e) {
+            this.trace(`unregisterNativePushDevice failed: ${e?.message || e}`);
         }
     }
 

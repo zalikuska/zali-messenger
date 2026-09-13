@@ -59,6 +59,16 @@
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />
 
+        <!-- Фоновые пуши FCM (server/src/fcm.rs): будит приложение, расшифровывает
+             сообщение ключами с устройства и показывает уведомление. -->
+        <service
+            android:name=".PushMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- DOWNLOAD_ATTACHMENT (NativeBridge.kt's saveAttachment) shares attachments
              via a content:// Uri through the system share sheet, mirroring iOS's
              UIActivityViewController. -->

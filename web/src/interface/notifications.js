@@ -605,6 +605,9 @@ ZaliMixin(ZaliInterface, class {
             attachmentCount,
             serverId: serverId || null,
             channelId: channelId || null,
+            // Android выводит из него id уведомления: живая доставка и FCM-пуш об одном
+            // сообщении дают одно уведомление, а не два (MessageNotifier.kt).
+            messageId: String(messageId || ''),
         });
         this.showBrowserNotification({
             sender: from,

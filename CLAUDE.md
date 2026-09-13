@@ -548,8 +548,21 @@ Append-only журнал **событий** сообщений: на каждо�
   ответ всегда (`null` при отмене), иначе вебвью больше не откроет выбор файла.
   `FileChooserParams.createIntent()` не используется: он берёт из `accept` только
   первый тип.
-- Фоновой доставки нет: WS живёт в Activity, foreground-сервиса нет, Web Push отключён
-  при наличии моста. Уведомления приходят, только пока приложение живо.
+- **Фоновая доставка — FCM** (`PushMessagingService.kt`, сервер `server/src/fcm.rs`).
+  Пуш — data-сообщение без текста; сервис сам скачивает архив и расшифровывает его
+  ключами из `filesDir` (не больше 3 кандидатов и 8 МБ — у data-пуша ~10 с), не вышло —
+  «Новое сообщение». Сессию для фона (адрес API, токен, аккаунт, устройство) хранит
+  `PushSession`: пуш будит процесс без WebView и моста. Инварианты:
+  - **id уведомления выводится из id сообщения** (`MessageNotifier`), и `SHOW_NOTIFICATION`
+    из веба несёт `messageId`. Приложение в фоне с живым сокетом получает сообщение и по
+    WS, и пушем; без общего id это два уведомления;
+  - приложение сообщает серверу `client_presence` по **своему** WS (`onStart`/`onStop`),
+    веб в вебвью этого не делает — он видит мост. По нему сервер не пушит телефон в руках;
+  - выход из аккаунта снимает устройство с пушей (`/api/push/device/unregister`) и
+    стирает `PushSession`, а сервис сверяет `recipient` пуша с аккаунтом на устройстве;
+  - `google-services.json` **не в git** (публичный репозиторий). Без него плагин
+    google-services не применяется, сборка проходит, Firebase не инициализируется
+    (`PushSession.firebaseAvailable`) — приложение живёт без фоновых пушей.
 
 ### Web UI (`web/src/interface.js` + `web/src/interface/`)
 
@@ -866,8 +879,13 @@ native bridge (macOS/Windows/iOS/Android), for direct-message text (and attachme
   `?open=`); выход из аккаунта снимает подписку браузера (`unsubscribeWebPush`).
 - Проверяется `notify_doctor` (`check_service_worker.mjs`) и юнит-тестами `push.rs`.
 
-Не закрыто: фоновой доставки в нативных Android/iOS нет (WS живёт в Activity/WebView,
-ни FCM, ни APNs); сервер не знает о заглушённых чатах — пуш по заглушённому чату
+- **Нативный Android — FCM** (`server/src/fcm.rs`, `PushMessagingService.kt`): то же
+  решение по устройству (`fcm_tokens.device_id` + `client_presence` с нативного WS),
+  тот же `PushNotification` (`native_data`). `send_push` шлёт по обоим каналам сразу.
+  Включается `FCM_SERVICE_ACCOUNT_FILE`; OAuth-токен кэшируется на час, мёртвые токены
+  (404, UNREGISTERED, SENDER_ID_MISMATCH) удаляются, временные ошибки — нет.
+
+Не закрыто: фоновой доставки в нативном iOS нет (ни APNs); сервер не знает о заглушённых чатах — пуш по заглушённому чату
 придёт; первое сообщение от нового собеседника, пришедшее раньше ключа, догружается
 историей без уведомления (`peerAlreadyPrimed`).
 

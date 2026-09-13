@@ -6,6 +6,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// FCM (PushMessagingService.kt). google-services.json в репозиторий не кладётся — он у
+// того, кто собирает APK. Без файла плагин не применяется: сборка проходит, Firebase не
+// инициализируется, и приложение живёт без фоновых пушей (PushSession.firebaseAvailable).
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "org.zalikus.messenger"
     compileSdk = 35
@@ -22,8 +29,8 @@ android {
         // (MAJOR.MINOR{a|b|r}BUILD) в него не укладывается — считаем как
         // MAJOR*10000 + MINOR*1000 + BUILD: 0.2b33 → 2033. Порядок сохраняется, пока
         // BUILD < 1000, чего с запасом хватает.
-        versionCode = 2043
-        versionName = "0.2b43"
+        versionCode = 2044
+        versionName = "0.2b44"
     }
 
     buildTypes {
@@ -57,6 +64,9 @@ dependencies {
     // WebViewCompat.addDocumentStartJavaScript — injects the bridge before the
     // page's own scripts run, matching iOS's WKUserScript(.atDocumentStart).
     implementation("androidx.webkit:webkit:1.12.1")
+    // Фоновые пуши (PushMessagingService.kt, server/src/fcm.rs).
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
 }
 
 // Copy the shared web bundle (produced by `python3 scripts/bundle_web.py`) into

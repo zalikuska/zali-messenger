@@ -242,7 +242,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             voice: false,
             windowDrag: false,
             screenCapture: true,
-            mobileNav: true
+            mobileNav: true,
+            // Снятие устройства с FCM-пушей при выходе (web_push.js, unregisterNativePushDevice).
+            pushDevice: true
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
@@ -286,6 +288,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 val base = dict.optString("apiBaseUrl", "")
                 if (base.isNotEmpty() && base != apiBaseUrl) {
                     apiBaseUrl = base
+                    PushSession.update(context, apiBaseUrl = base)
                     if (wsAuthToken.isNotEmpty()) connectWebSocket()
                 }
             }
@@ -330,6 +333,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 attachmentCount = dict.optInt("attachmentCount", 0),
                 serverId = dict.optString("serverId", "").ifEmpty { null },
                 channelId = dict.optString("channelId", "").ifEmpty { null },
+                messageId = dict.optString("messageId", "").trim(),
             )
         }
     }
@@ -401,6 +405,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         } catch (e: Exception) {
             // keep previous wsDeviceId
         }
+        PushSession.update(context, username = username, deviceId = wsDeviceId)
+        sendClientPresence()
     }
 
     // MARK: - HTTP API bridge
@@ -419,6 +425,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             if (token.isNotEmpty() && token != wsAuthToken) {
                 wsAuthToken = token
                 connectWebSocket()
+                // Фоновому приёму FCM (PushMessagingService) нужна та же сессия, а моста
+                // с его памятью в тот момент может и не быть.
+                PushSession.update(context, apiBaseUrl = apiBaseUrl, authToken = token, username = currentUsername(), deviceId = wsDeviceId)
+                if (PushSession.firebaseAvailable(context)) {
+                    mainHandler.post { requestNotificationPermissionIfNeeded() }
+                }
+            }
+        }
+        val deviceHeader = rawHeaders.keys().asSequence().firstOrNull { it.equals("X-Zali-Device-ID", ignoreCase = true) }
+        if (deviceHeader != null) {
+            val device = rawHeaders.optString(deviceHeader, "").trim()
+            if (device.isNotEmpty() && device != wsDeviceId) {
+                wsDeviceId = device
+                PushSession.update(context, deviceId = device)
+                sendClientPresence()
             }
         }
 
@@ -427,6 +448,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             sendNativeResponse(requestId, ok = false, error = "Некорректный путь запроса")
             return
         }
+        // Выход из аккаунта (web_push.js, unregisterNativePushDevice): с этого момента
+        // фоновый приём FCM не расшифровывает и не показывает пуши ушедшего аккаунта,
+        // даже если сервер ещё успеет что-то прислать.
+        if (path == "/api/push/device/unregister") PushSession.clear(context)
         val url = apiBaseUrl + path
 
         // Two attempts, second on a brand-new client (own connection pool) — a
@@ -1150,27 +1175,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     //
     // Ported from macOS's `.showNotification` IPC case + `NativeNotificationService`,
     // mirroring the iOS shell's `showMessageNotification`/`deliverMessageNotification`.
-    // Local notifications only, no FCM. `Web/src/interface.js`'s
+    // Background delivery is FCM (PushMessagingService). `Web/src/interface.js`'s
     // `notifyBackgroundMessage()` fires this unconditionally (no capability gate), so
     // this always attempts delivery and just no-ops if permission isn't granted.
 
-    private var notificationChannelReady = false
-
-    private fun ensureNotificationChannel() {
-        if (notificationChannelReady) return
-        notificationChannelReady = true
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(
-            "zali-message", "Сообщения", NotificationManager.IMPORTANCE_HIGH
-        ).apply { description = "Новые сообщения Zali Messenger" }
-        manager.createNotificationChannel(channel)
-    }
-
-    private fun hasNotificationPermission(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-    }
+    private fun hasNotificationPermission(): Boolean = MessageNotifier.hasPermission(context)
 
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasNotificationPermission()) return
@@ -1178,38 +1187,15 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE_NOTIFICATIONS)
     }
 
-    private fun showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?) {
+    // Показ — в MessageNotifier: тем же кодом пользуется фоновый приём FCM, и id
+    // уведомления там и здесь выводится из id сообщения. Иначе живая доставка по
+    // WebSocket и пуш об одном сообщении давали бы два уведомления.
+    private fun showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?, messageId: String) {
         if (!hasNotificationPermission()) {
             requestNotificationPermissionIfNeeded()
             return
         }
-        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
-        ensureNotificationChannel()
-
-        val titleSender = sender.ifEmpty { "Zali Messenger" }
-        val trimmedText = text.trim()
-        val body = when {
-            trimmedText.isNotEmpty() -> trimmedText.take(180)
-            attachmentCount == 1 -> "Вложение"
-            attachmentCount > 1 -> "Вложения: $attachmentCount"
-            else -> "Новое сообщение"
-        }
-        val title = if (serverId == null && channelId == null) titleSender else "$titleSender в канале"
-
-        val notification = NotificationCompat.Builder(context, "zali-message")
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setGroup(serverId ?: "dm")
-            .build()
-
-        try {
-            NotificationManagerCompat.from(context).notify(java.util.UUID.randomUUID().hashCode(), notification)
-        } catch (e: SecurityException) {
-            // Permission revoked between the check above and here — drop silently.
-        }
+        MessageNotifier.show(context, sender, text, attachmentCount, serverId, channelId, messageId)
     }
 
     private fun emitTenorResolution(requestId: String, sourceUrl: String, mediaUrl: String?, mimeType: String?, kind: String?) {
@@ -1258,6 +1244,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     if (generation != wsGeneration) return@post
                     wsReconnectAttempt = 0
                     setConnectionStatusJs(true)
+                    sendClientPresence()
                 }
             }
 
@@ -1995,6 +1982,49 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             archiveFile.delete()
             tempDir.deleteRecursively()
         }
+    }
+
+    /** MainActivity.onStart/onStop. См. PushSession.appVisible. */
+    fun setAppVisible(visible: Boolean) {
+        PushSession.appVisible = visible
+        sendClientPresence()
+    }
+
+    /**
+     * Сообщает серверу, смотрят ли в приложение на этом устройстве, — тем же событием
+     * `client_presence`, что и браузер (web/src/interface/web_push.js). По нему сервер не
+     * шлёт FCM-пуш на телефон в руках и шлёт, когда приложение ушло в фон, даже если
+     * WebSocket ещё жив (server/src/push.rs::push_suppressed_for). Веб в Android-вебвью
+     * этого не делает: он видит нативный мост и молчит.
+     */
+    private fun sendClientPresence() {
+        val socket = wsInstance ?: return
+        val payload = JSONObject().apply {
+            put("type", "client_presence")
+            put("attended", PushSession.appVisible)
+            put("deviceId", wsDeviceId)
+        }
+        socket.send(payload.toString())
+    }
+
+    /** Нажатие на уведомление (MainActivity): открыть его переписку, как только веб поднимется. */
+    fun openConversationFromNotification(sender: String?, serverId: String?, channelId: String?) {
+        val target = JSONObject().apply {
+            put("sender", sender.orEmpty())
+            put("serverId", serverId.orEmpty())
+            put("channelId", channelId.orEmpty())
+        }
+        val js = """
+            (function open(attempt) {
+              var ui = window.__ZALI_INTERFACE;
+              if (ui && ui.S && ui.S.session && ui.S.session.token && ui.openConversationFromNotification) {
+                ui.openConversationFromNotification($target);
+              } else if (attempt < 60) {
+                setTimeout(function () { open(attempt + 1); }, 250);
+              }
+            })(0);
+        """.trimIndent()
+        mainHandler.post { webView.evaluateJavascript(js, null) }
     }
 
     private fun setConnectionStatusJs(connected: Boolean) {

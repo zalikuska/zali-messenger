@@ -7,7 +7,7 @@ use crate::{
     get_server_member_role, hash_archive_on_disk, history_access_matches,
     last_payload_for_message, load_channel_permissions, push_history_access_predicate,
     record_message_event, record_message_event_best_effort, resolve_history_access,
-    role_permissions_for_view, send_payload_to_user, send_web_push, server_conversation_scope,
+    role_permissions_for_view, send_payload_to_user, send_push, server_conversation_scope,
     AppState, AuthenticatedUser, ChainEvent, Message, MessagePageQuery, MessageResponse,
     PayloadDigest, ReactionPayload, ReactionSummary, ServerRecord,
 };
@@ -1284,7 +1284,7 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
         let username = username.to_string();
         let notification = crate::PushNotification::direct_message(&msg.sender, &msg.id);
         tokio::spawn(async move {
-            send_web_push(&state, &username, &notification).await;
+            send_push(&state, &username, &notification).await;
         });
     }
 }
@@ -1465,13 +1465,13 @@ pub(crate) async fn deliver_server_message(state: &Arc<AppState>, msg: &Message)
         let notification =
             crate::PushNotification::channel_message(&sender, &server.id, &channel_id, &message_id);
         for target in targets {
-            send_web_push(&state, &target, &notification).await;
+            send_push(&state, &target, &notification).await;
         }
     });
 }
 
 /// Members of `server` who may get a Web Push for a new message in `channel_id`: everyone
-/// with view access to the channel who holds at least one push subscription, minus the
+/// with view access to the channel who holds a Web Push subscription or an FCM token, minus the
 /// sender. Whether each of their subscriptions is actually pushed is decided per device
 /// in push.rs (`push_suppressed_for`). A live WebSocket used to exclude the member right
 /// here, which let any open client of theirs — the Mac app, a frozen background tab —
@@ -1494,7 +1494,8 @@ pub(crate) async fn resolve_channel_push_targets(
     let candidates: Vec<String> = sqlx::query_scalar::<_, String>(
         "SELECT DISTINCT sm.username
          FROM server_members sm
-         JOIN push_subscriptions ps ON ps.username = sm.username
+         JOIN (SELECT username FROM push_subscriptions
+               UNION SELECT username FROM fcm_tokens) ps ON ps.username = sm.username
          WHERE sm.server_id = ? AND sm.username != ?",
     )
     .bind(&server.id)
@@ -2159,6 +2160,26 @@ mod tests {
             .expect("resolve targets");
 
         assert_eq!(targets, vec!["owner".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn channel_push_targets_include_members_with_only_an_android_fcm_token() {
+        let state = test_state().await;
+        let (server, channel_id) = seed_server(
+            &state,
+            "owner",
+            &[("owner", "owner"), ("alice", "member"), ("bob", "member")],
+        )
+        .await;
+        crate::upsert_fcm_token(&state, "bob", "dev-bob-phone", "fcm-token-bob")
+            .await
+            .expect("fcm token");
+
+        let targets = resolve_channel_push_targets(&state, &server, &channel_id, "alice")
+            .await
+            .expect("resolve targets");
+
+        assert_eq!(targets, vec!["bob".to_string()]);
     }
 
     #[tokio::test]

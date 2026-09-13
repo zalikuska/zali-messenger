@@ -49,6 +49,8 @@ apps/android/app/src/main/assets/web/
 apps/android/app/src/main/jniLibs/
 apps/android/.gradle/
 apps/android/local.properties
+# Firebase-конфиг Android (FCM) — у того, кто собирает APK; в публичный репозиторий не кладётся.
+apps/android/app/google-services.json
 tests/voice_e2e/node_modules/
 
 # Runtime data (server-generated uploads/avatars), not source

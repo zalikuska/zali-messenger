@@ -35498,7 +35498,7 @@ ZaliMixin(ZaliInterface, class {
         // Сеть не должна держать выход дольше 3 с — не успела, и подписка этого браузера
         // перейдёт к следующему вошедшему, когда он оформит свою.
         await Promise.race([
-            this.unsubscribeWebPush(),
+            Promise.all([this.unsubscribeWebPush(), this.unregisterNativePushDevice()]),
             new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
         this.S.auth.dismissed = false;
@@ -37658,9 +37658,9 @@ ZaliMixin(ZaliInterface, class {
 // --- MODULE: interface/updates.js ---
 // --- ZaliInterface: Встроенный апдейтер клиента. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
-// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 """#,
     #"""
+// перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
@@ -39976,6 +39976,9 @@ ZaliMixin(ZaliInterface, class {
             attachmentCount,
             serverId: serverId || null,
             channelId: channelId || null,
+            // Android выводит из него id уведомления: живая доставка и FCM-пуш об одном
+            // сообщении дают одно уведомление, а не два (MessageNotifier.kt).
+            messageId: String(messageId || ''),
         });
         this.showBrowserNotification({
             sender: from,
@@ -40172,6 +40175,21 @@ ZaliMixin(ZaliInterface, class {
             this.trace('unsubscribeWebPush ok');
         } catch (e) {
             this.trace(`unsubscribeWebPush failed: ${e?.message || e}`);
+        }
+    }
+
+    // Нативный Android получает пуши через FCM (server/src/fcm.rs), токен на сервере
+    // привязан к устройству — и после выхода телефон продолжал бы получать пуши ушедшего
+    // аккаунта. Заголовки берутся синхронно, до первого await: logout() следом стирает
+    // токен, а apiFetch собирает свои заголовки уже после ожидания слота.
+    async unregisterNativePushDevice() {
+        if (!this.nativeSupports('pushDevice')) return;
+        const headers = this.apiHeaders({}, { includeDeviceId: true });
+        if (!headers.Authorization) return;
+        try {
+            await this.apiFetch('/api/push/device/unregister', { method: 'POST', headers, includeDeviceId: true });
+        } catch (e) {
+            this.trace(`unregisterNativePushDevice failed: ${e?.message || e}`);
         }
     }
 
@@ -41624,6 +41642,8 @@ ZaliMixin(ZaliInterface, class {
 
     // ------------------------------------------------------------
     // Редактирование своего профиля
+"""#,
+    #"""
     // ------------------------------------------------------------
 
     startProfileEditing() {
@@ -41649,8 +41669,6 @@ ZaliMixin(ZaliInterface, class {
     updateProfileDraftLink(index, field, value) {
         const state = this.ensureProfileState();
         const draft = { ...(state.draft || this.profileDraftFrom(state.data)) };
-"""#,
-    #"""
         const links = Array.isArray(draft.links) ? draft.links.map(link => ({ ...link })) : [];
         if (!links[index]) return;
         links[index][field] = value;
@@ -45631,6 +45649,8 @@ ZaliMixin(ZaliInterface, class {
     const hasNativeBridge = !!window.__ZALI_NATIVE?.available;
     if (!hasNativeBridge) {
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.SET_USERS || 'set_users'}`, ['Alice', 'Bob', 'Zalikus']);
+"""#,
+    #"""
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.SET_LOADING || 'set_loading'}`, false);
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.SET_CONNECTION_STATUS || 'set_connection_status'}`, false);
         loader.bus.send(`${'zali_interface'}:${window.ZaliBusEvents?.ADD_LOG_ENTRY || 'add_log_entry'}`, {
