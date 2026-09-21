@@ -489,6 +489,21 @@ ZaliMixin(ZaliInterface, class {
                     // The sender may predate canonicalConversationScope, so fold
                     // its scope before it is used as a storage/registry key.
                     const scope = this.canonicalConversationScope(String(payload.scope));
+                    // Отправителя подтверждает сервер (record.sender), а не содержимое
+                    // конверта — его пишет кто угодно. Личный ключ принимаем только от
+                    // участника этой переписки: иначе посторонний подкладывал свой ключ к
+                    // чужому диалогу, а поле sender внутри конверта ещё и позволяло
+                    // выдать себя за «владельца» и сменить активный ключ.
+                    const attestedSender = String(record?.sender || '').trim();
+                    if (scope.startsWith('dm:')) {
+                        const pair = scope.split(':').slice(1).map(p => String(p || '').trim().toLowerCase());
+                        if (!attestedSender || !pair.includes(attestedSender.toLowerCase())) {
+                            decryptFailed += 1;
+                            this.trace(`syncIncomingKeyEnvelopes rejected foreign envelope scope=${scope} sender=${attestedSender}`);
+                            continue;
+                        }
+                    }
+                    if (attestedSender) payload.sender = attestedSender;
                     // Remember exactly what this row was carrying, so the check
                     // above can prove the re-open would be a no-op before skipping.
                     if (stamp) {

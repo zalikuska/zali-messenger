@@ -1,0 +1,9 @@
+# Сгенерированное bundle_web.py и лежащее в git. ripgrep (а значит и Grep/Glob в
+# Claude Code, и поиск редакторов) не показывает эти файлы: иначе каждый поиск по
+# коду возвращает по 4–5 копий одного и того же совпадения из 2-мегабайтного бандла.
+# Источник правды — web/src/ и web/{index.html,style.css,bridge_protocol.json};
+# сами файлы по прямому пути читаются и правятся как обычно.
+web/app.js
+apps/macos/Sources/ZaliMessenger/Assets.swift
+apps/macos/Sources/ZaliMessenger/BridgeProtocol.generated.swift
+apps/macos/Sources/ZaliMessenger/Resources/Web/

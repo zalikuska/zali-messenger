@@ -1336,7 +1336,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 if (id.isNotEmpty() && sender != null && receiver != null) {
                     val serverId = raw.optString("serverId", raw.optString("server_id", "")).ifEmpty { null }
                     val channelId = raw.optString("channelId", raw.optString("channel_id", "")).ifEmpty { null }
-                    downloadAndDecryptMessage(id, sender, receiver, serverId, channelId)
+                    // Маленький архив сервер кладёт прямо в кадр (server/src/messages.rs,
+                    // `inlineArchive`) — тогда отдельного GET /api/download/:id не нужно.
+                    // Это круг до сервера на каждое входящее сообщение, а на мобильной
+                    // сети он же ещё и заново поднимает соединение.
+                    val inline = raw.optString("inlineArchive", "")
+                    val inlineBytes = if (inline.isNotEmpty()) {
+                        try { android.util.Base64.decode(inline, android.util.Base64.DEFAULT) } catch (e: IllegalArgumentException) { null }
+                    } else null
+                    if (inlineBytes != null && inlineBytes.isNotEmpty()) {
+                        // Тот же исполнитель, что и у скачанного архива: unpackMessage —
+                        // это PBKDF2 210k + AES-GCM, на UI-потоке он вешает приложение.
+                        cryptoExecutor.execute { decryptAndDeliver(inlineBytes, id, sender, receiver, serverId, channelId) }
+                    } else {
+                        downloadAndDecryptMessage(id, sender, receiver, serverId, channelId)
+                    }
                 }
             }
             else -> {
@@ -1985,9 +1999,44 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     }
 
     /** MainActivity.onStart/onStop. См. PushSession.appVisible. */
+    // Пул HTTP-соединений остывает: nginx держит keepalive 180 с, и следующая
+    // отправка после паузы платит полный TCP+TLS. Замер 2026-09-16 с боевого
+    // сервера: 390 мс по холодному соединению против 155 мс по живому. Пока
+    // приложение на экране и есть сессия, держим соединение тёплым копеечным
+    // запросом; в фоне таймер снят — там батарея дороже этих миллисекунд.
+    private val warmupIntervalMs = 60_000L
+    private val warmupRunnable = object : Runnable {
+        override fun run() {
+            warmApiConnection()
+            mainHandler.postDelayed(this, warmupIntervalMs)
+        }
+    }
+
+    private fun warmApiConnection() {
+        if (wsAuthToken.isEmpty()) return
+        // /health, а не /api/version: платформы `android` сервер не знает и отвечал бы
+        // 400 раз в минуту с каждого телефона.
+        val request = Request.Builder().url("$apiBaseUrl/health").build()
+        // Ответ не нужен — нужен живой сокет. Ошибку глотаем: прогрев не обязан
+        // ничего гарантировать, а шуметь в лог раз в минуту при плохой сети он не должен.
+        for (client in listOf(httpClient, transferClient)) {
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {}
+                override fun onResponse(call: Call, response: Response) { response.close() }
+            })
+        }
+    }
+
     fun setAppVisible(visible: Boolean) {
         PushSession.appVisible = visible
+        mainHandler.removeCallbacks(warmupRunnable)
+        if (visible) mainHandler.postDelayed(warmupRunnable, warmupIntervalMs)
         sendClientPresence()
+        // Вебвью без onPause остаётся «видимым» и в фоне — фокус сообщаем явно
+        // (isAppAttended в web/src/interface/notifications.js).
+        val js = "window.__zaliNativeAppFocus = $visible; var ui = window.__ZALI_INTERFACE; " +
+            "if (ui && ui.onNativeAppFocusChange) ui.onNativeAppFocusChange();"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
     }
 
     /**

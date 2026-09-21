@@ -24,7 +24,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 /// How long one `key_envelope_available` push suppresses the next one for the same
@@ -49,6 +49,7 @@ const KEY_ENVELOPE_NOTIFY_MAP_SOFT_CAP: usize = 512;
 /// (scopes × peers' devices), tight enough that a pathological row count cannot
 /// turn every sync into an unbounded download plus one ECDH open per row.
 const MAX_KEY_ENVELOPES_PER_FETCH: i64 = 2000;
+const KEY_ENVELOPES_PER_SENDER_DEVICE: i64 = 24;
 
 /// How many vault events per account survive a write.
 ///
@@ -320,25 +321,19 @@ pub(crate) async fn register_device(
         serde_json::to_string(&payload.keyPackage.unwrap_or_else(|| serde_json::json!({})))
             .unwrap_or_else(|_| "{}".to_string());
 
-    let mut conn = match state.db.acquire().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!(
-                "Ошибка получения соединения для регистрации устройства {}: {}",
-                device_id, e
-            );
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-        error!(
-            "Ошибка начала блокирующей транзакции для устройства {}: {}",
-            device_id, e
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
-    let result: Result<(bool, i64, bool), sqlx::Error> = async {
+    // BEGIN IMMEDIATE … COMMIT в отдельной задаче: хендлер axum выбрасывается при
+    // обрыве клиента, и транзакция, брошенная между BEGIN и COMMIT, возвращала в пул
+    // соединение с блокировкой записи sqlite — после чего вставала запись на всём
+    // сервере. Этот хендлер вызывается при каждом входе. См. hash_chain.rs.
+    let db = state.db.clone();
+    let task_owner = owner.clone();
+    let task_device_id = device_id.clone();
+    let result: Result<(bool, i64, bool), sqlx::Error> = tokio::spawn(async move {
+        let owner = task_owner;
+        let device_id = task_device_id;
+        let mut conn = db.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        let result: Result<(bool, i64, bool), sqlx::Error> = async {
         let approved_count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
         )
@@ -359,6 +354,44 @@ pub(crate) async fn register_device(
         .fetch_one(&mut *conn)
         .await?
             == 0;
+
+        // Одобренное устройство, пришедшее с ДРУГИМИ ключами, одобрение теряет.
+        // Раньше ON CONFLICT молча заменял ключи и оставлял approved=1, а id устройств
+        // любого аккаунта публичны (/api/users/:u/devices) — с украденным токеном
+        // можно было «стать» уже одобренным устройством со своими ключами. Если
+        // других одобренных устройств нет, одобрить его заново некому — такое
+        // оставляем одобренным, иначе аккаунт остался бы вовсе без доверенных.
+        let existing_keys = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT approved, COALESCE(public_key, ''), COALESCE(signing_key, '')
+             FROM account_devices WHERE owner = ? AND device_id = ?",
+        )
+        .bind(&owner)
+        .bind(&device_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+        let keys_changed = existing_keys
+            .as_ref()
+            .map(|(approved, old_public, old_signing)| {
+                *approved == 1
+                    && ((!old_public.is_empty() && *old_public != public_key)
+                        || (!old_signing.is_empty() && *old_signing != signing_key))
+            })
+            .unwrap_or(false);
+        let other_approved = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM account_devices
+             WHERE owner = ? AND device_id <> ? AND approved = 1 AND revoked = 0",
+        )
+        .bind(&owner)
+        .bind(&device_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        let demote: i64 = if keys_changed && other_approved > 0 { 1 } else { 0 };
+        if demote == 1 {
+            warn!(
+                "Устройство {} аккаунта {} пришло с новыми ключами — одобрение снято",
+                device_id, owner
+            );
+        }
 
         let first_device = approved_count == 0;
         let group_epoch = if first_device {
@@ -389,12 +422,14 @@ pub(crate) async fn register_device(
                 signing_key = excluded.signing_key,
                 key_package = excluded.key_package,
                 approved = CASE
-                    WHEN account_devices.approved = 1 THEN 1
+                    WHEN account_devices.approved = 1 AND ? = 0 THEN 1
                     ELSE excluded.approved
                 END,
                 revoked = 0,
-                approved_by = COALESCE(account_devices.approved_by, excluded.approved_by),
-                approved_at = COALESCE(approved_at, excluded.approved_at),
+                approved_by = CASE WHEN ? = 1 THEN excluded.approved_by
+                    ELSE COALESCE(account_devices.approved_by, excluded.approved_by) END,
+                approved_at = CASE WHEN ? = 1 THEN excluded.approved_at
+                    ELSE COALESCE(approved_at, excluded.approved_at) END,
                 revoked_at = NULL,
                 history_days = CASE
                     WHEN account_devices.approved = 1 THEN COALESCE(account_devices.history_days, 30)
@@ -415,6 +450,9 @@ pub(crate) async fn register_device(
         .bind(approved)
         .bind(approved_by.as_deref())
         .bind(approved)
+        .bind(demote)
+        .bind(demote)
+        .bind(demote)
         .execute(&mut *conn)
         .await?;
 
@@ -438,13 +476,19 @@ pub(crate) async fn register_device(
 
         sqlx::query("COMMIT").execute(&mut *conn).await?;
         Ok((first_device, group_epoch, is_new_device))
-    }
-    .await;
+        }
+        .await;
+        if result.is_err() {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        }
+        result
+    })
+    .await
+    .unwrap_or_else(|e| Err(sqlx::Error::Protocol(format!("задача регистрации устройства: {}", e))));
 
     let (first_device, group_epoch, is_new_device) = match result {
         Ok(value) => value,
         Err(e) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             error!("Ошибка регистрации устройства {}: {}", device_id, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
@@ -689,26 +733,16 @@ pub(crate) async fn revoke_device(
             .into_response();
     }
 
-    let mut conn = match state.db.acquire().await {
-        Ok(c) => c,
-        Err(e) => {
-            error!(
-                "Ошибка получения соединения для revoke_device {}: {}",
-                device_id, e
-            );
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-        error!(
-            "Ошибка начала транзакции revoke_device {}: {}",
-            device_id, e
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
-    let revoke_result: Result<i64, sqlx::Error> = async {
+    // Транзакция в отдельной задаче — по той же причине, что и в register_device.
+    let db = state.db.clone();
+    let task_owner = owner.clone();
+    let task_device_id = device_id.clone();
+    let revoke_result: Result<i64, sqlx::Error> = tokio::spawn(async move {
+        let owner = task_owner;
+        let device_id = task_device_id;
+        let mut conn = db.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        let result: Result<i64, sqlx::Error> = async {
         let active_count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND approved = 1 AND revoked = 0",
         )
@@ -764,12 +798,18 @@ pub(crate) async fn revoke_device(
 
         sqlx::query("COMMIT").execute(&mut *conn).await?;
         Ok(group_epoch)
-    }
-    .await;
+        }
+        .await;
+        if !matches!(result, Ok(epoch) if epoch >= 0) {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        }
+        result
+    })
+    .await
+    .unwrap_or_else(|e| Err(sqlx::Error::Protocol(format!("задача отзыва устройства: {}", e))));
 
     let group_epoch = match revoke_result {
         Ok(-1) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             return (
                 StatusCode::BAD_REQUEST,
                 "Нельзя отозвать последнее доверенное устройство",
@@ -778,11 +818,9 @@ pub(crate) async fn revoke_device(
         }
         Ok(epoch) => epoch,
         Err(sqlx::Error::RowNotFound) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             return (StatusCode::NOT_FOUND, "Устройство не найдено").into_response();
         }
         Err(e) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             error!("Ошибка отзыва устройства {}: {}", device_id, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
@@ -1026,6 +1064,42 @@ pub(crate) async fn post_key_envelope(
     // sender gets a 200 and the recipient just has no key.
     let recipient = resolve_username_casing(&state.db, &recipient).await;
 
+    match crate::conversation_keys::envelope_scope_allowed(&state.db, &scope, &sender, &recipient)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!(
+                "Key envelope отклонён: {} -> {} scope={} — не участники переписки",
+                sender, recipient, scope
+            );
+            return (StatusCode::FORBIDDEN, "Нет доступа к этой переписке").into_response();
+        }
+        Err(e) => {
+            error!("Ошибка проверки scope key envelope {}: {}", scope, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    // Адресат — реальное устройство получателя (или общий «any»). Иначе произвольные
+    // recipientDeviceId давали бесконечно много строк мимо лимита ниже.
+    if recipient_device_id != "any" {
+        match sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM account_devices WHERE owner = ? AND device_id = ?",
+        )
+        .bind(&recipient)
+        .bind(&recipient_device_id)
+        .fetch_one(&state.db)
+        .await
+        {
+            Ok(0) => return (StatusCode::NOT_FOUND, "Устройство получателя не найдено").into_response(),
+            Ok(_) => {}
+            Err(e) => {
+                error!("Ошибка проверки устройства получателя {}: {}", recipient, e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    }
+
     let envelope_id = Uuid::new_v4().to_string();
     match sqlx::query(
         "INSERT INTO conversation_key_envelopes
@@ -1047,6 +1121,34 @@ pub(crate) async fn post_key_envelope(
     .await
     {
         Ok(_) => {
+            // Не больше KEY_ENVELOPES_PER_SENDER_DEVICE строк от одного отправителя на
+            // одно устройство по одному scope: клиент шлёт до 6 кандидатов, всё сверх
+            // окна — старые ротации, а без потолка отправитель мог вытеснить конвертами
+            // все настоящие из окна выборки MAX_KEY_ENVELOPES_PER_FETCH.
+            if let Err(e) = sqlx::query(
+                "DELETE FROM conversation_key_envelopes
+                 WHERE owner = ? AND scope_key = ? AND sender = ? AND recipient_device_id = ?
+                   AND rowid NOT IN (
+                     SELECT rowid FROM conversation_key_envelopes
+                     WHERE owner = ? AND scope_key = ? AND sender = ? AND recipient_device_id = ?
+                     ORDER BY created_at DESC, rowid DESC
+                     LIMIT ?
+                   )",
+            )
+            .bind(&recipient)
+            .bind(&scope)
+            .bind(&sender)
+            .bind(&recipient_device_id)
+            .bind(&recipient)
+            .bind(&scope)
+            .bind(&sender)
+            .bind(&recipient_device_id)
+            .bind(KEY_ENVELOPES_PER_SENDER_DEVICE)
+            .execute(&state.db)
+            .await
+            {
+                warn!("Не удалось подрезать key envelopes {} -> {}: {}", sender, recipient, e);
+            }
             notify_key_envelope_available(&state, &recipient).await;
             Json(serde_json::json!({ "envelopeId": envelope_id })).into_response()
         }

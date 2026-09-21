@@ -51,13 +51,13 @@ pub(crate) async fn load_visible_channels_for_server(
     }
 
     let role = get_server_member_role(pool, server_id, viewer).await?;
-    if role.is_none() {
-        if server.is_public == 0 {
-            return Ok(Vec::new());
-        }
-        return load_channels_for_server(pool, server_id).await;
+    if role.is_none() && server.is_public == 0 {
+        return Ok(Vec::new());
     }
 
+    // Не участник публичного сервера видит ровно то, что видит роль `member` —
+    // не больше. Раньше ему отдавались ВСЕ каналы без фильтра, включая закрытые
+    // правами ролей, и участник с урезанной ролью получал их назад, просто выйдя.
     let viewer_role = role.unwrap_or_else(|| "member".to_string());
     let channels = load_channels_for_server(pool, server_id).await?;
     let channel_permissions = load_channel_permissions_map(pool, server_id).await?;
@@ -272,7 +272,11 @@ pub(crate) async fn can_access_channel(
         return Ok(true);
     }
     if role.is_none() {
-        return Ok(server.is_public != 0 && action == "view");
+        // Не участник публичного сервера только читает, и только то, что открыто
+        // роли `member`. Раньше `is_public` пускал его в любой канал мимо прав канала.
+        if server.is_public == 0 || action != "view" {
+            return Ok(false);
+        }
     }
 
     let role_key = role.as_deref().unwrap_or("member");

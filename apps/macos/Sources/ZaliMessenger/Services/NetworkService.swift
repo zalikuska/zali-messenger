@@ -4,6 +4,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     static let shared = NetworkService()
     
     private let connectionQueue = DispatchQueue(label: "zali.network.websocket")
+    /// Таймер прогрева HTTP-пула — см. scheduleApiWarmup.
+    private var warmupWorkItem: DispatchWorkItem?
     private let configQueue = DispatchQueue(label: "zali.network.config")
     private let apiBaseURLStorageKey = "zali_network_api_base_url"
     private let wsBaseURLStorageKey = "zali_network_ws_base_url"
@@ -392,6 +394,13 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             self.currentUsername = nextUsername
             self.authToken = nextToken
             self.currentDeviceId = nextDeviceId
+            // Пул соединений держим тёплым только при живой сессии; на выходе из
+            // аккаунта таймер снимается сам — см. scheduleApiWarmup.
+            if nextToken != nil {
+                self.scheduleApiWarmup()
+            } else {
+                self.stopApiWarmup()
+            }
             if usernameChanged {
                 // Reload from the NEW account's own scoped keys (storageKey computed
                 // properties above already reflect currentUsername at this point) —
@@ -524,6 +533,50 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             self.reconnectWorkItem = workItem
             self.trace("ws reconnect scheduled reason=\(reason) delay=\(String(format: "%.2f", delay))s gen=\(generation)")
             self.connectionQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+        }
+    }
+
+    // MARK: - Тёплый HTTP-пул
+    //
+    // Пул соединений остывает между сообщениями (nginx держит keepalive 180 с), и
+    // первая же отправка после паузы платит полный TCP+TLS. Замер 2026-09-16 с
+    // боевого сервера: 390 мс по холодному соединению против 155 мс по живому — на
+    // каждое сообщение после паузы в переписке. Один крошечный запрос в минуту
+    // дешевле. Зеркало Windows (`warm_api_connections` в native.rs) и Android
+    // (`warmApiConnection` в NativeBridge.kt).
+    //
+    // Запрос без `Authorization`: `/api/version` открыт, и таскать токен в фоновом
+    // пинге незачем. Ответ не читается — нужен живой сокет, а не данные.
+    private func scheduleApiWarmup() {
+        connectionQueue.async { [weak self] in
+            guard let self else { return }
+            self.warmupWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.authToken != nil else { return }
+                self.warmApiConnections()
+                self.scheduleApiWarmup()
+            }
+            self.warmupWorkItem = workItem
+            self.connectionQueue.asyncAfter(deadline: .now() + 60, execute: workItem)
+        }
+    }
+
+    private func stopApiWarmup() {
+        connectionQueue.async { [weak self] in
+            self?.warmupWorkItem?.cancel()
+            self?.warmupWorkItem = nil
+        }
+    }
+
+    private func warmApiConnections() {
+        guard let url = URL(string: apiURL("version?platform=macos")) else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        // Обе сессии: сообщения и архивы идут через httpSession, остальной API —
+        // через apiSession, и у каждой свой пул соединений.
+        for session in [httpSession, apiSession] {
+            session.dataTask(with: request) { _, _, _ in }.resume()
         }
     }
 
@@ -970,6 +1023,10 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             let sender: String
             let receiver: String
             let filename: String
+            /// Архив целиком, base64, если он влез в кадр доставки
+            /// (server/src/messages.rs, потолок 32 КиБ) — тогда отдельного
+            /// GET /api/download/:id не нужно. Отсутствует — качаем как раньше.
+            let inlineArchive: String?
             let keyVersion: Int?
             let key_version: Int?
             let serverId: String?
@@ -1100,7 +1157,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         // For DMs, accept messages that involve the current account on either side,
         // so a second session of the same user also receives its own outgoing echoes.
         if serverId != nil || wsMsg.receiver == currentUsername || wsMsg.sender == currentUsername {
-            downloadMessageWithRetry(messageId: wsMsg.id) { [weak self] fileURL, statusCode in
+            downloadMessageWithRetry(messageId: wsMsg.id, inlineArchive: wsMsg.inlineArchive) { [weak self] fileURL, statusCode in
                 guard let fileURL = fileURL else {
                     if statusCode == 403 {
                         self?.trace("download forbidden messageId=\(wsMsg.id)")
@@ -2141,7 +2198,26 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     /// permanent conditions — retrying them would just waste 3 round-trips, so only the
     /// live WS-push path (which previously dropped the message on any single failure)
     /// gets this; history replay already has its own attempt loop in WebView.swift.
-    func downloadMessageWithRetry(messageId: String, attempt: Int = 1, completion: @escaping (URL?, Int?) -> Void) {
+    /// `inlineArchive` — архив, приехавший прямо в кадре доставки (server/src/messages.rs).
+    /// Тогда скачивать нечего: это целый круг до сервера на каждое входящее сообщение,
+    /// а на остывшем пуле ещё и TLS-рукопожатие поверх него (замер 2026-09-16: 155 мс
+    /// по живому соединению против 390 мс по холодному). Файл кладём туда же, куда его
+    /// положил бы загрузчик, и удаляет его тот же самый вызывающий код.
+    func downloadMessageWithRetry(messageId: String, inlineArchive: String? = nil, attempt: Int = 1, completion: @escaping (URL?, Int?) -> Void) {
+        if attempt == 1,
+           let encoded = inlineArchive?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !encoded.isEmpty,
+           let data = Data(base64Encoded: encoded),
+           !data.isEmpty {
+            let inlineURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("\(messageId)-\(UUID().uuidString).zali")
+            if (try? data.write(to: inlineURL)) != nil {
+                trace("downloadMessage inline id=\(messageId) bytes=\(data.count)")
+                completion(inlineURL, nil)
+                return
+            }
+            trace("downloadMessage inline write failed id=\(messageId) — falling back to download")
+        }
         downloadMessage(messageId: messageId) { [weak self] fileURL, statusCode in
             if fileURL != nil || statusCode == 403 || statusCode == 413 || attempt >= 3 {
                 completion(fileURL, statusCode)

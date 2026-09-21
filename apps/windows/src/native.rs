@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 mod api;
 pub(crate) use api::*;
+mod autostart;
+pub(crate) use autostart::*;
 mod cache;
 pub(crate) use cache::*;
 mod http;
@@ -42,7 +44,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b45";
+const APP_DISPLAY_VERSION: &str = "0.2b46";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -270,6 +272,9 @@ struct NativeCapabilities {
     /// minimize/maximize/close buttons. False everywhere else — macOS (Swift and
     /// this experimental Rust shell) keeps its native traffic-light buttons.
     window_controls: bool,
+    /// Windows-only: «Запускать при входе в Windows» свёрнутым в трей (see
+    /// native/autostart.rs). Elsewhere there is no tray to start into.
+    autostart: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -293,6 +298,7 @@ impl Default for NativeCapabilities {
             app_update: true,
             taskbar_badge: cfg!(target_os = "windows"),
             window_controls: cfg!(target_os = "windows"),
+            autostart: cfg!(target_os = "windows"),
         }
     }
 }
@@ -346,6 +352,39 @@ impl VoiceBridge {
     }
 }
 
+/// Держит HTTP-пул тёплым, пока в приложении есть сессия.
+///
+/// nginx закрывает keepalive-соединение через 180 с, пул reqwest — раньше, и первая
+/// же отправка после паузы платит полный TCP+TLS. Замер 2026-09-16 с боевого сервера:
+/// 390 мс по холодному соединению против 155 мс по живому — на КАЖДОЕ сообщение после
+/// паузы в переписке. Один крошечный публичный запрос в минуту дешевле этого.
+///
+/// Запрос намеренно без `Authorization`: `/api/version` открыт, а таскать токен в
+/// фоновом пинге незачем. Ответ не проверяется — нужен живой сокет, а не данные.
+async fn warm_api_connections(config_rx: watch::Receiver<MessageConfig>) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        let (api_base_url, has_session) = {
+            let current = config_rx.borrow();
+            (
+                current.api_base_url.clone(),
+                current.auth_token.is_some(),
+            )
+        };
+        if !has_session || api_base_url.trim().is_empty() {
+            continue;
+        }
+        let url = format!(
+            "{}/api/version?platform=windows",
+            api_base_url.trim_end_matches('/')
+        );
+        // Оба пула: сообщения уходят через http_client(), остальной API — через
+        // api_http_client(), и у каждого своё соединение.
+        let _ = api_http_client().get(url.as_str()).send().await;
+        let _ = http_client().get(url.as_str()).send().await;
+    }
+}
+
 pub struct MessageBridge {
     config_tx: watch::Sender<MessageConfig>,
 }
@@ -354,8 +393,12 @@ impl MessageBridge {
     pub fn new(runtime: Arc<Runtime>, proxy: EventLoopProxy<AppEvent>) -> Arc<Self> {
         let (config_tx, config_rx) = watch::channel(MessageConfig::default());
         let bridge = Arc::new(Self { config_tx });
+        let warm_rx = config_rx.clone();
         runtime.spawn(async move {
             run_message_transport(config_rx, proxy).await;
+        });
+        runtime.spawn(async move {
+            warm_api_connections(warm_rx).await;
         });
         bridge
     }
@@ -1213,6 +1256,25 @@ pub fn handle_ipc_message(
                     ),
                 }
             });
+        }
+        BridgeProtocolMessageType::AutostartRequest => {
+            // No `enabled` = the settings card asking what the state is; a boolean sets
+            // it. A few registry calls — answered inline, no runtime task needed.
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let result = match payload.get("enabled").and_then(Value::as_bool) {
+                Some(enabled) => set_autostart(enabled),
+                None => Ok(autostart_status()),
+            };
+            let response = match result {
+                Ok(status) => json!({ "requestId": request_id, "ok": true, "data": status }),
+                Err(error) => json!({ "requestId": request_id, "ok": false, "error": error }),
+            };
+            dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, response);
         }
         BridgeProtocolMessageType::DownloadUpdateRequest => {
             let request_id = payload

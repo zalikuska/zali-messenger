@@ -703,17 +703,22 @@ pub(crate) fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) ->
         })
         .unwrap_or(false);
     if trusted {
+        // X-Real-IP первым: наш nginx ставит его сам (`$remote_addr`), подделать его
+        // клиент не может. X-Forwarded-For nginx лишь ДОПИСЫВАЕТ
+        // (`$proxy_add_x_forwarded_for`), поэтому первым в нём стоит то, что прислал
+        // сам клиент — по нему лимиты входа и регистрации обходились сменой заголовка.
+        // Если X-Real-IP нет, верить можно только последнему адресу цепочки.
         if let Some(ip) = headers
-            .get("X-Forwarded-For")
+            .get("X-Real-IP")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
             .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
         {
             return ip;
         }
         if let Some(ip) = headers
-            .get("X-Real-IP")
+            .get("X-Forwarded-For")
             .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.rsplit(',').next())
             .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
         {
             return ip;

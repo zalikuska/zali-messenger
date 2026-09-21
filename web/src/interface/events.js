@@ -187,6 +187,15 @@ ZaliMixin(ZaliInterface, class {
         const voiceCallStrip = document.getElementById('voiceCallStrip');
         if (voiceCallStrip) {
             voiceCallStrip.addEventListener('click', (e) => {
+                // A DM call ringing over the voice channel we are in (renderVoiceIncomingStrip).
+                if (e.target.closest('#voiceStripAcceptBtn')) {
+                    void this.acceptIncomingCall();
+                    return;
+                }
+                if (e.target.closest('#voiceStripRejectBtn')) {
+                    void this.rejectIncomingCall();
+                    return;
+                }
                 if (e.target.closest('#voiceMuteBtn')) {
                     this.toggleVoiceMute();
                     return;
@@ -849,6 +858,12 @@ ZaliMixin(ZaliInterface, class {
         if (checkForUpdatesBtn) {
             checkForUpdatesBtn.addEventListener('click', () => {
                 void this.checkForAppUpdateFromSettings();
+            });
+        }
+        const inputAutostart = document.getElementById('inputAutostart');
+        if (inputAutostart) {
+            inputAutostart.addEventListener('change', () => {
+                void this.setAutostartFromSettings(inputAutostart.checked);
             });
         }
         if (navigator.mediaDevices?.addEventListener) {

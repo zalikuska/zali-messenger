@@ -335,7 +335,7 @@ ZaliMixin(ZaliInterface, class {
                     mimeType: path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.webm') ? 'video/webm' : 'image/gif',
                     kind: path.endsWith('.mp4') || path.endsWith('.webm') ? 'video' : 'gif',
                     dataUrl: url
-                }, false, { gifLike: true });
+                }, false, { gifLike: true, trustedRemote: true });
             }
 
             const cached = this.tenorCache.get(this.tenorCacheKey(url));
@@ -347,7 +347,7 @@ ZaliMixin(ZaliInterface, class {
                     mimeType,
                     kind,
                     dataUrl: cached.mediaUrl
-                }, false, { gifLike: true });
+                }, false, { gifLike: true, trustedRemote: true });
             }
 
             this.requestTenorResolution(url);
@@ -363,7 +363,7 @@ ZaliMixin(ZaliInterface, class {
                 mimeType: path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.webm') ? 'video/webm' : path.endsWith('.gif') ? 'image/gif' : 'image/*',
                 kind: path.endsWith('.mp4') || path.endsWith('.webm') ? 'video' : 'image',
                 dataUrl: url
-            });
+            }, false, { trustedRemote: true });
         }
 
         return '';

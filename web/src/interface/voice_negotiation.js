@@ -764,6 +764,12 @@ ZaliMixin(ZaliInterface, class {
         const outgoing = this.voice.outgoingInvite;
         const incoming = this.voice.incomingInvite;
         this.voiceTrace('end-current-session', { reason, roomId, status });
+        // Starting another call or joining another channel while a call rings over
+        // this one is a decision not to take it: decline it properly, or the caller
+        // keeps ringing into a room nobody will ever answer.
+        if (incoming?.overChannel) {
+            await this.rejectIncomingCall();
+        }
         if (status === 'incoming' && incoming?.roomId && incoming?.from) {
             await this.rejectIncomingCall();
             return;

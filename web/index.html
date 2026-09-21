@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260912-rev37">
+    <link rel="stylesheet" href="style.css?v=20260917-rev42">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -506,6 +506,26 @@
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputNotificationVolume" class="settings-range">
                                     </label>
                                     <p class="settings-help">Звук нового сообщения и рингтон входящего звонка. Не влияет на громкость собеседника в разговоре — та настраивается отдельно, в блоке «Микрофон и динамики».</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card" id="autostartSettingsCard" hidden>
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Windows</span>
+                                        <h3 class="settings-card-title">Автозапуск</h3>
+                                    </div>
+                                    <span class="settings-card-note">tray</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputAutostart" type="checkbox">
+                                        <span>
+                                            <strong>Запускать при входе в Windows</strong>
+                                            <small>Приложение стартует свёрнутым в трей и получает сообщения и звонки, даже если вы его не открывали</small>
+                                        </span>
+                                    </label>
+                                    <p class="settings-help" id="autostartStatusText"></p>
                                 </div>
                             </section>
 
@@ -1174,6 +1194,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260912-rev37"></script>
+    <script src="app.js?v=20260917-rev42"></script>
 </body>
 </html>

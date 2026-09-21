@@ -226,6 +226,36 @@ async fn scope_participants(
     }
 }
 
+/// Может ли `sender` класть конверт с ключом этого scope для `recipient`.
+///
+/// Оба обязаны быть участниками переписки: для `dm:a:b` — это и есть пара, для
+/// `server:<sid>:<cid>` — участники сервера. Раньше конверт принимался от кого
+/// угодно кому угодно для любого scope: посторонний мог подложить жертве свой ключ
+/// к её переписке с третьим лицом (и сломать ей расшифровку), либо завалить её
+/// конвертами так, что настоящие выпадали из окна выборки. Scope неизвестного вида
+/// разрешён только между устройствами одного аккаунта.
+pub(crate) async fn envelope_scope_allowed(
+    pool: &SqlitePool,
+    scope: &str,
+    sender: &str,
+    recipient: &str,
+) -> Result<bool, sqlx::Error> {
+    match parse_scope(scope) {
+        Some(Scope::Dm(a, b)) => {
+            let sender_lc = sender.trim().to_lowercase();
+            let recipient_lc = recipient.trim().to_lowercase();
+            Ok((a == sender_lc || b == sender_lc) && (a == recipient_lc || b == recipient_lc))
+        }
+        Some(Scope::Channel { server_id }) => Ok(get_server_member_role(pool, &server_id, sender)
+            .await?
+            .is_some()
+            && get_server_member_role(pool, &server_id, recipient)
+                .await?
+                .is_some()),
+        None => Ok(sender == recipient),
+    }
+}
+
 /// Fold legacy, differently-cased DM scopes onto their canonical form.
 ///
 /// Idempotent and cheap enough to run at every start — the registry holds one row

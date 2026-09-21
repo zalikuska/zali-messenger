@@ -682,6 +682,8 @@ fn undecryptable_placeholder(
     output
 }
 
+/// `inline_archive` — байты архива, приехавшие вместе с кадром доставки; `None` для
+/// истории, где их взять неоткуда, и тогда архив скачивается как раньше.
 pub(crate) async fn process_history_record(
     session: ApiSession,
     keys: Vec<String>,
@@ -689,6 +691,7 @@ pub(crate) async fn process_history_record(
     context_label: &str,
     server_id: Option<String>,
     channel_id: Option<String>,
+    inline_archive: Option<Vec<u8>>,
 ) -> Option<Value> {
     let message_id = record
         .get("id")
@@ -733,25 +736,58 @@ pub(crate) async fn process_history_record(
         ));
     }
 
-    let file_url = match retry_with_backoff(
-        &format!("{}_download_message id={}", context_label, message_id),
-        3,
-        || {
-            let session = session.clone();
-            let message_id = message_id.clone();
-            async move {
-                download_message(
-                    session.api_base_url,
-                    session.auth_token,
-                    session.device_id,
-                    message_id,
-                )
-                .await
+    // Архив, приехавший прямо в кадре доставки (server/src/messages.rs, `inlineArchive`),
+    // избавляет от отдельного GET /api/download/:id — это круг до сервера на каждое
+    // входящее сообщение, а на остывшем пуле ещё и TLS-рукопожатие поверх него.
+    // Записываем его туда же, куда положил бы загрузчик, дальше путь общий.
+    let inline_path = match inline_archive {
+        Some(bytes) if !bytes.is_empty() => {
+            let path = std::env::temp_dir().join(format!("zali-inline-{}.zali", Uuid::new_v4()));
+            match tokio::fs::write(&path, &bytes).await {
+                Ok(()) => {
+                    trace(format!(
+                        "{} inline_archive message_id={} bytes={}",
+                        context_label,
+                        message_id,
+                        bytes.len()
+                    ));
+                    Some(path)
+                }
+                Err(error) => {
+                    // Не фатально: ниже сработает обычное скачивание.
+                    trace(format!(
+                        "{} inline_archive_write_failed message_id={} err={}",
+                        context_label, message_id, error
+                    ));
+                    None
+                }
             }
-        },
-    )
-    .await
-    {
+        }
+        _ => None,
+    };
+
+    let file_url = match if let Some(path) = inline_path {
+        Ok(path)
+    } else {
+        retry_with_backoff(
+            &format!("{}_download_message id={}", context_label, message_id),
+            3,
+            || {
+                let session = session.clone();
+                let message_id = message_id.clone();
+                async move {
+                    download_message(
+                        session.api_base_url,
+                        session.auth_token,
+                        session.device_id,
+                        message_id,
+                    )
+                    .await
+                }
+            },
+        )
+        .await
+    } {
         Ok(path) => path,
         Err(error) => {
             trace(format!(
@@ -772,9 +808,13 @@ pub(crate) async fn process_history_record(
         // key fails identically every time. This used to run through
         // retry_with_backoff(3), which re-derived PBKDF2 (210k iterations) three
         // times and slept 250+500ms between attempts — per wrong key, per message.
-        let unpack_attempt = (|| {
-            let archive_path = file_url.to_string_lossy().to_string();
-            let temp_dir_path = temp_dir.to_string_lossy().to_string();
+        // В пуле блокирующих задач: распаковка — синхронный вызов ядра с PBKDF2 на
+        // 210k итераций. Прямо в async-коде она занимала поток рантайма, и
+        // buffer_unordered(4) в истории параллелил её только на бумаге — все
+        // расшифровки шли по очереди на одном потоке, а прочее на нём стояло.
+        let archive_path = file_url.to_string_lossy().to_string();
+        let temp_dir_path = temp_dir.to_string_lossy().to_string();
+        let unpack_attempt = tokio::task::spawn_blocking(move || {
             let response = dispatch_core_command(
                 "zali_net:unpack_message",
                 json!({
@@ -802,7 +842,9 @@ pub(crate) async fn process_history_record(
                     }
                     Ok(data)
                 })
-        })();
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("unpack task failed: {}", e)));
 
         match unpack_attempt {
             Ok(value) => {
@@ -966,7 +1008,7 @@ pub(crate) async fn refresh_direct_history(
         let session = session.clone();
         let keys = candidate_message_keys(&key, &HashMap::new(), "", &record, None, None);
         async move {
-            process_history_record(session, keys, record, "refresh_direct_history", None, None)
+            process_history_record(session, keys, record, "refresh_direct_history", None, None, None)
                 .await
         }
     }))
@@ -1079,6 +1121,7 @@ pub(crate) async fn refresh_server_history(
                 "refresh_server_history",
                 Some(server_id),
                 Some(channel_id),
+                None,
             )
             .await
         }

@@ -979,6 +979,136 @@ console.log('\n== who placed the call survives renegotiation and reloads ==');
         outcomes.length ? `silent: ${outcomes.join('; ')}` : '4 reload variants');
 }
 
+console.log('\n== a DM call to someone sitting in a voice channel ==');
+
+// Production, 2026-09-15: every DM call between two people who hang out in the
+// same voice channel died in ~100 ms — whoever was still in the channel auto-
+// rejected the invite as "busy" before it ever rang.
+const CHANNEL_ROOM = 'voice:channel:srv:srv-voice';
+
+/** bob and carol talking in a voice channel; alice outside it. */
+async function channelWithOutsider() {
+    const clock = new VirtualClock();
+    const server = new SimServer({ clock });
+    const alice = new VoicePeer('alice', server, { clock });
+    const bob = new VoicePeer('bob', server, { clock });
+    const carol = new VoicePeer('carol', server, { clock });
+    for (const p of [alice, bob, carol]) server.register(p);
+    for (const p of [bob, carol]) {
+        Object.assign(p.api.voice, {
+            roomId: CHANNEL_ROOM, roomType: 'channel', serverId: 'srv', channelId: 'srv-voice',
+            status: 'connecting', participants: [],
+        });
+        p.api.sendVoiceEvent({ type: 'voice_join', roomId: CHANNEL_ROOM, roomType: 'channel', serverId: 'srv', channelId: 'srv-voice' });
+    }
+    await server.settle();
+    return { server, alice, bob, carol };
+}
+
+async function channelScenario(label, body) {
+    try {
+        await withDeadline((async () => {
+            const ctx = await channelWithOutsider();
+            await body(ctx);
+        })(), label);
+    } catch (error) {
+        if (!(error instanceof Deadlocked)) throw error;
+        record(label, false, `DEADLOCKED: ${error.message}`);
+    }
+}
+
+const sentBy = (server, who, type) => server.log.findIndex(r => r.from === who && r.type === type);
+
+await channelScenario('ring over channel, decline', async ({ server, alice, bob, carol }) => {
+    record('the channel carries audio before anyone calls',
+        bob.hasTwoWayAudio('carol') && carol.hasTwoWayAudio('bob'),
+        describe({ a: bob, b: carol, server, deadlocked: '' }));
+    await alice.api.startDirectCall('bob');
+    await server.settle(2000);
+    record('a DM invite to someone in a voice channel is not auto-rejected as busy',
+        sentBy(server, 'bob', 'voice_call_reject') < 0 && alice.api.voice.status === 'calling',
+        `bob rejects at=${sentBy(server, 'bob', 'voice_call_reject')} alice.status=${alice.api.voice.status}`);
+    record('it rings on top of the channel instead',
+        bob.api.hasRingingIncomingInvite() && bob.api.voice.roomId === CHANNEL_ROOM && bob.api.voice.status === 'connected',
+        `ringing=${bob.api.hasRingingIncomingInvite()} room=${bob.api.voice.roomId} status=${bob.api.voice.status}`);
+    record('and the channel keeps talking while it rings', bob.hasTwoWayAudio('carol') && carol.hasTwoWayAudio('bob'));
+    await bob.api.rejectIncomingCall();
+    await server.settle();
+    record('declining leaves you in the channel, still talking',
+        bob.api.voice.roomId === CHANNEL_ROOM && !bob.api.hasRingingIncomingInvite()
+            && sentBy(server, 'bob', 'voice_leave') < 0 && bob.hasTwoWayAudio('carol'),
+        `room=${bob.api.voice.roomId} ringing=${bob.api.hasRingingIncomingInvite()} left=${sentBy(server, 'bob', 'voice_leave')}`);
+    record('and the caller is told it was declined', alice.api.voice.status === 'idle', `alice.status=${alice.api.voice.status}`);
+});
+
+await channelScenario('ring over channel, accept', async ({ server, alice, bob, carol }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(2000);
+    const accepting = bob.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+    const leave = server.log.findIndex(r => r.from === 'bob' && r.type === 'voice_leave' && r.roomId === CHANNEL_ROOM);
+    const accept = sentBy(server, 'bob', 'voice_call_accept');
+    record('answering leaves the channel before accepting', leave >= 0 && accept > leave, `leave=${leave} accept=${accept}`);
+    record('and puts you on the call with audio both ways',
+        alice.hasTwoWayAudio('bob') && bob.hasTwoWayAudio('alice'),
+        describe({ a: alice, b: bob, server, deadlocked: '' }));
+    record('the channel no longer has you on either end',
+        !server.rooms.get(CHANNEL_ROOM)?.participants.has('bob') && !bob.entryFor('carol') && !carol.entryFor('bob'),
+        `server=${[...(server.rooms.get(CHANNEL_ROOM)?.participants || [])]} bob->carol=${!!bob.entryFor('carol')} carol->bob=${!!carol.entryFor('bob')}`);
+});
+
+await channelScenario('ring over channel, caller gives up', async ({ server, alice, bob }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(2000);
+    await alice.api.endCurrentVoiceSession({ reason: 'hangup' });
+    await server.settle();
+    record('a caller hanging up stops the ringing and nothing else',
+        !bob.api.hasRingingIncomingInvite() && bob.api.voice.roomId === CHANNEL_ROOM && bob.hasTwoWayAudio('carol'),
+        `ringing=${bob.api.hasRingingIncomingInvite()} room=${bob.api.voice.roomId}`);
+});
+
+await channelScenario('ring over channel, leave channel', async ({ server, alice, bob }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(2000);
+    await bob.api.leaveVoiceRoom({ announce: true });
+    await server.settle(2000);
+    record('leaving the channel while it rings keeps the call ringing',
+        bob.api.voice.status === 'incoming' && bob.api.voice.incomingInvite?.from === 'alice' && !bob.api.voice.incomingInvite?.overChannel,
+        `status=${bob.api.voice.status} invite=${JSON.stringify(bob.api.voice.incomingInvite)}`);
+    const accepting = bob.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+    record('and it can still be answered', alice.hasTwoWayAudio('bob') && bob.hasTwoWayAudio('alice'),
+        describe({ a: alice, b: bob, server, deadlocked: '' }));
+});
+
+await channelScenario('ring over channel, call them back', async ({ server, alice, bob }) => {
+    await alice.api.startDirectCall('bob');
+    await server.settle(2000);
+    const calling = bob.api.startDirectCall('alice');
+    await server.settle();
+    await calling;
+    record('calling the person ringing you answers their call instead of placing another',
+        sentBy(server, 'bob', 'voice_call_invite') < 0 && sentBy(server, 'bob', 'voice_call_accept') >= 0
+            && alice.hasTwoWayAudio('bob') && bob.hasTwoWayAudio('alice'),
+        `bob invites=${sentBy(server, 'bob', 'voice_call_invite')} accepts=${sentBy(server, 'bob', 'voice_call_accept')}`);
+});
+
+await channelScenario('call out of a channel', async ({ server, alice, bob }) => {
+    const calling = bob.api.startDirectCall('alice');
+    await server.settle(2000);
+    await calling;
+    const leave = server.log.findIndex(r => r.from === 'bob' && r.type === 'voice_leave' && r.roomId === CHANNEL_ROOM);
+    const invite = sentBy(server, 'bob', 'voice_call_invite');
+    record('your own DM call takes you out of the channel first', leave >= 0 && invite > leave, `leave=${leave} invite=${invite}`);
+    const accepting = alice.api.acceptIncomingCall();
+    await server.settle();
+    await accepting;
+    record('and connects with audio both ways', alice.hasTwoWayAudio('bob') && bob.hasTwoWayAudio('alice'),
+        describe({ a: bob, b: alice, server, deadlocked: '' }));
+});
+
 console.log('\n== randomized scenarios ==');
 {
     let bad = 0; let ran = 0; const examples = [];

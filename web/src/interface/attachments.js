@@ -345,6 +345,21 @@ ZaliMixin(ZaliInterface, class {
         return ratio ? ` style="aspect-ratio: ${ratio};"` : '';
     }
 
+    // Свой API-сервер и CDN Tenor — туда клиент и так ходит сам.
+    isTrustedAttachmentHost(url) {
+        try {
+            const host = new URL(url, window.location.href).hostname.toLowerCase();
+            if (host === window.location.hostname.toLowerCase()) return true;
+            try {
+                const apiHost = new URL(this.getApiBaseUrl()).hostname.toLowerCase();
+                if (apiHost && host === apiHost) return true;
+            } catch (e) {}
+            return host === 'tenor.com' || host.endsWith('.tenor.com');
+        } catch (e) {
+            return false;
+        }
+    }
+
     safeAttachmentUrl(url) {
         const value = String(url || '').trim();
         if (!value) return '';
@@ -367,6 +382,21 @@ ZaliMixin(ZaliInterface, class {
         const showControls = options.controls !== undefined ? !!options.controls : !gifLike;
         if (!src) {
             return `<div class="media-unknown">${this.esc(attachment.name)}</div>`;
+        }
+
+        // Вложение из архива сообщения, указывающее на чужой http(s)-адрес, сам не
+        // грузим: <img>/<video> сходили бы туда при одном показе переписки и выдали
+        // отправителю IP получателя и момент прочтения. Настоящие вложения приезжают
+        // внутри архива (data:/blob:). Ссылки из текста (renderUrlPreview) — отдельный
+        // случай: адрес там виден в самом сообщении, они передают trustedRemote.
+        if (!options.trustedRemote && /^https?:/i.test(src) && !this.isTrustedAttachmentHost(src)) {
+            return `<a class="file-message" href="${this.esc(src)}" target="_blank" rel="noopener noreferrer">
+            ${this.renderFileIcon(attachment.name)}
+            <span class="file-message-info">
+                <span class="file-message-name">${this.esc(attachment.name)}</span>
+                <span class="file-message-size">${this.esc(src)}</span>
+            </span>
+        </a>`;
         }
 
         // Animated stickers are decoded and played by web/src/modules/tgs.js after

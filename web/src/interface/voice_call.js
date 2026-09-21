@@ -19,6 +19,18 @@ ZaliMixin(ZaliInterface, class {
             this.voiceTrace('start-dm-call-ignored-busy-setup', { target }, 'WARN');
             return;
         }
+        // Calling the person whose call is ringing over our channel means taking that
+        // call. Placing a second one instead would leave the channel, decline theirs
+        // (endCurrentVoiceSession) and ring them back — the same conversation, one
+        // pointless «отклонён» and a second wait later.
+        const ringing = this.voice.incomingInvite;
+        if (ringing?.overChannel && String(ringing.from || '').trim().toLowerCase() === target.toLowerCase()) {
+            this.voiceDiag('start-dm-call-answers-ringing', { target, roomId: ringing.roomId, video: !!video });
+            // Флаг камеры едет с собой: без него нажатие «Видеозвонок» молча отвечало
+            // бы аудиозвонком, и кнопка выглядела бы сломанной.
+            await this.acceptIncomingCall({ video });
+            return;
+        }
         const activeRoomId = String(this.voice.roomId || '').trim();
         if (activeRoomId && this.isInActiveCall()) {
             const activePeer = String(this.voice.targetUser || this.voice.inviter || '').trim();
@@ -126,7 +138,11 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
-    async acceptIncomingCall() {
+    // `video` — ответ с камерой: его просит startDirectCall, когда нажали
+    // «Видеозвонок» тому, кто в этот момент звонит сам. Флаг ставится ПОСЛЕ выхода
+    // из канала: resetVoiceState внутри leaveVoiceRoom сбрасывает videoEnabled, и
+    // выставленный заранее он бы потерялся — звонок соединялся бы без камеры.
+    async acceptIncomingCall({ video = false } = {}) {
         const invite = this.voice.incomingInvite;
         if (!invite?.roomId || !invite?.from) return;
         // Same re-entrancy hazard as startDirectCall: this awaits before it clears
@@ -139,6 +155,31 @@ ZaliMixin(ZaliInterface, class {
         this.voice.callSetupInFlight = true;
         this.voice.callSetupStartedAt = Date.now();
         try {
+            if (invite.overChannel) {
+                // Answering a call that rang over a voice channel takes us out of the
+                // channel first — one account is in one room at a time, on the server
+                // and here. The invite is detached BEFORE the teardown: it belongs to
+                // the call being answered, and resetVoiceState would otherwise either
+                // wipe it or turn it back into a ringing call (see resetVoiceState).
+                this.voice.incomingInvite = null;
+                // Пока выходим из канала, звонящий может успеть отменить вызов. Без этой
+                // отметки отмена уже не находила приглашения (оно отцеплено), и ответ
+                // уходил в удалённую комнату — клиент «подключался» до сторожевого таймера.
+                this.voice.acceptingInvite = invite;
+                this.voiceDiag('accept-over-channel', { roomId: invite.roomId, from: invite.from, channelRoomId: this.voice.roomId || '' });
+                try {
+                    await this.leaveVoiceRoom({ announce: true, outcome: 'completed' });
+                } finally {
+                    if (this.voice.acceptingInvite === invite) this.voice.acceptingInvite = null;
+                }
+                if (invite.endedWhileAccepting) {
+                    this.voiceDiag('accept-over-channel-aborted', { roomId: invite.roomId, reason: invite.endedWhileAccepting });
+                    this.recordVoiceCallHistory({ outcome: invite.endedWhileAccepting, endedAt: Date.now(), call: this.inviteCallTrack(invite) });
+                    this.renderVoicePanel();
+                    return;
+                }
+            }
+            if (video) this.voice.videoEnabled = true;
             await this.performAcceptIncomingCall(invite);
         } finally {
             this.voice.callSetupInFlight = false;
@@ -205,8 +246,86 @@ ZaliMixin(ZaliInterface, class {
             roomId: invite.roomId,
             inviter: invite.from,
         });
+        if (invite.overChannel) {
+            // Declining a call that rang over a voice channel leaves you in the
+            // channel: resetVoiceState here would have hung up the channel too.
+            this.dismissInviteOverChannel({ outcome: 'rejected', reason: 'declined' });
+            return;
+        }
         this.recordVoiceCallHistory({ outcome: 'rejected', endedAt: Date.now() });
         this.resetVoiceState({ preserveInvite: false });
+    }
+
+    // A DM invite that rings while this client is in a voice channel (see the
+    // voice_call_invite branch of handleVoiceEvent). It is kept beside the channel
+    // session instead of inside it, so none of roomId/status/callTrack describe it.
+    // Вызов, на который отвечаем прямо сейчас (acceptIncomingCall ещё выходит из
+    // канала), закончился на той стороне: запоминаем исход, ответ не отправится.
+    markAcceptingInviteEnded(roomId, outcome) {
+        const invite = this.voice.acceptingInvite;
+        if (!invite || String(invite.roomId || '').trim() !== String(roomId || '').trim()) return false;
+        invite.endedWhileAccepting = outcome || 'cancelled';
+        return true;
+    }
+
+    hasInviteOverChannel(roomId = '') {
+        const invite = this.voice.incomingInvite;
+        if (!invite?.overChannel) return false;
+        const id = String(roomId || '').trim();
+        return !id || String(invite.roomId || '').trim() === id;
+    }
+
+    // Whether anything is ringing right now — the ringtone and the incoming-call UI
+    // key off this, not off status alone: a call ringing over a channel leaves
+    // status at the channel's 'connected'.
+    hasRingingIncomingInvite() {
+        const invite = this.voice.incomingInvite;
+        if (!invite?.roomId || !invite?.from) return false;
+        return !!invite.overChannel || this.voice.status === 'incoming';
+    }
+
+    inviteCallTrack(invite) {
+        return {
+            roomId: invite.roomId,
+            peer: invite.from,
+            roomType: 'dm',
+            direction: 'incoming',
+            startedAt: Number(invite.receivedAt) || Date.now(),
+            connectedAt: 0,
+            endedAt: 0,
+            outcome: 'incoming',
+            recorded: false,
+        };
+    }
+
+    // Stops a call ringing over the channel without touching the channel. `outcome`
+    // writes the call-history row this device owns (declined here, missed, caller
+    // cancelled); an invite answered or declined on another device passes none.
+    dismissInviteOverChannel({ outcome = '', reason = '' } = {}) {
+        const invite = this.voice.incomingInvite;
+        if (!invite?.overChannel) return false;
+        this.voice.incomingInvite = null;
+        this.voiceDiag('invite-over-channel-dismissed', { roomId: invite.roomId, from: invite.from, reason, outcome });
+        if (outcome) {
+            this.recordVoiceCallHistory({ outcome, endedAt: Date.now(), call: this.inviteCallTrack(invite) });
+        }
+        this.renderVoicePanel();
+        return true;
+    }
+
+    // The ordinary ringing state: this call is now THE voice session. Used for a
+    // fresh invite on an idle client, and for one that was ringing over a channel
+    // the user has since left some other way — it should keep ringing, not vanish
+    // while the caller still waits.
+    ringInviteAsIncomingCall(invite) {
+        const roomId = String(invite?.roomId || '').trim();
+        const from = String(invite?.from || '').trim();
+        if (!roomId || !from) return;
+        this.voice.incomingInvite = { roomId, from, roomType: 'dm' };
+        this.voice.inviter = from;
+        this.voice.callTrack = this.inviteCallTrack({ roomId, from, receivedAt: invite.receivedAt });
+        this.voice.outgoingInvite = null;
+        this.voice.status = 'incoming';
     }
 
     toggleVoiceMute() {
@@ -417,8 +536,9 @@ ZaliMixin(ZaliInterface, class {
         if (this.S.navMode === 'dm' && this.S.current === peer) this.scheduleRenderMessages();
     }
 
-    recordVoiceCallHistory({ outcome = 'completed', endedAt = Date.now() } = {}) {
-        const call = this.voice.callTrack;
+    // `call` defaults to the live session's track; a call that rang over a voice
+    // channel never became the session, so it passes its own (inviteCallTrack).
+    recordVoiceCallHistory({ outcome = 'completed', endedAt = Date.now(), call = this.voice.callTrack } = {}) {
         if (!call || call.recorded || call.roomType === 'channel') return;
         const peer = String(call.peer || this.voice.targetUser || this.voice.inviter || '').trim();
         if (!peer) return;
@@ -463,7 +583,7 @@ ZaliMixin(ZaliInterface, class {
             arr.sort((a, b) => this.compareMessagesByTime(a, b));
         }
         call.recorded = true;
-        this.voice.callTrack = null;
+        if (this.voice.callTrack === call) this.voice.callTrack = null;
         this.saveStoredMessageCache();
         // The caller owns the record and is the one that sends it, so exactly one
         // copy travels. The callee keeps its local row for instant feedback and lets

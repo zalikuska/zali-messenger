@@ -724,7 +724,10 @@ async fn a_burst_of_envelopes_produces_one_notification_but_loses_none() {
             .header("Authorization", zalikus.auth_header())
             .json(&serde_json::json!({
                 "recipient": "GRIBOED",
-                "scope": format!("dm:griboed:peer{index}"),
+                // Один scope, разные ключи: конверт вправе класть только участник
+                // переписки, так что «восемь чужих scope» больше не принимаются.
+                "scope": "dm:griboed:zalikus",
+                "keyId": format!("key-id-{index}"),
                 "recipientDeviceId": "dev_griboed_one",
                 "senderDeviceId": "dev_zalikus_one",
                 "encryptedKey": "x".repeat(64),
@@ -984,6 +987,7 @@ async fn distinct_keys_for_one_scope_are_stored_as_distinct_envelopes() {
     let app = spawn_app().await;
     let alice = register_user(&app, "alice", "hunter22").await;
     let bob = register_user(&app, "bob", "hunter22").await;
+    common::register_device(&app, &bob, "dev_recipient").await;
     let scope = "dm:alice:bob";
 
     // Three candidates for one scope, same sender device, same recipient device —
@@ -1019,6 +1023,7 @@ async fn republishing_the_same_key_replaces_its_envelope_rather_than_adding_one(
     let app = spawn_app().await;
     let alice = register_user(&app, "alice", "hunter22").await;
     let bob = register_user(&app, "bob", "hunter22").await;
+    common::register_device(&app, &bob, "dev_recipient").await;
     let scope = "dm:alice:bob";
 
     post_envelope(&app, &alice, "bob", scope, Some("key-id-a"), "encrypted-envelope-first-version-aa").await;
@@ -1034,6 +1039,7 @@ async fn a_client_that_sends_no_key_id_keeps_the_old_one_row_behaviour() {
     let app = spawn_app().await;
     let alice = register_user(&app, "alice", "hunter22").await;
     let bob = register_user(&app, "bob", "hunter22").await;
+    common::register_device(&app, &bob, "dev_recipient").await;
     let scope = "dm:alice:bob";
 
     // Older clients predate `keyId` entirely. They land on the empty-string id, so
@@ -1235,4 +1241,44 @@ async fn broadcast_churn_does_not_evict_a_targeted_vault_handoff() {
         blobs.contains(&"encrypted-vault-handoff-for-the-new-device"),
         "a targeted handoff must not be evicted by broadcast churn"
     );
+}
+
+#[tokio::test]
+async fn an_outsider_cannot_plant_a_key_envelope_into_someone_elses_dm() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let mallory = register_user(&app, "mallory", "hunter22").await;
+    common::register_device(&app, &bob, "dev_recipient").await;
+
+    let status = post_envelope(&app, &mallory, "bob", "dm:alice:bob", Some("key-id-evil"), "encrypted-envelope-planted-by-mallory").await;
+    assert_eq!(status, reqwest::StatusCode::FORBIDDEN);
+    assert!(envelopes_for(&app, &bob, "dev_recipient").await.is_empty());
+
+    // Участник той же переписки — по-прежнему может.
+    let status = post_envelope(&app, &alice, "bob", "dm:alice:bob", Some("key-id-good"), "encrypted-envelope-from-alice-aaaaaa").await;
+    assert!(status.is_success());
+}
+
+#[tokio::test]
+async fn envelopes_to_a_device_that_does_not_exist_are_refused() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let _bob = register_user(&app, "bob", "hunter22").await;
+    let status = post_envelope(&app, &alice, "bob", "dm:alice:bob", Some("key-id-x"), "encrypted-envelope-to-nowhere-aaaaaaa").await;
+    assert_eq!(status, reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn one_sender_cannot_flood_a_device_past_the_per_sender_cap() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    common::register_device(&app, &bob, "dev_recipient").await;
+    for index in 0..40 {
+        let status = post_envelope(&app, &alice, "bob", "dm:alice:bob", Some(&format!("key-id-{index:03}")), "encrypted-envelope-flood-aaaaaaaaaaaaa").await;
+        assert!(status.is_success());
+    }
+    let rows = envelopes_for(&app, &bob, "dev_recipient").await;
+    assert_eq!(rows.len(), 24, "per-sender cap must bound the rows");
 }
