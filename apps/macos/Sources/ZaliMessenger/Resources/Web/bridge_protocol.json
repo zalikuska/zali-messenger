@@ -218,6 +218,12 @@
     },
     "CLEAR_LOCAL_DATA": {
       "fields": []
+    },
+    "AUTOSTART_REQUEST": {
+      "fields": [
+        "requestId",
+        "enabled"
+      ]
     }
   }
 }

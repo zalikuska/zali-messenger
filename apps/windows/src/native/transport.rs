@@ -661,6 +661,20 @@ pub(crate) async fn handle_message_ws_payload(
     let sync_server_id = server_id.clone();
     let sync_channel_id = channel_id.clone();
 
+    // Небольшой архив сервер кладёт прямо в кадр (server/src/messages.rs,
+    // `inlineArchive`) — тогда отдельного GET /api/download/:id не будет.
+    let inline_archive = raw
+        .get("inlineArchive")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| {
+            use base64::prelude::BASE64_STANDARD;
+            use base64::Engine;
+            BASE64_STANDARD.decode(value).ok()
+        })
+        .filter(|bytes| !bytes.is_empty());
+
     match process_history_record(
         ApiSession {
             api_base_url: current.api_base_url,
@@ -672,6 +686,7 @@ pub(crate) async fn handle_message_ws_payload(
         "message_ws",
         server_id,
         channel_id,
+        inline_archive,
     )
     .await
     {

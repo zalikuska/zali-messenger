@@ -808,6 +808,27 @@ pub(crate) async fn handle_voice_event(
             if room_type == "channel" {
                 match (server_id.as_deref(), channel_id.as_deref()) {
                     (Some(sid), Some(cid)) => {
+                        // roomId обязан быть комнатой ИМЕННО этого канала. Раньше права
+                        // проверялись по serverId/channelId, а входили в произвольный
+                        // roomId: доступа к каналу своего сервера хватало, чтобы войти
+                        // в чужую голосовую комнату (и получать её сигналы) или
+                        // перекрасить личный звонок в «канал».
+                        if room_id != voice_room_key("channel", Some(sid), Some(cid), None) {
+                            warn!(
+                                "[VOICE][JOIN] reject roomId not matching channel sender={} roomId={} serverId={} channelId={}",
+                                sender, room_id, sid, cid
+                            );
+                            send_voice_error(
+                                state,
+                                sender,
+                                &device,
+                                &room_id,
+                                "bad_request",
+                                "Комната не соответствует каналу",
+                            )
+                            .await;
+                            return;
+                        }
                         if !can_access_channel(&state.db, sid, cid, sender, "voice")
                             .await
                             .unwrap_or(false)
@@ -915,6 +936,16 @@ pub(crate) async fn handle_voice_event(
                 if membership.is_none() {
                     restore_dm_room(state, sender, &room_id);
                 }
+            } else {
+                // Других типов комнат нет. Раньше любой иной roomType проходил мимо
+                // обеих проверок прямо в join_voice_room с произвольным roomId.
+                warn!(
+                    "[VOICE][JOIN] reject unknown roomType sender={} roomId={} roomType={}",
+                    sender, room_id, room_type
+                );
+                send_voice_error(state, sender, &device, &room_id, "bad_request", "Неизвестный тип комнаты")
+                    .await;
+                return;
             }
 
             join_voice_room(
@@ -955,6 +986,29 @@ pub(crate) async fn handle_voice_event(
                 room_id
             };
             if target.is_empty() {
+                return;
+            }
+            // Id комнаты присылает клиент, и он обязан называть пару «звонящий —
+            // адресат». Раньше сюда годился любой: invite с id чужого звонка или
+            // голосового канала перезаписывал существующую комнату — очищал список
+            // участников, то есть вешал трубку кому угодно.
+            let pair_matches = dm_room_participants(&room_key)
+                .map(|(a, b)| {
+                    (a.eq_ignore_ascii_case(sender) && b.eq_ignore_ascii_case(&target))
+                        || (b.eq_ignore_ascii_case(sender) && a.eq_ignore_ascii_case(&target))
+                })
+                .unwrap_or(false);
+            let existing_type = state
+                .voice_rooms
+                .get(&room_key)
+                .map(|room| room.room_type.clone());
+            if !pair_matches || existing_type.as_deref().is_some_and(|t| t != "dm") {
+                warn!(
+                    "[VOICE][INVITE] reject roomId not naming this pair sender={} target={} roomId={}",
+                    sender, target, room_key
+                );
+                send_voice_error(state, sender, &device, &room_key, "bad_request", "Некорректная комната звонка")
+                    .await;
                 return;
             }
             match contact_exists(&state.db, sender, &target).await {

@@ -561,9 +561,18 @@ ZaliMixin(ZaliInterface, class {
         this.voice.activeSince = 0;
         this.stopVoiceCallBarTimer();
         this.voice.callTrack = null;
+        // A call ringing over the channel being torn down is not part of that
+        // channel. The paths that end the invite itself (answer, decline, cancel,
+        // missed) detach it before they get here; anything still attached is a
+        // channel that ended some other way — «Покинуть», the room vanishing, the
+        // session moving — while the caller is still waiting, so it keeps ringing.
+        const ringingOverChannel = this.voice.incomingInvite?.overChannel ? this.voice.incomingInvite : null;
         if (!preserveInvite) {
             this.voice.incomingInvite = null;
             this.voice.outgoingInvite = null;
+        }
+        if (ringingOverChannel) {
+            this.ringInviteAsIncomingCall(ringingOverChannel);
         }
         this.renderVoicePanel();
         this.scheduleRenderMessages();

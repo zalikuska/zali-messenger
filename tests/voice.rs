@@ -749,3 +749,83 @@ async fn turn_credentials_are_opt_in_and_time_limited() {
     std::env::remove_var("TURN_CREDENTIAL_TTL_SECS");
 }
 
+
+/// Id комнаты в приглашении обязан называть пару «звонящий — адресат». Раньше
+/// invite с id чужого звонка перезаписывал существующую комнату и вешал трубку.
+#[tokio::test]
+async fn an_invite_cannot_hijack_someone_elses_call_room() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let mallory = register_user(&app, "mallory", "hunter22").await;
+    add_contact(&app, &alice, "bob").await;
+    add_contact(&app, &bob, "alice").await;
+    add_contact(&app, &mallory, "bob").await;
+    let room_id = "voice:dm:alice:bob:victim-call";
+
+    let mut alice_ws = connect_ws(&app, &alice).await;
+    let mut bob_ws = connect_ws(&app, &bob).await;
+    let mut mallory_ws = connect_ws(&app, &mallory).await;
+    send(
+        &mut alice_ws,
+        serde_json::json!({ "type": "voice_call_invite", "roomId": room_id, "target": "bob", "device": "a1" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    send(
+        &mut bob_ws,
+        serde_json::json!({ "type": "voice_call_accept", "roomId": room_id, "inviter": "alice", "device": "b1" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    let _ = drain_voice_events(&mut alice_ws, 300).await;
+
+    send(
+        &mut mallory_ws,
+        serde_json::json!({ "type": "voice_call_invite", "roomId": room_id, "target": "bob", "device": "m1" }),
+    )
+    .await;
+    let mallory_events = drain_voice_events(&mut mallory_ws, 400).await;
+    let error = find_event(&mallory_events, "voice_error").expect("hijack must be refused");
+    assert_eq!(error["code"], "bad_request");
+    let bob_events = drain_voice_events(&mut bob_ws, 300).await;
+    assert!(find_event(&bob_events, "voice_call_invite").is_none(), "{bob_events:?}");
+
+    // Звонок alice—bob жив: keepalive bob находит себя в комнате.
+    send(
+        &mut bob_ws,
+        serde_json::json!({ "type": "voice_join", "roomId": room_id, "roomType": "dm", "keepalive": true, "device": "b1" }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_ws, 400).await;
+    assert!(find_event(&bob_events, "voice_error").is_none(), "call intact: {bob_events:?}");
+}
+
+/// Вход в канал проверяет права по serverId/channelId — значит и roomId обязан быть
+/// комнатой этого канала. Иначе доступа к своему каналу хватало, чтобы войти в
+/// чужую голосовую комнату.
+#[tokio::test]
+async fn a_channel_join_cannot_name_a_foreign_room() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let mut ws = connect_ws(&app, &alice).await;
+
+    for (room_id, room_type) in [
+        ("voice:dm:bob:carol:private".to_string(), "channel"),
+        (format!("voice:channel:{}:{}", server_id, channel_id), "whatever"),
+    ] {
+        send(
+            &mut ws,
+            serde_json::json!({
+                "type": "voice_join", "roomId": room_id, "roomType": room_type,
+                "serverId": server_id, "channelId": channel_id,
+            }),
+        )
+        .await;
+        let events = drain_voice_events(&mut ws, 400).await;
+        assert!(find_event(&events, "voice_room_state").is_none(), "{room_type} {room_id}: {events:?}");
+        assert_eq!(find_event(&events, "voice_error").expect("must be refused")["code"], "bad_request");
+    }
+}

@@ -1983,6 +1983,13 @@ struct WebView {
                     }
                 }
 
+                case .autostartRequest:
+                    // Windows-only («Запускать при входе в Windows», свёрнутым в трей — see
+                    // apps/windows/src/native/autostart.rs). `autostart` is never advertised
+                    // as a supported capability here, so JS never sends it on macOS. No-op
+                    // kept only for switch exhaustiveness.
+                    break
+
                 case .setUnreadBadge:
                     // Windows-only feature (taskbar overlay badge, see CLAUDE.md /
                     // apps/windows/src/native/taskbar_badge.rs) — `taskbarBadge` is never
@@ -2064,6 +2071,13 @@ struct WebView {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("[ZALI][WEBVIEW] didFinish currentUser=\(NetworkService.shared.currentUser) keySet=\(!NetworkService.shared.currentKey.isEmpty)")
             self.setLoading(false)
+            // Свежий документ не знает, в фокусе ли приложение: window.__zaliNativeAppFocus
+            // живёт в странице и стирается любой перезагрузкой вебвью, а события фокуса
+            // придут только при следующем переключении приложений. До тех пор
+            // isAppAttended() падает на document.hasFocus(), который внутри WKWebView
+            // остаётся true у фонового приложения — и уведомление об открытом чате не
+            // приходит вовсе. Android делает это в onPageFinished, Windows — опросом.
+            (NSApp.delegate as? AppDelegate)?.syncWebAppFocus()
             // Was unconditionally true here too — page load finishing says nothing about
             // network state. See the SET_SESSION handler's comment for the full story.
             self.syncCryptoKeyFromWebUI(reason: "didFinish") { [weak self] in

@@ -533,6 +533,8 @@ class MainActivity : ComponentActivity() {
                                     // Переход из уведомления — только в загруженный документ: скрипт,
                                     // выполненный до загрузки, живёт в пустой странице и умирает с ней.
                                     webPageReady = true
+                                    // Новый документ не знает, на экране ли приложение.
+                                    bridge?.setAppVisible(PushSession.appVisible)
                                     consumeNotificationIntent()
                                     view.postDelayed({
                                         val root = view.rootView

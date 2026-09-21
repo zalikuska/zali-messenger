@@ -310,6 +310,76 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // ============================================================
+    // Карточка «Автозапуск» (только Windows, capability `autostart`): запуск
+    // свёрнутым в трей при входе в систему. Истина лежит в реестре, а не здесь:
+    // автозапуск переключают ещё Диспетчер задач и установщик, поэтому при
+    // каждом открытии настроек состояние спрашивается у оболочки
+    // (apps/windows/src/native/autostart.rs).
+    // ============================================================
+
+    autostartSupported() {
+        return this.hasNativeBridge() && this.nativeSupports('autostart');
+    }
+
+    async renderAutostartSettings() {
+        const card = document.getElementById('autostartSettingsCard');
+        if (!card) return;
+        const supported = this.autostartSupported();
+        card.hidden = !supported;
+        if (!supported) return;
+        this.applyAutostartStatus();
+        if (this._autostartBusy) return;
+        try {
+            const res = await this.requestNativeAction({ type: NativeMessageTypes.AUTOSTART_REQUEST }, 5000);
+            this._autostartStatus = res?.data || null;
+            this._autostartError = '';
+        } catch (error) {
+            this._autostartError = error?.message || String(error);
+        }
+        this.applyAutostartStatus();
+    }
+
+    applyAutostartStatus() {
+        const input = document.getElementById('inputAutostart');
+        const text = document.getElementById('autostartStatusText');
+        const status = this._autostartStatus;
+        if (input) {
+            input.checked = !!status?.enabled;
+            input.disabled = !!this._autostartBusy || !status;
+        }
+        if (!text) return;
+        if (this._autostartError) {
+            text.textContent = `Автозапуск недоступен: ${this._autostartError}`;
+        } else if (!status) {
+            text.textContent = 'Проверяем…';
+        } else if (status.blockedBySystem) {
+            text.textContent = 'Автозапуск выключен в Диспетчере задач (вкладка «Автозагрузка»). Включите переключатель, чтобы вернуть его.';
+        } else if (status.enabled) {
+            text.textContent = 'После входа в Windows приложение запустится само и останется в трее. Закрыть его совсем можно через значок в трее → «Выход».';
+        } else {
+            text.textContent = 'Приложение не запускается само: пока вы его не откроете, сообщения и звонки не приходят.';
+        }
+    }
+
+    // При сбое переключатель возвращается в прежнее положение: applyAutostartStatus
+    // рисует последнее состояние, которое подтвердила оболочка, а не клик.
+    async setAutostartFromSettings(enabled) {
+        if (!this.autostartSupported() || this._autostartBusy) return;
+        this._autostartBusy = true;
+        this.applyAutostartStatus();
+        try {
+            const res = await this.requestNativeAction({ type: NativeMessageTypes.AUTOSTART_REQUEST, enabled: !!enabled }, 5000);
+            this._autostartStatus = res?.data || this._autostartStatus;
+            this._autostartError = '';
+        } catch (error) {
+            this._autostartError = error?.message || String(error);
+        } finally {
+            this._autostartBusy = false;
+            this.applyAutostartStatus();
+        }
+    }
+
+    // ============================================================
     // Карточка «Обновления» в настройках: текущая версия + ручная проверка.
     // Автопроверка (checkForAppUpdate, updates.js) идёт при каждом входе и
     // сама решает, показывать ли модалку; этой кнопке при этом ЕЩЁ нужно

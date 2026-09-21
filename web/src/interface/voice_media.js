@@ -1374,6 +1374,24 @@ ZaliMixin(ZaliInterface, class {
         } catch (error) {
             this.voiceTrace('audio-bitrate-limit-failed', { error: error?.message || String(error) }, 'WARN');
         }
+        // Voice goes first when the uplink is short. Every encoding defaults to
+        // priority 'low', so on a video call or a screen share the bandwidth allocator
+        // split a congested link evenly — and audio is the stream where a queue turns
+        // straight into delay: the receiver's jitter buffer grows to ride out the loss
+        // and stays grown. 'high' makes video give way first; `networkPriority` asks
+        // for an expedited-forwarding DSCP mark where the engine and OS apply one.
+        // Nothing is taken from the voice itself, so no quality is traded for it.
+        // A separate setParameters on purpose: an engine that refuses these fields
+        // must not take the bitrate cap above down with it.
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || !params.encodings.length) return;
+            params.encodings[0].priority = 'high';
+            params.encodings[0].networkPriority = 'high';
+            await sender.setParameters(params);
+        } catch (error) {
+            this.voiceTrace('audio-priority-failed', { error: error?.message || String(error) }, 'WARN');
+        }
     }
 
     // Mesh means every video track is encoded and uploaded once per peer, and

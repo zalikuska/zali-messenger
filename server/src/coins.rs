@@ -203,104 +203,101 @@ pub(crate) async fn transfer_coins(
         return (StatusCode::NOT_FOUND, "Получатель не найден").into_response();
     }
 
-    let mut conn = match state.db.acquire().await {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Ошибка получения соединения для transfer_coins: {}", e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    // Через run_immediate_tx, как карточки: BEGIN IMMEDIATE прямо в хендлере при
+    // обрыве клиента между BEGIN и COMMIT возвращал в пул соединение с открытой
+    // транзакцией — и с блокировкой записи sqlite, на которой вставал весь сервер.
+    let tx_sender = sender.clone();
+    let tx_to = to.clone();
+    let outcome = run_immediate_tx(state.db.clone(), move |mut conn| async move {
+        let result: Result<TransferOutcome, sqlx::Error> = async {
+            let already_applied: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM coin_transactions WHERE from_user = ? AND idempotency_key = ?",
+            )
+            .bind(&tx_sender)
+            .bind(&idempotency_key)
+            .fetch_optional(&mut *conn)
+            .await?;
+            if let Some(existing_id) = already_applied {
+                return Ok(TransferOutcome::Replayed(existing_id));
+            }
 
-    if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-        error!("Ошибка начала транзакции transfer_coins: {}", e);
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
+            let sender_balance: i64 =
+                sqlx::query_scalar("SELECT balance FROM coin_balances WHERE username = ?")
+                    .bind(&tx_sender)
+                    .fetch_optional(&mut *conn)
+                    .await?
+                    .unwrap_or(0);
 
-    // Sentinel `Ok` values distinguish outcomes without invoking `?` past
-    // COMMIT: -1 = already-applied retry (idempotent no-op), -2 = insufficient funds.
-    let transfer_result: Result<(i64, String), sqlx::Error> = async {
-        let already_applied: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM coin_transactions WHERE from_user = ? AND idempotency_key = ?",
-        )
-        .bind(&sender)
-        .bind(&idempotency_key)
-        .fetch_optional(&mut *conn)
-        .await?;
-        if let Some(existing_id) = already_applied {
-            return Ok((-1, existing_id));
-        }
+            if sender_balance < amount {
+                return Ok(TransferOutcome::InsufficientFunds);
+            }
 
-        let sender_balance: i64 =
-            sqlx::query_scalar("SELECT balance FROM coin_balances WHERE username = ?")
-                .bind(&sender)
-                .fetch_optional(&mut *conn)
-                .await?
-                .unwrap_or(0);
+            sqlx::query("UPDATE coin_balances SET balance = balance - ? WHERE username = ?")
+                .bind(amount)
+                .bind(&tx_sender)
+                .execute(&mut *conn)
+                .await?;
 
-        if sender_balance < amount {
-            return Ok((-2, String::new()));
-        }
-
-        sqlx::query("UPDATE coin_balances SET balance = balance - ? WHERE username = ?")
+            sqlx::query(
+                "INSERT INTO coin_balances (username, balance) VALUES (?, ?)
+                 ON CONFLICT(username) DO UPDATE SET balance = balance + excluded.balance",
+            )
+            .bind(&tx_to)
             .bind(amount)
-            .bind(&sender)
             .execute(&mut *conn)
             .await?;
 
-        sqlx::query(
-            "INSERT INTO coin_balances (username, balance) VALUES (?, ?)
-             ON CONFLICT(username) DO UPDATE SET balance = balance + excluded.balance",
-        )
-        .bind(&to)
-        .bind(amount)
-        .execute(&mut *conn)
-        .await?;
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO coin_transactions (id, from_user, to_user, amount, idempotency_key, card_client_id)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&tx_sender)
+            .bind(&tx_to)
+            .bind(amount)
+            .bind(&idempotency_key)
+            .bind(&card_client_id)
+            .execute(&mut *conn)
+            .await?;
 
-        let id = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO coin_transactions (id, from_user, to_user, amount, idempotency_key, card_client_id)
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(&sender)
-        .bind(&to)
-        .bind(amount)
-        .bind(&idempotency_key)
-        .bind(&card_client_id)
-        .execute(&mut *conn)
-        .await?;
-
-        let new_balance = sender_balance - amount;
-        sqlx::query("COMMIT").execute(&mut *conn).await?;
-        Ok((new_balance, id))
-    }
+            Ok(TransferOutcome::Applied(sender_balance - amount, id))
+        }
+        .await;
+        (conn, result)
+    })
     .await;
 
-    match transfer_result {
-        Ok((-2, _)) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+    match outcome {
+        Ok(TransferOutcome::InsufficientFunds) => {
             (StatusCode::BAD_REQUEST, "Недостаточно ZaliCoin для перевода").into_response()
         }
-        Ok((-1, transaction_id)) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        Ok(TransferOutcome::Replayed(transaction_id)) => {
             let balance = load_balance(&state.db, &sender).await;
             Json(CoinTransferResponse { balance, transaction_id }).into_response()
         }
-        Ok((new_balance, transaction_id)) => Json(CoinTransferResponse {
-            balance: new_balance,
-            transaction_id,
-        })
-        .into_response(),
+        Ok(TransferOutcome::Applied(balance, transaction_id)) => {
+            Json(CoinTransferResponse { balance, transaction_id }).into_response()
+        }
         Err(e) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             warn!("Ошибка перевода ZaliCoin from={} to={}: {}", sender, to, e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
 
-/// Квитанция перевода для карточки в личном чате. Видна только двум сторонам
-/// перевода: всем остальным — 404, как будто перевода нет вовсе.
+enum TransferOutcome {
+    Applied(i64, String),
+    Replayed(String),
+    InsufficientFunds,
+}
+
+impl CoinTxOutcome for TransferOutcome {
+    fn commits(&self) -> bool {
+        matches!(self, TransferOutcome::Applied(..))
+    }
+}
+
 pub(crate) async fn get_coin_transfer(
     AuthenticatedUser(username): AuthenticatedUser,
     State(state): State<Arc<AppState>>,

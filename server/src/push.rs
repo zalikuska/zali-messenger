@@ -249,6 +249,10 @@ pub(crate) async fn subscribe_push(
     if endpoint.is_empty() || body.keys.p256dh.trim().is_empty() || body.keys.auth.trim().is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    if !is_acceptable_push_endpoint(endpoint) {
+        warn!("Push subscription отклонена: endpoint не публичный https username={}", username);
+        return (StatusCode::BAD_REQUEST, "Некорректный push endpoint").into_response();
+    }
     let device_id = header_device_id(&headers).or_else(|| {
         body.device_id
             .as_deref()
@@ -353,6 +357,53 @@ pub(crate) async fn push_targets_for(
         .collect())
 }
 
+/// Один клиент на весь процесс: `Client::new()` на каждый пуш означал новый пул
+/// соединений и полное TLS-рукопожатие с пуш-сервисом на каждое сообщение. Таймаут —
+/// потому что без него зависший пуш-сервис навсегда держал фоновую задачу рассылки.
+/// Редиректы выключены: endpoint проверен, а цель редиректа — нет.
+fn web_push_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .connect_timeout(Duration::from_secs(5))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
+}
+
+/// Endpoint подписки — URL, на который сервер сам будет слать POST, поэтому он
+/// обязан быть публичным https-адресом пуш-сервиса. Раньше годился любой, включая
+/// `http://127.0.0.1:3000` (AdGuard на этой же машине) и внутренние адреса: SSRF,
+/// срабатывающий на каждое входящее сообщение.
+pub(crate) fn is_acceptable_push_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    if url.port().is_some_and(|port| port != 443) {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    // IP-литерал (в т. ч. `[::1]`) — не адрес пуш-сервиса, а прямой путь внутрь сети.
+    if host.starts_with('[') || host.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    host.contains('.')
+        && !host.ends_with(".localhost")
+        && !host.ends_with(".local")
+        && !host.ends_with(".internal")
+        && !host.ends_with(".lan")
+}
+
 /// Every push channel of `username`: Web Push subscriptions of their browsers and FCM
 /// tokens of their Android devices. Each decides per device on its own.
 pub(crate) async fn send_push(state: &Arc<AppState>, username: &str, notification: &PushNotification) {
@@ -390,7 +441,7 @@ pub(crate) async fn send_web_push(
             return;
         }
     };
-    let http_client = reqwest::Client::new();
+    let http_client = web_push_client();
 
     for PushTarget {
         id,
@@ -399,6 +450,10 @@ pub(crate) async fn send_web_push(
         auth,
     } in targets
     {
+        if !is_acceptable_push_endpoint(&endpoint) {
+            warn!("Push endpoint отклонён (не публичный https) id={}", id);
+            continue;
+        }
         let subscription_info = SubscriptionInfo {
             endpoint: endpoint.clone(),
             keys: SubscriptionKeys { p256dh, auth },

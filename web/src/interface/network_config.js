@@ -402,6 +402,14 @@ ZaliMixin(ZaliInterface, class {
             // still covers the latency the pool exists for.
             iceCandidatePoolSize: 1,
             iceTransportPolicy: 'all',
+            // One ICE/DTLS transport for audio, camera and screen instead of one per
+            // media kind. With 'balanced' a video call gathered, checked and
+            // DTLS-handshook two or three transports — each its own TURN allocation and
+            // its own round of connectivity checks before that media could flow. Every
+            // engine this ships in (Chromium, WebKit, WebView2, Android WebView)
+            // supports BUNDLE, and an answerer on an older client still accepts the
+            // offered group, so this changes setup time, not what is negotiated.
+            bundlePolicy: 'max-bundle',
         };
     }
 

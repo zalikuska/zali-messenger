@@ -159,11 +159,14 @@ export class SimBackend {
                 && e.recipientDeviceId === recipientDeviceId
                 && e.keyId === keyId);
             if (existing) {
+                existing.sender = String(caller);
                 existing.encryptedKey = body.encryptedKey;
                 existing.createdAt = new Date(this.now() + (this.envelopeSeq = (this.envelopeSeq || 0) + 1)).toISOString();
             } else {
                 this.envelopes.push({
                     envelopeId: `env_${this.envelopes.length + 1}`,
+                    // Как настоящий сервер: отправителя проставляет он сам, из токена.
+                    sender: String(caller),
                     recipient,
                     recipientDeviceId,
                     senderDeviceId,
@@ -185,8 +188,8 @@ export class SimBackend {
             // "already opened this exact row" memo on the pair. Omitting them here made
             // every row look identical to that memo, which is how a fragile version of
             // it passed review and then skipped nearly every import.
-            return this._res(200, rows.map(({ envelopeId, scope, encryptedKey, senderDeviceId, createdAt }) => ({
-                envelopeId, scope, encryptedKey, senderDeviceId, createdAt,
+            return this._res(200, rows.map(({ envelopeId, sender, scope, encryptedKey, senderDeviceId, createdAt }) => ({
+                envelopeId, sender, scope, encryptedKey, senderDeviceId, createdAt,
             })));
         }
 

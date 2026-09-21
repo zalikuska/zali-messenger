@@ -182,6 +182,7 @@
         ADD_CONTACT_REQUEST: "ADD_CONTACT_REQUEST",
         API_REQUEST: "API_REQUEST",
         AUTH_REQUEST: "AUTH_REQUEST",
+        AUTOSTART_REQUEST: "AUTOSTART_REQUEST",
         CLEAR_LOCAL_DATA: "CLEAR_LOCAL_DATA",
         CLOSE_WINDOW: "CLOSE_WINDOW",
         DELETE_AVATAR_REQUEST: "DELETE_AVATAR_REQUEST",
@@ -496,6 +497,122 @@
         return readyPromise;
     }
 
+    // ---- Распаковка в воркере ------------------------------------------------
+    // unpack_message_wasm — это PBKDF2 на 210k итераций плюс AES-GCM, синхронно.
+    // В главном потоке каждое сообщение (и каждый неподошедший ключ-кандидат)
+    // замораживал вкладку: история из десятков сообщений или одно сообщение,
+    // перебирающее десяток старых ключей, — секунды без отрисовки и ввода.
+    // Воркер собирается из Blob и сам импортирует тот же wasm-pkg по абсолютному
+    // адресу, поэтому отдельного файла на сервере для него не нужно. Не поднялся
+    // (старый движок, запрет blob:) — распаковываем по-старому в главном потоке.
+    const WORKER_SOURCE = `
+        let ready = null;
+        function load(url) {
+            if (!ready) {
+                ready = import(url).then(async (mod) => { await mod.default(); return mod; })
+                    .catch((error) => { ready = null; throw error; });
+            }
+            return ready;
+        }
+        self.onmessage = async (event) => {
+            const { id, url, archive, key } = event.data || {};
+            let mod;
+            try {
+                mod = await load(url);
+            } catch (error) {
+                self.postMessage({ id, ok: false, loadFailed: true, error: String(error) });
+                return;
+            }
+            try {
+                const value = mod.unpack_message_wasm(archive, key);
+                const transfer = [];
+                for (const att of (value && value.attachments) || []) {
+                    if (att && att.bytes && att.bytes.buffer) transfer.push(att.bytes.buffer);
+                }
+                self.postMessage({ id, ok: true, value }, transfer);
+            } catch (error) {
+                const message = (error && error.message) || String(error);
+                self.postMessage({ id, ok: false, error: message });
+            }
+        };
+    `;
+    const workerPool = [];
+    let workerBroken = false;
+    let workerSeq = 0;
+    let workerCursor = 0;
+    const workerPending = new Map();
+
+    function spawnWorker() {
+        const blobUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
+        const worker = new Worker(blobUrl, { type: 'module' });
+        URL.revokeObjectURL(blobUrl);
+        worker.onmessage = (event) => {
+            const { id, ok, value, error, loadFailed } = event.data || {};
+            const pending = workerPending.get(id);
+            if (!pending) return;
+            workerPending.delete(id);
+            if (loadFailed) {
+                // Не «неверный ключ», а воркер не смог загрузить WASM: такая ошибка
+                // пометила бы сообщение нерасшифруемым. Уходим в главный поток.
+                workerBroken = true;
+                pending.fallback();
+                return;
+            }
+            if (ok) pending.resolve(value);
+            else pending.reject(new Error(error || 'unpack failed'));
+        };
+        worker.onerror = () => {
+            // Воркер не загрузился целиком (например, движок без module workers):
+            // всё, что ждало его, повторяем в главном потоке и больше его не зовём.
+            workerBroken = true;
+            for (const [id, pending] of workerPending) {
+                if (pending.worker === worker) {
+                    workerPending.delete(id);
+                    pending.fallback();
+                }
+            }
+        };
+        return worker;
+    }
+
+    function pickWorker() {
+        if (workerBroken || typeof Worker === 'undefined') return null;
+        try {
+            if (!workerPool.length) {
+                const cores = Number(navigator.hardwareConcurrency) || 2;
+                const size = Math.max(1, Math.min(2, cores - 1));
+                for (let i = 0; i < size; i += 1) workerPool.push(spawnWorker());
+            }
+        } catch (e) {
+            workerBroken = true;
+            return null;
+        }
+        workerCursor = (workerCursor + 1) % workerPool.length;
+        return workerPool[workerCursor];
+    }
+
+    async function unpackOnMainThread(bytes, key) {
+        const mod = await load();
+        return mod.unpack_message_wasm(bytes, key);
+    }
+
+    function unpackInWorker(bytes, key) {
+        const worker = pickWorker();
+        if (!worker) return unpackOnMainThread(bytes, key);
+        const url = new URL('./wasm-pkg/zali_core.js', document.baseURI).href;
+        return new Promise((resolve, reject) => {
+            const id = ++workerSeq;
+            workerPending.set(id, {
+                worker,
+                resolve,
+                reject,
+                fallback: () => unpackOnMainThread(bytes, key).then(resolve, reject),
+            });
+            // Копия, а не передача буфера: при откате в главный поток байты нужны здесь.
+            worker.postMessage({ id, url, archive: bytes.slice(), key });
+        });
+    }
+
     window.ZaliWasm = {
         async isAvailable() {
             try {
@@ -543,9 +660,8 @@
          * @returns {Promise<{sender:string, text:string, timestamp:number, keyVersion:number, attachments:Array<{name:string,archivePath:string,mimeType:string,kind:string,bytes:Uint8Array}>}>}
          */
         async unpackMessage(archiveBytes, key) {
-            const mod = await load();
             const bytes = archiveBytes instanceof Uint8Array ? archiveBytes : new Uint8Array(archiveBytes);
-            return mod.unpack_message_wasm(bytes, key);
+            return unpackInWorker(bytes, key);
         },
     };
 })();
@@ -1706,6 +1822,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     DOWNLOAD_UPDATE_REQUEST: 'DOWNLOAD_UPDATE_REQUEST',
     INSTALL_UPDATE_REQUEST: 'INSTALL_UPDATE_REQUEST',
     MOBILE_NAV_PROGRESS: 'MOBILE_NAV_PROGRESS',
+    AUTOSTART_REQUEST: 'AUTOSTART_REQUEST',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
@@ -3604,6 +3721,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderAudioDeviceSettings();
         this.renderNotificationVolumeSettings();
         this.renderUpdateSettings();
+        void this.renderAutostartSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         // Индекс сводок кеша поднимается лениво, первым обращением. Открытие
@@ -5587,6 +5705,76 @@ ZaliMixin(ZaliInterface, class {
         if (volumeInput) volumeInput.value = String(this.audioPrefs.notificationVolumePercent);
         const volumeLabel = document.getElementById('notificationVolumeValue');
         if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.notificationVolumePercent}%`;
+    }
+
+    // ============================================================
+    // Карточка «Автозапуск» (только Windows, capability `autostart`): запуск
+    // свёрнутым в трей при входе в систему. Истина лежит в реестре, а не здесь:
+    // автозапуск переключают ещё Диспетчер задач и установщик, поэтому при
+    // каждом открытии настроек состояние спрашивается у оболочки
+    // (apps/windows/src/native/autostart.rs).
+    // ============================================================
+
+    autostartSupported() {
+        return this.hasNativeBridge() && this.nativeSupports('autostart');
+    }
+
+    async renderAutostartSettings() {
+        const card = document.getElementById('autostartSettingsCard');
+        if (!card) return;
+        const supported = this.autostartSupported();
+        card.hidden = !supported;
+        if (!supported) return;
+        this.applyAutostartStatus();
+        if (this._autostartBusy) return;
+        try {
+            const res = await this.requestNativeAction({ type: NativeMessageTypes.AUTOSTART_REQUEST }, 5000);
+            this._autostartStatus = res?.data || null;
+            this._autostartError = '';
+        } catch (error) {
+            this._autostartError = error?.message || String(error);
+        }
+        this.applyAutostartStatus();
+    }
+
+    applyAutostartStatus() {
+        const input = document.getElementById('inputAutostart');
+        const text = document.getElementById('autostartStatusText');
+        const status = this._autostartStatus;
+        if (input) {
+            input.checked = !!status?.enabled;
+            input.disabled = !!this._autostartBusy || !status;
+        }
+        if (!text) return;
+        if (this._autostartError) {
+            text.textContent = `Автозапуск недоступен: ${this._autostartError}`;
+        } else if (!status) {
+            text.textContent = 'Проверяем…';
+        } else if (status.blockedBySystem) {
+            text.textContent = 'Автозапуск выключен в Диспетчере задач (вкладка «Автозагрузка»). Включите переключатель, чтобы вернуть его.';
+        } else if (status.enabled) {
+            text.textContent = 'После входа в Windows приложение запустится само и останется в трее. Закрыть его совсем можно через значок в трее → «Выход».';
+        } else {
+            text.textContent = 'Приложение не запускается само: пока вы его не откроете, сообщения и звонки не приходят.';
+        }
+    }
+
+    // При сбое переключатель возвращается в прежнее положение: applyAutostartStatus
+    // рисует последнее состояние, которое подтвердила оболочка, а не клик.
+    async setAutostartFromSettings(enabled) {
+        if (!this.autostartSupported() || this._autostartBusy) return;
+        this._autostartBusy = true;
+        this.applyAutostartStatus();
+        try {
+            const res = await this.requestNativeAction({ type: NativeMessageTypes.AUTOSTART_REQUEST, enabled: !!enabled }, 5000);
+            this._autostartStatus = res?.data || this._autostartStatus;
+            this._autostartError = '';
+        } catch (error) {
+            this._autostartError = error?.message || String(error);
+        } finally {
+            this._autostartBusy = false;
+            this.applyAutostartStatus();
+        }
     }
 
     // ============================================================
@@ -10505,6 +10693,21 @@ ZaliMixin(ZaliInterface, class {
                     // The sender may predate canonicalConversationScope, so fold
                     // its scope before it is used as a storage/registry key.
                     const scope = this.canonicalConversationScope(String(payload.scope));
+                    // Отправителя подтверждает сервер (record.sender), а не содержимое
+                    // конверта — его пишет кто угодно. Личный ключ принимаем только от
+                    // участника этой переписки: иначе посторонний подкладывал свой ключ к
+                    // чужому диалогу, а поле sender внутри конверта ещё и позволяло
+                    // выдать себя за «владельца» и сменить активный ключ.
+                    const attestedSender = String(record?.sender || '').trim();
+                    if (scope.startsWith('dm:')) {
+                        const pair = scope.split(':').slice(1).map(p => String(p || '').trim().toLowerCase());
+                        if (!attestedSender || !pair.includes(attestedSender.toLowerCase())) {
+                            decryptFailed += 1;
+                            this.trace(`syncIncomingKeyEnvelopes rejected foreign envelope scope=${scope} sender=${attestedSender}`);
+                            continue;
+                        }
+                    }
+                    if (attestedSender) payload.sender = attestedSender;
                     // Remember exactly what this row was carrying, so the check
                     // above can prove the re-open would be a no-op before skipping.
                     if (stamp) {
@@ -12440,6 +12643,14 @@ ZaliMixin(ZaliInterface, class {
             // still covers the latency the pool exists for.
             iceCandidatePoolSize: 1,
             iceTransportPolicy: 'all',
+            // One ICE/DTLS transport for audio, camera and screen instead of one per
+            // media kind. With 'balanced' a video call gathered, checked and
+            // DTLS-handshook two or three transports — each its own TURN allocation and
+            // its own round of connectivity checks before that media could flow. Every
+            // engine this ships in (Chromium, WebKit, WebView2, Android WebView)
+            // supports BUNDLE, and an answerer on an older client still accepts the
+            // offered group, so this changes setup time, not what is negotiated.
+            bundlePolicy: 'max-bundle',
         };
     }
 
@@ -15859,9 +16070,18 @@ ZaliMixin(ZaliInterface, class {
         this.voice.activeSince = 0;
         this.stopVoiceCallBarTimer();
         this.voice.callTrack = null;
+        // A call ringing over the channel being torn down is not part of that
+        // channel. The paths that end the invite itself (answer, decline, cancel,
+        // missed) detach it before they get here; anything still attached is a
+        // channel that ended some other way — «Покинуть», the room vanishing, the
+        // session moving — while the caller is still waiting, so it keeps ringing.
+        const ringingOverChannel = this.voice.incomingInvite?.overChannel ? this.voice.incomingInvite : null;
         if (!preserveInvite) {
             this.voice.incomingInvite = null;
             this.voice.outgoingInvite = null;
+        }
+        if (ringingOverChannel) {
+            this.ringInviteAsIncomingCall(ringingOverChannel);
         }
         this.renderVoicePanel();
         this.scheduleRenderMessages();
@@ -17246,6 +17466,24 @@ ZaliMixin(ZaliInterface, class {
         } catch (error) {
             this.voiceTrace('audio-bitrate-limit-failed', { error: error?.message || String(error) }, 'WARN');
         }
+        // Voice goes first when the uplink is short. Every encoding defaults to
+        // priority 'low', so on a video call or a screen share the bandwidth allocator
+        // split a congested link evenly — and audio is the stream where a queue turns
+        // straight into delay: the receiver's jitter buffer grows to ride out the loss
+        // and stays grown. 'high' makes video give way first; `networkPriority` asks
+        // for an expedited-forwarding DSCP mark where the engine and OS apply one.
+        // Nothing is taken from the voice itself, so no quality is traded for it.
+        // A separate setParameters on purpose: an engine that refuses these fields
+        // must not take the bitrate cap above down with it.
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || !params.encodings.length) return;
+            params.encodings[0].priority = 'high';
+            params.encodings[0].networkPriority = 'high';
+            await sender.setParameters(params);
+        } catch (error) {
+            this.voiceTrace('audio-priority-failed', { error: error?.message || String(error) }, 'WARN');
+        }
     }
 
     // Mesh means every video track is encoded and uploaded once per peer, and
@@ -18238,6 +18476,12 @@ ZaliMixin(ZaliInterface, class {
         const outgoing = this.voice.outgoingInvite;
         const incoming = this.voice.incomingInvite;
         this.voiceTrace('end-current-session', { reason, roomId, status });
+        // Starting another call or joining another channel while a call rings over
+        // this one is a decision not to take it: decline it properly, or the caller
+        // keeps ringing into a room nobody will ever answer.
+        if (incoming?.overChannel) {
+            await this.rejectIncomingCall();
+        }
         if (status === 'incoming' && incoming?.roomId && incoming?.from) {
             await this.rejectIncomingCall();
             return;
@@ -18281,6 +18525,18 @@ ZaliMixin(ZaliInterface, class {
         // "connected" while neither side ever sends an offer — a silent call.
         if (this.isVoiceCallSetupBusy('start-dm-call')) {
             this.voiceTrace('start-dm-call-ignored-busy-setup', { target }, 'WARN');
+            return;
+        }
+        // Calling the person whose call is ringing over our channel means taking that
+        // call. Placing a second one instead would leave the channel, decline theirs
+        // (endCurrentVoiceSession) and ring them back — the same conversation, one
+        // pointless «отклонён» and a second wait later.
+        const ringing = this.voice.incomingInvite;
+        if (ringing?.overChannel && String(ringing.from || '').trim().toLowerCase() === target.toLowerCase()) {
+            this.voiceDiag('start-dm-call-answers-ringing', { target, roomId: ringing.roomId, video: !!video });
+            // Флаг камеры едет с собой: без него нажатие «Видеозвонок» молча отвечало
+            // бы аудиозвонком, и кнопка выглядела бы сломанной.
+            await this.acceptIncomingCall({ video });
             return;
         }
         const activeRoomId = String(this.voice.roomId || '').trim();
@@ -18390,7 +18646,11 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
-    async acceptIncomingCall() {
+    // `video` — ответ с камерой: его просит startDirectCall, когда нажали
+    // «Видеозвонок» тому, кто в этот момент звонит сам. Флаг ставится ПОСЛЕ выхода
+    // из канала: resetVoiceState внутри leaveVoiceRoom сбрасывает videoEnabled, и
+    // выставленный заранее он бы потерялся — звонок соединялся бы без камеры.
+    async acceptIncomingCall({ video = false } = {}) {
         const invite = this.voice.incomingInvite;
         if (!invite?.roomId || !invite?.from) return;
         // Same re-entrancy hazard as startDirectCall: this awaits before it clears
@@ -18403,6 +18663,31 @@ ZaliMixin(ZaliInterface, class {
         this.voice.callSetupInFlight = true;
         this.voice.callSetupStartedAt = Date.now();
         try {
+            if (invite.overChannel) {
+                // Answering a call that rang over a voice channel takes us out of the
+                // channel first — one account is in one room at a time, on the server
+                // and here. The invite is detached BEFORE the teardown: it belongs to
+                // the call being answered, and resetVoiceState would otherwise either
+                // wipe it or turn it back into a ringing call (see resetVoiceState).
+                this.voice.incomingInvite = null;
+                // Пока выходим из канала, звонящий может успеть отменить вызов. Без этой
+                // отметки отмена уже не находила приглашения (оно отцеплено), и ответ
+                // уходил в удалённую комнату — клиент «подключался» до сторожевого таймера.
+                this.voice.acceptingInvite = invite;
+                this.voiceDiag('accept-over-channel', { roomId: invite.roomId, from: invite.from, channelRoomId: this.voice.roomId || '' });
+                try {
+                    await this.leaveVoiceRoom({ announce: true, outcome: 'completed' });
+                } finally {
+                    if (this.voice.acceptingInvite === invite) this.voice.acceptingInvite = null;
+                }
+                if (invite.endedWhileAccepting) {
+                    this.voiceDiag('accept-over-channel-aborted', { roomId: invite.roomId, reason: invite.endedWhileAccepting });
+                    this.recordVoiceCallHistory({ outcome: invite.endedWhileAccepting, endedAt: Date.now(), call: this.inviteCallTrack(invite) });
+                    this.renderVoicePanel();
+                    return;
+                }
+            }
+            if (video) this.voice.videoEnabled = true;
             await this.performAcceptIncomingCall(invite);
         } finally {
             this.voice.callSetupInFlight = false;
@@ -18469,8 +18754,86 @@ ZaliMixin(ZaliInterface, class {
             roomId: invite.roomId,
             inviter: invite.from,
         });
+        if (invite.overChannel) {
+            // Declining a call that rang over a voice channel leaves you in the
+            // channel: resetVoiceState here would have hung up the channel too.
+            this.dismissInviteOverChannel({ outcome: 'rejected', reason: 'declined' });
+            return;
+        }
         this.recordVoiceCallHistory({ outcome: 'rejected', endedAt: Date.now() });
         this.resetVoiceState({ preserveInvite: false });
+    }
+
+    // A DM invite that rings while this client is in a voice channel (see the
+    // voice_call_invite branch of handleVoiceEvent). It is kept beside the channel
+    // session instead of inside it, so none of roomId/status/callTrack describe it.
+    // Вызов, на который отвечаем прямо сейчас (acceptIncomingCall ещё выходит из
+    // канала), закончился на той стороне: запоминаем исход, ответ не отправится.
+    markAcceptingInviteEnded(roomId, outcome) {
+        const invite = this.voice.acceptingInvite;
+        if (!invite || String(invite.roomId || '').trim() !== String(roomId || '').trim()) return false;
+        invite.endedWhileAccepting = outcome || 'cancelled';
+        return true;
+    }
+
+    hasInviteOverChannel(roomId = '') {
+        const invite = this.voice.incomingInvite;
+        if (!invite?.overChannel) return false;
+        const id = String(roomId || '').trim();
+        return !id || String(invite.roomId || '').trim() === id;
+    }
+
+    // Whether anything is ringing right now — the ringtone and the incoming-call UI
+    // key off this, not off status alone: a call ringing over a channel leaves
+    // status at the channel's 'connected'.
+    hasRingingIncomingInvite() {
+        const invite = this.voice.incomingInvite;
+        if (!invite?.roomId || !invite?.from) return false;
+        return !!invite.overChannel || this.voice.status === 'incoming';
+    }
+
+    inviteCallTrack(invite) {
+        return {
+            roomId: invite.roomId,
+            peer: invite.from,
+            roomType: 'dm',
+            direction: 'incoming',
+            startedAt: Number(invite.receivedAt) || Date.now(),
+            connectedAt: 0,
+            endedAt: 0,
+            outcome: 'incoming',
+            recorded: false,
+        };
+    }
+
+    // Stops a call ringing over the channel without touching the channel. `outcome`
+    // writes the call-history row this device owns (declined here, missed, caller
+    // cancelled); an invite answered or declined on another device passes none.
+    dismissInviteOverChannel({ outcome = '', reason = '' } = {}) {
+        const invite = this.voice.incomingInvite;
+        if (!invite?.overChannel) return false;
+        this.voice.incomingInvite = null;
+        this.voiceDiag('invite-over-channel-dismissed', { roomId: invite.roomId, from: invite.from, reason, outcome });
+        if (outcome) {
+            this.recordVoiceCallHistory({ outcome, endedAt: Date.now(), call: this.inviteCallTrack(invite) });
+        }
+        this.renderVoicePanel();
+        return true;
+    }
+
+    // The ordinary ringing state: this call is now THE voice session. Used for a
+    // fresh invite on an idle client, and for one that was ringing over a channel
+    // the user has since left some other way — it should keep ringing, not vanish
+    // while the caller still waits.
+    ringInviteAsIncomingCall(invite) {
+        const roomId = String(invite?.roomId || '').trim();
+        const from = String(invite?.from || '').trim();
+        if (!roomId || !from) return;
+        this.voice.incomingInvite = { roomId, from, roomType: 'dm' };
+        this.voice.inviter = from;
+        this.voice.callTrack = this.inviteCallTrack({ roomId, from, receivedAt: invite.receivedAt });
+        this.voice.outgoingInvite = null;
+        this.voice.status = 'incoming';
     }
 
     toggleVoiceMute() {
@@ -18681,8 +19044,9 @@ ZaliMixin(ZaliInterface, class {
         if (this.S.navMode === 'dm' && this.S.current === peer) this.scheduleRenderMessages();
     }
 
-    recordVoiceCallHistory({ outcome = 'completed', endedAt = Date.now() } = {}) {
-        const call = this.voice.callTrack;
+    // `call` defaults to the live session's track; a call that rang over a voice
+    // channel never became the session, so it passes its own (inviteCallTrack).
+    recordVoiceCallHistory({ outcome = 'completed', endedAt = Date.now(), call = this.voice.callTrack } = {}) {
         if (!call || call.recorded || call.roomType === 'channel') return;
         const peer = String(call.peer || this.voice.targetUser || this.voice.inviter || '').trim();
         if (!peer) return;
@@ -18727,7 +19091,7 @@ ZaliMixin(ZaliInterface, class {
             arr.sort((a, b) => this.compareMessagesByTime(a, b));
         }
         call.recorded = true;
-        this.voice.callTrack = null;
+        if (this.voice.callTrack === call) this.voice.callTrack = null;
         this.saveStoredMessageCache();
         // The caller owns the record and is the one that sends it, so exactly one
         // copy travels. The callee keeps its local row for instant feedback and lets
@@ -19195,6 +19559,13 @@ ZaliMixin(ZaliInterface, class {
         this.voiceTrace('event-other-device', { eventType, roomId, targetDevice: payload.targetDevice || '' });
         const answered = eventType === 'voice_call_accepted' || eventType === 'voice_call_connected';
         if (!answered || !roomId) return;
+        if (this.hasInviteOverChannel(roomId)) {
+            // Answered on another device while it rang over this device's channel:
+            // only the ringing belongs to that call, the channel here carries on.
+            this.addLogEntry({ type: 'INFO', msg: 'Звонок принят на другом устройстве', ts: new Date().toLocaleTimeString() });
+            this.dismissInviteOverChannel({ reason: 'answered-elsewhere' });
+            return;
+        }
         if (String(this.voice.incomingInvite?.roomId || '').trim() !== roomId) return;
         this.voiceDiag('invite-answered-elsewhere', { roomId, status: this.voice.status || '' });
         this.addLogEntry({ type: 'INFO', msg: 'Звонок принят на другом устройстве', ts: new Date().toLocaleTimeString() });
@@ -19297,8 +19668,35 @@ ZaliMixin(ZaliInterface, class {
                 }
                 this.voice.outgoingInvite = null;
                 // Fall through: the incoming invite below becomes the live call.
+            } else if (activeRoomId && activeRoomId !== roomId && this.voice.roomType === 'channel'
+                && this.isInActiveCall()
+                && (!this.voice.incomingInvite || String(this.voice.incomingInvite.roomId || '').trim() === roomId)) {
+                // Sitting in a voice channel is not "busy". It used to be: the invite was
+                // auto-rejected 60–100 ms after it arrived, before it ever rang, and the
+                // caller saw «Вызов отклонён» the instant they pressed «Позвонить». In
+                // production (2026-09-15) that was every DM call between two people who
+                // hang out in the same voice channel — one of them always still was.
+                //
+                // So it rings on top of the channel instead, and lives NEXT to the channel
+                // session rather than in it: roomId/status/callTrack stay the channel's,
+                // the channel keeps talking. Answering leaves the channel and takes the
+                // call (acceptIncomingCall), declining leaves you where you were
+                // (rejectIncomingCall), and a caller who gives up only stops the ringing.
+                this.voice.incomingInvite = {
+                    roomId,
+                    from,
+                    roomType: 'dm',
+                    overChannel: true,
+                    receivedAt: Number(this.voice.incomingInvite?.receivedAt) || Date.now(),
+                };
+                this.voiceDiag('incoming-invite-over-channel', { roomId, from, channelRoomId: activeRoomId });
+                this.renderVoicePanel();
+                return;
             } else if (activeRoomId && activeRoomId !== roomId && this.isInActiveCall()) {
-                this.voiceTrace('incoming-invite-busy', { roomId, from, activeRoomId, status: this.voice.status }, 'WARN');
+                // Always-on: this auto-reject is invisible on the callee's screen, and the
+                // caller only sees «отклонён» — without this line the client log said
+                // nothing at all about why a call died in 100 ms.
+                this.voiceDiag('incoming-invite-busy', { roomId, from, activeRoomId, roomType: this.voice.roomType || '', status: this.voice.status }, 'WARN');
                 this.sendVoiceEvent({
                     type: 'voice_call_reject',
                     roomId,
@@ -19307,25 +19705,7 @@ ZaliMixin(ZaliInterface, class {
                 this.addLogEntry({ type: 'INFO', msg: `Входящий звонок от ${from} отклонён: уже идёт другой звонок`, ts: new Date().toLocaleTimeString() });
                 return;
             }
-            this.voice.incomingInvite = {
-                roomId,
-                from,
-                roomType: 'dm',
-            };
-            this.voice.inviter = from;
-            this.voice.callTrack = {
-                roomId,
-                peer: from,
-                roomType: 'dm',
-                direction: 'incoming',
-                startedAt: Date.now(),
-                connectedAt: 0,
-                endedAt: 0,
-                outcome: 'incoming',
-                recorded: false,
-            };
-            this.voice.outgoingInvite = null;
-            this.voice.status = 'incoming';
+            this.ringInviteAsIncomingCall({ roomId, from });
             this.voiceTrace('incoming-invite', { roomId, from });
             this.renderVoicePanel();
             return;
@@ -19359,6 +19739,12 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (eventType === 'voice_call_rejected') {
+            // Declined on another device of this account while it rang over our channel:
+            // stop ringing, stay in the channel. The declining device records it.
+            if (this.hasInviteOverChannel(payload.roomId)) {
+                this.dismissInviteOverChannel({ reason: 'rejected-elsewhere' });
+                return;
+            }
             if (this.voice.outgoingInvite?.roomId === String(payload.roomId || '').trim()) {
                 this.voiceTrace('outgoing-rejected', { roomId: payload.roomId || '', from: payload.from || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'rejected', endedAt: Date.now() });
@@ -19375,6 +19761,13 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (eventType === 'voice_call_cancelled') {
+            if (this.markAcceptingInviteEnded(payload.roomId, 'cancelled')) return;
+            // The caller gave up while it rang over our channel: the channel was never
+            // touched, so only the ringing stops.
+            if (this.hasInviteOverChannel(payload.roomId)) {
+                this.dismissInviteOverChannel({ outcome: 'cancelled', reason: 'cancelled' });
+                return;
+            }
             if (this.voice.incomingInvite?.roomId === String(payload.roomId || '').trim()) {
                 this.voiceTrace('incoming-cancelled', { roomId: payload.roomId || '', from: payload.from || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
@@ -19385,6 +19778,11 @@ ZaliMixin(ZaliInterface, class {
 
         if (eventType === 'voice_call_missed') {
             const roomId = String(payload.roomId || '').trim();
+            if (this.markAcceptingInviteEnded(roomId, 'missed')) return;
+            if (this.hasInviteOverChannel(roomId)) {
+                this.dismissInviteOverChannel({ outcome: 'missed', reason: 'missed' });
+                return;
+            }
             if (this.voice.incomingInvite?.roomId === roomId || this.voice.outgoingInvite?.roomId === roomId) {
                 this.voiceTrace('call-missed', { roomId, from: payload.from || '', target: payload.target || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'missed', endedAt: Date.now() });
@@ -19800,6 +20198,22 @@ ZaliMixin(ZaliInterface, class {
         `;
     }
 
+    // The strip while a DM call rings over the voice channel we are in. Buttons have
+    // their own ids: the panel's #voiceAcceptBtn may be in the DOM at the same time.
+    renderVoiceIncomingStrip(invite) {
+        const from = String(invite?.from || '').trim();
+        const title = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        return `
+            <div class="voice-callbar voice-callbar-incoming" id="voiceIncomingBar" role="group" aria-label="${this.esc(title)}">
+                <div class="voice-callbar-title">${this.esc(title)}</div>
+                <div class="voice-callbar-controls">
+                    <button class="voice-callbar-action" type="button" id="voiceStripAcceptBtn" title="Выйти из канала и принять звонок" aria-label="Принять">${this.voiceIcon('phone')}<span>Принять</span></button>
+                    <button class="voice-callbar-action danger" type="button" id="voiceStripRejectBtn" title="Отклонить и остаться в канале" aria-label="Отклонить">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>
+                </div>
+            </div>
+        `;
+    }
+
     // Fullscreen (within the chat window) call view: dynamic grid of 16:9 tiles,
     // one per participant, reusing renderVoiceTiles()/mountVoiceVideoElements()
     // as-is so a participant's camera feed replaces their tile exactly like it
@@ -19991,7 +20405,7 @@ ZaliMixin(ZaliInterface, class {
         // calls renderVoicePanel(), so syncing the ringtone here — rather than at
         // each individual transition site — guarantees it always stops, including
         // paths that don't go through resetVoiceState (e.g. the caller cancelling).
-        if (this.voice.status === 'incoming' && this.voice.incomingInvite) {
+        if (this.hasRingingIncomingInvite()) {
             this.startRingtone();
         } else {
             this.stopRingtone();
@@ -20123,6 +20537,20 @@ ZaliMixin(ZaliInterface, class {
         }
         const strip = document.getElementById('voiceCallStrip');
         if (!strip) return;
+        // A DM call ringing over the channel takes the strip over, everywhere —
+        // including the channel's own view, where the strip is otherwise hidden and
+        // where the user most likely is when it rings.
+        const ringingOverChannel = this.hasInviteOverChannel() ? this.voice.incomingInvite : null;
+        if (ringingOverChannel) {
+            strip.parentElement?.classList.add('has-call-strip');
+            const html = this.renderVoiceIncomingStrip(ringingOverChannel);
+            if (html !== this._voiceStripHtml) {
+                strip.innerHTML = html;
+                this._voiceStripHtml = html;
+            }
+            strip.hidden = false;
+            return;
+        }
         const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
         const coveredByCall = type === 'channel'
             ? this.isViewingVoiceCallRoom()
@@ -23738,6 +24166,21 @@ ZaliMixin(ZaliInterface, class {
         return ratio ? ` style="aspect-ratio: ${ratio};"` : '';
     }
 
+    // Свой API-сервер и CDN Tenor — туда клиент и так ходит сам.
+    isTrustedAttachmentHost(url) {
+        try {
+            const host = new URL(url, window.location.href).hostname.toLowerCase();
+            if (host === window.location.hostname.toLowerCase()) return true;
+            try {
+                const apiHost = new URL(this.getApiBaseUrl()).hostname.toLowerCase();
+                if (apiHost && host === apiHost) return true;
+            } catch (e) {}
+            return host === 'tenor.com' || host.endsWith('.tenor.com');
+        } catch (e) {
+            return false;
+        }
+    }
+
     safeAttachmentUrl(url) {
         const value = String(url || '').trim();
         if (!value) return '';
@@ -23760,6 +24203,21 @@ ZaliMixin(ZaliInterface, class {
         const showControls = options.controls !== undefined ? !!options.controls : !gifLike;
         if (!src) {
             return `<div class="media-unknown">${this.esc(attachment.name)}</div>`;
+        }
+
+        // Вложение из архива сообщения, указывающее на чужой http(s)-адрес, сам не
+        // грузим: <img>/<video> сходили бы туда при одном показе переписки и выдали
+        // отправителю IP получателя и момент прочтения. Настоящие вложения приезжают
+        // внутри архива (data:/blob:). Ссылки из текста (renderUrlPreview) — отдельный
+        // случай: адрес там виден в самом сообщении, они передают trustedRemote.
+        if (!options.trustedRemote && /^https?:/i.test(src) && !this.isTrustedAttachmentHost(src)) {
+            return `<a class="file-message" href="${this.esc(src)}" target="_blank" rel="noopener noreferrer">
+            ${this.renderFileIcon(attachment.name)}
+            <span class="file-message-info">
+                <span class="file-message-name">${this.esc(attachment.name)}</span>
+                <span class="file-message-size">${this.esc(src)}</span>
+            </span>
+        </a>`;
         }
 
         // Animated stickers are decoded and played by web/src/modules/tgs.js after
@@ -24178,7 +24636,7 @@ ZaliMixin(ZaliInterface, class {
                     mimeType: path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.webm') ? 'video/webm' : 'image/gif',
                     kind: path.endsWith('.mp4') || path.endsWith('.webm') ? 'video' : 'gif',
                     dataUrl: url
-                }, false, { gifLike: true });
+                }, false, { gifLike: true, trustedRemote: true });
             }
 
             const cached = this.tenorCache.get(this.tenorCacheKey(url));
@@ -24190,7 +24648,7 @@ ZaliMixin(ZaliInterface, class {
                     mimeType,
                     kind,
                     dataUrl: cached.mediaUrl
-                }, false, { gifLike: true });
+                }, false, { gifLike: true, trustedRemote: true });
             }
 
             this.requestTenorResolution(url);
@@ -24206,7 +24664,7 @@ ZaliMixin(ZaliInterface, class {
                 mimeType: path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.webm') ? 'video/webm' : path.endsWith('.gif') ? 'image/gif' : 'image/*',
                 kind: path.endsWith('.mp4') || path.endsWith('.webm') ? 'video' : 'image',
                 dataUrl: url
-            });
+            }, false, { trustedRemote: true });
         }
 
         return '';
@@ -26513,6 +26971,24 @@ ZaliMixin(ZaliInterface, class {
     // see server/src/realtime.rs deliver_to_user/deliver_server_message). Downloads
     // the .zali archive and decrypts it in-browser via WASM, then feeds the result
     // into the same receiveMessage() path the native shells use.
+    // base64 из поля `inlineArchive` кадра доставки → байты архива. Сервер кладёт
+    // туда только то, что меньше 32 КиБ, поэтому синхронный проход здесь дешевле
+    // асинхронного fetch('data:…'). Битую строку не чиним: возвращаем null, и
+    // вызывающий скачивает архив обычным путём.
+    decodeInlineArchive(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return null;
+        try {
+            const binary = atob(raw);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+            return bytes.length ? bytes : null;
+        } catch (e) {
+            this.trace('decodeInlineArchive failed');
+            return null;
+        }
+    }
+
     async handleIncomingBrowserMessage(payload) {
         const id = String(payload?.id || '').trim();
         const sender = String(payload?.sender || '').trim();
@@ -26580,14 +27056,21 @@ ZaliMixin(ZaliInterface, class {
         }
 
         try {
-            // A `.zali` archive carries the message's attachments, so this is a bulk
-            // transfer, not an API round trip — the general request timeout would
-            // abort a large but perfectly healthy download.
-            const res = await this.apiFetch(this.apiRoutes.messages.download(id), {
-                timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
-            });
-            if (!res.ok) return;
-            const archiveBytes = new Uint8Array(await res.arrayBuffer());
+            // Небольшой архив приезжает прямо в кадре доставки (server/src/messages.rs,
+            // `inlineArchive`) — тогда скачивать нечего. Это целый круг до сервера на
+            // каждое входящее сообщение, а на остывшем пуле ещё и TLS-рукопожатие.
+            // Битую строку не лечим здесь: молча падаем на скачивание, как раньше.
+            let archiveBytes = this.decodeInlineArchive(payload?.inlineArchive);
+            if (!archiveBytes) {
+                // A `.zali` archive carries the message's attachments, so this is a bulk
+                // transfer, not an API round trip — the general request timeout would
+                // abort a large but perfectly healthy download.
+                const res = await this.apiFetch(this.apiRoutes.messages.download(id), {
+                    timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+                });
+                if (!res.ok) return;
+                archiveBytes = new Uint8Array(await res.arrayBuffer());
+            }
             const unpacked = await this.unpackBrowserMessageWithCandidates(archiveBytes, candidates, id);
             const attachments = (unpacked.attachments || []).map(att => ({
                 name: att.name,
@@ -27067,14 +27550,38 @@ ZaliMixin(ZaliInterface, class {
     // мессенджера — переписывались, ушли в другое приложение, собеседник ответил —
     // давал ровно ноль: ни уведомления, ни звука, ни счётчика непрочитанного.
     //
-    // hasFocus() не спрашиваем в мобильной раскладке: на телефоне приложение на
-    // экране и есть приложение в руках, а фокус вида у Android WebView зависит от
-    // того, куда последним ушло касание (нативная нижняя панель его забирает).
+    // Правило одно: приложение не в фокусе — уведомление и звук, даже если нужный
+    // чат открыт.
+    //
+    // Нативный шелл сообщает фокус сам (`window.__zaliNativeAppFocus`, см.
+    // onNativeAppFocusChange): документ внутри WKWebView не всегда узнаёт, что
+    // приложение ушло на задний план, а Android WebView без onPause остаётся
+    // «видимым» и в фоне. Без сигнала шелла — видимость документа и hasFocus().
+    //
+    // hasFocus() не спрашиваем только на сенсорном устройстве: на телефоне
+    // приложение на экране и есть приложение в руках, а фокус вида у WebView
+    // зависит от того, куда последним ушло касание. Раньше здесь стояла мобильная
+    // РАСКЛАДКА — и узкое окно на компьютере считалось «смотрят» при любом фокусе.
     isAppAttended() {
         if (typeof document === 'undefined') return true;
         if (document.visibilityState === 'hidden') return false;
-        if (this.isMobileLayout?.()) return true;
+        const nativeFocus = typeof window !== 'undefined' ? window.__zaliNativeAppFocus : undefined;
+        if (typeof nativeFocus === 'boolean') return nativeFocus;
+        if (this.isHandheldDevice()) return true;
         return typeof document.hasFocus !== 'function' || document.hasFocus();
+    }
+
+    isHandheldDevice() {
+        if (this.nativeBridge?.()?.transport === 'android') return true;
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+        return window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(any-pointer: fine)').matches;
+    }
+
+    // Шелл сменил window.__zaliNativeAppFocus: вернувшись, снять счётчик открытого
+    // чата; сервер узнаёт о смене из client_presence (браузер) или от самого шелла.
+    onNativeAppFocusChange() {
+        this.clearAttendedConversationUnread();
+        this.reportClientPresence?.();
     }
 
     // Входящее не требует уведомления, только если его чат на экране И пользователь
@@ -31074,6 +31581,12 @@ ZaliMixin(ZaliInterface, class {
             let inJitter = null;
             let level = null;
             let concealed = null;
+            // Cumulative seconds the jitter buffer held samples, and how many samples
+            // it let out. Their per-interval ratio is how long received voice waits
+            // before it is played — the receive half of call delay, and the half the
+            // network's RTT figure below says nothing about.
+            let jbDelay = null;
+            let jbEmitted = null;
             let outPackets = 0;
             let outBytes = 0;
             let outLevel = null;
@@ -31095,6 +31608,8 @@ ZaliMixin(ZaliInterface, class {
                     if (typeof report.jitter === 'number') inJitter = report.jitter;
                     if (typeof report.audioLevel === 'number') level = report.audioLevel;
                     if (typeof report.concealedSamples === 'number') concealed = report.concealedSamples;
+                    if (typeof report.jitterBufferDelay === 'number') jbDelay = report.jitterBufferDelay;
+                    if (typeof report.jitterBufferEmittedCount === 'number') jbEmitted = report.jitterBufferEmittedCount;
                 }
                 if (report.type === 'outbound-rtp' && isAudio) {
                     outPackets = report.packetsSent ?? outPackets;
@@ -31118,6 +31633,13 @@ ZaliMixin(ZaliInterface, class {
             const prevOut = entry.lastOutboundBytes || 0;
             entry.lastInboundBytes = inBytes;
             entry.lastOutboundBytes = outBytes;
+            let jbMs = null;
+            if (jbDelay !== null && jbEmitted !== null) {
+                const emitted = jbEmitted - (entry.lastJbEmitted || 0);
+                if (emitted > 0) jbMs = ((jbDelay - (entry.lastJbDelay || 0)) / emitted) * 1000;
+                entry.lastJbDelay = jbDelay;
+                entry.lastJbEmitted = jbEmitted;
+            }
             const arriving = inBytes > prevIn;
             // A dead upstream is as silent as a dead downstream and used to be
             // invisible here: the old line reported only what we RECEIVE, so "он меня
@@ -31155,6 +31677,7 @@ ZaliMixin(ZaliInterface, class {
                 inBytes,
                 inLost,
                 inJitter: inJitter === null ? '' : inJitter.toFixed(4),
+                jbMs: jbMs === null ? '' : Math.round(jbMs),
                 concealed: concealed === null ? '' : concealed,
                 outPackets,
                 outBytes,
@@ -31462,6 +31985,15 @@ ZaliMixin(ZaliInterface, class {
         const voiceCallStrip = document.getElementById('voiceCallStrip');
         if (voiceCallStrip) {
             voiceCallStrip.addEventListener('click', (e) => {
+                // A DM call ringing over the voice channel we are in (renderVoiceIncomingStrip).
+                if (e.target.closest('#voiceStripAcceptBtn')) {
+                    void this.acceptIncomingCall();
+                    return;
+                }
+                if (e.target.closest('#voiceStripRejectBtn')) {
+                    void this.rejectIncomingCall();
+                    return;
+                }
                 if (e.target.closest('#voiceMuteBtn')) {
                     this.toggleVoiceMute();
                     return;
@@ -32124,6 +32656,12 @@ ZaliMixin(ZaliInterface, class {
         if (checkForUpdatesBtn) {
             checkForUpdatesBtn.addEventListener('click', () => {
                 void this.checkForAppUpdateFromSettings();
+            });
+        }
+        const inputAutostart = document.getElementById('inputAutostart');
+        if (inputAutostart) {
+            inputAutostart.addEventListener('change', () => {
+                void this.setAutostartFromSettings(inputAutostart.checked);
             });
         }
         if (navigator.mediaDevices?.addEventListener) {

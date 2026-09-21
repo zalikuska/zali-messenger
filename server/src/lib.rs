@@ -1217,6 +1217,17 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    // История лички (get_messages): `(sender=a AND receiver=b) OR (sender=b AND
+    // receiver=a)` по одиночным индексам sender/receiver перебирала ВСЕ сообщения
+    // пользователя со всеми собеседниками и сортировала их. С парой в индексе каждая
+    // половина OR — прямой диапазон, уже упорядоченный по времени.
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_messages_dm_pair
+         ON messages (sender, receiver, timestamp) WHERE server_id IS NULL",
+    )
+    .execute(&pool)
+    .await
+    .ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts (owner)")
         .execute(&pool)
         .await

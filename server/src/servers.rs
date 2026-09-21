@@ -1367,8 +1367,9 @@ pub(crate) async fn join_server_invite(
     if let Err(e) = sqlx::query(
         "INSERT INTO server_members (server_id, username, role, joined_at)
          VALUES (?, ?, ?, ?)
-         ON CONFLICT(server_id, username) DO UPDATE SET
-            role = excluded.role",
+         -- Уже участник (в т. ч. админ или со своей ролью) входит по инвайту
+         -- как есть: раньше это молча понижало его до `member`.
+         ON CONFLICT(server_id, username) DO NOTHING",
     )
     .bind(&invite.server_id)
     .bind(&auth_user)

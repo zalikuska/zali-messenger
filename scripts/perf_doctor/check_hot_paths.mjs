@@ -121,7 +121,7 @@ function nativeAttachmentsRenderAsBlob() {
 function videoPlaybackIsBounded() {
     console.log('\n──────── воспроизведение видео в ленте\n');
     const client = new RenderClient();
-    const video = { name: 'clip.mp4', mimeType: 'video/mp4', kind: 'video', size: 1024, dataUrl: 'https://example.test/clip.mp4' };
+    const video = { name: 'clip.mp4', mimeType: 'video/mp4', kind: 'video', size: 1024, dataUrl: 'blob:https://example.test/clip-mp4' };
 
     const plain = client.api.renderAttachmentPreview(video);
     check(

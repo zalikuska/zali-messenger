@@ -74,6 +74,20 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserMo
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ZaliMessenger"; ValueData: """{app}\{#MyAppExeName}"" --start-minimized"; Tasks: autostart; Flags: uninsdeletevalue
+; The app also writes that same Run entry itself, on every launch (see
+; src/native/autostart.rs) — so an unticked checkbox has to be remembered where the
+; app looks for it, or the first launch would re-enable autostart behind the user's
+; back. Ticking it clears a refusal left by an earlier install or the in-app toggle.
+Root: HKCU; Subkey: "Software\ZaliMessenger"; ValueType: dword; ValueName: "AutostartDisabled"; ValueData: 1; Tasks: not autostart; Flags: uninsdeletevalue uninsdeletekeyifempty
+; Снятая галочка обязана ещё и УБРАТЬ запись Run, оставшуюся от прошлой установки:
+; флаг отказа выше только не даёт приложению прописаться заново, а уже существующую
+; запись Windows исполняет как ни в чём не бывало — приложение стартовало бы при входе,
+; хотя карточка «Автозапуск» показывает «выключено» (status() читает флаг отказа).
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "ZaliMessenger"; Flags: deletevalue; Tasks: not autostart
+Root: HKCU; Subkey: "Software\ZaliMessenger"; ValueType: none; ValueName: "AutostartDisabled"; Tasks: autostart; Flags: deletevalue uninsdeletekeyifempty
+; The Run entry may have been written by the app rather than by the task above, so
+; the uninstaller removes it regardless of what was ticked.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "ZaliMessenger"; Flags: uninsdeletevalue
 
 [UninstallDelete]
 ; The exe isn't tracked via [Files] (it's downloaded, not bundled), so it

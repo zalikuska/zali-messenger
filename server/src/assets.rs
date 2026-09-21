@@ -124,10 +124,13 @@ pub(crate) async fn get_server_asset(
     }
 
     let dir = server_asset_dir(data_dir, server_id);
-    if let Ok(Some((mime, data, _))) = read_asset_file(dir.clone(), kind).await {
-        if !mime.is_empty() && !data.is_empty() {
-            return Ok(Some((mime, data)));
+    if let Ok(Some((_stored_mime, data, _))) = read_asset_file(dir.clone(), kind).await {
+        // Тип берётся из самих байтов, а не из того, что прислал загрузивший: см.
+        // set_server_asset. Уже лежащий на диске не-картиночный файл не отдаётся.
+        if let Some(mime) = sniff_image_mime(&data) {
+            return Ok(Some((mime.to_string(), data)));
         }
+        return Ok(None);
     }
 
     let row = match kind {
@@ -149,7 +152,9 @@ pub(crate) async fn get_server_asset(
         let mime: Option<String> = r.try_get(0).ok();
         let data: Option<Vec<u8>> = r.try_get(1).ok();
         match (mime, data) {
-            (Some(m), Some(d)) if !d.is_empty() => Some((m, d)),
+            (Some(_), Some(d)) if !d.is_empty() => {
+                sniff_image_mime(&d).map(|m| (m.to_string(), d))
+            }
             _ => None,
         }
     });
@@ -161,6 +166,8 @@ pub(crate) async fn get_server_asset(
     Ok(asset)
 }
 
+const SERVER_ASSET_MAX_BYTES: usize = 5 * 1024 * 1024;
+
 pub(crate) async fn set_server_asset(
     pool: &SqlitePool,
     data_dir: &Path,
@@ -168,7 +175,21 @@ pub(crate) async fn set_server_asset(
     kind: &str,
     data_url: &str,
 ) -> Result<(), sqlx::Error> {
-    let (mime, data) = normalize_data_url(data_url).map_err(|_| sqlx::Error::RowNotFound)?;
+    let (_declared_mime, data) =
+        normalize_data_url(data_url).map_err(|_| sqlx::Error::RowNotFound)?;
+    // MIME из data URL не доверяем: раньше сюда можно было положить `text/html` или
+    // `application/javascript`, и сервер отдавал это со своего домена с этим же
+    // Content-Type — а CSP `script-src 'self'` такой «скрипт» разрешает. Хранимый
+    // XSS на домене API, где лежит cookie сессии. Только растровые картинки, тип —
+    // по сигнатуре байтов, как у аватара пользователя.
+    let Some(mime) = sniff_image_mime(&data).map(str::to_string) else {
+        return Err(sqlx::Error::Protocol(
+            "аватар/баннер сервера должен быть PNG, JPEG, GIF или WEBP".to_string(),
+        ));
+    };
+    if data.len() > SERVER_ASSET_MAX_BYTES {
+        return Err(sqlx::Error::Protocol("файл слишком большой".to_string()));
+    }
     let dir = server_asset_dir(data_dir, server_id);
     write_asset_file(dir, kind, &mime, &data, None)
         .await
@@ -283,6 +304,9 @@ pub(crate) async fn set_server_avatar(
     )
     .await
     {
+        if let sqlx::Error::Protocol(message) = &e {
+            return (StatusCode::BAD_REQUEST, message.clone()).into_response();
+        }
         error!("Ошибка сохранения аватара сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -369,6 +393,9 @@ pub(crate) async fn set_server_banner(
     )
     .await
     {
+        if let sqlx::Error::Protocol(message) = &e {
+            return (StatusCode::BAD_REQUEST, message.clone()).into_response();
+        }
         error!("Ошибка сохранения баннера сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -399,10 +426,13 @@ pub(crate) async fn get_avatar(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let file_dir = user_avatar_asset_dir(&state.data_dir, &username);
-    if let Ok(Some((mime, data, _))) = read_asset_file(file_dir.clone(), "avatar").await {
+    if let Ok(Some((_stored_mime, data, _))) = read_asset_file(file_dir.clone(), "avatar").await {
+        let Some(mime) = sniff_image_mime(&data) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
         return (
             [
-                (axum::http::header::CONTENT_TYPE, mime.as_str()),
+                (axum::http::header::CONTENT_TYPE, mime),
                 (
                     axum::http::header::CACHE_CONTROL,
                     "no-store, no-cache, must-revalidate",
@@ -422,6 +452,9 @@ pub(crate) async fn get_avatar(
     .await
     {
         Ok(Some(avatar)) => {
+            let Some(mime) = sniff_image_mime(&avatar.data) else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
             let _ = write_asset_file(
                 file_dir,
                 "avatar",
@@ -432,7 +465,7 @@ pub(crate) async fn get_avatar(
             .await;
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, avatar.mime_type.as_str()),
+                    (axum::http::header::CONTENT_TYPE, mime),
                     (
                         axum::http::header::CACHE_CONTROL,
                         "no-store, no-cache, must-revalidate",

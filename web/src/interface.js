@@ -43,6 +43,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     DOWNLOAD_UPDATE_REQUEST: 'DOWNLOAD_UPDATE_REQUEST',
     INSTALL_UPDATE_REQUEST: 'INSTALL_UPDATE_REQUEST',
     MOBILE_NAV_PROGRESS: 'MOBILE_NAV_PROGRESS',
+    AUTOSTART_REQUEST: 'AUTOSTART_REQUEST',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;

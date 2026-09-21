@@ -145,6 +145,12 @@ ZaliMixin(ZaliInterface, class {
             let inJitter = null;
             let level = null;
             let concealed = null;
+            // Cumulative seconds the jitter buffer held samples, and how many samples
+            // it let out. Their per-interval ratio is how long received voice waits
+            // before it is played — the receive half of call delay, and the half the
+            // network's RTT figure below says nothing about.
+            let jbDelay = null;
+            let jbEmitted = null;
             let outPackets = 0;
             let outBytes = 0;
             let outLevel = null;
@@ -166,6 +172,8 @@ ZaliMixin(ZaliInterface, class {
                     if (typeof report.jitter === 'number') inJitter = report.jitter;
                     if (typeof report.audioLevel === 'number') level = report.audioLevel;
                     if (typeof report.concealedSamples === 'number') concealed = report.concealedSamples;
+                    if (typeof report.jitterBufferDelay === 'number') jbDelay = report.jitterBufferDelay;
+                    if (typeof report.jitterBufferEmittedCount === 'number') jbEmitted = report.jitterBufferEmittedCount;
                 }
                 if (report.type === 'outbound-rtp' && isAudio) {
                     outPackets = report.packetsSent ?? outPackets;
@@ -189,6 +197,13 @@ ZaliMixin(ZaliInterface, class {
             const prevOut = entry.lastOutboundBytes || 0;
             entry.lastInboundBytes = inBytes;
             entry.lastOutboundBytes = outBytes;
+            let jbMs = null;
+            if (jbDelay !== null && jbEmitted !== null) {
+                const emitted = jbEmitted - (entry.lastJbEmitted || 0);
+                if (emitted > 0) jbMs = ((jbDelay - (entry.lastJbDelay || 0)) / emitted) * 1000;
+                entry.lastJbDelay = jbDelay;
+                entry.lastJbEmitted = jbEmitted;
+            }
             const arriving = inBytes > prevIn;
             // A dead upstream is as silent as a dead downstream and used to be
             // invisible here: the old line reported only what we RECEIVE, so "он меня
@@ -226,6 +241,7 @@ ZaliMixin(ZaliInterface, class {
                 inBytes,
                 inLost,
                 inJitter: inJitter === null ? '' : inJitter.toFixed(4),
+                jbMs: jbMs === null ? '' : Math.round(jbMs),
                 concealed: concealed === null ? '' : concealed,
                 outPackets,
                 outBytes,

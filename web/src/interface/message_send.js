@@ -386,6 +386,24 @@ ZaliMixin(ZaliInterface, class {
     // see server/src/realtime.rs deliver_to_user/deliver_server_message). Downloads
     // the .zali archive and decrypts it in-browser via WASM, then feeds the result
     // into the same receiveMessage() path the native shells use.
+    // base64 из поля `inlineArchive` кадра доставки → байты архива. Сервер кладёт
+    // туда только то, что меньше 32 КиБ, поэтому синхронный проход здесь дешевле
+    // асинхронного fetch('data:…'). Битую строку не чиним: возвращаем null, и
+    // вызывающий скачивает архив обычным путём.
+    decodeInlineArchive(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return null;
+        try {
+            const binary = atob(raw);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+            return bytes.length ? bytes : null;
+        } catch (e) {
+            this.trace('decodeInlineArchive failed');
+            return null;
+        }
+    }
+
     async handleIncomingBrowserMessage(payload) {
         const id = String(payload?.id || '').trim();
         const sender = String(payload?.sender || '').trim();
@@ -453,14 +471,21 @@ ZaliMixin(ZaliInterface, class {
         }
 
         try {
-            // A `.zali` archive carries the message's attachments, so this is a bulk
-            // transfer, not an API round trip — the general request timeout would
-            // abort a large but perfectly healthy download.
-            const res = await this.apiFetch(this.apiRoutes.messages.download(id), {
-                timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
-            });
-            if (!res.ok) return;
-            const archiveBytes = new Uint8Array(await res.arrayBuffer());
+            // Небольшой архив приезжает прямо в кадре доставки (server/src/messages.rs,
+            // `inlineArchive`) — тогда скачивать нечего. Это целый круг до сервера на
+            // каждое входящее сообщение, а на остывшем пуле ещё и TLS-рукопожатие.
+            // Битую строку не лечим здесь: молча падаем на скачивание, как раньше.
+            let archiveBytes = this.decodeInlineArchive(payload?.inlineArchive);
+            if (!archiveBytes) {
+                // A `.zali` archive carries the message's attachments, so this is a bulk
+                // transfer, not an API round trip — the general request timeout would
+                // abort a large but perfectly healthy download.
+                const res = await this.apiFetch(this.apiRoutes.messages.download(id), {
+                    timeoutMs: TRANSFER_REQUEST_TIMEOUT_MS,
+                });
+                if (!res.ok) return;
+                archiveBytes = new Uint8Array(await res.arrayBuffer());
+            }
             const unpacked = await this.unpackBrowserMessageWithCandidates(archiveBytes, candidates, id);
             const attachments = (unpacked.attachments || []).map(att => ({
                 name: att.name,

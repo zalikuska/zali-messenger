@@ -416,9 +416,14 @@ fn main() -> wry::Result<()> {
     ensure_single_instance_or_focus_existing();
     #[cfg(target_os = "windows")]
     set_windows_app_user_model_id();
-    // Set by the installer's autostart registry entry (see apps/windows/installer/)
-    // so a login-triggered launch doesn't flash a window before dropping to tray.
-    let start_minimized = std::env::args().any(|arg| arg == "--start-minimized");
+    // The app keeps its own «start with Windows» entry pointed at this exe on every
+    // launch, unless the user turned it off (native/autostart.rs). The installer's
+    // checkbox used to be the only thing that ever wrote it.
+    #[cfg(target_os = "windows")]
+    native::register_autostart_on_launch();
+    // Set by that autostart entry so a login-triggered launch doesn't flash a window
+    // before dropping to tray.
+    let start_minimized = std::env::args().any(|arg| arg == native::START_MINIMIZED_ARG);
 
     let native_state = Arc::new(Mutex::new(NativeState::load()));
     let init_script = {
@@ -458,6 +463,8 @@ fn main() -> wry::Result<()> {
 
     #[cfg(target_os = "windows")]
     let _tray_icon = install_windows_tray(proxy.clone());
+    #[cfg(target_os = "windows")]
+    spawn_windows_focus_watcher(&window, proxy.clone());
 
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
     let voice_bridge = native::VoiceBridge::new(Arc::clone(&runtime), proxy.clone());
@@ -705,6 +712,50 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> Cow<'static, str> {
 
 /// Shared by the OS close button (when decorations are on) and the in-app close
 /// button (Windows, decorations off) so both behave identically.
+/// Windows: сообщает вебу, в фокусе ли приложение (`window.__zaliNativeAppFocus`,
+/// isAppAttended в web/src/interface/notifications.js). Без этого открытое, но не
+/// активное окно с открытым чатом не давало ни уведомления, ни звука: `document.hasFocus()`
+/// внутри WebView2 не узнаёт, что окно ушло за другое приложение.
+///
+/// Опрос, а не `WindowEvent::Focused`: tao шлёт `Focused(false)`, когда фокус просто
+/// уходит внутрь дочернего окна WebView2, а при Alt+Tab из вебвью родитель события не
+/// получает вовсе. `GetForegroundWindow` отвечает ровно на вопрос «активно ли окно».
+/// Состояние повторяется раз в 5 с и без изменений — перезагруженная страница его не знает.
+#[cfg(target_os = "windows")]
+fn spawn_windows_focus_watcher(window: &tao::window::Window, proxy: tao::event_loop::EventLoopProxy<AppEvent>) {
+    use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsIconic, IsWindowVisible};
+
+    let RawWindowHandle::Win32(handle) = window.raw_window_handle() else {
+        return;
+    };
+    let hwnd = handle.hwnd as isize;
+    std::thread::spawn(move || {
+        let mut last: Option<bool> = None;
+        let mut ticks: u32 = 0;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let focused = unsafe {
+                let hwnd = hwnd as HWND;
+                GetForegroundWindow() == hwnd && IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0
+            };
+            ticks = ticks.wrapping_add(1);
+            if last == Some(focused) && ticks % 10 != 0 {
+                continue;
+            }
+            last = Some(focused);
+            let script = format!(
+                "window.__zaliNativeAppFocus = {}; var ui = window.__ZALI_INTERFACE; if (ui && ui.onNativeAppFocusChange) ui.onNativeAppFocusChange();",
+                focused
+            );
+            if proxy.send_event(AppEvent::EvaluateScript(script)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
 fn handle_close_request(window: &tao::window::Window, control_flow: &mut ControlFlow) {
     // Windows: hide to tray instead of exiting — the tray icon (and its "Выход"
     // item, which sends AppEvent::Quit) is the only way to actually quit, so local

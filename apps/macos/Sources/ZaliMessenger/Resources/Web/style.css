@@ -2660,9 +2660,14 @@ body[data-nav-mode="servers"] .contacts {
     overflow: hidden;
 }
 
+/* Flex column, not a fixed-row grid: header / stage / participants / controls
+   are four (five with the mic alert) children, and a 3-row template pushed the
+   control bar into an implicit row that the panel's overflow:hidden clipped
+   whenever a screen share was on. Header and controls never shrink; the stage
+   and the participant grid split what is left. */
 .voice-call-expanded {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    display: flex;
+    flex-direction: column;
     gap: 14px;
     height: 100%;
     padding: 16px 18px;
@@ -2716,27 +2721,94 @@ body[data-nav-mode="servers"] .contacts {
     font-variant-numeric: tabular-nums;
 }
 
-/* Dynamic grid of 16:9 tiles — one per participant, reusing .voice-tiles/
-   .voice-tile as-is so camera-on swaps a tile's content exactly like it does
-   in the collapsed layout. Wider tiles than the embedded card's minmax(190px)
-   since there's a whole viewport to fill here. */
+/* Participant tiles fill the whole cell they are given (both axes) — no fixed
+   aspect ratio, which left dead space around each tile whenever the area's
+   shape differed from 16:9. Rows share the height equally. */
+.voice-call-expanded > .voice-room-alert,
+.voice-call-expanded > .voice-call-expanded-header {
+    flex: 0 0 auto;
+}
+
 .voice-call-expanded-grid {
+    flex: 1 1 0;
     min-height: 0;
-    overflow-y: auto;
+    overflow: auto;
 }
 
 .voice-call-expanded-grid .voice-tiles {
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-auto-rows: minmax(120px, 1fr);
+    justify-content: stretch;
+    align-content: stretch;
     height: 100%;
-    align-content: center;
 }
 
 .voice-call-expanded-grid .voice-tile {
-    aspect-ratio: 16 / 9;
+    aspect-ratio: auto;
 }
 
 .voice-call-expanded-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     flex: 0 0 auto;
+    justify-content: center;
+}
+
+/* Screen share: the stage owns a permanent slot (all the free height), the
+   participants shrink to a fixed strip under it, and the control bar stays put
+   at the bottom instead of being pushed out by the 16:9 stage tile. */
+.voice-call-expanded .voice-stage {
+    flex: 1 1 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    grid-auto-rows: minmax(0, 1fr);
+}
+
+.voice-call-expanded .voice-stage:empty {
+    display: none;
+}
+
+.voice-call-expanded .voice-stage-tile {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+    aspect-ratio: auto;
+}
+
+.voice-panel.has-stage .voice-call-expanded-grid {
+    flex: 0 0 auto;
+    height: 112px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.voice-panel.has-stage .voice-call-expanded-grid .voice-tiles,
+.voice-panel.has-stage .voice-call-expanded.embedded .voice-tiles {
+    grid-template-columns: none;
+    grid-template-rows: minmax(0, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: 176px;
+    grid-auto-rows: auto;
+    justify-content: start;
+    height: 100%;
+    min-height: 0;
+}
+
+.voice-panel.has-stage .voice-tile-avatar {
+    width: 48px;
+    height: 48px;
+    font-size: 16px;
+}
+
+/* A share must not fall back to the half-screen cap of the embedded card. */
+.voice-panel.call-expanded-mode.has-stage,
+.voice-panel.call-room-mode.has-stage,
+#viewChat .voice-panel.call-expanded-mode.has-stage,
+#viewChat .voice-panel.call-room-mode.has-stage {
+    max-height: none;
 }
 
 .voice-trace {
@@ -2873,6 +2945,76 @@ body[data-nav-mode="servers"] .contacts {
     font-size: 13px;
 }
 
+/* A DM call ringing while we sit in a voice channel. It rides the same strip,
+   and is shown even inside the channel's own view — that is exactly where the
+   user is when it rings. */
+/* Opaque base, tint on top as an inset shadow: a translucent strip let the
+   mobile list screen behind .main show through it. */
+.voice-call-strip .voice-callbar-incoming {
+    gap: 10px;
+    cursor: default;
+    background: var(--bg);
+    box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb), .26);
+    animation: voiceIncomingPulse 1.6s ease-in-out infinite;
+}
+
+.voice-call-strip .voice-callbar-incoming .voice-callbar-title {
+    text-align: left;
+}
+
+.voice-call-strip .voice-callbar-incoming .voice-callbar-controls {
+    gap: 6px;
+}
+
+.voice-callbar-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), .98), rgba(var(--accent-rgb), .84));
+    color: #0b0b0b;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.voice-callbar-action.danger {
+    background: linear-gradient(180deg, rgba(255,77,109,.96), rgba(255,77,109,.82));
+    color: #fff;
+}
+
+.voice-callbar-action .call-ctrl-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+}
+
+@keyframes voiceIncomingPulse {
+    0%, 100% { box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb), .18); }
+    50% { box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb), .34); }
+}
+
+@media (max-width: 520px) {
+    .voice-callbar-action {
+        padding: 0 9px;
+    }
+
+    .voice-callbar-action span {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .voice-call-strip .voice-callbar-incoming {
+        animation: none;
+    }
+}
+
 .main.has-call-strip > .view,
 .main.has-call-strip > #viewChat {
     top: var(--call-strip-h);
@@ -2914,14 +3056,12 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 0;
 }
 
-/* Tiles keep a sane size: one participant is one tile, not a 16:9 rectangle
-   the width of the whole window. */
 .voice-call-expanded.embedded .voice-tiles {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 340px));
-    justify-content: center;
-    align-content: center;
-    min-height: 100%;
-    height: auto;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-auto-rows: minmax(120px, 1fr);
+    justify-content: stretch;
+    align-content: stretch;
+    height: 100%;
 }
 
 .voice-call-expanded.embedded .voice-call-expanded-actions {
@@ -2945,13 +3085,12 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .voice-call-expanded.embedded .voice-call-expanded-grid {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-height: 0;
 }
 
-.voice-call-expanded.embedded .voice-call-expanded-actions {
+.voice-panel.has-stage .voice-call-expanded.embedded .voice-call-expanded-grid {
     flex: 0 0 auto;
-    justify-content: center;
 }
 
 #viewChat .msgs {

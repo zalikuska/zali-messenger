@@ -447,6 +447,13 @@ ZaliMixin(ZaliInterface, class {
         this.voiceTrace('event-other-device', { eventType, roomId, targetDevice: payload.targetDevice || '' });
         const answered = eventType === 'voice_call_accepted' || eventType === 'voice_call_connected';
         if (!answered || !roomId) return;
+        if (this.hasInviteOverChannel(roomId)) {
+            // Answered on another device while it rang over this device's channel:
+            // only the ringing belongs to that call, the channel here carries on.
+            this.addLogEntry({ type: 'INFO', msg: 'Звонок принят на другом устройстве', ts: new Date().toLocaleTimeString() });
+            this.dismissInviteOverChannel({ reason: 'answered-elsewhere' });
+            return;
+        }
         if (String(this.voice.incomingInvite?.roomId || '').trim() !== roomId) return;
         this.voiceDiag('invite-answered-elsewhere', { roomId, status: this.voice.status || '' });
         this.addLogEntry({ type: 'INFO', msg: 'Звонок принят на другом устройстве', ts: new Date().toLocaleTimeString() });
@@ -549,8 +556,35 @@ ZaliMixin(ZaliInterface, class {
                 }
                 this.voice.outgoingInvite = null;
                 // Fall through: the incoming invite below becomes the live call.
+            } else if (activeRoomId && activeRoomId !== roomId && this.voice.roomType === 'channel'
+                && this.isInActiveCall()
+                && (!this.voice.incomingInvite || String(this.voice.incomingInvite.roomId || '').trim() === roomId)) {
+                // Sitting in a voice channel is not "busy". It used to be: the invite was
+                // auto-rejected 60–100 ms after it arrived, before it ever rang, and the
+                // caller saw «Вызов отклонён» the instant they pressed «Позвонить». In
+                // production (2026-09-15) that was every DM call between two people who
+                // hang out in the same voice channel — one of them always still was.
+                //
+                // So it rings on top of the channel instead, and lives NEXT to the channel
+                // session rather than in it: roomId/status/callTrack stay the channel's,
+                // the channel keeps talking. Answering leaves the channel and takes the
+                // call (acceptIncomingCall), declining leaves you where you were
+                // (rejectIncomingCall), and a caller who gives up only stops the ringing.
+                this.voice.incomingInvite = {
+                    roomId,
+                    from,
+                    roomType: 'dm',
+                    overChannel: true,
+                    receivedAt: Number(this.voice.incomingInvite?.receivedAt) || Date.now(),
+                };
+                this.voiceDiag('incoming-invite-over-channel', { roomId, from, channelRoomId: activeRoomId });
+                this.renderVoicePanel();
+                return;
             } else if (activeRoomId && activeRoomId !== roomId && this.isInActiveCall()) {
-                this.voiceTrace('incoming-invite-busy', { roomId, from, activeRoomId, status: this.voice.status }, 'WARN');
+                // Always-on: this auto-reject is invisible on the callee's screen, and the
+                // caller only sees «отклонён» — without this line the client log said
+                // nothing at all about why a call died in 100 ms.
+                this.voiceDiag('incoming-invite-busy', { roomId, from, activeRoomId, roomType: this.voice.roomType || '', status: this.voice.status }, 'WARN');
                 this.sendVoiceEvent({
                     type: 'voice_call_reject',
                     roomId,
@@ -559,25 +593,7 @@ ZaliMixin(ZaliInterface, class {
                 this.addLogEntry({ type: 'INFO', msg: `Входящий звонок от ${from} отклонён: уже идёт другой звонок`, ts: new Date().toLocaleTimeString() });
                 return;
             }
-            this.voice.incomingInvite = {
-                roomId,
-                from,
-                roomType: 'dm',
-            };
-            this.voice.inviter = from;
-            this.voice.callTrack = {
-                roomId,
-                peer: from,
-                roomType: 'dm',
-                direction: 'incoming',
-                startedAt: Date.now(),
-                connectedAt: 0,
-                endedAt: 0,
-                outcome: 'incoming',
-                recorded: false,
-            };
-            this.voice.outgoingInvite = null;
-            this.voice.status = 'incoming';
+            this.ringInviteAsIncomingCall({ roomId, from });
             this.voiceTrace('incoming-invite', { roomId, from });
             this.renderVoicePanel();
             return;
@@ -611,6 +627,12 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (eventType === 'voice_call_rejected') {
+            // Declined on another device of this account while it rang over our channel:
+            // stop ringing, stay in the channel. The declining device records it.
+            if (this.hasInviteOverChannel(payload.roomId)) {
+                this.dismissInviteOverChannel({ reason: 'rejected-elsewhere' });
+                return;
+            }
             if (this.voice.outgoingInvite?.roomId === String(payload.roomId || '').trim()) {
                 this.voiceTrace('outgoing-rejected', { roomId: payload.roomId || '', from: payload.from || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'rejected', endedAt: Date.now() });
@@ -627,6 +649,13 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (eventType === 'voice_call_cancelled') {
+            if (this.markAcceptingInviteEnded(payload.roomId, 'cancelled')) return;
+            // The caller gave up while it rang over our channel: the channel was never
+            // touched, so only the ringing stops.
+            if (this.hasInviteOverChannel(payload.roomId)) {
+                this.dismissInviteOverChannel({ outcome: 'cancelled', reason: 'cancelled' });
+                return;
+            }
             if (this.voice.incomingInvite?.roomId === String(payload.roomId || '').trim()) {
                 this.voiceTrace('incoming-cancelled', { roomId: payload.roomId || '', from: payload.from || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
@@ -637,6 +666,11 @@ ZaliMixin(ZaliInterface, class {
 
         if (eventType === 'voice_call_missed') {
             const roomId = String(payload.roomId || '').trim();
+            if (this.markAcceptingInviteEnded(roomId, 'missed')) return;
+            if (this.hasInviteOverChannel(roomId)) {
+                this.dismissInviteOverChannel({ outcome: 'missed', reason: 'missed' });
+                return;
+            }
             if (this.voice.incomingInvite?.roomId === roomId || this.voice.outgoingInvite?.roomId === roomId) {
                 this.voiceTrace('call-missed', { roomId, from: payload.from || '', target: payload.target || '' }, 'WARN');
                 this.recordVoiceCallHistory({ outcome: 'missed', endedAt: Date.now() });

@@ -101,6 +101,22 @@ ZaliMixin(ZaliInterface, class {
         `;
     }
 
+    // The strip while a DM call rings over the voice channel we are in. Buttons have
+    // their own ids: the panel's #voiceAcceptBtn may be in the DOM at the same time.
+    renderVoiceIncomingStrip(invite) {
+        const from = String(invite?.from || '').trim();
+        const title = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        return `
+            <div class="voice-callbar voice-callbar-incoming" id="voiceIncomingBar" role="group" aria-label="${this.esc(title)}">
+                <div class="voice-callbar-title">${this.esc(title)}</div>
+                <div class="voice-callbar-controls">
+                    <button class="voice-callbar-action" type="button" id="voiceStripAcceptBtn" title="Выйти из канала и принять звонок" aria-label="Принять">${this.voiceIcon('phone')}<span>Принять</span></button>
+                    <button class="voice-callbar-action danger" type="button" id="voiceStripRejectBtn" title="Отклонить и остаться в канале" aria-label="Отклонить">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>
+                </div>
+            </div>
+        `;
+    }
+
     // Fullscreen (within the chat window) call view: dynamic grid of 16:9 tiles,
     // one per participant, reusing renderVoiceTiles()/mountVoiceVideoElements()
     // as-is so a participant's camera feed replaces their tile exactly like it
@@ -292,7 +308,7 @@ ZaliMixin(ZaliInterface, class {
         // calls renderVoicePanel(), so syncing the ringtone here — rather than at
         // each individual transition site — guarantees it always stops, including
         // paths that don't go through resetVoiceState (e.g. the caller cancelling).
-        if (this.voice.status === 'incoming' && this.voice.incomingInvite) {
+        if (this.hasRingingIncomingInvite()) {
             this.startRingtone();
         } else {
             this.stopRingtone();
@@ -424,6 +440,20 @@ ZaliMixin(ZaliInterface, class {
         }
         const strip = document.getElementById('voiceCallStrip');
         if (!strip) return;
+        // A DM call ringing over the channel takes the strip over, everywhere —
+        // including the channel's own view, where the strip is otherwise hidden and
+        // where the user most likely is when it rings.
+        const ringingOverChannel = this.hasInviteOverChannel() ? this.voice.incomingInvite : null;
+        if (ringingOverChannel) {
+            strip.parentElement?.classList.add('has-call-strip');
+            const html = this.renderVoiceIncomingStrip(ringingOverChannel);
+            if (html !== this._voiceStripHtml) {
+                strip.innerHTML = html;
+                this._voiceStripHtml = html;
+            }
+            strip.hidden = false;
+            return;
+        }
         const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
         const coveredByCall = type === 'channel'
             ? this.isViewingVoiceCallRoom()

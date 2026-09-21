@@ -54,14 +54,38 @@ ZaliMixin(ZaliInterface, class {
     // мессенджера — переписывались, ушли в другое приложение, собеседник ответил —
     // давал ровно ноль: ни уведомления, ни звука, ни счётчика непрочитанного.
     //
-    // hasFocus() не спрашиваем в мобильной раскладке: на телефоне приложение на
-    // экране и есть приложение в руках, а фокус вида у Android WebView зависит от
-    // того, куда последним ушло касание (нативная нижняя панель его забирает).
+    // Правило одно: приложение не в фокусе — уведомление и звук, даже если нужный
+    // чат открыт.
+    //
+    // Нативный шелл сообщает фокус сам (`window.__zaliNativeAppFocus`, см.
+    // onNativeAppFocusChange): документ внутри WKWebView не всегда узнаёт, что
+    // приложение ушло на задний план, а Android WebView без onPause остаётся
+    // «видимым» и в фоне. Без сигнала шелла — видимость документа и hasFocus().
+    //
+    // hasFocus() не спрашиваем только на сенсорном устройстве: на телефоне
+    // приложение на экране и есть приложение в руках, а фокус вида у WebView
+    // зависит от того, куда последним ушло касание. Раньше здесь стояла мобильная
+    // РАСКЛАДКА — и узкое окно на компьютере считалось «смотрят» при любом фокусе.
     isAppAttended() {
         if (typeof document === 'undefined') return true;
         if (document.visibilityState === 'hidden') return false;
-        if (this.isMobileLayout?.()) return true;
+        const nativeFocus = typeof window !== 'undefined' ? window.__zaliNativeAppFocus : undefined;
+        if (typeof nativeFocus === 'boolean') return nativeFocus;
+        if (this.isHandheldDevice()) return true;
         return typeof document.hasFocus !== 'function' || document.hasFocus();
+    }
+
+    isHandheldDevice() {
+        if (this.nativeBridge?.()?.transport === 'android') return true;
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+        return window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(any-pointer: fine)').matches;
+    }
+
+    // Шелл сменил window.__zaliNativeAppFocus: вернувшись, снять счётчик открытого
+    // чата; сервер узнаёт о смене из client_presence (браузер) или от самого шелла.
+    onNativeAppFocusChange() {
+        this.clearAttendedConversationUnread();
+        this.reportClientPresence?.();
     }
 
     // Входящее не требует уведомления, только если его чат на экране И пользователь

@@ -51,6 +51,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
 
     func applicationDidBecomeActive(_ notification: Notification) {
         NativeNotificationService.shared.recheckAuthorizationStatus()
+        syncWebAppFocus()
+    }
+
+    func applicationDidResignActive(_ notification: Notification) { syncWebAppFocus() }
+    func windowDidBecomeKey(_ notification: Notification) { syncWebAppFocus() }
+    func windowDidResignKey(_ notification: Notification) { syncWebAppFocus() }
+    func windowDidMiniaturize(_ notification: Notification) { syncWebAppFocus() }
+
+    // Уведомление и звук идут, когда приложение не в фокусе, даже при открытом чате
+    // (isAppAttended в web/src/interface/notifications.js). document.hasFocus() в
+    // WKWebView не всегда меняется при уходе в другое приложение — фокус сообщаем явно.
+    //
+    // Не private: то же самое обязан сделать didFinish в WebView.swift. Флаг живёт в
+    // документе, поэтому любая перезагрузка вебвью его стирает, а события фокуса до
+    // следующего переключения приложений не приходят — и до тех пор isAppAttended()
+    // снова опирается на ненадёжный document.hasFocus(). Зеркало Android
+    // (onPageFinished в MainActivity.kt) и Windows (опрос в main.rs).
+    func syncWebAppFocus() {
+        let focused = NSApp.isActive && (window?.isKeyWindow ?? false) && !(window?.isMiniaturized ?? true)
+        let script = "window.__zaliNativeAppFocus = \(focused); var ui = window.__ZALI_INTERFACE; if (ui && ui.onNativeAppFocusChange) ui.onNativeAppFocusChange();"
+        coordinator?.webView?.evaluateJavaScript(script, completionHandler: nil)
     }
 
     // Closing the window does not quit. Whether an incoming message deserves a

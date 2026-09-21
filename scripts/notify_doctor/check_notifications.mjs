@@ -126,6 +126,19 @@ async function attendedGate() {
     check('открытый канал, окно не в фокусе — уведомление есть', channel.shown.length === 1,
         `${channel.shown.length} уведомлений`, '1 уведомление');
 
+    const shellBlur = makeClient();
+    shellBlur.sandbox.window.__zaliNativeAppFocus = false;
+    shellBlur.api.receiveMessage({ id: 'n-1', sender: 'alice', receiver: 'me', text: 'шелл не в фокусе' });
+    check('шелл сообщил «не в фокусе», хотя документ считает себя в фокусе — уведомление есть',
+        shellBlur.shown.length === 1, 'сигнал шелла проигнорирован', '1 уведомление');
+
+    const narrow = makeClient();
+    narrow.sandbox.window.matchMedia = (query) => ({ matches: /max-width|any-pointer: fine/.test(query) });
+    narrow.env.focused = false;
+    narrow.api.receiveMessage({ id: 'w-1', sender: 'alice', receiver: 'me', text: 'узкое окно' });
+    check('узкое окно на компьютере, не в фокусе — уведомление есть', narrow.shown.length === 1,
+        'мобильная раскладка на мыши считалась «смотрят»', '1 уведомление');
+
     const browser = makeClient({ native: false });
     browser.env.focused = false;
     browser.api.receiveMessage({ id: 'b-1', sender: 'alice', receiver: 'me', text: 'из браузера' });

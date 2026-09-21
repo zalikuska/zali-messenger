@@ -495,3 +495,161 @@ async fn a_fresh_install_seeds_no_demo_servers() {
         .unwrap();
     assert_eq!(discoverable["servers"].as_array().unwrap().len(), 0);
 }
+
+/// Не участник публичного сервера видит только то, что открыто роли `member`.
+/// Раньше `is_public` пускал его в любой канал мимо прав канала — и участник с
+/// урезанной ролью получал закрытые каналы назад, просто выйдя с сервера.
+#[tokio::test]
+async fn outsiders_of_a_public_server_do_not_see_channels_closed_to_members() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let mallory = register_user(&app, "mallory", "hunter22").await;
+    let server = create_server(&app, &alice, "Guild", true).await;
+    let server_id = server["id"].as_str().unwrap().to_string();
+    let channels = server["channels"].as_array().unwrap();
+    let hidden_id = channels[0]["id"].as_str().unwrap().to_string();
+    let open_id = channels[1]["id"].as_str().unwrap().to_string();
+
+    let resp = app
+        .http
+        .put(app.url(&format!("/api/servers/{server_id}/channels/{hidden_id}/permissions")))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "permissions": [
+            { "role": "member", "can_view": false, "can_send": false, "can_manage": false }
+        ]}))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "set permissions: {}", resp.status());
+
+    let hidden = app
+        .http
+        .get(app.url(&format!("/api/servers/{server_id}/channels/{hidden_id}/messages")))
+        .header("Authorization", mallory.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(hidden.status(), 403, "closed channel must stay closed to outsiders");
+
+    let open = app
+        .http
+        .get(app.url(&format!("/api/servers/{server_id}/channels/{open_id}/messages")))
+        .header("Authorization", mallory.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(open.status(), 200, "a channel open to members stays readable");
+
+    let listed: serde_json::Value = app
+        .http
+        .get(app.url(&format!("/api/servers/{server_id}/channels")))
+        .header("Authorization", mallory.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let text = listed.to_string();
+    assert!(!text.contains(&hidden_id), "closed channel must not be listed: {text}");
+    assert!(text.contains(&open_id));
+}
+
+#[tokio::test]
+async fn joining_by_invite_never_demotes_an_existing_admin() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let server = create_server(&app, &alice, "Guild", false).await;
+    let server_id = server["id"].as_str().unwrap().to_string();
+    let add = app
+        .http
+        .post(app.url(&format!("/api/servers/{server_id}/members")))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "username": "bob", "role": "admin" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(add.status(), 200);
+    let invite: serde_json::Value = app
+        .http
+        .post(app.url(&format!("/api/servers/{server_id}/invites")))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "max_uses": 5 }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let code = invite["code"].as_str().unwrap().to_string();
+    let join = app
+        .http
+        .post(app.url(&format!("/api/invites/{code}/join")))
+        .header("Authorization", bob.auth_header())
+        .json(&serde_json::json!({ "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(join.status(), 200);
+    let members: serde_json::Value = app
+        .http
+        .get(app.url(&format!("/api/servers/{server_id}/members")))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_member = members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["username"] == "bob")
+        .unwrap();
+    assert_eq!(bob_member["role"], "admin");
+}
+
+/// Аватар/баннер сервера отдаётся с домена API, поэтому принимать можно только
+/// растровые картинки — иначе это хранимый XSS (`text/html`, `application/javascript`).
+#[tokio::test]
+async fn server_assets_accept_only_real_images() {
+    use base64::Engine;
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server = create_server(&app, &alice, "Guild", true).await;
+    let server_id = server["id"].as_str().unwrap().to_string();
+
+    let script = base64::engine::general_purpose::STANDARD.encode(b"fetch('/api/coins/transfer')");
+    let bad = app
+        .http
+        .put(app.url(&format!("/api/servers/{server_id}/assets/banner")))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "data_url": format!("data:application/javascript;base64,{script}") }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    // PNG, но с ложным MIME в data URL — отдаётся как image/png.
+    let png: Vec<u8> = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0].to_vec();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+    let ok = app
+        .http
+        .put(app.url(&format!("/api/servers/{server_id}/assets/avatar")))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "data_url": format!("data:text/html;base64,{encoded}") }))
+        .send()
+        .await
+        .unwrap();
+    assert!(ok.status().is_success(), "png upload: {}", ok.status());
+    let served = app
+        .http
+        .get(app.url(&format!("/api/servers/{server_id}/assets/avatar")))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(served.headers()["content-type"], "image/png");
+}
