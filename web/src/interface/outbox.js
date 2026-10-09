@@ -555,6 +555,7 @@ ZaliMixin(ZaliInterface, class {
                     clientId: item.clientId,
                     attachments: outAttachments,
                     reply: String(item.reply || ''),
+                    call: String(item.call || ''),
                 }).then(ok => {
                     if (!ok) {
                         this.trace(`flushPendingOutbox browserSendMessage failed clientId=${pendingId}`);

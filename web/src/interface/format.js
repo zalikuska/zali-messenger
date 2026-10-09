@@ -6,6 +6,61 @@ const ZALI_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 const ZALI_ESCAPE_PATTERN = /[&<>"']/g;
 const ZALI_ESCAPE_PROBE = /[&<>"']/;
 
+// Форматтеры дат создаются один раз. toLocaleTimeString()/toLocaleDateString()
+// с локалью и опциями строят новый ICU-форматтер на КАЖДЫЙ вызов, а отрисовка
+// списка сообщений зовёт их по три-пять раз на пузырь: замер на 78 пузырях —
+// 5 из 5,8 мс кадра уходило на даты. Intl.DateTimeFormat с теми же локалью и
+// опциями даёт ту же строку (toLocale*String по спецификации делегирует ему).
+// Результаты дополнительно запоминаются по исходному значению метки времени:
+// перерисовка того же списка просит те же самые строки.
+// Форматтер запоминает часовой пояс на момент создания, поэтому раз в минуту
+// пояс сверяется заново: сменили пояс системы — форматтеры и память
+// пересоздаются, как это неявно делал toLocale*String().
+const ZALI_FORMAT_MEMO_LIMIT = 4096;
+const ZALI_TZ_RECHECK_MS = 60 * 1000;
+let zaliTimeFormat = null;
+let zaliDayMonthFormat = null;
+let zaliFormatTimeZone = '';
+let zaliFormatCheckedAt = 0;
+const zaliTimeMemo = new Map();
+const zaliDayMonthMemo = new Map();
+
+function zaliEnsureFormatters() {
+    const nowMs = Date.now();
+    if (zaliTimeFormat && nowMs - zaliFormatCheckedAt < ZALI_TZ_RECHECK_MS) return;
+    zaliFormatCheckedAt = nowMs;
+    let zone = '';
+    try { zone = new Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { zone = ''; }
+    if (zaliTimeFormat && zone === zaliFormatTimeZone) return;
+    zaliFormatTimeZone = zone;
+    zaliTimeFormat = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    zaliDayMonthFormat = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
+    zaliTimeMemo.clear();
+    zaliDayMonthMemo.clear();
+}
+
+function zaliMemoFormat(memo, key, compute) {
+    let value = memo.get(key);
+    if (value === undefined) {
+        if (memo.size >= ZALI_FORMAT_MEMO_LIMIT) memo.clear();
+        value = compute();
+        memo.set(key, value);
+    }
+    return value;
+}
+
+// Сравнение имён в сайдбаре. localeCompare() с локалью и опциями строит
+// коллатор на каждое сравнение — а сортировка контактов делает их n·log n на
+// каждую перерисовку сайдбара. Тот же коллатор, созданный один раз, сравнивает
+// так же.
+const ZALI_NAME_COLLATOR = new Intl.Collator('ru', { sensitivity: 'base' });
+
+// Номер локального календарного дня — то же сравнение, что toDateString(),
+// без построения строк.
+function zaliLocalDayIndex(date) {
+    return date.getFullYear() * 400 + date.getMonth() * 32 + date.getDate();
+}
+
 ZaliMixin(ZaliInterface, class {
 
     // --- HTML Helper Utilities ---
@@ -79,8 +134,15 @@ ZaliMixin(ZaliInterface, class {
 
     fmtTime(iso) {
         if (!iso) return '';
-        try { return new Date(iso).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}); }
-        catch(e) { return ''; }
+        zaliEnsureFormatters();
+        return zaliMemoFormat(zaliTimeMemo, iso, () => {
+            const date = new Date(iso);
+            // Невалидная дата: форматтер бросает RangeError там, где
+            // toLocaleTimeString() вернул бы строку «Invalid Date».
+            if (Number.isNaN(date.getTime())) return 'Invalid Date';
+            try { return zaliTimeFormat.format(date); }
+            catch(e) { return ''; }
+        });
     }
 
     // Numbers are handled explicitly, not as an afterthought: the browser
@@ -120,26 +182,50 @@ ZaliMixin(ZaliInterface, class {
     // Messages are appended chronologically, so the newest timestamp lives at the
     // tail; scan backwards over a small bounded tail to stay tolerant of the slight
     // out-of-order that reconciliation can leave behind, and stop there.
+    //
+    // The answer is memoised per conversation against the identity of those tail
+    // message objects. Messages are never mutated in place (every edit/reconcile
+    // replaces the object), so identical references mean identical timestamps —
+    // and one incoming message then costs one conversation's re-scan, not
+    // Date.parse × 24 × every contact on each sidebar paint.
     conversationLastMessageAt(peer) {
         const msgs = Array.isArray(this.S.chats?.[peer]) ? this.S.chats[peer] : [];
         const TAIL_SCAN = 24;
+        const memoMap = this._lastMessageAtMemo || (this._lastMessageAtMemo = new WeakMap());
+        const tailStart = Math.max(0, msgs.length - TAIL_SCAN);
+        const memo = memoMap.get(msgs);
+        if (memo && memo.length === msgs.length) {
+            let same = true;
+            for (let i = tailStart, j = 0; i < msgs.length; i += 1, j += 1) {
+                if (memo.tail[j] !== msgs[i]) { same = false; break; }
+            }
+            if (same) return memo.value;
+        }
         let lastTs = 0;
-        let scanned = 0;
-        for (let i = msgs.length - 1; i >= 0 && scanned < TAIL_SCAN; i -= 1, scanned += 1) {
+        for (let i = msgs.length - 1; i >= tailStart; i -= 1) {
             const ts = this.messageTimestampValue(msgs[i]?.timestamp);
             if (ts > lastTs) lastTs = ts;
         }
+        memoMap.set(msgs, { length: msgs.length, tail: msgs.slice(tailStart), value: lastTs });
         return lastTs;
+    }
+
+    compareContactNames(a, b) {
+        return ZALI_NAME_COLLATOR.compare(a, b);
     }
 
     fmtDate(iso) {
         if (!iso) return '';
         try {
-            const messageDate = new Date(iso), now = new Date();
-            const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-            if (messageDate.toDateString() === now.toDateString())       return 'Сегодня';
-            if (messageDate.toDateString() === yesterday.toDateString()) return 'Вчера';
-            return messageDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
+            const messageDate = new Date(iso);
+            if (Number.isNaN(messageDate.getTime())) return 'Invalid Date';
+            zaliEnsureFormatters();
+            const now = new Date();
+            const yesterday = new Date(now); yesterday.setDate(yesterday.getDate()-1);
+            const day = zaliLocalDayIndex(messageDate);
+            if (day === zaliLocalDayIndex(now))       return 'Сегодня';
+            if (day === zaliLocalDayIndex(yesterday)) return 'Вчера';
+            return zaliMemoFormat(zaliDayMonthMemo, day, () => zaliDayMonthFormat.format(messageDate));
         } catch(e) { return ''; }
     }
 });

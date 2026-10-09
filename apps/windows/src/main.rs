@@ -383,29 +383,90 @@ fn response_for_asset(path: &str) -> Response<Cow<'static, [u8]>> {
         .unwrap_or_else(|_| Response::new(Cow::Owned(Vec::new())))
 }
 
+const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// zali-win.log с ротацией: дальше LOG_MAX_BYTES текущий файл становится
+/// zali-win.1.log (прежний .1 удаляется) — и при запуске, и посреди работы.
+/// Проверка только при старте не спасала: с подробным уровнем (см. ниже) клиент,
+/// неделями живущий в трее, раздувал файл до сотен мегабайт до следующего запуска.
+/// Не удаляется сразу: сессия, которая только что сломалась, — именно та, что
+/// перевалила порог. Та же схема, что у macOS zali-debug.log.
+struct RotatingLog {
+    path: std::path::PathBuf,
+    previous: std::path::PathBuf,
+    file: Option<std::fs::File>,
+    written: u64,
+}
+
+impl RotatingLog {
+    fn open(path: std::path::PathBuf, previous: std::path::PathBuf) -> std::io::Result<Self> {
+        let mut log = RotatingLog { path, previous, file: None, written: 0 };
+        let size = std::fs::metadata(&log.path).map(|m| m.len()).unwrap_or(0);
+        if size > LOG_MAX_BYTES {
+            log.rotate();
+        } else {
+            log.written = size;
+        }
+        log.file = Some(std::fs::OpenOptions::new().create(true).append(true).open(&log.path)?);
+        Ok(log)
+    }
+
+    fn rotate(&mut self) {
+        self.file = None;
+        let _ = std::fs::remove_file(&self.previous);
+        if std::fs::rename(&self.path, &self.previous).is_err() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        self.written = 0;
+    }
+}
+
+impl std::io::Write for RotatingLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() as u64 > LOG_MAX_BYTES {
+            self.rotate();
+        }
+        if self.file.is_none() {
+            self.file = Some(std::fs::OpenOptions::new().create(true).append(true).open(&self.path)?);
+        }
+        let n = self.file.as_mut().map(|f| f.write(buf)).unwrap_or(Ok(buf.len()))?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.as_mut().map(|f| f.flush()).unwrap_or(Ok(()))
+    }
+}
+
 /// Sends tracing output to `<app data>/zali-win.log` instead of stdout. A GUI-subsystem
 /// process has no console, so the default stdout writer would drop every line on the
 /// floor — and this shell's log is the only record of what the native layer did
 /// (bridge traffic, WS reconnects, update installs). Mirrors the macOS client's
-/// zali-debug.log. Falls back to stdout if the file cannot be opened; the level is
-/// still controlled by RUST_LOG as before.
+/// zali-debug.log. Falls back to stdout if the file cannot be opened.
 fn init_logging() {
-    let path = NativeState::app_data_dir().join("zali-win.log");
-    let _ = std::fs::create_dir_all(NativeState::app_data_dir());
-    // Nothing rotates this file, and it is appended to for the whole life of the
-    // installation — start over once it passes 8 MB rather than growing without bound.
-    if std::fs::metadata(&path).map(|m| m.len() > 8 * 1024 * 1024).unwrap_or(false) {
-        let _ = std::fs::remove_file(&path);
-    }
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(file) => {
+    let dir = NativeState::app_data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("zali-win.log");
+    // Нативный слой пишет свои трейсы (`native::trace`) на уровне TRACE. Без
+    // фильтра `fmt()` пропускал только INFO и выше, а RUST_LOG без фичи
+    // `env-filter` не читался вовсе — то есть весь подробный журнал шелла (мост,
+    // WS, история, загрузки) не попадал в этот файл никогда. По умолчанию — всё
+    // своё, чужие крейты с INFO; RUST_LOG по-прежнему переопределяет.
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,zali_messenger_win=trace"))
+    };
+    match RotatingLog::open(path.clone(), dir.join("zali-win.1.log")) {
+        Ok(log) => {
             tracing_subscriber::fmt()
+                .with_env_filter(filter())
                 .with_ansi(false)
-                .with_writer(Mutex::new(file))
+                .with_writer(Mutex::new(log))
                 .init();
             info!("logging to {}", path.display());
         }
-        Err(_) => tracing_subscriber::fmt::init(),
+        Err(_) => tracing_subscriber::fmt().with_env_filter(filter()).init(),
     }
 }
 

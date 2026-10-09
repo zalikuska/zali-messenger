@@ -5,7 +5,7 @@ name = "zali_messenger_win"
 # APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
 # compares against the server's app_releases.version). This field only needs to
 # keep incrementing for Cargo's own bookkeeping; it is not shown to users.
-version = "0.2.46"
+version = "0.2.47"
 edition = "2021"
 
 [dependencies]
@@ -21,7 +21,7 @@ tao = { version = "0.24", default-features = false, features = ["rwh_05"] }
 zali_messenger_core = { path = "../../core" }
 uuid = { version = "1.0", features = ["v4"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 notify-rust = "4.17"

@@ -235,6 +235,9 @@ ZaliMixin(ZaliInterface, class {
             this.S.serverChats = userCachedMessages.serverChats && typeof userCachedMessages.serverChats === 'object'
                 ? userCachedMessages.serverChats
                 : {};
+            // Кеш, сохранённый до исправления, уже держит дубли записей о звонках
+            // (текстом рядом с карточкой) — сводим их один раз при входе.
+            for (const arr of Object.values(this.S.chats)) this.collapseCallRecordRows(arr);
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))

@@ -160,16 +160,7 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const cancelBtn = e.target.closest('#voiceCancelBtn');
                 if (cancelBtn) {
-                    const invite = this.voice.outgoingInvite;
-                    if (invite?.roomId && invite?.target) {
-                        this.sendVoiceEvent({
-                            type: 'voice_call_cancel',
-                            roomId: invite.roomId,
-                            target: invite.target,
-                        });
-                    }
-                    this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
-                    this.resetVoiceState({ preserveInvite: false });
+                    this.cancelOutgoingVoiceCall();
                 }
             });
             voicePanel.addEventListener('keydown', (e) => {
@@ -182,11 +173,44 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // Компактный звонок (renderVoiceCompactCall) — в титлбаре и в полосе на
+        // телефоне. Кнопки адресуются data-voice-action: фрагмент один, мест два.
+        const handleCompactCallAction = (e) => {
+            const btn = e.target.closest('[data-voice-action]');
+            if (!btn) return false;
+            const action = btn.getAttribute('data-voice-action');
+            if (action === 'open') this.openActiveVoiceCall();
+            else if (action === 'mute') this.toggleVoiceMute();
+            else if (action === 'deafen') this.toggleVoiceDeafen();
+            else if (action === 'leave') void this.leaveVoiceRoom({ announce: true });
+            return true;
+        };
+        document.getElementById('tbCall')?.addEventListener('click', (e) => {
+            handleCompactCallAction(e);
+        });
+
+        // Шапка чата в состоянии «звонит» (renderChatHeaderCallState): принять,
+        // отклонить, отменить исходящий; и полоса над вкладками с тем же.
+        const handleRingingAction = (e) => {
+            const btn = e.target.closest('[data-ring-action]');
+            if (!btn) return false;
+            const action = btn.getAttribute('data-ring-action');
+            if (action === 'accept') void this.acceptIncomingCall();
+            else if (action === 'reject') void this.rejectIncomingCall();
+            else if (action === 'cancel') this.cancelOutgoingVoiceCall();
+            return true;
+        };
+        document.getElementById('chatHdrCallCtl')?.addEventListener('click', (e) => {
+            handleRingingAction(e);
+        });
+
         // The strip above every tab: its mute/deafen act in place, anywhere else
         // on it goes back to the call.
         const voiceCallStrip = document.getElementById('voiceCallStrip');
         if (voiceCallStrip) {
             voiceCallStrip.addEventListener('click', (e) => {
+                if (handleCompactCallAction(e)) return;
+                if (handleRingingAction(e)) return;
                 // A DM call ringing over the voice channel we are in (renderVoiceIncomingStrip).
                 if (e.target.closest('#voiceStripAcceptBtn')) {
                     void this.acceptIncomingCall();
@@ -638,6 +662,24 @@ ZaliMixin(ZaliInterface, class {
 
         const authNetworkSaveBtn = document.getElementById('authNetworkSaveBtn');
         const authApiBaseUrl = document.getElementById('authApiBaseUrl');
+        // В оформлении «Фокус» блок адреса сервера свёрнут до одной строки —
+        // нужен редко, а занимал треть формы входа.
+        const authNetworkHead = document.getElementById('authNetworkHead');
+        if (authNetworkHead) {
+            const toggleAuthNetwork = () => {
+                const box = authNetworkHead.closest('.auth-network');
+                const open = !box?.classList.contains('is-open');
+                box?.classList.toggle('is-open', open);
+                authNetworkHead.setAttribute('aria-expanded', open ? 'true' : 'false');
+                if (open) authApiBaseUrl?.focus({ preventScroll: true });
+            };
+            authNetworkHead.addEventListener('click', toggleAuthNetwork);
+            authNetworkHead.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleAuthNetwork();
+            });
+        }
         if (authApiBaseUrl) {
             authApiBaseUrl.addEventListener('input', () => {
                 authApiBaseUrl.dataset.dirty = '1';
@@ -742,6 +784,9 @@ ZaliMixin(ZaliInterface, class {
         const serverRoleNameInput = document.getElementById('serverRoleNameInput');
         const settingsLogoutBtn = document.getElementById('settingsLogoutBtn');
         const clearLogsBtn = document.getElementById('clearLogs');
+        document.getElementById('sendDiagnosticsBtn')?.addEventListener('click', () => {
+            void this.sendManualDiagnosticReport();
+        });
         const closeSettings = document.getElementById('closeSettings');
         const resetEncryptionKeysBtn = document.getElementById('resetEncryptionKeysBtn');
         const networkConfigSaveBtn = document.getElementById('networkConfigSaveBtn');
@@ -1303,6 +1348,7 @@ ZaliMixin(ZaliInterface, class {
         if (meAva) meAva.title = 'Мой профиль';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
+                this._pendingLogEntries = [];
                 const logBody = document.getElementById('logBody');
                 if (logBody) logBody.innerHTML = '';
             });
@@ -1677,7 +1723,7 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
@@ -1704,6 +1750,13 @@ ZaliMixin(ZaliInterface, class {
             if (tbL && wsPill) {
                 tbL.insertBefore(wsPill, tbL.firstChild);
             }
+            // Компактный идущий звонок — на стороне, противоположной кнопкам окна:
+            // на Windows они справа, звонок уходит влево, следом за индикатором
+            // связи. В macOS (светофор слева) и в браузере он остаётся справа.
+            const tbCall = document.getElementById('tbCall');
+            if (tbL && tbCall) {
+                tbL.insertBefore(tbCall, wsPill ? wsPill.nextSibling : tbL.firstChild);
+            }
             document.getElementById('winMinBtn')?.addEventListener('click', () => {
                 this.postNativeMessage({ type: NativeMessageTypes.MINIMIZE_WINDOW });
             });
@@ -1714,7 +1767,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

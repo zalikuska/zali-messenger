@@ -21,7 +21,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // ============================================================
-    // DESIGN MODE — оформление интерфейса целиком: classic | flat.
+    // DESIGN MODE — оформление интерфейса целиком: classic | flat | focus.
     //
     // Раньше это был одиночный чекбокс «плоский режим»
     // (`zali_experimental_design_v1`, атрибут `data-experimental-design`).
@@ -41,6 +41,12 @@ ZaliMixin(ZaliInterface, class {
         return [
             { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
             { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+            // «Фокус» — не очередная перекраска, а другая иерархия: акцент
+            // остаётся только у «моего» (исходящие, мой аватар), «нового»
+            // (непрочитанное) и главного действия (отправить), служебное
+            // прячется до наведения или до проблемы. Слой CSS — в конце
+            // web/style.css, раздел «DESIGN MODE: FOCUS».
+            { id: 'focus', label: 'Фокус', note: 'focus', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
         ];
     }
 
@@ -82,6 +88,11 @@ ZaliMixin(ZaliInterface, class {
         // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
         const legacyToggle = document.getElementById('inputExperimentalDesign');
         if (legacyToggle) legacyToggle.checked = !!this.experimentalDesign;
+        // Высоту поля ввода resizeComposer() пишет инлайном по scrollHeight,
+        // а отступы поля у режимов разные: при старте он отрабатывает раньше
+        // applyDesignMode(), и без пересчёта поле оставалось на 3px ниже
+        // своего содержимого — с полосой прокрутки внутри.
+        this.resizeComposer?.();
         this.renderDesignModeSettings();
     }
 
@@ -670,6 +681,20 @@ ZaliMixin(ZaliInterface, class {
         const nav = document.getElementById('hubSegmentNav');
         if (!nav) return;
         const previousActive = nav.querySelector('.hub-segment-btn.active');
+        // Активный сегмент не сменился (переход между личками, входящее
+        // сообщение): кнопки трогать незачем, а чтение offsetLeft ниже —
+        // принудительная синхронная раскладка документа, который вызывающий
+        // только что поменял (switchChat → setNavMode). Сверка индикатора с
+        // положением кнопки откладывается в кадр, где раскладка и так будет.
+        if (previousActive && String(previousActive.getAttribute('data-hub-segment') || '') === active) {
+            if (!this._hubIndicatorSyncRaf) {
+                this._hubIndicatorSyncRaf = requestAnimationFrame(() => {
+                    this._hubIndicatorSyncRaf = 0;
+                    this.resyncHubSegmentIndicator();
+                });
+            }
+            return;
+        }
         const previousPosition = previousActive
             ? {
                 x: previousActive.offsetLeft,
@@ -693,6 +718,7 @@ ZaliMixin(ZaliInterface, class {
             if (withTransition) indicator.style.transition = '';
             indicator.style.width = `${activeBtn.offsetWidth}px`;
             indicator.style.transform = `translate3d(${activeBtn.offsetLeft}px, 0, 0)`;
+            indicator.dataset.target = `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`;
         };
         const samePosition = previousPosition
             && Math.abs(Number(previousPosition.x || 0) - activeBtn.offsetLeft) < 0.5
@@ -710,6 +736,19 @@ ZaliMixin(ZaliInterface, class {
                 indicator.style.transition = '';
             });
         }
+    }
+
+    // Индикатор уже стоит (или едет) туда, где активная кнопка, — ничего не
+    // делать: мгновенная пересинхронизация оборвала бы идущий переезд. Иначе
+    // (кнопка сдвинулась — сменилась ширина окна, набор сегментов) — поставить
+    // на место без анимации.
+    resyncHubSegmentIndicator() {
+        const nav = document.getElementById('hubSegmentNav');
+        const indicator = nav?.querySelector('.hub-segment-indicator');
+        const activeBtn = nav?.querySelector('.hub-segment-btn.active');
+        if (!indicator || !activeBtn) return;
+        if (indicator.dataset.target === `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`) return;
+        this.syncHubSegmentIndicator(null);
     }
 
     renderUiV2Settings() {

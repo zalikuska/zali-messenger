@@ -2,21 +2,49 @@
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+const ZALI_LOG_BODY_LIMIT = 300;
+
 ZaliMixin(ZaliInterface, class {
 
     addLogEntry({ type, msg, ts }) {
         // Mirror to console so the native console-hook persists the full in-app
         // journal to zali-debug.log on disk (readable without the UI).
         try { console.log(`[ZALI][JOURNAL] ${type}: ${msg}`); } catch (e) {}
+        // Копия для диагностического отчёта (diagnostic_reports.js): журнал в DOM
+        // читать оттуда не годится — его очищают кнопкой и обрезают.
+        this.pushDiagRing('_journalRing', `${ts} ${type}: ${msg}`);
+        // В DOM журнал уходит пачкой раз в кадр. Прямая вставка читала
+        // body.scrollHeight сразу после того, как вызывающий (receiveMessage,
+        // отправка, звонок) только что поменял сайдбар или список, — это
+        // принудительная синхронная раскладка всего документа на каждую строку
+        // журнала: 9 из 13 мс приёма одного сообщения на аккаунте со 150 чатами.
+        const pending = this._pendingLogEntries || (this._pendingLogEntries = []);
+        pending.push({ type, msg, ts });
+        if (pending.length > ZALI_LOG_BODY_LIMIT) pending.splice(0, pending.length - ZALI_LOG_BODY_LIMIT);
+        if (this._logFlushScheduled) return;
+        this._logFlushScheduled = true;
+        const flush = () => this.flushLogEntries();
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+        else setTimeout(flush, 16);
+    }
+
+    // Выгружает накопленные строки журнала в #logBody одной вставкой. Зовётся из
+    // кадра, а также синхронно теми, кто читает журнал из DOM (отчёт о сбое
+    // расшифровки), чтобы они видели и ещё не отрисованные строки.
+    flushLogEntries() {
+        this._logFlushScheduled = false;
+        const pending = this._pendingLogEntries;
+        if (!pending || !pending.length) return;
+        this._pendingLogEntries = [];
         const body = document.getElementById('logBody');
-        if (body) {
-            const div = document.createElement('div');
-            div.className = `log-entry log-${type}`;
-            div.innerHTML = `<span class="ts">[${ts}]</span>${this.esc(type)}: ${this.esc(msg)}`;
-            body.appendChild(div);
-            body.scrollTop = body.scrollHeight;
-            if (body.childElementCount > 300) body.removeChild(body.firstElementChild);
+        if (!body) return;
+        let html = '';
+        for (const { type, msg, ts } of pending) {
+            html += `<div class="log-entry log-${this.esc(type)}"><span class="ts">[${this.esc(ts)}]</span>${this.esc(type)}: ${this.esc(msg)}</div>`;
         }
+        body.insertAdjacentHTML('beforeend', html);
+        while (body.childElementCount > ZALI_LOG_BODY_LIMIT) body.removeChild(body.firstElementChild);
+        body.scrollTop = body.scrollHeight;
     }
 
     // Always-on counterpart of voiceTrace, for the handful of facts that decide

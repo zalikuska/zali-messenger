@@ -149,6 +149,7 @@ ZaliMixin(ZaliInterface, class {
                     canonicalKeyId = canonical.get(scope) || '';
                 } catch (e) { /* best-effort — see fetchCanonicalKeyIds's own fallback */ }
             }
+            this.flushLogEntries();
             const logBody = document.getElementById('logBody');
             const recentLog = logBody
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
@@ -453,40 +454,33 @@ ZaliMixin(ZaliInterface, class {
         const timeLabel = this.fmtTime(startedAt || endedAt);
         const durationLabel = this.formatDuration(durationMs);
         const title = outcome === 'missed'
-            ? `Пропущенный звонок`
+            ? (direction === 'outgoing' ? 'Без ответа' : 'Пропущенный звонок')
             : outcome === 'rejected'
-                ? `Звонок отклонён`
+                ? 'Звонок отклонён'
                 : outcome === 'cancelled'
-                    ? `Звонок отменён`
+                    ? 'Звонок отменён'
                     // The client gave up on a call it could no longer recover — see
                     // concludeDeadVoiceCallIfNeeded. Without this it read as an
                     // ordinary completed call, which is the one thing it was not.
                     : outcome === 'failed'
-                        ? `Звонок прерван`
-                        : direction === 'outgoing'
-                            ? `Исходящий звонок`
-                            : `Входящий звонок`;
-        const subject = direction === 'outgoing'
-            ? `К ${peer || 'контакту'}`
-            : `От ${peer || 'контакта'}`;
-        const durationText = durationLabel === '00:00' && outcome !== 'completed'
-            ? '00:00'
-            : durationLabel;
-        return `
-            <div class="call-card ${this.esc(outcome)} ${this.esc(direction)}">
-                <div class="call-card-top">
-                    <div class="call-card-icon">${outcome === 'completed' ? this.uiIcon('phone') : this.uiIcon('close')}</div>
-                    <div class="call-card-copy">
-                        <div class="call-card-title">${this.esc(title)}</div>
-                        <div class="call-card-sub">${this.esc(subject)}</div>
-                    </div>
-                </div>
-                <div class="call-card-meta">
-                    <span>Когда: ${this.esc(whenLabel ? `${whenLabel}, ${timeLabel}` : timeLabel)}</span>
-                    <span>Длительность: ${this.esc(durationText)}</span>
-                </div>
-            </div>
-        `;
+                        ? 'Звонок прерван'
+                        : 'Звонок';
+        // Карточка — одна строка; подробности всплывают при наведении на её части
+        // (data-tip, см. .call-card в style.css): иконка — кто и куда, заголовок —
+        // когда, длительность — что за цифра. aria-label несёт всё сразу.
+        const whoTip = direction === 'outgoing'
+            ? `Исходящий · ${peer || 'контакту'}`
+            : `Входящий · от ${peer || 'контакта'}`;
+        const whenTip = whenLabel ? `${whenLabel}, ${timeLabel}` : timeLabel;
+        const failed = outcome !== 'completed';
+        const showDuration = !failed && durationMs > 0;
+        const label = [title, whoTip, whenTip, showDuration ? `длительность ${durationLabel}` : '']
+            .filter(Boolean).join(', ');
+        return `<div class="call-card ${this.esc(outcome)} ${this.esc(direction)}${failed ? ' is-failed' : ''}" role="group" aria-label="${this.esc(label)}">`
+            + `<span class="call-card-icon" data-tip="${this.esc(whoTip)}">${this.voiceIcon(failed ? 'phone-down' : 'phone')}</span>`
+            + `<span class="call-card-title" data-tip="${this.esc(whenTip)}">${this.esc(title)}</span>`
+            + (showDuration ? `<span class="call-card-dur" data-tip="Длительность разговора">${this.esc(durationLabel)}</span>` : '')
+            + '</div>';
     }
 
     messageHasMedia(msg) {
@@ -798,7 +792,7 @@ ZaliMixin(ZaliInterface, class {
                 active: contact === this.S.current ? 1 : 0,
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => `${item.name}:${item.lastMessageAt}:${item.unread}:${item.lastKey}:${item.active}`)
             .join('|');
     }

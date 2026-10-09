@@ -22,7 +22,7 @@ ZaliMixin(ZaliInterface, class {
     // hundred and twenty directory round trips through a five-slot pool before it had
     // published anything. The envelope POSTs themselves are irreducible — one per key
     // per device — but the lookups are not.
-    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false } = {}) {
+    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false, deviceDirectory = null } = {}) {
         const target = String(recipient || '').trim();
         const scoped = String(scope || '').trim();
         const secrets = Array.from(new Set(
@@ -33,9 +33,7 @@ ZaliMixin(ZaliInterface, class {
         if (!this.S.session?.token || !target || !scoped || !secrets.length) return false;
         try {
             await this.ensureDeviceCryptoIdentity();
-            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
-            if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
-            const devices = await res.json();
+            const devices = await this.fetchPublicDevicesOf(target, deviceDirectory);
             const selfDeviceId = String(this.currentDeviceId() || '');
             const usable = Array.isArray(devices)
                 ? devices.filter(device => !device?.revoked
@@ -92,12 +90,40 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto' } = {}) {
+    // Справочник устройств пользователя. Свип переотправки ключей
+    // (_retryPublishConversationKeysImpl) передаёт сюда свою Map, и ответ
+    // запоминается на время свипа: свип идёт по всем scope подряд и для КАЖДОГО
+    // публикует ключ своим устройствам — то есть запрашивал один и тот же список
+    // своих устройств столько раз, сколько
+    // у аккаунта переписок (замер: 104 одинаковых GET за 23 с после входа), в том
+    // же пятислотовом пуле, где ждут загрузка истории и конверты. Новое устройство,
+    // появившееся посреди свипа, ничего не теряет: его регистрация сама ставит
+    // хвостовой свип (retryPublishConversationKeys), и тот спросит список заново.
+    // Все остальные пути (ответ на запрос ключа от нового устройства, захват
+    // ключа) Map не передают и всегда спрашивают свежий список, как раньше.
+    // Ошибки не запоминаются.
+    async fetchPublicDevicesOf(target, memo = null) {
+        if (memo?.has(target)) return memo.get(target);
+        const pending = (async () => {
+            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
+            if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
+            return res.json();
+        })();
+        if (memo) {
+            memo.set(target, pending);
+            pending.catch(() => {
+                if (memo.get(target) === pending) memo.delete(target);
+            });
+        }
+        return pending;
+    }
+
+    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto', deviceDirectory = null } = {}) {
         const recipient = String(peer || '').trim();
         // Self is not a peer: own devices go through publishConversationKeyToOwnDevices,
         // which excludes this device and reports separately.
         if (!recipient || recipient === this.myName()) return false;
-        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason });
+        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason, deviceDirectory });
     }
 
     // The account's *other* devices need this key just as much as the peer's do,
@@ -113,7 +139,7 @@ ZaliMixin(ZaliInterface, class {
     // This widens nothing: each envelope is sealed to one of our own devices'
     // ECDH public keys, and the cloud vault already hands every own device the
     // full key set — this is the same reach over a channel that actually works.
-    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto' } = {}) {
+    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto', deviceDirectory = null } = {}) {
         const me = String(this.myName() || '').trim();
         if (!me) return false;
         return this.publishConversationKeyEnvelopes({
@@ -123,6 +149,7 @@ ZaliMixin(ZaliInterface, class {
             keys,
             reason: `self:${reason}`,
             excludeCurrentDevice: true,
+            deviceDirectory,
         });
     }
 
@@ -355,12 +382,14 @@ ZaliMixin(ZaliInterface, class {
         // every login for every scope.
         const entries = scopes.map(scope => [scope, String(stored[scope] || '').trim()]);
         let published = 0;
+        // См. fetchPublicDevicesOf(): один запрос справочника на пользователя за свип.
+        const deviceDirectory = new Map();
         for (const [scope, key] of entries) {
             // Unconditional, and before the peer/channel split: this sweep is the
             // one path that can retroactively hand our other devices the keys they
             // never received, so it must cover every scope we hold — including
             // channel scopes and DMs whose peer is momentarily unresolvable.
-            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}` });
+            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}`, deviceDirectory });
             const channel = this.channelFromConversationScope(scope);
             if (channel) {
                 published += await this.publishConversationKeyToServerMembers({
@@ -374,7 +403,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const peer = this.peerFromConversationScope(scope);
             if (!peer) continue;
-            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}` });
+            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}`, deviceDirectory });
             // 'no_devices' is truthy but means nothing was delivered — the peer has
             // no registered devices yet, so the envelope must be retried later.
             if (result === true) {
@@ -891,7 +920,7 @@ ZaliMixin(ZaliInterface, class {
         const desc = peer ? `Диалог с ${String(peer).trim()}` : 'Личное сообщение';
         chatHdrSub.innerHTML = `
             <span class="chat-hdr-desc">${this.esc(desc)}</span>
-            <span class="chat-hdr-key">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
+            <span class="chat-hdr-key${key ? '' : ' is-missing'}">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
         `;
     }
 

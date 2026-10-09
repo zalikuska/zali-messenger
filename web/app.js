@@ -108,7 +108,8 @@
             join: (code) => apiRoute(`/invites/${encodeURIComponent(code)}/join`),
         },
         messages: {
-            direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
+            // `inlineArchives`: небольшие архивы прямо в ответе (server/src/messages.rs).
+            direct: (user, { inlineArchives = false, limit = 0, offset = 0 } = {}) => apiRoute(`/messages/${encodeURIComponent(user)}?${[limit ? `limit=${limit}&offset=${offset}` : '', inlineArchives ? 'inlineArchives=true' : ''].filter(Boolean).join('&')}`.replace(/\?$/, '')),
             reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
             remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
             edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
@@ -121,7 +122,7 @@
             byId: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}`),
             channels: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels`),
             channel: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}`),
-            channelMessages: (serverId, channelId, limit, offset) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}`),
+            channelMessages: (serverId, channelId, limit, offset, { inlineArchives = false } = {}) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}${inlineArchives ? '&inlineArchives=true' : ''}`),
             assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
             members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
             member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
@@ -164,6 +165,8 @@
         },
         diagnostics: {
             decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
+            // Общие отчёты (вручную и при сбоях) — diagnostic_reports.js.
+            report: apiRoute('/diagnostics/report'),
         },
     });
 
@@ -1959,7 +1962,7 @@ const DefaultApiRoutes = Object.freeze({
         join: (code) => apiRoute(`/invites/${encodeURIComponent(code)}/join`),
     },
     messages: {
-        direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
+        direct: (user, { inlineArchives = false, limit = 0, offset = 0 } = {}) => apiRoute(`/messages/${encodeURIComponent(user)}?${[limit ? `limit=${limit}&offset=${offset}` : '', inlineArchives ? 'inlineArchives=true' : ''].filter(Boolean).join('&')}`.replace(/\?$/, '')),
         reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
         remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
@@ -1972,7 +1975,7 @@ const DefaultApiRoutes = Object.freeze({
         byId: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}`),
         channels: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels`),
         channel: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}`),
-        channelMessages: (serverId, channelId, limit, offset) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}`),
+        channelMessages: (serverId, channelId, limit, offset, { inlineArchives = false } = {}) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}${inlineArchives ? '&inlineArchives=true' : ''}`),
         assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
         members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
         member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
@@ -2015,6 +2018,7 @@ const DefaultApiRoutes = Object.freeze({
     },
     diagnostics: {
         decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
+            report: apiRoute('/diagnostics/report'),
     },
 });
 
@@ -2289,6 +2293,61 @@ const ZALI_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 const ZALI_ESCAPE_PATTERN = /[&<>"']/g;
 const ZALI_ESCAPE_PROBE = /[&<>"']/;
 
+// Форматтеры дат создаются один раз. toLocaleTimeString()/toLocaleDateString()
+// с локалью и опциями строят новый ICU-форматтер на КАЖДЫЙ вызов, а отрисовка
+// списка сообщений зовёт их по три-пять раз на пузырь: замер на 78 пузырях —
+// 5 из 5,8 мс кадра уходило на даты. Intl.DateTimeFormat с теми же локалью и
+// опциями даёт ту же строку (toLocale*String по спецификации делегирует ему).
+// Результаты дополнительно запоминаются по исходному значению метки времени:
+// перерисовка того же списка просит те же самые строки.
+// Форматтер запоминает часовой пояс на момент создания, поэтому раз в минуту
+// пояс сверяется заново: сменили пояс системы — форматтеры и память
+// пересоздаются, как это неявно делал toLocale*String().
+const ZALI_FORMAT_MEMO_LIMIT = 4096;
+const ZALI_TZ_RECHECK_MS = 60 * 1000;
+let zaliTimeFormat = null;
+let zaliDayMonthFormat = null;
+let zaliFormatTimeZone = '';
+let zaliFormatCheckedAt = 0;
+const zaliTimeMemo = new Map();
+const zaliDayMonthMemo = new Map();
+
+function zaliEnsureFormatters() {
+    const nowMs = Date.now();
+    if (zaliTimeFormat && nowMs - zaliFormatCheckedAt < ZALI_TZ_RECHECK_MS) return;
+    zaliFormatCheckedAt = nowMs;
+    let zone = '';
+    try { zone = new Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { zone = ''; }
+    if (zaliTimeFormat && zone === zaliFormatTimeZone) return;
+    zaliFormatTimeZone = zone;
+    zaliTimeFormat = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    zaliDayMonthFormat = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
+    zaliTimeMemo.clear();
+    zaliDayMonthMemo.clear();
+}
+
+function zaliMemoFormat(memo, key, compute) {
+    let value = memo.get(key);
+    if (value === undefined) {
+        if (memo.size >= ZALI_FORMAT_MEMO_LIMIT) memo.clear();
+        value = compute();
+        memo.set(key, value);
+    }
+    return value;
+}
+
+// Сравнение имён в сайдбаре. localeCompare() с локалью и опциями строит
+// коллатор на каждое сравнение — а сортировка контактов делает их n·log n на
+// каждую перерисовку сайдбара. Тот же коллатор, созданный один раз, сравнивает
+// так же.
+const ZALI_NAME_COLLATOR = new Intl.Collator('ru', { sensitivity: 'base' });
+
+// Номер локального календарного дня — то же сравнение, что toDateString(),
+// без построения строк.
+function zaliLocalDayIndex(date) {
+    return date.getFullYear() * 400 + date.getMonth() * 32 + date.getDate();
+}
+
 ZaliMixin(ZaliInterface, class {
 
     // --- HTML Helper Utilities ---
@@ -2362,8 +2421,15 @@ ZaliMixin(ZaliInterface, class {
 
     fmtTime(iso) {
         if (!iso) return '';
-        try { return new Date(iso).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}); }
-        catch(e) { return ''; }
+        zaliEnsureFormatters();
+        return zaliMemoFormat(zaliTimeMemo, iso, () => {
+            const date = new Date(iso);
+            // Невалидная дата: форматтер бросает RangeError там, где
+            // toLocaleTimeString() вернул бы строку «Invalid Date».
+            if (Number.isNaN(date.getTime())) return 'Invalid Date';
+            try { return zaliTimeFormat.format(date); }
+            catch(e) { return ''; }
+        });
     }
 
     // Numbers are handled explicitly, not as an afterthought: the browser
@@ -2403,26 +2469,50 @@ ZaliMixin(ZaliInterface, class {
     // Messages are appended chronologically, so the newest timestamp lives at the
     // tail; scan backwards over a small bounded tail to stay tolerant of the slight
     // out-of-order that reconciliation can leave behind, and stop there.
+    //
+    // The answer is memoised per conversation against the identity of those tail
+    // message objects. Messages are never mutated in place (every edit/reconcile
+    // replaces the object), so identical references mean identical timestamps —
+    // and one incoming message then costs one conversation's re-scan, not
+    // Date.parse × 24 × every contact on each sidebar paint.
     conversationLastMessageAt(peer) {
         const msgs = Array.isArray(this.S.chats?.[peer]) ? this.S.chats[peer] : [];
         const TAIL_SCAN = 24;
+        const memoMap = this._lastMessageAtMemo || (this._lastMessageAtMemo = new WeakMap());
+        const tailStart = Math.max(0, msgs.length - TAIL_SCAN);
+        const memo = memoMap.get(msgs);
+        if (memo && memo.length === msgs.length) {
+            let same = true;
+            for (let i = tailStart, j = 0; i < msgs.length; i += 1, j += 1) {
+                if (memo.tail[j] !== msgs[i]) { same = false; break; }
+            }
+            if (same) return memo.value;
+        }
         let lastTs = 0;
-        let scanned = 0;
-        for (let i = msgs.length - 1; i >= 0 && scanned < TAIL_SCAN; i -= 1, scanned += 1) {
+        for (let i = msgs.length - 1; i >= tailStart; i -= 1) {
             const ts = this.messageTimestampValue(msgs[i]?.timestamp);
             if (ts > lastTs) lastTs = ts;
         }
+        memoMap.set(msgs, { length: msgs.length, tail: msgs.slice(tailStart), value: lastTs });
         return lastTs;
+    }
+
+    compareContactNames(a, b) {
+        return ZALI_NAME_COLLATOR.compare(a, b);
     }
 
     fmtDate(iso) {
         if (!iso) return '';
         try {
-            const messageDate = new Date(iso), now = new Date();
-            const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-            if (messageDate.toDateString() === now.toDateString())       return 'Сегодня';
-            if (messageDate.toDateString() === yesterday.toDateString()) return 'Вчера';
-            return messageDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
+            const messageDate = new Date(iso);
+            if (Number.isNaN(messageDate.getTime())) return 'Invalid Date';
+            zaliEnsureFormatters();
+            const now = new Date();
+            const yesterday = new Date(now); yesterday.setDate(yesterday.getDate()-1);
+            const day = zaliLocalDayIndex(messageDate);
+            if (day === zaliLocalDayIndex(now))       return 'Сегодня';
+            if (day === zaliLocalDayIndex(yesterday)) return 'Вчера';
+            return zaliMemoFormat(zaliDayMonthMemo, day, () => zaliDayMonthFormat.format(messageDate));
         } catch(e) { return ''; }
     }
 });
@@ -2617,6 +2707,7 @@ ZaliMixin(ZaliInterface, class {
 
         this.scheduleAvatarRefreshPolling();
         this.scheduleConversationSyncPolling();
+        this.installDiagnosticAutoReports();
     }
 
     scheduleAvatarRefreshPolling() {
@@ -2642,7 +2733,16 @@ ZaliMixin(ZaliInterface, class {
         }
 
         const hasNativeWs = this.nativeSupports('sendMessage');
-        const delay = document.hidden || hasNativeWs ? 5 * 60 * 1000 : 15 * 1000;
+        // Опрос — страховка на случай, когда реального времени нет. Пока сокет
+        // браузера жив (S.wsOn — у него свой сторож полуоткрытого соединения,
+        // voice_transport.js), каждое сообщение и так приходит пушем, а всё
+        // пропущенное за обрыв подтягивает догонялка в setConnectionStatus.
+        // Раньше браузер всё равно раз в 15 с перекачивал историю открытого чата
+        // и слал POST claim ключа — 8 запросов в минуту на ничего. Сокет упал —
+        // setConnectionStatus перезапускает этот таймер, и опрос снова частый.
+        const delay = document.hidden || hasNativeWs
+            ? 5 * 60 * 1000
+            : (this.S.wsOn ? 2 * 60 * 1000 : 15 * 1000);
         this.messageSyncTimer = setTimeout(() => {
             this.messageSyncTimer = null;
             this.syncActiveConversation({ force: !document.hidden && !hasNativeWs });
@@ -2697,6 +2797,12 @@ ZaliMixin(ZaliInterface, class {
     // console call — same lines, same order, one hop.
     trace(message) {
         const line = `[ZALI][WEB] ${message}`;
+        // Хвост трассы — в диагностический отчёт (diagnostic_reports.js). На
+        // браузере и Android это единственное место, где он вообще хранится.
+        // Метка — performance.now() в мс: без Date и строки времени на каждый
+        // вызов (трасса идёт пачками на горячих путях). В отчёте к ней приложен
+        // performance.timeOrigin (collectDiagnosticsSnapshot).
+        this.pushDiagRing('_traceRing', `${Math.round(performance.now())} ${message}`);
         this._traceBuffer = this._traceBuffer || [];
         this._traceBuffer.push(line);
         if (this._traceBuffer.length >= 64) {
@@ -3696,6 +3802,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (cv) cv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         this.setMobileSidebarOpen(showList);
         this.renderServerToolbar();
         this.renderHubSegmentNav();
@@ -3714,6 +3822,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (sv) sv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Настройки';
         this.applyNetworkConfigToInputs();
@@ -3747,6 +3857,8 @@ ZaliMixin(ZaliInterface, class {
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (hv) hv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Хаб';
         this.closeMobileSidebar();
@@ -3767,6 +3879,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'ZaliCoin';
         this.closeMobileSidebar();
@@ -5419,7 +5533,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // ============================================================
-    // DESIGN MODE — оформление интерфейса целиком: classic | flat.
+    // DESIGN MODE — оформление интерфейса целиком: classic | flat | focus.
     //
     // Раньше это был одиночный чекбокс «плоский режим»
     // (`zali_experimental_design_v1`, атрибут `data-experimental-design`).
@@ -5439,6 +5553,12 @@ ZaliMixin(ZaliInterface, class {
         return [
             { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
             { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+            // «Фокус» — не очередная перекраска, а другая иерархия: акцент
+            // остаётся только у «моего» (исходящие, мой аватар), «нового»
+            // (непрочитанное) и главного действия (отправить), служебное
+            // прячется до наведения или до проблемы. Слой CSS — в конце
+            // web/style.css, раздел «DESIGN MODE: FOCUS».
+            { id: 'focus', label: 'Фокус', note: 'focus', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
         ];
     }
 
@@ -5480,6 +5600,11 @@ ZaliMixin(ZaliInterface, class {
         // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
         const legacyToggle = document.getElementById('inputExperimentalDesign');
         if (legacyToggle) legacyToggle.checked = !!this.experimentalDesign;
+        // Высоту поля ввода resizeComposer() пишет инлайном по scrollHeight,
+        // а отступы поля у режимов разные: при старте он отрабатывает раньше
+        // applyDesignMode(), и без пересчёта поле оставалось на 3px ниже
+        // своего содержимого — с полосой прокрутки внутри.
+        this.resizeComposer?.();
         this.renderDesignModeSettings();
     }
 
@@ -6068,6 +6193,20 @@ ZaliMixin(ZaliInterface, class {
         const nav = document.getElementById('hubSegmentNav');
         if (!nav) return;
         const previousActive = nav.querySelector('.hub-segment-btn.active');
+        // Активный сегмент не сменился (переход между личками, входящее
+        // сообщение): кнопки трогать незачем, а чтение offsetLeft ниже —
+        // принудительная синхронная раскладка документа, который вызывающий
+        // только что поменял (switchChat → setNavMode). Сверка индикатора с
+        // положением кнопки откладывается в кадр, где раскладка и так будет.
+        if (previousActive && String(previousActive.getAttribute('data-hub-segment') || '') === active) {
+            if (!this._hubIndicatorSyncRaf) {
+                this._hubIndicatorSyncRaf = requestAnimationFrame(() => {
+                    this._hubIndicatorSyncRaf = 0;
+                    this.resyncHubSegmentIndicator();
+                });
+            }
+            return;
+        }
         const previousPosition = previousActive
             ? {
                 x: previousActive.offsetLeft,
@@ -6091,6 +6230,7 @@ ZaliMixin(ZaliInterface, class {
             if (withTransition) indicator.style.transition = '';
             indicator.style.width = `${activeBtn.offsetWidth}px`;
             indicator.style.transform = `translate3d(${activeBtn.offsetLeft}px, 0, 0)`;
+            indicator.dataset.target = `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`;
         };
         const samePosition = previousPosition
             && Math.abs(Number(previousPosition.x || 0) - activeBtn.offsetLeft) < 0.5
@@ -6108,6 +6248,19 @@ ZaliMixin(ZaliInterface, class {
                 indicator.style.transition = '';
             });
         }
+    }
+
+    // Индикатор уже стоит (или едет) туда, где активная кнопка, — ничего не
+    // делать: мгновенная пересинхронизация оборвала бы идущий переезд. Иначе
+    // (кнопка сдвинулась — сменилась ширина окна, набор сегментов) — поставить
+    // на место без анимации.
+    resyncHubSegmentIndicator() {
+        const nav = document.getElementById('hubSegmentNav');
+        const indicator = nav?.querySelector('.hub-segment-indicator');
+        const activeBtn = nav?.querySelector('.hub-segment-btn.active');
+        if (!indicator || !activeBtn) return;
+        if (indicator.dataset.target === `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`) return;
+        this.syncHubSegmentIndicator(null);
     }
 
     renderUiV2Settings() {
@@ -6627,9 +6780,12 @@ ZaliMixin(ZaliInterface, class {
             normalized[peer].sort((a, b) => this.compareMessagesByTime(a, b));
         });
 
-        const before = JSON.stringify(this.S.chats || {});
-        const after = JSON.stringify(normalized);
-        if (before !== after) {
+        // Порядок ключей и сообщений сравнивается по ссылкам, а не через
+        // JSON.stringify() обоих хранилищ: normalized собран из тех же объектов
+        // сообщений, так что одинаковые ссылки в одинаковом порядке — ровно
+        // «ничего не сдвинулось». Две полные сериализации истории стоили ~12 мс
+        // на 22 тыс. сообщений при каждом входе и каждой синхронизации истории.
+        if (!this.sameChatStoreLayout(this.S.chats || {}, normalized)) {
             this.S.chats = normalized;
             this.saveStoredMessageCache();
             this.trace(`normalizeDmChatStore changed peers=${Object.keys(normalized).length}`);
@@ -6638,6 +6794,23 @@ ZaliMixin(ZaliInterface, class {
 
         this.S.chats = normalized;
         return changed;
+    }
+
+    sameChatStoreLayout(before, after) {
+        const beforeKeys = Object.keys(before);
+        const afterKeys = Object.keys(after);
+        if (beforeKeys.length !== afterKeys.length) return false;
+        for (let i = 0; i < beforeKeys.length; i += 1) {
+            const key = beforeKeys[i];
+            if (key !== afterKeys[i]) return false;
+            const a = before[key];
+            const b = after[key];
+            if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+            for (let j = 0; j < a.length; j += 1) {
+                if (a[j] !== b[j]) return false;
+            }
+        }
+        return true;
     }
 
     loadStoredCurrentContact() {
@@ -8997,9 +9170,16 @@ ZaliMixin(ZaliInterface, class {
             // conversation has no key yet", so the client invented a fresh random key
             // and encrypted real messages with it. Losing key material is strictly
             // worse than storing it at rest in a store the same origin already owns.
-            const readStore = (store) => {
+            const storageKey = this.conversationKeysStorageKey();
+            const readRaw = (store) => {
                 try {
-                    const raw = store.getItem(this.conversationKeysStorageKey());
+                    return store.getItem(storageKey);
+                } catch (e) {
+                    return null;
+                }
+            };
+            const parseRaw = (raw) => {
+                try {
                     if (!raw) return null;
                     const parsed = JSON.parse(raw);
                     return parsed && typeof parsed === 'object' ? parsed : null;
@@ -9007,12 +9187,34 @@ ZaliMixin(ZaliInterface, class {
                     return null;
                 }
             };
-            const injected = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
+            const injectedRef = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
-                : {};
-            const persisted = readStore(localStorage);
-            const session = readStore(sessionStorage);
-            if (!persisted && !session) return this.canonicalizeConversationKeyScopes(injected);
+                : null;
+            const injected = injectedRef || {};
+            const rawLocal = readRaw(localStorage);
+            const rawSession = readRaw(sessionStorage);
+            // Результат запоминается против того, из чего он собран: двух сырых строк
+            // хранилищ и ссылки на внедрённую шеллом карту (её только переприсваивают,
+            // на месте не меняют). Совпало всё — слияние дало бы то же самое, и
+            // записывать нечего. Раньше каждый из ~30 вызовов (переключение чата,
+            // отрисовка шапки, отправка) заново разбирал JSON обоих хранилищ,
+            // канонизировал все scope и сериализовал карту обратно для сравнения.
+            // Отдаётся копия: вызывающие дописывают в карту ключи перед сохранением.
+            const memo = this._conversationKeysMemo;
+            if (memo
+                && memo.storageKey === storageKey
+                && memo.rawLocal === rawLocal
+                && memo.rawSession === rawSession
+                && memo.injected === injectedRef) {
+                return { ...memo.value };
+            }
+            const remember = (value) => {
+                this._conversationKeysMemo = { storageKey, rawLocal, rawSession, injected: injectedRef, value: { ...value } };
+                return value;
+            };
+            const persisted = parseRaw(rawLocal);
+            const session = parseRaw(rawSession);
+            if (!persisted && !session) return remember(this.canonicalizeConversationKeyScopes(injected));
             // sessionStorage last: within one session it is the freshest writer.
             const merged = this.canonicalizeConversationKeyScopes({
                 ...injected,
@@ -9028,15 +9230,24 @@ ZaliMixin(ZaliInterface, class {
             // there. The write still has to happen when it changes something (a legacy
             // scope folded onto its canonical form, or one store ahead of the other),
             // because a key filed under a name nobody looks up is a key that is lost.
+            let wrote = false;
             try {
                 const encoded = JSON.stringify(merged || {});
                 if (encoded !== this._lastConversationKeysEncoded) {
-                    sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
-                    localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    wrote = true;
+                    sessionStorage.setItem(storageKey, encoded);
+                    localStorage.setItem(storageKey, encoded);
                     this._lastConversationKeysEncoded = encoded;
                 }
             } catch (e) {}
-            return merged && typeof merged === 'object' ? merged : {};
+            const result = merged && typeof merged === 'object' ? merged : {};
+            // После записи сырые строки уже другие — запоминать нечего, следующий
+            // вызов соберёт карту из записанного и запомнит её.
+            if (wrote) {
+                this._conversationKeysMemo = null;
+                return result;
+            }
+            return remember(result);
         } catch (e) {
             return {};
         }
@@ -10226,7 +10437,7 @@ ZaliMixin(ZaliInterface, class {
     // hundred and twenty directory round trips through a five-slot pool before it had
     // published anything. The envelope POSTs themselves are irreducible — one per key
     // per device — but the lookups are not.
-    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false } = {}) {
+    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false, deviceDirectory = null } = {}) {
         const target = String(recipient || '').trim();
         const scoped = String(scope || '').trim();
         const secrets = Array.from(new Set(
@@ -10237,9 +10448,7 @@ ZaliMixin(ZaliInterface, class {
         if (!this.S.session?.token || !target || !scoped || !secrets.length) return false;
         try {
             await this.ensureDeviceCryptoIdentity();
-            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
-            if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
-            const devices = await res.json();
+            const devices = await this.fetchPublicDevicesOf(target, deviceDirectory);
             const selfDeviceId = String(this.currentDeviceId() || '');
             const usable = Array.isArray(devices)
                 ? devices.filter(device => !device?.revoked
@@ -10296,12 +10505,40 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto' } = {}) {
+    // Справочник устройств пользователя. Свип переотправки ключей
+    // (_retryPublishConversationKeysImpl) передаёт сюда свою Map, и ответ
+    // запоминается на время свипа: свип идёт по всем scope подряд и для КАЖДОГО
+    // публикует ключ своим устройствам — то есть запрашивал один и тот же список
+    // своих устройств столько раз, сколько
+    // у аккаунта переписок (замер: 104 одинаковых GET за 23 с после входа), в том
+    // же пятислотовом пуле, где ждут загрузка истории и конверты. Новое устройство,
+    // появившееся посреди свипа, ничего не теряет: его регистрация сама ставит
+    // хвостовой свип (retryPublishConversationKeys), и тот спросит список заново.
+    // Все остальные пути (ответ на запрос ключа от нового устройства, захват
+    // ключа) Map не передают и всегда спрашивают свежий список, как раньше.
+    // Ошибки не запоминаются.
+    async fetchPublicDevicesOf(target, memo = null) {
+        if (memo?.has(target)) return memo.get(target);
+        const pending = (async () => {
+            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
+            if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
+            return res.json();
+        })();
+        if (memo) {
+            memo.set(target, pending);
+            pending.catch(() => {
+                if (memo.get(target) === pending) memo.delete(target);
+            });
+        }
+        return pending;
+    }
+
+    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto', deviceDirectory = null } = {}) {
         const recipient = String(peer || '').trim();
         // Self is not a peer: own devices go through publishConversationKeyToOwnDevices,
         // which excludes this device and reports separately.
         if (!recipient || recipient === this.myName()) return false;
-        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason });
+        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason, deviceDirectory });
     }
 
     // The account's *other* devices need this key just as much as the peer's do,
@@ -10317,7 +10554,7 @@ ZaliMixin(ZaliInterface, class {
     // This widens nothing: each envelope is sealed to one of our own devices'
     // ECDH public keys, and the cloud vault already hands every own device the
     // full key set — this is the same reach over a channel that actually works.
-    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto' } = {}) {
+    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto', deviceDirectory = null } = {}) {
         const me = String(this.myName() || '').trim();
         if (!me) return false;
         return this.publishConversationKeyEnvelopes({
@@ -10327,6 +10564,7 @@ ZaliMixin(ZaliInterface, class {
             keys,
             reason: `self:${reason}`,
             excludeCurrentDevice: true,
+            deviceDirectory,
         });
     }
 
@@ -10559,12 +10797,14 @@ ZaliMixin(ZaliInterface, class {
         // every login for every scope.
         const entries = scopes.map(scope => [scope, String(stored[scope] || '').trim()]);
         let published = 0;
+        // См. fetchPublicDevicesOf(): один запрос справочника на пользователя за свип.
+        const deviceDirectory = new Map();
         for (const [scope, key] of entries) {
             // Unconditional, and before the peer/channel split: this sweep is the
             // one path that can retroactively hand our other devices the keys they
             // never received, so it must cover every scope we hold — including
             // channel scopes and DMs whose peer is momentarily unresolvable.
-            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}` });
+            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}`, deviceDirectory });
             const channel = this.channelFromConversationScope(scope);
             if (channel) {
                 published += await this.publishConversationKeyToServerMembers({
@@ -10578,7 +10818,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const peer = this.peerFromConversationScope(scope);
             if (!peer) continue;
-            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}` });
+            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}`, deviceDirectory });
             // 'no_devices' is truthy but means nothing was delivered — the peer has
             // no registered devices yet, so the envelope must be retried later.
             if (result === true) {
@@ -11095,7 +11335,7 @@ ZaliMixin(ZaliInterface, class {
         const desc = peer ? `Диалог с ${String(peer).trim()}` : 'Личное сообщение';
         chatHdrSub.innerHTML = `
             <span class="chat-hdr-desc">${this.esc(desc)}</span>
-            <span class="chat-hdr-key">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
+            <span class="chat-hdr-key${key ? '' : ' is-missing'}">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
         `;
     }
 
@@ -12161,6 +12401,7 @@ ZaliMixin(ZaliInterface, class {
                     clientId: item.clientId,
                     attachments: outAttachments,
                     reply: String(item.reply || ''),
+                    call: String(item.call || ''),
                 }).then(ok => {
                     if (!ok) {
                         this.trace(`flushPendingOutbox browserSendMessage failed clientId=${pendingId}`);
@@ -18867,6 +19108,21 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // «Отменить» исходящий, пока собеседник не ответил: из шапки чата, из
+    // полосы над вкладками и из панели — одно действие.
+    cancelOutgoingVoiceCall() {
+        const invite = this.voice.outgoingInvite;
+        if (invite?.roomId && invite?.target) {
+            this.sendVoiceEvent({
+                type: 'voice_call_cancel',
+                roomId: invite.roomId,
+                target: invite.target,
+            });
+        }
+        this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
+        this.resetVoiceState({ preserveInvite: false });
+    }
+
     // Collapsed top bar <-> fullscreen grid. Purely a local UI toggle — it does
     // not touch tracks or connections, so it's safe to flip mid-call.
     toggleVoiceCallExpanded() {
@@ -18928,10 +19184,11 @@ ZaliMixin(ZaliInterface, class {
             const since = Number(this.voice.activeSince || 0);
             if (!since) return;
             const label = this.formatCallClock(Date.now() - since);
-            const bar = document.getElementById('voiceCallTimer');
-            if (bar) bar.textContent = label;
             const expanded = document.getElementById('voiceCallExpandedTimer');
             if (expanded) expanded.textContent = label;
+            // Компактный звонок рисуется сразу в двух местах (титлбар и полоса
+            // на телефоне) — таймеры там помечены атрибутом, а не id.
+            this.fillVoiceCallTimers?.();
         };
         tick();
         this.voice.barTimerInterval = setInterval(tick, 1000);
@@ -18942,6 +19199,18 @@ ZaliMixin(ZaliInterface, class {
             clearInterval(this.voice.barTimerInterval);
             this.voice.barTimerInterval = 0;
         }
+    }
+
+    // Время карточки — всегда ISO-строка. Браузерный путь приёма отдаёт время
+    // числом миллисекунд (WASM unpack × 1000), а String(1791571697000) не
+    // разбирается датой: карточка показывала «Invalid Date» и сортировалась мимо.
+    callRecordTimestamp(value, fallback = '') {
+        const raw = typeof value === 'number' || /^\d+$/.test(String(value || '').trim())
+            ? Number(value)
+            : Date.parse(String(value || ''));
+        if (Number.isFinite(raw) && raw > 0) return new Date(raw).toISOString();
+        const alt = Date.parse(String(fallback || ''));
+        return new Date(Number.isFinite(alt) ? alt : Date.now()).toISOString();
     }
 
     callRecordMessageId(roomId) {
@@ -19012,6 +19281,118 @@ ZaliMixin(ZaliInterface, class {
         return parsed;
     }
 
+    // Запись о звонке, отправленная браузерным клиентом до исправления
+    // browserSendMessage: в архиве только текст-сводка (formatCallSummary), поля
+    // call нет. Узнаётся по clientId «call-<roomId>» плюс тексту ровно одной из
+    // сводок — обычное сообщение с таким clientId не бывает. Восстанавливаем то,
+    // что из сводки следует: исход и длительность (с точностью до секунды).
+    legacyCallRecordFromText(payload) {
+        if (!payload || String(payload.call || '').trim()) return null;
+        const clientId = String(payload.clientId || payload.client_id || '').trim();
+        if (!clientId.startsWith('call-')) return null;
+        const roomId = clientId.slice('call-'.length);
+        const text = String(payload.text || '').trim();
+        if (!roomId || !text) return null;
+        const duration = (m, s) => (Number(m) * 60 + Number(s)) * 1000;
+        let outcome = '';
+        let durationMs = 0;
+        let match = null;
+        if ((match = text.match(/^(?:Исходящий|Входящий) звонок(?: · (\d+):(\d{2}))?$/))) {
+            outcome = 'completed';
+            if (match[1] != null) durationMs = duration(match[1], match[2]);
+        } else if (text === 'Вызов без ответа' || text === 'Пропущенный звонок') {
+            outcome = 'missed';
+        } else if (text === 'Вызов отклонён' || text === 'Отклонённый звонок') {
+            outcome = 'rejected';
+        } else if ((match = text.match(/^Звонок прерван(?: · (\d+):(\d{2}))?$/))) {
+            outcome = 'failed';
+            if (match[1] != null) durationMs = duration(match[1], match[2]);
+        } else {
+            return null;
+        }
+        const endMs = Date.parse(this.callRecordTimestamp(payload.timestamp));
+        return {
+            roomId,
+            outcome,
+            durationMs,
+            endedAt: new Date(endMs).toISOString(),
+            startedAt: new Date(endMs - durationMs).toISOString(),
+            connectedAt: durationMs ? new Date(endMs - durationMs).toISOString() : '',
+        };
+    }
+
+    // Строки истории/кеша, которые на самом деле записи о звонке, а рисовались
+    // обычным текстом («Вызов отклонён») рядом с карточкой того же звонка:
+    // с полем call (JSON) без kind 'call' — сводятся в карточку; без поля call,
+    // но с clientId карточки — удаляются как эхо. true — если что-то поменялось.
+    collapseCallRecordRows(arr) {
+        if (!Array.isArray(arr) || !arr.length) return false;
+        const me = String(this.myName() || '').trim();
+        let changed = false;
+        for (let i = arr.length - 1; i >= 0; i -= 1) {
+            const row = arr[i];
+            if (!row || row.kind === 'call') continue;
+            const info = (typeof row.call === 'string' && row.call)
+                ? this.parseCallRecordPayload(row)
+                : this.legacyCallRecordFromText(row);
+            if (!info) continue;
+            const id = this.callRecordMessageId(info.roomId);
+            const sender = String(row.sender || '').trim();
+            const receiver = String(row.receiver || '').trim();
+            const peer = sender === me ? receiver : sender;
+            const card = {
+                id,
+                clientId: id,
+                kind: 'call',
+                sender,
+                receiver,
+                text: '',
+                attachments: [],
+                timestamp: this.callRecordTimestamp(row.timestamp, info.endedAt),
+                status: 'sent',
+                call: { ...info, peer, direction: sender === me ? 'outgoing' : 'incoming' },
+            };
+            const existing = arr.findIndex((m, j) => j !== i && m
+                && (String(m.id || '').trim() === id || String(m.clientId || '').trim() === id));
+            arr.splice(i, 1);
+            if (existing >= 0) {
+                const at = existing > i ? existing - 1 : existing;
+                arr[at] = { ...card, ...arr[at], call: { ...card.call, ...(arr[at].call || {}) } };
+            } else {
+                arr.push(card);
+            }
+            changed = true;
+        }
+        // Эхо собственной записи с сервера: история отдаёт её без поля call,
+        // только текстом-сводкой, но с clientId = id карточки (call-<roomId>).
+        // Отправленная запись не бывает «отправляется», поэтому обычная склейка
+        // по clientId её не находит, и текст ложился рядом с карточкой.
+        const cardIds = new Set();
+        for (const m of arr) {
+            if (!m || m.kind !== 'call') continue;
+            const id = String(m.id || '').trim();
+            // Карточки из кеша до исправления — без clientId: без него эхо не
+            // склеится и при следующей загрузке истории.
+            if (!m.clientId && id.startsWith('call-')) {
+                m.clientId = id;
+                changed = true;
+            }
+            cardIds.add(id);
+            cardIds.add(String(m.clientId || '').trim());
+        }
+        for (let i = arr.length - 1; i >= 0; i -= 1) {
+            const row = arr[i];
+            if (!row || row.kind === 'call') continue;
+            const clientId = String(row.clientId || row.client_id || '').trim();
+            if (clientId.startsWith('call-') && cardIds.has(clientId)) {
+                arr.splice(i, 1);
+                changed = true;
+            }
+        }
+        if (changed) arr.sort((a, b) => this.compareMessagesByTime(a, b));
+        return changed;
+    }
+
     applyCallRecordMessage(callInfo, payload) {
         const me = String(this.myName() || '').trim();
         const sender = String(payload?.sender || '').trim();
@@ -19028,7 +19409,7 @@ ZaliMixin(ZaliInterface, class {
             receiver,
             text: '',
             attachments: [],
-            timestamp: String(payload?.timestamp || callInfo.endedAt || new Date().toISOString()),
+            timestamp: this.callRecordTimestamp(payload?.timestamp, callInfo.endedAt),
             call: { ...callInfo, peer, direction },
         };
         this.initChat(peer);
@@ -19059,6 +19440,10 @@ ZaliMixin(ZaliInterface, class {
             // identifies one call, so the local row and the one that arrives over the
             // wire collapse into a single entry instead of duplicating.
             id: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
+            // clientId — тот же: запись уходит в outbox с ним, и эхо с сервера
+            // (история отдаёт его текстом-сводкой без поля call) склеивается с
+            // этой карточкой в finalizePendingMessage, а не ложится рядом текстом.
+            clientId: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
             kind: 'call',
             sender: direction === 'outgoing' ? this.myName() : peer,
             receiver: direction === 'outgoing' ? peer : this.myName(),
@@ -19092,6 +19477,13 @@ ZaliMixin(ZaliInterface, class {
         }
         call.recorded = true;
         if (this.voice.callTrack === call) this.voice.callTrack = null;
+        // Звонок, который клиент бросил, исчерпав все попытки восстановить связь, —
+        // автоматический отчёт: голосовая диагностика этого звонка ещё в кольце.
+        if (outcome === 'failed') {
+            void this.sendDiagnosticReport('voice_failed', {
+                call: { ...message.call, rebuilds: Number(this.voice.rebuilds || 0) },
+            });
+        }
         this.saveStoredMessageCache();
         // The caller owns the record and is the one that sends it, so exactly one
         // copy travels. The callee keeps its local row for instant feedback and lets
@@ -20109,9 +20501,13 @@ ZaliMixin(ZaliInterface, class {
         const headphones = '<path d="M4.5 13.5v-1.7a7.5 7.5 0 0 1 15 0v1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="3" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/><rect x="17" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/>';
         const chevronDown = '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
         const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        // Положенная трубка — общепринятый знак «сбросить», понятнее
+        // перечёркнутой: трубка, повёрнутая на 135° вокруг центра.
+        const phoneDown = `<g transform="rotate(135 12 12)">${phone}</g>`;
         const icons = {
             phone,
             'phone-off': phone + slash,
+            'phone-down': phoneDown,
             mic,
             'mic-off': mic + slash,
             cam,
@@ -20126,9 +20522,13 @@ ZaliMixin(ZaliInterface, class {
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
 
-    callCtrlBtn({ id, kind, label, active = false, danger = false }) {
+    // short — короткая подпись под кнопкой («Микрофон», «Камера»): label
+    // меняется вместе с состоянием («Выключить микрофон») и годится только
+    // для подсказки, а подпись должна называть кнопку, а не действие.
+    callCtrlBtn({ id, kind, label, short = '', active = false, danger = false }) {
         const cls = ['call-ctrl-btn', active ? 'active' : '', danger ? 'danger' : ''].filter(Boolean).join(' ');
-        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(kind)}</button>`;
+        const shortAttr = short ? ` data-short="${this.esc(short)}"` : '';
+        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}"${shortAttr}>${this.voiceIcon(kind)}</button>`;
     }
 
     // Discord-style call stage: one rectangular tile per participant, avatar in
@@ -20169,7 +20569,10 @@ ZaliMixin(ZaliInterface, class {
             return `
                 <div class="voice-tile ${mine ? 'mine' : ''}" data-peer="${this.esc(key)}">
                     <div class="voice-tile-media"></div>
-                    <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    <div class="voice-tile-person">
+                        <span class="voice-level-ring" aria-hidden="true"></span>
+                        <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    </div>
                     <div class="voice-tile-footer">
                         ${muted ? `<span class="voice-tile-mic muted" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''}
                         <span class="voice-tile-name">${this.esc(name)}</span>
@@ -20179,36 +20582,61 @@ ZaliMixin(ZaliInterface, class {
         }).join('') + `</div>`;
     }
 
-    // Collapsed call UI: mute + deafen on the left, peer/channel name centered,
-    // running timer on the right. Tapping anywhere on the bar except those two
-    // buttons expands to renderVoiceCallExpanded (wired in the #voicePanel
-    // click delegate).
-    renderVoiceCallBar({ title }) {
+    // Компактный идущий звонок: таймер, затем микрофон и звук, затем «сбросить».
+    // Один и тот же фрагмент рисуется в двух местах — в титлбаре (#tbCall, на
+    // стороне, противоположной кнопкам окна) и в полосе над вкладками
+    // (#voiceCallStrip, видна только на телефоне, где титлбара нет), — поэтому
+    // кнопки адресуются data-voice-action, а не id. Таймер — кнопка: открывает
+    // полный интерфейс звонка (openActiveVoiceCall).
+    // Время в разметку не входит: HTML сравнивается с прошлым, и тикающие
+    // секунды пересобирали бы кнопки прямо под курсором (клик терялся).
+    // Его вписывает fillVoiceCallTimers() — сразу после вставки и по таймеру.
+    fillVoiceCallTimers() {
+        const label = this.voiceCallClockLabel();
+        for (const el of document.querySelectorAll('[data-voice-timer]')) {
+            if (el.textContent !== label) el.textContent = label;
+        }
+    }
+
+    renderVoiceCompactCall({ title }) {
         const muteLabel = this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон';
         const deafenLabel = this.voice.deafened ? 'Включить звук' : 'Выключить звук';
+        const openLabel = `${title} — открыть звонок`;
         return `
-            <div class="voice-callbar" id="voiceCallBar" role="button" tabindex="0" aria-label="Развернуть звонок">
-                <div class="voice-callbar-controls">
-                    <button class="voice-callbar-btn" type="button" id="voiceMuteBtn" title="${this.esc(muteLabel)}" aria-label="${this.esc(muteLabel)}">${this.voiceIcon(this.voice.muted ? 'mic-off' : 'mic')}</button>
-                    <button class="voice-callbar-btn ${this.voice.deafened ? 'danger' : ''}" type="button" id="voiceDeafenBtn" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
-                </div>
-                <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-timer" id="voiceCallTimer">${this.voiceCallClockLabel()}</div>
+            <div class="voice-compact" role="group" aria-label="${this.esc(title)}">
+                <button class="voice-compact-timer" type="button" data-voice-action="open" title="${this.esc(openLabel)}" aria-label="${this.esc(openLabel)}">
+                    <span class="voice-compact-dot" aria-hidden="true"></span>
+                    <span class="voice-compact-time" data-voice-timer></span>
+                </button>
+                <button class="voice-compact-btn${this.voice.muted ? ' is-off' : ''}" type="button" data-voice-action="mute" title="${this.esc(muteLabel)}" aria-label="${this.esc(muteLabel)}" aria-pressed="${this.voice.muted ? 'true' : 'false'}">${this.voiceIcon(this.voice.muted ? 'mic-off' : 'mic')}</button>
+                <button class="voice-compact-btn${this.voice.deafened ? ' is-off' : ''}" type="button" data-voice-action="deafen" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}" aria-pressed="${this.voice.deafened ? 'true' : 'false'}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
+                <button class="voice-compact-btn is-hangup" type="button" data-voice-action="leave" title="Завершить звонок" aria-label="Завершить звонок">${this.voiceIcon('phone-down')}</button>
             </div>
         `;
     }
 
-    // The strip while a DM call rings over the voice channel we are in. Buttons have
-    // their own ids: the panel's #voiceAcceptBtn may be in the DOM at the same time.
+    // Входящий звонок — одна строка: кто звонит, «Отклонить», «Принять». Живёт
+    // в полосе над вкладками и видна с любого экрана — и для обычного входящего,
+    // и для звонящего поверх голосового канала. Кнопки со своими id: панель
+    // чата может одновременно держать свои (#voiceAcceptBtn и т. п.).
+    // «Принять» стоит последней — справа, под большим пальцем и там, где её
+    // ищут по привычке; «Отклонить» — красная положенная трубка слева от неё.
     renderVoiceIncomingStrip(invite) {
         const from = String(invite?.from || '').trim();
-        const title = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        const overChannel = !!invite?.overChannel;
+        const label = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        const acceptTitle = overChannel ? 'Выйти из канала и принять звонок' : 'Принять звонок';
+        const rejectTitle = overChannel ? 'Отклонить и остаться в канале' : 'Отклонить звонок';
         return `
-            <div class="voice-callbar voice-callbar-incoming" id="voiceIncomingBar" role="group" aria-label="${this.esc(title)}">
-                <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-controls">
-                    <button class="voice-callbar-action" type="button" id="voiceStripAcceptBtn" title="Выйти из канала и принять звонок" aria-label="Принять">${this.voiceIcon('phone')}<span>Принять</span></button>
-                    <button class="voice-callbar-action danger" type="button" id="voiceStripRejectBtn" title="Отклонить и остаться в канале" aria-label="Отклонить">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>
+            <div class="voice-incoming" role="group" aria-label="${this.esc(label)}">
+                <div class="voice-incoming-who">
+                    <span class="voice-incoming-ava" aria-hidden="true">${from ? this.renderAvatarHTML(from, 'avatar-img', from) : ''}</span>
+                    <span class="voice-incoming-name">${this.esc(from || 'Входящий звонок')}</span>
+                    <span class="voice-incoming-note">${overChannel ? 'звонит · вы в канале' : 'звонит'}</span>
+                </div>
+                <div class="voice-incoming-actions">
+                    <button class="voice-incoming-btn is-decline" type="button" id="voiceStripRejectBtn" title="${this.esc(rejectTitle)}" aria-label="${this.esc(rejectTitle)}">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>
+                    <button class="voice-incoming-btn is-accept" type="button" id="voiceStripAcceptBtn" title="${this.esc(acceptTitle)}" aria-label="${this.esc(acceptTitle)}">${this.voiceIcon('phone')}<span>Принять</span></button>
                 </div>
             </div>
         `;
@@ -20270,10 +20698,14 @@ ZaliMixin(ZaliInterface, class {
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
         const voiceHealth = this.voiceTraceEnabled ? this.getVoiceHealthSnapshot() : [];
+        // Собеседник активного звонка — через voiceDmCallPeer(): после перезагрузки
+        // посреди звонка outgoingInvite пуст, а inviter — это мы сами, если звонили
+        // мы, и заголовок говорил «Активный звонок с <моё имя>».
+        const activePeer = this.voiceDmCallPeer() || outgoingTarget || incomingFrom;
         const title = isVoice
             ? `Голосовой канал: ${this.currentChannel()?.name || 'room'}`
             : activeRoom
-                ? `Активный звонок${outgoingTarget || incomingFrom ? ` с ${outgoingTarget || incomingFrom}` : ''}`
+                ? `Активный звонок${activePeer ? ` с ${activePeer}` : ''}`
                 : this.voice.status === 'incoming'
                     ? `Входящий звонок от ${incomingFrom}`
                     : this.voice.status === 'calling'
@@ -20285,26 +20717,26 @@ ZaliMixin(ZaliInterface, class {
         const actionButtons = [];
         if (isVoice) {
             if (activeRoom) {
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Покинуть', danger: true }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Покинуть', short: 'Покинуть', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Присоединиться</span></button>`);
             }
         } else if (this.S.navMode === 'dm' && this.S.current) {
             if (activeRoom) {
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Завершить', danger: true }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Завершить', short: 'Завершить', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">${this.voiceIcon('phone')}<span>Принять</span></button>`);
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>`);
             } else if (this.voice.status === 'calling') {
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-off')}<span>Отменить</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-down')}<span>Отменить</span></button>`);
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceCallBtn">${this.voiceIcon('phone')}<span>Позвонить</span></button>`);
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceVideoCallBtn">${this.voiceIcon('video')}<span>Видеозвонок</span></button>`);
@@ -20327,7 +20759,7 @@ ZaliMixin(ZaliInterface, class {
             ? 'Нажмите «Присоединиться», чтобы войти в канал'
             : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
         return `
-            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
+            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}" data-voice-status="${this.esc(String(this.voice.status || 'idle'))}">
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
@@ -20339,26 +20771,6 @@ ZaliMixin(ZaliInterface, class {
                 <div class="voice-stage" id="voiceStage"></div>
                 ${isVoice ? '' : this.renderVoiceTiles()}
                 <div class="${actionsBarClass}">${actionButtons.join('')}</div>
-                <div class="voice-meter-grid">
-                    <div class="voice-meter" id="voiceMicMeter">
-                        <div class="voice-meter-head">
-                            <span class="voice-meter-name">Микрофон</span>
-                            <span class="voice-meter-value" id="voiceMicLevelText">0%</span>
-                        </div>
-                        <div class="voice-meter-track">
-                            <div class="voice-meter-fill" id="voiceMicLevelFill"></div>
-                        </div>
-                    </div>
-                    <div class="voice-meter" id="voiceServerMeter">
-                        <div class="voice-meter-head">
-                            <span class="voice-meter-name">С сервера</span>
-                            <span class="voice-meter-value" id="voiceServerLevelText">0%</span>
-                        </div>
-                        <div class="voice-meter-track">
-                            <div class="voice-meter-fill remote" id="voiceServerLevelFill"></div>
-                        </div>
-                    </div>
-                </div>
                 ${voiceHealth.length ? `
                     <div class="voice-health">
                         <div class="voice-room-label">Voice health</div>
@@ -20414,6 +20826,7 @@ ZaliMixin(ZaliInterface, class {
         // After the panel: whether the strip shows depends on what the panel
         // just decided to cover (a voice channel's own view, a DM's fullscreen grid).
         this.renderVoiceCallStrip();
+        this.renderChatHeaderCallState();
     }
 
     renderVoicePanelBody() {
@@ -20424,9 +20837,13 @@ ZaliMixin(ZaliInterface, class {
         // A voice channel has no text chat: its view is the call (or the join
         // card), with the message list and composer hidden by this class.
         document.getElementById('viewChat')?.classList.toggle('voice-channel-view', isVoiceChannel);
-        const hasDmCall = this.voice.roomType === 'dm' || this.voice.status === 'incoming' || this.voice.status === 'calling';
-        const hasIncoming = this.voice.status === 'incoming';
-        const html = (isVoiceChannel || hasDmCall || hasIncoming) ? this.renderVoiceRoomView() : '';
+        // Звонящий входящий в панели чата не рисуется: он — одна строка в полосе
+        // над вкладками (renderVoiceCallStrip), видимая с любого экрана.
+        // И исходящий, пока не ответили, — тоже не карточка: шапка чата или
+        // строка сверху (renderChatHeaderCallState / renderVoiceCallStrip).
+        const ringingDm = this.voice.status === 'incoming' || this.voice.status === 'calling';
+        const hasDmCall = !ringingDm && this.voice.roomType === 'dm';
+        const html = (isVoiceChannel || hasDmCall) ? this.renderVoiceRoomView() : '';
         if (!html) {
             panel.hidden = true;
             panel.innerHTML = '';
@@ -20535,42 +20952,128 @@ ZaliMixin(ZaliInterface, class {
             this.voice.activeSince = 0;
             this.stopVoiceCallBarTimer();
         }
+        // Компактный идущий звонок в титлбаре — всегда, пока звонок идёт: это его
+        // постоянное место (таймер открывает полный интерфейс).
+        const titleCall = document.getElementById('tbCall');
+        if (titleCall) {
+            const html = type ? this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }) : '';
+            if (html !== this._voiceTitleCallHtml) {
+                titleCall.innerHTML = html;
+                this._voiceTitleCallHtml = html;
+            }
+            titleCall.hidden = !type;
+        }
+        if (type) this.fillVoiceCallTimers();
         const strip = document.getElementById('voiceCallStrip');
         if (!strip) return;
-        // A DM call ringing over the channel takes the strip over, everywhere —
-        // including the channel's own view, where the strip is otherwise hidden and
-        // where the user most likely is when it rings.
-        const ringingOverChannel = this.hasInviteOverChannel() ? this.voice.incomingInvite : null;
-        if (ringingOverChannel) {
-            strip.parentElement?.classList.add('has-call-strip');
-            const html = this.renderVoiceIncomingStrip(ringingOverChannel);
+        const main = strip.parentElement;
+        const setStrip = (kind, html) => {
+            main?.classList.toggle('has-call-strip', !!kind);
+            main?.classList.toggle('has-incoming-strip', kind === 'incoming');
+            main?.classList.toggle('has-live-strip', kind === 'live');
+            if (kind) strip.dataset.kind = kind;
+            else delete strip.dataset.kind;
             if (html !== this._voiceStripHtml) {
                 strip.innerHTML = html;
                 this._voiceStripHtml = html;
             }
-            strip.hidden = false;
+            strip.hidden = !kind;
+            if (kind === 'live') this.fillVoiceCallTimers();
+        };
+        // Звонящий входящий занимает полосу везде — в том числе поверх
+        // голосового канала, где пользователь скорее всего и находится.
+        // …но если открыт чат именно с этим человеком, звонок уже в его шапке.
+        const ringing = this.voiceRingingState();
+        if (ringing) {
+            if (this.isRingingInChatHeader(ringing)) setStrip('', '');
+            else if (ringing.kind === 'incoming') setStrip('incoming', this.renderVoiceIncomingStrip(this.voice.incomingInvite));
+            else setStrip('incoming', this.renderVoiceOutgoingStrip(ringing.peer));
             return;
         }
+        // Полоса идущего звонка — для телефона: там нет титлбара. На десктопе её
+        // прячет CSS (#voiceCallStrip[data-kind="live"]), звонок живёт в титлбаре.
         const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
         const coveredByCall = type === 'channel'
             ? this.isViewingVoiceCallRoom()
             : type === 'dm' && chatOpen && !!this.voice.expanded;
-        const show = !!type && !coveredByCall;
-        strip.parentElement?.classList.toggle('has-call-strip', show);
-        if (!show) {
-            strip.hidden = true;
-            if (this._voiceStripHtml) {
-                strip.innerHTML = '';
-                this._voiceStripHtml = '';
-            }
+        if (!type || coveredByCall) {
+            setStrip('', '');
             return;
         }
-        const html = this.renderVoiceCallBar({ title: this.voiceLiveCallTitle(type) });
-        if (html !== this._voiceStripHtml) {
-            strip.innerHTML = html;
-            this._voiceStripHtml = html;
+        setStrip('live', this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }));
+    }
+
+    // Звонок, который сейчас звонит (ещё не начался): входящий или исходящий
+    // личный; null — ничего не звонит.
+    voiceRingingState() {
+        if (this.hasRingingIncomingInvite()) {
+            return { kind: 'incoming', peer: String(this.voice.incomingInvite?.from || '').trim() };
         }
-        strip.hidden = false;
+        if (this.voice.status === 'calling') {
+            const peer = String(this.voice.outgoingInvite?.target || this.voice.targetUser || '').trim();
+            if (peer) return { kind: 'outgoing', peer };
+        }
+        return null;
+    }
+
+    // Открыт ли сейчас чат именно с тем, кто звонит / кому звоним, — тогда
+    // звонок рисуется прямо в его шапке.
+    isRingingInChatHeader(ringing = this.voiceRingingState()) {
+        if (!ringing?.peer || this.S.navMode !== 'dm') return false;
+        if (!document.getElementById('viewChat')?.classList.contains('active')) return false;
+        return String(this.S.current || '').trim().toLowerCase() === ringing.peer.toLowerCase();
+    }
+
+    // Пока звонок звонит, шапка чата с этим человеком сама становится звонком:
+    // той же высоты, аватар пульсирует, под именем — статус, на месте трубки и
+    // камеры — «Отклонить / Принять» или «Отменить».
+    renderChatHeaderCallState() {
+        const hdr = document.getElementById('chatHdr');
+        const note = document.getElementById('chatHdrCallNote');
+        const ctl = document.getElementById('chatHdrCallCtl');
+        if (!hdr || !note || !ctl) return;
+        const ringing = this.voiceRingingState();
+        const show = !!ringing && this.isRingingInChatHeader(ringing);
+        const kind = show ? ringing.kind : '';
+        hdr.classList.toggle('is-ringing', show);
+        hdr.dataset.ringKind = kind;
+        note.hidden = !show;
+        ctl.hidden = !show;
+        const noteText = kind === 'incoming' ? 'Входящий звонок…' : kind === 'outgoing' ? 'Вызов…' : '';
+        if (note.textContent !== noteText) note.textContent = noteText;
+        const html = kind === 'incoming'
+            ? this.ringingButton('reject', 'Отклонить', 'phone-down') + this.ringingButton('accept', 'Принять', 'phone')
+            : kind === 'outgoing'
+                ? this.ringingButton('cancel', 'Отменить', 'phone-down')
+                : '';
+        if (ctl.innerHTML !== html) ctl.innerHTML = html;
+    }
+
+    ringingButton(action, label, icon) {
+        const cls = action === 'accept' ? 'is-accept' : 'is-decline';
+        return `<button class="voice-incoming-btn ${cls}" type="button" data-ring-action="${this.esc(action)}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(icon)}<span>${this.esc(label)}</span></button>`;
+    }
+
+    // Строка сверху, когда звоним мы, а открыт другой экран.
+    renderVoiceOutgoingStrip(peer) {
+        const label = `Вызов ${peer}`;
+        return `
+            <div class="voice-incoming is-outgoing" role="group" aria-label="${this.esc(label)}">
+                <div class="voice-incoming-who">
+                    <span class="voice-incoming-ava" aria-hidden="true">${this.renderAvatarHTML(peer, 'avatar-img', peer)}</span>
+                    <span class="voice-incoming-name">${this.esc(peer)}</span>
+                    <span class="voice-incoming-note">вызов…</span>
+                </div>
+                <div class="voice-incoming-actions">${this.ringingButton('cancel', 'Отменить', 'phone-down')}</div>
+            </div>
+        `;
+    }
+
+    // Смена экрана посреди звонящего звонка: шапка или строка сверху.
+    syncRingingCallPlacement() {
+        if (!this.voiceRingingState() && !document.getElementById('chatHdr')?.classList.contains('is-ringing')) return;
+        this.renderVoiceCallStrip();
+        this.renderChatHeaderCallState();
     }
 
     mountVoiceVideoElements() {
@@ -20639,8 +21142,19 @@ ZaliMixin(ZaliInterface, class {
         const byPeer = this._voiceTileNodes;
         if (!byPeer || !byPeer.size) return;
         const SPEAKING_THRESHOLD = 12; // percent, same scale as the meters
+        // Кольцо уровня вокруг аватара (или рамка видео-плитки) заполняется от
+        // нижней точки в обе стороны: --voice-level 0…1, полное кольцо — на
+        // ~60 % шкалы, где уже громкая речь. Пишется только при заметном
+        // изменении, чтобы 8 обновлений в секунду не трогали стиль впустую.
+        const LEVEL_FULL = 60;
         for (const [peer, tile] of byPeer) {
-            const speaking = Number(this._voiceTileLevels[peer] || 0) >= SPEAKING_THRESHOLD;
+            const percent = Number(this._voiceTileLevels[peer] || 0);
+            const level = Math.round(Math.min(1, percent / LEVEL_FULL) * 50) / 50;
+            if (tile._voiceLevel !== level) {
+                tile._voiceLevel = level;
+                tile.style.setProperty('--voice-level', String(level));
+            }
+            const speaking = percent >= SPEAKING_THRESHOLD;
             // classList.toggle with an explicit force flag still writes the
             // attribute every call, which dirties style on tiles that did not
             // change. Only touch the ones whose state actually flipped.
@@ -20883,8 +21397,19 @@ ZaliMixin(ZaliInterface, class {
             const limit = 200;
             let offset = 0;
             let mergedCount = 0;
+            // См. loadBrowserDmHistory: архивы в ответе — только при первой
+            // загрузке канала за сессию, зато для всех её страниц.
+            const inlineScope = `channel:${sid}:${cid}`;
+            const inlineArchives = this.takeHistoryInlineArchives(inlineScope);
+            let firstPageLoaded = false;
             while (true) {
-                const res = await this.apiFetch(this.apiRoutes.servers.channelMessages(sid, cid, limit, offset));
+                let res;
+                try {
+                    res = await this.apiFetch(this.apiRoutes.servers.channelMessages(sid, cid, limit, offset, { inlineArchives }));
+                } finally {
+                    if (!firstPageLoaded && !res?.ok) this.releaseHistoryInlineArchives(inlineScope, inlineArchives);
+                }
+                if (res.ok) firstPageLoaded = true;
                 if (!res.ok) {
                     const text = await res.text().catch(() => '');
                     this.trace(`loadServerMessages failed server=${sid} channel=${cid} status=${res.status} offset=${offset} body=${text.slice(0, 300)}`);
@@ -20899,6 +21424,7 @@ ZaliMixin(ZaliInterface, class {
                 for (const msg of batch) {
                     await this.handleIncomingBrowserMessage(msg);
                 }
+                if (inlineArchives) this.releaseHistoryInlineIfUndecoded(inlineScope, inlineArchives, batch);
                 mergedCount += batch.length;
                 if (batch.length < limit) break;
                 offset += limit;
@@ -22454,6 +22980,7 @@ ZaliMixin(ZaliInterface, class {
                 timeoutMs: timeoutMs || API_REQUEST_TIMEOUT_MS,
             });
             this.trace(`apiFetch native response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
+            if (!res.ok) this.noteFailedRequest({ method, path, status: res.status, requestId });
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         }
@@ -22501,10 +23028,12 @@ ZaliMixin(ZaliInterface, class {
                 headers,
             });
             this.trace(`apiFetch response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
+            if (!res.ok) this.noteFailedRequest({ method, path, status: res.status, requestId });
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         } catch (error) {
             this.trace(`apiFetch transport_error method=${method} path=${path} request_id=${requestId} err=${error?.message || error}`);
+            this.noteFailedRequest({ method, path, requestId, error: error?.name === 'AbortError' ? 'timeout' : String(error?.message || error).slice(0, 80) });
             throw error;
         } finally {
             if (timeoutId) clearTimeout(timeoutId);
@@ -22789,6 +23318,9 @@ ZaliMixin(ZaliInterface, class {
             this.S.serverChats = userCachedMessages.serverChats && typeof userCachedMessages.serverChats === 'object'
                 ? userCachedMessages.serverChats
                 : {};
+            // Кеш, сохранённый до исправления, уже держит дубли записей о звонках
+            // (текстом рядом с карточкой) — сводим их один раз при входе.
+            for (const arr of Object.values(this.S.chats)) this.collapseCallRecordRows(arr);
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))
@@ -24450,6 +24982,7 @@ ZaliMixin(ZaliInterface, class {
                     canonicalKeyId = canonical.get(scope) || '';
                 } catch (e) { /* best-effort — see fetchCanonicalKeyIds's own fallback */ }
             }
+            this.flushLogEntries();
             const logBody = document.getElementById('logBody');
             const recentLog = logBody
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
@@ -24754,40 +25287,33 @@ ZaliMixin(ZaliInterface, class {
         const timeLabel = this.fmtTime(startedAt || endedAt);
         const durationLabel = this.formatDuration(durationMs);
         const title = outcome === 'missed'
-            ? `Пропущенный звонок`
+            ? (direction === 'outgoing' ? 'Без ответа' : 'Пропущенный звонок')
             : outcome === 'rejected'
-                ? `Звонок отклонён`
+                ? 'Звонок отклонён'
                 : outcome === 'cancelled'
-                    ? `Звонок отменён`
+                    ? 'Звонок отменён'
                     // The client gave up on a call it could no longer recover — see
                     // concludeDeadVoiceCallIfNeeded. Without this it read as an
                     // ordinary completed call, which is the one thing it was not.
                     : outcome === 'failed'
-                        ? `Звонок прерван`
-                        : direction === 'outgoing'
-                            ? `Исходящий звонок`
-                            : `Входящий звонок`;
-        const subject = direction === 'outgoing'
-            ? `К ${peer || 'контакту'}`
-            : `От ${peer || 'контакта'}`;
-        const durationText = durationLabel === '00:00' && outcome !== 'completed'
-            ? '00:00'
-            : durationLabel;
-        return `
-            <div class="call-card ${this.esc(outcome)} ${this.esc(direction)}">
-                <div class="call-card-top">
-                    <div class="call-card-icon">${outcome === 'completed' ? this.uiIcon('phone') : this.uiIcon('close')}</div>
-                    <div class="call-card-copy">
-                        <div class="call-card-title">${this.esc(title)}</div>
-                        <div class="call-card-sub">${this.esc(subject)}</div>
-                    </div>
-                </div>
-                <div class="call-card-meta">
-                    <span>Когда: ${this.esc(whenLabel ? `${whenLabel}, ${timeLabel}` : timeLabel)}</span>
-                    <span>Длительность: ${this.esc(durationText)}</span>
-                </div>
-            </div>
-        `;
+                        ? 'Звонок прерван'
+                        : 'Звонок';
+        // Карточка — одна строка; подробности всплывают при наведении на её части
+        // (data-tip, см. .call-card в style.css): иконка — кто и куда, заголовок —
+        // когда, длительность — что за цифра. aria-label несёт всё сразу.
+        const whoTip = direction === 'outgoing'
+            ? `Исходящий · ${peer || 'контакту'}`
+            : `Входящий · от ${peer || 'контакта'}`;
+        const whenTip = whenLabel ? `${whenLabel}, ${timeLabel}` : timeLabel;
+        const failed = outcome !== 'completed';
+        const showDuration = !failed && durationMs > 0;
+        const label = [title, whoTip, whenTip, showDuration ? `длительность ${durationLabel}` : '']
+            .filter(Boolean).join(', ');
+        return `<div class="call-card ${this.esc(outcome)} ${this.esc(direction)}${failed ? ' is-failed' : ''}" role="group" aria-label="${this.esc(label)}">`
+            + `<span class="call-card-icon" data-tip="${this.esc(whoTip)}">${this.voiceIcon(failed ? 'phone-down' : 'phone')}</span>`
+            + `<span class="call-card-title" data-tip="${this.esc(whenTip)}">${this.esc(title)}</span>`
+            + (showDuration ? `<span class="call-card-dur" data-tip="Длительность разговора">${this.esc(durationLabel)}</span>` : '')
+            + '</div>';
     }
 
     messageHasMedia(msg) {
@@ -25099,7 +25625,7 @@ ZaliMixin(ZaliInterface, class {
                 active: contact === this.S.current ? 1 : 0,
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => `${item.name}:${item.lastMessageAt}:${item.unread}:${item.lastKey}:${item.active}`)
             .join('|');
     }
@@ -25310,15 +25836,17 @@ ZaliMixin(ZaliInterface, class {
                 lastMessageAt: this.conversationLastMessageAt(contact),
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => item.name);
 
         if (list.length === 0) {
-            this.commitListHTML(el, 'contacts', `<div style="text-align:center;color:var(--text3);font-size:11px;padding:24px 0">${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</div>`);
+            // contacts-empty-art — иллюстрация «найти → добавить → написать»
+            // (оформление «Фокус»); при пустом поиске она не к месту.
+            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span></div>`);
             return;
         }
 
-        const html = list.map(contact => {
+        const rows = list.map(contact => {
             this.initChat(contact);
             const msgs = this.S.chats[contact];
             const last = msgs[msgs.length-1];
@@ -25336,13 +25864,13 @@ ZaliMixin(ZaliInterface, class {
             // otherwise a short date — same helpers the message list uses.
             let timeLabel = '';
             if (last && last.timestamp) {
-                const d = new Date(last.timestamp);
-                const now = new Date();
-                timeLabel = d.toDateString() === now.toDateString()
-                    ? this.fmtTime(last.timestamp)
-                    : this.fmtDate(last.timestamp);
+                // fmtDate() answers «Сегодня» exactly when the row wants a time.
+                const day = this.fmtDate(last.timestamp);
+                timeLabel = day === 'Сегодня' ? this.fmtTime(last.timestamp) : day;
             }
-            return `<div class="contact ${active}" data-name="${this.esc(contact)}">
+            // has-unread — чтобы строку с новым можно было выделить целиком
+            // (имя, превью), а не только бейджем в углу.
+            return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
                 <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}</div>
@@ -25355,8 +25883,8 @@ ZaliMixin(ZaliInterface, class {
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
-        }).join('');
-        this.commitListHTML(el, 'contacts', html);
+        });
+        this.commitListRows(el, 'contacts', rows);
     }
 
     // renderContacts()/renderServers() are called from ~30 places (every incoming
@@ -25398,6 +25926,134 @@ ZaliMixin(ZaliInterface, class {
         }
         el.dataset.listSlot = key;
         el.innerHTML = html;
+        this._listHTMLCache.set(key, html);
+        return true;
+    }
+
+    // Полная запись списка из строк (одна строка разметки = ровно один элемент
+    // верхнего уровня). Запоминает соответствие «строка разметки → узел», если
+    // каждая строка дала ровно один узел верхнего уровня; иначе соответствия нет и
+    // следующий кадр тоже пишется целиком — как было до точечного обновления.
+    writeListRows(el, state, rows, html = rows.join('')) {
+        el.innerHTML = html;
+        const nodes = el.childNodes;
+        if (nodes && nodes.length === rows.length) {
+            state.rows = rows;
+            state.nodes = Array.from(nodes);
+        } else {
+            state.rows = null;
+            state.nodes = null;
+        }
+    }
+
+    // Точечное обновление списка (#msgs, сайдбар контактов): узлы строк, которые не изменились, остаются на месте,
+    // создаются только новые. Новое сообщение, смена статуса «отправляется»,
+    // реакция — это одна-две строки, а раньше каждое такое событие пересоздавало
+    // все пузыри окна (и все их <img>/<video>) и заново раскладывало список.
+    //
+    // Сопоставление — по самой строке разметки, по порядку: для каждой новой строки
+    // берётся первый ещё не занятый старый узел с той же разметкой правее
+    // предыдущего взятого. Так покрывается и сдвиг виртуального окна (сверху ушла
+    // строка, снизу пришла, распорка сменила высоту), а не только правка хвоста.
+    //
+    // Возвращает false, если патч неприменим, — вызывающий пишет список целиком:
+    //  - соответствие строк узлам потеряно (кто-то менял #msgs мимо рендера —
+    //    пустое состояние, голосовой канал; проверяется поузлово, а не по флагу);
+    //  - новых строк больше половины — полная запись не дороже;
+    //  - новые строки разобрались не в один узел на строку.
+    patchListRows(box, state, rows) {
+        if (!state) return false;
+        const prevRows = state.rows;
+        const prevNodes = state.nodes;
+        if (!Array.isArray(prevRows) || !Array.isArray(prevNodes) || prevRows.length !== prevNodes.length) return false;
+        const children = box.childNodes;
+        if (!children || children.length !== prevNodes.length) return false;
+        for (let i = 0; i < prevNodes.length; i += 1) {
+            if (children[i] !== prevNodes[i]) return false;
+        }
+
+        const byRow = new Map();
+        for (let i = 0; i < prevRows.length; i += 1) {
+            const list = byRow.get(prevRows[i]);
+            if (list) list.push(i);
+            else byRow.set(prevRows[i], [i]);
+        }
+        const matched = new Array(rows.length);
+        const reused = new Uint8Array(prevRows.length);
+        const freshRows = [];
+        let lastOld = -1;
+        for (let i = 0; i < rows.length; i += 1) {
+            const list = byRow.get(rows[i]);
+            let found = -1;
+            if (list) {
+                while (list.length && list[0] <= lastOld) list.shift();
+                if (list.length) found = list.shift();
+            }
+            if (found >= 0) {
+                matched[i] = prevNodes[found];
+                reused[found] = 1;
+                lastOld = found;
+            } else {
+                matched[i] = null;
+                freshRows.push(rows[i]);
+            }
+        }
+        if (freshRows.length * 2 > rows.length) return false;
+
+        let fresh = [];
+        if (freshRows.length) {
+            const tpl = document.createElement('template');
+            tpl.innerHTML = freshRows.join('');
+            if (tpl.content.childNodes.length !== freshRows.length) return false;
+            fresh = Array.from(tpl.content.childNodes);
+        }
+        for (let i = 0; i < prevNodes.length; i += 1) {
+            if (!reused[i]) prevNodes[i].remove();
+        }
+        // После удаления в #msgs остались только переиспользованные узлы, уже в
+        // нужном порядке; новые вставляются перед следующим переиспользованным.
+        let ref = box.firstChild;
+        let freshIndex = 0;
+        const nodes = new Array(rows.length);
+        for (let i = 0; i < rows.length; i += 1) {
+            if (matched[i]) {
+                nodes[i] = matched[i];
+                ref = matched[i].nextSibling;
+            } else {
+                const node = fresh[freshIndex++];
+                box.insertBefore(node, ref);
+                nodes[i] = node;
+            }
+        }
+
+        state.rows = rows;
+        state.nodes = nodes;
+        return true;
+    }
+
+    // commitListHTML() для списков, собранных построчно: та же защёлка «не
+    // изменилось — не трогать», но изменение применяется точечно (patchListRows),
+    // а не перезаписью всего контейнера. Кэш commitListHTML обновляется тем же
+    // значением, чтобы обычная запись в тот же слот (пустое состояние) не сочла
+    // себя «неизменившейся» по устаревшей строке.
+    commitListRows(el, slot, rows) {
+        if (!el) return false;
+        const html = rows.join('');
+        this._listHTMLCache = this._listHTMLCache || new Map();
+        const key = `${slot}`;
+        const unchanged = this._listHTMLCache.get(key) === html
+            && el.dataset.listSlot === key
+            && (el.childElementCount > 0 || !html);
+        if (unchanged) return false;
+        this._listRowState = this._listRowState || new Map();
+        let state = this._listRowState.get(key);
+        if (!state) {
+            state = {};
+            this._listRowState.set(key, state);
+        }
+        const patched = el.dataset.listSlot === key && this.patchListRows(el, state, rows);
+        if (!patched) this.writeListRows(el, state, rows, html);
+        el.dataset.listSlot = key;
         this._listHTMLCache.set(key, html);
         return true;
     }
@@ -25664,11 +26320,14 @@ ZaliMixin(ZaliInterface, class {
                 const sub = ch.topic
                     ? this.esc(ch.topic)
                     : (kind === 'voice' ? (inCall ? 'Вы в канале' : 'Голосовой канал') : 'Текстовый канал');
-                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
+                // is-generic — подпись лишь повторяет иконку («Текстовый канал»):
+                // оформление «Фокус» её прячет, тема канала и «Вы в канале» остаются.
+                const genericSub = !ch.topic && !inCall;
+                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}${count > 0 ? ' has-unread' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
                     <span class="sidebar-channel-icon ${kind}">${this.channelKindIcon(kind, 'sidebar-channel-glyph')}</span>
                     <div class="contact-info">
                         <div class="contact-name">${this.esc(ch.name)}</div>
-                        <div class="contact-prev">${sub}</div>
+                        <div class="contact-prev${genericSub ? ' is-generic' : ''}">${sub}</div>
                     </div>
                     <div class="contact-actions">
                         ${badge}
@@ -26221,12 +26880,15 @@ ZaliMixin(ZaliInterface, class {
             this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
                 box.innerHTML = `<div class="empty-state">
+                    <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">Нет сообщений в канале</div>
                     <div class="empty-sub">${channel ? `#${this.esc(channel.name)}` : 'Выберите канал'}</div>
                 </div>`;
                 return;
             }
+            // empty-art — иллюстрация «как доходит сообщение» (оформление «Фокус»).
             box.innerHTML = `<div class="empty-state">
+                <div class="empty-art" aria-hidden="true"></div>
                 <div class="empty-ttl">Нет сообщений</div>
                 <div class="empty-sub">Начните разговор</div>
             </div>`;
@@ -26238,9 +26900,12 @@ ZaliMixin(ZaliInterface, class {
             stickToBottom,
         });
         const renderedMsgs = windowInfo.useWindow ? msgs.slice(windowInfo.start, windowInfo.end) : msgs;
-        let html = '';
+        // Одна строка массива = ровно один элемент верхнего уровня в #msgs (разделитель
+        // дня, пузырь, распорка окна). На этом держится точечное обновление ниже:
+        // пришло одно сообщение — меняется одна строка, а не весь список.
+        const rows = [];
         if (windowInfo.useWindow && windowInfo.topSpacer > 0) {
-            html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`;
+            rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`);
         }
         const GROUP_WINDOW_MS = 5 * 60 * 1000;
         const items = renderedMsgs.map(msg => {
@@ -26251,7 +26916,7 @@ ZaliMixin(ZaliInterface, class {
 
         let activeGroup = null;
         items.forEach((item) => {
-            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const isGroupable = !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
@@ -26295,13 +26960,13 @@ ZaliMixin(ZaliInterface, class {
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
             const isSending = isOut && msg.status === 'sending';
             const messageId = String(msg.id || '').trim();
-            const hoverTimeLabel = !isCall ? this.messageHoverTimeLabel(msg) : '';
-            const showInlineTime = !isCall && (item.groupPos === 'single' || item.groupPos === 'end');
-            const inlineTimeLabel = !isCall ? this.messageInlineTimeLabel(msg) : '';
+            const hoverTimeLabel = this.messageHoverTimeLabel(msg);
+            const showInlineTime = item.groupPos === 'single' || item.groupPos === 'end';
+            const inlineTimeLabel = this.messageInlineTimeLabel(msg);
             const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
-            const showAvatar = !isCall && !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
+            const showAvatar = !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
             if (dateStr && dateStr !== lastDate) {
-                html += `<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`;
+                rows.push(`<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`);
                 lastDate = dateStr;
             }
 
@@ -26325,7 +26990,7 @@ ZaliMixin(ZaliInterface, class {
             // уведомления о переводе: у карточки есть кнопка, и «системная» плашка
             // читалась бы как то, на что нажимать не нужно.
             if (coinCard) {
-                html += `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -26336,6 +27001,7 @@ ZaliMixin(ZaliInterface, class {
                     ${this.renderCoinCard(coinCard, msg)}
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
+                rows.push(html);
                 return;
             }
 
@@ -26355,7 +27021,7 @@ ZaliMixin(ZaliInterface, class {
                         messageTimestamp: msg.timestamp,
                     });
                 }
-                html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
+                rows.push(`<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
                     <div class="notice-stack">
                         ${senderLabelHtml}
                         <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
@@ -26363,7 +27029,7 @@ ZaliMixin(ZaliInterface, class {
                             <span class="notice-text">${this.renderMessageText(msg.text)}</span>
                         </div>
                     </div>
-                </div>`;
+                </div>`);
                 return;
             }
 
@@ -26375,7 +27041,7 @@ ZaliMixin(ZaliInterface, class {
             if (isImageCaption) {
                 const attachments = this.normalizeAttachments(msg.attachments);
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
-                html += `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -26387,34 +27053,41 @@ ZaliMixin(ZaliInterface, class {
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
+                rows.push(html);
                 return;
             }
 
-            const bubbleClass = isCall ? '' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
+            // Звонок — обычное облачко (сторона, цвет, сгруппированные углы, время),
+            // внутри только своя строка: иконка, заголовок, длительность.
+            const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
-            if (!isCall && !isOut && showAvatar) {
+            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            if (!isOut && showAvatar) {
                 html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
-            } else if (!isCall && !isOut) {
+            } else if (!isOut) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
                 ${senderLabelHtml}
-                ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
+                ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
+            rows.push(html);
         });
 
         if (this.S.loading) {
-            html += `<div class="sk sk-bubble sk-w2"></div>
-                     <div class="sk sk-bubble sk-w3 sk-self"></div>
-                     <div class="sk sk-bubble sk-w1"></div>
-                     <div class="sk sk-bubble sk-w2 sk-self"></div>`;
+            rows.push(
+                `<div class="sk sk-bubble sk-w2"></div>`,
+                `<div class="sk sk-bubble sk-w3 sk-self"></div>`,
+                `<div class="sk sk-bubble sk-w1"></div>`,
+                `<div class="sk sk-bubble sk-w2 sk-self"></div>`,
+            );
         }
 
         if (windowInfo.useWindow && windowInfo.bottomSpacer > 0) {
-            html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`;
+            rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`);
         }
+        const html = rows.join('');
 
         // Redundant re-renders are common (an avatar finishing its fetch, an unrelated
         // state sync). Reassigning identical innerHTML would still destroy and rebuild
@@ -26422,7 +27095,9 @@ ZaliMixin(ZaliInterface, class {
         // on WebKit it also resets scrollTop mid-scroll. Compare first.
         const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
         if (htmlChanged) {
-            box.innerHTML = html;
+            const rowState = this._messageRowState || (this._messageRowState = {});
+            const patched = !conversationChanged && this.patchListRows(box, rowState, rows);
+            if (!patched) this.writeListRows(box, rowState, rows, html);
             this._lastMessagesHTML = html;
             this.hydrateGifMedia(box);
 
@@ -26573,6 +27248,11 @@ ZaliMixin(ZaliInterface, class {
         } else {
             this.renderContacts();
             this.scheduleRenderMessages();
+            // «Принять/Отклонить» рисуются только при открытом личном чате
+            // (renderVoiceRoomView проверяет S.current). Если входящий пришёл,
+            // когда чат ещё не был выбран (после перезагрузки, свежий вход),
+            // карточка оставалась без кнопок, и ответить было нечем.
+            if (this.voice?.status === 'incoming' || this.voice?.status === 'calling') this.renderVoicePanel();
         }
         this.updateSendButtonState();
         this.syncActiveConversation({ force: true });
@@ -26875,7 +27555,7 @@ ZaliMixin(ZaliInterface, class {
         return new Uint8Array(buf);
     }
 
-    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments, reply }) {
+    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments, reply, call }) {
         if (!key || !receiver) return false;
         if (!(await this.wasmAvailable())) return false;
 
@@ -26896,7 +27576,10 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
-        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments, '', reply || '');
+        // `call` — запись о звонке (JSON, sendCallRecordMessage). Раньше здесь стояла
+        // пустая строка: браузер отправлял запись только текстом-сводкой, и у
+        // собеседника она навсегда оставалась голым текстом без карточки звонка.
+        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments, call || '', reply || '');
         if (!archiveBytes || !archiveBytes.length) return false;
 
         const formData = new FormData();
@@ -27108,6 +27791,10 @@ ZaliMixin(ZaliInterface, class {
                 // Decrypted by the WASM core alongside the body; without this the
                 // browser client would render replies as ordinary messages.
                 reply: unpacked.reply || '',
+                // Запись о звонке (JSON-строка, как у нативных шеллов) — без неё
+                // история браузера показывала её голым текстом-сводкой
+                // («Исходящий звонок · 3:09») вместо карточки звонка.
+                call: unpacked.call || '',
                 timestamp: unpacked.timestamp ? unpacked.timestamp * 1000 : payload?.timestamp,
                 attachments,
                 reactions: payload?.reactions || [],
@@ -27222,11 +27909,68 @@ ZaliMixin(ZaliInterface, class {
         throw lastError || new Error('Нет ключа для расшифровки сообщения');
     }
 
+    // Архивы в ответе истории — один раз на разговор за сессию (см.
+    // loadBrowserDmHistory). Неудачный запрос (HTTP-ошибка или сеть — например,
+    // сервер ещё не поднялся при старте) отдаёт право обратно.
+    takeHistoryInlineArchives(scope) {
+        if (!this._historyInlineTaken) this._historyInlineTaken = new Set();
+        if (this._historyInlineTaken.has(scope)) return false;
+        this._historyInlineTaken.add(scope);
+        return true;
+    }
+
+    releaseHistoryInlineArchives(scope, taken) {
+        if (taken) this._historyInlineTaken?.delete(scope);
+    }
+
+    // Загрузка, после которой часть строк так и не расшифрована (ключ пришёл
+    // позже), не должна «съедать» право: иначе ровно та загрузка, что их
+    // откроет, пойдёт по одному GET /api/download/:id на строку.
+    releaseHistoryInlineIfUndecoded(scope, taken, rows) {
+        if (!taken || !Array.isArray(rows)) return;
+        const decoded = this._decodedBrowserMessageIds;
+        const missing = rows.some(row => {
+            const id = String(row?.id || '').trim();
+            return id && !(decoded && decoded.has(id));
+        });
+        if (missing) this.releaseHistoryInlineArchives(scope, taken);
+    }
+
     // Fallback for loading DM history from a plain browser tab (no native shell to do
     // it via REFRESH_HISTORY). Downloads + decrypts each message metadata row returned
     // by GET /api/messages/:user and feeds it through receiveMessage(), same as above.
+    // Параллельные загрузки истории одного чата (старт, переподключение,
+    // догонялка контактов, refreshAfterKey) склеиваются: пока идёт одна, вторая
+    // не стартует, а ставит один повтор после неё. Иначе каждая параллельная
+    // качала все ещё не расшифрованные строки сама — по 3 GET /api/download на
+    // строку после рестарта сервера, — и без права на архивы в ответе, которое
+    // держала первая.
     async loadBrowserDmHistory(peer, key) {
         if (!peer || !key) return;
+        const inflight = this._dmHistoryInflight || (this._dmHistoryInflight = new Map());
+        const running = inflight.get(peer);
+        if (running) {
+            running.again = key;
+            return running.promise;
+        }
+        const entry = { again: '', promise: null };
+        inflight.set(peer, entry);
+        entry.promise = (async () => {
+            try {
+                let nextKey = key;
+                while (nextKey) {
+                    entry.again = '';
+                    await this._loadBrowserDmHistoryOnce(peer, nextKey);
+                    nextKey = entry.again;
+                }
+            } finally {
+                inflight.delete(peer);
+            }
+        })();
+        return entry.promise;
+    }
+
+    async _loadBrowserDmHistoryOnce(peer, key) {
         if (!(await this.wasmAvailable())) return;
         // Cleared before the walk, not after: every row is fed through
         // handleIncomingBrowserMessage below, which re-marks the gap for anything it
@@ -27234,10 +27978,32 @@ ZaliMixin(ZaliInterface, class {
         // and a conversation that has been repaired stops asking for reloads.
         this.clearBrowserDecryptGap({ peer });
         try {
-            const res = await this.apiFetch(this.apiRoutes.messages.direct(peer));
-            if (!res.ok) return;
-            const rows = await res.json();
-            if (!Array.isArray(rows)) return;
+            // Первая загрузка чата за сессию просит архивы прямо в ответе
+            // (`inlineArchives`, server/src/messages.rs) — иначе каждая строка
+            // истории — отдельный GET /api/download/:id. Повторные синхронизации
+            // их не просят: всё уже расшифрованное отсекает
+            // _decodedBrowserMessageIds, и байты гонялись бы впустую.
+            //
+            // Постранично, как каналы: без limit сервер отдаёт 50 САМЫХ СТАРЫХ
+            // строк, и всё, что новее, в браузер после перезагрузки не попадало.
+            const inlineScope = `dm:${peer}`;
+            const inlineArchives = this.takeHistoryInlineArchives(inlineScope);
+            const PAGE = 200;
+            let rows = [];
+            let complete = false;
+            try {
+                for (let offset = 0; ; offset += PAGE) {
+                    const res = await this.apiFetch(this.apiRoutes.messages.direct(peer, { inlineArchives, limit: PAGE, offset }));
+                    if (!res.ok) break;
+                    const page = await res.json();
+                    if (!Array.isArray(page)) break;
+                    rows = rows.concat(page);
+                    if (page.length < PAGE) { complete = true; break; }
+                }
+            } finally {
+                if (!complete) this.releaseHistoryInlineArchives(inlineScope, inlineArchives);
+            }
+            if (!complete && !rows.length) return;
             // Bounded concurrency instead of one strictly serial pass. Each row is an
             // independent download plus a WASM unpack, and doing them one after another
             // made a history load take the sum of every round trip. Kept small on
@@ -27255,6 +28021,9 @@ ZaliMixin(ZaliInterface, class {
             await Promise.all(
                 Array.from({ length: Math.min(HISTORY_CONCURRENCY, rows.length) }, worker)
             );
+            // Строки, которые не открылись (ключ ещё не пришёл), будут скачиваться
+            // заново — пусть следующая загрузка снова попросит их архивы в ответе.
+            this.releaseHistoryInlineIfUndecoded(inlineScope, inlineArchives, rows);
         } catch (e) {
             this.trace(`loadBrowserDmHistory failed peer=${peer} error=${e?.message || e}`);
         }
@@ -27290,7 +28059,7 @@ ZaliMixin(ZaliInterface, class {
     receiveMessage(payload = {}) {
         // Call records are not chat text and DM-only, so they take their own path
         // instead of being threaded through both branches of the logic below.
-        const callRecord = this.parseCallRecordPayload(payload);
+        const callRecord = this.parseCallRecordPayload(payload) || this.legacyCallRecordFromText(payload);
         if (callRecord) {
             const clientId = String(payload?.clientId || payload?.client_id || '').trim();
             if (clientId) this.dropPendingOutbox(clientId);
@@ -27483,11 +28252,14 @@ ZaliMixin(ZaliInterface, class {
         }
         if (this.isDmChatVisible(peer)) {
             this.scheduleRenderMessages();
-        } else {
-            // Unread/notification bookkeeping (own-echo filtering included) already
-            // happened above via notifyBackgroundMessage; just refresh the sidebar.
-            this.renderContacts();
         }
+        // The sidebar row (preview, time, order, unread badge) changes whether or
+        // not the chat is open. Skipping it for the open chat left its row showing
+        // the previous message until something unrelated repainted the list; the
+        // repaint now touches only the rows that changed (commitListRows).
+        // Unread/notification bookkeeping (own-echo filtering included) already
+        // happened above via notifyBackgroundMessage.
+        this.renderContacts();
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
 });
@@ -27766,6 +28538,11 @@ ZaliMixin(ZaliInterface, class {
                 <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
                        class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
+            ${isSelf ? '' : `
+            <div class="peer-context-menu-sep" aria-hidden="true"></div>
+            <button type="button" class="peer-context-menu-item is-danger" role="menuitem" data-action="remove">
+                ${this.uiIcon('trash')}<span>Удалить из контактов</span>
+            </button>`}
         `;
         if (!isSelf) this.applyContactRelationToMenu(menu, relation);
         document.body.appendChild(menu);
@@ -27811,6 +28588,13 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
+        });
+        // Тот же removeContact(), что и у крестика в строке: в оформлении
+        // «Фокус» крестик скрыт, и удаление живёт только здесь — рядом с
+        // остальными действиями над контактом, а не на каждой строке списка.
+        menu.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.removeContact(name);
         });
         const range = menu.querySelector('#contactVolumeRange');
         const label = menu.querySelector('#contactVolumeValue');
@@ -28782,7 +29566,11 @@ ZaliMixin(ZaliInterface, class {
             touchedPeers.forEach(peer => {
                 const arr = this.S.chats[peer];
                 if (Array.isArray(arr)) {
-                    arr.sort((a, b) => this.compareMessagesByTime(a, b));
+                    // Записи о звонках из истории — в одну карточку, без
+                    // дубля-текста «Вызов отклонён» (collapseCallRecordRows сортирует сам).
+                    if (!this.collapseCallRecordRows(arr)) {
+                        arr.sort((a, b) => this.compareMessagesByTime(a, b));
+                    }
                 }
             });
             this.normalizeDmChatStore();
@@ -28845,6 +29633,11 @@ ZaliMixin(ZaliInterface, class {
         // (the desktop #wsPill is hidden on mobile). Only marks "not connected"
         // once a first status has arrived, so the strip doesn't flash on boot.
         document.body?.classList.toggle('ws-offline', !connected);
+        // Частота страховочного опроса зависит от того, жив ли сокет
+        // (scheduleConversationSyncPolling) — пересчитать при смене состояния.
+        if (wasOn !== !!connected && this.messageSyncTimer) this.scheduleConversationSyncPolling();
+        // Частые обрывы — повод для автоматического отчёта (diagnostic_reports.js).
+        if (wasOn && !connected) this.noteRealtimeDrop();
         this.addLogEntry({ type: connected ? 'SUCCESS' : 'WARN', msg: connected ? 'WebSocket соединение установлено' : 'WebSocket соединение разорвано', ts: new Date().toLocaleTimeString() });
         if (connected) {
             // Connection (re)established — drain the outbox immediately instead of
@@ -31438,21 +32231,49 @@ ZaliMixin(ZaliInterface, class {
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+const ZALI_LOG_BODY_LIMIT = 300;
+
 ZaliMixin(ZaliInterface, class {
 
     addLogEntry({ type, msg, ts }) {
         // Mirror to console so the native console-hook persists the full in-app
         // journal to zali-debug.log on disk (readable without the UI).
         try { console.log(`[ZALI][JOURNAL] ${type}: ${msg}`); } catch (e) {}
+        // Копия для диагностического отчёта (diagnostic_reports.js): журнал в DOM
+        // читать оттуда не годится — его очищают кнопкой и обрезают.
+        this.pushDiagRing('_journalRing', `${ts} ${type}: ${msg}`);
+        // В DOM журнал уходит пачкой раз в кадр. Прямая вставка читала
+        // body.scrollHeight сразу после того, как вызывающий (receiveMessage,
+        // отправка, звонок) только что поменял сайдбар или список, — это
+        // принудительная синхронная раскладка всего документа на каждую строку
+        // журнала: 9 из 13 мс приёма одного сообщения на аккаунте со 150 чатами.
+        const pending = this._pendingLogEntries || (this._pendingLogEntries = []);
+        pending.push({ type, msg, ts });
+        if (pending.length > ZALI_LOG_BODY_LIMIT) pending.splice(0, pending.length - ZALI_LOG_BODY_LIMIT);
+        if (this._logFlushScheduled) return;
+        this._logFlushScheduled = true;
+        const flush = () => this.flushLogEntries();
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+        else setTimeout(flush, 16);
+    }
+
+    // Выгружает накопленные строки журнала в #logBody одной вставкой. Зовётся из
+    // кадра, а также синхронно теми, кто читает журнал из DOM (отчёт о сбое
+    // расшифровки), чтобы они видели и ещё не отрисованные строки.
+    flushLogEntries() {
+        this._logFlushScheduled = false;
+        const pending = this._pendingLogEntries;
+        if (!pending || !pending.length) return;
+        this._pendingLogEntries = [];
         const body = document.getElementById('logBody');
-        if (body) {
-            const div = document.createElement('div');
-            div.className = `log-entry log-${type}`;
-            div.innerHTML = `<span class="ts">[${ts}]</span>${this.esc(type)}: ${this.esc(msg)}`;
-            body.appendChild(div);
-            body.scrollTop = body.scrollHeight;
-            if (body.childElementCount > 300) body.removeChild(body.firstElementChild);
+        if (!body) return;
+        let html = '';
+        for (const { type, msg, ts } of pending) {
+            html += `<div class="log-entry log-${this.esc(type)}"><span class="ts">[${this.esc(ts)}]</span>${this.esc(type)}: ${this.esc(msg)}</div>`;
         }
+        body.insertAdjacentHTML('beforeend', html);
+        while (body.childElementCount > ZALI_LOG_BODY_LIMIT) body.removeChild(body.firstElementChild);
+        body.scrollTop = body.scrollHeight;
     }
 
     // Always-on counterpart of voiceTrace, for the handful of facts that decide
@@ -31795,6 +32616,282 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
+// --- MODULE: interface/diagnostic_reports.js ---
+// --- ZaliInterface: Диагностические отчёты на сервер (вручную и при сбоях). ---
+// Часть класса ZaliInterface (см. web/src/interface.js).
+//
+// До этого с устройства на сервер уходили только отчёты о неудачной
+// расшифровке (reportDecryptFailure). Звонки, доставка, обрывы соединения и
+// ошибки JS оставались в журнале устройства, и разбор начинался с «пришли
+// лог». Здесь клиент собирает снимок своего состояния из ограниченных колец
+// (журнал, трасса, голосовая диагностика, неудачные запросы, очередь отправки)
+// и отправляет его в POST /api/diagnostics/report (server/src/diagnostics.rs):
+//   • вручную — кнопка «Отправить диагностику» в Настройках → Журнал событий;
+//   • сам — при сбое звонка, зависшей отправке, частых обрывах WS, ошибке JS.
+// Читает оператор: scripts/diag_reports.py.
+//
+// Кольца — короткие строки, без payload-ов и ссылок на объекты (инварианты
+// производительности: ничего, что держит память). Длинные токены вычищаются
+// перед отправкой (scrubDiagnosticText) — ключи и JWT в отчёт не попадают.
+
+const ZALI_DIAG_RING_LIMIT = 400;
+// Сервер принимает до 256 КиБ (server/src/diagnostics.rs); запас на заголовки.
+const ZALI_DIAG_MAX_REPORT_BYTES = 240 * 1024;
+const ZALI_DIAG_LINE_MAX = 400;
+// Один автоматический отчёт каждого вида не чаще, чем раз в столько.
+const ZALI_DIAG_AUTO_INTERVAL_MS = 10 * 60 * 1000;
+// Сообщение, висящее в очереди дольше этого при живом соединении, — сбой доставки.
+const ZALI_DIAG_STUCK_OUTBOX_MS = 2 * 60 * 1000;
+// Столько обрывов WS за окно — «нестабильное соединение».
+const ZALI_DIAG_WS_DROPS = 5;
+const ZALI_DIAG_WS_WINDOW_MS = 10 * 60 * 1000;
+
+ZaliMixin(ZaliInterface, class {
+
+    pushDiagRing(name, line) {
+        const ring = this[name] || (this[name] = []);
+        ring.push(String(line).slice(0, ZALI_DIAG_LINE_MAX));
+        if (ring.length > ZALI_DIAG_RING_LIMIT) ring.shift();
+    }
+
+    // Неудачный HTTP-запрос (статус ≥ 400 или транспортная ошибка) — для отчёта.
+    // request_id тот же, что в логе сервера: по нему видна вторая половина.
+    noteFailedRequest({ method, path, status = 0, requestId = '', error = '' }) {
+        // 404 на необязательный ресурс — норма, а не сбой: у большинства контактов
+        // нет аватарки, у серверов — баннера. Без фильтра такие строки вытесняли
+        // из кольца единственный 500/таймаут, который и объяснял проблему.
+        if (status === 404 && /\/api\/(avatar|profile)\/|\/assets\//.test(String(path || ''))) return;
+        const at = new Date().toISOString();
+        this.pushDiagRing('_requestFailureRing',
+            `${at} ${method} ${String(path || '').split('?')[0]} status=${status}${error ? ` err=${error}` : ''} request_id=${requestId}`);
+    }
+
+    // Ключи, токены, base64 — длинные непрерывные строки. Id сообщений (uuid с
+    // дефисами) короче порога и остаются: без них отчёт нельзя сопоставить.
+    scrubDiagnosticText(value) {
+        return String(value || '')
+            .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]')
+            .replace(/[A-Za-z0-9+/_=]{40,}/g, '[redacted]');
+    }
+
+    diagnosticPlatform() {
+        const transport = String(this.nativeBridge()?.transport || 'none');
+        const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+        if (transport === 'webkit') return /iPhone|iPad|iPod/.test(ua) ? 'ios' : 'macos';
+        if (transport === 'webview2') return 'windows';
+        if (transport === 'ipc') return /Windows/.test(ua) ? 'windows' : 'rust-shell';
+        if (transport === 'android') return 'android';
+        return /Mobi|Android|iPhone/.test(ua) ? 'browser-mobile' : 'browser';
+    }
+
+    collectDiagnosticsSnapshot(kind, extra = {}) {
+        const scrubLines = (ring, tail) => (Array.isArray(ring) ? ring.slice(-tail) : [])
+            .map(line => this.scrubDiagnosticText(line));
+        let outbox = [];
+        try { outbox = this.loadPendingOutbox() || []; } catch (e) {}
+        const now = Date.now();
+        const voiceLines = (Array.isArray(this._voiceDiagRing) ? this._voiceDiagRing : [])
+            .slice(-200)
+            .map(line => this.scrubDiagnosticText(`[${line.ts}] ${line.level} ${line.message}`).slice(0, ZALI_DIAG_LINE_MAX));
+        const memory = (typeof performance !== 'undefined' && performance.memory)
+            ? { usedMb: Math.round(performance.memory.usedJSHeapSize / 1048576), limitMb: Math.round(performance.memory.jsHeapSizeLimit / 1048576) }
+            : null;
+        return {
+            kind,
+            appVersion: String(window.__ZALI_NATIVE_APP_VERSION || '').trim() || 'web',
+            platform: this.diagnosticPlatform(),
+            reportedAt: new Date().toISOString(),
+            userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+            deviceId: this.currentDeviceId?.() || '',
+            designMode: document.body?.dataset?.designMode || '',
+            online: typeof navigator !== 'undefined' ? navigator.onLine : null,
+            visible: !document.hidden,
+            uptimeSec: Math.round((typeof performance !== 'undefined' ? performance.now() : 0) / 1000),
+            ws: { connected: !!this.S.wsOn, recentDrops: (this._wsDropTimes || []).length },
+            navMode: this.S.navMode || '',
+            activeChat: this.S.current || '',
+            voice: {
+                status: this.voice?.status || '',
+                roomId: this.voice?.roomId || '',
+                peers: this.voice?.peerConnections?.size || 0,
+            },
+            outbox: {
+                count: outbox.length,
+                oldestAgeSec: outbox.length
+                    ? Math.round(Math.max(...outbox.map(item => now - (Date.parse(item.timestamp) || now))) / 1000)
+                    : 0,
+                items: outbox.slice(0, 20).map(item => ({
+                    clientId: item.clientId,
+                    receiver: item.receiver,
+                    serverId: item.serverId || '',
+                    attempts: item.attemptCount || 0,
+                    ageSec: Math.round((now - (Date.parse(item.timestamp) || now)) / 1000),
+                    inFlight: !!item.inFlight,
+                })),
+            },
+            memory,
+            failedRequests: scrubLines(this._requestFailureRing, 60),
+            journal: scrubLines(this._journalRing, 200),
+            // Строки трассы начинаются с performance.now() в мс (дёшево на горячем
+            // пути, см. trace()); абсолютное время = traceTimeOrigin + это число.
+            traceTimeOrigin: typeof performance !== 'undefined' ? Math.round(performance.timeOrigin || 0) : 0,
+            trace: scrubLines(this._traceRing, 300),
+            voiceDiag: voiceLines,
+            ...extra,
+        };
+    }
+
+    // Сервер не примет больше 256 КиБ (413) — и отчёт, нужный сильнее всего
+    // (после долгого плохого звонка), пропал бы целиком. Режем самые объёмные
+    // кольца с головы (старое), пока не влезет; свежий хвост остаётся.
+    fitDiagnosticReport(snapshot) {
+        const LIMIT = ZALI_DIAG_MAX_REPORT_BYTES;
+        const bytes = (value) => new Blob([value]).size;
+        let body = JSON.stringify(snapshot);
+        for (let round = 0; round < 8 && bytes(body) > LIMIT; round += 1) {
+            for (const key of ['trace', 'journal', 'voiceDiag', 'failedRequests']) {
+                const list = snapshot[key];
+                if (Array.isArray(list) && list.length > 10) snapshot[key] = list.slice(Math.floor(list.length / 2));
+            }
+            snapshot.truncated = true;
+            body = JSON.stringify(snapshot);
+        }
+        return body;
+    }
+
+    // Отправляет отчёт. Автоматические — не чаще раза в 10 минут на вид;
+    // ручной — всегда. Возвращает id отчёта на сервере или '' (не отправлен).
+    async sendDiagnosticReport(kind, extra = {}, { manual = false } = {}) {
+        if (!this.S.session?.token || this.S.session?.guest) return '';
+        this._diagLastReportStatus = 0;
+        if (!manual) {
+            const last = (this._diagLastAutoReportAt || (this._diagLastAutoReportAt = {}))[kind] || 0;
+            if (Date.now() - last < ZALI_DIAG_AUTO_INTERVAL_MS) return '';
+            this._diagLastAutoReportAt[kind] = Date.now();
+        }
+        try {
+            this.flushTrace?.();
+            const body = this.fitDiagnosticReport(this.collectDiagnosticsSnapshot(kind, extra));
+            const res = await this.apiFetch(this.apiRoutes.diagnostics.report, { method: 'POST', body });
+            this._diagLastReportStatus = res.status;
+            if (!res.ok) {
+                this.trace(`sendDiagnosticReport kind=${kind} status=${res.status}`);
+                return '';
+            }
+            const data = await res.json().catch(() => ({}));
+            const id = String(data?.id || '');
+            this.trace(`sendDiagnosticReport kind=${kind} id=${id} bytes=${body.length}`);
+            return id;
+        } catch (e) {
+            this.trace(`sendDiagnosticReport failed kind=${kind} error=${e?.message || e}`);
+            return '';
+        }
+    }
+
+    // Кнопка в Настройках. Id отчёта показываем человеку — его называют,
+    // когда описывают проблему, и по нему оператор находит снимок.
+    async sendManualDiagnosticReport() {
+        const btn = document.getElementById('sendDiagnosticsBtn');
+        const note = document.getElementById('sendDiagnosticsNote');
+        if (btn) btn.disabled = true;
+        if (note) note.textContent = 'Отправляем…';
+        const id = await this.sendDiagnosticReport('manual', {}, { manual: true });
+        if (btn) btn.disabled = false;
+        if (note) {
+            note.textContent = id
+                ? `Отправлено. Номер отчёта: ${id.slice(0, 8)}`
+                : this._diagLastReportStatus === 429
+                    ? 'Слишком много отчётов за последний час — попробуйте позже.'
+                    : 'Не удалось отправить — проверьте соединение и попробуйте ещё раз.';
+        }
+        this.addLogEntry({
+            type: id ? 'SUCCESS' : 'WARN',
+            msg: id ? `Диагностика отправлена, отчёт ${id}` : 'Диагностику отправить не удалось',
+            ts: new Date().toLocaleTimeString(),
+        });
+    }
+
+    // Обрыв WS: ZALI_DIAG_WS_DROPS обрывов за окно — отчёт ws_unstable.
+    noteRealtimeDrop() {
+        const now = Date.now();
+        const drops = (this._wsDropTimes || []).filter(t => now - t < ZALI_DIAG_WS_WINDOW_MS);
+        drops.push(now);
+        this._wsDropTimes = drops;
+        if (drops.length >= ZALI_DIAG_WS_DROPS) {
+            void this.sendDiagnosticReport('ws_unstable', { drops: drops.length, windowMin: ZALI_DIAG_WS_WINDOW_MS / 60000 });
+        }
+    }
+
+    // Сообщение висит в очереди дольше двух минут, хотя соединение есть, —
+    // значит, оно не уходит не из-за сети. Отчёт один на сообщение.
+    //
+    // Возраст считается от момента, когда проверка впервые увидела сообщение при
+    // живом соединении, а не от времени самого сообщения: написанное офлайн
+    // (самолёт) иначе считалось «зависшим» сразу после переподключения, ещё до
+    // того, как очередь успела уйти. Пока соединения нет — отсчёт сбрасывается.
+    // Сообщение с вложениями, которое прямо сейчас загружается, не в счёт:
+    // большой файл законно грузится дольше двух минут.
+    checkStuckOutbox() {
+        const seen = this._diagOutboxSeenAt || (this._diagOutboxSeenAt = new Map());
+        if (!this.S.wsOn || !this.S.session?.token) {
+            seen.clear();
+            return;
+        }
+        let outbox = [];
+        try { outbox = this.loadPendingOutbox() || []; } catch (e) { return; }
+        const now = Date.now();
+        const present = new Set(outbox.map(item => String(item.clientId || '')));
+        for (const id of seen.keys()) if (!present.has(id)) seen.delete(id);
+        for (const id of present) if (!seen.has(id)) seen.set(id, now);
+        const reported = this._diagStuckReported || (this._diagStuckReported = new Set());
+        const stuck = outbox.filter(item => {
+            const id = String(item.clientId || '');
+            const uploading = item.inFlight && Array.isArray(item.attachments) && item.attachments.length > 0;
+            return !uploading && now - (seen.get(id) || now) > ZALI_DIAG_STUCK_OUTBOX_MS && !reported.has(id);
+        });
+        if (!stuck.length) return;
+        for (const item of stuck) reported.add(String(item.clientId || ''));
+        if (reported.size > 500) reported.delete(reported.values().next().value);
+        void this.sendDiagnosticReport('delivery_failed', {
+            stuck: stuck.slice(0, 10).map(item => ({
+                clientId: item.clientId,
+                receiver: item.receiver,
+                serverId: item.serverId || '',
+                attempts: item.attemptCount || 0,
+                ageSec: Math.round((now - (Date.parse(item.timestamp) || now)) / 1000),
+                hasCall: !!item.call,
+                attachments: Array.isArray(item.attachments) ? item.attachments.length : 0,
+            })),
+        });
+    }
+
+    // Ставится один раз при запуске (bindNativeBridgeEvents).
+    installDiagnosticAutoReports() {
+        if (this._diagAutoInstalled) return;
+        this._diagAutoInstalled = true;
+        const onJsError = (message, stack) => {
+            const text = this.scrubDiagnosticText(String(message || '')).slice(0, 500);
+            if (!text) return;
+            this.pushDiagRing('_traceRing', `[JS-ERROR] ${text}`);
+            void this.sendDiagnosticReport('js_error', {
+                error: text,
+                stack: this.scrubDiagnosticText(String(stack || '')).slice(0, 4000),
+            });
+        };
+        window.addEventListener('error', (event) => {
+            onJsError(event?.message || event?.error?.message, event?.error?.stack
+                || `${event?.filename || ''}:${event?.lineno || ''}:${event?.colno || ''}`);
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+            const reason = event?.reason;
+            onJsError(`unhandledrejection: ${reason?.message || reason}`, reason?.stack || '');
+        });
+        if (this._diagOutboxTimer) clearInterval(this._diagOutboxTimer);
+        this._diagOutboxTimer = setInterval(() => this.checkStuckOutbox(), 60 * 1000);
+    }
+});
+
+
 // --- MODULE: interface/events.js ---
 // --- ZaliInterface: Привязка DOM-событий и инерция прокрутки. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
@@ -31958,16 +33055,7 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const cancelBtn = e.target.closest('#voiceCancelBtn');
                 if (cancelBtn) {
-                    const invite = this.voice.outgoingInvite;
-                    if (invite?.roomId && invite?.target) {
-                        this.sendVoiceEvent({
-                            type: 'voice_call_cancel',
-                            roomId: invite.roomId,
-                            target: invite.target,
-                        });
-                    }
-                    this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
-                    this.resetVoiceState({ preserveInvite: false });
+                    this.cancelOutgoingVoiceCall();
                 }
             });
             voicePanel.addEventListener('keydown', (e) => {
@@ -31980,11 +33068,44 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // Компактный звонок (renderVoiceCompactCall) — в титлбаре и в полосе на
+        // телефоне. Кнопки адресуются data-voice-action: фрагмент один, мест два.
+        const handleCompactCallAction = (e) => {
+            const btn = e.target.closest('[data-voice-action]');
+            if (!btn) return false;
+            const action = btn.getAttribute('data-voice-action');
+            if (action === 'open') this.openActiveVoiceCall();
+            else if (action === 'mute') this.toggleVoiceMute();
+            else if (action === 'deafen') this.toggleVoiceDeafen();
+            else if (action === 'leave') void this.leaveVoiceRoom({ announce: true });
+            return true;
+        };
+        document.getElementById('tbCall')?.addEventListener('click', (e) => {
+            handleCompactCallAction(e);
+        });
+
+        // Шапка чата в состоянии «звонит» (renderChatHeaderCallState): принять,
+        // отклонить, отменить исходящий; и полоса над вкладками с тем же.
+        const handleRingingAction = (e) => {
+            const btn = e.target.closest('[data-ring-action]');
+            if (!btn) return false;
+            const action = btn.getAttribute('data-ring-action');
+            if (action === 'accept') void this.acceptIncomingCall();
+            else if (action === 'reject') void this.rejectIncomingCall();
+            else if (action === 'cancel') this.cancelOutgoingVoiceCall();
+            return true;
+        };
+        document.getElementById('chatHdrCallCtl')?.addEventListener('click', (e) => {
+            handleRingingAction(e);
+        });
+
         // The strip above every tab: its mute/deafen act in place, anywhere else
         // on it goes back to the call.
         const voiceCallStrip = document.getElementById('voiceCallStrip');
         if (voiceCallStrip) {
             voiceCallStrip.addEventListener('click', (e) => {
+                if (handleCompactCallAction(e)) return;
+                if (handleRingingAction(e)) return;
                 // A DM call ringing over the voice channel we are in (renderVoiceIncomingStrip).
                 if (e.target.closest('#voiceStripAcceptBtn')) {
                     void this.acceptIncomingCall();
@@ -32436,6 +33557,24 @@ ZaliMixin(ZaliInterface, class {
 
         const authNetworkSaveBtn = document.getElementById('authNetworkSaveBtn');
         const authApiBaseUrl = document.getElementById('authApiBaseUrl');
+        // В оформлении «Фокус» блок адреса сервера свёрнут до одной строки —
+        // нужен редко, а занимал треть формы входа.
+        const authNetworkHead = document.getElementById('authNetworkHead');
+        if (authNetworkHead) {
+            const toggleAuthNetwork = () => {
+                const box = authNetworkHead.closest('.auth-network');
+                const open = !box?.classList.contains('is-open');
+                box?.classList.toggle('is-open', open);
+                authNetworkHead.setAttribute('aria-expanded', open ? 'true' : 'false');
+                if (open) authApiBaseUrl?.focus({ preventScroll: true });
+            };
+            authNetworkHead.addEventListener('click', toggleAuthNetwork);
+            authNetworkHead.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleAuthNetwork();
+            });
+        }
         if (authApiBaseUrl) {
             authApiBaseUrl.addEventListener('input', () => {
                 authApiBaseUrl.dataset.dirty = '1';
@@ -32540,6 +33679,9 @@ ZaliMixin(ZaliInterface, class {
         const serverRoleNameInput = document.getElementById('serverRoleNameInput');
         const settingsLogoutBtn = document.getElementById('settingsLogoutBtn');
         const clearLogsBtn = document.getElementById('clearLogs');
+        document.getElementById('sendDiagnosticsBtn')?.addEventListener('click', () => {
+            void this.sendManualDiagnosticReport();
+        });
         const closeSettings = document.getElementById('closeSettings');
         const resetEncryptionKeysBtn = document.getElementById('resetEncryptionKeysBtn');
         const networkConfigSaveBtn = document.getElementById('networkConfigSaveBtn');
@@ -33101,6 +34243,7 @@ ZaliMixin(ZaliInterface, class {
         if (meAva) meAva.title = 'Мой профиль';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
+                this._pendingLogEntries = [];
                 const logBody = document.getElementById('logBody');
                 if (logBody) logBody.innerHTML = '';
             });
@@ -33475,7 +34618,7 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
@@ -33502,6 +34645,13 @@ ZaliMixin(ZaliInterface, class {
             if (tbL && wsPill) {
                 tbL.insertBefore(wsPill, tbL.firstChild);
             }
+            // Компактный идущий звонок — на стороне, противоположной кнопкам окна:
+            // на Windows они справа, звонок уходит влево, следом за индикатором
+            // связи. В macOS (светофор слева) и в браузере он остаётся справа.
+            const tbCall = document.getElementById('tbCall');
+            if (tbL && tbCall) {
+                tbL.insertBefore(tbCall, wsPill ? wsPill.nextSibling : tbL.firstChild);
+            }
             document.getElementById('winMinBtn')?.addEventListener('click', () => {
                 this.postNativeMessage({ type: NativeMessageTypes.MINIMIZE_WINDOW });
             });
@@ -33512,7 +34662,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

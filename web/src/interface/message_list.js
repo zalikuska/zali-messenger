@@ -193,12 +193,15 @@ ZaliMixin(ZaliInterface, class {
             this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
                 box.innerHTML = `<div class="empty-state">
+                    <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">Нет сообщений в канале</div>
                     <div class="empty-sub">${channel ? `#${this.esc(channel.name)}` : 'Выберите канал'}</div>
                 </div>`;
                 return;
             }
+            // empty-art — иллюстрация «как доходит сообщение» (оформление «Фокус»).
             box.innerHTML = `<div class="empty-state">
+                <div class="empty-art" aria-hidden="true"></div>
                 <div class="empty-ttl">Нет сообщений</div>
                 <div class="empty-sub">Начните разговор</div>
             </div>`;
@@ -210,9 +213,12 @@ ZaliMixin(ZaliInterface, class {
             stickToBottom,
         });
         const renderedMsgs = windowInfo.useWindow ? msgs.slice(windowInfo.start, windowInfo.end) : msgs;
-        let html = '';
+        // Одна строка массива = ровно один элемент верхнего уровня в #msgs (разделитель
+        // дня, пузырь, распорка окна). На этом держится точечное обновление ниже:
+        // пришло одно сообщение — меняется одна строка, а не весь список.
+        const rows = [];
         if (windowInfo.useWindow && windowInfo.topSpacer > 0) {
-            html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`;
+            rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`);
         }
         const GROUP_WINDOW_MS = 5 * 60 * 1000;
         const items = renderedMsgs.map(msg => {
@@ -223,7 +229,7 @@ ZaliMixin(ZaliInterface, class {
 
         let activeGroup = null;
         items.forEach((item) => {
-            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const isGroupable = !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
@@ -267,13 +273,13 @@ ZaliMixin(ZaliInterface, class {
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
             const isSending = isOut && msg.status === 'sending';
             const messageId = String(msg.id || '').trim();
-            const hoverTimeLabel = !isCall ? this.messageHoverTimeLabel(msg) : '';
-            const showInlineTime = !isCall && (item.groupPos === 'single' || item.groupPos === 'end');
-            const inlineTimeLabel = !isCall ? this.messageInlineTimeLabel(msg) : '';
+            const hoverTimeLabel = this.messageHoverTimeLabel(msg);
+            const showInlineTime = item.groupPos === 'single' || item.groupPos === 'end';
+            const inlineTimeLabel = this.messageInlineTimeLabel(msg);
             const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
-            const showAvatar = !isCall && !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
+            const showAvatar = !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
             if (dateStr && dateStr !== lastDate) {
-                html += `<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`;
+                rows.push(`<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`);
                 lastDate = dateStr;
             }
 
@@ -297,7 +303,7 @@ ZaliMixin(ZaliInterface, class {
             // уведомления о переводе: у карточки есть кнопка, и «системная» плашка
             // читалась бы как то, на что нажимать не нужно.
             if (coinCard) {
-                html += `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -308,6 +314,7 @@ ZaliMixin(ZaliInterface, class {
                     ${this.renderCoinCard(coinCard, msg)}
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
+                rows.push(html);
                 return;
             }
 
@@ -327,7 +334,7 @@ ZaliMixin(ZaliInterface, class {
                         messageTimestamp: msg.timestamp,
                     });
                 }
-                html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
+                rows.push(`<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
                     <div class="notice-stack">
                         ${senderLabelHtml}
                         <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
@@ -335,7 +342,7 @@ ZaliMixin(ZaliInterface, class {
                             <span class="notice-text">${this.renderMessageText(msg.text)}</span>
                         </div>
                     </div>
-                </div>`;
+                </div>`);
                 return;
             }
 
@@ -347,7 +354,7 @@ ZaliMixin(ZaliInterface, class {
             if (isImageCaption) {
                 const attachments = this.normalizeAttachments(msg.attachments);
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
-                html += `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -359,34 +366,41 @@ ZaliMixin(ZaliInterface, class {
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
+                rows.push(html);
                 return;
             }
 
-            const bubbleClass = isCall ? '' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
+            // Звонок — обычное облачко (сторона, цвет, сгруппированные углы, время),
+            // внутри только своя строка: иконка, заголовок, длительность.
+            const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
-            if (!isCall && !isOut && showAvatar) {
+            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            if (!isOut && showAvatar) {
                 html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
-            } else if (!isCall && !isOut) {
+            } else if (!isOut) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
                 ${senderLabelHtml}
-                ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
+                ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
+            rows.push(html);
         });
 
         if (this.S.loading) {
-            html += `<div class="sk sk-bubble sk-w2"></div>
-                     <div class="sk sk-bubble sk-w3 sk-self"></div>
-                     <div class="sk sk-bubble sk-w1"></div>
-                     <div class="sk sk-bubble sk-w2 sk-self"></div>`;
+            rows.push(
+                `<div class="sk sk-bubble sk-w2"></div>`,
+                `<div class="sk sk-bubble sk-w3 sk-self"></div>`,
+                `<div class="sk sk-bubble sk-w1"></div>`,
+                `<div class="sk sk-bubble sk-w2 sk-self"></div>`,
+            );
         }
 
         if (windowInfo.useWindow && windowInfo.bottomSpacer > 0) {
-            html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`;
+            rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`);
         }
+        const html = rows.join('');
 
         // Redundant re-renders are common (an avatar finishing its fetch, an unrelated
         // state sync). Reassigning identical innerHTML would still destroy and rebuild
@@ -394,7 +408,9 @@ ZaliMixin(ZaliInterface, class {
         // on WebKit it also resets scrollTop mid-scroll. Compare first.
         const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
         if (htmlChanged) {
-            box.innerHTML = html;
+            const rowState = this._messageRowState || (this._messageRowState = {});
+            const patched = !conversationChanged && this.patchListRows(box, rowState, rows);
+            if (!patched) this.writeListRows(box, rowState, rows, html);
             this._lastMessagesHTML = html;
             this.hydrateGifMedia(box);
 
@@ -545,6 +561,11 @@ ZaliMixin(ZaliInterface, class {
         } else {
             this.renderContacts();
             this.scheduleRenderMessages();
+            // «Принять/Отклонить» рисуются только при открытом личном чате
+            // (renderVoiceRoomView проверяет S.current). Если входящий пришёл,
+            // когда чат ещё не был выбран (после перезагрузки, свежий вход),
+            // карточка оставалась без кнопок, и ответить было нечем.
+            if (this.voice?.status === 'incoming' || this.voice?.status === 'calling') this.renderVoicePanel();
         }
         this.updateSendButtonState();
         this.syncActiveConversation({ force: true });
