@@ -22,6 +22,7 @@ use chrono::Utc;
 use sqlx::{QueryBuilder, Row, Sqlite};
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::Arc,
 };
 use tokio::{fs, io::AsyncWriteExt};
@@ -261,16 +262,25 @@ pub(crate) async fn get_server_messages(
                 auth_user,
                 msgs.len()
             );
+            let scans = scan_archives(
+                &state.uploads_dir,
+                &msgs,
+                page.inline_archives.unwrap_or(false),
+            )
+            .await;
             let mut available_msgs = Vec::with_capacity(msgs.len());
-            for msg in msgs {
-                let path = state.uploads_dir.join(&msg.filename);
-                if fs::try_exists(&path).await.unwrap_or(false) {
+            let mut inline_archives: HashMap<String, String> = HashMap::new();
+            for (msg, scan) in msgs.into_iter().zip(scans) {
+                if scan.present {
+                    if let Some(encoded) = scan.inline {
+                        inline_archives.insert(msg.id.clone(), encoded);
+                    }
                     available_msgs.push(msg);
                 } else {
                     warn!(
                         "API get_server_messages skip orphan record id={} missing_file={}",
                         msg.id,
-                        path.display()
+                        state.uploads_dir.join(&msg.filename).display()
                     );
                 }
             }
@@ -283,6 +293,7 @@ pub(crate) async fn get_server_messages(
                 .map(|msg| {
                     let (reactions, my_reactions) =
                         reaction_states.get(&msg.id).cloned().unwrap_or_default();
+                    let inline_archive = inline_archives.remove(&msg.id);
                     MessageResponse {
                         id: msg.id,
                         client_id: msg.client_id,
@@ -293,6 +304,7 @@ pub(crate) async fn get_server_messages(
                         key_version: msg.key_version,
                         server_id: msg.server_id,
                         channel_id: msg.channel_id,
+                        inline_archive,
                         reactions,
                         my_reactions,
                     }
@@ -308,6 +320,58 @@ pub(crate) async fn get_server_messages(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Архив строки истории глазами сервера: есть ли файл на диске и, если
+/// клиент попросил `inlineArchives=true`, сами байты (base64).
+struct ArchiveScan {
+    present: bool,
+    inline: Option<String>,
+}
+
+/// Сколько байт архивов одна страница истории может вложить в ответ.
+///
+/// Без вложения перезагрузка истории — это один запрос на страницу плюс
+/// ОТДЕЛЬНЫЙ `GET /api/download/:id` на каждую строку: 200 сообщений = 201 круг
+/// до сервера, и так при каждом открытии чата/реконнекте. Медиана архива —
+/// 307 байт, поэтому текстовая страница из 200 строк укладывается в ~100 КиБ.
+/// Потолок на строку тот же, что у кадра доставки (`INLINE_ARCHIVE_MAX_BYTES`):
+/// вложения туда не проходят и качаются по-старому. Бюджет на страницу не даёт
+/// ответу вырасти до мегабайт, если в переписке много средних архивов.
+const HISTORY_INLINE_BUDGET_BYTES: u64 = 1024 * 1024;
+
+/// Which of the page's archives are still on disk, in order, plus the inlined
+/// bytes when asked. One blocking-pool hop for the whole page:
+/// `tokio::fs::try_exists` per row was a separate round trip through the
+/// blocking pool for each of up to 500 rows.
+async fn scan_archives(uploads_dir: &std::path::Path, msgs: &[Message], inline: bool) -> Vec<ArchiveScan> {
+    let paths: Vec<PathBuf> = msgs.iter().map(|m| uploads_dir.join(&m.filename)).collect();
+    let count = paths.len();
+    tokio::task::spawn_blocking(move || {
+        use base64::Engine;
+        let mut budget = if inline { HISTORY_INLINE_BUDGET_BYTES } else { 0 };
+        paths
+            .iter()
+            .map(|path| {
+                let meta = match std::fs::metadata(path) {
+                    Ok(meta) if meta.is_file() => meta,
+                    _ => return ArchiveScan { present: false, inline: None },
+                };
+                let len = meta.len();
+                let inline = if len > 0 && len <= INLINE_ARCHIVE_MAX_BYTES && len <= budget {
+                    std::fs::read(path).ok().map(|bytes| {
+                        budget = budget.saturating_sub(bytes.len() as u64);
+                        base64::engine::general_purpose::STANDARD.encode(&bytes)
+                    })
+                } else {
+                    None
+                };
+                ArchiveScan { present: true, inline }
+            })
+            .collect::<Vec<ArchiveScan>>()
+    })
+    .await
+    .unwrap_or_else(|_| (0..count).map(|_| ArchiveScan { present: false, inline: None }).collect())
 }
 
 pub(crate) async fn get_messages(
@@ -342,21 +406,37 @@ pub(crate) async fn get_messages(
         Ok(value) => value,
         Err(response) => return response,
     };
+    // Две половины переписки — два отдельных диапазона idx_messages_dm_pair,
+    // склеенные UNION ALL. Форма `(sender=a AND receiver=b) OR (sender=b AND
+    // receiver=a)` без статистики (ANALYZE на сервере не запускается) уводила
+    // планировщик в idx_messages_server_channel по `server_id IS NULL`: перебор
+    // ВСЕХ личных сообщений сервера плюс сортировка во временном B-дереве —
+    // 26 мс на 300 тыс. строк против 0,14 мс здесь (каждая ветка приходит уже
+    // упорядоченной по времени, и SQLite их сливает). Чат с самим собой — одна
+    // ветка: обе совпали бы с одними и теми же строками и продублировали их.
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
-         FROM messages
-         WHERE server_id IS NULL
-           AND ((sender = ",
+         FROM (",
     );
-    builder.push_bind(&effective_user);
-    builder.push(" AND receiver = ");
-    builder.push_bind(&user);
-    builder.push(") OR (sender = ");
-    builder.push_bind(&user);
-    builder.push(" AND receiver = ");
-    builder.push_bind(&effective_user);
-    builder.push("))");
-    push_history_access_predicate(&mut builder, &history_access);
+    let mut pairs = vec![(&effective_user, &user)];
+    if user != effective_user {
+        pairs.push((&user, &effective_user));
+    }
+    for (index, (sender, receiver)) in pairs.into_iter().enumerate() {
+        if index > 0 {
+            builder.push(" UNION ALL ");
+        }
+        builder.push(
+            "SELECT id, client_id, sender, receiver, filename, timestamp, key_version, server_id, channel_id
+             FROM messages
+             WHERE server_id IS NULL AND sender = ",
+        );
+        builder.push_bind(sender);
+        builder.push(" AND receiver = ");
+        builder.push_bind(receiver);
+        push_history_access_predicate(&mut builder, &history_access);
+    }
+    builder.push(")");
     if newest_first {
         builder.push(" ORDER BY timestamp DESC, id DESC");
     } else {
@@ -379,16 +459,25 @@ pub(crate) async fn get_messages(
                 state.data_dir.join("zali_messenger.db").display(),
                 state.uploads_dir.display()
             );
+            let scans = scan_archives(
+                &state.uploads_dir,
+                &msgs,
+                page.inline_archives.unwrap_or(false),
+            )
+            .await;
             let mut available_msgs = Vec::with_capacity(msgs.len());
-            for msg in msgs {
-                let path = state.uploads_dir.join(&msg.filename);
-                if fs::try_exists(&path).await.unwrap_or(false) {
+            let mut inline_archives: HashMap<String, String> = HashMap::new();
+            for (msg, scan) in msgs.into_iter().zip(scans) {
+                if scan.present {
+                    if let Some(encoded) = scan.inline {
+                        inline_archives.insert(msg.id.clone(), encoded);
+                    }
                     available_msgs.push(msg);
                 } else {
                     warn!(
                         "API get_messages skip orphan record id={} missing_file={}",
                         msg.id,
-                        path.display()
+                        state.uploads_dir.join(&msg.filename).display()
                     );
                 }
             }
@@ -401,6 +490,7 @@ pub(crate) async fn get_messages(
                 .map(|msg| {
                     let (reactions, my_reactions) =
                         reaction_states.get(&msg.id).cloned().unwrap_or_default();
+                    let inline_archive = inline_archives.remove(&msg.id);
                     MessageResponse {
                         id: msg.id,
                         client_id: msg.client_id,
@@ -411,6 +501,7 @@ pub(crate) async fn get_messages(
                         key_version: msg.key_version,
                         server_id: msg.server_id,
                         channel_id: msg.channel_id,
+                        inline_archive,
                         reactions,
                         my_reactions,
                     }
@@ -1193,6 +1284,7 @@ pub(crate) async fn download_upload_file(
                 offset: None,
                 since: None,
                 newest_first: None,
+                inline_archives: None,
             };
             let history_access = match resolve_history_access(
                 &state.db,
@@ -1673,6 +1765,7 @@ pub(crate) async fn download_message(
                 offset: None,
                 since: None,
                 newest_first: None,
+                inline_archives: None,
             };
             let history_access = match resolve_history_access(
                 &state.db,

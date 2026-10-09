@@ -106,6 +106,10 @@ struct WebView {
         /// from the start (`DECRYPTED_CACHE_MAX_ENTRIES` / `_MAX_ENTRY_BYTES` in
         /// native/cache.rs); this is the missing half of that pair.
         private var decryptedMessageCache: [String: [String: Any]] = [:]
+        /// Разговоры, историю которых в этом запуске уже просили с вложенными
+        /// архивами (см. takeHistoryInlineArchives). Зовётся из фоновых задач.
+        private var historyInlineTaken: Set<String> = []
+        private let historyInlineLock = NSLock()
         private var decryptedMessageCacheOrder: [String] = []
         /// Guards the three decryption caches below.
         ///
@@ -219,12 +223,32 @@ struct WebView {
         /// injected console hook (all JS console.* output) so the full in-app journal is
         /// tail-able from disk. Serialized on a dedicated queue; best-effort, never throws.
         private static let debugLogQueue = DispatchQueue(label: "com.zali.messenger.debuglog")
+        /// Порог ротации: дальше текущий файл становится zali-debug.1.log (прежний
+        /// .1 удаляется). Раньше файл рос без предела всю жизнь установки — 13 МБ на
+        /// живой машине. Проверяется раз в сотню записей, а не на каждой: размер
+        /// файла — лишний системный вызов на горячем пути журнала. Та же схема, что
+        /// у zali-win.log (apps/windows/src/main.rs).
+        private static let debugLogMaxBytes: UInt64 = 8 * 1024 * 1024
+        private static var debugLogWritesSinceCheck = 0
+        private static let debugLogDateFormatter = ISO8601DateFormatter()
         static func appendDebugLog(_ line: String) {
             guard let dir = sharedAppSupportDir else { return }
             let url = dir.appendingPathComponent("zali-debug.log")
-            let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] \(line)\n"
             debugLogQueue.async {
+                let stamped = "[\(debugLogDateFormatter.string(from: Date()))] \(line)\n"
                 guard let data = stamped.data(using: .utf8) else { return }
+                debugLogWritesSinceCheck += 1
+                if debugLogWritesSinceCheck >= 100 {
+                    debugLogWritesSinceCheck = 0
+                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
+                    if size > debugLogMaxBytes {
+                        let previous = dir.appendingPathComponent("zali-debug.1.log")
+                        try? FileManager.default.removeItem(at: previous)
+                        if (try? FileManager.default.moveItem(at: url, to: previous)) == nil {
+                            try? FileManager.default.removeItem(at: url)
+                        }
+                    }
+                }
                 if let handle = try? FileHandle(forWritingTo: url) {
                     defer { try? handle.close() }
                     _ = try? handle.seekToEnd()
@@ -517,6 +541,11 @@ struct WebView {
             decryptedMessageCache.removeAll()
             decryptedMessageCacheOrder.removeAll()
             failedDecryptKeyFingerprint.removeAll()
+            // Кэш снова холодный — следующая загрузка каждого разговора опять
+            // просит архивы прямо в ответе истории.
+            historyInlineLock.lock()
+            historyInlineTaken.removeAll()
+            historyInlineLock.unlock()
         }
 
         /// Stores a decrypted message, evicting the oldest entries past the cap.
@@ -824,6 +853,13 @@ struct WebView {
             // Superseded while waiting for the gate: a newer reload of this chat is queued.
             guard isCurrentDirectHistoryReload(username, reloadToken) else { return }
             let (records, ok) = await fetchMessagesAsync(for: username)
+            // Право на архивы в ответе остаётся использованным, только если эта
+            // загрузка действительно отрисовала историю и всё в ней открылось.
+            // Вытесненная загрузка или строки, которые не расшифровались (ключ
+            // придёт позже), — вернуть: иначе та загрузка, что их откроет, пойдёт
+            // по GET /api/download/:id на строку.
+            var keepInlineRight = false
+            defer { if !keepInlineRight { releaseHistoryInlineArchives("dm:\(username)", taken: true) } }
             guard isCurrentDirectHistoryReload(username, reloadToken) else { return }
             print("[ZALI][WEBVIEW] reloadHistory fetched user=\(username) count=\(records.count) ok=\(ok)")
 
@@ -855,6 +891,7 @@ struct WebView {
             )
 
             guard isCurrentDirectHistoryReload(username, reloadToken) else { return }
+            keepInlineRight = !records.contains { decryptVerdict(for: $0.id.trimmingCharacters(in: .whitespacesAndNewlines)).failedWith != nil }
             let encodedHistory = WebView.javascriptLiteral(renderedMessages)
             DispatchQueue.main.async {
                 guard self.isCurrentDirectHistoryReload(username, reloadToken) else { return }
@@ -988,24 +1025,53 @@ struct WebView {
             }
         }
 
+        // Архивы прямо в ответе истории (`inlineArchives`) — только при первой
+        // загрузке разговора за запуск: кэш расшифрованных живёт в памяти, и
+        // именно тогда каждая строка истории стоила бы своего GET /api/download/:id.
+        // Дальше почти всё берётся из кэша, и вложенные байты гонялись бы впустую.
+        // Неудачная загрузка отдаёт право обратно. Как в вебе (takeHistoryInlineArchives).
+        private func takeHistoryInlineArchives(_ scope: String) -> Bool {
+            historyInlineLock.lock()
+            defer { historyInlineLock.unlock() }
+            return historyInlineTaken.insert(scope).inserted
+        }
+
+        private func releaseHistoryInlineArchives(_ scope: String, taken: Bool) {
+            guard taken else { return }
+            historyInlineLock.lock()
+            historyInlineTaken.remove(scope)
+            historyInlineLock.unlock()
+        }
+
         private func fetchMessagesAsync(for username: String) async -> ([NetworkService.RemoteMessageRecord], Bool) {
-            await withCheckedContinuation { continuation in
-                NetworkService.shared.fetchMessages(for: username) { records, ok in
+            let scope = "dm:\(username)"
+            let inline = takeHistoryInlineArchives(scope)
+            let result: ([NetworkService.RemoteMessageRecord], Bool) = await withCheckedContinuation { continuation in
+                NetworkService.shared.fetchMessages(for: username, inlineArchives: inline) { records, ok in
                     continuation.resume(returning: (records, ok))
                 }
             }
+            if !result.1 { releaseHistoryInlineArchives(scope, taken: inline) }
+            return result
         }
 
         private func fetchServerMessagesAsync(serverId: String, channelId: String) async -> ([NetworkService.RemoteMessageRecord], Bool) {
-            await withCheckedContinuation { continuation in
-                NetworkService.shared.fetchServerMessages(serverId: serverId, channelId: channelId) { records, ok in
+            let scope = "channel:\(serverId):\(channelId)"
+            let inline = takeHistoryInlineArchives(scope)
+            let result: ([NetworkService.RemoteMessageRecord], Bool) = await withCheckedContinuation { continuation in
+                NetworkService.shared.fetchServerMessages(serverId: serverId, channelId: channelId, inlineArchives: inline) { records, ok in
                     continuation.resume(returning: (records, ok))
                 }
             }
+            if !result.1 { releaseHistoryInlineArchives(scope, taken: inline) }
+            return result
         }
 
-        private func downloadMessageAsync(messageId: String) async -> (URL?, Int?) {
-            await withCheckedContinuation { continuation in
+        private func downloadMessageAsync(messageId: String, inlineArchive: String? = nil) async -> (URL?, Int?) {
+            if let inlineURL = NetworkService.shared.writeInlineArchive(messageId: messageId, inlineArchive: inlineArchive) {
+                return (inlineURL, nil)
+            }
+            return await withCheckedContinuation { continuation in
                 NetworkService.shared.downloadMessage(messageId: messageId) { fileURL, statusCode in
                     continuation.resume(returning: (fileURL, statusCode))
                 }
@@ -1093,7 +1159,11 @@ struct WebView {
             for attempt in 1...3 {
                 guard !Task.isCancelled else { return nil }
 
-                let (fileURL, statusCode) = await self.downloadMessageAsync(messageId: messageId)
+                // Первая попытка — из архива, вложенного в ответ истории, если он есть.
+                let (fileURL, statusCode) = await self.downloadMessageAsync(
+                    messageId: messageId,
+                    inlineArchive: attempt == 1 ? record.inlineArchive : nil
+                )
                 guard let fileURL else {
                     if statusCode == 403 {
                         print("[ZALI][WEBVIEW] \(logPrefix) download forbidden messageId=\(messageId)")
@@ -1340,6 +1410,10 @@ struct WebView {
             // Superseded while waiting for the gate: a newer reload of this channel is queued.
             guard isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
             let (records, ok) = await fetchServerMessagesAsync(serverId: serverId, channelId: channelId)
+            // См. performReloadHistory: право на архивы в ответе — только за
+            // загрузкой, которая отрисовалась и всё расшифровала.
+            var keepInlineRight = false
+            defer { if !keepInlineRight { releaseHistoryInlineArchives("channel:\(serverId):\(channelId)", taken: true) } }
             guard isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
             print("[ZALI][WEBVIEW] reloadServerHistory fetched server=\(serverId) channel=\(channelId) count=\(records.count) ok=\(ok)")
 
@@ -1371,6 +1445,7 @@ struct WebView {
             )
 
             guard isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
+            keepInlineRight = !records.contains { decryptVerdict(for: $0.id.trimmingCharacters(in: .whitespacesAndNewlines)).failedWith != nil }
             let encodedHistory = WebView.javascriptLiteral(renderedMessages)
             DispatchQueue.main.async {
                 guard self.isCurrentServerHistoryReload(serverId, channelId, reloadToken) else { return }
@@ -2273,8 +2348,13 @@ struct WebView {
         let pendingBootstrap = "window.__ZALI_PENDING_OUTBOX = \(pendingOutbox.isEmpty ? "[]" : pendingOutbox);"
         config.userContentController.addUserScript(WKUserScript(source: pendingBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let messageCache = NetworkService.shared.currentMessageCacheJSON()
-        let messageCacheObject: Any = (try? JSONSerialization.jsonObject(with: Data(messageCache.utf8), options: [])) ?? ["chats": [:], "serverChats": [:]]
-        let messageCacheBootstrap = "window.__ZALI_MESSAGE_CACHE = \(WebView.javascriptLiteral(messageCacheObject));"
+        // The parse is the validity gate (only a JSON object may reach the page as
+        // source); the text that passed it is injected as is. Re-serialising the
+        // parsed object gave back the same JSON at the cost of a second full pass
+        // over a multi-megabyte archive on the main thread, at every launch.
+        let messageCacheIsObject = (try? JSONSerialization.jsonObject(with: Data(messageCache.utf8), options: [])) is [String: Any]
+        let messageCacheLiteral = messageCacheIsObject ? messageCache : #"{"chats":{},"serverChats":{}}"#
+        let messageCacheBootstrap = "window.__ZALI_MESSAGE_CACHE = \(messageCacheLiteral);"
         config.userContentController.addUserScript(WKUserScript(source: messageCacheBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
         let webView = ZaliNativeWebView(frame: .zero, configuration: config)

@@ -180,7 +180,7 @@ const DefaultApiRoutes = Object.freeze({
         join: (code) => apiRoute(`/invites/${encodeURIComponent(code)}/join`),
     },
     messages: {
-        direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
+        direct: (user, { inlineArchives = false, limit = 0, offset = 0 } = {}) => apiRoute(`/messages/${encodeURIComponent(user)}?${[limit ? `limit=${limit}&offset=${offset}` : '', inlineArchives ? 'inlineArchives=true' : ''].filter(Boolean).join('&')}`.replace(/\?$/, '')),
         reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
         remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
@@ -193,7 +193,7 @@ const DefaultApiRoutes = Object.freeze({
         byId: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}`),
         channels: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels`),
         channel: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}`),
-        channelMessages: (serverId, channelId, limit, offset) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}`),
+        channelMessages: (serverId, channelId, limit, offset, { inlineArchives = false } = {}) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}${inlineArchives ? '&inlineArchives=true' : ''}`),
         assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
         members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
         member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
@@ -236,6 +236,7 @@ const DefaultApiRoutes = Object.freeze({
     },
     diagnostics: {
         decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
+            report: apiRoute('/diagnostics/report'),
     },
 });
 

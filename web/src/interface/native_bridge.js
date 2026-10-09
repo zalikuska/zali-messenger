@@ -186,6 +186,7 @@ ZaliMixin(ZaliInterface, class {
 
         this.scheduleAvatarRefreshPolling();
         this.scheduleConversationSyncPolling();
+        this.installDiagnosticAutoReports();
     }
 
     scheduleAvatarRefreshPolling() {
@@ -211,7 +212,16 @@ ZaliMixin(ZaliInterface, class {
         }
 
         const hasNativeWs = this.nativeSupports('sendMessage');
-        const delay = document.hidden || hasNativeWs ? 5 * 60 * 1000 : 15 * 1000;
+        // Опрос — страховка на случай, когда реального времени нет. Пока сокет
+        // браузера жив (S.wsOn — у него свой сторож полуоткрытого соединения,
+        // voice_transport.js), каждое сообщение и так приходит пушем, а всё
+        // пропущенное за обрыв подтягивает догонялка в setConnectionStatus.
+        // Раньше браузер всё равно раз в 15 с перекачивал историю открытого чата
+        // и слал POST claim ключа — 8 запросов в минуту на ничего. Сокет упал —
+        // setConnectionStatus перезапускает этот таймер, и опрос снова частый.
+        const delay = document.hidden || hasNativeWs
+            ? 5 * 60 * 1000
+            : (this.S.wsOn ? 2 * 60 * 1000 : 15 * 1000);
         this.messageSyncTimer = setTimeout(() => {
             this.messageSyncTimer = null;
             this.syncActiveConversation({ force: !document.hidden && !hasNativeWs });
@@ -266,6 +276,12 @@ ZaliMixin(ZaliInterface, class {
     // console call — same lines, same order, one hop.
     trace(message) {
         const line = `[ZALI][WEB] ${message}`;
+        // Хвост трассы — в диагностический отчёт (diagnostic_reports.js). На
+        // браузере и Android это единственное место, где он вообще хранится.
+        // Метка — performance.now() в мс: без Date и строки времени на каждый
+        // вызов (трасса идёт пачками на горячих путях). В отчёте к ней приложен
+        // performance.timeOrigin (collectDiagnosticsSnapshot).
+        this.pushDiagRing('_traceRing', `${Math.round(performance.now())} ${message}`);
         this._traceBuffer = this._traceBuffer || [];
         this._traceBuffer.push(line);
         if (this._traceBuffer.length >= 64) {

@@ -290,7 +290,7 @@ ZaliMixin(ZaliInterface, class {
         return new Uint8Array(buf);
     }
 
-    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments, reply }) {
+    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments, reply, call }) {
         if (!key || !receiver) return false;
         if (!(await this.wasmAvailable())) return false;
 
@@ -311,7 +311,10 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
-        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments, '', reply || '');
+        // `call` — запись о звонке (JSON, sendCallRecordMessage). Раньше здесь стояла
+        // пустая строка: браузер отправлял запись только текстом-сводкой, и у
+        // собеседника она навсегда оставалась голым текстом без карточки звонка.
+        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments, call || '', reply || '');
         if (!archiveBytes || !archiveBytes.length) return false;
 
         const formData = new FormData();
@@ -523,6 +526,10 @@ ZaliMixin(ZaliInterface, class {
                 // Decrypted by the WASM core alongside the body; without this the
                 // browser client would render replies as ordinary messages.
                 reply: unpacked.reply || '',
+                // Запись о звонке (JSON-строка, как у нативных шеллов) — без неё
+                // история браузера показывала её голым текстом-сводкой
+                // («Исходящий звонок · 3:09») вместо карточки звонка.
+                call: unpacked.call || '',
                 timestamp: unpacked.timestamp ? unpacked.timestamp * 1000 : payload?.timestamp,
                 attachments,
                 reactions: payload?.reactions || [],
@@ -637,11 +644,68 @@ ZaliMixin(ZaliInterface, class {
         throw lastError || new Error('Нет ключа для расшифровки сообщения');
     }
 
+    // Архивы в ответе истории — один раз на разговор за сессию (см.
+    // loadBrowserDmHistory). Неудачный запрос (HTTP-ошибка или сеть — например,
+    // сервер ещё не поднялся при старте) отдаёт право обратно.
+    takeHistoryInlineArchives(scope) {
+        if (!this._historyInlineTaken) this._historyInlineTaken = new Set();
+        if (this._historyInlineTaken.has(scope)) return false;
+        this._historyInlineTaken.add(scope);
+        return true;
+    }
+
+    releaseHistoryInlineArchives(scope, taken) {
+        if (taken) this._historyInlineTaken?.delete(scope);
+    }
+
+    // Загрузка, после которой часть строк так и не расшифрована (ключ пришёл
+    // позже), не должна «съедать» право: иначе ровно та загрузка, что их
+    // откроет, пойдёт по одному GET /api/download/:id на строку.
+    releaseHistoryInlineIfUndecoded(scope, taken, rows) {
+        if (!taken || !Array.isArray(rows)) return;
+        const decoded = this._decodedBrowserMessageIds;
+        const missing = rows.some(row => {
+            const id = String(row?.id || '').trim();
+            return id && !(decoded && decoded.has(id));
+        });
+        if (missing) this.releaseHistoryInlineArchives(scope, taken);
+    }
+
     // Fallback for loading DM history from a plain browser tab (no native shell to do
     // it via REFRESH_HISTORY). Downloads + decrypts each message metadata row returned
     // by GET /api/messages/:user and feeds it through receiveMessage(), same as above.
+    // Параллельные загрузки истории одного чата (старт, переподключение,
+    // догонялка контактов, refreshAfterKey) склеиваются: пока идёт одна, вторая
+    // не стартует, а ставит один повтор после неё. Иначе каждая параллельная
+    // качала все ещё не расшифрованные строки сама — по 3 GET /api/download на
+    // строку после рестарта сервера, — и без права на архивы в ответе, которое
+    // держала первая.
     async loadBrowserDmHistory(peer, key) {
         if (!peer || !key) return;
+        const inflight = this._dmHistoryInflight || (this._dmHistoryInflight = new Map());
+        const running = inflight.get(peer);
+        if (running) {
+            running.again = key;
+            return running.promise;
+        }
+        const entry = { again: '', promise: null };
+        inflight.set(peer, entry);
+        entry.promise = (async () => {
+            try {
+                let nextKey = key;
+                while (nextKey) {
+                    entry.again = '';
+                    await this._loadBrowserDmHistoryOnce(peer, nextKey);
+                    nextKey = entry.again;
+                }
+            } finally {
+                inflight.delete(peer);
+            }
+        })();
+        return entry.promise;
+    }
+
+    async _loadBrowserDmHistoryOnce(peer, key) {
         if (!(await this.wasmAvailable())) return;
         // Cleared before the walk, not after: every row is fed through
         // handleIncomingBrowserMessage below, which re-marks the gap for anything it
@@ -649,10 +713,32 @@ ZaliMixin(ZaliInterface, class {
         // and a conversation that has been repaired stops asking for reloads.
         this.clearBrowserDecryptGap({ peer });
         try {
-            const res = await this.apiFetch(this.apiRoutes.messages.direct(peer));
-            if (!res.ok) return;
-            const rows = await res.json();
-            if (!Array.isArray(rows)) return;
+            // Первая загрузка чата за сессию просит архивы прямо в ответе
+            // (`inlineArchives`, server/src/messages.rs) — иначе каждая строка
+            // истории — отдельный GET /api/download/:id. Повторные синхронизации
+            // их не просят: всё уже расшифрованное отсекает
+            // _decodedBrowserMessageIds, и байты гонялись бы впустую.
+            //
+            // Постранично, как каналы: без limit сервер отдаёт 50 САМЫХ СТАРЫХ
+            // строк, и всё, что новее, в браузер после перезагрузки не попадало.
+            const inlineScope = `dm:${peer}`;
+            const inlineArchives = this.takeHistoryInlineArchives(inlineScope);
+            const PAGE = 200;
+            let rows = [];
+            let complete = false;
+            try {
+                for (let offset = 0; ; offset += PAGE) {
+                    const res = await this.apiFetch(this.apiRoutes.messages.direct(peer, { inlineArchives, limit: PAGE, offset }));
+                    if (!res.ok) break;
+                    const page = await res.json();
+                    if (!Array.isArray(page)) break;
+                    rows = rows.concat(page);
+                    if (page.length < PAGE) { complete = true; break; }
+                }
+            } finally {
+                if (!complete) this.releaseHistoryInlineArchives(inlineScope, inlineArchives);
+            }
+            if (!complete && !rows.length) return;
             // Bounded concurrency instead of one strictly serial pass. Each row is an
             // independent download plus a WASM unpack, and doing them one after another
             // made a history load take the sum of every round trip. Kept small on
@@ -670,6 +756,9 @@ ZaliMixin(ZaliInterface, class {
             await Promise.all(
                 Array.from({ length: Math.min(HISTORY_CONCURRENCY, rows.length) }, worker)
             );
+            // Строки, которые не открылись (ключ ещё не пришёл), будут скачиваться
+            // заново — пусть следующая загрузка снова попросит их архивы в ответе.
+            this.releaseHistoryInlineIfUndecoded(inlineScope, inlineArchives, rows);
         } catch (e) {
             this.trace(`loadBrowserDmHistory failed peer=${peer} error=${e?.message || e}`);
         }
@@ -705,7 +794,7 @@ ZaliMixin(ZaliInterface, class {
     receiveMessage(payload = {}) {
         // Call records are not chat text and DM-only, so they take their own path
         // instead of being threaded through both branches of the logic below.
-        const callRecord = this.parseCallRecordPayload(payload);
+        const callRecord = this.parseCallRecordPayload(payload) || this.legacyCallRecordFromText(payload);
         if (callRecord) {
             const clientId = String(payload?.clientId || payload?.client_id || '').trim();
             if (clientId) this.dropPendingOutbox(clientId);
@@ -898,11 +987,14 @@ ZaliMixin(ZaliInterface, class {
         }
         if (this.isDmChatVisible(peer)) {
             this.scheduleRenderMessages();
-        } else {
-            // Unread/notification bookkeeping (own-echo filtering included) already
-            // happened above via notifyBackgroundMessage; just refresh the sidebar.
-            this.renderContacts();
         }
+        // The sidebar row (preview, time, order, unread badge) changes whether or
+        // not the chat is open. Skipping it for the open chat left its row showing
+        // the previous message until something unrelated repainted the list; the
+        // repaint now touches only the rows that changed (commitListRows).
+        // Unread/notification bookkeeping (own-echo filtering included) already
+        // happened above via notifyBackgroundMessage.
+        this.renderContacts();
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
 });

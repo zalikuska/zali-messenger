@@ -499,3 +499,47 @@ async fn newest_first_paging_returns_the_recent_end_of_a_conversation() {
     expected.sort();
     assert_eq!(walked, expected, "a full newest-first walk must cover the same set");
 }
+
+// `inlineArchives=true` кладёт небольшие архивы прямо в ответ истории — без
+// этого каждая строка стоит отдельного GET /api/download/:id. По умолчанию
+// поля нет: клиент, который его не читает, не должен платить за раздутый ответ.
+#[tokio::test]
+async fn history_inlines_small_archives_only_when_asked() {
+    use base64::Engine;
+
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    for i in 0..3 {
+        let resp = upload_dm(&app, &alice, "bob", Some(&format!("inline-{i}"))).await;
+        assert!(resp.status().is_success(), "upload {i} failed");
+    }
+
+    let plain = dm_history(&app, &bob, "alice", "limit=50&offset=0").await;
+    assert_eq!(plain.len(), 3);
+    assert!(
+        plain.iter().all(|m| m.get("inlineArchive").is_none()),
+        "no inlineArchive unless the client asks for it"
+    );
+
+    let inlined = dm_history(&app, &bob, "alice", "limit=50&offset=0&inlineArchives=true").await;
+    assert_eq!(inlined.len(), 3);
+    for row in &inlined {
+        let encoded = row["inlineArchive"].as_str().expect("inlineArchive present");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("valid base64");
+        let id = row["id"].as_str().unwrap();
+        let downloaded = app
+            .http
+            .get(app.url(&format!("/api/download/{id}")))
+            .header("Authorization", bob.auth_header())
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(bytes, downloaded.to_vec(), "inlined bytes are the archive itself");
+    }
+}

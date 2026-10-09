@@ -48,6 +48,10 @@ pub(crate) struct MessageResponse {
     pub(crate) reactions: Vec<ReactionSummary>,
     #[serde(rename = "myReactions")]
     pub(crate) my_reactions: Vec<String>,
+    /// Архив целиком (base64), если запрошено `inlineArchives=true` и он влез
+    /// в бюджет страницы — тогда отдельный GET /api/download/:id не нужен.
+    #[serde(rename = "inlineArchive", skip_serializing_if = "Option::is_none")]
+    pub(crate) inline_archive: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
@@ -411,6 +415,11 @@ pub(crate) struct MessagePageQuery {
     pub(crate) offset: Option<i64>,
     pub(crate) since: Option<String>,
     pub(crate) newest_first: Option<bool>,
+    /// `inlineArchives=true`: класть небольшие архивы прямо в ответ
+    /// (`MessageResponse::inline_archive`). Только по запросу — клиент, который
+    /// поле не читает, не должен платить за раздутый ответ.
+    #[serde(rename = "inlineArchives")]
+    pub(crate) inline_archives: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]

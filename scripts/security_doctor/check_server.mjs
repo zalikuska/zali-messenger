@@ -22,6 +22,10 @@ function rustFn(src, name) {
 const downloadUpload = rustFn(messages, 'download_upload_file');
 const assets = stripLineComments(read('server/src/assets.rs'));
 const updates = stripLineComments(read('server/src/updates.rs'));
+// Операторский токен проверяется в одном месте — operator_authorized
+// (diagnostics.rs); публикация релизов обязана звать именно её.
+const diagnostics = stripLineComments(read('server/src/diagnostics.rs'));
+const operatorGate = (diagnostics.match(/fn operator_authorized[\s\S]*?\n\}/) || [''])[0];
 
 section('credentials');
 {
@@ -142,10 +146,12 @@ section('user content');
 
 section('release publishing');
 {
+    record('publishing goes through the shared operator gate',
+        /operator_authorized\(&state, &headers\)[\s\S]{0,80}?FORBIDDEN/.test(updates));
     record('the admin token is compared in constant time',
-        /constant_time_eq\(/.test(updates));
+        /constant_time_eq\(/.test(operatorGate));
     record('publishing is closed unless a token is configured',
-        /release_admin_token \{[\s\S]{0,200}?None => return StatusCode::FORBIDDEN/.test(updates));
+        /release_admin_token\.as_ref\(\) else \{\s*return false;/.test(operatorGate));
     record('release artifacts are served from their own directory',
         /releases_dir/.test(updates),
         'never from uploads/, which holds user attachments behind per-message auth');

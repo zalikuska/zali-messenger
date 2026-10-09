@@ -121,6 +121,50 @@ pub(crate) fn clear_decrypted_message_caches() {
     if let Ok(mut cache) = failed_decrypt_cache().lock() {
         cache.clear();
     }
+    // Кэш снова холодный — следующая загрузка каждого разговора опять просит
+    // архивы прямо в ответе истории.
+    if let Ok(mut taken) = history_inline_taken().lock() {
+        taken.clear();
+    }
+}
+
+/// Разговоры, историю которых в этом запуске уже просили с вложенными архивами
+/// (`inlineArchives=true`, server/src/messages.rs). Кэш расшифрованных живёт в
+/// памяти, поэтому именно первая загрузка разговора после запуска стоила бы
+/// отдельного GET /api/download/:id на каждую строку; дальше почти всё берётся из
+/// кэша, и вложенные байты гонялись бы впустую. Зеркало Swift-клиента
+/// (WebView.swift, takeHistoryInlineArchives) и веба.
+fn history_inline_taken() -> &'static Mutex<HashSet<String>> {
+    static TAKEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    TAKEN.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// true — эта загрузка должна попросить архивы в ответе (первая для `scope`).
+pub(crate) fn take_history_inline_archives(scope: &str) -> bool {
+    history_inline_taken()
+        .lock()
+        .map(|mut taken| taken.insert(scope.to_string()))
+        .unwrap_or(false)
+}
+
+/// Хоть одна из строк этой загрузки не расшифровалась (ключ придёт позже)?
+/// Тогда право на архивы в ответе возвращается: иначе ровно та загрузка, что их
+/// откроет, пойдёт по GET /api/download/:id на строку.
+pub(crate) fn any_decrypt_failed(message_ids: &[String]) -> bool {
+    failed_decrypt_cache()
+        .lock()
+        .map(|cache| message_ids.iter().any(|id| cache.contains_key(id.trim())))
+        .unwrap_or(false)
+}
+
+/// Неудачная загрузка отдаёт право обратно — следующая попросит архивы снова.
+pub(crate) fn release_history_inline_archives(scope: &str, taken: bool) {
+    if !taken {
+        return;
+    }
+    if let Ok(mut set) = history_inline_taken().lock() {
+        set.remove(scope);
+    }
 }
 
 pub(crate) fn cached_decrypted_message(message_id: &str) -> Option<Value> {

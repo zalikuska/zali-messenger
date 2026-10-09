@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20260917-rev42">
+    <link rel="stylesheet" href="style.css?v=20261010-net1">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -137,6 +137,11 @@
                 </div>
             </div>
             <div class="tb-r">
+                <!-- Компактный идущий звонок: таймер (открывает звонок), микрофон,
+                     звук, «сбросить». Заполняет renderVoiceCallStrip()
+                     (web/src/interface/voice_ui.js); на Windows переезжает в .tb-l —
+                     подальше от кнопок окна (bindWindowChromeEvents). -->
+                <div class="tb-call" id="tbCall" hidden></div>
                 <div class="ws-pill" id="wsPill">
                     <span class="ws-dot" id="wsDot"></span>
                     <span id="wsLabel">Подключение...</span>
@@ -232,8 +237,13 @@
                         <div class="chat-hdr-info">
                             <div class="chat-hdr-name" id="chatHdrName">Alice</div>
                             <div class="chat-hdr-sub" id="chatHdrSub">Личное сообщение</div>
+                            <!-- Пока звонок звонит, шапка сама становится звонком: статус
+                                 здесь, кнопки — в #chatHdrCallCtl на месте трубки и камеры
+                                 (renderChatHeaderCallState, voice_ui.js). -->
+                            <div class="chat-hdr-callnote" id="chatHdrCallNote" hidden></div>
                         </div>
                         <div class="chat-hdr-actions">
+                            <div class="chat-hdr-callctl" id="chatHdrCallCtl" hidden></div>
                             <button class="server-settings-btn chat-call-btn" id="chatCallBtn" type="button" title="Позвонить" aria-label="Позвонить" hidden>
                                 <svg class="ui-icon ui-icon-phone" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.25" stroke-linejoin="round"/>
@@ -384,7 +394,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="profile">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Profile</span>
@@ -406,7 +416,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="navigation">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Interface v2</span>
@@ -436,7 +446,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="design">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Тема интерфейса</span>
@@ -450,7 +460,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="cache">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Storage</span>
@@ -467,7 +477,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="audio">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Voice</span>
@@ -492,7 +502,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="notify-sound">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Notifications</span>
@@ -509,7 +519,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card" id="autostartSettingsCard" hidden>
+                            <section class="settings-card" id="autostartSettingsCard" hidden data-settings-section="autostart">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Windows</span>
@@ -529,7 +539,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="updates">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">App</span>
@@ -543,7 +553,7 @@
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="voice-trace">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Debug</span>
@@ -564,7 +574,7 @@
 
                             <div class="settings-grid">
                                 <div class="settings-column">
-                                    <section class="settings-card">
+                                    <section class="settings-card" data-settings-section="theme">
                                         <div class="settings-card-head">
                                             <div>
                                                 <span class="settings-kicker">Styler</span>
@@ -589,7 +599,7 @@
                                 </div>
 
                                 <div class="settings-column">
-                                    <section class="settings-card settings-card--logs">
+                                    <section class="settings-card settings-card--logs" data-settings-section="logs">
                                         <div class="settings-card-head settings-card-head--tight">
                                             <div>
                                                 <span class="settings-kicker">Telemetry</span>
@@ -598,9 +608,15 @@
                                             <button class="btn-flat" id="clearLogs" type="button">Очистить</button>
                                         </div>
                                         <div class="log-body settings-log-body" id="logBody"></div>
+                                        <!-- Снимок состояния на сервер (diagnostic_reports.js). Номер
+                                             отчёта показывается здесь — его называют, описывая проблему. -->
+                                        <div class="settings-diag-row">
+                                            <button class="btn-flat" id="sendDiagnosticsBtn" type="button">Отправить диагностику</button>
+                                            <span class="settings-help" id="sendDiagnosticsNote">Журнал, трасса и состояние соединения уйдут разработчику. Содержимое переписки и ключи не отправляются.</span>
+                                        </div>
                                     </section>
 
-                                    <section class="settings-card">
+                                    <section class="settings-card" data-settings-section="crypto">
                                         <div class="settings-card-head">
                                             <div>
                                                 <span class="settings-kicker">Security</span>
@@ -631,7 +647,7 @@
                                         </div>
                                     </section>
 
-                                    <section class="settings-card settings-card--danger">
+                                    <section class="settings-card settings-card--danger" data-settings-section="session">
                                         <div class="settings-card-head">
                                             <div>
                                                 <span class="settings-kicker">Account</span>
@@ -645,6 +661,19 @@
                                     </section>
                                 </div>
                             </div>
+
+                            <!-- Заголовки групп. Видны только в оформлении «Фокус»: там
+                                 .settings-grid/.settings-column становятся display:contents,
+                                 все карточки — соседями в одной колонке, и CSS-свойство
+                                 order раскладывает их по группам под этими заголовками
+                                 (раздел «DESIGN MODE: FOCUS» в style.css). В остальных
+                                 режимах — display:none, раскладка прежняя. -->
+                            <h2 class="settings-group-title" data-settings-group="profile">Профиль</h2>
+                            <h2 class="settings-group-title" data-settings-group="appearance">Оформление</h2>
+                            <h2 class="settings-group-title" data-settings-group="sound">Звук и звонки</h2>
+                            <h2 class="settings-group-title" data-settings-group="account">Аккаунт и безопасность</h2>
+                            <h2 class="settings-group-title" data-settings-group="app">Приложение</h2>
+                            <h2 class="settings-group-title" data-settings-group="dev">Для разработчиков</h2>
                         </div>
                     </div>
                 </div>
@@ -1159,6 +1188,74 @@
 
 
     <div class="auth-overlay visible" id="authOverlay">
+        <!-- Витрина слева — только в полноэкранном входе оформления «Фокус»
+             (в остальных скрыта): бренд и иллюстрация, чисто декоративная. -->
+        <aside class="auth-showcase" aria-hidden="true">
+            <div class="auth-showcase-brand">ZaliMessenger</div>
+            <svg class="auth-art" viewBox="28 16 520 408" role="presentation" focusable="false">
+                <ellipse class="aa-orbit" cx="280" cy="230" rx="250" ry="168"/>
+                <ellipse class="aa-orbit" cx="280" cy="230" rx="186" ry="122"/>
+                <g class="aa-spark">
+                    <path d="M86 92l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+                    <path d="M500 214l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                    <path d="M120 392l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                </g>
+                <g class="aa-dots">
+                    <circle cx="470" cy="34" r="4"/><circle cx="52" cy="300" r="5"/>
+                    <circle cx="538" cy="330" r="3"/><circle cx="210" cy="24" r="3"/>
+                </g>
+                <!-- окно переписки -->
+                <g class="aa-window">
+                    <rect class="aa-card" x="150" y="54" width="262" height="330" rx="30"/>
+                    <circle class="aa-lime" cx="190" cy="96" r="18"/>
+                    <path class="aa-ink-line" d="M183 101c2.5 3 11.5 3 14 0M184 90h.01M196 90h.01"/>
+                    <rect class="aa-txt" x="218" y="84" width="96" height="10" rx="5"/>
+                    <rect class="aa-txt aa-txt--dim" x="218" y="101" width="58" height="8" rx="4"/>
+                    <path class="aa-hair" d="M150 134h262"/>
+                    <rect class="aa-bubble" x="172" y="152" width="156" height="44" rx="18"/>
+                    <rect class="aa-txt" x="188" y="166" width="112" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="188" y="179" width="72" height="7" rx="3.5"/>
+                    <rect class="aa-lime" x="234" y="210" width="156" height="44" rx="18"/>
+                    <rect class="aa-ink" x="250" y="224" width="106" height="7" rx="3.5"/>
+                    <rect class="aa-ink aa-ink--soft" x="250" y="237" width="64" height="7" rx="3.5"/>
+                    <rect class="aa-bubble" x="172" y="268" width="118" height="44" rx="18"/>
+                    <rect class="aa-txt" x="188" y="282" width="84" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="188" y="295" width="50" height="7" rx="3.5"/>
+                    <rect class="aa-bubble" x="172" y="326" width="74" height="36" rx="18"/>
+                    <circle class="aa-typing" cx="193" cy="344" r="4.5"/>
+                    <circle class="aa-typing" cx="209" cy="344" r="4.5"/>
+                    <circle class="aa-typing" cx="225" cy="344" r="4.5"/>
+                </g>
+                <!-- звонок -->
+                <g class="aa-float aa-float--b">
+                    <rect class="aa-pill" x="40" y="172" width="168" height="62" rx="31"/>
+                    <circle class="aa-lime" cx="73" cy="203" r="21"/>
+                    <path class="aa-ink-line" d="M66.5 194.5c-1.4 0-2.6 1.3-2.3 2.8 1.4 7.3 6.4 12.4 13.7 13.8 1.5.3 2.8-.9 2.8-2.3v-2.5c0-1-.7-1.9-1.7-2.1l-2.9-.6c-.8-.2-1.6.1-2.1.7l-1 1.2c-2.4-1.2-4.4-3.2-5.6-5.6l1.2-1c.6-.5.9-1.3.7-2.1l-.6-2.9c-.2-1-1.1-1.7-2.1-1.7z"/>
+                    <path class="aa-wave" d="M108 203v0M120 195v16M132 188v30M144 197v12M156 191v24M168 199v8M180 195v16"/>
+                </g>
+                <!-- замок -->
+                <g class="aa-float aa-float--a">
+                    <circle class="aa-ring" cx="420" cy="92" r="54"/>
+                    <circle class="aa-lime" cx="420" cy="92" r="40"/>
+                    <rect class="aa-ink-line" x="403" y="88" width="34" height="26" rx="7"/>
+                    <path class="aa-ink-line" d="M409 88v-7a11 11 0 0 1 22 0v7"/>
+                    <path class="aa-ink-line" d="M420 98v6"/>
+                </g>
+                <!-- монеты -->
+                <g class="aa-float aa-float--c">
+                    <path class="aa-coin-side" d="M386 362v14c0 8.3 19.7 15 44 15s44-6.7 44-15v-14"/>
+                    <path class="aa-coin-side" d="M386 344v14c0 8.3 19.7 15 44 15s44-6.7 44-15v-14"/>
+                    <path class="aa-coin-side" d="M386 326v14c0 8.3 19.7 15 44 15s44-6.7 44-15v-14"/>
+                    <ellipse class="aa-coin-top" cx="430" cy="326" rx="44" ry="15"/>
+                    <path class="aa-ink-line" d="M420 320h20l-20 12h20"/>
+                    <g transform="rotate(-24 494 268)">
+                        <ellipse class="aa-coin-top" cx="494" cy="268" rx="22" ry="22"/>
+                        <circle class="aa-ink-line" cx="494" cy="268" r="15"/>
+                        <path class="aa-ink-line" d="M488 262h12l-12 12h12"/>
+                    </g>
+                </g>
+            </svg>
+        </aside>
         <div class="auth-card">
             <div class="auth-brand">ZaliMessenger</div>
             <h1 id="authTitle">Вход в аккаунт</h1>
@@ -1171,7 +1268,7 @@
                     <button id="authLoginBtn" class="auth-btn primary" type="submit">Войти</button>
                 </div>
                 <div class="auth-network">
-                    <div class="auth-network-head">
+                    <div class="auth-network-head" id="authNetworkHead" role="button" tabindex="0" aria-expanded="false">
                         <div class="auth-network-title">Адрес сервера</div>
                         <div class="auth-network-note" id="authNetworkNote">Автоматически подставляется из настроек</div>
                     </div>
@@ -1194,6 +1291,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20260917-rev42"></script>
+    <script src="app.js?v=20261010-net1"></script>
 </body>
 </html>

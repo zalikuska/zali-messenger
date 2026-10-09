@@ -107,7 +107,12 @@ cargo test --manifest-path server/Cargo.toml   # интеграционные, �
 ```
 
 Проверки области — `./scripts/{voice,notify,perf,security,crypto,memory}_doctor/run.sh`
-(подсказка, какой запускать, приходит хуком при открытии файла области). После правки
+(подсказка, какой запускать, приходит хуком при открытии файла области). Данные с живых
+устройств: клиенты сами шлют отчёты (кнопка «Отправить диагностику» и автоматически при
+сбое звонка/доставки/WS/JS — `web/src/interface/diagnostic_reports.js`), читать —
+`python3 scripts/diag_reports.py metrics|list|show` (`ZALI_API_URL`, `ZALI_ADMIN_TOKEN` =
+`RELEASE_ADMIN_TOKEN` сервера). Логи шеллов: macOS `zali-debug.log`, Windows `zali-win.log`
+(оба с ротацией в `.1` на 8 МБ). После правки
 скиллов, `CLAUDE.md` или констант, на которые они ссылаются, — `python3 scripts/check_docs.py`.
 
 Хуки проекта (`.claude/settings.json`, код в `scripts/hooks/`): `graphify_hint.py` требует graphify

@@ -6,7 +6,7 @@
 //! is gated on `RELEASE_ADMIN_TOKEN` — unset (the default) means the route
 //! always 403s, same opt-in shape as the VAPID keys in `push.rs`.
 
-use crate::{constant_time_eq, AppState};
+use crate::AppState;
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
@@ -164,18 +164,7 @@ pub(crate) async fn publish_version(
     headers: HeaderMap,
     Json(body): Json<PublishReleaseRequest>,
 ) -> impl IntoResponse {
-    let expected_token = match &state.config.release_admin_token {
-        Some(token) => token,
-        None => return StatusCode::FORBIDDEN.into_response(),
-    };
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    let authorized = provided_token
-        .map(|token| constant_time_eq(token.as_bytes(), expected_token.as_bytes()))
-        .unwrap_or(false);
-    if !authorized {
+    if !crate::operator_authorized(&state, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
 

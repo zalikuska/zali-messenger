@@ -166,6 +166,7 @@ ZaliMixin(ZaliInterface, class {
                 timeoutMs: timeoutMs || API_REQUEST_TIMEOUT_MS,
             });
             this.trace(`apiFetch native response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
+            if (!res.ok) this.noteFailedRequest({ method, path, status: res.status, requestId });
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         }
@@ -213,10 +214,12 @@ ZaliMixin(ZaliInterface, class {
                 headers,
             });
             this.trace(`apiFetch response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
+            if (!res.ok) this.noteFailedRequest({ method, path, status: res.status, requestId });
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         } catch (error) {
             this.trace(`apiFetch transport_error method=${method} path=${path} request_id=${requestId} err=${error?.message || error}`);
+            this.noteFailedRequest({ method, path, requestId, error: error?.name === 'AbortError' ? 'timeout' : String(error?.message || error).slice(0, 80) });
             throw error;
         } finally {
             if (timeoutId) clearTimeout(timeoutId);

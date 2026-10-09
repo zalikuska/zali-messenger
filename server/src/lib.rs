@@ -156,6 +156,14 @@ impl Config {
         &self.hash_chain_key
     }
 
+    /// Для интеграционных тестов операторских эндпоинтов: в окружении теста
+    /// RELEASE_ADMIN_TOKEN нет, а тесты идут параллельно в одном процессе —
+    /// трогать переменную окружения нельзя.
+    pub fn with_release_admin_token(mut self, token: &str) -> Self {
+        self.release_admin_token = Some(token.to_string());
+        self
+    }
+
     pub fn from_env() -> Self {
         let jwt_secret = std::env::var("JWT_SECRET").ok();
         let jwt_secret = match jwt_secret {
@@ -435,6 +443,7 @@ async fn request_id_middleware(
 
     let elapsed_ms = start.elapsed().as_millis();
     let status = response.status().as_u16();
+    record_request_metric(method.as_str(), &path, status, elapsed_ms as u64);
     span.in_scope(|| {
         info!(status, elapsed_ms, "← request done");
     });
@@ -1228,6 +1237,13 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .execute(&pool)
     .await
     .ok();
+    // Скачивание архива сообщения/вложения (GET /api/download/:filename) ищет
+    // запись по имени файла — без индекса это полный перебор таблицы на каждое
+    // скачивание.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_messages_filename ON messages (filename)")
+        .execute(&pool)
+        .await
+        .ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts (owner)")
         .execute(&pool)
         .await
@@ -1317,6 +1333,35 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS client_diagnostic_reports (
+            id TEXT PRIMARY KEY,
+            reported_by TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'other',
+            app_version TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы client_diagnostic_reports");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_client_diagnostic_reports_user_time
+         ON client_diagnostic_reports (reported_by, created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_client_diagnostic_reports_created_at
+         ON client_diagnostic_reports (created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS decrypt_failure_reports (
@@ -1695,6 +1740,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     .await
     .ok();
 
+    init_server_metrics();
     Arc::new(AppState {
         db: pool,
         data_dir,
@@ -1886,6 +1932,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/diagnostics/decrypt-failure",
             post(report_decrypt_failure),
         )
+        // Общие отчёты клиентов и чтение для оператора (RELEASE_ADMIN_TOKEN) —
+        // diagnostics.rs; клиент: sendDiagnosticReport, скрипт: scripts/diag_reports.py.
+        .route("/api/diagnostics/report", post(report_client_diagnostics))
+        .route("/api/diagnostics/reports", get(list_reports))
+        .route("/api/diagnostics/reports/:id", get(get_report))
+        .route("/api/diagnostics/metrics", get(get_metrics))
         // ---- Профили ----
         // Порядок важен: axum матчит по дереву, и статические сегменты
         // (`/api/profile/comments/:id`) должны стоять ДО параметрических
@@ -1952,7 +2004,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn health_check() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptimeSecs": server_uptime_secs(),
+    }))
 }
 
 async fn shutdown_signal() {

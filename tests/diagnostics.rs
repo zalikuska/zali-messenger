@@ -78,3 +78,159 @@ async fn oversized_decrypt_failure_report_is_rejected() {
 
     assert_eq!(resp.status(), 413);
 }
+
+// ── Общие отчёты клиентов, чтение оператором, метрики ──────────────────────
+
+#[tokio::test]
+async fn client_report_is_stored_and_readable_by_the_operator_only() {
+    let app = common::spawn_app_with_admin_token("operator-token-for-tests").await;
+    let user = register_user(&app, "reporter2", "correct horse battery staple").await;
+
+    let resp = app
+        .http
+        .post(app.url("/api/diagnostics/report"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({
+            "kind": "voice_failed",
+            "appVersion": "0.2b47",
+            "platform": "browser",
+            "journal": ["a", "b"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Пользовательский токен — не операторский.
+    let forbidden = app
+        .http
+        .get(app.url("/api/diagnostics/reports"))
+        .header("Authorization", user.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), 403);
+
+    let list: serde_json::Value = app
+        .http
+        .get(app.url("/api/diagnostics/reports?kind=voice_failed"))
+        .header("Authorization", "Bearer operator-token-for-tests")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["items"][0]["id"], id);
+    assert_eq!(list["items"][0]["user"], "reporter2");
+    assert_eq!(list["items"][0]["platform"], "browser");
+
+    let full: serde_json::Value = app
+        .http
+        .get(app.url(&format!("/api/diagnostics/reports/{id}")))
+        .header("Authorization", "Bearer operator-token-for-tests")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(full["kind"], "voice_failed");
+    assert_eq!(full["payload"]["journal"][1], "b");
+}
+
+#[tokio::test]
+async fn unknown_report_kind_is_kept_as_other_and_oversized_is_rejected() {
+    let app = common::spawn_app_with_admin_token("operator-token-for-tests").await;
+    let user = register_user(&app, "reporter3", "correct horse battery staple").await;
+
+    let resp = app
+        .http
+        .post(app.url("/api/diagnostics/report"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({ "kind": "from-the-future" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let list: serde_json::Value = app
+        .http
+        .get(app.url("/api/diagnostics/reports?kind=other"))
+        .header("Authorization", "Bearer operator-token-for-tests")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list["count"], 1);
+
+    let huge = "x".repeat(300 * 1024);
+    let resp = app
+        .http
+        .post(app.url("/api/diagnostics/report"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({ "kind": "manual", "journal": [huge] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+}
+
+#[tokio::test]
+async fn client_reports_are_rate_limited_per_user() {
+    let app = spawn_app().await;
+    let user = register_user(&app, "reporter4", "correct horse battery staple").await;
+    let mut last = 0;
+    for _ in 0..31 {
+        last = app
+            .http
+            .post(app.url("/api/diagnostics/report"))
+            .header("Authorization", user.auth_header())
+            .json(&serde_json::json!({ "kind": "js_error" }))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16();
+    }
+    assert_eq!(last, 429, "the 31st report within an hour is refused");
+}
+
+#[tokio::test]
+async fn metrics_count_requests_and_need_the_operator_token() {
+    let app = common::spawn_app_with_admin_token("operator-token-for-tests").await;
+    let _ = register_user(&app, "metrics1", "correct horse battery staple").await;
+    let health: serde_json::Value = app
+        .http
+        .get(app.url("/health"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(health["uptimeSecs"].is_u64());
+
+    let denied = app.http.get(app.url("/api/diagnostics/metrics")).send().await.unwrap();
+    assert_eq!(denied.status(), 403);
+
+    let metrics: serde_json::Value = app
+        .http
+        .get(app.url("/api/diagnostics/metrics"))
+        .header("Authorization", "Bearer operator-token-for-tests")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(metrics["requests"]["count"].as_u64().unwrap() >= 2);
+    assert!(metrics["routesByTime"].as_array().is_some());
+    assert!(metrics["uptimeSecs"].is_u64());
+}

@@ -7,6 +7,12 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     /// Таймер прогрева HTTP-пула — см. scheduleApiWarmup.
     private var warmupWorkItem: DispatchWorkItem?
     private let configQueue = DispatchQueue(label: "zali.network.config")
+    /// Кодирование и запись кэша сообщений — отдельная очередь, не connectionQueue:
+    /// архив с вложениями весит десятки мегабайт, и пока он кодировался и писался,
+    /// очередь сокета стояла (приём сообщений, реконнект, heartbeat).
+    private let messageCacheIOQueue = DispatchQueue(label: "zali.messagecache.io", qos: .utility)
+    /// Последнее записанное содержимое — только на messageCacheIOQueue.
+    private var lastWrittenMessageCache: (key: String, json: String)?
     private let apiBaseURLStorageKey = "zali_network_api_base_url"
     private let wsBaseURLStorageKey = "zali_network_ws_base_url"
     private let cryptoKeyStorageKey = "zali_crypto_key_v2"
@@ -160,10 +166,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         if pendingOutboxJSON.isEmpty {
             pendingOutboxJSON = "[]"
         }
-        messageCacheJSON = (UserDefaults.standard.string(forKey: messageCacheStorageKey) ?? #"{"chats":{},"serverChats":{}}"#).trimmingCharacters(in: .whitespacesAndNewlines)
-        if messageCacheJSON.isEmpty {
-            messageCacheJSON = #"{"chats":{},"serverChats":{}}"#
-        }
+        messageCacheJSON = loadMessageCache(storageKey: messageCacheStorageKey)
         if let storedKeysJSON = UserDefaults.standard.string(forKey: conversationKeysStorageKey),
            let data = storedKeysJSON.data(using: .utf8),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
@@ -193,6 +196,12 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         for (key, _) in defaults.dictionaryRepresentation() {
             if prefixes.contains(where: { key == $0 || key.hasPrefix("\($0)_") }) {
                 defaults.removeObject(forKey: key)
+            }
+        }
+        messageCacheIOQueue.async { [weak self] in
+            self?.lastWrittenMessageCache = nil
+            if let dir = Self.messageCacheDirectory {
+                try? FileManager.default.removeItem(at: dir)
             }
         }
         authToken = nil
@@ -306,12 +315,10 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     func saveMessageCacheJSON(_ value: String) {
         connectionQueue.async { [weak self] in
             guard let self else { return }
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalized = trimmed.isEmpty ? #"{"chats":{},"serverChats":{}}"# : trimmed
-            guard self.messageCacheJSON != normalized else { return }
-            self.messageCacheJSON = normalized
-            UserDefaults.standard.set(self.messageCacheJSON, forKey: self.messageCacheStorageKey)
-            self.trace("messageCache saved bytes=\(self.messageCacheJSON.count)")
+            let storageKey = self.messageCacheStorageKey
+            self.messageCacheIOQueue.async { [weak self] in
+                self?.writeMessageCache(value, storageKey: storageKey)
+            }
         }
     }
 
@@ -323,20 +330,100 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     func saveMessageCacheObject(_ object: Any) {
         connectionQueue.async { [weak self] in
             guard let self else { return }
-            let json: String
-            if let encoded = zaliJSONString(object) {
-                json = encoded
-            } else {
-                json = #"{"chats":{},"serverChats":{}}"#
+            // Аккаунт фиксируется здесь, где его меняет setSession, а тяжёлая работа
+            // уходит на messageCacheIOQueue.
+            let storageKey = self.messageCacheStorageKey
+            self.messageCacheIOQueue.async { [weak self] in
+                // An object that does not encode is not an empty cache: writing the
+                // empty placeholder here used to wipe the stored history outright.
+                guard let json = zaliJSONString(object) else {
+                    self?.trace("messageCache save skipped: payload is not JSON-encodable")
+                    return
+                }
+                self?.writeMessageCache(json, storageKey: storageKey)
             }
-            let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalized = trimmed.isEmpty ? #"{"chats":{},"serverChats":{}}"# : trimmed
-            // Redundant saves (state churn that normalises back to the same shape) would
-            // otherwise re-write UserDefaults with byte-identical content every time.
-            guard self.messageCacheJSON != normalized else { return }
+        }
+    }
+
+    private static let emptyMessageCacheJSON = #"{"chats":{},"serverChats":{}}"#
+
+    /// Каталог кэша сообщений: по файлу на аккаунт, в той же папке Application
+    /// Support, что и остальные файлы приложения (WebView.Coordinator.sharedAppSupportDir).
+    ///
+    /// Раньше архив лежал в UserDefaults. Архив с вложениями — это десятки мегабайт
+    /// base64 (на живой машине plist домена вырос до 26 МБ), а UserDefaults держит
+    /// весь домен в памяти процесса и cfprefsd и переписывает plist целиком на каждое
+    /// изменение: каждое сохранение кэша после пачки сообщений было записью 26 МБ на
+    /// диск, и весь этот объём читался при каждом запуске, даже чтобы узнать адрес
+    /// сервера. Файл пишется только сам и только когда изменился.
+    private static let messageCacheDirectory: URL? = {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return base
+            .appendingPathComponent("ZaliMessenger", isDirectory: true)
+            .appendingPathComponent("MessageCache", isDirectory: true)
+    }()
+
+    private static func messageCacheFileURL(storageKey: String) -> URL? {
+        let safeName = storageKey.map { ch -> Character in
+            ch.isLetter || ch.isNumber || ch == "_" || ch == "-" || ch == "." ? ch : "_"
+        }
+        return messageCacheDirectory?.appendingPathComponent(String(safeName) + ".json")
+    }
+
+    /// Только на messageCacheIOQueue.
+    private func writeMessageCache(_ json: String, storageKey: String) {
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.isEmpty ? Self.emptyMessageCacheJSON : trimmed
+        // Redundant saves (state churn that normalises back to the same shape) would
+        // otherwise re-write the file with byte-identical content every time.
+        if let last = lastWrittenMessageCache, last.key == storageKey, last.json == normalized { return }
+        guard let url = Self.messageCacheFileURL(storageKey: storageKey) else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(normalized.utf8).write(to: url, options: .atomic)
+            lastWrittenMessageCache = (storageKey, normalized)
+            trace("messageCache saved bytes=\(normalized.utf8.count)")
+        } catch {
+            trace("messageCache save failed error=\(error.localizedDescription)")
+        }
+        connectionQueue.async { [weak self] in
+            guard let self, self.messageCacheStorageKey == storageKey else { return }
             self.messageCacheJSON = normalized
-            UserDefaults.standard.set(self.messageCacheJSON, forKey: self.messageCacheStorageKey)
-            self.trace("messageCache saved bytes=\(self.messageCacheJSON.count)")
+        }
+    }
+
+    /// Кэш аккаунта: файл, а если его ещё нет — прежняя копия из UserDefaults,
+    /// которая тут же переносится в файл и удаляется из UserDefaults. Идёт через
+    /// messageCacheIOQueue синхронно, чтобы не прочитать файл раньше ещё не
+    /// дописанного сохранения (быстрое переключение аккаунтов туда-обратно).
+    private func loadMessageCache(storageKey: String) -> String {
+        messageCacheIOQueue.sync {
+            if let url = Self.messageCacheFileURL(storageKey: storageKey),
+               let data = try? Data(contentsOf: url),
+               let text = String(data: data, encoding: .utf8) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    lastWrittenMessageCache = (storageKey, trimmed)
+                    return trimmed
+                }
+            }
+            let legacy = (UserDefaults.standard.string(forKey: storageKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !legacy.isEmpty else { return Self.emptyMessageCacheJSON }
+            if let url = Self.messageCacheFileURL(storageKey: storageKey) {
+                do {
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data(legacy.utf8).write(to: url, options: .atomic)
+                    lastWrittenMessageCache = (storageKey, legacy)
+                    // Only once the file holds it — a failed write keeps the old copy.
+                    UserDefaults.standard.removeObject(forKey: storageKey)
+                    trace("messageCache migrated from UserDefaults bytes=\(legacy.utf8.count)")
+                } catch {
+                    trace("messageCache migration failed error=\(error.localizedDescription)")
+                }
+            }
+            return legacy
         }
     }
     
@@ -409,9 +496,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 self.pendingOutboxJSON = (UserDefaults.standard.string(forKey: self.pendingOutboxStorageKey) ?? "[]")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if self.pendingOutboxJSON.isEmpty { self.pendingOutboxJSON = "[]" }
-                self.messageCacheJSON = (UserDefaults.standard.string(forKey: self.messageCacheStorageKey) ?? #"{"chats":{},"serverChats":{}}"#)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if self.messageCacheJSON.isEmpty { self.messageCacheJSON = #"{"chats":{},"serverChats":{}}"# }
+                self.messageCacheJSON = self.loadMessageCache(storageKey: self.messageCacheStorageKey)
                 if let storedKeysJSON = UserDefaults.standard.string(forKey: self.conversationKeysStorageKey),
                    let data = storedKeysJSON.data(using: .utf8),
                    let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
@@ -2065,6 +2150,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         let channel_id: String?
         let reactions: [RemoteReactionSummary]?
         let myReactions: [String]?
+        /// Архив целиком (base64), если историю запросили с `inlineArchives=true`
+        /// и он влез в бюджет страницы — тогда GET /api/download/:id не нужен.
+        let inlineArchive: String?
     }
 
     struct RemoteReactionSummary: Codable {
@@ -2075,14 +2163,17 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     // completion carries `ok`: true only when the whole history was fetched cleanly.
     // false means a page failed (auth/HTTP/decode) — callers must NOT treat the
     // (possibly empty) list as authoritative, or a transient error wipes the view.
-    func fetchMessages(for user: String, completion: @escaping ([RemoteMessageRecord], Bool) -> Void) {
-        self.fetchMessagesPage(for: user, limit: 200, offset: 0, accumulated: []) { messages, ok in
+    // `inlineArchives`: попросить небольшие архивы прямо в ответе истории
+    // (server/src/messages.rs) — иначе каждая строка, которой нет в кэше
+    // расшифрованных, стоит отдельного GET /api/download/:id.
+    func fetchMessages(for user: String, inlineArchives: Bool = false, completion: @escaping ([RemoteMessageRecord], Bool) -> Void) {
+        self.fetchMessagesPage(for: user, limit: 200, offset: 0, inlineArchives: inlineArchives, accumulated: []) { messages, ok in
             completion(messages, ok)
         }
     }
 
-    func fetchServerMessages(serverId: String, channelId: String, completion: @escaping ([RemoteMessageRecord], Bool) -> Void) {
-        self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: 200, offset: 0, accumulated: []) { messages, ok in
+    func fetchServerMessages(serverId: String, channelId: String, inlineArchives: Bool = false, completion: @escaping ([RemoteMessageRecord], Bool) -> Void) {
+        self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: 200, offset: 0, inlineArchives: inlineArchives, accumulated: []) { messages, ok in
             completion(messages, ok)
         }
     }
@@ -2091,6 +2182,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         for user: String,
         limit: Int,
         offset: Int,
+        inlineArchives: Bool,
         accumulated: [RemoteMessageRecord],
         completion: @escaping ([RemoteMessageRecord], Bool) -> Void
     ) {
@@ -2106,6 +2198,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset))
         ]
+        if inlineArchives {
+            components.queryItems?.append(URLQueryItem(name: "inlineArchives", value: "true"))
+        }
         guard let messagesURL = components.url else {
             completion(accumulated, false)
             return
@@ -2131,7 +2226,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 if messages.count < limit {
                     completion(merged, true)
                 } else {
-                    self.fetchMessagesPage(for: user, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
+                    self.fetchMessagesPage(for: user, limit: limit, offset: offset + limit, inlineArchives: inlineArchives, accumulated: merged, completion: completion)
                 }
             } else {
                 self.trace("fetchMessages decode failed user=\(user) bytes=\(data.count)")
@@ -2145,6 +2240,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         channelId: String,
         limit: Int,
         offset: Int,
+        inlineArchives: Bool,
         accumulated: [RemoteMessageRecord],
         completion: @escaping ([RemoteMessageRecord], Bool) -> Void
     ) {
@@ -2159,6 +2255,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset))
         ]
+        if inlineArchives {
+            components.queryItems?.append(URLQueryItem(name: "inlineArchives", value: "true"))
+        }
         guard let messagesURL = components.url else {
             completion(accumulated, false)
             return
@@ -2184,7 +2283,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 if messages.count < limit {
                     completion(merged, true)
                 } else {
-                    self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: limit, offset: offset + limit, accumulated: merged, completion: completion)
+                    self.fetchServerMessagesPage(serverId: serverId, channelId: channelId, limit: limit, offset: offset + limit, inlineArchives: inlineArchives, accumulated: merged, completion: completion)
                 }
             } else {
                 self.trace("fetchServerMessages decode failed server=\(serverId) channel=\(channelId) bytes=\(data.count)")
@@ -2204,19 +2303,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     /// по живому соединению против 390 мс по холодному). Файл кладём туда же, куда его
     /// положил бы загрузчик, и удаляет его тот же самый вызывающий код.
     func downloadMessageWithRetry(messageId: String, inlineArchive: String? = nil, attempt: Int = 1, completion: @escaping (URL?, Int?) -> Void) {
-        if attempt == 1,
-           let encoded = inlineArchive?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !encoded.isEmpty,
-           let data = Data(base64Encoded: encoded),
-           !data.isEmpty {
-            let inlineURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("\(messageId)-\(UUID().uuidString).zali")
-            if (try? data.write(to: inlineURL)) != nil {
-                trace("downloadMessage inline id=\(messageId) bytes=\(data.count)")
-                completion(inlineURL, nil)
-                return
-            }
-            trace("downloadMessage inline write failed id=\(messageId) — falling back to download")
+        if attempt == 1, let inlineURL = writeInlineArchive(messageId: messageId, inlineArchive: inlineArchive) {
+            completion(inlineURL, nil)
+            return
         }
         downloadMessage(messageId: messageId) { [weak self] fileURL, statusCode in
             if fileURL != nil || statusCode == 403 || statusCode == 413 || attempt >= 3 {
@@ -2229,6 +2318,25 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 self?.downloadMessageWithRetry(messageId: messageId, attempt: attempt + 1, completion: completion)
             }
         }
+    }
+
+    /// Архив, приехавший прямо в кадре доставки или в ответе истории
+    /// (`inlineArchive`, server/src/messages.rs), — во временный файл, туда же,
+    /// куда его положил бы загрузчик; удаляет его тот же вызывающий код.
+    /// nil — поля нет или оно битое: тогда качаем как обычно.
+    func writeInlineArchive(messageId: String, inlineArchive: String?) -> URL? {
+        guard let encoded = inlineArchive?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !encoded.isEmpty,
+              let data = Data(base64Encoded: encoded),
+              !data.isEmpty else { return nil }
+        let inlineURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("\(messageId)-\(UUID().uuidString).zali")
+        guard (try? data.write(to: inlineURL)) != nil else {
+            trace("downloadMessage inline write failed id=\(messageId) — falling back to download")
+            return nil
+        }
+        trace("downloadMessage inline id=\(messageId) bytes=\(data.count)")
+        return inlineURL
     }
 
     func downloadMessage(messageId: String, completion: @escaping (URL?, Int?) -> Void) {

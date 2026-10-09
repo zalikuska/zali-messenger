@@ -810,9 +810,16 @@ ZaliMixin(ZaliInterface, class {
             // conversation has no key yet", so the client invented a fresh random key
             // and encrypted real messages with it. Losing key material is strictly
             // worse than storing it at rest in a store the same origin already owns.
-            const readStore = (store) => {
+            const storageKey = this.conversationKeysStorageKey();
+            const readRaw = (store) => {
                 try {
-                    const raw = store.getItem(this.conversationKeysStorageKey());
+                    return store.getItem(storageKey);
+                } catch (e) {
+                    return null;
+                }
+            };
+            const parseRaw = (raw) => {
+                try {
                     if (!raw) return null;
                     const parsed = JSON.parse(raw);
                     return parsed && typeof parsed === 'object' ? parsed : null;
@@ -820,12 +827,34 @@ ZaliMixin(ZaliInterface, class {
                     return null;
                 }
             };
-            const injected = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
+            const injectedRef = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
-                : {};
-            const persisted = readStore(localStorage);
-            const session = readStore(sessionStorage);
-            if (!persisted && !session) return this.canonicalizeConversationKeyScopes(injected);
+                : null;
+            const injected = injectedRef || {};
+            const rawLocal = readRaw(localStorage);
+            const rawSession = readRaw(sessionStorage);
+            // Результат запоминается против того, из чего он собран: двух сырых строк
+            // хранилищ и ссылки на внедрённую шеллом карту (её только переприсваивают,
+            // на месте не меняют). Совпало всё — слияние дало бы то же самое, и
+            // записывать нечего. Раньше каждый из ~30 вызовов (переключение чата,
+            // отрисовка шапки, отправка) заново разбирал JSON обоих хранилищ,
+            // канонизировал все scope и сериализовал карту обратно для сравнения.
+            // Отдаётся копия: вызывающие дописывают в карту ключи перед сохранением.
+            const memo = this._conversationKeysMemo;
+            if (memo
+                && memo.storageKey === storageKey
+                && memo.rawLocal === rawLocal
+                && memo.rawSession === rawSession
+                && memo.injected === injectedRef) {
+                return { ...memo.value };
+            }
+            const remember = (value) => {
+                this._conversationKeysMemo = { storageKey, rawLocal, rawSession, injected: injectedRef, value: { ...value } };
+                return value;
+            };
+            const persisted = parseRaw(rawLocal);
+            const session = parseRaw(rawSession);
+            if (!persisted && !session) return remember(this.canonicalizeConversationKeyScopes(injected));
             // sessionStorage last: within one session it is the freshest writer.
             const merged = this.canonicalizeConversationKeyScopes({
                 ...injected,
@@ -841,15 +870,24 @@ ZaliMixin(ZaliInterface, class {
             // there. The write still has to happen when it changes something (a legacy
             // scope folded onto its canonical form, or one store ahead of the other),
             // because a key filed under a name nobody looks up is a key that is lost.
+            let wrote = false;
             try {
                 const encoded = JSON.stringify(merged || {});
                 if (encoded !== this._lastConversationKeysEncoded) {
-                    sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
-                    localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    wrote = true;
+                    sessionStorage.setItem(storageKey, encoded);
+                    localStorage.setItem(storageKey, encoded);
                     this._lastConversationKeysEncoded = encoded;
                 }
             } catch (e) {}
-            return merged && typeof merged === 'object' ? merged : {};
+            const result = merged && typeof merged === 'object' ? merged : {};
+            // После записи сырые строки уже другие — запоминать нечего, следующий
+            // вызов соберёт карту из записанного и запомнит её.
+            if (wrote) {
+                this._conversationKeysMemo = null;
+                return result;
+            }
+            return remember(result);
         } catch (e) {
             return {};
         }

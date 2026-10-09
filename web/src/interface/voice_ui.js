@@ -12,9 +12,13 @@ ZaliMixin(ZaliInterface, class {
         const headphones = '<path d="M4.5 13.5v-1.7a7.5 7.5 0 0 1 15 0v1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="3" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/><rect x="17" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/>';
         const chevronDown = '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
         const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        // Положенная трубка — общепринятый знак «сбросить», понятнее
+        // перечёркнутой: трубка, повёрнутая на 135° вокруг центра.
+        const phoneDown = `<g transform="rotate(135 12 12)">${phone}</g>`;
         const icons = {
             phone,
             'phone-off': phone + slash,
+            'phone-down': phoneDown,
             mic,
             'mic-off': mic + slash,
             cam,
@@ -29,9 +33,13 @@ ZaliMixin(ZaliInterface, class {
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
 
-    callCtrlBtn({ id, kind, label, active = false, danger = false }) {
+    // short — короткая подпись под кнопкой («Микрофон», «Камера»): label
+    // меняется вместе с состоянием («Выключить микрофон») и годится только
+    // для подсказки, а подпись должна называть кнопку, а не действие.
+    callCtrlBtn({ id, kind, label, short = '', active = false, danger = false }) {
         const cls = ['call-ctrl-btn', active ? 'active' : '', danger ? 'danger' : ''].filter(Boolean).join(' ');
-        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(kind)}</button>`;
+        const shortAttr = short ? ` data-short="${this.esc(short)}"` : '';
+        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}"${shortAttr}>${this.voiceIcon(kind)}</button>`;
     }
 
     // Discord-style call stage: one rectangular tile per participant, avatar in
@@ -72,7 +80,10 @@ ZaliMixin(ZaliInterface, class {
             return `
                 <div class="voice-tile ${mine ? 'mine' : ''}" data-peer="${this.esc(key)}">
                     <div class="voice-tile-media"></div>
-                    <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    <div class="voice-tile-person">
+                        <span class="voice-level-ring" aria-hidden="true"></span>
+                        <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    </div>
                     <div class="voice-tile-footer">
                         ${muted ? `<span class="voice-tile-mic muted" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''}
                         <span class="voice-tile-name">${this.esc(name)}</span>
@@ -82,36 +93,61 @@ ZaliMixin(ZaliInterface, class {
         }).join('') + `</div>`;
     }
 
-    // Collapsed call UI: mute + deafen on the left, peer/channel name centered,
-    // running timer on the right. Tapping anywhere on the bar except those two
-    // buttons expands to renderVoiceCallExpanded (wired in the #voicePanel
-    // click delegate).
-    renderVoiceCallBar({ title }) {
+    // Компактный идущий звонок: таймер, затем микрофон и звук, затем «сбросить».
+    // Один и тот же фрагмент рисуется в двух местах — в титлбаре (#tbCall, на
+    // стороне, противоположной кнопкам окна) и в полосе над вкладками
+    // (#voiceCallStrip, видна только на телефоне, где титлбара нет), — поэтому
+    // кнопки адресуются data-voice-action, а не id. Таймер — кнопка: открывает
+    // полный интерфейс звонка (openActiveVoiceCall).
+    // Время в разметку не входит: HTML сравнивается с прошлым, и тикающие
+    // секунды пересобирали бы кнопки прямо под курсором (клик терялся).
+    // Его вписывает fillVoiceCallTimers() — сразу после вставки и по таймеру.
+    fillVoiceCallTimers() {
+        const label = this.voiceCallClockLabel();
+        for (const el of document.querySelectorAll('[data-voice-timer]')) {
+            if (el.textContent !== label) el.textContent = label;
+        }
+    }
+
+    renderVoiceCompactCall({ title }) {
         const muteLabel = this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон';
         const deafenLabel = this.voice.deafened ? 'Включить звук' : 'Выключить звук';
+        const openLabel = `${title} — открыть звонок`;
         return `
-            <div class="voice-callbar" id="voiceCallBar" role="button" tabindex="0" aria-label="Развернуть звонок">
-                <div class="voice-callbar-controls">
-                    <button class="voice-callbar-btn" type="button" id="voiceMuteBtn" title="${this.esc(muteLabel)}" aria-label="${this.esc(muteLabel)}">${this.voiceIcon(this.voice.muted ? 'mic-off' : 'mic')}</button>
-                    <button class="voice-callbar-btn ${this.voice.deafened ? 'danger' : ''}" type="button" id="voiceDeafenBtn" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
-                </div>
-                <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-timer" id="voiceCallTimer">${this.voiceCallClockLabel()}</div>
+            <div class="voice-compact" role="group" aria-label="${this.esc(title)}">
+                <button class="voice-compact-timer" type="button" data-voice-action="open" title="${this.esc(openLabel)}" aria-label="${this.esc(openLabel)}">
+                    <span class="voice-compact-dot" aria-hidden="true"></span>
+                    <span class="voice-compact-time" data-voice-timer></span>
+                </button>
+                <button class="voice-compact-btn${this.voice.muted ? ' is-off' : ''}" type="button" data-voice-action="mute" title="${this.esc(muteLabel)}" aria-label="${this.esc(muteLabel)}" aria-pressed="${this.voice.muted ? 'true' : 'false'}">${this.voiceIcon(this.voice.muted ? 'mic-off' : 'mic')}</button>
+                <button class="voice-compact-btn${this.voice.deafened ? ' is-off' : ''}" type="button" data-voice-action="deafen" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}" aria-pressed="${this.voice.deafened ? 'true' : 'false'}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
+                <button class="voice-compact-btn is-hangup" type="button" data-voice-action="leave" title="Завершить звонок" aria-label="Завершить звонок">${this.voiceIcon('phone-down')}</button>
             </div>
         `;
     }
 
-    // The strip while a DM call rings over the voice channel we are in. Buttons have
-    // their own ids: the panel's #voiceAcceptBtn may be in the DOM at the same time.
+    // Входящий звонок — одна строка: кто звонит, «Отклонить», «Принять». Живёт
+    // в полосе над вкладками и видна с любого экрана — и для обычного входящего,
+    // и для звонящего поверх голосового канала. Кнопки со своими id: панель
+    // чата может одновременно держать свои (#voiceAcceptBtn и т. п.).
+    // «Принять» стоит последней — справа, под большим пальцем и там, где её
+    // ищут по привычке; «Отклонить» — красная положенная трубка слева от неё.
     renderVoiceIncomingStrip(invite) {
         const from = String(invite?.from || '').trim();
-        const title = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        const overChannel = !!invite?.overChannel;
+        const label = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        const acceptTitle = overChannel ? 'Выйти из канала и принять звонок' : 'Принять звонок';
+        const rejectTitle = overChannel ? 'Отклонить и остаться в канале' : 'Отклонить звонок';
         return `
-            <div class="voice-callbar voice-callbar-incoming" id="voiceIncomingBar" role="group" aria-label="${this.esc(title)}">
-                <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-controls">
-                    <button class="voice-callbar-action" type="button" id="voiceStripAcceptBtn" title="Выйти из канала и принять звонок" aria-label="Принять">${this.voiceIcon('phone')}<span>Принять</span></button>
-                    <button class="voice-callbar-action danger" type="button" id="voiceStripRejectBtn" title="Отклонить и остаться в канале" aria-label="Отклонить">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>
+            <div class="voice-incoming" role="group" aria-label="${this.esc(label)}">
+                <div class="voice-incoming-who">
+                    <span class="voice-incoming-ava" aria-hidden="true">${from ? this.renderAvatarHTML(from, 'avatar-img', from) : ''}</span>
+                    <span class="voice-incoming-name">${this.esc(from || 'Входящий звонок')}</span>
+                    <span class="voice-incoming-note">${overChannel ? 'звонит · вы в канале' : 'звонит'}</span>
+                </div>
+                <div class="voice-incoming-actions">
+                    <button class="voice-incoming-btn is-decline" type="button" id="voiceStripRejectBtn" title="${this.esc(rejectTitle)}" aria-label="${this.esc(rejectTitle)}">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>
+                    <button class="voice-incoming-btn is-accept" type="button" id="voiceStripAcceptBtn" title="${this.esc(acceptTitle)}" aria-label="${this.esc(acceptTitle)}">${this.voiceIcon('phone')}<span>Принять</span></button>
                 </div>
             </div>
         `;
@@ -173,10 +209,14 @@ ZaliMixin(ZaliInterface, class {
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
         const voiceHealth = this.voiceTraceEnabled ? this.getVoiceHealthSnapshot() : [];
+        // Собеседник активного звонка — через voiceDmCallPeer(): после перезагрузки
+        // посреди звонка outgoingInvite пуст, а inviter — это мы сами, если звонили
+        // мы, и заголовок говорил «Активный звонок с <моё имя>».
+        const activePeer = this.voiceDmCallPeer() || outgoingTarget || incomingFrom;
         const title = isVoice
             ? `Голосовой канал: ${this.currentChannel()?.name || 'room'}`
             : activeRoom
-                ? `Активный звонок${outgoingTarget || incomingFrom ? ` с ${outgoingTarget || incomingFrom}` : ''}`
+                ? `Активный звонок${activePeer ? ` с ${activePeer}` : ''}`
                 : this.voice.status === 'incoming'
                     ? `Входящий звонок от ${incomingFrom}`
                     : this.voice.status === 'calling'
@@ -188,26 +228,26 @@ ZaliMixin(ZaliInterface, class {
         const actionButtons = [];
         if (isVoice) {
             if (activeRoom) {
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Покинуть', danger: true }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Покинуть', short: 'Покинуть', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Присоединиться</span></button>`);
             }
         } else if (this.S.navMode === 'dm' && this.S.current) {
             if (activeRoom) {
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Завершить', danger: true }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Завершить', short: 'Завершить', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">${this.voiceIcon('phone')}<span>Принять</span></button>`);
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>`);
             } else if (this.voice.status === 'calling') {
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-off')}<span>Отменить</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-down')}<span>Отменить</span></button>`);
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceCallBtn">${this.voiceIcon('phone')}<span>Позвонить</span></button>`);
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceVideoCallBtn">${this.voiceIcon('video')}<span>Видеозвонок</span></button>`);
@@ -230,7 +270,7 @@ ZaliMixin(ZaliInterface, class {
             ? 'Нажмите «Присоединиться», чтобы войти в канал'
             : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
         return `
-            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
+            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}" data-voice-status="${this.esc(String(this.voice.status || 'idle'))}">
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
@@ -242,26 +282,6 @@ ZaliMixin(ZaliInterface, class {
                 <div class="voice-stage" id="voiceStage"></div>
                 ${isVoice ? '' : this.renderVoiceTiles()}
                 <div class="${actionsBarClass}">${actionButtons.join('')}</div>
-                <div class="voice-meter-grid">
-                    <div class="voice-meter" id="voiceMicMeter">
-                        <div class="voice-meter-head">
-                            <span class="voice-meter-name">Микрофон</span>
-                            <span class="voice-meter-value" id="voiceMicLevelText">0%</span>
-                        </div>
-                        <div class="voice-meter-track">
-                            <div class="voice-meter-fill" id="voiceMicLevelFill"></div>
-                        </div>
-                    </div>
-                    <div class="voice-meter" id="voiceServerMeter">
-                        <div class="voice-meter-head">
-                            <span class="voice-meter-name">С сервера</span>
-                            <span class="voice-meter-value" id="voiceServerLevelText">0%</span>
-                        </div>
-                        <div class="voice-meter-track">
-                            <div class="voice-meter-fill remote" id="voiceServerLevelFill"></div>
-                        </div>
-                    </div>
-                </div>
                 ${voiceHealth.length ? `
                     <div class="voice-health">
                         <div class="voice-room-label">Voice health</div>
@@ -317,6 +337,7 @@ ZaliMixin(ZaliInterface, class {
         // After the panel: whether the strip shows depends on what the panel
         // just decided to cover (a voice channel's own view, a DM's fullscreen grid).
         this.renderVoiceCallStrip();
+        this.renderChatHeaderCallState();
     }
 
     renderVoicePanelBody() {
@@ -327,9 +348,13 @@ ZaliMixin(ZaliInterface, class {
         // A voice channel has no text chat: its view is the call (or the join
         // card), with the message list and composer hidden by this class.
         document.getElementById('viewChat')?.classList.toggle('voice-channel-view', isVoiceChannel);
-        const hasDmCall = this.voice.roomType === 'dm' || this.voice.status === 'incoming' || this.voice.status === 'calling';
-        const hasIncoming = this.voice.status === 'incoming';
-        const html = (isVoiceChannel || hasDmCall || hasIncoming) ? this.renderVoiceRoomView() : '';
+        // Звонящий входящий в панели чата не рисуется: он — одна строка в полосе
+        // над вкладками (renderVoiceCallStrip), видимая с любого экрана.
+        // И исходящий, пока не ответили, — тоже не карточка: шапка чата или
+        // строка сверху (renderChatHeaderCallState / renderVoiceCallStrip).
+        const ringingDm = this.voice.status === 'incoming' || this.voice.status === 'calling';
+        const hasDmCall = !ringingDm && this.voice.roomType === 'dm';
+        const html = (isVoiceChannel || hasDmCall) ? this.renderVoiceRoomView() : '';
         if (!html) {
             panel.hidden = true;
             panel.innerHTML = '';
@@ -438,42 +463,128 @@ ZaliMixin(ZaliInterface, class {
             this.voice.activeSince = 0;
             this.stopVoiceCallBarTimer();
         }
+        // Компактный идущий звонок в титлбаре — всегда, пока звонок идёт: это его
+        // постоянное место (таймер открывает полный интерфейс).
+        const titleCall = document.getElementById('tbCall');
+        if (titleCall) {
+            const html = type ? this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }) : '';
+            if (html !== this._voiceTitleCallHtml) {
+                titleCall.innerHTML = html;
+                this._voiceTitleCallHtml = html;
+            }
+            titleCall.hidden = !type;
+        }
+        if (type) this.fillVoiceCallTimers();
         const strip = document.getElementById('voiceCallStrip');
         if (!strip) return;
-        // A DM call ringing over the channel takes the strip over, everywhere —
-        // including the channel's own view, where the strip is otherwise hidden and
-        // where the user most likely is when it rings.
-        const ringingOverChannel = this.hasInviteOverChannel() ? this.voice.incomingInvite : null;
-        if (ringingOverChannel) {
-            strip.parentElement?.classList.add('has-call-strip');
-            const html = this.renderVoiceIncomingStrip(ringingOverChannel);
+        const main = strip.parentElement;
+        const setStrip = (kind, html) => {
+            main?.classList.toggle('has-call-strip', !!kind);
+            main?.classList.toggle('has-incoming-strip', kind === 'incoming');
+            main?.classList.toggle('has-live-strip', kind === 'live');
+            if (kind) strip.dataset.kind = kind;
+            else delete strip.dataset.kind;
             if (html !== this._voiceStripHtml) {
                 strip.innerHTML = html;
                 this._voiceStripHtml = html;
             }
-            strip.hidden = false;
+            strip.hidden = !kind;
+            if (kind === 'live') this.fillVoiceCallTimers();
+        };
+        // Звонящий входящий занимает полосу везде — в том числе поверх
+        // голосового канала, где пользователь скорее всего и находится.
+        // …но если открыт чат именно с этим человеком, звонок уже в его шапке.
+        const ringing = this.voiceRingingState();
+        if (ringing) {
+            if (this.isRingingInChatHeader(ringing)) setStrip('', '');
+            else if (ringing.kind === 'incoming') setStrip('incoming', this.renderVoiceIncomingStrip(this.voice.incomingInvite));
+            else setStrip('incoming', this.renderVoiceOutgoingStrip(ringing.peer));
             return;
         }
+        // Полоса идущего звонка — для телефона: там нет титлбара. На десктопе её
+        // прячет CSS (#voiceCallStrip[data-kind="live"]), звонок живёт в титлбаре.
         const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
         const coveredByCall = type === 'channel'
             ? this.isViewingVoiceCallRoom()
             : type === 'dm' && chatOpen && !!this.voice.expanded;
-        const show = !!type && !coveredByCall;
-        strip.parentElement?.classList.toggle('has-call-strip', show);
-        if (!show) {
-            strip.hidden = true;
-            if (this._voiceStripHtml) {
-                strip.innerHTML = '';
-                this._voiceStripHtml = '';
-            }
+        if (!type || coveredByCall) {
+            setStrip('', '');
             return;
         }
-        const html = this.renderVoiceCallBar({ title: this.voiceLiveCallTitle(type) });
-        if (html !== this._voiceStripHtml) {
-            strip.innerHTML = html;
-            this._voiceStripHtml = html;
+        setStrip('live', this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }));
+    }
+
+    // Звонок, который сейчас звонит (ещё не начался): входящий или исходящий
+    // личный; null — ничего не звонит.
+    voiceRingingState() {
+        if (this.hasRingingIncomingInvite()) {
+            return { kind: 'incoming', peer: String(this.voice.incomingInvite?.from || '').trim() };
         }
-        strip.hidden = false;
+        if (this.voice.status === 'calling') {
+            const peer = String(this.voice.outgoingInvite?.target || this.voice.targetUser || '').trim();
+            if (peer) return { kind: 'outgoing', peer };
+        }
+        return null;
+    }
+
+    // Открыт ли сейчас чат именно с тем, кто звонит / кому звоним, — тогда
+    // звонок рисуется прямо в его шапке.
+    isRingingInChatHeader(ringing = this.voiceRingingState()) {
+        if (!ringing?.peer || this.S.navMode !== 'dm') return false;
+        if (!document.getElementById('viewChat')?.classList.contains('active')) return false;
+        return String(this.S.current || '').trim().toLowerCase() === ringing.peer.toLowerCase();
+    }
+
+    // Пока звонок звонит, шапка чата с этим человеком сама становится звонком:
+    // той же высоты, аватар пульсирует, под именем — статус, на месте трубки и
+    // камеры — «Отклонить / Принять» или «Отменить».
+    renderChatHeaderCallState() {
+        const hdr = document.getElementById('chatHdr');
+        const note = document.getElementById('chatHdrCallNote');
+        const ctl = document.getElementById('chatHdrCallCtl');
+        if (!hdr || !note || !ctl) return;
+        const ringing = this.voiceRingingState();
+        const show = !!ringing && this.isRingingInChatHeader(ringing);
+        const kind = show ? ringing.kind : '';
+        hdr.classList.toggle('is-ringing', show);
+        hdr.dataset.ringKind = kind;
+        note.hidden = !show;
+        ctl.hidden = !show;
+        const noteText = kind === 'incoming' ? 'Входящий звонок…' : kind === 'outgoing' ? 'Вызов…' : '';
+        if (note.textContent !== noteText) note.textContent = noteText;
+        const html = kind === 'incoming'
+            ? this.ringingButton('reject', 'Отклонить', 'phone-down') + this.ringingButton('accept', 'Принять', 'phone')
+            : kind === 'outgoing'
+                ? this.ringingButton('cancel', 'Отменить', 'phone-down')
+                : '';
+        if (ctl.innerHTML !== html) ctl.innerHTML = html;
+    }
+
+    ringingButton(action, label, icon) {
+        const cls = action === 'accept' ? 'is-accept' : 'is-decline';
+        return `<button class="voice-incoming-btn ${cls}" type="button" data-ring-action="${this.esc(action)}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(icon)}<span>${this.esc(label)}</span></button>`;
+    }
+
+    // Строка сверху, когда звоним мы, а открыт другой экран.
+    renderVoiceOutgoingStrip(peer) {
+        const label = `Вызов ${peer}`;
+        return `
+            <div class="voice-incoming is-outgoing" role="group" aria-label="${this.esc(label)}">
+                <div class="voice-incoming-who">
+                    <span class="voice-incoming-ava" aria-hidden="true">${this.renderAvatarHTML(peer, 'avatar-img', peer)}</span>
+                    <span class="voice-incoming-name">${this.esc(peer)}</span>
+                    <span class="voice-incoming-note">вызов…</span>
+                </div>
+                <div class="voice-incoming-actions">${this.ringingButton('cancel', 'Отменить', 'phone-down')}</div>
+            </div>
+        `;
+    }
+
+    // Смена экрана посреди звонящего звонка: шапка или строка сверху.
+    syncRingingCallPlacement() {
+        if (!this.voiceRingingState() && !document.getElementById('chatHdr')?.classList.contains('is-ringing')) return;
+        this.renderVoiceCallStrip();
+        this.renderChatHeaderCallState();
     }
 
     mountVoiceVideoElements() {
@@ -542,8 +653,19 @@ ZaliMixin(ZaliInterface, class {
         const byPeer = this._voiceTileNodes;
         if (!byPeer || !byPeer.size) return;
         const SPEAKING_THRESHOLD = 12; // percent, same scale as the meters
+        // Кольцо уровня вокруг аватара (или рамка видео-плитки) заполняется от
+        // нижней точки в обе стороны: --voice-level 0…1, полное кольцо — на
+        // ~60 % шкалы, где уже громкая речь. Пишется только при заметном
+        // изменении, чтобы 8 обновлений в секунду не трогали стиль впустую.
+        const LEVEL_FULL = 60;
         for (const [peer, tile] of byPeer) {
-            const speaking = Number(this._voiceTileLevels[peer] || 0) >= SPEAKING_THRESHOLD;
+            const percent = Number(this._voiceTileLevels[peer] || 0);
+            const level = Math.round(Math.min(1, percent / LEVEL_FULL) * 50) / 50;
+            if (tile._voiceLevel !== level) {
+                tile._voiceLevel = level;
+                tile.style.setProperty('--voice-level', String(level));
+            }
+            const speaking = percent >= SPEAKING_THRESHOLD;
             // classList.toggle with an explicit force flag still writes the
             // attribute every call, which dirties style on tiles that did not
             // change. Only touch the ones whose state actually flipped.

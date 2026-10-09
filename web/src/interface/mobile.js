@@ -611,6 +611,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (cv) cv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         this.setMobileSidebarOpen(showList);
         this.renderServerToolbar();
         this.renderHubSegmentNav();
@@ -629,6 +631,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (sv) sv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Настройки';
         this.applyNetworkConfigToInputs();
@@ -662,6 +666,8 @@ ZaliMixin(ZaliInterface, class {
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (hv) hv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Хаб';
         this.closeMobileSidebar();
@@ -682,6 +688,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'ZaliCoin';
         this.closeMobileSidebar();

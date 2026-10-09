@@ -16,8 +16,9 @@ use zali_messenger_core::{zali_bus_dispatch, zali_bus_free_string};
 use crate::native::{
     cache_decrypted_message, cached_decrypted_message, candidate_keys_fingerprint,
     candidate_message_keys, decrypt_known_to_fail, dispatch_ui_event, forget_decrypted_message,
-    remember_decrypt_failure, http_client, json_string_literal, make_data_url, new_request_id,
-    retry_with_backoff, sanitize_file_name, trace, ApiSession, AppEvent, UiBusEvent, UploadError,
+    any_decrypt_failed, release_history_inline_archives, remember_decrypt_failure, http_client, json_string_literal,
+    make_data_url, new_request_id, retry_with_backoff, sanitize_file_name,
+    take_history_inline_archives, trace, ApiSession, AppEvent, UiBusEvent, UploadError,
 };
 
 pub(crate) fn dispatch_core_command(address_command: &str, args: Value) -> Result<Value, String> {
@@ -293,6 +294,7 @@ pub(crate) async fn fetch_messages_page(
     username: String,
     limit: i64,
     offset: i64,
+    inline_archives: bool,
 ) -> Result<Vec<Value>, String> {
     // No trailing slash before path_segments_mut().push(): a trailing "/" makes the
     // parsed URL end in an implicit empty path segment, and push() appends AFTER it
@@ -312,7 +314,12 @@ pub(crate) async fn fetch_messages_page(
     url.path_segments_mut()
         .map_err(|_| "cannot-be-base".to_string())?
         .push(&username);
-    url.set_query(Some(&format!("limit={}&offset={}", limit, offset)));
+    url.set_query(Some(&format!(
+        "limit={}&offset={}{}",
+        limit,
+        offset,
+        if inline_archives { "&inlineArchives=true" } else { "" }
+    )));
     let url = url.to_string();
     trace(format!(
         "fetch_messages_page start user={} url={}",
@@ -355,6 +362,7 @@ pub(crate) async fn fetch_messages(
     auth_token: Option<String>,
     device_id: String,
     username: String,
+    inline_archives: bool,
 ) -> Result<Vec<Value>, String> {
     let mut all = Vec::new();
     let page_size = 200_i64;
@@ -368,6 +376,7 @@ pub(crate) async fn fetch_messages(
             username.clone(),
             page_size,
             offset,
+            inline_archives,
         )
         .await?;
         let count = page.len();
@@ -394,6 +403,7 @@ pub(crate) async fn fetch_server_messages_page(
     channel_id: String,
     limit: i64,
     offset: i64,
+    inline_archives: bool,
 ) -> Result<Vec<Value>, String> {
     // No trailing slash before path_segments_mut() — see fetch_messages_page's comment:
     // a trailing "/" leaves an implicit empty path segment that push() appends AFTER,
@@ -413,7 +423,12 @@ pub(crate) async fn fetch_server_messages_page(
             .push(&channel_id)
             .push("messages");
     }
-    url.set_query(Some(&format!("limit={}&offset={}", limit, offset)));
+    url.set_query(Some(&format!(
+        "limit={}&offset={}{}",
+        limit,
+        offset,
+        if inline_archives { "&inlineArchives=true" } else { "" }
+    )));
     let url = url.to_string();
     trace(format!(
         "fetch_server_messages_page start server={} channel={} url={}",
@@ -459,6 +474,7 @@ pub(crate) async fn fetch_server_messages(
     device_id: String,
     server_id: String,
     channel_id: String,
+    inline_archives: bool,
 ) -> Result<Vec<Value>, String> {
     let mut all = Vec::new();
     let page_size = 200_i64;
@@ -473,6 +489,7 @@ pub(crate) async fn fetch_server_messages(
             channel_id.clone(),
             page_size,
             offset,
+            inline_archives,
         )
         .await?;
         let count = page.len();
@@ -682,8 +699,22 @@ fn undecryptable_placeholder(
     output
 }
 
-/// `inline_archive` — байты архива, приехавшие вместе с кадром доставки; `None` для
-/// истории, где их взять неоткуда, и тогда архив скачивается как раньше.
+/// Байты из поля `inlineArchive` (base64) кадра доставки или строки истории —
+/// сервер кладёт туда небольшие архивы (server/src/messages.rs). Нет поля или оно
+/// битое — `None`, и архив скачивается как раньше.
+pub(crate) fn decode_inline_archive(raw: &Value) -> Option<Vec<u8>> {
+    use base64::prelude::BASE64_STANDARD;
+    use base64::Engine;
+    raw.get("inlineArchive")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| BASE64_STANDARD.decode(value).ok())
+        .filter(|bytes| !bytes.is_empty())
+}
+
+/// `inline_archive` — байты архива, приехавшие вместе с кадром доставки или в
+/// ответе истории (`decode_inline_archive`); `None` — архив скачивается как раньше.
 pub(crate) async fn process_history_record(
     session: ApiSession,
     keys: Vec<String>,
@@ -969,16 +1000,20 @@ pub(crate) async fn refresh_direct_history(
         !key.trim().is_empty()
     ));
 
+    let inline_scope = format!("dm:{}", peer);
+    let inline_archives = take_history_inline_archives(&inline_scope);
     let records = match fetch_messages(
         api_base_url.clone(),
         auth_token.clone(),
         device_id.clone(),
         peer.clone(),
+        inline_archives,
     )
     .await
     {
         Ok(records) => records,
         Err(error) => {
+            release_history_inline_archives(&inline_scope, inline_archives);
             trace(format!(
                 "refresh_direct_history fetch_error user={} err={}",
                 peer, error
@@ -999,6 +1034,10 @@ pub(crate) async fn refresh_direct_history(
     ));
 
     let total_records = records.len();
+    let record_ids: Vec<String> = records
+        .iter()
+        .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
     let session = ApiSession {
         api_base_url,
         auth_token,
@@ -1007,9 +1046,18 @@ pub(crate) async fn refresh_direct_history(
     let rendered = stream::iter(records.into_iter().map(|record| {
         let session = session.clone();
         let keys = candidate_message_keys(&key, &HashMap::new(), "", &record, None, None);
+        let inline_archive = decode_inline_archive(&record);
         async move {
-            process_history_record(session, keys, record, "refresh_direct_history", None, None, None)
-                .await
+            process_history_record(
+                session,
+                keys,
+                record,
+                "refresh_direct_history",
+                None,
+                None,
+                inline_archive,
+            )
+            .await
         }
     }))
     .buffer_unordered(4)
@@ -1017,6 +1065,9 @@ pub(crate) async fn refresh_direct_history(
     .collect::<Vec<_>>()
     .await;
 
+    if any_decrypt_failed(&record_ids) {
+        release_history_inline_archives(&inline_scope, inline_archives);
+    }
     let rendered_count = rendered.len();
     if rendered_count < total_records {
         let skipped = total_records.saturating_sub(rendered_count);
@@ -1063,17 +1114,21 @@ pub(crate) async fn refresh_server_history(
         !key.trim().is_empty()
     ));
 
+    let inline_scope = format!("channel:{}:{}", server_id, channel_id);
+    let inline_archives = take_history_inline_archives(&inline_scope);
     let records = match fetch_server_messages(
         api_base_url.clone(),
         auth_token.clone(),
         device_id.clone(),
         server_id.clone(),
         channel_id.clone(),
+        inline_archives,
     )
     .await
     {
         Ok(records) => records,
         Err(error) => {
+            release_history_inline_archives(&inline_scope, inline_archives);
             trace(format!(
                 "refresh_server_history fetch_error server={} channel={} err={}",
                 server_id, channel_id, error
@@ -1096,6 +1151,10 @@ pub(crate) async fn refresh_server_history(
     ));
 
     let total_records = records.len();
+    let record_ids: Vec<String> = records
+        .iter()
+        .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
     let session = ApiSession {
         api_base_url,
         auth_token,
@@ -1113,6 +1172,7 @@ pub(crate) async fn refresh_server_history(
             Some(&server_id),
             Some(&channel_id),
         );
+        let inline_archive = decode_inline_archive(&record);
         async move {
             process_history_record(
                 session,
@@ -1121,7 +1181,7 @@ pub(crate) async fn refresh_server_history(
                 "refresh_server_history",
                 Some(server_id),
                 Some(channel_id),
-                None,
+                inline_archive,
             )
             .await
         }
@@ -1131,6 +1191,9 @@ pub(crate) async fn refresh_server_history(
     .collect::<Vec<_>>()
     .await;
 
+    if any_decrypt_failed(&record_ids) {
+        release_history_inline_archives(&inline_scope, inline_archives);
+    }
     let rendered_count = rendered.len();
     if rendered_count < total_records {
         let skipped = total_records.saturating_sub(rendered_count);

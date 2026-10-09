@@ -270,6 +270,11 @@ ZaliMixin(ZaliInterface, class {
                 <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
                        class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
+            ${isSelf ? '' : `
+            <div class="peer-context-menu-sep" aria-hidden="true"></div>
+            <button type="button" class="peer-context-menu-item is-danger" role="menuitem" data-action="remove">
+                ${this.uiIcon('trash')}<span>Удалить из контактов</span>
+            </button>`}
         `;
         if (!isSelf) this.applyContactRelationToMenu(menu, relation);
         document.body.appendChild(menu);
@@ -315,6 +320,13 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
+        });
+        // Тот же removeContact(), что и у крестика в строке: в оформлении
+        // «Фокус» крестик скрыт, и удаление живёт только здесь — рядом с
+        // остальными действиями над контактом, а не на каждой строке списка.
+        menu.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.removeContact(name);
         });
         const range = menu.querySelector('#contactVolumeRange');
         const label = menu.querySelector('#contactVolumeValue');

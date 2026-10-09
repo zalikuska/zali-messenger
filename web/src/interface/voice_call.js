@@ -359,6 +359,21 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // «Отменить» исходящий, пока собеседник не ответил: из шапки чата, из
+    // полосы над вкладками и из панели — одно действие.
+    cancelOutgoingVoiceCall() {
+        const invite = this.voice.outgoingInvite;
+        if (invite?.roomId && invite?.target) {
+            this.sendVoiceEvent({
+                type: 'voice_call_cancel',
+                roomId: invite.roomId,
+                target: invite.target,
+            });
+        }
+        this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
+        this.resetVoiceState({ preserveInvite: false });
+    }
+
     // Collapsed top bar <-> fullscreen grid. Purely a local UI toggle — it does
     // not touch tracks or connections, so it's safe to flip mid-call.
     toggleVoiceCallExpanded() {
@@ -420,10 +435,11 @@ ZaliMixin(ZaliInterface, class {
             const since = Number(this.voice.activeSince || 0);
             if (!since) return;
             const label = this.formatCallClock(Date.now() - since);
-            const bar = document.getElementById('voiceCallTimer');
-            if (bar) bar.textContent = label;
             const expanded = document.getElementById('voiceCallExpandedTimer');
             if (expanded) expanded.textContent = label;
+            // Компактный звонок рисуется сразу в двух местах (титлбар и полоса
+            // на телефоне) — таймеры там помечены атрибутом, а не id.
+            this.fillVoiceCallTimers?.();
         };
         tick();
         this.voice.barTimerInterval = setInterval(tick, 1000);
@@ -434,6 +450,18 @@ ZaliMixin(ZaliInterface, class {
             clearInterval(this.voice.barTimerInterval);
             this.voice.barTimerInterval = 0;
         }
+    }
+
+    // Время карточки — всегда ISO-строка. Браузерный путь приёма отдаёт время
+    // числом миллисекунд (WASM unpack × 1000), а String(1791571697000) не
+    // разбирается датой: карточка показывала «Invalid Date» и сортировалась мимо.
+    callRecordTimestamp(value, fallback = '') {
+        const raw = typeof value === 'number' || /^\d+$/.test(String(value || '').trim())
+            ? Number(value)
+            : Date.parse(String(value || ''));
+        if (Number.isFinite(raw) && raw > 0) return new Date(raw).toISOString();
+        const alt = Date.parse(String(fallback || ''));
+        return new Date(Number.isFinite(alt) ? alt : Date.now()).toISOString();
     }
 
     callRecordMessageId(roomId) {
@@ -504,6 +532,118 @@ ZaliMixin(ZaliInterface, class {
         return parsed;
     }
 
+    // Запись о звонке, отправленная браузерным клиентом до исправления
+    // browserSendMessage: в архиве только текст-сводка (formatCallSummary), поля
+    // call нет. Узнаётся по clientId «call-<roomId>» плюс тексту ровно одной из
+    // сводок — обычное сообщение с таким clientId не бывает. Восстанавливаем то,
+    // что из сводки следует: исход и длительность (с точностью до секунды).
+    legacyCallRecordFromText(payload) {
+        if (!payload || String(payload.call || '').trim()) return null;
+        const clientId = String(payload.clientId || payload.client_id || '').trim();
+        if (!clientId.startsWith('call-')) return null;
+        const roomId = clientId.slice('call-'.length);
+        const text = String(payload.text || '').trim();
+        if (!roomId || !text) return null;
+        const duration = (m, s) => (Number(m) * 60 + Number(s)) * 1000;
+        let outcome = '';
+        let durationMs = 0;
+        let match = null;
+        if ((match = text.match(/^(?:Исходящий|Входящий) звонок(?: · (\d+):(\d{2}))?$/))) {
+            outcome = 'completed';
+            if (match[1] != null) durationMs = duration(match[1], match[2]);
+        } else if (text === 'Вызов без ответа' || text === 'Пропущенный звонок') {
+            outcome = 'missed';
+        } else if (text === 'Вызов отклонён' || text === 'Отклонённый звонок') {
+            outcome = 'rejected';
+        } else if ((match = text.match(/^Звонок прерван(?: · (\d+):(\d{2}))?$/))) {
+            outcome = 'failed';
+            if (match[1] != null) durationMs = duration(match[1], match[2]);
+        } else {
+            return null;
+        }
+        const endMs = Date.parse(this.callRecordTimestamp(payload.timestamp));
+        return {
+            roomId,
+            outcome,
+            durationMs,
+            endedAt: new Date(endMs).toISOString(),
+            startedAt: new Date(endMs - durationMs).toISOString(),
+            connectedAt: durationMs ? new Date(endMs - durationMs).toISOString() : '',
+        };
+    }
+
+    // Строки истории/кеша, которые на самом деле записи о звонке, а рисовались
+    // обычным текстом («Вызов отклонён») рядом с карточкой того же звонка:
+    // с полем call (JSON) без kind 'call' — сводятся в карточку; без поля call,
+    // но с clientId карточки — удаляются как эхо. true — если что-то поменялось.
+    collapseCallRecordRows(arr) {
+        if (!Array.isArray(arr) || !arr.length) return false;
+        const me = String(this.myName() || '').trim();
+        let changed = false;
+        for (let i = arr.length - 1; i >= 0; i -= 1) {
+            const row = arr[i];
+            if (!row || row.kind === 'call') continue;
+            const info = (typeof row.call === 'string' && row.call)
+                ? this.parseCallRecordPayload(row)
+                : this.legacyCallRecordFromText(row);
+            if (!info) continue;
+            const id = this.callRecordMessageId(info.roomId);
+            const sender = String(row.sender || '').trim();
+            const receiver = String(row.receiver || '').trim();
+            const peer = sender === me ? receiver : sender;
+            const card = {
+                id,
+                clientId: id,
+                kind: 'call',
+                sender,
+                receiver,
+                text: '',
+                attachments: [],
+                timestamp: this.callRecordTimestamp(row.timestamp, info.endedAt),
+                status: 'sent',
+                call: { ...info, peer, direction: sender === me ? 'outgoing' : 'incoming' },
+            };
+            const existing = arr.findIndex((m, j) => j !== i && m
+                && (String(m.id || '').trim() === id || String(m.clientId || '').trim() === id));
+            arr.splice(i, 1);
+            if (existing >= 0) {
+                const at = existing > i ? existing - 1 : existing;
+                arr[at] = { ...card, ...arr[at], call: { ...card.call, ...(arr[at].call || {}) } };
+            } else {
+                arr.push(card);
+            }
+            changed = true;
+        }
+        // Эхо собственной записи с сервера: история отдаёт её без поля call,
+        // только текстом-сводкой, но с clientId = id карточки (call-<roomId>).
+        // Отправленная запись не бывает «отправляется», поэтому обычная склейка
+        // по clientId её не находит, и текст ложился рядом с карточкой.
+        const cardIds = new Set();
+        for (const m of arr) {
+            if (!m || m.kind !== 'call') continue;
+            const id = String(m.id || '').trim();
+            // Карточки из кеша до исправления — без clientId: без него эхо не
+            // склеится и при следующей загрузке истории.
+            if (!m.clientId && id.startsWith('call-')) {
+                m.clientId = id;
+                changed = true;
+            }
+            cardIds.add(id);
+            cardIds.add(String(m.clientId || '').trim());
+        }
+        for (let i = arr.length - 1; i >= 0; i -= 1) {
+            const row = arr[i];
+            if (!row || row.kind === 'call') continue;
+            const clientId = String(row.clientId || row.client_id || '').trim();
+            if (clientId.startsWith('call-') && cardIds.has(clientId)) {
+                arr.splice(i, 1);
+                changed = true;
+            }
+        }
+        if (changed) arr.sort((a, b) => this.compareMessagesByTime(a, b));
+        return changed;
+    }
+
     applyCallRecordMessage(callInfo, payload) {
         const me = String(this.myName() || '').trim();
         const sender = String(payload?.sender || '').trim();
@@ -520,7 +660,7 @@ ZaliMixin(ZaliInterface, class {
             receiver,
             text: '',
             attachments: [],
-            timestamp: String(payload?.timestamp || callInfo.endedAt || new Date().toISOString()),
+            timestamp: this.callRecordTimestamp(payload?.timestamp, callInfo.endedAt),
             call: { ...callInfo, peer, direction },
         };
         this.initChat(peer);
@@ -551,6 +691,10 @@ ZaliMixin(ZaliInterface, class {
             // identifies one call, so the local row and the one that arrives over the
             // wire collapse into a single entry instead of duplicating.
             id: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
+            // clientId — тот же: запись уходит в outbox с ним, и эхо с сервера
+            // (история отдаёт его текстом-сводкой без поля call) склеивается с
+            // этой карточкой в finalizePendingMessage, а не ложится рядом текстом.
+            clientId: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
             kind: 'call',
             sender: direction === 'outgoing' ? this.myName() : peer,
             receiver: direction === 'outgoing' ? peer : this.myName(),
@@ -584,6 +728,13 @@ ZaliMixin(ZaliInterface, class {
         }
         call.recorded = true;
         if (this.voice.callTrack === call) this.voice.callTrack = null;
+        // Звонок, который клиент бросил, исчерпав все попытки восстановить связь, —
+        // автоматический отчёт: голосовая диагностика этого звонка ещё в кольце.
+        if (outcome === 'failed') {
+            void this.sendDiagnosticReport('voice_failed', {
+                call: { ...message.call, rebuilds: Number(this.voice.rebuilds || 0) },
+            });
+        }
         this.saveStoredMessageCache();
         // The caller owns the record and is the one that sends it, so exactly one
         // copy travels. The callee keeps its local row for instant feedback and lets

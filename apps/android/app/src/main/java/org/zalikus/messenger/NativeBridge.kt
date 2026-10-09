@@ -1453,9 +1453,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 done() // a newer reload of this chat superseded this one while it waited
                 return@scheduleHistoryReload
             }
-            fetchMessagesPage(peer, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
+            val inlineArchives = takeHistoryInlineArchives(reloadKey)
+            fetchMessagesPage(peer, limit = 200, offset = 0, inlineArchives = inlineArchives, accumulated = mutableListOf()) { records, ok ->
                 // Superseded, or a transient fetch failure — keep whatever's already shown, don't blank it.
                 if (!isCurrent() || !ok) {
+                    releaseHistoryInlineArchives(reloadKey, inlineArchives)
                     done()
                     return@fetchMessagesPage
                 }
@@ -1466,6 +1468,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 }
                 renderHistoryRecords(records, peer, isCurrent) { rendered ->
                     done()
+                    settleHistoryInlineArchives(reloadKey, inlineArchives, records, rendered != null && isCurrent())
                     if (rendered == null || !isCurrent()) return@renderHistoryRecords
                     val json = JSONArray(rendered)
                     mainHandler.post { webView.evaluateJavascript("window.loadHistory && window.loadHistory($json);", null) }
@@ -1500,9 +1503,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 done()
                 return@scheduleHistoryReload
             }
-            fetchChannelMessagesPage(serverId, channelId, limit = 200, offset = 0, accumulated = mutableListOf()) { records, ok ->
+            val inlineArchives = takeHistoryInlineArchives(reloadKey)
+            fetchChannelMessagesPage(serverId, channelId, limit = 200, offset = 0, inlineArchives = inlineArchives, accumulated = mutableListOf()) { records, ok ->
                 // Неудача выборки не бланкует канал: пустой пуш стёр бы то, что уже видно.
                 if (!isCurrent() || !ok) {
+                    releaseHistoryInlineArchives(reloadKey, inlineArchives)
                     done()
                     return@fetchChannelMessagesPage
                 }
@@ -1513,6 +1518,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 }
                 renderHistoryRecords(records, peer = "", isCurrent = isCurrent, serverId = serverId, channelId = channelId) { rendered ->
                     done()
+                    settleHistoryInlineArchives(reloadKey, inlineArchives, records, rendered != null && isCurrent())
                     if (rendered == null || !isCurrent()) return@renderHistoryRecords
                     emitServerHistory(serverId, channelId, JSONArray(rendered))
                 }
@@ -1536,6 +1542,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         channelId: String,
         limit: Int,
         offset: Int,
+        inlineArchives: Boolean,
         accumulated: MutableList<JSONObject>,
         completion: (List<JSONObject>, Boolean) -> Unit,
     ) {
@@ -1549,6 +1556,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             .addPathSegment("channels").addPathSegment(channelId).addPathSegment("messages")
             .addQueryParameter("limit", limit.toString())
             .addQueryParameter("offset", offset.toString())
+            .apply { if (inlineArchives) addQueryParameter("inlineArchives", "true") }
             .build()
         val request = Request.Builder().url(url).apply {
             if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
@@ -1573,7 +1581,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     if (page.length() < limit) {
                         completion(accumulated, true)
                     } else {
-                        fetchChannelMessagesPage(serverId, channelId, limit, offset + limit, accumulated, completion)
+                        fetchChannelMessagesPage(serverId, channelId, limit, offset + limit, inlineArchives, accumulated, completion)
                     }
                 }
             }
@@ -1586,11 +1594,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         username: String,
         limit: Int,
         offset: Int,
+        inlineArchives: Boolean,
         accumulated: MutableList<JSONObject>,
         completion: (List<JSONObject>, Boolean) -> Unit,
     ) {
         val encodedUser = java.net.URLEncoder.encode(username, "UTF-8")
-        val request = Request.Builder().url("$apiBaseUrl/api/messages/$encodedUser?limit=$limit&offset=$offset").apply {
+        val request = Request.Builder().url("$apiBaseUrl/api/messages/$encodedUser?limit=$limit&offset=$offset${if (inlineArchives) "&inlineArchives=true" else ""}").apply {
             if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
         }.build()
         httpClient.newCall(request).enqueue(object : Callback {
@@ -1613,11 +1622,42 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     if (page.length() < limit) {
                         completion(accumulated, true)
                     } else {
-                        fetchMessagesPage(username, limit, offset + limit, accumulated, completion)
+                        fetchMessagesPage(username, limit, offset + limit, inlineArchives, accumulated, completion)
                     }
                 }
             }
         })
+    }
+
+    // MARK: - Архивы в ответе истории (`inlineArchives`)
+    //
+    // Кэш расшифрованных ниже живёт в памяти, поэтому первая загрузка каждого
+    // разговора после запуска стоила отдельного GET /api/download/:id на КАЖДУЮ
+    // строку — и здесь строго последовательно, то есть сумму всех кругов до
+    // сервера по мобильной сети. Первая загрузка просит небольшие архивы прямо в
+    // ответе (server/src/messages.rs); дальше почти всё берётся из кэша, и байты
+    // гонялись бы впустую. Неудачная загрузка отдаёт право обратно. Зеркало
+    // macOS (WebView.swift) и Windows (native/cache.rs).
+    private val historyInlineTaken = mutableSetOf<String>()
+
+    private fun takeHistoryInlineArchives(scope: String): Boolean =
+        synchronized(historyInlineTaken) { historyInlineTaken.add(scope) }
+
+    private fun releaseHistoryInlineArchives(scope: String, taken: Boolean) {
+        if (!taken) return
+        synchronized(historyInlineTaken) { historyInlineTaken.remove(scope) }
+    }
+
+    /** Право остаётся использованным, только если загрузка отрисовалась и всё в
+     * ней открылось. Вытеснена или есть нерасшифрованные строки (ключ придёт
+     * позже) — вернуть, иначе загрузка, что их откроет, пойдёт по скачиванию на
+     * строку. */
+    private fun settleHistoryInlineArchives(scope: String, taken: Boolean, records: List<JSONObject>, shown: Boolean) {
+        if (!taken) return
+        val anyFailed = synchronized(failedDecryptFingerprints) {
+            records.any { failedDecryptFingerprints.containsKey(it.optString("id", "").trim()) }
+        }
+        if (!shown || anyFailed) releaseHistoryInlineArchives(scope, taken)
     }
 
     // MARK: - Decrypt caches (положительный и отрицательный)
@@ -1849,6 +1889,54 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             return
         }
 
+        fun decryptArchive(bytes: ByteArray) {
+            val workDirName = UUID.randomUUID().toString()
+            val archiveFile = File(context.cacheDir, "$workDirName.zali")
+            val tempDir = File(context.cacheDir, "$workDirName-unpack")
+            try {
+                archiveFile.writeBytes(bytes)
+                tempDir.mkdirs()
+
+                val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
+                if (payload == null) {
+                    rememberDecryptFailure(messageId, fingerprint)
+                    // Before key sync converges on a freshly logged-in device the
+                    // only candidate is currentE2eKey, so this fails for every
+                    // message. "Encrypted with another key" is a permanent-sounding
+                    // verdict on a state that repairs itself once the envelope lands.
+                    val hasScopeKey = ZaliCoreBridge.hasConversationScopeKey(
+                        conversationKeys = conversationKeys,
+                        participantA = sender, participantB = receiver,
+                        serverId = serverId, channelId = channelId,
+                    )
+                    completion(placeholder(
+                        if (hasScopeKey) "🔒 Сообщение зашифровано другим ключом"
+                        else "🔑 Получение ключа…"
+                    ))
+                    return
+                }
+
+                val decrypted = decryptedContent(payload, tempDir)
+                cacheDecryptedMessage(messageId, decrypted)
+                completion(buildHistoryOutput(messageId, record, decrypted, receiver, serverId, channelId))
+            } finally {
+                archiveFile.delete()
+                tempDir.deleteRecursively()
+            }
+        }
+
+        // Архив приехал прямо в ответе истории (`inlineArchive`) — скачивать нечего.
+        // Через cryptoExecutor, а не здесь же: расшифровка — PBKDF2, а прямой вызов
+        // ещё и углублял бы цепочку next() → completion → next() на каждую строку.
+        val inline = record.optString("inlineArchive", "")
+        val inlineBytes = if (inline.isNotEmpty()) {
+            try { android.util.Base64.decode(inline, android.util.Base64.DEFAULT) } catch (e: IllegalArgumentException) { null }
+        } else null
+        if (inlineBytes != null && inlineBytes.isNotEmpty()) {
+            cryptoExecutor.execute { decryptArchive(inlineBytes) }
+            return
+        }
+
         val encodedId = java.net.URLEncoder.encode(messageId, "UTF-8")
         val request = Request.Builder().url("$apiBaseUrl/api/download/$encodedId").apply {
             if (wsAuthToken.isNotEmpty()) header("Authorization", "Bearer $wsAuthToken")
@@ -1872,40 +1960,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                         completion(placeholder("⚠️ Не удалось загрузить сообщение"))
                         return
                     }
-
-                    val workDirName = UUID.randomUUID().toString()
-                    val archiveFile = File(context.cacheDir, "$workDirName.zali")
-                    val tempDir = File(context.cacheDir, "$workDirName-unpack")
-                    try {
-                        archiveFile.writeBytes(bytes)
-                        tempDir.mkdirs()
-
-                        val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
-                        if (payload == null) {
-                            rememberDecryptFailure(messageId, fingerprint)
-                            // Before key sync converges on a freshly logged-in device the
-                            // only candidate is currentE2eKey, so this fails for every
-                            // message. "Encrypted with another key" is a permanent-sounding
-                            // verdict on a state that repairs itself once the envelope lands.
-                            val hasScopeKey = ZaliCoreBridge.hasConversationScopeKey(
-                                conversationKeys = conversationKeys,
-                                participantA = sender, participantB = receiver,
-                                serverId = serverId, channelId = channelId,
-                            )
-                            completion(placeholder(
-                                if (hasScopeKey) "🔒 Сообщение зашифровано другим ключом"
-                                else "🔑 Получение ключа…"
-                            ))
-                            return
-                        }
-
-                        val decrypted = decryptedContent(payload, tempDir)
-                        cacheDecryptedMessage(messageId, decrypted)
-                        completion(buildHistoryOutput(messageId, record, decrypted, receiver, serverId, channelId))
-                    } finally {
-                        archiveFile.delete()
-                        tempDir.deleteRecursively()
-                    }
+                    decryptArchive(bytes)
                 }
             }
         })

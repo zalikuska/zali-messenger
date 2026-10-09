@@ -60,7 +60,6 @@
     "web/src/interface/cache.js|value|prefs.limitIndex",
     "web/src/interface/message_list.js|class|bubbleClass",
     "web/src/interface/message_list.js|class|dir",
-    "web/src/interface/message_list.js|class|isCall ? 'call-msg' : `group-${item.groupPos}`",
     "web/src/interface/message_list.js|class|item.groupPos",
     "web/src/interface/message_list.js|class|noticeType",
     "web/src/interface/message_list.js|style|Math.round(windowInfo.bottomSpacer)",

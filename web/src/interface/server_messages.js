@@ -228,8 +228,19 @@ ZaliMixin(ZaliInterface, class {
             const limit = 200;
             let offset = 0;
             let mergedCount = 0;
+            // См. loadBrowserDmHistory: архивы в ответе — только при первой
+            // загрузке канала за сессию, зато для всех её страниц.
+            const inlineScope = `channel:${sid}:${cid}`;
+            const inlineArchives = this.takeHistoryInlineArchives(inlineScope);
+            let firstPageLoaded = false;
             while (true) {
-                const res = await this.apiFetch(this.apiRoutes.servers.channelMessages(sid, cid, limit, offset));
+                let res;
+                try {
+                    res = await this.apiFetch(this.apiRoutes.servers.channelMessages(sid, cid, limit, offset, { inlineArchives }));
+                } finally {
+                    if (!firstPageLoaded && !res?.ok) this.releaseHistoryInlineArchives(inlineScope, inlineArchives);
+                }
+                if (res.ok) firstPageLoaded = true;
                 if (!res.ok) {
                     const text = await res.text().catch(() => '');
                     this.trace(`loadServerMessages failed server=${sid} channel=${cid} status=${res.status} offset=${offset} body=${text.slice(0, 300)}`);
@@ -244,6 +255,7 @@ ZaliMixin(ZaliInterface, class {
                 for (const msg of batch) {
                     await this.handleIncomingBrowserMessage(msg);
                 }
+                if (inlineArchives) this.releaseHistoryInlineIfUndecoded(inlineScope, inlineArchives, batch);
                 mergedCount += batch.length;
                 if (batch.length < limit) break;
                 offset += limit;

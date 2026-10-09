@@ -387,7 +387,11 @@ ZaliMixin(ZaliInterface, class {
             touchedPeers.forEach(peer => {
                 const arr = this.S.chats[peer];
                 if (Array.isArray(arr)) {
-                    arr.sort((a, b) => this.compareMessagesByTime(a, b));
+                    // Записи о звонках из истории — в одну карточку, без
+                    // дубля-текста «Вызов отклонён» (collapseCallRecordRows сортирует сам).
+                    if (!this.collapseCallRecordRows(arr)) {
+                        arr.sort((a, b) => this.compareMessagesByTime(a, b));
+                    }
                 }
             });
             this.normalizeDmChatStore();
@@ -450,6 +454,11 @@ ZaliMixin(ZaliInterface, class {
         // (the desktop #wsPill is hidden on mobile). Only marks "not connected"
         // once a first status has arrived, so the strip doesn't flash on boot.
         document.body?.classList.toggle('ws-offline', !connected);
+        // Частота страховочного опроса зависит от того, жив ли сокет
+        // (scheduleConversationSyncPolling) — пересчитать при смене состояния.
+        if (wasOn !== !!connected && this.messageSyncTimer) this.scheduleConversationSyncPolling();
+        // Частые обрывы — повод для автоматического отчёта (diagnostic_reports.js).
+        if (wasOn && !connected) this.noteRealtimeDrop();
         this.addLogEntry({ type: connected ? 'SUCCESS' : 'WARN', msg: connected ? 'WebSocket соединение установлено' : 'WebSocket соединение разорвано', ts: new Date().toLocaleTimeString() });
         if (connected) {
             // Connection (re)established — drain the outbox immediately instead of

@@ -80,6 +80,7 @@
     "interface/profile_ui.js",
     "interface/autographs.js",
     "interface/diagnostics.js",
+    "interface/diagnostic_reports.js",
     "interface/events.js"
   ],
   "boot": [

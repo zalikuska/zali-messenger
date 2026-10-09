@@ -24,6 +24,7 @@ run() {
 run "цена кадра отрисовки"  node scripts/perf_doctor/check_render_payload.mjs
 run "цена сохранения кэша"  node scripts/perf_doctor/check_persist_cost.mjs
 run "горячие пути"          node scripts/perf_doctor/check_hot_paths.mjs
+run "точечное обновление"   node scripts/perf_doctor/check_incremental_render.mjs
 run "политика кеша"         node scripts/perf_doctor/check_cache_policy.mjs
 
 echo ""

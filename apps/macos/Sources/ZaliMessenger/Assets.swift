@@ -2005,6 +2005,11 @@ body[data-nav-mode="servers"] .contacts {
     min-width: 0;
     max-width: min(58vw, 860px);
     margin-left: auto;
+    /* Рейл (44px иконки + поля трека, всего 58px) выше содержимого шапки —
+       без этого шапка сервера на ~20px выше шапки ЛС. Отрицательные поля
+       забирают лишнее: иконки и кольцо выбранного остаются целиком, а
+       шапка держит ту же высоту, что и в ЛС. */
+    margin-block: -10px;
 }
 
 /* Few servers: sit at the right end, where the channel pills used to be. Once
@@ -5552,7 +5557,6 @@ body[data-nav-mode="servers"] .contacts {
 
 .msg.call-msg .bwrap {
     width: fit-content;
-    max-width: min(560px, 74%);
 }
 
 .msg.single,
@@ -5694,60 +5698,89 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text3);
 }
 
+/* Запись о звонке — одна строка-«чип»: иконка исхода, короткий заголовок
+   и длительность (только у состоявшегося). Подробности не печатаются, а
+   всплывают подсказкой над той частью, на которую навели: иконка — кто и
+   в какую сторону, заголовок — когда, длительность — что это за цифра
+   (renderCallMessage в message_render.js кладёт текст в data-tip). */
+/* Внутри облачка — только строка: фон, отступы, скругление и цвет стороны
+   даёт само облачко, как у любого сообщения. */
 .call-card {
-    display: grid;
-    gap: 10px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    background: rgba(255,255,255,.03);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-}
-
-.call-card-top {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    color: inherit;
 }
 
 .call-card-icon {
-    display: grid;
+    display: inline-grid;
     place-items: center;
-    width: 30px;
-    height: 30px;
-    border-radius: 10px;
-    background: rgba(255,255,255,.06);
-    font-size: 15px;
     flex: 0 0 auto;
+    color: inherit;
+    cursor: default;
 }
 
-.call-card-icon .ui-icon {
+.call-card-icon .call-ctrl-icon {
     width: 16px;
     height: 16px;
 }
 
-.call-card-copy {
-    min-width: 0;
+/* Не состоялся (пропущен, отклонён, отменён, прерван) — красная трубка. */
+.call-card.is-failed .call-card-icon {
+    color: #ff5c76;
+}
+
+.out .call-card.is-failed .call-card-icon {
+    color: #c4002e;
 }
 
 .call-card-title {
+    white-space: nowrap;
+    cursor: default;
+}
+
+.call-card-dur {
+    opacity: .6;
+    font-variant-numeric: tabular-nums;
+    cursor: default;
+}
+
+.call-card [data-tip] {
+    position: relative;
+    transition: color .12s var(--ease-out), box-shadow .12s var(--ease-out);
+}
+
+.call-card .call-card-title:hover,
+.call-card .call-card-dur:hover {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+}
+
+.call-card .call-card-icon:hover {
+    opacity: .7;
+}
+
+.call-card [data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 9px);
+    left: 50%;
+    z-index: 5;
+    padding: 5px 9px;
+    border: 1px solid var(--menu-border);
+    border-radius: 8px;
+    background: var(--menu-bg);
+    backdrop-filter: var(--menu-blur);
+    -webkit-backdrop-filter: var(--menu-blur);
+    box-shadow: var(--menu-shadow);
     color: var(--text);
-    font-size: 13px;
-    font-weight: 900;
-}
-
-.call-card-sub {
-    margin-top: 2px;
-    color: var(--text2);
-    font-size: 11px;
-}
-
-.call-card-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 12px;
-    color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translateX(-50%);
+    animation: menu-pop .12s var(--ease-out) both;
 }
 
 .server-msg-main {
@@ -8440,6 +8473,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     align-items: stretch;
     gap: 2px;
     height: 28px;
+"""#,
+    #"""
     border-radius: 999px;
     overflow: hidden;
     background: var(--zc-series-unassigned);
@@ -8521,8 +8556,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     inset: 0;
     z-index: 70;
     display: flex;
-"""#,
-    #"""
     align-items: center;
     justify-content: center;
     padding: 12px;
@@ -11073,6 +11106,3124 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     }
 }
 
+
+/* ════════════════════════════════════════════════════════════════════════
+   DESIGN MODE: FOCUS («Фокус»)
+   Третий режим в Настройки → «Стиль оформления» (designModeCatalog() в
+   web/src/interface/prefs.js). Не перекраска classic, а другая иерархия.
+
+   Принципы — по ним и проверять любую правку этого блока:
+   1. Акцент = смысл, и он в полную силу. Лайм — сплошной заливкой с тёмным
+      текстом, как в оригинале, но только там, где он что-то значит: «моё»
+      (исходящие, мой аватар), «где я» (выбранный раздел, диалог, сервер),
+      «новое» (непрочитанное) и главное действие, когда оно доступно
+      (отправить, подтвердить). Полупрозрачных лаймовых подложек нет: на
+      тёмном фоне любая из них превращается в оливковую муть. Буква в
+      аватаре собеседника — лаймовая на нейтральном круге: цвет есть,
+      пятна нет. Имена, статус ключа, наведение — нейтральные.
+   2. Одна система поверхностей: фон → панель чата → заливка контролов.
+      Никаких градиентов, свечений, сетки и стекла на статичных панелях;
+      глубина — тоном, а не тенью и рамкой.
+   3. Список диалогов лежит прямо на фоне, переписка — единственная
+      «поднятая» панель: фигура и фон вместо двух одинаковых карточек.
+   4. Служебное показывается, когда оно что-то сообщает: «Подключено»,
+      «Ключ: задан», «Диалог с X», крестик удаления на каждой строке —
+      скрыты в нормальном состоянии; проблема (нет сети, нет ключа) видна.
+   5. Спокойная типографика: без КАПСА и разрядки, веса 500/600/700 вместо
+      800/900, одна шкала 11/12/13/14/15. Группировка — отступами.
+
+   Как и для остальных режимов: НЕ переопределять здесь --bg/--text/--text2/
+   --text3/--border/--lime/--accent-rgb — их пишет styler.js инлайном на
+   <html> при выборе цветовой схемы, правило на body перебило бы схему.
+   Поверхности — белые альфа-слои поверх любого --bg, акцент — через
+   rgba(var(--accent-rgb), …).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Заголовки групп настроек (см. index.html) — существуют только в «Фокусе». */
+.settings-group-title {
+    display: none;
+}
+
+/* Опасный пункт контекстного меню («Удалить из контактов») — во всех
+   режимах: цветным в меню остаётся только опасное действие. */
+.peer-context-menu-item.is-danger,
+.peer-context-menu-item.is-danger .ui-icon {
+    color: var(--red);
+}
+
+.peer-context-menu-item.is-danger:hover,
+.peer-context-menu-item.is-danger:focus-visible {
+    background: rgba(255, 77, 109, .1);
+}
+
+.design-mode-preview--focus {
+    background: #0c0e12;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+}
+
+.design-mode-preview--focus .design-mode-preview-bar {
+    background: rgba(255,255,255,.08);
+}
+
+.design-mode-preview--focus .design-mode-preview-row--accent {
+    background: rgb(var(--accent-rgb));
+}
+
+body[data-design-mode="focus"] {
+    --f-surface: rgba(255,255,255,.032);
+    --f-fill: rgba(255,255,255,.065);
+    --f-fill-hover: rgba(255,255,255,.095);
+    --f-fill-strong: rgba(255,255,255,.11);
+    --f-hairline: rgba(255,255,255,.07);
+    --f-on-accent: #050505;
+    --f-ring: 0 0 0 3px rgba(var(--accent-rgb), .22);
+    --f-ring-border: var(--lime);
+    --f-radius: 10px;
+    --f-radius-l: 16px;
+    --f-ctl: 36px;
+    --f-warn: #ffcc66;
+    --footer-line-color: var(--f-hairline);
+    --menu-hover: rgba(255,255,255,.07);
+    scrollbar-color: rgba(255,255,255,.14) transparent;
+}
+
+/* Метатекст (время, подписи разделов, «Сегодня») — var(--text) с
+   прозрачностью, а не --text3: у схем --text3 = 25–35 % белого, это
+   контраст ~2:1 — подпись видна, но не читается. Здесь ~3.5:1, и она
+   всё равно тише превью (--text2). Только на элементах без цветных
+   детей: opacity гасит и их. */
+body[data-design-mode="focus"] .contact-time,
+body[data-design-mode="focus"] .date-sep span,
+body[data-design-mode="focus"] .recent-accounts-title {
+    color: var(--text);
+    opacity: .45;
+}
+
+/* Метки разделов — лаймовый капс, как кикеры оригинала: по одной на зону
+   («Диалоги»/«Каналы», группы настроек, карточки хаба и ZaliCoin). Это
+   якоря для глаза при переходе между разделами, а не украшение строк. */
+body[data-design-mode="focus"] .nav-label,
+body[data-design-mode="focus"] .settings-group-title,
+body[data-design-mode="focus"] .settings-kicker,
+body[data-design-mode="focus"] .hub-card-kicker {
+    color: var(--lime);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+body[data-design-mode="focus"] ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+body[data-design-mode="focus"] ::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body[data-design-mode="focus"] ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    background: rgba(255,255,255,.12);
+    background-clip: padding-box;
+}
+
+body[data-design-mode="focus"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,.22);
+    background-clip: padding-box;
+}
+
+/* ── Холст и титлбар ─────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .app {
+    background: var(--bg);
+}
+
+body[data-design-mode="focus"] .app::before {
+    display: none;
+}
+
+body[data-design-mode="focus"] .titlebar {
+    border-bottom-color: transparent;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+/* Имя чата в титлбаре дублировало шапку чата строкой ниже — остаётся только
+   приглушённое имя приложения (и объявления сервера, когда они есть). */
+body[data-design-mode="focus"] .tb-c {
+    color: var(--text3);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .tb-brand {
+    color: var(--text2);
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .tb-sep,
+body[data-design-mode="focus"] .tb-chat {
+    display: none;
+}
+
+/* Нормальное состояние сокета — точка без подписи (подпись на наведении);
+   любое другое — с подписью, потому что тогда она что-то сообщает. */
+body[data-design-mode="focus"] .ws-pill {
+    position: relative;
+    justify-self: end;
+    min-width: 0;
+    height: 24px;
+    padding: 0 8px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+body[data-design-mode="focus"] .ws-dot,
+body[data-design-mode="focus"] .ws-pill.on .ws-dot {
+    width: 6px;
+    height: 6px;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .ws-pill.on {
+    color: var(--text3);
+}
+
+body[data-design-mode="focus"] .ws-pill.on:not(:hover) #wsLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+/* ── Каркас (десктоп): список на фоне, переписка — одна панель ───────── */
+
+@media (min-width: 761px) {
+    body[data-design-mode="focus"] .body {
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 0;
+        padding: 0 10px 10px 0;
+    }
+
+    body[data-design-mode="focus"] .sidebar {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+
+    /* isolation — вместо снятого backdrop-filter: панель остаётся отдельным
+       контекстом наложения, как и раньше, и слои внутри неё (профиль,
+       настройки сервера) не меняют порядок относительно сайдбара. */
+    body[data-design-mode="focus"] .main {
+        isolation: isolate;
+        border: 1px solid var(--f-hairline);
+        border-radius: var(--f-radius-l);
+        background: var(--f-surface);
+        box-shadow: none;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+
+    body[data-design-mode="focus"] .sidebar-head {
+        padding: 12px 12px 12px 20px;
+    }
+
+    body[data-design-mode="focus"] .search-wrap {
+        margin: 0;
+        padding: 0 12px 8px 20px;
+    }
+
+    body[data-design-mode="focus"] .contacts {
+        margin: 0 8px 0 12px;
+        padding: 0 0 8px;
+    }
+
+    body[data-design-mode="focus"] .me {
+        min-height: 60px;
+        margin: 0 8px 0 12px;
+        padding: 10px 8px;
+    }
+
+    body[data-design-mode="focus"] .me::before {
+        left: 8px;
+        right: 8px;
+    }
+
+    body[data-design-mode="focus"] #viewChat {
+        padding: 0;
+        gap: 0;
+    }
+
+    body[data-design-mode="focus"] #viewChat .chat-hdr {
+        min-height: 60px;
+        padding: 10px 14px 10px 20px;
+    }
+
+    body[data-design-mode="focus"] #viewChat .msgs {
+        margin-right: 0;
+        padding: 8px 20px calc(var(--footer-dock-h) + 24px);
+        scroll-padding-bottom: calc(var(--footer-dock-h) + 24px);
+    }
+
+    /* Композер — плавающее поле над перепиской, без разделительной линии. */
+    body[data-design-mode="focus"] #viewChat .input-area {
+        padding: 0 16px 14px;
+        background: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+
+    body[data-design-mode="focus"] #viewChat .input-area::before {
+        display: none;
+    }
+}
+
+/* ── Шапка сайдбара: бренд и разделы ─────────────────────────────────── */
+
+body[data-design-mode="focus"] .brand {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: .01em;
+}
+
+/* Переключатель разделов — форма и поведение classic (таблетка, бегущий
+   индикатор, «пружина» иконки, подсветка наведения, бейдж), меняется
+   только материал: плоская заливка без рамки, бликов и свечения, индикатор
+   — сплошной лайм. Геометрию не трогаем: её считает JS индикатора. */
+body[data-design-mode="focus"] .hub-segment-nav {
+    border-color: transparent;
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .hub-segment-indicator {
+    background: rgb(var(--accent-rgb));
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .hub-segment-btn.active,
+body[data-design-mode="focus"] .hub-segment-btn.active:hover {
+    color: var(--f-on-accent);
+}
+
+body[data-design-mode="focus"] .hub-segment-badge {
+    border-color: var(--bg);
+}
+
+body[data-design-mode="focus"] .mode-switch {
+    padding: 3px;
+    border: 0;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .mode-btn {
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .mode-btn.active {
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent);
+    box-shadow: none;
+}
+
+/* ── Поиск и «добавить» ───────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .search-wrap {
+    gap: 6px;
+}
+
+body[data-design-mode="focus"] .search-icon {
+    left: 12px;
+    width: 16px;
+    height: 16px;
+    background-color: var(--text3);
+}
+
+body[data-design-mode="focus"] .search-input {
+    height: var(--f-ctl);
+    padding: 0 12px 0 36px;
+    border: 1px solid transparent;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .search-input::placeholder {
+    color: var(--text3);
+}
+
+body[data-design-mode="focus"] .search-input:focus {
+    border-color: var(--f-ring-border);
+    background: rgba(255,255,255,.07);
+    box-shadow: var(--f-ring);
+}
+
+/* «+» — второстепенная кнопка, пока она лишь открывает режим добавления;
+   акцентной она становится, когда ей есть что подтвердить (введён логин). */
+body[data-design-mode="focus"] .contact-add-btn {
+    width: var(--f-ctl);
+    height: var(--f-ctl);
+    flex-basis: var(--f-ctl);
+    border: 0;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+    color: var(--lime);
+    font-size: 20px;
+    font-weight: 500;
+    box-shadow: none;
+    filter: none;
+}
+
+body[data-design-mode="focus"] .contact-add-btn:hover {
+    background: var(--f-fill-hover);
+    color: var(--lime);
+    box-shadow: none;
+    filter: none;
+}
+
+body[data-design-mode="focus"] .contact-add-btn.is-active {
+    border: 0;
+    background: var(--f-fill-hover);
+    color: var(--lime);
+}
+
+body[data-design-mode="focus"] .contact-add-btn.is-active:not(.is-empty) {
+    background: var(--lime);
+    color: var(--f-on-accent);
+}
+
+body[data-design-mode="focus"] .contact-status {
+    min-height: 0;
+    margin: 0 20px 6px;
+    padding: 0;
+    font-size: 12px;
+}
+
+body[data-design-mode="focus"] .contact-status:empty {
+    display: none;
+}
+
+body[data-design-mode="focus"] .nav-label {
+    padding: 10px 20px 8px;
+}
+
+/* ── Список диалогов ─────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .contact {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    gap: 12px;
+    min-height: 58px;
+    padding: 8px;
+    border-radius: 12px;
+}
+
+body[data-design-mode="focus"] .contact:hover {
+    background: rgba(255,255,255,.035);
+}
+
+body[data-design-mode="focus"] .contact.active {
+    background: rgba(255,255,255,.075);
+    box-shadow: none;
+}
+
+/* Открытый диалог/канал: нейтральная подложка строки + короткая лаймовая
+   метка у левого края — «где я» в оригинальном цвете, без заливки строки
+   полупрозрачным лаймом. На телефоне в списке открытого диалога нет. */
+@media (min-width: 761px) {
+    body[data-design-mode="focus"] .contact,
+    body[data-design-mode="focus"] .sidebar-channel {
+        position: relative;
+    }
+
+    body[data-design-mode="focus"] .contact.active::after,
+    body[data-design-mode="focus"] .sidebar-channel.active::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        width: 3px;
+        height: 20px;
+        border-radius: 0 3px 3px 0;
+        background: var(--lime);
+        transform: translateY(-50%);
+        pointer-events: none;
+    }
+}
+
+body[data-design-mode="focus"] .contact .ava {
+    width: 40px;
+    height: 40px;
+}
+
+body[data-design-mode="focus"] .contact.active .ava {
+    box-shadow: none;
+    animation: none;
+}
+
+body[data-design-mode="focus"] .contact-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .contact-prev {
+    margin-top: 2px;
+    color: var(--text2);
+    font-size: 13px;
+}
+
+/* Строку с новым видно целиком — имя и превью ярче, — а не только по
+   бейджу в углу: глаз находит непрочитанное, не читая цифры. */
+body[data-design-mode="focus"] .contact.has-unread .contact-name {
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .contact.has-unread .contact-prev {
+    color: var(--text);
+    opacity: .82;
+}
+
+body[data-design-mode="focus"] .contact.has-unread .contact-time {
+    color: var(--lime);
+    opacity: 1;
+    font-weight: 700;
+}
+
+/* Время — вверху справа на уровне имени, бейдж и «без звука» — под ним
+   на уровне превью. Время теперь видно и на десктопе: по нему список
+   сканируется на «что свежее» без открытия диалога. */
+body[data-design-mode="focus"] .contact-actions {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-rows: auto auto;
+    align-content: start;
+    align-self: stretch;
+    justify-items: end;
+    gap: 5px 4px;
+    padding-top: 2px;
+}
+
+body[data-design-mode="focus"] .contact-time {
+    display: block;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    font-size: 11px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    line-height: 16px;
+}
+
+body[data-design-mode="focus"] .contact-actions .badge {
+    grid-column: 2;
+    grid-row: 2;
+}
+
+body[data-design-mode="focus"] .contact-mute-indicator {
+    grid-column: 1;
+    grid-row: 2;
+    width: 18px;
+    height: 18px;
+}
+
+/* Удаление — разрушающее и редкое действие; оно в контекстном меню контакта
+   («Удалить из контактов»), а не крестиком на каждой строке. */
+body[data-design-mode="focus"] .contact-remove {
+    display: none;
+}
+
+body[data-design-mode="focus"] .badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* ── Аватары: у собеседников лаймовая буква на нейтральном круге,
+   мой — целиком лаймовый, как в оригинале ─────────────────────────────── */
+
+body[data-design-mode="focus"] .ava,
+body[data-design-mode="focus"] .msg-ava,
+body[data-design-mode="focus"] .chat-hdr-ava {
+    background: var(--f-fill-strong);
+    color: var(--lime);
+    font-weight: 700;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .ava .avatar-fallback,
+body[data-design-mode="focus"] .msg-ava .avatar-fallback,
+body[data-design-mode="focus"] .chat-hdr-ava .avatar-fallback {
+    color: var(--lime);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+/* Аватар с собственным цветом (иконка сервера в шапке канала: JS пишет
+   его инлайном в style) — буква тёмная, как в classic: лаймовая буква на
+   лаймовом (цвет сервера по умолчанию) круге исчезала. */
+body[data-design-mode="focus"] .ava[style*="background"],
+body[data-design-mode="focus"] .msg-ava[style*="background"],
+body[data-design-mode="focus"] .chat-hdr-ava[style*="background"],
+body[data-design-mode="focus"] [style*="background"] > .avatar-fallback {
+    color: var(--f-on-accent);
+}
+
+body[data-design-mode="focus"] .me-ava {
+    background: var(--lime);
+    color: var(--f-on-accent);
+}
+
+body[data-design-mode="focus"] .me-ava .avatar-fallback {
+    color: var(--f-on-accent);
+}
+
+body[data-design-mode="focus"] .me-ava:hover {
+    box-shadow: var(--f-ring);
+}
+
+/* ── Я (низ сайдбара) ────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .me-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .me-sub {
+    color: var(--text2);
+    font-size: 12px;
+}
+
+body[data-design-mode="focus"] .online-dot {
+    width: 6px;
+    height: 6px;
+}
+
+body[data-design-mode="focus"] .settings-btn {
+    width: var(--f-ctl);
+    height: var(--f-ctl);
+    border: 0;
+    border-radius: var(--f-radius);
+    background: transparent;
+    color: var(--text2);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .settings-btn:hover {
+    background: var(--f-fill);
+    color: var(--text);
+    box-shadow: none;
+}
+
+/* ── Виды внутри панели ──────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] #viewChat,
+body[data-design-mode="focus"] #viewSettings,
+body[data-design-mode="focus"] #viewHub,
+body[data-design-mode="focus"] #viewZaliCoin {
+    background: transparent;
+}
+
+/* ── Шапка чата ──────────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .chat-hdr,
+body[data-design-mode="focus"] .logs-bar {
+    border-bottom: 1px solid var(--f-hairline);
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    animation: none;
+}
+
+body[data-design-mode="focus"] .chat-hdr-ava {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+}
+
+body[data-design-mode="focus"] .chat-hdr-name,
+body[data-design-mode="focus"] .logs-title {
+    font-size: 15px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .chat-hdr-sub {
+    gap: 1px;
+    margin-top: 1px;
+    color: var(--text2);
+    font-size: 12px;
+}
+
+/* «Диалог с X» под именем X и «Ключ: задан» в норме ничего не сообщают.
+   Отсутствующий ключ — сообщает, и остаётся видимым (в т.ч. на телефоне,
+   где мобильный слой прячет .chat-hdr-key целиком — отсюда #viewChat). */
+body[data-design-mode="focus"] .chat-hdr-desc,
+body[data-design-mode="focus"] .chat-hdr-key {
+    display: none;
+}
+
+body[data-design-mode="focus"] #viewChat .chat-hdr-key.is-missing {
+    display: inline-block;
+    color: var(--f-warn);
+    font-family: inherit;
+    font-size: 12px;
+}
+
+body[data-design-mode="focus"] .chat-hdr-actions {
+    gap: 2px;
+}
+
+body[data-design-mode="focus"] .chat-hdr .server-settings-btn {
+    width: var(--f-ctl);
+    height: var(--f-ctl);
+    border: 0;
+    border-radius: var(--f-radius);
+    background: transparent;
+    color: var(--text2);
+    box-shadow: none;
+}
+
+/* Звонок и видео — главные действия шапки, их иконки лаймовые. */
+body[data-design-mode="focus"] .chat-hdr .chat-call-btn {
+    background: var(--f-fill);
+    color: var(--lime);
+}
+
+body[data-design-mode="focus"] .chat-hdr .server-settings-btn:hover {
+    background: var(--f-fill);
+    color: var(--text);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .server-settings-btn .ui-icon-phone,
+body[data-design-mode="focus"] .server-settings-btn .ui-icon-video {
+    width: 18px;
+    height: 18px;
+    filter: none;
+}
+
+/* ── Серверы: каналы и рейка ─────────────────────────────────────────── */
+
+/* Канал без темы — одна строка: подпись «Текстовый канал» повторяла иконку
+   (render_shell.js помечает такие подписи .is-generic). */
+body[data-design-mode="focus"] .sidebar-channel {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 10px;
+    min-height: 40px;
+    padding: 5px 8px;
+    border-radius: var(--f-radius);
+}
+
+body[data-design-mode="focus"] .sidebar-channel:hover {
+    background: rgba(255,255,255,.035);
+}
+
+body[data-design-mode="focus"] .sidebar-channel.active {
+    background: rgba(255,255,255,.075);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .sidebar-channel .contact-prev.is-generic {
+    display: none;
+}
+
+body[data-design-mode="focus"] .sidebar-channel .contact-name {
+    font-weight: 500;
+}
+
+body[data-design-mode="focus"] .sidebar-channel.active .contact-name,
+body[data-design-mode="focus"] .sidebar-channel.has-unread .contact-name {
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .sidebar-channel .contact-actions {
+    display: flex;
+    align-self: center;
+    padding: 0;
+}
+
+body[data-design-mode="focus"] .sidebar-channel-icon,
+body[data-design-mode="focus"] .sidebar-channel-icon.voice {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text3);
+}
+
+body[data-design-mode="focus"] .sidebar-channel.active .sidebar-channel-icon {
+    color: var(--text2);
+}
+
+/* «Вы в канале» — живое состояние, оно и остаётся акцентным. */
+body[data-design-mode="focus"] .sidebar-channel.in-call .sidebar-channel-icon {
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .chat-hdr-count {
+    padding: 2px 8px;
+    border: 0;
+    background: var(--f-fill);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* Цвет иконки сервера — его собственный (данные); выбранный отмечается
+   лаймовым кольцом через зазор, без свечения. */
+body[data-design-mode="focus"] .server-rail-item.active .server-rail-avatar {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--lime);
+}
+
+body[data-design-mode="focus"] .server-rail-action .server-rail-avatar {
+    background: transparent;
+    color: var(--text2);
+    box-shadow: inset 0 0 0 1px var(--f-hairline);
+}
+
+body[data-design-mode="focus"] .server-rail-action:hover .server-rail-avatar {
+    background: var(--f-fill);
+    color: var(--text);
+}
+
+body[data-design-mode="focus"] .server-rail-sep {
+    background: var(--f-hairline);
+}
+
+body[data-design-mode="focus"] .server-rail-tip {
+    border-color: var(--menu-border);
+    font-weight: 600;
+}
+
+/* ── Переписка ───────────────────────────────────────────────────────── */
+
+/* Группы разделяет воздух, а не линии-градиенты между ними. */
+body[data-design-mode="focus"] .msg.group-start::before,
+body[data-design-mode="focus"] .msg.out.group-start::before {
+    display: none;
+}
+
+body[data-design-mode="focus"] .msg.single,
+body[data-design-mode="focus"] .msg.group-start {
+    margin-top: 14px;
+}
+
+body[data-design-mode="focus"] .msg.group-mid,
+body[data-design-mode="focus"] .msg.group-end {
+    margin-top: 2px;
+}
+
+body[data-design-mode="focus"] .bubble {
+    padding: 8px 12px;
+    border-color: transparent;
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+/* Исходящие — оригинальная лаймовая заливка с тёмным текстом, только
+   плоская: без градиента, бликов и тени. Вложенные элементы (цитата,
+   время на телефоне) остаются на classic-правилах для тёмного-по-лайму. */
+body[data-design-mode="focus"] .out .bubble {
+    border-color: transparent;
+    background: rgb(var(--accent-rgb));
+    color: #111100;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .bubble.media-card,
+body[data-design-mode="focus"] .out .bubble.media-card {
+    border-color: transparent;
+    background: var(--f-fill);
+    color: var(--text);
+}
+
+/* Сгруппированные углы: пузыри одной реплики читаются как один блок. */
+body[data-design-mode="focus"] .msg.in.group-start .bubble { border-bottom-left-radius: 6px; }
+body[data-design-mode="focus"] .msg.in.group-mid .bubble { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+body[data-design-mode="focus"] .msg.in.group-end .bubble { border-top-left-radius: 6px; }
+body[data-design-mode="focus"] .msg.out.group-start .bubble { border-bottom-right-radius: 6px; }
+body[data-design-mode="focus"] .msg.out.group-mid .bubble { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+body[data-design-mode="focus"] .msg.out.group-end .bubble { border-top-right-radius: 6px; }
+
+/* В личном диалоге собеседник один, и его имя над каждой группой — повтор
+   шапки; аватар у последнего пузыря группы и так говорит, чья реплика. */
+body[data-design-mode="focus"][data-nav-mode="dm"] #msgs .msg:not(.notice) .msg-sender {
+    display: none;
+}
+
+/* Своё имя над своими сообщениями в канале — то же самое: сторона и цвет
+   уже говорят «моё». */
+body[data-design-mode="focus"] #msgs .msg.out:not(.notice) .msg-sender {
+    display: none;
+}
+
+/* Имя автора в канале — лаймовое, как в оригинале: по нему глаз находит
+   смену собеседника. */
+body[data-design-mode="focus"] .msg-sender,
+body[data-design-mode="focus"] .server-msg-name {
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+/* Цвет — var(--text): видимость времени задают opacity из базовых правил
+   (.56 видимое, .68 на наведении; на телефоне .5/.6), и с --text3 под ними
+   выходило ~1.5:1 — время было почти не различимо даже по наведению. */
+body[data-design-mode="focus"] .msg-time,
+body[data-design-mode="focus"] .msg.out .msg-time {
+    color: var(--text);
+    font-weight: 500;
+}
+
+body[data-design-mode="focus"] .date-sep {
+    margin: 20px 0 6px;
+}
+
+body[data-design-mode="focus"] .date-sep span {
+    padding: 2px 8px;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ── Композер ────────────────────────────────────────────────────────── */
+
+/* Непрозрачное поле: --bg плюс белый слой поверх, чтобы переписка не
+   просвечивала под ним при прокрутке — при любой цветовой схеме. */
+body[data-design-mode="focus"] #viewChat .input-bar {
+    grid-template-columns: var(--f-ctl) var(--f-ctl) minmax(0, 1fr) var(--f-ctl);
+    gap: 2px;
+    height: auto;
+    min-height: 48px;
+    padding: 6px;
+    border: 1px solid var(--f-hairline);
+    border-radius: 14px;
+    background:
+        linear-gradient(rgba(255,255,255,.05), rgba(255,255,255,.05)),
+        var(--bg);
+    box-shadow: 0 8px 24px rgba(0,0,0,.22);
+    transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out);
+}
+
+body[data-design-mode="focus"] #viewChat .input-bar:focus-within {
+    border-color: rgba(255,255,255,.12);
+}
+
+body[data-design-mode="focus"] #viewChat .input-bar.drop-active {
+    border-color: var(--f-ring-border);
+    box-shadow: var(--f-ring);
+}
+
+/* Вертикальные отступы — как у classic (7/5): высоту поля пишет
+   resizeComposer() по scrollHeight, одинаковые метрики не дают ей прыгать
+   при переключении режима. */
+body[data-design-mode="focus"] #msgInput {
+    padding: 7px 6px 5px;
+    font-size: 14px;
+}
+
+body[data-design-mode="focus"] #msgInput::placeholder {
+    color: var(--text3);
+}
+
+body[data-design-mode="focus"] .attach-btn {
+    width: var(--f-ctl);
+    height: var(--f-ctl);
+    border: 0;
+    border-radius: var(--f-radius);
+    background: transparent;
+    color: var(--text2);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .attach-btn:hover {
+    border-color: transparent;
+    background: var(--f-fill);
+    color: var(--text);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .attach-btn .ui-icon-paperclip {
+    filter: none;
+}
+
+/* «Отправить» загорается, только когда есть что отправлять: пустое поле —
+   тихая иконка, введён текст — единственное лаймовое действие на экране. */
+body[data-design-mode="focus"] .send-btn {
+    width: var(--f-ctl);
+    height: var(--f-ctl);
+    border-radius: var(--f-radius);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .send-btn:hover {
+    box-shadow: none;
+    filter: brightness(1.06);
+}
+
+body[data-design-mode="focus"] .send-btn:disabled {
+    background: transparent;
+    color: var(--text2);
+    opacity: 1;
+    filter: none;
+}
+
+/* ── Контекстные меню ────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .peer-context-menu-volume-head span {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+/* ── Кнопки, поля, переключатели ─────────────────────────────────────── */
+
+body[data-design-mode="focus"] .hdr-btn,
+body[data-design-mode="focus"] .btn-flat {
+    min-height: var(--f-ctl);
+    padding: 0 14px;
+    border: 0;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .hdr-btn:hover,
+body[data-design-mode="focus"] .btn-flat:hover {
+    border-color: transparent;
+    background: var(--f-fill-hover);
+    box-shadow: none;
+}
+
+/* Опасное — красным текстом по красной тонировке, не красной плитой. */
+body[data-design-mode="focus"] .settings-logout {
+    border: 0;
+    background: rgba(255, 77, 109, .12);
+    color: #ff7a93;
+}
+
+body[data-design-mode="focus"] .settings-logout:hover {
+    background: rgba(255, 77, 109, .2);
+    color: #ff97ab;
+    filter: none;
+}
+
+body[data-design-mode="focus"] .auth-btn {
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .auth-btn.primary {
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .settings-input,
+body[data-design-mode="focus"] .auth-input {
+    border-color: transparent;
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .settings-input:focus,
+body[data-design-mode="focus"] .auth-input:focus {
+    border-color: var(--f-ring-border);
+    box-shadow: var(--f-ring);
+}
+
+body[data-design-mode="focus"] .server-toggle {
+    border-color: transparent;
+    background: rgba(255,255,255,.035);
+}
+
+body[data-design-mode="focus"] .server-toggle strong {
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .server-toggle small {
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+/* ── Настройки: одна колонка, группы по смыслу ───────────────────────── */
+
+body[data-design-mode="focus"] .settings-topbar {
+    align-items: center;
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+body[data-design-mode="focus"] #viewSettings {
+    grid-template-rows: auto minmax(0, 1fr);
+}
+
+body[data-design-mode="focus"] .settings-topcopy .settings-kicker,
+body[data-design-mode="focus"] .settings-lead,
+body[data-design-mode="focus"] .settings-hero {
+    display: none;
+}
+
+body[data-design-mode="focus"] .settings-topcopy .logs-title {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .settings-body {
+    padding: 8px 24px 24px;
+}
+
+body[data-design-mode="focus"] .settings-shell {
+    max-width: 720px;
+    gap: 10px;
+}
+
+/* Двухколоночная сетка распадается: её карточки становятся соседями
+   остальных и встают по order в свою группу. */
+body[data-design-mode="focus"] .settings-grid,
+body[data-design-mode="focus"] .settings-column {
+    display: contents;
+}
+
+body[data-design-mode="focus"] .settings-group-title {
+    display: block;
+    margin: 20px 4px 0;
+}
+
+body[data-design-mode="focus"] [data-settings-group="profile"] { order: 10; margin-top: 4px; }
+body[data-design-mode="focus"] [data-settings-section="profile"] { order: 11; }
+body[data-design-mode="focus"] [data-settings-group="appearance"] { order: 20; }
+body[data-design-mode="focus"] [data-settings-section="theme"] { order: 21; }
+body[data-design-mode="focus"] [data-settings-section="design"] { order: 22; }
+body[data-design-mode="focus"] [data-settings-section="navigation"] { order: 23; }
+body[data-design-mode="focus"] [data-settings-group="sound"] { order: 30; }
+body[data-design-mode="focus"] [data-settings-section="audio"] { order: 31; }
+body[data-design-mode="focus"] [data-settings-section="notify-sound"] { order: 32; }
+body[data-design-mode="focus"] [data-settings-group="account"] { order: 40; }
+body[data-design-mode="focus"] [data-settings-section="session"] { order: 41; }
+body[data-design-mode="focus"] [data-settings-section="crypto"] { order: 42; }
+body[data-design-mode="focus"] [data-settings-group="app"] { order: 50; }
+body[data-design-mode="focus"] [data-settings-section="updates"] { order: 51; }
+body[data-design-mode="focus"] [data-settings-section="autostart"] { order: 52; }
+body[data-design-mode="focus"] [data-settings-section="cache"] { order: 53; }
+body[data-design-mode="focus"] [data-settings-group="dev"] { order: 60; }
+body[data-design-mode="focus"] [data-settings-section="voice-trace"] { order: 61; }
+body[data-design-mode="focus"] [data-settings-section="logs"] { order: 62; }
+
+body[data-design-mode="focus"] .settings-card {
+    padding: 16px 18px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    animation: none;
+}
+
+body[data-design-mode="focus"] .settings-card::before {
+    display: none;
+}
+
+/* Английские надписи-кикеры («Profile», «Styler», «Telemetry») и
+   статичные пометки справа («sync», «zali_crypto», «dev») — подписи для
+   разработчика. Пометки с id живые (версия, «3 / 4») — остаются. */
+body[data-design-mode="focus"] #viewSettings .settings-card .settings-kicker,
+body[data-design-mode="focus"] .settings-card-note:not([id]) {
+    display: none;
+}
+
+body[data-design-mode="focus"] .settings-card-head {
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+body[data-design-mode="focus"] .settings-card-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .settings-card-note {
+    color: var(--text3);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .settings-help {
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+body[data-design-mode="focus"] .settings-card--danger {
+    border-color: transparent;
+    background: rgba(255,255,255,.03);
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme {
+    min-height: 38px;
+    border-radius: var(--f-radius);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    text-transform: none;
+    box-shadow: none;
+    animation: none;
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme.active {
+    border-color: rgba(255,255,255,.85);
+    box-shadow: 0 0 0 2px rgba(255,255,255,.12);
+    transform: none;
+}
+
+/* Цветовые схемы — компактные чипы с цветной точкой вместо десяти ярких
+   плит. Цвет схемы задают классы .theme-* фоном самой кнопки (где сплошной,
+   где градиент), поэтому кнопку не перекрашиваем: её фон остаётся образцом,
+   а ::after накрывает его нейтральной подложкой с круглым окном слева —
+   маска оставляет видимой ровно «точку». Текст лежит выше обоих
+   псевдоэлементов: у кнопки isolation, они на z-index:-1. */
+body[data-design-mode="focus"] .settings-theme-grid {
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: 6px;
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme {
+    justify-content: flex-start;
+    min-height: 36px;
+    padding: 0 10px 0 32px;
+    border: 1px solid transparent;
+    color: var(--text) !important;
+    text-align: left;
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    background:
+        linear-gradient(rgba(255,255,255,.07), rgba(255,255,255,.07)),
+        var(--bg);
+    -webkit-mask: radial-gradient(circle at 17px 50%, transparent 6.5px, #000 7.5px);
+    mask: radial-gradient(circle at 17px 50%, transparent 6.5px, #000 7.5px);
+    transition: background .18s var(--ease-out);
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme:hover {
+    border-color: transparent;
+    box-shadow: none;
+    filter: none;
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme:hover::after {
+    background:
+        linear-gradient(rgba(255,255,255,.1), rgba(255,255,255,.1)),
+        var(--bg);
+}
+
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme.active {
+    border-color: var(--f-ring-border);
+    box-shadow: none;
+    transform: none;
+}
+
+/* Карточка в карточке в карточке («Кнопки под названием» внутри
+   «Новой навигации», строки разделов внутри неё) — один уровень. */
+body[data-design-mode="focus"] .settings-control-box {
+    padding: 4px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .settings-control-box .settings-card-title {
+    font-size: 14px;
+}
+
+body[data-design-mode="focus"] .hub-segment-settings {
+    gap: 2px;
+    margin: 8px 0;
+}
+
+body[data-design-mode="focus"] .hub-segment-option {
+    padding: 8px 10px;
+    border: 0;
+    border-radius: var(--f-radius);
+    background: transparent;
+}
+
+body[data-design-mode="focus"] .hub-segment-option:hover {
+    background: rgba(255,255,255,.04);
+}
+
+body[data-design-mode="focus"] .hub-segment-option strong {
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .hub-segment-option small {
+    font-size: 12px;
+}
+
+body[data-design-mode="focus"] .recent-accounts-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .recent-accounts-title::after {
+    display: none;
+}
+
+body[data-design-mode="focus"] .recent-account-row,
+body[data-design-mode="focus"] .recent-account-row.is-active {
+    min-height: 56px;
+    padding: 8px 8px 8px 14px;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .recent-account-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .recent-account-meta {
+    font-size: 12px;
+}
+
+body[data-design-mode="focus"] .design-mode-option {
+    border-color: transparent;
+    background: rgba(255,255,255,.035);
+}
+
+body[data-design-mode="focus"] .design-mode-option:hover {
+    border-color: transparent;
+    background: rgba(255,255,255,.055);
+}
+
+body[data-design-mode="focus"] .design-mode-option.active {
+    border-color: var(--f-ring-border);
+    background: rgba(255,255,255,.05);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .design-mode-copy strong {
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .design-mode-note {
+    display: none;
+}
+
+/* ── Хаб ─────────────────────────────────────────────────────────────── */
+
+/* Только по горизонтали: сверху и снизу на телефоне мобильный слой
+   резервирует место под вырез экрана и нижнюю панель — не перебивать. */
+body[data-design-mode="focus"] #viewHub,
+body[data-design-mode="focus"] #viewZaliCoin {
+    padding-left: 24px;
+    padding-right: 24px;
+}
+
+@media (min-width: 761px) {
+    body[data-design-mode="focus"] #viewHub,
+    body[data-design-mode="focus"] #viewZaliCoin {
+        padding-top: 20px;
+        padding-bottom: 20px;
+    }
+}
+
+body[data-design-mode="focus"] .hub-view {
+    gap: 12px;
+}
+
+body[data-design-mode="focus"] .hub-hero {
+    padding: 4px 4px 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .hub-hero h2 {
+    margin: 0 0 6px;
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -.01em;
+}
+
+body[data-design-mode="focus"] .hub-hero p {
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+body[data-design-mode="focus"] .hub-hero .settings-kicker,
+body[data-design-mode="focus"] .hub-orb {
+    display: none;
+}
+
+body[data-design-mode="focus"] .hub-grid {
+    gap: 10px;
+}
+
+body[data-design-mode="focus"] .hub-card {
+    min-height: 0;
+    gap: 6px;
+    padding: 16px 18px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .hub-card:hover {
+    transform: none;
+    border-color: transparent;
+    background: rgba(255,255,255,.05);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .hub-card strong {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+body[data-design-mode="focus"] .hub-card em {
+    margin-top: 6px;
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .hub-card em {
+    color: var(--lime);
+}
+
+body[data-design-mode="focus"] .hub-card:hover em {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+body[data-design-mode="focus"] .hub-components {
+    padding: 16px 18px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: rgba(255,255,255,.03);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .hub-components-head h3 {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .hub-components-head > span,
+body[data-design-mode="focus"] .hub-component-top span,
+body[data-design-mode="focus"] .hub-component-version {
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .hub-component-item {
+    border-color: transparent;
+    background: rgba(255,255,255,.03);
+}
+
+/* ── Вход ────────────────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .auth-card {
+    border-color: var(--f-hairline);
+    background:
+        linear-gradient(rgba(255,255,255,.04), rgba(255,255,255,.04)),
+        var(--bg);
+    box-shadow: 0 24px 64px rgba(0,0,0,.45);
+}
+
+body[data-design-mode="focus"] .auth-card::before {
+    display: none;
+}
+
+/* ── Телефон ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 760px) {
+    body[data-design-mode="focus"] .sidebar-head .brand {
+        font-size: 20px;
+        font-weight: 800;
+    }
+
+    body[data-design-mode="focus"] .search-box {
+        background: transparent;
+    }
+
+    body[data-design-mode="focus"] .search-wrap {
+        gap: 8px;
+    }
+
+    body[data-design-mode="focus"] .search-input {
+        height: 40px;
+    }
+
+    body[data-design-mode="focus"] .contact-add-btn {
+        width: 40px;
+        height: 40px;
+        flex-basis: 40px;
+    }
+
+    /* Шапка списка (бренд + поиск) — один блок: линия только под поиском. */
+    body[data-design-mode="focus"] .sidebar-head {
+        border-bottom-color: transparent;
+    }
+
+    body[data-design-mode="focus"] .contacts {
+        margin: 0;
+    }
+
+    /* Строки разделяет высота и аватар, а не линия под каждой. */
+    body[data-design-mode="focus"] .contacts .contact + .contact::before {
+        display: none;
+    }
+
+    body[data-design-mode="focus"] .contacts .contact,
+    body[data-design-mode="focus"] .contact {
+        grid-template-columns: 48px minmax(0, 1fr) auto;
+        min-height: 66px;
+        padding: 9px 16px;
+        border-radius: 0;
+    }
+
+    body[data-design-mode="focus"] .contact .ava {
+        width: 48px;
+        height: 48px;
+    }
+
+    body[data-design-mode="focus"] .contact.active {
+        background: rgba(255,255,255,.06);
+    }
+
+    body[data-design-mode="focus"] .contact-name {
+        font-size: 15px;
+    }
+
+    body[data-design-mode="focus"] .contact-prev {
+        font-size: 14px;
+    }
+
+    body[data-design-mode="focus"] .contact-time {
+        font-size: 12px;
+    }
+
+    body[data-design-mode="focus"] #viewChat .bubble {
+        box-shadow: none;
+    }
+
+    /* Время внутри исходящего на телефоне — тёмное по лайму. */
+    body[data-design-mode="focus"] .msg.out .msg-time {
+        color: #111100;
+    }
+
+    body[data-design-mode="focus"] #viewChat .input-area {
+        border-top-color: transparent;
+    }
+
+    body[data-design-mode="focus"] #viewChat .input-bar {
+        box-shadow: none;
+    }
+
+    /* Нижняя навигация: тот же язык, что у разделов на десктопе — выбранный
+       пункт на плоской лаймовой плашке, без бликов и свечения. */
+    body[data-design-mode="focus"] .mobile-dock {
+        border: 1px solid var(--f-hairline);
+        border-radius: 22px;
+        background: color-mix(in srgb, var(--bg) 82%, transparent);
+        box-shadow: 0 12px 32px rgba(0,0,0,.4);
+    }
+
+    body[data-design-mode="focus"] .mobile-dock-btn {
+        border-radius: 16px;
+        color: var(--text2);
+        font-weight: 600;
+    }
+
+    body[data-design-mode="focus"] .mobile-dock-btn.active {
+        background: rgb(var(--accent-rgb));
+        color: var(--f-on-accent);
+        box-shadow: none;
+    }
+
+    body[data-design-mode="focus"] .settings-body {
+        padding: 4px 12px 24px;
+    }
+
+    body[data-design-mode="focus"] #viewHub,
+    body[data-design-mode="focus"] #viewZaliCoin {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+}
+
+/* ── «Фокус»: звонки ──────────────────────────────────────────────────────
+   Тот же язык, что у остального «Фокуса»: лайм — сплошной и только там, где
+   звонок «живой» или ждёт действия (полоса идущего звонка, таймер, «говорит»,
+   включённый микрофон, «Позвонить/Принять»), красный — сплошной у
+   «Завершить/Отклонить», всё остальное — нейтральные плоские заливки без
+   свечений и градиентов. Разметку рисует voice_ui.js; карточка комнаты несёт
+   data-voice-status (incoming/calling/connecting/…) для анимации ожидания. */
+
+@keyframes focus-live-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .35; transform: scale(.8); }
+}
+
+@keyframes focus-ring-wave {
+    0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), .55); }
+    100% { box-shadow: 0 0 0 16px rgba(var(--accent-rgb), 0); }
+}
+
+/* ── Карточка звонка: исходящий, входящий, «Присоединиться» ───────────── */
+
+body[data-design-mode="focus"] .voice-room-card,
+body[data-design-mode="focus"] .voice-room-card.active {
+    gap: 14px;
+    padding: 16px 18px;
+    border: 1px solid var(--f-hairline);
+    border-radius: var(--f-radius-l);
+    background:
+        linear-gradient(rgba(255,255,255,.045), rgba(255,255,255,.045)),
+        var(--bg);
+    box-shadow: none;
+}
+
+/* Входящий — единственная карточка, которая ждёт решения именно от вас:
+   лаймовая рамка. */
+body[data-design-mode="focus"] .voice-room-card[data-voice-status="incoming"] {
+    border-color: var(--lime);
+}
+
+body[data-design-mode="focus"] .voice-room-title {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .voice-room-sub {
+    margin-top: 3px;
+    font-size: 13px;
+}
+
+/* «Входящий звонок» под «Входящий звонок от X» — повтор заголовка. */
+body[data-design-mode="focus"] .voice-room-card[data-voice-status="incoming"] .voice-room-sub {
+    display: none;
+}
+
+body[data-design-mode="focus"] .voice-room-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--lime);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .08em;
+}
+
+body[data-design-mode="focus"] .voice-room-state::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lime);
+}
+
+body[data-design-mode="focus"] .voice-room-card[data-voice-status="incoming"] .voice-room-state::before,
+body[data-design-mode="focus"] .voice-room-card[data-voice-status="calling"] .voice-room-state::before,
+body[data-design-mode="focus"] .voice-room-card[data-voice-status="connecting"] .voice-room-state::before {
+    animation: focus-live-dot 1.2s ease-in-out infinite;
+}
+
+body[data-design-mode="focus"] .voice-room-alert {
+    margin-top: 0;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: var(--f-radius);
+    background: rgba(255, 77, 109, .12);
+    color: #ff97ab;
+    font-size: 13px;
+}
+
+/* Плитки участников — плоские; буква аватара лаймовая, как везде. */
+body[data-design-mode="focus"] .voice-tile {
+    border: 0;
+    border-radius: 14px;
+    background: rgba(255,255,255,.05);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .voice-tile.speaking {
+    border-color: transparent;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .voice-tile-avatar {
+    width: 64px;
+    height: 64px;
+    background: var(--f-fill-strong);
+    color: var(--lime);
+    font-size: 22px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .voice-tile-avatar .avatar-fallback {
+    color: var(--lime);
+    font-size: 22px;
+    font-weight: 700;
+}
+
+
+body[data-design-mode="focus"] .voice-tile-footer {
+    left: 10px;
+    bottom: 10px;
+    padding: 3px 10px;
+    background: rgba(0,0,0,.5);
+}
+
+body[data-design-mode="focus"] .voice-tile-name {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Кнопки «Позвонить / Принять / Присоединиться» — главное действие,
+   сплошной лайм; «Отменить / Отклонить» — сплошной красный; «Видеозвонок»
+   рядом с «Позвонить» — второстепенная, нейтральная с лаймовой иконкой. */
+body[data-design-mode="focus"] .voice-btn {
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 18px 0 14px;
+    border: 0;
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .voice-btn:hover {
+    box-shadow: none;
+    filter: brightness(1.06);
+    transform: none;
+}
+
+body[data-design-mode="focus"] .voice-btn.danger {
+    background: var(--red);
+    color: #fff;
+}
+
+body[data-design-mode="focus"] #voiceVideoCallBtn {
+    background: var(--f-fill);
+    color: var(--text);
+}
+
+body[data-design-mode="focus"] #voiceVideoCallBtn .call-ctrl-icon {
+    color: var(--lime);
+}
+
+body[data-design-mode="focus"] .voice-btn .call-ctrl-icon {
+    width: 17px;
+    height: 17px;
+}
+
+body[data-design-mode="focus"] .voice-health-card,
+body[data-design-mode="focus"] .voice-trace-list {
+    border-color: transparent;
+    background: rgba(255,255,255,.035);
+}
+
+body[data-design-mode="focus"] .voice-health-name,
+body[data-design-mode="focus"] .voice-room-label {
+    letter-spacing: .06em;
+}
+
+/* ── Развёрнутый звонок и звонок в голосовом канале ───────────────────── */
+
+/* Непрозрачный фон: полупрозрачный пропускал переписку сквозь плитки. */
+body[data-design-mode="focus"] .voice-call-expanded {
+    gap: 16px;
+    padding: 16px 20px 18px;
+    background:
+        linear-gradient(rgba(255,255,255,.03), rgba(255,255,255,.03)),
+        var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded.embedded {
+    padding: 8px 0 0;
+    background: transparent;
+}
+
+body[data-design-mode="focus"] .voice-call-collapse-btn {
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .voice-call-collapse-btn:hover {
+    background: var(--f-fill-hover);
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-title {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+/* Таймер — «в эфире»: лаймовый, с пульсирующей точкой. */
+body[data-design-mode="focus"] .voice-call-expanded-timer {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--lime);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-timer::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lime);
+    animation: focus-live-dot 1.4s ease-in-out infinite;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tile-avatar,
+body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tile-avatar {
+    width: 88px;
+    height: 88px;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tile-avatar .avatar-fallback,
+body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tile-avatar .avatar-fallback {
+    font-size: 30px;
+}
+
+body[data-design-mode="focus"] .voice-panel.has-stage .voice-tile-avatar {
+    width: 48px;
+    height: 48px;
+}
+
+body[data-design-mode="focus"] .voice-stage-tile {
+    border: 0;
+    border-radius: 14px;
+    box-shadow: none;
+}
+
+/* Панель управления — одна «капсула» по центру, а не россыпь кружков. */
+body[data-design-mode="focus"] .call-ctrl-bar {
+    gap: 8px;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-actions {
+    align-self: center;
+    flex-wrap: nowrap;
+    padding: 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.06);
+}
+
+body[data-design-mode="focus"] .call-ctrl-btn {
+    width: 48px;
+    height: 48px;
+    border: 0;
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .call-ctrl-btn:hover {
+    transform: none;
+    background: rgba(255,255,255,.14);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .call-ctrl-btn.active,
+body[data-design-mode="focus"] .call-ctrl-btn.active:hover {
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .call-ctrl-btn.danger,
+body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
+    background: var(--red);
+    color: #fff;
+    box-shadow: none;
+}
+
+/* «Завершить» — шире остальных: самую важную кнопку находят не глядя. */
+body[data-design-mode="focus"] #voiceLeaveBtn.call-ctrl-btn {
+    width: 64px;
+}
+
+body[data-design-mode="focus"] .call-ctrl-btn.active:hover,
+body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
+    filter: brightness(1.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-design-mode="focus"] .voice-room-state::before,
+    body[data-design-mode="focus"] .voice-call-expanded-timer::before {
+        animation: none !important;
+    }
+}
+
+@media (max-width: 760px) {
+    body[data-design-mode="focus"] .voice-call-expanded-actions {
+        gap: 6px;
+        padding: 6px;
+    }
+
+    body[data-design-mode="focus"] .call-ctrl-btn {
+        width: 44px;
+        height: 44px;
+    }
+
+    body[data-design-mode="focus"] #voiceLeaveBtn.call-ctrl-btn {
+        width: 56px;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ЗВОНОК: компактный идущий, однострочный входящий, кольца уровня
+   Разметка — voice_ui.js (renderVoiceCompactCall, renderVoiceIncomingStrip,
+   renderVoiceTiles), общая для всех стилей оформления; ниже — её базовый вид,
+   «Фокус» доводит его в своём блоке.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* --voice-level (0…1) пишет applyVoiceSpeakingState 8 раз в секунду;
+   регистрация свойства даёт ему плавный переход между замерами. */
+@property --voice-level {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 0;
+}
+
+@keyframes voice-live-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .35; transform: scale(.75); }
+}
+
+@keyframes voice-ring-wave {
+    0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), .55); }
+    100% { box-shadow: 0 0 0 18px rgba(var(--accent-rgb), 0); }
+}
+
+@keyframes voice-phone-ring {
+    0%, 55%, 100% { transform: rotate(0); }
+    10%, 30% { transform: rotate(-14deg); }
+    20%, 40% { transform: rotate(14deg); }
+}
+
+/* Титлбар: боковые колонки растут под содержимое (звонок + индикатор связи),
+   центр остаётся по центру окна — стороны всегда равны. */
+.titlebar {
+    grid-template-columns: minmax(max-content, 1fr) minmax(0, max-content) minmax(max-content, 1fr);
+}
+
+.tb-l,
+.tb-r {
+    min-width: 220px;
+}
+
+.tb-r {
+    align-items: center;
+    gap: 10px;
+}
+
+/* ── Компактный идущий звонок ────────────────────────────────────────── */
+
+.tb-call {
+    display: inline-flex;
+    align-items: center;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.voice-compact {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+    padding: 2px;
+    border-radius: 999px;
+    background: rgb(var(--accent-rgb));
+    color: #050505;
+}
+
+.voice-compact-timer,
+.voice-compact-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 24px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    transition: background .14s var(--ease-out), color .14s var(--ease-out);
+}
+
+.voice-compact-timer {
+    gap: 6px;
+    padding: 0 9px 0 8px;
+    font-size: 12px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+}
+
+.voice-compact-timer:hover,
+.voice-compact-btn:hover {
+    background: rgba(0,0,0,.12);
+}
+
+.voice-compact-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: voice-live-dot 1.4s ease-in-out infinite;
+}
+
+.voice-compact-btn {
+    width: 26px;
+}
+
+.voice-compact-btn .call-ctrl-icon {
+    width: 15px;
+    height: 15px;
+}
+
+/* Выключенный микрофон / звук — инверсия: тёмная плашка, лаймовая иконка.
+   Видно сразу, без чтения иконки. */
+.voice-compact-btn.is-off,
+.voice-compact-btn.is-off:hover {
+    background: #050505;
+    color: rgb(var(--accent-rgb));
+}
+
+.voice-compact-btn.is-hangup {
+    width: 34px;
+    margin-left: 2px;
+    background: var(--red);
+    color: #fff;
+}
+
+.voice-compact-btn.is-hangup:hover {
+    background: var(--red);
+    filter: brightness(1.1);
+}
+
+.voice-compact-timer:focus-visible,
+.voice-compact-btn:focus-visible {
+    outline: 2px solid #050505;
+    outline-offset: -2px;
+}
+
+/* На десктопе идущий звонок живёт в титлбаре — полоса над вкладками нужна
+   только телефону (там титлбара нет). Входящий в полосе — везде. */
+@media (min-width: 761px) {
+    #voiceCallStrip[data-kind="live"] {
+        display: none !important;
+    }
+
+    .main.has-live-strip > .view,
+    .main.has-live-strip > #viewChat {
+        top: 0;
+    }
+}
+
+.voice-call-strip[data-kind="live"] .voice-compact {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    padding: 0 8px;
+    border-radius: 0;
+}
+
+.voice-call-strip[data-kind="live"] .voice-compact-timer {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+    height: 30px;
+    font-size: 13px;
+}
+
+.voice-call-strip[data-kind="live"] .voice-compact-btn {
+    width: 34px;
+    height: 30px;
+}
+
+.voice-call-strip[data-kind="live"] .voice-compact-btn.is-hangup {
+    width: 44px;
+}
+
+.voice-call-strip[data-kind="live"] .voice-compact-btn .call-ctrl-icon {
+    width: 17px;
+    height: 17px;
+}
+
+/* ── Входящий: одна строка ───────────────────────────────────────────── */
+
+.main.has-incoming-strip {
+    --call-strip-h: 54px;
+}
+
+.voice-incoming {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 100%;
+    padding: 0 10px 0 14px;
+    border-bottom: 2px solid rgb(var(--accent-rgb));
+    background:
+        linear-gradient(rgba(255,255,255,.06), rgba(255,255,255,.06)),
+        var(--bg);
+}
+
+.voice-incoming-who {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.voice-incoming-ava {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: visible;
+    background: rgba(255,255,255,.1);
+    color: rgb(var(--accent-rgb));
+    font-size: 14px;
+    font-weight: 800;
+    animation: voice-ring-wave 1.5s ease-out infinite;
+}
+
+.voice-incoming-ava .avatar-img,
+.voice-incoming-ava .avatar-fallback {
+    border-radius: 50%;
+}
+
+.voice-incoming-ava .avatar-fallback {
+    color: rgb(var(--accent-rgb));
+    font-size: 14px;
+}
+
+.voice-incoming-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.voice-incoming-note {
+    flex: 0 0 auto;
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.voice-incoming-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.voice-incoming-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 36px;
+    padding: 0 16px 0 12px;
+    border: 0;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: filter .14s var(--ease-out), transform .14s var(--ease-out);
+}
+
+.voice-incoming-btn:hover {
+    filter: brightness(1.08);
+}
+
+.voice-incoming-btn:active {
+    transform: scale(.97);
+}
+
+.voice-incoming-btn .call-ctrl-icon {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+}
+
+.voice-incoming-btn.is-decline {
+    background: var(--red);
+    color: #fff;
+}
+
+.voice-incoming-btn.is-accept {
+    background: rgb(var(--accent-rgb));
+    color: #050505;
+}
+
+/* Трубка «Принять» покачивается — как у звонящего телефона. */
+.voice-incoming-btn.is-accept .call-ctrl-icon {
+    animation: voice-phone-ring 1.5s ease-in-out infinite;
+}
+
+@media (max-width: 520px) {
+    .voice-incoming-note {
+        display: none;
+    }
+
+    .voice-incoming-btn {
+        width: 42px;
+        height: 42px;
+        padding: 0;
+        justify-content: center;
+    }
+
+    .voice-incoming-btn span {
+        display: none;
+    }
+}
+
+/* ── Кольца уровня ───────────────────────────────────────────────────── */
+
+.voice-tile {
+    transition: --voice-level .16s linear, box-shadow .12s var(--ease-out), border-color .12s var(--ease-out);
+}
+
+/* Полоски «Микрофон / С сервера» убраны: уровень у каждого — свой, кольцом
+   вокруг его аватара, которое заполняется от нижней точки вверх по обеим
+   сторонам. Бледная дорожка видна всегда — кольцо читается как шкала. */
+.voice-tile-person {
+    position: relative;
+    display: grid;
+    place-items: center;
+}
+
+.voice-level-ring {
+    position: absolute;
+    inset: -7px;
+    border-radius: 50%;
+    pointer-events: none;
+    background: conic-gradient(
+        from 180deg,
+        rgb(var(--accent-rgb)) 0deg calc(var(--voice-level) * 180deg),
+        rgba(255,255,255,.08) calc(var(--voice-level) * 180deg) calc(360deg - var(--voice-level) * 180deg),
+        rgb(var(--accent-rgb)) calc(360deg - var(--voice-level) * 180deg)
+    );
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+}
+
+/* С камерой круга нет — заполняется рамка самой плитки, тоже от середины
+   нижнего края вверх по обеим сторонам. */
+.voice-tile.has-video .voice-tile-person {
+    display: none;
+}
+
+.voice-tile.has-video::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    padding: 3px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: conic-gradient(
+        from 180deg,
+        rgb(var(--accent-rgb)) 0deg calc(var(--voice-level) * 180deg),
+        transparent calc(var(--voice-level) * 180deg) calc(360deg - var(--voice-level) * 180deg),
+        rgb(var(--accent-rgb)) calc(360deg - var(--voice-level) * 180deg)
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+
+/* Исходящий, ещё не ответили: от аватара собеседника расходятся волны. */
+.voice-room-card[data-voice-status="calling"] .voice-tile:not(.mine) .voice-tile-person::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+    animation: voice-ring-wave 1.5s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .voice-compact-dot,
+    .voice-incoming-ava,
+    .voice-incoming-btn.is-accept .call-ctrl-icon,
+    .voice-room-card[data-voice-status="calling"] .voice-tile:not(.mine) .voice-tile-person::after {
+        animation: none;
+    }
+
+    .voice-tile {
+        transition: none;
+    }
+}
+
+/* ── «Фокус»: полный интерфейс звонка ────────────────────────────────── */
+
+/* Без камеры плитка — «карточка человека»: крупный аватар с кольцом уровня
+   и имя под ним, а не бейдж в углу. */
+body[data-design-mode="focus"] .voice-tile:not(.has-video) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+}
+
+body[data-design-mode="focus"] .voice-tile:not(.has-video) .voice-tile-footer {
+    position: static;
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+body[data-design-mode="focus"] .voice-tile:not(.has-video) .voice-tile-name {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tile-avatar,
+body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tile-avatar {
+    width: 104px;
+    height: 104px;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-grid .voice-level-ring,
+body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-level-ring {
+    inset: -9px;
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px));
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tile-avatar .avatar-fallback,
+body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tile-avatar .avatar-fallback {
+    font-size: 36px;
+}
+
+body[data-design-mode="focus"] .voice-panel.has-stage .voice-tile:not(.has-video) {
+    gap: 8px;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-header {
+    min-height: 40px;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-title {
+    font-size: 16px;
+}
+
+/* Плитки — по центру и не шире разумного: в разговоре вдвоём это две
+   спокойные карточки, а не два экрана во всю ширину. */
+body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tiles,
+body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tiles {
+    /* Не minmax(…, 420px): auto-fit считает число колонок по максимуму трека,
+       и при 420px двое вставали столбиком. Ширину ограничивает сама сетка. */
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    justify-content: center;
+    align-content: center;
+    grid-auto-rows: minmax(200px, 340px);
+    gap: 12px;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+/* Подписи под кнопками звонка — называют кнопку («Микрофон», «Камера»),
+   состояние показывает цвет: лайм — включено, красный — завершить/без звука. */
+body[data-design-mode="focus"] .voice-call-expanded-actions {
+    gap: 14px;
+    padding: 10px 16px 28px;
+    border-radius: 24px;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-actions .call-ctrl-btn {
+    position: relative;
+}
+
+body[data-design-mode="focus"] .voice-call-expanded-actions .call-ctrl-btn[data-short]::after {
+    content: attr(data-short);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    color: var(--text2);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+body[data-design-mode="focus"] .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles,
+body[data-design-mode="focus"] .voice-panel.has-stage .voice-call-expanded.embedded .voice-tiles {
+    grid-auto-rows: auto;
+    align-content: stretch;
+}
+
+body[data-design-mode="focus"] .voice-tile.mine:not(.has-video) {
+    background: rgba(255,255,255,.035);
+}
+
+body[data-design-mode="focus"] .voice-tile-mic {
+    color: var(--red);
+}
+
+@media (max-width: 760px) {
+    body[data-design-mode="focus"] .voice-call-expanded {
+        padding: calc(var(--m-safe-top) + 12px) 14px calc(var(--m-safe-bottom) + 14px);
+    }
+
+    body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tiles,
+    body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tiles {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        grid-auto-rows: minmax(150px, 1fr);
+        gap: 8px;
+    }
+
+    body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tile-avatar,
+    body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tile-avatar {
+        width: 76px;
+        height: 76px;
+    }
+
+    body[data-design-mode="focus"] .voice-call-expanded-grid .voice-tile-avatar .avatar-fallback,
+    body[data-design-mode="focus"] .voice-call-expanded.embedded .voice-tile-avatar .avatar-fallback {
+        font-size: 28px;
+    }
+
+    body[data-design-mode="focus"] .voice-call-expanded-actions {
+        gap: 8px;
+        padding: 8px 12px 26px;
+    }
+
+    body[data-design-mode="focus"] .voice-call-expanded-actions .call-ctrl-btn[data-short]::after {
+        font-size: 10px;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ИЛЛЮСТРАЦИИ ЭКРАНОВ (декор, оформление «Фокус»)
+   Крупные линейные рисунки в свободных местах — каждый сюжет о том, что на
+   экране происходит: монетка летит в копилку (ZaliCoin), модули запускают
+   ракету (хаб), сообщение долетает через замок (пустая переписка), поиск →
+   добавить → написать (пустой список), окно, которое подстраивают
+   (настройки — только на широком экране, где есть поля).
+   Рисунки — scripts/build_decor.py, он пишет блок переменных --decor-<имя>
+   ниже. Каждая — одноцветная SVG-маска: цвет и прозрачность задаёт CSS,
+   поэтому иллюстрации один и тот же приглушённый серый в любой цветовой
+   схеме. В остальных стилях оформления не показываются: у classic на этих
+   местах свои «шары» и свечения.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* @generated decor:start — scripts/build_decor.py, руками не править */
+:root {
+    --decor-zalicoin: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22coin%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2222%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216.5%22/%3E%3Cpath d=%22M25.5 24.5h13l-13 15h13%22/%3E%3C/g%3E%3Cg id=%22coin3d%22%3E%3Cellipse cx=%2232%22 cy=%2225%22 rx=%2222%22 ry=%2210%22/%3E%3Cpath d=%22M10 25v9c0 5.5 9.85 10 22 10s22-4.5 22-10v-9%22/%3E%3Cpath d=%22M26.5 21.5h11l-11 7h11%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22phone%22%3E%3Crect x=%2218%22 y=%226%22 width=%2228%22 height=%2252%22 rx=%226%22/%3E%3Cpath d=%22M28 11.5h8%22/%3E%3Ccircle cx=%2232%22 cy=%2231%22 r=%227%22/%3E%3Cpath d=%22M29 28.5h6l-6 5h6%22/%3E%3Cpath d=%22M24 46h16%22 opacity=%22.6%22/%3E%3C/g%3E%3Cg id=%22piggy%22%3E%3Cpath d=%22M12 34c0-9.6 9.4-16.5 21.5-16.5 7.5 0 13.5 2.6 16.9 7l5.1-1.2c1.4-.3 2.7.7 2.7 2.1v7.4c0 1.2-1 2.2-2.2 2.2h-4.2c-1.6 3.4-4.3 6.1-7.8 7.9l.9 5.6c.2 1.2-.7 2.3-1.9 2.3h-4.2c-.9 0-1.7-.6-1.9-1.5l-.7-3.5c-1.6.3-3.3.4-5 .4s-3.4-.1-5-.4l-.7 3.5c-.2.9-1 1.5-1.9 1.5h-4.2c-1.2 0-2.1-1.1-1.9-2.3l1-5.9C14.6 44.4 12 39.6 12 34z%22/%3E%3Cpath d=%22M42.5 19.2l1.6-6.3c.2-.9 1.3-1.2 2-.6l4.6 4.9%22/%3E%3Cpath d=%22M27 22.5h9%22/%3E%3Cpath d=%22M12.6 31.6c-3.3.3-5.4-1.6-4.9-3.7.4-1.6 2.4-2.1 3.4-.9%22/%3E%3Cpath d=%22M53.2 26.6v4.2%22/%3E%3Ccircle class=%22f%22 cx=%2246.6%22 cy=%2227.2%22 r=%221.7%22/%3E%3C/g%3E%3Cg id=%22plus%22%3E%3Cpath d=%22M32 22v20M22 32h20%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22stack%22%3E%3Cellipse cx=%2232%22 cy=%2218%22 rx=%2219%22 ry=%227%22/%3E%3Cpath d=%22M13 18v6c0 3.9 8.5 7 19 7s19-3.1 19-7v-6%22/%3E%3Cpath d=%22M13 24v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3Cpath d=%22M13 31v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3Cpath d=%22M13 38v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3C/g%3E%3Cg id=%22s-coin%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2222%22/%3E%3C/g%3E%3Cg id=%22s-coin3d%22%3E%3Cpath d=%22M10 25c0-5.5 9.85-10 22-10s22 4.5 22 10v9c0 5.5-9.85 10-22 10S10 39.5 10 34z%22/%3E%3C/g%3E%3Cg id=%22s-phone%22%3E%3Crect x=%2218%22 y=%226%22 width=%2228%22 height=%2252%22 rx=%226%22/%3E%3C/g%3E%3Cg id=%22s-piggy%22%3E%3Cpath d=%22M12 34c0-9.6 9.4-16.5 21.5-16.5 7.5 0 13.5 2.6 16.9 7l5.1-1.2c1.4-.3 2.7.7 2.7 2.1v7.4c0 1.2-1 2.2-2.2 2.2h-4.2c-1.6 3.4-4.3 6.1-7.8 7.9l.9 5.6c.2 1.2-.7 2.3-1.9 2.3h-4.2c-.9 0-1.7-.6-1.9-1.5l-.7-3.5c-1.6.3-3.3.4-5 .4s-3.4-.1-5-.4l-.7 3.5c-.2.9-1 1.5-1.9 1.5h-4.2c-1.2 0-2.1-1.1-1.9-2.3l1-5.9C14.6 44.4 12 39.6 12 34z%22/%3E%3Cpath d=%22M42.5 19.2l1.6-6.3c.2-.9 1.3-1.2 2-.6l4.6 4.9z%22/%3E%3C/g%3E%3Cg id=%22s-stack%22%3E%3Cpath d=%22M13 18c0-3.9 8.5-7 19-7s19 3.1 19 7v27c0 3.9-8.5 7-19 7s-19-3.1-19-7z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m8%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m9%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m10%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M295.6 240.5C268.1 248.7 213.7 235.0 179.5 228.1C145.2 221.1 109.6 213.2 89.9 198.6C70.3 184.0 61.2 160.3 61.7 140.5C62.2 120.7 70.8 95.7 92.9 79.7C114.9 63.7 160.5 45.0 194.2 44.4C227.9 43.7 266.3 63.2 295.1 75.8C324.0 88.4 358.9 102.9 367.2 120.1C375.4 137.3 356.5 158.7 344.6 178.8C332.6 198.9 323.1 232.3 295.6 240.5Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Ccircle cx=%22318%22 cy=%2262%22 r=%2240%22 fill=%22%23000%22 fill-opacity=%22.18%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cpath d=%22M84 70C120 6 236 -4 292 40C334 74 304 120 252 120%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(252 120) rotate(172)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cpath d=%22M154.1 61.6L144.9 65.0 M152.0 56.0L137.9 61.1 M149.9 50.4L140.8 53.7%22 opacity=%220.5%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m8)%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m9)%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m10)%22%3E%3Cpath d=%22M277.5 49.4L268.0 45.0 M280.0 44.0L265.5 37.2 M282.5 38.6L273.1 34.2%22 opacity=%220.5%22/%3E%3C/g%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(40 34) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(376 112) rotate(0) scale(0.34) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(200 236) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(262 18) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(22 160) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(104 150) rotate(0) scale(0.48) translate(-32 -32)%22 opacity=%220.55%22/%3E%3Cuse href=%22%23plus%22 transform=%22translate(372 240) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.5%22/%3E%3C/svg%3E");
+    --decor-hub: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bell%22%3E%3Cpath d=%22M32 11.5a3.6 3.6 0 0 1 3.6 3.6v1.6c6.2 1.6 10.6 7.2 10.6 13.8v8.3l4.3 6.2h-37l4.3-6.2v-8.3c0-6.6 4.4-12.2 10.6-13.8v-1.6a3.6 3.6 0 0 1 3.6-3.6z%22/%3E%3Cpath d=%22M26.8 49.8a5.2 5.2 0 0 0 10.4 0%22/%3E%3C/g%3E%3Cg id=%22box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3Cpath d=%22M11 19.7l21 10.2 21-10.2M32 29.9v24.6M21.5 14.6l21 10.2%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22planet%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2212.5%22/%3E%3Cpath d=%22M43.3 26.2c7.4-3.2 12.6-3.8 13.5-1.9 1.4 3-9.2 10.2-23.7 16.1S9.7 49.6 8.3 46.6c-.9-1.9 2.8-5.6 9.5-9.8%22/%3E%3C/g%3E%3Cg id=%22plus%22%3E%3Cpath d=%22M32 22v20M22 32h20%22/%3E%3C/g%3E%3Cg id=%22puzzle%22%3E%3Cpath d=%22M14 20h9.5a4.5 4.5 0 1 1 9 0H42v9.5a4.5 4.5 0 1 1 0 9V48H32.5a4.5 4.5 0 1 0-9 0H14v-9.5a4.5 4.5 0 1 0 0-9z%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22rocket%22%3E%3Cpath d=%22M32 7.5c8.4 6 12.6 15 12.6 25.3L40.4 45H23.6l-4.2-12.2C19.4 22.5 23.6 13.5 32 7.5z%22/%3E%3Ccircle cx=%2232%22 cy=%2225%22 r=%225%22/%3E%3Cpath d=%22M19.8 33.5l-6.5 8.8 8.2 2M44.2 33.5l6.5 8.8-8.2 2%22/%3E%3Cpath d=%22M27.5 49.5c0 4.8 4.5 8 4.5 8s4.5-3.2 4.5-8%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22star%22%3E%3Cpath d=%22M32.00 13.00 L37.00 26.12 L51.02 26.82 L40.08 35.63 L43.76 49.18 L32.00 41.50 L20.24 49.18 L23.92 35.63 L12.98 26.82 L27.00 26.12Z%22/%3E%3C/g%3E%3Cg id=%22s-bell%22%3E%3Cpath d=%22M32 11.5a3.6 3.6 0 0 1 3.6 3.6v1.6c6.2 1.6 10.6 7.2 10.6 13.8v8.3l4.3 6.2h-37l4.3-6.2v-8.3c0-6.6 4.4-12.2 10.6-13.8v-1.6a3.6 3.6 0 0 1 3.6-3.6z%22/%3E%3C/g%3E%3Cg id=%22s-box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3C/g%3E%3Cg id=%22s-planet%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2212.5%22/%3E%3C/g%3E%3Cg id=%22s-puzzle%22%3E%3Cpath d=%22M14 20h9.5a4.5 4.5 0 1 1 9 0H42v9.5a4.5 4.5 0 1 1 0 9V48H32.5a4.5 4.5 0 1 0-9 0H14v-9.5a4.5 4.5 0 1 0 0-9z%22/%3E%3C/g%3E%3Cg id=%22s-rocket%22%3E%3Cpath d=%22M32 7.5c8.4 6 12.6 15 12.6 25.3L40.4 45H23.6l-4.2-12.2C19.4 22.5 23.6 13.5 32 7.5z%22/%3E%3C/g%3E%3Cg id=%22s-star%22%3E%3Cpath d=%22M32.00 13.00 L37.00 26.12 L51.02 26.82 L40.08 35.63 L43.76 49.18 L32.00 41.50 L20.24 49.18 L23.92 35.63 L12.98 26.82 L27.00 26.12Z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m8%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M75.5 195.6C59.3 177.7 49.4 157.7 50.4 136.9C51.4 116.0 57.2 83.7 81.4 70.5C105.6 57.4 158.9 57.4 195.7 57.9C232.4 58.4 279.5 60.7 302.1 73.3C324.7 86.0 323.8 113.4 331.1 134.0C338.4 154.6 357.7 179.1 345.9 196.9C334.2 214.7 293.6 232.9 260.4 240.8C227.3 248.7 178.1 251.9 147.2 244.4C116.4 236.9 91.6 213.5 75.5 195.6Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cellipse cx=%22206%22 cy=%22146%22 rx=%22158%22 ry=%2254%22 transform=%22rotate(-20 206 146)%22 stroke-dasharray=%220.1 7%22 opacity=%22.7%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Ccircle cx=%22120%22 cy=%22180%22 r=%229%22 opacity=%22.45%22/%3E%3Ccircle cx=%22104%22 cy=%22166%22 r=%226%22 opacity=%22.4%22/%3E%3Ccircle cx=%22136%22 cy=%22190%22 r=%225%22 opacity=%22.35%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m8)%22%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(232 24) rotate(0) scale(0.44) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(380 140) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(22 62) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(160 30) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(376 30) rotate(0) scale(0.46) translate(-32 -32)%22 opacity=%220.55%22/%3E%3Cuse href=%22%23plus%22 transform=%22translate(22 210) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.5%22/%3E%3C/svg%3E");
+    --decor-chat: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 210%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3Cpath d=%22M21 28v-6.5a11 11 0 0 1 22 0V28%22/%3E%3Ccircle cx=%2232%22 cy=%2239%22 r=%223.2%22/%3E%3Cpath d=%22M32 42.2v4.3%22/%3E%3C/g%3E%3Cg id=%22person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18%22/%3E%3C/g%3E%3Cg id=%22plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3Cpath d=%22M24 37l31-25.5M31.5 41l-7.5-4%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22s-heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22s-lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3C/g%3E%3Cg id=%22s-person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18z%22/%3E%3C/g%3E%3Cg id=%22s-plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.1 46.4C124.5 34.3 164.7 18.6 192.7 20.8C220.7 23.0 247.0 45.9 268.1 59.5C289.2 73.2 313.8 86.3 319.3 102.5C324.7 118.8 316.3 141.3 300.9 156.8C285.5 172.3 256.5 189.6 227.1 195.6C197.7 201.7 150.1 201.7 124.6 193.2C99.2 184.6 87.3 161.1 74.3 144.5C61.3 127.8 42.4 109.5 46.7 93.1C51.0 76.8 75.8 58.4 100.1 46.4Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cpath d=%22M152 30C176 -2 222 0 224 26C226 50 192 52 196 30C200 8 252 4 290 44%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(290 44) rotate(48)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(30 150) rotate(0) scale(0.4) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(186 196) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(344 110) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(76 22) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
+"""#,
+    #"""
+    --decor-contacts: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 260 150%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22badge-plus%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216%22/%3E%3Cpath d=%22M32 24.5v15M24.5 32h15%22/%3E%3C/g%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22card%22%3E%3Crect x=%226%22 y=%2214%22 width=%2252%22 height=%2236%22 rx=%226%22/%3E%3Ccircle cx=%2220%22 cy=%2228%22 r=%225.5%22/%3E%3Cpath d=%22M11.5 42c1.4-3.8 4.6-5.8 8.5-5.8s7.1 2 8.5 5.8M35 27h15M35 34h10%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22search%22%3E%3Ccircle cx=%2227%22 cy=%2227%22 r=%2214%22/%3E%3Cpath d=%22M37.5 37.5L52 52%22/%3E%3Cpath d=%22M20 22a8 8 0 0 1 6-5%22 opacity=%22.6%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-badge-plus%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-card%22%3E%3Crect x=%226%22 y=%2214%22 width=%2252%22 height=%2236%22 rx=%226%22/%3E%3C/g%3E%3Cg id=%22s-search%22%3E%3Ccircle cx=%2227%22 cy=%2227%22 r=%2214%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.3 135.8C81.1 131.6 70.6 116.7 57.3 106.4C44.0 96.1 20.4 84.9 20.5 73.8C20.6 62.7 41.1 49.2 58.0 39.8C74.9 30.5 100.3 18.3 121.9 17.8C143.6 17.4 171.1 28.9 187.8 37.1C204.6 45.4 216.2 56.3 222.3 67.6C228.5 78.9 233.1 94.2 224.8 104.9C216.6 115.6 193.5 126.5 172.7 131.6C151.9 136.8 119.5 140.0 100.3 135.8Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(26 110) rotate(0) scale(0.34) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(150 18) rotate(0) scale(0.28) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(244 28) rotate(0) scale(0.28) translate(-32 -32)%22 opacity=%220.7%22/%3E%3C/svg%3E");
+    --decor-settings: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22gear%22%3E%3Cpath d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%226.5%22/%3E%3C/g%3E%3Cg id=%22palette%22%3E%3Cpath d=%22M32 10.5c-12.4 0-22 9.1-22 20.9C10 43 18.4 53 29 53c2.7 0 4-1.7 4-3.7 0-2.6-2.1-3.4-2.1-5.7 0-2.6 2.1-4.2 4.7-4.2H41c7.1 0 12-4.4 12-10.6 0-10.6-9.4-18.3-21-18.3z%22/%3E%3Ccircle class=%22f%22 cx=%2221.5%22 cy=%2231%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2226%22 cy=%2221.5%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2236.5%22 cy=%2219.5%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2244.5%22 cy=%2226.5%22 r=%222.8%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sliders%22%3E%3Cpath d=%22M18 11v42M32 11v42M46 11v42%22/%3E%3Crect x=%2213%22 y=%2217%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3Crect x=%2227%22 y=%2236%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3Crect x=%2241%22 y=%2225%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22toggle%22%3E%3Crect x=%228%22 y=%2222%22 width=%2248%22 height=%2220%22 rx=%2210%22/%3E%3Ccircle class=%22f%22 cx=%2246%22 cy=%2232%22 r=%226%22/%3E%3C/g%3E%3Cg id=%22window%22%3E%3Crect x=%226%22 y=%2212%22 width=%2252%22 height=%2240%22 rx=%225%22/%3E%3Cpath d=%22M6 20h52%22/%3E%3Ccircle class=%22f%22 cx=%2211%22 cy=%2216%22 r=%221.3%22/%3E%3Ccircle class=%22f%22 cx=%2215.5%22 cy=%2216%22 r=%221.3%22/%3E%3Ccircle class=%22f%22 cx=%2220%22 cy=%2216%22 r=%221.3%22/%3E%3Cpath d=%22M13 28h24M13 34h32M13 40h18%22 opacity=%22.7%22/%3E%3Crect x=%2236%22 y=%2239%22 width=%2215%22 height=%227%22 rx=%223.5%22 opacity=%22.7%22/%3E%3C/g%3E%3Cg id=%22s-gear%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3C/g%3E%3Cg id=%22s-gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3C/g%3E%3Cg id=%22s-palette%22%3E%3Cpath d=%22M32 10.5c-12.4 0-22 9.1-22 20.9C10 43 18.4 53 29 53c2.7 0 4-1.7 4-3.7 0-2.6-2.1-3.4-2.1-5.7 0-2.6 2.1-4.2 4.7-4.2H41c7.1 0 12-4.4 12-10.6 0-10.6-9.4-18.3-21-18.3z%22/%3E%3C/g%3E%3Cg id=%22s-toggle%22%3E%3Crect x=%228%22 y=%2222%22 width=%2248%22 height=%2220%22 rx=%2210%22/%3E%3C/g%3E%3Cg id=%22s-window%22%3E%3Crect x=%226%22 y=%2212%22 width=%2252%22 height=%2240%22 rx=%225%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M198.4 44.0C231.2 46.9 272.1 56.5 291.1 71.5C310.1 86.4 307.7 111.6 312.3 133.5C316.9 155.5 333.8 185.9 318.7 203.0C303.6 220.0 255.7 230.4 221.7 235.8C187.6 241.2 141.2 245.0 114.3 235.1C87.3 225.3 70.7 196.8 59.8 176.8C49.0 156.9 43.6 135.9 49.4 115.5C55.1 95.0 69.4 66.3 94.2 54.4C119.1 42.5 165.6 41.2 198.4 44.0Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23sliders%22 transform=%22translate(296 214) rotate(8) scale(0.95) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(34 128) rotate(0) scale(0.38) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(200 22) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(340 32) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(200 240) rotate(0) scale(0.44) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
+}
+/* @generated decor:end */
+
+.empty-art,
+.contacts-empty-art {
+    display: none;
+}
+
+.contacts-empty {
+    padding: 24px 0;
+    color: var(--text3);
+    font-size: 11px;
+    text-align: center;
+}
+
+body[data-design-mode="focus"] #viewZaliCoin .zc-view::after,
+body[data-design-mode="focus"] #viewHub .hub-hero::after,
+body[data-design-mode="focus"] .empty-art,
+body[data-design-mode="focus"] .contacts-empty-art {
+    content: "";
+    display: block;
+    background: #fff;
+    opacity: var(--decor-opacity, .2);
+    -webkit-mask: var(--decor) center / contain no-repeat;
+    mask: var(--decor) center / contain no-repeat;
+}
+
+/* ZaliCoin: под карточками — экран короткий, и низ панели пустует.
+   margin-top: auto прижимает рисунок к низу свободного места; если
+   карточек много, он просто идёт после них. */
+/* .zc-view — flex-колонка ограниченной высоты: с рисунком в конце карточки
+   начинали сжиматься под него (обрезались кнопка баланса и полоса
+   распределения). Не сжимаются — колонка прокручивается. */
+body[data-design-mode="focus"] #viewZaliCoin .zc-view > * {
+    flex-shrink: 0;
+}
+
+body[data-design-mode="focus"] #viewZaliCoin .zc-view::after {
+    --decor: var(--decor-zalicoin);
+    flex: 0 0 auto;
+    align-self: center;
+    width: min(440px, 92%);
+    aspect-ratio: 380 / 220;
+    margin: auto 0 8px;
+}
+
+/* Хаб: справа от заголовка, на месте скрытого «шара». */
+body[data-design-mode="focus"] #viewHub .hub-hero {
+    grid-template-columns: minmax(280px, 1.15fr) minmax(0, 320px);
+}
+
+body[data-design-mode="focus"] #viewHub .hub-hero::after {
+    width: 100%;
+    aspect-ratio: 380 / 220;
+}
+
+body[data-design-mode="focus"] #viewHub .hub-hero::after {
+    --decor: var(--decor-hub);
+}
+
+/* Пустая переписка — над «Нет сообщений» (empty-art рисует renderMessages
+   в web/src/interface/message_list.js). */
+body[data-design-mode="focus"] .empty-art {
+    --decor: var(--decor-chat);
+    --decor-opacity: .22;
+    width: min(320px, 80%);
+    aspect-ratio: 340 / 180;
+    margin: 0 auto 16px;
+}
+
+/* Пустой список контактов (renderContacts в render_shell.js). */
+body[data-design-mode="focus"] .contacts-empty {
+    display: grid;
+    justify-items: center;
+    gap: 12px;
+    padding: 28px 12px;
+    color: var(--text2);
+    font-size: 13px;
+}
+
+body[data-design-mode="focus"] .contacts-empty-art {
+    --decor: var(--decor-contacts);
+    --decor-opacity: .22;
+    width: min(200px, 90%);
+    aspect-ratio: 240 / 120;
+}
+
+/* Настройки: только в правом поле широкого окна — колонка настроек 720px
+   по центру, поле появляется, когда панель заметно шире. */
+@media (min-width: 1440px) {
+    body[data-design-mode="focus"] #viewSettings::before {
+        content: "";
+        position: absolute;
+        right: 28px;
+        bottom: 28px;
+        z-index: 0;
+        width: min(300px, calc((100% - 720px) / 2 - 56px));
+        aspect-ratio: 340 / 250;
+        pointer-events: none;
+        background: #fff;
+        opacity: .16;
+        -webkit-mask: var(--decor-settings) center / contain no-repeat;
+        mask: var(--decor-settings) center / contain no-repeat;
+    }
+
+    body[data-design-mode="focus"] #viewSettings > * {
+        position: relative;
+        z-index: 1;
+    }
+}
+
+@media (max-width: 760px) {
+    body[data-design-mode="focus"] #viewHub .hub-hero {
+        grid-template-columns: 1fr;
+    }
+
+    body[data-design-mode="focus"] #viewHub .hub-hero::after {
+        justify-self: center;
+        width: min(300px, 86%);
+        margin-top: 8px;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ВХОД НА ВЕСЬ ЭКРАН (оформление «Фокус»)
+   Две колонки: слева витрина (.auth-showcase — бренд и иллюстрация; в
+   других стилях скрыта), справа крупная форма по центру своей половины.
+   Адрес сервера — свёрнутая строка внизу колонки (.auth-network.is-open —
+   открыт, переключает events.js). Разметка — #authOverlay в index.html.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.auth-showcase {
+    display: none;
+}
+
+body[data-design-mode="focus"] .auth-overlay {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+    align-items: stretch;
+    justify-content: stretch;
+    gap: 0;
+    padding: 0;
+    background: var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+/* ── Витрина ─────────────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .auth-showcase {
+    position: relative;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 16px;
+    min-height: 0;
+    margin: calc(var(--titlebar-h, 38px) + 4px) 0 16px 16px;
+    padding: clamp(28px, 3.4vw, 48px);
+    overflow: hidden;
+    border: 1px solid var(--f-hairline);
+    border-radius: 28px;
+    background: rgba(255,255,255,.028);
+    animation: auth-pop .5s cubic-bezier(.2,.9,.18,1) both;
+}
+
+body[data-design-mode="focus"] .auth-showcase-brand {
+    color: var(--lime);
+    font-size: clamp(30px, 3.2vw, 44px);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.035em;
+}
+
+body[data-design-mode="focus"] .auth-art {
+    align-self: center;
+    justify-self: center;
+    width: 100%;
+    max-width: 720px;
+    height: 100%;
+    max-height: 600px;
+    min-height: 0;
+    overflow: visible;
+}
+
+.auth-art .aa-orbit {
+    fill: none;
+    stroke: rgba(255,255,255,.07);
+    stroke-width: 1.5;
+    stroke-dasharray: 2 9;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-spark { fill: var(--lime); }
+.auth-art .aa-dots { fill: rgba(255,255,255,.14); }
+
+.auth-art .aa-card {
+    fill: #141518;
+    stroke: rgba(255,255,255,.1);
+    stroke-width: 1.5;
+}
+
+.auth-art .aa-window {
+    transform: rotate(-3deg);
+    transform-origin: 281px 219px;
+}
+
+.auth-art .aa-hair {
+    stroke: rgba(255,255,255,.07);
+    stroke-width: 1.5;
+}
+
+.auth-art .aa-lime { fill: var(--lime); }
+.auth-art .aa-bubble { fill: #24262b; }
+.auth-art .aa-txt { fill: rgba(255,255,255,.34); }
+.auth-art .aa-txt--dim { fill: rgba(255,255,255,.16); }
+.auth-art .aa-ink { fill: rgba(5,5,5,.72); }
+.auth-art .aa-ink--soft { fill: rgba(5,5,5,.4); }
+.auth-art .aa-typing { fill: rgba(255,255,255,.4); }
+
+.auth-art .aa-ink-line {
+    fill: none;
+    stroke: #050505;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.auth-art .aa-pill {
+    fill: #1b1c20;
+    stroke: rgba(255,255,255,.12);
+    stroke-width: 1.5;
+}
+
+.auth-art .aa-wave {
+    stroke: var(--lime);
+    stroke-width: 5;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-ring {
+    fill: none;
+    stroke: var(--lime);
+    stroke-width: 1.5;
+    stroke-dasharray: 3 7;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-coin-top,
+.auth-art .aa-coin-side {
+    fill: var(--lime);
+    stroke: #050505;
+    stroke-width: 3;
+    stroke-linejoin: round;
+}
+
+.auth-art .aa-float {
+    animation: auth-art-float 6s ease-in-out infinite;
+}
+
+.auth-art .aa-float--b { animation-delay: -2s; animation-duration: 7s; }
+.auth-art .aa-float--c { animation-delay: -4s; animation-duration: 6.5s; }
+
+.auth-art .aa-typing { animation: auth-art-typing 1.4s ease-in-out infinite; }
+.auth-art .aa-typing + .aa-typing { animation-delay: .18s; }
+.auth-art .aa-typing + .aa-typing + .aa-typing { animation-delay: .36s; }
+
+@keyframes auth-art-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+}
+
+@keyframes auth-art-typing {
+    0%, 60%, 100% { opacity: .35; }
+    30% { opacity: 1; }
+}
+
+/* ── Форма ───────────────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .auth-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 0;
+    padding: calc(var(--titlebar-h, 38px) + 24px) clamp(28px, 5vw, 80px) 112px;
+    overflow-y: auto;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .auth-card::before,
+body[data-design-mode="focus"] .auth-brand {
+    display: none;
+}
+
+body[data-design-mode="focus"] .auth-card > * {
+    width: 100%;
+    max-width: clamp(400px, 34vw, 500px);
+}
+
+body[data-design-mode="focus"] .auth-card h1 {
+    margin: 0 0 10px;
+    font-size: clamp(34px, 3.3vw, 48px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -.03em;
+}
+
+body[data-design-mode="focus"] .auth-card p {
+    margin-bottom: 14px;
+    color: var(--text2);
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+/* Подсказка про ключи — метка с замком, а не вторая строка серого текста. */
+body[data-design-mode="focus"] .auth-vault-sync {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 30px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+body[data-design-mode="focus"] .auth-vault-sync::before {
+    content: "";
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23050505' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='6' y='11' width='12' height='9' rx='2'/%3E%3Cpath d='M9 11V8.5a3 3 0 0 1 6 0V11'/%3E%3C/svg%3E") center / 14px no-repeat,
+        var(--lime);
+}
+
+body[data-design-mode="focus"] .auth-vault-sync[hidden],
+body[data-design-mode="focus"] .auth-vault-sync:empty {
+    display: none;
+}
+
+/* Порядок: поля → «Войти» → ошибка → вторичные действия. Адрес сервера
+   вынесен из потока вниз колонки (см. .auth-network). */
+body[data-design-mode="focus"] .auth-form {
+    position: static;
+    gap: 12px;
+}
+
+body[data-design-mode="focus"] .auth-input {
+    height: 56px;
+    min-height: 56px;
+    padding: 0 18px;
+    border-radius: 14px;
+    font-size: 16px;
+}
+
+body[data-design-mode="focus"] .auth-actions {
+    order: 1;
+    margin-top: 6px;
+}
+
+body[data-design-mode="focus"] .auth-btn.primary {
+    min-height: 56px;
+    border-radius: 14px;
+    font-size: 16px;
+}
+
+body[data-design-mode="focus"] .auth-error {
+    order: 2;
+    text-align: center;
+}
+
+body[data-design-mode="focus"] .auth-error:empty {
+    display: none;
+}
+
+body[data-design-mode="focus"] .auth-footer {
+    order: 3;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+body[data-design-mode="focus"] .auth-link {
+    min-height: 48px;
+    padding: 0 12px;
+    border-radius: 14px;
+    background: var(--f-fill);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+    transition: background .15s var(--ease-out);
+}
+
+body[data-design-mode="focus"] .auth-link:hover {
+    opacity: 1;
+    background: var(--f-fill-hover);
+}
+
+body[data-design-mode="focus"] .auth-link:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 2px;
+}
+
+/* Сервер — одна строка внизу колонки «Адрес сервера … адрес ⌄»,
+   по клику раскрывается вверх. */
+body[data-design-mode="focus"] .auth-network {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 24px;
+    width: min(clamp(400px, 34vw, 500px), calc(100% - 56px));
+    margin: 0 auto;
+    gap: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .auth-network-head {
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    cursor: pointer;
+    user-select: none;
+}
+
+body[data-design-mode="focus"] .auth-network-head:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+body[data-design-mode="focus"] .auth-network-title {
+    flex: none;
+    white-space: nowrap;
+    color: var(--text3);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+body[data-design-mode="focus"] .auth-network-note {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body[data-design-mode="focus"] .auth-network-head::after {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 2px;
+    border-right: 1.8px solid var(--text3);
+    border-bottom: 1.8px solid var(--text3);
+    transform: rotate(45deg);
+    transition: transform .2s var(--ease-out);
+}
+
+body[data-design-mode="focus"] .auth-network.is-open .auth-network-head::after {
+    margin-top: 3px;
+    transform: rotate(-135deg);
+}
+
+body[data-design-mode="focus"] .auth-network-row,
+body[data-design-mode="focus"] .auth-network-help {
+    display: none;
+}
+
+body[data-design-mode="focus"] .auth-network.is-open .auth-network-row {
+    display: flex;
+    margin-top: 8px;
+}
+
+body[data-design-mode="focus"] .auth-network.is-open .auth-network-help {
+    display: block;
+    margin-top: 8px;
+    color: var(--text3);
+    text-align: center;
+}
+
+body[data-design-mode="focus"] .auth-network.is-open .auth-input {
+    height: 44px;
+    min-height: 44px;
+    font-size: 14px;
+}
+
+/* Узкое окно: одна колонка, от витрины остаётся только бренд над формой. */
+@media (max-width: 980px) {
+    body[data-design-mode="focus"] .auth-overlay {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    body[data-design-mode="focus"] .auth-showcase {
+        display: block;
+        margin: calc(var(--titlebar-h, 38px) + 28px) auto 0;
+        width: min(clamp(400px, 34vw, 500px), calc(100% - 56px));
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: none;
+    }
+
+    body[data-design-mode="focus"] .auth-art {
+        display: none;
+    }
+
+    body[data-design-mode="focus"] .auth-card {
+        justify-content: flex-start;
+        padding-top: 28px;
+    }
+}
+
+@media (max-width: 760px) {
+    body[data-design-mode="focus"] .auth-showcase {
+        margin-top: calc(var(--m-safe-top) + 32px);
+        width: auto;
+        margin-inline: 20px;
+    }
+
+    body[data-design-mode="focus"] .auth-showcase-brand {
+        font-size: 30px;
+    }
+
+    body[data-design-mode="focus"] .auth-card {
+        padding: 24px 20px calc(var(--m-safe-bottom) + 28px);
+    }
+
+    body[data-design-mode="focus"] .auth-footer {
+        grid-template-columns: 1fr;
+    }
+
+    body[data-design-mode="focus"] .auth-network {
+        position: static;
+        order: 4;
+        width: auto;
+        margin-top: 8px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .auth-art .aa-float,
+    .auth-art .aa-typing,
+    body[data-design-mode="focus"] .auth-showcase {
+        animation: none;
+    }
+}
+
+/* ── Шапка чата, пока звонок звонит (renderChatHeaderCallState) ──────────
+   Карточки звонка на пол-экрана нет: шапка той же высоты сама становится
+   звонком — аватар пульсирует, как во входящей строке, под именем статус,
+   на месте трубки и камеры — «Отклонить / Принять» или «Отменить». */
+.chat-hdr-callctl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chat-hdr.is-ringing .chat-call-btn {
+    display: none !important;
+}
+
+.chat-hdr.is-ringing .chat-hdr-ava {
+    animation: voice-ring-wave 1.5s ease-out infinite;
+}
+
+.chat-hdr.is-ringing .chat-hdr-sub {
+    display: none;
+}
+
+.chat-hdr-callnote {
+    margin-top: 2px;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.chat-hdr-callctl .voice-incoming-btn {
+    height: 32px;
+    padding: 0 14px 0 10px;
+    font-size: 13px;
+}
+
+.chat-hdr-callctl .voice-incoming-btn .call-ctrl-icon {
+    width: 16px;
+    height: 16px;
+}
+
+@media (max-width: 760px) {
+    .chat-hdr-callctl .voice-incoming-btn {
+        width: 38px;
+        height: 38px;
+        padding: 0;
+        justify-content: center;
+    }
+
+    .chat-hdr-callctl .voice-incoming-btn span {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chat-hdr.is-ringing .chat-hdr-ava {
+        animation: none;
+    }
+}
+
+/* Кнопка «Отправить диагностику» под журналом (diagnostic_reports.js). */
+.settings-diag-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-top: 12px;
+}
+
+.settings-diag-row .settings-help {
+    flex: 1 1 220px;
+    margin: 0;
+}
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -11447,6 +14598,11 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                 </div>
             </div>
             <div class="tb-r">
+                <!-- Компактный идущий звонок: таймер (открывает звонок), микрофон,
+                     звук, «сбросить». Заполняет renderVoiceCallStrip()
+                     (web/src/interface/voice_ui.js); на Windows переезжает в .tb-l —
+                     подальше от кнопок окна (bindWindowChromeEvents). -->
+                <div class="tb-call" id="tbCall" hidden></div>
                 <div class="ws-pill" id="wsPill">
                     <span class="ws-dot" id="wsDot"></span>
                     <span id="wsLabel">Подключение...</span>
@@ -11542,8 +14698,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                         <div class="chat-hdr-info">
                             <div class="chat-hdr-name" id="chatHdrName">Alice</div>
                             <div class="chat-hdr-sub" id="chatHdrSub">Личное сообщение</div>
+                            <!-- Пока звонок звонит, шапка сама становится звонком: статус
+                                 здесь, кнопки — в #chatHdrCallCtl на месте трубки и камеры
+                                 (renderChatHeaderCallState, voice_ui.js). -->
+                            <div class="chat-hdr-callnote" id="chatHdrCallNote" hidden></div>
                         </div>
                         <div class="chat-hdr-actions">
+                            <div class="chat-hdr-callctl" id="chatHdrCallCtl" hidden></div>
                             <button class="server-settings-btn chat-call-btn" id="chatCallBtn" type="button" title="Позвонить" aria-label="Позвонить" hidden>
                                 <svg class="ui-icon ui-icon-phone" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.25" stroke-linejoin="round"/>
@@ -11694,7 +14855,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="profile">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Profile</span>
@@ -11716,7 +14877,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="navigation">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Interface v2</span>
@@ -11746,7 +14907,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="design">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Тема интерфейса</span>
@@ -11760,7 +14921,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="cache">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Storage</span>
@@ -11777,7 +14938,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="audio">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Voice</span>
@@ -11802,7 +14963,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="notify-sound">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Notifications</span>
@@ -11819,7 +14980,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card" id="autostartSettingsCard" hidden>
+                            <section class="settings-card" id="autostartSettingsCard" hidden data-settings-section="autostart">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Windows</span>
@@ -11839,7 +15000,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="updates">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">App</span>
@@ -11853,7 +15014,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
                             </section>
 
-                            <section class="settings-card">
+                            <section class="settings-card" data-settings-section="voice-trace">
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Debug</span>
@@ -11874,7 +15035,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
                             <div class="settings-grid">
                                 <div class="settings-column">
-                                    <section class="settings-card">
+                                    <section class="settings-card" data-settings-section="theme">
                                         <div class="settings-card-head">
                                             <div>
                                                 <span class="settings-kicker">Styler</span>
@@ -11899,7 +15060,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                 </div>
 
                                 <div class="settings-column">
-                                    <section class="settings-card settings-card--logs">
+                                    <section class="settings-card settings-card--logs" data-settings-section="logs">
                                         <div class="settings-card-head settings-card-head--tight">
                                             <div>
                                                 <span class="settings-kicker">Telemetry</span>
@@ -11908,9 +15069,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                             <button class="btn-flat" id="clearLogs" type="button">Очистить</button>
                                         </div>
                                         <div class="log-body settings-log-body" id="logBody"></div>
+                                        <!-- Снимок состояния на сервер (diagnostic_reports.js). Номер
+                                             отчёта показывается здесь — его называют, описывая проблему. -->
+                                        <div class="settings-diag-row">
+                                            <button class="btn-flat" id="sendDiagnosticsBtn" type="button">Отправить диагностику</button>
+                                            <span class="settings-help" id="sendDiagnosticsNote">Журнал, трасса и состояние соединения уйдут разработчику. Содержимое переписки и ключи не отправляются.</span>
+                                        </div>
                                     </section>
 
-                                    <section class="settings-card">
+                                    <section class="settings-card" data-settings-section="crypto">
                                         <div class="settings-card-head">
                                             <div>
                                                 <span class="settings-kicker">Security</span>
@@ -11941,7 +15108,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                         </div>
                                     </section>
 
-                                    <section class="settings-card settings-card--danger">
+                                    <section class="settings-card settings-card--danger" data-settings-section="session">
                                         <div class="settings-card-head">
                                             <div>
                                                 <span class="settings-kicker">Account</span>
@@ -11955,6 +15122,19 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                                     </section>
                                 </div>
                             </div>
+
+                            <!-- Заголовки групп. Видны только в оформлении «Фокус»: там
+                                 .settings-grid/.settings-column становятся display:contents,
+                                 все карточки — соседями в одной колонке, и CSS-свойство
+                                 order раскладывает их по группам под этими заголовками
+                                 (раздел «DESIGN MODE: FOCUS» в style.css). В остальных
+                                 режимах — display:none, раскладка прежняя. -->
+                            <h2 class="settings-group-title" data-settings-group="profile">Профиль</h2>
+                            <h2 class="settings-group-title" data-settings-group="appearance">Оформление</h2>
+                            <h2 class="settings-group-title" data-settings-group="sound">Звук и звонки</h2>
+                            <h2 class="settings-group-title" data-settings-group="account">Аккаунт и безопасность</h2>
+                            <h2 class="settings-group-title" data-settings-group="app">Приложение</h2>
+                            <h2 class="settings-group-title" data-settings-group="dev">Для разработчиков</h2>
                         </div>
                     </div>
                 </div>
@@ -12469,6 +15649,74 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 
     <div class="auth-overlay visible" id="authOverlay">
+        <!-- Витрина слева — только в полноэкранном входе оформления «Фокус»
+             (в остальных скрыта): бренд и иллюстрация, чисто декоративная. -->
+        <aside class="auth-showcase" aria-hidden="true">
+            <div class="auth-showcase-brand">ZaliMessenger</div>
+            <svg class="auth-art" viewBox="28 16 520 408" role="presentation" focusable="false">
+                <ellipse class="aa-orbit" cx="280" cy="230" rx="250" ry="168"/>
+                <ellipse class="aa-orbit" cx="280" cy="230" rx="186" ry="122"/>
+                <g class="aa-spark">
+                    <path d="M86 92l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+                    <path d="M500 214l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                    <path d="M120 392l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                </g>
+                <g class="aa-dots">
+                    <circle cx="470" cy="34" r="4"/><circle cx="52" cy="300" r="5"/>
+                    <circle cx="538" cy="330" r="3"/><circle cx="210" cy="24" r="3"/>
+                </g>
+                <!-- окно переписки -->
+                <g class="aa-window">
+                    <rect class="aa-card" x="150" y="54" width="262" height="330" rx="30"/>
+                    <circle class="aa-lime" cx="190" cy="96" r="18"/>
+                    <path class="aa-ink-line" d="M183 101c2.5 3 11.5 3 14 0M184 90h.01M196 90h.01"/>
+                    <rect class="aa-txt" x="218" y="84" width="96" height="10" rx="5"/>
+                    <rect class="aa-txt aa-txt--dim" x="218" y="101" width="58" height="8" rx="4"/>
+                    <path class="aa-hair" d="M150 134h262"/>
+                    <rect class="aa-bubble" x="172" y="152" width="156" height="44" rx="18"/>
+                    <rect class="aa-txt" x="188" y="166" width="112" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="188" y="179" width="72" height="7" rx="3.5"/>
+                    <rect class="aa-lime" x="234" y="210" width="156" height="44" rx="18"/>
+                    <rect class="aa-ink" x="250" y="224" width="106" height="7" rx="3.5"/>
+                    <rect class="aa-ink aa-ink--soft" x="250" y="237" width="64" height="7" rx="3.5"/>
+                    <rect class="aa-bubble" x="172" y="268" width="118" height="44" rx="18"/>
+                    <rect class="aa-txt" x="188" y="282" width="84" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="188" y="295" width="50" height="7" rx="3.5"/>
+                    <rect class="aa-bubble" x="172" y="326" width="74" height="36" rx="18"/>
+                    <circle class="aa-typing" cx="193" cy="344" r="4.5"/>
+                    <circle class="aa-typing" cx="209" cy="344" r="4.5"/>
+                    <circle class="aa-typing" cx="225" cy="344" r="4.5"/>
+                </g>
+                <!-- звонок -->
+                <g class="aa-float aa-float--b">
+                    <rect class="aa-pill" x="40" y="172" width="168" height="62" rx="31"/>
+                    <circle class="aa-lime" cx="73" cy="203" r="21"/>
+                    <path class="aa-ink-line" d="M66.5 194.5c-1.4 0-2.6 1.3-2.3 2.8 1.4 7.3 6.4 12.4 13.7 13.8 1.5.3 2.8-.9 2.8-2.3v-2.5c0-1-.7-1.9-1.7-2.1l-2.9-.6c-.8-.2-1.6.1-2.1.7l-1 1.2c-2.4-1.2-4.4-3.2-5.6-5.6l1.2-1c.6-.5.9-1.3.7-2.1l-.6-2.9c-.2-1-1.1-1.7-2.1-1.7z"/>
+                    <path class="aa-wave" d="M108 203v0M120 195v16M132 188v30M144 197v12M156 191v24M168 199v8M180 195v16"/>
+                </g>
+                <!-- замок -->
+                <g class="aa-float aa-float--a">
+                    <circle class="aa-ring" cx="420" cy="92" r="54"/>
+                    <circle class="aa-lime" cx="420" cy="92" r="40"/>
+                    <rect class="aa-ink-line" x="403" y="88" width="34" height="26" rx="7"/>
+                    <path class="aa-ink-line" d="M409 88v-7a11 11 0 0 1 22 0v7"/>
+                    <path class="aa-ink-line" d="M420 98v6"/>
+                </g>
+                <!-- монеты -->
+                <g class="aa-float aa-float--c">
+                    <path class="aa-coin-side" d="M386 362v14c0 8.3 19.7 15 44 15s44-6.7 44-15v-14"/>
+                    <path class="aa-coin-side" d="M386 344v14c0 8.3 19.7 15 44 15s44-6.7 44-15v-14"/>
+                    <path class="aa-coin-side" d="M386 326v14c0 8.3 19.7 15 44 15s44-6.7 44-15v-14"/>
+                    <ellipse class="aa-coin-top" cx="430" cy="326" rx="44" ry="15"/>
+                    <path class="aa-ink-line" d="M420 320h20l-20 12h20"/>
+                    <g transform="rotate(-24 494 268)">
+                        <ellipse class="aa-coin-top" cx="494" cy="268" rx="22" ry="22"/>
+                        <circle class="aa-ink-line" cx="494" cy="268" r="15"/>
+                        <path class="aa-ink-line" d="M488 262h12l-12 12h12"/>
+                    </g>
+                </g>
+            </svg>
+        </aside>
         <div class="auth-card">
             <div class="auth-brand">ZaliMessenger</div>
             <h1 id="authTitle">Вход в аккаунт</h1>
@@ -12481,7 +15729,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
                     <button id="authLoginBtn" class="auth-btn primary" type="submit">Войти</button>
                 </div>
                 <div class="auth-network">
-                    <div class="auth-network-head">
+                    <div class="auth-network-head" id="authNetworkHead" role="button" tabindex="0" aria-expanded="false">
                         <div class="auth-network-title">Адрес сервера</div>
                         <div class="auth-network-note" id="authNetworkNote">Автоматически подставляется из настроек</div>
                     </div>
@@ -12617,7 +15865,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             join: (code) => apiRoute(`/invites/${encodeURIComponent(code)}/join`),
         },
         messages: {
-            direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
+            // `inlineArchives`: небольшие архивы прямо в ответе (server/src/messages.rs).
+            direct: (user, { inlineArchives = false, limit = 0, offset = 0 } = {}) => apiRoute(`/messages/${encodeURIComponent(user)}?${[limit ? `limit=${limit}&offset=${offset}` : '', inlineArchives ? 'inlineArchives=true' : ''].filter(Boolean).join('&')}`.replace(/\?$/, '')),
             reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
             remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
             edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
@@ -12630,7 +15879,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             byId: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}`),
             channels: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels`),
             channel: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}`),
-            channelMessages: (serverId, channelId, limit, offset) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}`),
+            channelMessages: (serverId, channelId, limit, offset, { inlineArchives = false } = {}) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}${inlineArchives ? '&inlineArchives=true' : ''}`),
             assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
             members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
             member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
@@ -12673,6 +15922,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         },
         diagnostics: {
             decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
+            // Общие отчёты (вручную и при сбоях) — diagnostic_reports.js.
+            report: apiRoute('/diagnostics/report'),
         },
     });
 
@@ -13269,6 +16520,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         }
 
         function takeBits(n) {
+"""#,
+    #"""
             if (n === 0) return 0;
             needBits(n);
             const value = bitBuffer & ((1 << n) - 1);
@@ -13284,8 +16537,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
             for (let len = 1; len <= MAX_BITS; len += 1) {
                 code |= takeBits(1);
                 const count = table.count[len];
-"""#,
-    #"""
                 if (code - first < count) return table.symbols[index + (code - first)];
                 index += count;
                 first = (first + count) << 1;
@@ -14470,7 +17721,7 @@ const DefaultApiRoutes = Object.freeze({
         join: (code) => apiRoute(`/invites/${encodeURIComponent(code)}/join`),
     },
     messages: {
-        direct: (user) => apiRoute(`/messages/${encodeURIComponent(user)}`),
+        direct: (user, { inlineArchives = false, limit = 0, offset = 0 } = {}) => apiRoute(`/messages/${encodeURIComponent(user)}?${[limit ? `limit=${limit}&offset=${offset}` : '', inlineArchives ? 'inlineArchives=true' : ''].filter(Boolean).join('&')}`.replace(/\?$/, '')),
         reaction: (id) => apiRoute(`/message/${encodeURIComponent(id)}/reaction`),
         remove: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
         edit: (id) => apiRoute(`/message/${encodeURIComponent(id)}`),
@@ -14483,7 +17734,7 @@ const DefaultApiRoutes = Object.freeze({
         byId: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}`),
         channels: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels`),
         channel: (serverId, channelId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}`),
-        channelMessages: (serverId, channelId, limit, offset) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}`),
+        channelMessages: (serverId, channelId, limit, offset, { inlineArchives = false } = {}) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}${inlineArchives ? '&inlineArchives=true' : ''}`),
         assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
         members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
         member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
@@ -14526,6 +17777,7 @@ const DefaultApiRoutes = Object.freeze({
     },
     diagnostics: {
         decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
+            report: apiRoute('/diagnostics/report'),
     },
 });
 
@@ -14800,6 +18052,61 @@ const ZALI_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 const ZALI_ESCAPE_PATTERN = /[&<>"']/g;
 const ZALI_ESCAPE_PROBE = /[&<>"']/;
 
+// Форматтеры дат создаются один раз. toLocaleTimeString()/toLocaleDateString()
+// с локалью и опциями строят новый ICU-форматтер на КАЖДЫЙ вызов, а отрисовка
+// списка сообщений зовёт их по три-пять раз на пузырь: замер на 78 пузырях —
+// 5 из 5,8 мс кадра уходило на даты. Intl.DateTimeFormat с теми же локалью и
+// опциями даёт ту же строку (toLocale*String по спецификации делегирует ему).
+// Результаты дополнительно запоминаются по исходному значению метки времени:
+// перерисовка того же списка просит те же самые строки.
+// Форматтер запоминает часовой пояс на момент создания, поэтому раз в минуту
+// пояс сверяется заново: сменили пояс системы — форматтеры и память
+// пересоздаются, как это неявно делал toLocale*String().
+const ZALI_FORMAT_MEMO_LIMIT = 4096;
+const ZALI_TZ_RECHECK_MS = 60 * 1000;
+let zaliTimeFormat = null;
+let zaliDayMonthFormat = null;
+let zaliFormatTimeZone = '';
+let zaliFormatCheckedAt = 0;
+const zaliTimeMemo = new Map();
+const zaliDayMonthMemo = new Map();
+
+function zaliEnsureFormatters() {
+    const nowMs = Date.now();
+    if (zaliTimeFormat && nowMs - zaliFormatCheckedAt < ZALI_TZ_RECHECK_MS) return;
+    zaliFormatCheckedAt = nowMs;
+    let zone = '';
+    try { zone = new Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { zone = ''; }
+    if (zaliTimeFormat && zone === zaliFormatTimeZone) return;
+    zaliFormatTimeZone = zone;
+    zaliTimeFormat = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    zaliDayMonthFormat = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
+    zaliTimeMemo.clear();
+    zaliDayMonthMemo.clear();
+}
+
+function zaliMemoFormat(memo, key, compute) {
+    let value = memo.get(key);
+    if (value === undefined) {
+        if (memo.size >= ZALI_FORMAT_MEMO_LIMIT) memo.clear();
+        value = compute();
+        memo.set(key, value);
+    }
+    return value;
+}
+
+// Сравнение имён в сайдбаре. localeCompare() с локалью и опциями строит
+// коллатор на каждое сравнение — а сортировка контактов делает их n·log n на
+// каждую перерисовку сайдбара. Тот же коллатор, созданный один раз, сравнивает
+// так же.
+const ZALI_NAME_COLLATOR = new Intl.Collator('ru', { sensitivity: 'base' });
+
+// Номер локального календарного дня — то же сравнение, что toDateString(),
+// без построения строк.
+function zaliLocalDayIndex(date) {
+    return date.getFullYear() * 400 + date.getMonth() * 32 + date.getDate();
+}
+
 ZaliMixin(ZaliInterface, class {
 
     // --- HTML Helper Utilities ---
@@ -14873,8 +18180,15 @@ ZaliMixin(ZaliInterface, class {
 
     fmtTime(iso) {
         if (!iso) return '';
-        try { return new Date(iso).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}); }
-        catch(e) { return ''; }
+        zaliEnsureFormatters();
+        return zaliMemoFormat(zaliTimeMemo, iso, () => {
+            const date = new Date(iso);
+            // Невалидная дата: форматтер бросает RangeError там, где
+            // toLocaleTimeString() вернул бы строку «Invalid Date».
+            if (Number.isNaN(date.getTime())) return 'Invalid Date';
+            try { return zaliTimeFormat.format(date); }
+            catch(e) { return ''; }
+        });
     }
 
     // Numbers are handled explicitly, not as an afterthought: the browser
@@ -14914,26 +18228,50 @@ ZaliMixin(ZaliInterface, class {
     // Messages are appended chronologically, so the newest timestamp lives at the
     // tail; scan backwards over a small bounded tail to stay tolerant of the slight
     // out-of-order that reconciliation can leave behind, and stop there.
+    //
+    // The answer is memoised per conversation against the identity of those tail
+    // message objects. Messages are never mutated in place (every edit/reconcile
+    // replaces the object), so identical references mean identical timestamps —
+    // and one incoming message then costs one conversation's re-scan, not
+    // Date.parse × 24 × every contact on each sidebar paint.
     conversationLastMessageAt(peer) {
         const msgs = Array.isArray(this.S.chats?.[peer]) ? this.S.chats[peer] : [];
         const TAIL_SCAN = 24;
+        const memoMap = this._lastMessageAtMemo || (this._lastMessageAtMemo = new WeakMap());
+        const tailStart = Math.max(0, msgs.length - TAIL_SCAN);
+        const memo = memoMap.get(msgs);
+        if (memo && memo.length === msgs.length) {
+            let same = true;
+            for (let i = tailStart, j = 0; i < msgs.length; i += 1, j += 1) {
+                if (memo.tail[j] !== msgs[i]) { same = false; break; }
+            }
+            if (same) return memo.value;
+        }
         let lastTs = 0;
-        let scanned = 0;
-        for (let i = msgs.length - 1; i >= 0 && scanned < TAIL_SCAN; i -= 1, scanned += 1) {
+        for (let i = msgs.length - 1; i >= tailStart; i -= 1) {
             const ts = this.messageTimestampValue(msgs[i]?.timestamp);
             if (ts > lastTs) lastTs = ts;
         }
+        memoMap.set(msgs, { length: msgs.length, tail: msgs.slice(tailStart), value: lastTs });
         return lastTs;
+    }
+
+    compareContactNames(a, b) {
+        return ZALI_NAME_COLLATOR.compare(a, b);
     }
 
     fmtDate(iso) {
         if (!iso) return '';
         try {
-            const messageDate = new Date(iso), now = new Date();
-            const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-            if (messageDate.toDateString() === now.toDateString())       return 'Сегодня';
-            if (messageDate.toDateString() === yesterday.toDateString()) return 'Вчера';
-            return messageDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
+            const messageDate = new Date(iso);
+            if (Number.isNaN(messageDate.getTime())) return 'Invalid Date';
+            zaliEnsureFormatters();
+            const now = new Date();
+            const yesterday = new Date(now); yesterday.setDate(yesterday.getDate()-1);
+            const day = zaliLocalDayIndex(messageDate);
+            if (day === zaliLocalDayIndex(now))       return 'Сегодня';
+            if (day === zaliLocalDayIndex(yesterday)) return 'Вчера';
+            return zaliMemoFormat(zaliDayMonthMemo, day, () => zaliDayMonthFormat.format(messageDate));
         } catch(e) { return ''; }
     }
 });
@@ -15128,6 +18466,7 @@ ZaliMixin(ZaliInterface, class {
 
         this.scheduleAvatarRefreshPolling();
         this.scheduleConversationSyncPolling();
+        this.installDiagnosticAutoReports();
     }
 
     scheduleAvatarRefreshPolling() {
@@ -15153,7 +18492,16 @@ ZaliMixin(ZaliInterface, class {
         }
 
         const hasNativeWs = this.nativeSupports('sendMessage');
-        const delay = document.hidden || hasNativeWs ? 5 * 60 * 1000 : 15 * 1000;
+        // Опрос — страховка на случай, когда реального времени нет. Пока сокет
+        // браузера жив (S.wsOn — у него свой сторож полуоткрытого соединения,
+        // voice_transport.js), каждое сообщение и так приходит пушем, а всё
+        // пропущенное за обрыв подтягивает догонялка в setConnectionStatus.
+        // Раньше браузер всё равно раз в 15 с перекачивал историю открытого чата
+        // и слал POST claim ключа — 8 запросов в минуту на ничего. Сокет упал —
+        // setConnectionStatus перезапускает этот таймер, и опрос снова частый.
+        const delay = document.hidden || hasNativeWs
+            ? 5 * 60 * 1000
+            : (this.S.wsOn ? 2 * 60 * 1000 : 15 * 1000);
         this.messageSyncTimer = setTimeout(() => {
             this.messageSyncTimer = null;
             this.syncActiveConversation({ force: !document.hidden && !hasNativeWs });
@@ -15208,6 +18556,12 @@ ZaliMixin(ZaliInterface, class {
     // console call — same lines, same order, one hop.
     trace(message) {
         const line = `[ZALI][WEB] ${message}`;
+        // Хвост трассы — в диагностический отчёт (diagnostic_reports.js). На
+        // браузере и Android это единственное место, где он вообще хранится.
+        // Метка — performance.now() в мс: без Date и строки времени на каждый
+        // вызов (трасса идёт пачками на горячих путях). В отчёте к ней приложен
+        // performance.timeOrigin (collectDiagnosticsSnapshot).
+        this.pushDiagRing('_traceRing', `${Math.round(performance.now())} ${message}`);
         this._traceBuffer = this._traceBuffer || [];
         this._traceBuffer.push(line);
         if (this._traceBuffer.length >= 64) {
@@ -16207,6 +19561,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (cv) cv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         this.setMobileSidebarOpen(showList);
         this.renderServerToolbar();
         this.renderHubSegmentNav();
@@ -16225,6 +19581,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (sv) sv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Настройки';
         this.applyNetworkConfigToInputs();
@@ -16258,6 +19616,8 @@ ZaliMixin(ZaliInterface, class {
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (hv) hv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Хаб';
         this.closeMobileSidebar();
@@ -16278,6 +19638,8 @@ ZaliMixin(ZaliInterface, class {
         if (hv) hv.classList.remove('active');
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.add('active');
+        // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
+        this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'ZaliCoin';
         this.closeMobileSidebar();
@@ -17335,6 +20697,8 @@ ZaliMixin(ZaliInterface, class {
     async claimCoinGift(id) {
         const store = this.coinGiftStore();
         if (!id || store.pending.has(id)) return;
+"""#,
+    #"""
         store.pending.set(id, 'claim');
         store.notes.delete(id);
         this.patchCoinGiftCards(id);
@@ -17470,8 +20834,6 @@ ZaliMixin(ZaliInterface, class {
         const modal = document.getElementById('treasuryModal');
         if (!sid || !modal) return;
         // Модалка живёт в <body>, а не внутри .main: ПКМ по серверу на телефоне
-"""#,
-    #"""
         // открывается с экрана-списка, где .main уехал за край вместе со всем, что в нём.
         if (modal.parentElement !== document.body) document.body.appendChild(modal);
         this.bindTreasuryModalEvents();
@@ -17932,7 +21294,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // ============================================================
-    // DESIGN MODE — оформление интерфейса целиком: classic | flat.
+    // DESIGN MODE — оформление интерфейса целиком: classic | flat | focus.
     //
     // Раньше это был одиночный чекбокс «плоский режим»
     // (`zali_experimental_design_v1`, атрибут `data-experimental-design`).
@@ -17952,6 +21314,12 @@ ZaliMixin(ZaliInterface, class {
         return [
             { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
             { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+            // «Фокус» — не очередная перекраска, а другая иерархия: акцент
+            // остаётся только у «моего» (исходящие, мой аватар), «нового»
+            // (непрочитанное) и главного действия (отправить), служебное
+            // прячется до наведения или до проблемы. Слой CSS — в конце
+            // web/style.css, раздел «DESIGN MODE: FOCUS».
+            { id: 'focus', label: 'Фокус', note: 'focus', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
         ];
     }
 
@@ -17993,6 +21361,11 @@ ZaliMixin(ZaliInterface, class {
         // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
         const legacyToggle = document.getElementById('inputExperimentalDesign');
         if (legacyToggle) legacyToggle.checked = !!this.experimentalDesign;
+        // Высоту поля ввода resizeComposer() пишет инлайном по scrollHeight,
+        // а отступы поля у режимов разные: при старте он отрабатывает раньше
+        // applyDesignMode(), и без пересчёта поле оставалось на 3px ниже
+        // своего содержимого — с полосой прокрутки внутри.
+        this.resizeComposer?.();
         this.renderDesignModeSettings();
     }
 
@@ -18581,6 +21954,20 @@ ZaliMixin(ZaliInterface, class {
         const nav = document.getElementById('hubSegmentNav');
         if (!nav) return;
         const previousActive = nav.querySelector('.hub-segment-btn.active');
+        // Активный сегмент не сменился (переход между личками, входящее
+        // сообщение): кнопки трогать незачем, а чтение offsetLeft ниже —
+        // принудительная синхронная раскладка документа, который вызывающий
+        // только что поменял (switchChat → setNavMode). Сверка индикатора с
+        // положением кнопки откладывается в кадр, где раскладка и так будет.
+        if (previousActive && String(previousActive.getAttribute('data-hub-segment') || '') === active) {
+            if (!this._hubIndicatorSyncRaf) {
+                this._hubIndicatorSyncRaf = requestAnimationFrame(() => {
+                    this._hubIndicatorSyncRaf = 0;
+                    this.resyncHubSegmentIndicator();
+                });
+            }
+            return;
+        }
         const previousPosition = previousActive
             ? {
                 x: previousActive.offsetLeft,
@@ -18604,6 +21991,7 @@ ZaliMixin(ZaliInterface, class {
             if (withTransition) indicator.style.transition = '';
             indicator.style.width = `${activeBtn.offsetWidth}px`;
             indicator.style.transform = `translate3d(${activeBtn.offsetLeft}px, 0, 0)`;
+            indicator.dataset.target = `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`;
         };
         const samePosition = previousPosition
             && Math.abs(Number(previousPosition.x || 0) - activeBtn.offsetLeft) < 0.5
@@ -18621,6 +22009,19 @@ ZaliMixin(ZaliInterface, class {
                 indicator.style.transition = '';
             });
         }
+    }
+
+    // Индикатор уже стоит (или едет) туда, где активная кнопка, — ничего не
+    // делать: мгновенная пересинхронизация оборвала бы идущий переезд. Иначе
+    // (кнопка сдвинулась — сменилась ширина окна, набор сегментов) — поставить
+    // на место без анимации.
+    resyncHubSegmentIndicator() {
+        const nav = document.getElementById('hubSegmentNav');
+        const indicator = nav?.querySelector('.hub-segment-indicator');
+        const activeBtn = nav?.querySelector('.hub-segment-btn.active');
+        if (!indicator || !activeBtn) return;
+        if (indicator.dataset.target === `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`) return;
+        this.syncHubSegmentIndicator(null);
     }
 
     renderUiV2Settings() {
@@ -19140,9 +22541,12 @@ ZaliMixin(ZaliInterface, class {
             normalized[peer].sort((a, b) => this.compareMessagesByTime(a, b));
         });
 
-        const before = JSON.stringify(this.S.chats || {});
-        const after = JSON.stringify(normalized);
-        if (before !== after) {
+        // Порядок ключей и сообщений сравнивается по ссылкам, а не через
+        // JSON.stringify() обоих хранилищ: normalized собран из тех же объектов
+        // сообщений, так что одинаковые ссылки в одинаковом порядке — ровно
+        // «ничего не сдвинулось». Две полные сериализации истории стоили ~12 мс
+        // на 22 тыс. сообщений при каждом входе и каждой синхронизации истории.
+        if (!this.sameChatStoreLayout(this.S.chats || {}, normalized)) {
             this.S.chats = normalized;
             this.saveStoredMessageCache();
             this.trace(`normalizeDmChatStore changed peers=${Object.keys(normalized).length}`);
@@ -19151,6 +22555,23 @@ ZaliMixin(ZaliInterface, class {
 
         this.S.chats = normalized;
         return changed;
+    }
+
+    sameChatStoreLayout(before, after) {
+        const beforeKeys = Object.keys(before);
+        const afterKeys = Object.keys(after);
+        if (beforeKeys.length !== afterKeys.length) return false;
+        for (let i = 0; i < beforeKeys.length; i += 1) {
+            const key = beforeKeys[i];
+            if (key !== afterKeys[i]) return false;
+            const a = before[key];
+            const b = after[key];
+            if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+            for (let j = 0; j < a.length; j += 1) {
+                if (a[j] !== b[j]) return false;
+            }
+        }
+        return true;
     }
 
     loadStoredCurrentContact() {
@@ -21510,9 +24931,16 @@ ZaliMixin(ZaliInterface, class {
             // conversation has no key yet", so the client invented a fresh random key
             // and encrypted real messages with it. Losing key material is strictly
             // worse than storing it at rest in a store the same origin already owns.
-            const readStore = (store) => {
+            const storageKey = this.conversationKeysStorageKey();
+            const readRaw = (store) => {
                 try {
-                    const raw = store.getItem(this.conversationKeysStorageKey());
+                    return store.getItem(storageKey);
+                } catch (e) {
+                    return null;
+                }
+            };
+            const parseRaw = (raw) => {
+                try {
                     if (!raw) return null;
                     const parsed = JSON.parse(raw);
                     return parsed && typeof parsed === 'object' ? parsed : null;
@@ -21520,12 +24948,36 @@ ZaliMixin(ZaliInterface, class {
                     return null;
                 }
             };
-            const injected = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
+            const injectedRef = this.injectedMaterialMatchesAccount() && window.__ZALI_CONVERSATION_KEYS && typeof window.__ZALI_CONVERSATION_KEYS === 'object'
                 ? window.__ZALI_CONVERSATION_KEYS
-                : {};
-            const persisted = readStore(localStorage);
-            const session = readStore(sessionStorage);
-            if (!persisted && !session) return this.canonicalizeConversationKeyScopes(injected);
+                : null;
+            const injected = injectedRef || {};
+"""#,
+    #"""
+            const rawLocal = readRaw(localStorage);
+            const rawSession = readRaw(sessionStorage);
+            // Результат запоминается против того, из чего он собран: двух сырых строк
+            // хранилищ и ссылки на внедрённую шеллом карту (её только переприсваивают,
+            // на месте не меняют). Совпало всё — слияние дало бы то же самое, и
+            // записывать нечего. Раньше каждый из ~30 вызовов (переключение чата,
+            // отрисовка шапки, отправка) заново разбирал JSON обоих хранилищ,
+            // канонизировал все scope и сериализовал карту обратно для сравнения.
+            // Отдаётся копия: вызывающие дописывают в карту ключи перед сохранением.
+            const memo = this._conversationKeysMemo;
+            if (memo
+                && memo.storageKey === storageKey
+                && memo.rawLocal === rawLocal
+                && memo.rawSession === rawSession
+                && memo.injected === injectedRef) {
+                return { ...memo.value };
+            }
+            const remember = (value) => {
+                this._conversationKeysMemo = { storageKey, rawLocal, rawSession, injected: injectedRef, value: { ...value } };
+                return value;
+            };
+            const persisted = parseRaw(rawLocal);
+            const session = parseRaw(rawSession);
+            if (!persisted && !session) return remember(this.canonicalizeConversationKeyScopes(injected));
             // sessionStorage last: within one session it is the freshest writer.
             const merged = this.canonicalizeConversationKeyScopes({
                 ...injected,
@@ -21541,15 +24993,24 @@ ZaliMixin(ZaliInterface, class {
             // there. The write still has to happen when it changes something (a legacy
             // scope folded onto its canonical form, or one store ahead of the other),
             // because a key filed under a name nobody looks up is a key that is lost.
+            let wrote = false;
             try {
                 const encoded = JSON.stringify(merged || {});
                 if (encoded !== this._lastConversationKeysEncoded) {
-                    sessionStorage.setItem(this.conversationKeysStorageKey(), encoded);
-                    localStorage.setItem(this.conversationKeysStorageKey(), encoded);
+                    wrote = true;
+                    sessionStorage.setItem(storageKey, encoded);
+                    localStorage.setItem(storageKey, encoded);
                     this._lastConversationKeysEncoded = encoded;
                 }
             } catch (e) {}
-            return merged && typeof merged === 'object' ? merged : {};
+            const result = merged && typeof merged === 'object' ? merged : {};
+            // После записи сырые строки уже другие — запоминать нечего, следующий
+            // вызов соберёт карту из записанного и запомнит её.
+            if (wrote) {
+                this._conversationKeysMemo = null;
+                return result;
+            }
+            return remember(result);
         } catch (e) {
             return {};
         }
@@ -21737,8 +25198,6 @@ ZaliMixin(ZaliInterface, class {
         return new TextDecoder().decode(new Uint8Array(plain)).trim();
     }
 
-"""#,
-    #"""
     async saveVaultUnlockSecret(secret, token = null) {
         const passphrase = String(secret || '').trim();
         const guard = String(token || this.S.session?.token || '').trim();
@@ -22741,7 +26200,7 @@ ZaliMixin(ZaliInterface, class {
     // hundred and twenty directory round trips through a five-slot pool before it had
     // published anything. The envelope POSTs themselves are irreducible — one per key
     // per device — but the lookups are not.
-    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false } = {}) {
+    async publishConversationKeyEnvelopes({ recipient, scope, key, keys = null, reason = 'auto', excludeCurrentDevice = false, deviceDirectory = null } = {}) {
         const target = String(recipient || '').trim();
         const scoped = String(scope || '').trim();
         const secrets = Array.from(new Set(
@@ -22752,9 +26211,7 @@ ZaliMixin(ZaliInterface, class {
         if (!this.S.session?.token || !target || !scoped || !secrets.length) return false;
         try {
             await this.ensureDeviceCryptoIdentity();
-            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
-            if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
-            const devices = await res.json();
+            const devices = await this.fetchPublicDevicesOf(target, deviceDirectory);
             const selfDeviceId = String(this.currentDeviceId() || '');
             const usable = Array.isArray(devices)
                 ? devices.filter(device => !device?.revoked
@@ -22811,12 +26268,40 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto' } = {}) {
+    // Справочник устройств пользователя. Свип переотправки ключей
+    // (_retryPublishConversationKeysImpl) передаёт сюда свою Map, и ответ
+    // запоминается на время свипа: свип идёт по всем scope подряд и для КАЖДОГО
+    // публикует ключ своим устройствам — то есть запрашивал один и тот же список
+    // своих устройств столько раз, сколько
+    // у аккаунта переписок (замер: 104 одинаковых GET за 23 с после входа), в том
+    // же пятислотовом пуле, где ждут загрузка истории и конверты. Новое устройство,
+    // появившееся посреди свипа, ничего не теряет: его регистрация сама ставит
+    // хвостовой свип (retryPublishConversationKeys), и тот спросит список заново.
+    // Все остальные пути (ответ на запрос ключа от нового устройства, захват
+    // ключа) Map не передают и всегда спрашивают свежий список, как раньше.
+    // Ошибки не запоминаются.
+    async fetchPublicDevicesOf(target, memo = null) {
+        if (memo?.has(target)) return memo.get(target);
+        const pending = (async () => {
+            const res = await this.apiFetch(this.apiRoutes.devices.publicByUser(target));
+            if (!res.ok) throw new Error(await res.text().catch(() => 'Не удалось получить устройства контакта'));
+            return res.json();
+        })();
+        if (memo) {
+            memo.set(target, pending);
+            pending.catch(() => {
+                if (memo.get(target) === pending) memo.delete(target);
+            });
+        }
+        return pending;
+    }
+
+    async publishConversationKeyToPeer({ peer, scope, key, keys = null, reason = 'auto', deviceDirectory = null } = {}) {
         const recipient = String(peer || '').trim();
         // Self is not a peer: own devices go through publishConversationKeyToOwnDevices,
         // which excludes this device and reports separately.
         if (!recipient || recipient === this.myName()) return false;
-        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason });
+        return this.publishConversationKeyEnvelopes({ recipient, scope, key, keys, reason, deviceDirectory });
     }
 
     // The account's *other* devices need this key just as much as the peer's do,
@@ -22832,7 +26317,7 @@ ZaliMixin(ZaliInterface, class {
     // This widens nothing: each envelope is sealed to one of our own devices'
     // ECDH public keys, and the cloud vault already hands every own device the
     // full key set — this is the same reach over a channel that actually works.
-    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto' } = {}) {
+    async publishConversationKeyToOwnDevices({ scope, key, keys = null, reason = 'auto', deviceDirectory = null } = {}) {
         const me = String(this.myName() || '').trim();
         if (!me) return false;
         return this.publishConversationKeyEnvelopes({
@@ -22842,6 +26327,7 @@ ZaliMixin(ZaliInterface, class {
             keys,
             reason: `self:${reason}`,
             excludeCurrentDevice: true,
+            deviceDirectory,
         });
     }
 
@@ -23074,12 +26560,14 @@ ZaliMixin(ZaliInterface, class {
         // every login for every scope.
         const entries = scopes.map(scope => [scope, String(stored[scope] || '').trim()]);
         let published = 0;
+        // См. fetchPublicDevicesOf(): один запрос справочника на пользователя за свип.
+        const deviceDirectory = new Map();
         for (const [scope, key] of entries) {
             // Unconditional, and before the peer/channel split: this sweep is the
             // one path that can retroactively hand our other devices the keys they
             // never received, so it must cover every scope we hold — including
             // channel scopes and DMs whose peer is momentarily unresolvable.
-            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}` });
+            await this.publishConversationKeyToOwnDevices({ scope, key, reason: `retry:${reason}`, deviceDirectory });
             const channel = this.channelFromConversationScope(scope);
             if (channel) {
                 published += await this.publishConversationKeyToServerMembers({
@@ -23093,7 +26581,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const peer = this.peerFromConversationScope(scope);
             if (!peer) continue;
-            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}` });
+            const result = await this.publishConversationKeyToPeer({ peer, scope, key, reason: `retry:${reason}`, deviceDirectory });
             // 'no_devices' is truthy but means nothing was delivered — the peer has
             // no registered devices yet, so the envelope must be retried later.
             if (result === true) {
@@ -23610,7 +27098,7 @@ ZaliMixin(ZaliInterface, class {
         const desc = peer ? `Диалог с ${String(peer).trim()}` : 'Личное сообщение';
         chatHdrSub.innerHTML = `
             <span class="chat-hdr-desc">${this.esc(desc)}</span>
-            <span class="chat-hdr-key">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
+            <span class="chat-hdr-key${key ? '' : ' is-missing'}">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
         `;
     }
 
@@ -24676,6 +28164,7 @@ ZaliMixin(ZaliInterface, class {
                     clientId: item.clientId,
                     attachments: outAttachments,
                     reply: String(item.reply || ''),
+                    call: String(item.call || ''),
                 }).then(ok => {
                     if (!ok) {
                         this.trace(`flushPendingOutbox browserSendMessage failed clientId=${pendingId}`);
@@ -25491,6 +28980,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     draftServerRoleList() {
+"""#,
+    #"""
         return Array.isArray(this.S.serverModal.draftRoles) ? this.S.serverModal.draftRoles : [];
     }
 
@@ -25778,8 +29269,6 @@ ZaliMixin(ZaliInterface, class {
 
 
 // --- MODULE: interface/server_modal.js ---
-"""#,
-    #"""
 // --- ZaliInterface: Модалка настроек сервера: роли, каналы, участники, инвайты. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
@@ -29480,6 +32969,8 @@ ZaliMixin(ZaliInterface, class {
                     if (this.voice.status !== 'connected') {
                         this.voice.status = 'connecting';
                         this.renderVoicePanel();
+"""#,
+    #"""
                     }
                     const isDmCall = this.voice.roomType === 'dm';
                     const shouldWatchHealth = isDmCall;
@@ -29721,8 +33212,6 @@ ZaliMixin(ZaliInterface, class {
         if (!AudioCtx) return null;
         if (!this.voice.audioContext) {
             this.voice.audioContext = new AudioCtx();
-"""#,
-    #"""
             // Remote audio is rendered through this graph only (the <audio> elements
             // are muted so nothing is heard twice), so a context that is 'suspended'
             // — created outside a user gesture, or interrupted by the OS/WebView
@@ -31386,6 +34875,21 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // «Отменить» исходящий, пока собеседник не ответил: из шапки чата, из
+    // полосы над вкладками и из панели — одно действие.
+    cancelOutgoingVoiceCall() {
+        const invite = this.voice.outgoingInvite;
+        if (invite?.roomId && invite?.target) {
+            this.sendVoiceEvent({
+                type: 'voice_call_cancel',
+                roomId: invite.roomId,
+                target: invite.target,
+            });
+        }
+        this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
+        this.resetVoiceState({ preserveInvite: false });
+    }
+
     // Collapsed top bar <-> fullscreen grid. Purely a local UI toggle — it does
     // not touch tracks or connections, so it's safe to flip mid-call.
     toggleVoiceCallExpanded() {
@@ -31447,10 +34951,11 @@ ZaliMixin(ZaliInterface, class {
             const since = Number(this.voice.activeSince || 0);
             if (!since) return;
             const label = this.formatCallClock(Date.now() - since);
-            const bar = document.getElementById('voiceCallTimer');
-            if (bar) bar.textContent = label;
             const expanded = document.getElementById('voiceCallExpandedTimer');
             if (expanded) expanded.textContent = label;
+            // Компактный звонок рисуется сразу в двух местах (титлбар и полоса
+            // на телефоне) — таймеры там помечены атрибутом, а не id.
+            this.fillVoiceCallTimers?.();
         };
         tick();
         this.voice.barTimerInterval = setInterval(tick, 1000);
@@ -31461,6 +34966,18 @@ ZaliMixin(ZaliInterface, class {
             clearInterval(this.voice.barTimerInterval);
             this.voice.barTimerInterval = 0;
         }
+    }
+
+    // Время карточки — всегда ISO-строка. Браузерный путь приёма отдаёт время
+    // числом миллисекунд (WASM unpack × 1000), а String(1791571697000) не
+    // разбирается датой: карточка показывала «Invalid Date» и сортировалась мимо.
+    callRecordTimestamp(value, fallback = '') {
+        const raw = typeof value === 'number' || /^\d+$/.test(String(value || '').trim())
+            ? Number(value)
+            : Date.parse(String(value || ''));
+        if (Number.isFinite(raw) && raw > 0) return new Date(raw).toISOString();
+        const alt = Date.parse(String(fallback || ''));
+        return new Date(Number.isFinite(alt) ? alt : Date.now()).toISOString();
     }
 
     callRecordMessageId(roomId) {
@@ -31531,6 +35048,118 @@ ZaliMixin(ZaliInterface, class {
         return parsed;
     }
 
+    // Запись о звонке, отправленная браузерным клиентом до исправления
+    // browserSendMessage: в архиве только текст-сводка (formatCallSummary), поля
+    // call нет. Узнаётся по clientId «call-<roomId>» плюс тексту ровно одной из
+    // сводок — обычное сообщение с таким clientId не бывает. Восстанавливаем то,
+    // что из сводки следует: исход и длительность (с точностью до секунды).
+    legacyCallRecordFromText(payload) {
+        if (!payload || String(payload.call || '').trim()) return null;
+        const clientId = String(payload.clientId || payload.client_id || '').trim();
+        if (!clientId.startsWith('call-')) return null;
+        const roomId = clientId.slice('call-'.length);
+        const text = String(payload.text || '').trim();
+        if (!roomId || !text) return null;
+        const duration = (m, s) => (Number(m) * 60 + Number(s)) * 1000;
+        let outcome = '';
+        let durationMs = 0;
+        let match = null;
+        if ((match = text.match(/^(?:Исходящий|Входящий) звонок(?: · (\d+):(\d{2}))?$/))) {
+            outcome = 'completed';
+            if (match[1] != null) durationMs = duration(match[1], match[2]);
+        } else if (text === 'Вызов без ответа' || text === 'Пропущенный звонок') {
+            outcome = 'missed';
+        } else if (text === 'Вызов отклонён' || text === 'Отклонённый звонок') {
+            outcome = 'rejected';
+        } else if ((match = text.match(/^Звонок прерван(?: · (\d+):(\d{2}))?$/))) {
+            outcome = 'failed';
+            if (match[1] != null) durationMs = duration(match[1], match[2]);
+        } else {
+            return null;
+        }
+        const endMs = Date.parse(this.callRecordTimestamp(payload.timestamp));
+        return {
+            roomId,
+            outcome,
+            durationMs,
+            endedAt: new Date(endMs).toISOString(),
+            startedAt: new Date(endMs - durationMs).toISOString(),
+            connectedAt: durationMs ? new Date(endMs - durationMs).toISOString() : '',
+        };
+    }
+
+    // Строки истории/кеша, которые на самом деле записи о звонке, а рисовались
+    // обычным текстом («Вызов отклонён») рядом с карточкой того же звонка:
+    // с полем call (JSON) без kind 'call' — сводятся в карточку; без поля call,
+    // но с clientId карточки — удаляются как эхо. true — если что-то поменялось.
+    collapseCallRecordRows(arr) {
+        if (!Array.isArray(arr) || !arr.length) return false;
+        const me = String(this.myName() || '').trim();
+        let changed = false;
+        for (let i = arr.length - 1; i >= 0; i -= 1) {
+            const row = arr[i];
+            if (!row || row.kind === 'call') continue;
+            const info = (typeof row.call === 'string' && row.call)
+                ? this.parseCallRecordPayload(row)
+                : this.legacyCallRecordFromText(row);
+            if (!info) continue;
+            const id = this.callRecordMessageId(info.roomId);
+            const sender = String(row.sender || '').trim();
+            const receiver = String(row.receiver || '').trim();
+            const peer = sender === me ? receiver : sender;
+            const card = {
+                id,
+                clientId: id,
+                kind: 'call',
+                sender,
+                receiver,
+                text: '',
+                attachments: [],
+                timestamp: this.callRecordTimestamp(row.timestamp, info.endedAt),
+                status: 'sent',
+                call: { ...info, peer, direction: sender === me ? 'outgoing' : 'incoming' },
+            };
+            const existing = arr.findIndex((m, j) => j !== i && m
+                && (String(m.id || '').trim() === id || String(m.clientId || '').trim() === id));
+            arr.splice(i, 1);
+            if (existing >= 0) {
+                const at = existing > i ? existing - 1 : existing;
+                arr[at] = { ...card, ...arr[at], call: { ...card.call, ...(arr[at].call || {}) } };
+            } else {
+                arr.push(card);
+            }
+            changed = true;
+        }
+        // Эхо собственной записи с сервера: история отдаёт её без поля call,
+        // только текстом-сводкой, но с clientId = id карточки (call-<roomId>).
+        // Отправленная запись не бывает «отправляется», поэтому обычная склейка
+        // по clientId её не находит, и текст ложился рядом с карточкой.
+        const cardIds = new Set();
+        for (const m of arr) {
+            if (!m || m.kind !== 'call') continue;
+            const id = String(m.id || '').trim();
+            // Карточки из кеша до исправления — без clientId: без него эхо не
+            // склеится и при следующей загрузке истории.
+            if (!m.clientId && id.startsWith('call-')) {
+                m.clientId = id;
+                changed = true;
+            }
+            cardIds.add(id);
+            cardIds.add(String(m.clientId || '').trim());
+        }
+        for (let i = arr.length - 1; i >= 0; i -= 1) {
+            const row = arr[i];
+            if (!row || row.kind === 'call') continue;
+            const clientId = String(row.clientId || row.client_id || '').trim();
+            if (clientId.startsWith('call-') && cardIds.has(clientId)) {
+                arr.splice(i, 1);
+                changed = true;
+            }
+        }
+        if (changed) arr.sort((a, b) => this.compareMessagesByTime(a, b));
+        return changed;
+    }
+
     applyCallRecordMessage(callInfo, payload) {
         const me = String(this.myName() || '').trim();
         const sender = String(payload?.sender || '').trim();
@@ -31547,7 +35176,7 @@ ZaliMixin(ZaliInterface, class {
             receiver,
             text: '',
             attachments: [],
-            timestamp: String(payload?.timestamp || callInfo.endedAt || new Date().toISOString()),
+            timestamp: this.callRecordTimestamp(payload?.timestamp, callInfo.endedAt),
             call: { ...callInfo, peer, direction },
         };
         this.initChat(peer);
@@ -31578,6 +35207,10 @@ ZaliMixin(ZaliInterface, class {
             // identifies one call, so the local row and the one that arrives over the
             // wire collapse into a single entry instead of duplicating.
             id: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
+            // clientId — тот же: запись уходит в outbox с ним, и эхо с сервера
+            // (история отдаёт его текстом-сводкой без поля call) склеивается с
+            // этой карточкой в finalizePendingMessage, а не ложится рядом текстом.
+            clientId: this.callRecordMessageId(call.roomId || `${peer}-${endMs}`),
             kind: 'call',
             sender: direction === 'outgoing' ? this.myName() : peer,
             receiver: direction === 'outgoing' ? peer : this.myName(),
@@ -31611,6 +35244,13 @@ ZaliMixin(ZaliInterface, class {
         }
         call.recorded = true;
         if (this.voice.callTrack === call) this.voice.callTrack = null;
+        // Звонок, который клиент бросил, исчерпав все попытки восстановить связь, —
+        // автоматический отчёт: голосовая диагностика этого звонка ещё в кольце.
+        if (outcome === 'failed') {
+            void this.sendDiagnosticReport('voice_failed', {
+                call: { ...message.call, rebuilds: Number(this.voice.rebuilds || 0) },
+            });
+        }
         this.saveStoredMessageCache();
         // The caller owns the record and is the one that sends it, so exactly one
         // copy travels. The callee keeps its local row for instant feedback and lets
@@ -32628,9 +36268,13 @@ ZaliMixin(ZaliInterface, class {
         const headphones = '<path d="M4.5 13.5v-1.7a7.5 7.5 0 0 1 15 0v1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="3" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/><rect x="17" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/>';
         const chevronDown = '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
         const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+        // Положенная трубка — общепринятый знак «сбросить», понятнее
+        // перечёркнутой: трубка, повёрнутая на 135° вокруг центра.
+        const phoneDown = `<g transform="rotate(135 12 12)">${phone}</g>`;
         const icons = {
             phone,
             'phone-off': phone + slash,
+            'phone-down': phoneDown,
             mic,
             'mic-off': mic + slash,
             cam,
@@ -32645,9 +36289,13 @@ ZaliMixin(ZaliInterface, class {
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
 
-    callCtrlBtn({ id, kind, label, active = false, danger = false }) {
+    // short — короткая подпись под кнопкой («Микрофон», «Камера»): label
+    // меняется вместе с состоянием («Выключить микрофон») и годится только
+    // для подсказки, а подпись должна называть кнопку, а не действие.
+    callCtrlBtn({ id, kind, label, short = '', active = false, danger = false }) {
         const cls = ['call-ctrl-btn', active ? 'active' : '', danger ? 'danger' : ''].filter(Boolean).join(' ');
-        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(kind)}</button>`;
+        const shortAttr = short ? ` data-short="${this.esc(short)}"` : '';
+        return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}"${shortAttr}>${this.voiceIcon(kind)}</button>`;
     }
 
     // Discord-style call stage: one rectangular tile per participant, avatar in
@@ -32688,7 +36336,10 @@ ZaliMixin(ZaliInterface, class {
             return `
                 <div class="voice-tile ${mine ? 'mine' : ''}" data-peer="${this.esc(key)}">
                     <div class="voice-tile-media"></div>
-                    <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    <div class="voice-tile-person">
+                        <span class="voice-level-ring" aria-hidden="true"></span>
+                        <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                    </div>
                     <div class="voice-tile-footer">
                         ${muted ? `<span class="voice-tile-mic muted" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''}
                         <span class="voice-tile-name">${this.esc(name)}</span>
@@ -32698,36 +36349,61 @@ ZaliMixin(ZaliInterface, class {
         }).join('') + `</div>`;
     }
 
-    // Collapsed call UI: mute + deafen on the left, peer/channel name centered,
-    // running timer on the right. Tapping anywhere on the bar except those two
-    // buttons expands to renderVoiceCallExpanded (wired in the #voicePanel
-    // click delegate).
-    renderVoiceCallBar({ title }) {
+    // Компактный идущий звонок: таймер, затем микрофон и звук, затем «сбросить».
+    // Один и тот же фрагмент рисуется в двух местах — в титлбаре (#tbCall, на
+    // стороне, противоположной кнопкам окна) и в полосе над вкладками
+    // (#voiceCallStrip, видна только на телефоне, где титлбара нет), — поэтому
+    // кнопки адресуются data-voice-action, а не id. Таймер — кнопка: открывает
+    // полный интерфейс звонка (openActiveVoiceCall).
+    // Время в разметку не входит: HTML сравнивается с прошлым, и тикающие
+    // секунды пересобирали бы кнопки прямо под курсором (клик терялся).
+    // Его вписывает fillVoiceCallTimers() — сразу после вставки и по таймеру.
+    fillVoiceCallTimers() {
+        const label = this.voiceCallClockLabel();
+        for (const el of document.querySelectorAll('[data-voice-timer]')) {
+            if (el.textContent !== label) el.textContent = label;
+        }
+    }
+
+    renderVoiceCompactCall({ title }) {
         const muteLabel = this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон';
         const deafenLabel = this.voice.deafened ? 'Включить звук' : 'Выключить звук';
+        const openLabel = `${title} — открыть звонок`;
         return `
-            <div class="voice-callbar" id="voiceCallBar" role="button" tabindex="0" aria-label="Развернуть звонок">
-                <div class="voice-callbar-controls">
-                    <button class="voice-callbar-btn" type="button" id="voiceMuteBtn" title="${this.esc(muteLabel)}" aria-label="${this.esc(muteLabel)}">${this.voiceIcon(this.voice.muted ? 'mic-off' : 'mic')}</button>
-                    <button class="voice-callbar-btn ${this.voice.deafened ? 'danger' : ''}" type="button" id="voiceDeafenBtn" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
-                </div>
-                <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-timer" id="voiceCallTimer">${this.voiceCallClockLabel()}</div>
+            <div class="voice-compact" role="group" aria-label="${this.esc(title)}">
+                <button class="voice-compact-timer" type="button" data-voice-action="open" title="${this.esc(openLabel)}" aria-label="${this.esc(openLabel)}">
+                    <span class="voice-compact-dot" aria-hidden="true"></span>
+                    <span class="voice-compact-time" data-voice-timer></span>
+                </button>
+                <button class="voice-compact-btn${this.voice.muted ? ' is-off' : ''}" type="button" data-voice-action="mute" title="${this.esc(muteLabel)}" aria-label="${this.esc(muteLabel)}" aria-pressed="${this.voice.muted ? 'true' : 'false'}">${this.voiceIcon(this.voice.muted ? 'mic-off' : 'mic')}</button>
+                <button class="voice-compact-btn${this.voice.deafened ? ' is-off' : ''}" type="button" data-voice-action="deafen" title="${this.esc(deafenLabel)}" aria-label="${this.esc(deafenLabel)}" aria-pressed="${this.voice.deafened ? 'true' : 'false'}">${this.voiceIcon(this.voice.deafened ? 'headphones-off' : 'headphones')}</button>
+                <button class="voice-compact-btn is-hangup" type="button" data-voice-action="leave" title="Завершить звонок" aria-label="Завершить звонок">${this.voiceIcon('phone-down')}</button>
             </div>
         `;
     }
 
-    // The strip while a DM call rings over the voice channel we are in. Buttons have
-    // their own ids: the panel's #voiceAcceptBtn may be in the DOM at the same time.
+    // Входящий звонок — одна строка: кто звонит, «Отклонить», «Принять». Живёт
+    // в полосе над вкладками и видна с любого экрана — и для обычного входящего,
+    // и для звонящего поверх голосового канала. Кнопки со своими id: панель
+    // чата может одновременно держать свои (#voiceAcceptBtn и т. п.).
+    // «Принять» стоит последней — справа, под большим пальцем и там, где её
+    // ищут по привычке; «Отклонить» — красная положенная трубка слева от неё.
     renderVoiceIncomingStrip(invite) {
         const from = String(invite?.from || '').trim();
-        const title = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        const overChannel = !!invite?.overChannel;
+        const label = from ? `Входящий звонок от ${from}` : 'Входящий звонок';
+        const acceptTitle = overChannel ? 'Выйти из канала и принять звонок' : 'Принять звонок';
+        const rejectTitle = overChannel ? 'Отклонить и остаться в канале' : 'Отклонить звонок';
         return `
-            <div class="voice-callbar voice-callbar-incoming" id="voiceIncomingBar" role="group" aria-label="${this.esc(title)}">
-                <div class="voice-callbar-title">${this.esc(title)}</div>
-                <div class="voice-callbar-controls">
-                    <button class="voice-callbar-action" type="button" id="voiceStripAcceptBtn" title="Выйти из канала и принять звонок" aria-label="Принять">${this.voiceIcon('phone')}<span>Принять</span></button>
-                    <button class="voice-callbar-action danger" type="button" id="voiceStripRejectBtn" title="Отклонить и остаться в канале" aria-label="Отклонить">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>
+            <div class="voice-incoming" role="group" aria-label="${this.esc(label)}">
+                <div class="voice-incoming-who">
+                    <span class="voice-incoming-ava" aria-hidden="true">${from ? this.renderAvatarHTML(from, 'avatar-img', from) : ''}</span>
+                    <span class="voice-incoming-name">${this.esc(from || 'Входящий звонок')}</span>
+                    <span class="voice-incoming-note">${overChannel ? 'звонит · вы в канале' : 'звонит'}</span>
+                </div>
+                <div class="voice-incoming-actions">
+                    <button class="voice-incoming-btn is-decline" type="button" id="voiceStripRejectBtn" title="${this.esc(rejectTitle)}" aria-label="${this.esc(rejectTitle)}">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>
+                    <button class="voice-incoming-btn is-accept" type="button" id="voiceStripAcceptBtn" title="${this.esc(acceptTitle)}" aria-label="${this.esc(acceptTitle)}">${this.voiceIcon('phone')}<span>Принять</span></button>
                 </div>
             </div>
         `;
@@ -32789,10 +36465,14 @@ ZaliMixin(ZaliInterface, class {
         const outgoingTarget = this.voice.outgoingInvite?.target || this.voice.targetUser || '';
         const incomingFrom = this.voice.incomingInvite?.from || this.voice.inviter || '';
         const voiceHealth = this.voiceTraceEnabled ? this.getVoiceHealthSnapshot() : [];
+        // Собеседник активного звонка — через voiceDmCallPeer(): после перезагрузки
+        // посреди звонка outgoingInvite пуст, а inviter — это мы сами, если звонили
+        // мы, и заголовок говорил «Активный звонок с <моё имя>».
+        const activePeer = this.voiceDmCallPeer() || outgoingTarget || incomingFrom;
         const title = isVoice
             ? `Голосовой канал: ${this.currentChannel()?.name || 'room'}`
             : activeRoom
-                ? `Активный звонок${outgoingTarget || incomingFrom ? ` с ${outgoingTarget || incomingFrom}` : ''}`
+                ? `Активный звонок${activePeer ? ` с ${activePeer}` : ''}`
                 : this.voice.status === 'incoming'
                     ? `Входящий звонок от ${incomingFrom}`
                     : this.voice.status === 'calling'
@@ -32804,26 +36484,26 @@ ZaliMixin(ZaliInterface, class {
         const actionButtons = [];
         if (isVoice) {
             if (activeRoom) {
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Покинуть', danger: true }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Покинуть', short: 'Покинуть', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Присоединиться</span></button>`);
             }
         } else if (this.S.navMode === 'dm' && this.S.current) {
             if (activeRoom) {
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-off', label: 'Завершить', danger: true }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', active: !this.voice.muted }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', active: this.voice.cameraOn }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', active: this.voice.screenSharing }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Завершить', short: 'Завершить', danger: true }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">${this.voiceIcon('phone')}<span>Принять</span></button>`);
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-off')}<span>Отклонить</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>`);
             } else if (this.voice.status === 'calling') {
-                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-off')}<span>Отменить</span></button>`);
+                actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceCancelBtn">${this.voiceIcon('phone-down')}<span>Отменить</span></button>`);
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceCallBtn">${this.voiceIcon('phone')}<span>Позвонить</span></button>`);
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceVideoCallBtn">${this.voiceIcon('video')}<span>Видеозвонок</span></button>`);
@@ -32846,7 +36526,7 @@ ZaliMixin(ZaliInterface, class {
             ? 'Нажмите «Присоединиться», чтобы войти в канал'
             : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
         return `
-            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}">
+            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}" data-voice-status="${this.esc(String(this.voice.status || 'idle'))}">
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
@@ -32858,26 +36538,6 @@ ZaliMixin(ZaliInterface, class {
                 <div class="voice-stage" id="voiceStage"></div>
                 ${isVoice ? '' : this.renderVoiceTiles()}
                 <div class="${actionsBarClass}">${actionButtons.join('')}</div>
-                <div class="voice-meter-grid">
-                    <div class="voice-meter" id="voiceMicMeter">
-                        <div class="voice-meter-head">
-                            <span class="voice-meter-name">Микрофон</span>
-                            <span class="voice-meter-value" id="voiceMicLevelText">0%</span>
-                        </div>
-                        <div class="voice-meter-track">
-                            <div class="voice-meter-fill" id="voiceMicLevelFill"></div>
-                        </div>
-                    </div>
-                    <div class="voice-meter" id="voiceServerMeter">
-                        <div class="voice-meter-head">
-                            <span class="voice-meter-name">С сервера</span>
-                            <span class="voice-meter-value" id="voiceServerLevelText">0%</span>
-                        </div>
-                        <div class="voice-meter-track">
-                            <div class="voice-meter-fill remote" id="voiceServerLevelFill"></div>
-                        </div>
-                    </div>
-                </div>
                 ${voiceHealth.length ? `
                     <div class="voice-health">
                         <div class="voice-room-label">Voice health</div>
@@ -32933,6 +36593,7 @@ ZaliMixin(ZaliInterface, class {
         // After the panel: whether the strip shows depends on what the panel
         // just decided to cover (a voice channel's own view, a DM's fullscreen grid).
         this.renderVoiceCallStrip();
+        this.renderChatHeaderCallState();
     }
 
     renderVoicePanelBody() {
@@ -32943,9 +36604,13 @@ ZaliMixin(ZaliInterface, class {
         // A voice channel has no text chat: its view is the call (or the join
         // card), with the message list and composer hidden by this class.
         document.getElementById('viewChat')?.classList.toggle('voice-channel-view', isVoiceChannel);
-        const hasDmCall = this.voice.roomType === 'dm' || this.voice.status === 'incoming' || this.voice.status === 'calling';
-        const hasIncoming = this.voice.status === 'incoming';
-        const html = (isVoiceChannel || hasDmCall || hasIncoming) ? this.renderVoiceRoomView() : '';
+        // Звонящий входящий в панели чата не рисуется: он — одна строка в полосе
+        // над вкладками (renderVoiceCallStrip), видимая с любого экрана.
+        // И исходящий, пока не ответили, — тоже не карточка: шапка чата или
+        // строка сверху (renderChatHeaderCallState / renderVoiceCallStrip).
+        const ringingDm = this.voice.status === 'incoming' || this.voice.status === 'calling';
+        const hasDmCall = !ringingDm && this.voice.roomType === 'dm';
+        const html = (isVoiceChannel || hasDmCall) ? this.renderVoiceRoomView() : '';
         if (!html) {
             panel.hidden = true;
             panel.innerHTML = '';
@@ -32979,6 +36644,8 @@ ZaliMixin(ZaliInterface, class {
         const roomId = String(this.voice.roomId || '').trim();
         if (!roomId) return '';
         const status = String(this.voice.status || '');
+"""#,
+    #"""
         const me = String(this.myName() || '').trim().toLowerCase();
         const joined = !!me && (Array.isArray(this.voice.participants) ? this.voice.participants : [])
             .some(name => String(name || '').trim().toLowerCase() === me);
@@ -33054,42 +36721,128 @@ ZaliMixin(ZaliInterface, class {
             this.voice.activeSince = 0;
             this.stopVoiceCallBarTimer();
         }
+        // Компактный идущий звонок в титлбаре — всегда, пока звонок идёт: это его
+        // постоянное место (таймер открывает полный интерфейс).
+        const titleCall = document.getElementById('tbCall');
+        if (titleCall) {
+            const html = type ? this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }) : '';
+            if (html !== this._voiceTitleCallHtml) {
+                titleCall.innerHTML = html;
+                this._voiceTitleCallHtml = html;
+            }
+            titleCall.hidden = !type;
+        }
+        if (type) this.fillVoiceCallTimers();
         const strip = document.getElementById('voiceCallStrip');
         if (!strip) return;
-        // A DM call ringing over the channel takes the strip over, everywhere —
-        // including the channel's own view, where the strip is otherwise hidden and
-        // where the user most likely is when it rings.
-        const ringingOverChannel = this.hasInviteOverChannel() ? this.voice.incomingInvite : null;
-        if (ringingOverChannel) {
-            strip.parentElement?.classList.add('has-call-strip');
-            const html = this.renderVoiceIncomingStrip(ringingOverChannel);
+        const main = strip.parentElement;
+        const setStrip = (kind, html) => {
+            main?.classList.toggle('has-call-strip', !!kind);
+            main?.classList.toggle('has-incoming-strip', kind === 'incoming');
+            main?.classList.toggle('has-live-strip', kind === 'live');
+            if (kind) strip.dataset.kind = kind;
+            else delete strip.dataset.kind;
             if (html !== this._voiceStripHtml) {
                 strip.innerHTML = html;
                 this._voiceStripHtml = html;
             }
-            strip.hidden = false;
+            strip.hidden = !kind;
+            if (kind === 'live') this.fillVoiceCallTimers();
+        };
+        // Звонящий входящий занимает полосу везде — в том числе поверх
+        // голосового канала, где пользователь скорее всего и находится.
+        // …но если открыт чат именно с этим человеком, звонок уже в его шапке.
+        const ringing = this.voiceRingingState();
+        if (ringing) {
+            if (this.isRingingInChatHeader(ringing)) setStrip('', '');
+            else if (ringing.kind === 'incoming') setStrip('incoming', this.renderVoiceIncomingStrip(this.voice.incomingInvite));
+            else setStrip('incoming', this.renderVoiceOutgoingStrip(ringing.peer));
             return;
         }
+        // Полоса идущего звонка — для телефона: там нет титлбара. На десктопе её
+        // прячет CSS (#voiceCallStrip[data-kind="live"]), звонок живёт в титлбаре.
         const chatOpen = !!document.getElementById('viewChat')?.classList.contains('active');
         const coveredByCall = type === 'channel'
             ? this.isViewingVoiceCallRoom()
             : type === 'dm' && chatOpen && !!this.voice.expanded;
-        const show = !!type && !coveredByCall;
-        strip.parentElement?.classList.toggle('has-call-strip', show);
-        if (!show) {
-            strip.hidden = true;
-            if (this._voiceStripHtml) {
-                strip.innerHTML = '';
-                this._voiceStripHtml = '';
-            }
+        if (!type || coveredByCall) {
+            setStrip('', '');
             return;
         }
-        const html = this.renderVoiceCallBar({ title: this.voiceLiveCallTitle(type) });
-        if (html !== this._voiceStripHtml) {
-            strip.innerHTML = html;
-            this._voiceStripHtml = html;
+        setStrip('live', this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }));
+    }
+
+    // Звонок, который сейчас звонит (ещё не начался): входящий или исходящий
+    // личный; null — ничего не звонит.
+    voiceRingingState() {
+        if (this.hasRingingIncomingInvite()) {
+            return { kind: 'incoming', peer: String(this.voice.incomingInvite?.from || '').trim() };
         }
-        strip.hidden = false;
+        if (this.voice.status === 'calling') {
+            const peer = String(this.voice.outgoingInvite?.target || this.voice.targetUser || '').trim();
+            if (peer) return { kind: 'outgoing', peer };
+        }
+        return null;
+    }
+
+    // Открыт ли сейчас чат именно с тем, кто звонит / кому звоним, — тогда
+    // звонок рисуется прямо в его шапке.
+    isRingingInChatHeader(ringing = this.voiceRingingState()) {
+        if (!ringing?.peer || this.S.navMode !== 'dm') return false;
+        if (!document.getElementById('viewChat')?.classList.contains('active')) return false;
+        return String(this.S.current || '').trim().toLowerCase() === ringing.peer.toLowerCase();
+    }
+
+    // Пока звонок звонит, шапка чата с этим человеком сама становится звонком:
+    // той же высоты, аватар пульсирует, под именем — статус, на месте трубки и
+    // камеры — «Отклонить / Принять» или «Отменить».
+    renderChatHeaderCallState() {
+        const hdr = document.getElementById('chatHdr');
+        const note = document.getElementById('chatHdrCallNote');
+        const ctl = document.getElementById('chatHdrCallCtl');
+        if (!hdr || !note || !ctl) return;
+        const ringing = this.voiceRingingState();
+        const show = !!ringing && this.isRingingInChatHeader(ringing);
+        const kind = show ? ringing.kind : '';
+        hdr.classList.toggle('is-ringing', show);
+        hdr.dataset.ringKind = kind;
+        note.hidden = !show;
+        ctl.hidden = !show;
+        const noteText = kind === 'incoming' ? 'Входящий звонок…' : kind === 'outgoing' ? 'Вызов…' : '';
+        if (note.textContent !== noteText) note.textContent = noteText;
+        const html = kind === 'incoming'
+            ? this.ringingButton('reject', 'Отклонить', 'phone-down') + this.ringingButton('accept', 'Принять', 'phone')
+            : kind === 'outgoing'
+                ? this.ringingButton('cancel', 'Отменить', 'phone-down')
+                : '';
+        if (ctl.innerHTML !== html) ctl.innerHTML = html;
+    }
+
+    ringingButton(action, label, icon) {
+        const cls = action === 'accept' ? 'is-accept' : 'is-decline';
+        return `<button class="voice-incoming-btn ${cls}" type="button" data-ring-action="${this.esc(action)}" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon(icon)}<span>${this.esc(label)}</span></button>`;
+    }
+
+    // Строка сверху, когда звоним мы, а открыт другой экран.
+    renderVoiceOutgoingStrip(peer) {
+        const label = `Вызов ${peer}`;
+        return `
+            <div class="voice-incoming is-outgoing" role="group" aria-label="${this.esc(label)}">
+                <div class="voice-incoming-who">
+                    <span class="voice-incoming-ava" aria-hidden="true">${this.renderAvatarHTML(peer, 'avatar-img', peer)}</span>
+                    <span class="voice-incoming-name">${this.esc(peer)}</span>
+                    <span class="voice-incoming-note">вызов…</span>
+                </div>
+                <div class="voice-incoming-actions">${this.ringingButton('cancel', 'Отменить', 'phone-down')}</div>
+            </div>
+        `;
+    }
+
+    // Смена экрана посреди звонящего звонка: шапка или строка сверху.
+    syncRingingCallPlacement() {
+        if (!this.voiceRingingState() && !document.getElementById('chatHdr')?.classList.contains('is-ringing')) return;
+        this.renderVoiceCallStrip();
+        this.renderChatHeaderCallState();
     }
 
     mountVoiceVideoElements() {
@@ -33158,8 +36911,19 @@ ZaliMixin(ZaliInterface, class {
         const byPeer = this._voiceTileNodes;
         if (!byPeer || !byPeer.size) return;
         const SPEAKING_THRESHOLD = 12; // percent, same scale as the meters
+        // Кольцо уровня вокруг аватара (или рамка видео-плитки) заполняется от
+        // нижней точки в обе стороны: --voice-level 0…1, полное кольцо — на
+        // ~60 % шкалы, где уже громкая речь. Пишется только при заметном
+        // изменении, чтобы 8 обновлений в секунду не трогали стиль впустую.
+        const LEVEL_FULL = 60;
         for (const [peer, tile] of byPeer) {
-            const speaking = Number(this._voiceTileLevels[peer] || 0) >= SPEAKING_THRESHOLD;
+            const percent = Number(this._voiceTileLevels[peer] || 0);
+            const level = Math.round(Math.min(1, percent / LEVEL_FULL) * 50) / 50;
+            if (tile._voiceLevel !== level) {
+                tile._voiceLevel = level;
+                tile.style.setProperty('--voice-level', String(level));
+            }
+            const speaking = percent >= SPEAKING_THRESHOLD;
             // classList.toggle with an explicit force flag still writes the
             // attribute every call, which dirties style on tiles that did not
             // change. Only touch the ones whose state actually flipped.
@@ -33402,8 +37166,19 @@ ZaliMixin(ZaliInterface, class {
             const limit = 200;
             let offset = 0;
             let mergedCount = 0;
+            // См. loadBrowserDmHistory: архивы в ответе — только при первой
+            // загрузке канала за сессию, зато для всех её страниц.
+            const inlineScope = `channel:${sid}:${cid}`;
+            const inlineArchives = this.takeHistoryInlineArchives(inlineScope);
+            let firstPageLoaded = false;
             while (true) {
-                const res = await this.apiFetch(this.apiRoutes.servers.channelMessages(sid, cid, limit, offset));
+                let res;
+                try {
+                    res = await this.apiFetch(this.apiRoutes.servers.channelMessages(sid, cid, limit, offset, { inlineArchives }));
+                } finally {
+                    if (!firstPageLoaded && !res?.ok) this.releaseHistoryInlineArchives(inlineScope, inlineArchives);
+                }
+                if (res.ok) firstPageLoaded = true;
                 if (!res.ok) {
                     const text = await res.text().catch(() => '');
                     this.trace(`loadServerMessages failed server=${sid} channel=${cid} status=${res.status} offset=${offset} body=${text.slice(0, 300)}`);
@@ -33418,6 +37193,7 @@ ZaliMixin(ZaliInterface, class {
                 for (const msg of batch) {
                     await this.handleIncomingBrowserMessage(msg);
                 }
+                if (inlineArchives) this.releaseHistoryInlineIfUndecoded(inlineScope, inlineArchives, batch);
                 mergedCount += batch.length;
                 if (batch.length < limit) break;
                 offset += limit;
@@ -33466,8 +37242,6 @@ ZaliMixin(ZaliInterface, class {
                     : reconciled.findIndex(m => this.messageRenderKey(m) === incomingKey);
                 if (existingIndex >= 0) {
                     const prev = reconciled[existingIndex];
-"""#,
-    #"""
                     reconciled[existingIndex] = {
                         ...prev,
                         ...msg,
@@ -34975,6 +38749,7 @@ ZaliMixin(ZaliInterface, class {
                 timeoutMs: timeoutMs || API_REQUEST_TIMEOUT_MS,
             });
             this.trace(`apiFetch native response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
+            if (!res.ok) this.noteFailedRequest({ method, path, status: res.status, requestId });
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         }
@@ -35022,10 +38797,12 @@ ZaliMixin(ZaliInterface, class {
                 headers,
             });
             this.trace(`apiFetch response method=${method} path=${path} request_id=${requestId} status=${res.status} ok=${res.ok}`);
+            if (!res.ok) this.noteFailedRequest({ method, path, status: res.status, requestId });
             this.handleUnauthorizedApiResponse(res, headers, { allowSessionInvalidation });
             return res;
         } catch (error) {
             this.trace(`apiFetch transport_error method=${method} path=${path} request_id=${requestId} err=${error?.message || error}`);
+            this.noteFailedRequest({ method, path, requestId, error: error?.name === 'AbortError' ? 'timeout' : String(error?.message || error).slice(0, 80) });
             throw error;
         } finally {
             if (timeoutId) clearTimeout(timeoutId);
@@ -35310,6 +39087,9 @@ ZaliMixin(ZaliInterface, class {
             this.S.serverChats = userCachedMessages.serverChats && typeof userCachedMessages.serverChats === 'object'
                 ? userCachedMessages.serverChats
                 : {};
+            // Кеш, сохранённый до исправления, уже держит дубли записей о звонках
+            // (текстом рядом с карточкой) — сводим их один раз при входе.
+            for (const arr of Object.values(this.S.chats)) this.collapseCallRecordRows(arr);
             const cachedContacts = this.loadStoredContacts();
             const localContacts = this.localConversationContacts();
             this.S.contacts = Array.from(new Set([...cachedContacts, ...localContacts]))
@@ -36971,6 +40751,7 @@ ZaliMixin(ZaliInterface, class {
                     canonicalKeyId = canonical.get(scope) || '';
                 } catch (e) { /* best-effort — see fetchCanonicalKeyIds's own fallback */ }
             }
+            this.flushLogEntries();
             const logBody = document.getElementById('logBody');
             const recentLog = logBody
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
@@ -37115,6 +40896,8 @@ ZaliMixin(ZaliInterface, class {
         // box-shaping aspect-ratio is set from mediaSizeCache at render time, but on
         // first render nothing is cached yet, so it falls back to a hardcoded 16:9 box.
         // If the real photo isn't 16:9, its actual (height:auto) box disagrees with that
+"""#,
+    #"""
         // fallback and the shell's `overflow:hidden` crops it. Once the image decodes we
         // know its true size — cache it AND correct the already-rendered shell in place
         // so the crop clears immediately instead of waiting for an unrelated re-render.
@@ -37275,40 +41058,33 @@ ZaliMixin(ZaliInterface, class {
         const timeLabel = this.fmtTime(startedAt || endedAt);
         const durationLabel = this.formatDuration(durationMs);
         const title = outcome === 'missed'
-            ? `Пропущенный звонок`
+            ? (direction === 'outgoing' ? 'Без ответа' : 'Пропущенный звонок')
             : outcome === 'rejected'
-                ? `Звонок отклонён`
+                ? 'Звонок отклонён'
                 : outcome === 'cancelled'
-                    ? `Звонок отменён`
+                    ? 'Звонок отменён'
                     // The client gave up on a call it could no longer recover — see
                     // concludeDeadVoiceCallIfNeeded. Without this it read as an
                     // ordinary completed call, which is the one thing it was not.
                     : outcome === 'failed'
-                        ? `Звонок прерван`
-                        : direction === 'outgoing'
-                            ? `Исходящий звонок`
-                            : `Входящий звонок`;
-        const subject = direction === 'outgoing'
-            ? `К ${peer || 'контакту'}`
-            : `От ${peer || 'контакта'}`;
-        const durationText = durationLabel === '00:00' && outcome !== 'completed'
-            ? '00:00'
-            : durationLabel;
-        return `
-            <div class="call-card ${this.esc(outcome)} ${this.esc(direction)}">
-                <div class="call-card-top">
-                    <div class="call-card-icon">${outcome === 'completed' ? this.uiIcon('phone') : this.uiIcon('close')}</div>
-                    <div class="call-card-copy">
-                        <div class="call-card-title">${this.esc(title)}</div>
-                        <div class="call-card-sub">${this.esc(subject)}</div>
-                    </div>
-                </div>
-                <div class="call-card-meta">
-                    <span>Когда: ${this.esc(whenLabel ? `${whenLabel}, ${timeLabel}` : timeLabel)}</span>
-                    <span>Длительность: ${this.esc(durationText)}</span>
-                </div>
-            </div>
-        `;
+                        ? 'Звонок прерван'
+                        : 'Звонок';
+        // Карточка — одна строка; подробности всплывают при наведении на её части
+        // (data-tip, см. .call-card в style.css): иконка — кто и куда, заголовок —
+        // когда, длительность — что за цифра. aria-label несёт всё сразу.
+        const whoTip = direction === 'outgoing'
+            ? `Исходящий · ${peer || 'контакту'}`
+            : `Входящий · от ${peer || 'контакта'}`;
+        const whenTip = whenLabel ? `${whenLabel}, ${timeLabel}` : timeLabel;
+        const failed = outcome !== 'completed';
+        const showDuration = !failed && durationMs > 0;
+        const label = [title, whoTip, whenTip, showDuration ? `длительность ${durationLabel}` : '']
+            .filter(Boolean).join(', ');
+        return `<div class="call-card ${this.esc(outcome)} ${this.esc(direction)}${failed ? ' is-failed' : ''}" role="group" aria-label="${this.esc(label)}">`
+            + `<span class="call-card-icon" data-tip="${this.esc(whoTip)}">${this.voiceIcon(failed ? 'phone-down' : 'phone')}</span>`
+            + `<span class="call-card-title" data-tip="${this.esc(whenTip)}">${this.esc(title)}</span>`
+            + (showDuration ? `<span class="call-card-dur" data-tip="Длительность разговора">${this.esc(durationLabel)}</span>` : '')
+            + '</div>';
     }
 
     messageHasMedia(msg) {
@@ -37620,7 +41396,7 @@ ZaliMixin(ZaliInterface, class {
                 active: contact === this.S.current ? 1 : 0,
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => `${item.name}:${item.lastMessageAt}:${item.unread}:${item.lastKey}:${item.active}`)
             .join('|');
     }
@@ -37766,8 +41542,6 @@ ZaliMixin(ZaliInterface, class {
         const found = this.findMessageById(id);
         if (!found) return;
 
-"""#,
-    #"""
         const hasRealServerId = !!found.msg.id && (!found.msg.clientId || String(found.msg.id) !== String(found.msg.clientId));
         if (!hasRealServerId) {
             this.applyLocalReaction(found, reaction);
@@ -37833,15 +41607,17 @@ ZaliMixin(ZaliInterface, class {
                 lastMessageAt: this.conversationLastMessageAt(contact),
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => item.name);
 
         if (list.length === 0) {
-            this.commitListHTML(el, 'contacts', `<div style="text-align:center;color:var(--text3);font-size:11px;padding:24px 0">${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</div>`);
+            // contacts-empty-art — иллюстрация «найти → добавить → написать»
+            // (оформление «Фокус»); при пустом поиске она не к месту.
+            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span></div>`);
             return;
         }
 
-        const html = list.map(contact => {
+        const rows = list.map(contact => {
             this.initChat(contact);
             const msgs = this.S.chats[contact];
             const last = msgs[msgs.length-1];
@@ -37859,13 +41635,13 @@ ZaliMixin(ZaliInterface, class {
             // otherwise a short date — same helpers the message list uses.
             let timeLabel = '';
             if (last && last.timestamp) {
-                const d = new Date(last.timestamp);
-                const now = new Date();
-                timeLabel = d.toDateString() === now.toDateString()
-                    ? this.fmtTime(last.timestamp)
-                    : this.fmtDate(last.timestamp);
+                // fmtDate() answers «Сегодня» exactly when the row wants a time.
+                const day = this.fmtDate(last.timestamp);
+                timeLabel = day === 'Сегодня' ? this.fmtTime(last.timestamp) : day;
             }
-            return `<div class="contact ${active}" data-name="${this.esc(contact)}">
+            // has-unread — чтобы строку с новым можно было выделить целиком
+            // (имя, превью), а не только бейджем в углу.
+            return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
                 <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}</div>
@@ -37878,8 +41654,8 @@ ZaliMixin(ZaliInterface, class {
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
-        }).join('');
-        this.commitListHTML(el, 'contacts', html);
+        });
+        this.commitListRows(el, 'contacts', rows);
     }
 
     // renderContacts()/renderServers() are called from ~30 places (every incoming
@@ -37921,6 +41697,134 @@ ZaliMixin(ZaliInterface, class {
         }
         el.dataset.listSlot = key;
         el.innerHTML = html;
+        this._listHTMLCache.set(key, html);
+        return true;
+    }
+
+    // Полная запись списка из строк (одна строка разметки = ровно один элемент
+    // верхнего уровня). Запоминает соответствие «строка разметки → узел», если
+    // каждая строка дала ровно один узел верхнего уровня; иначе соответствия нет и
+    // следующий кадр тоже пишется целиком — как было до точечного обновления.
+    writeListRows(el, state, rows, html = rows.join('')) {
+        el.innerHTML = html;
+        const nodes = el.childNodes;
+        if (nodes && nodes.length === rows.length) {
+            state.rows = rows;
+            state.nodes = Array.from(nodes);
+        } else {
+            state.rows = null;
+            state.nodes = null;
+        }
+    }
+
+    // Точечное обновление списка (#msgs, сайдбар контактов): узлы строк, которые не изменились, остаются на месте,
+    // создаются только новые. Новое сообщение, смена статуса «отправляется»,
+    // реакция — это одна-две строки, а раньше каждое такое событие пересоздавало
+    // все пузыри окна (и все их <img>/<video>) и заново раскладывало список.
+    //
+    // Сопоставление — по самой строке разметки, по порядку: для каждой новой строки
+    // берётся первый ещё не занятый старый узел с той же разметкой правее
+    // предыдущего взятого. Так покрывается и сдвиг виртуального окна (сверху ушла
+    // строка, снизу пришла, распорка сменила высоту), а не только правка хвоста.
+    //
+    // Возвращает false, если патч неприменим, — вызывающий пишет список целиком:
+    //  - соответствие строк узлам потеряно (кто-то менял #msgs мимо рендера —
+    //    пустое состояние, голосовой канал; проверяется поузлово, а не по флагу);
+    //  - новых строк больше половины — полная запись не дороже;
+    //  - новые строки разобрались не в один узел на строку.
+    patchListRows(box, state, rows) {
+        if (!state) return false;
+        const prevRows = state.rows;
+        const prevNodes = state.nodes;
+        if (!Array.isArray(prevRows) || !Array.isArray(prevNodes) || prevRows.length !== prevNodes.length) return false;
+        const children = box.childNodes;
+        if (!children || children.length !== prevNodes.length) return false;
+        for (let i = 0; i < prevNodes.length; i += 1) {
+            if (children[i] !== prevNodes[i]) return false;
+        }
+
+        const byRow = new Map();
+        for (let i = 0; i < prevRows.length; i += 1) {
+            const list = byRow.get(prevRows[i]);
+            if (list) list.push(i);
+            else byRow.set(prevRows[i], [i]);
+        }
+        const matched = new Array(rows.length);
+        const reused = new Uint8Array(prevRows.length);
+        const freshRows = [];
+        let lastOld = -1;
+        for (let i = 0; i < rows.length; i += 1) {
+            const list = byRow.get(rows[i]);
+            let found = -1;
+            if (list) {
+                while (list.length && list[0] <= lastOld) list.shift();
+                if (list.length) found = list.shift();
+            }
+            if (found >= 0) {
+                matched[i] = prevNodes[found];
+                reused[found] = 1;
+                lastOld = found;
+            } else {
+                matched[i] = null;
+                freshRows.push(rows[i]);
+            }
+        }
+        if (freshRows.length * 2 > rows.length) return false;
+
+        let fresh = [];
+        if (freshRows.length) {
+            const tpl = document.createElement('template');
+            tpl.innerHTML = freshRows.join('');
+            if (tpl.content.childNodes.length !== freshRows.length) return false;
+            fresh = Array.from(tpl.content.childNodes);
+        }
+        for (let i = 0; i < prevNodes.length; i += 1) {
+            if (!reused[i]) prevNodes[i].remove();
+        }
+        // После удаления в #msgs остались только переиспользованные узлы, уже в
+        // нужном порядке; новые вставляются перед следующим переиспользованным.
+        let ref = box.firstChild;
+        let freshIndex = 0;
+        const nodes = new Array(rows.length);
+        for (let i = 0; i < rows.length; i += 1) {
+            if (matched[i]) {
+                nodes[i] = matched[i];
+                ref = matched[i].nextSibling;
+            } else {
+                const node = fresh[freshIndex++];
+                box.insertBefore(node, ref);
+                nodes[i] = node;
+            }
+        }
+
+        state.rows = rows;
+        state.nodes = nodes;
+        return true;
+    }
+
+    // commitListHTML() для списков, собранных построчно: та же защёлка «не
+    // изменилось — не трогать», но изменение применяется точечно (patchListRows),
+    // а не перезаписью всего контейнера. Кэш commitListHTML обновляется тем же
+    // значением, чтобы обычная запись в тот же слот (пустое состояние) не сочла
+    // себя «неизменившейся» по устаревшей строке.
+    commitListRows(el, slot, rows) {
+        if (!el) return false;
+        const html = rows.join('');
+        this._listHTMLCache = this._listHTMLCache || new Map();
+        const key = `${slot}`;
+        const unchanged = this._listHTMLCache.get(key) === html
+            && el.dataset.listSlot === key
+            && (el.childElementCount > 0 || !html);
+        if (unchanged) return false;
+        this._listRowState = this._listRowState || new Map();
+        let state = this._listRowState.get(key);
+        if (!state) {
+            state = {};
+            this._listRowState.set(key, state);
+        }
+        const patched = el.dataset.listSlot === key && this.patchListRows(el, state, rows);
+        if (!patched) this.writeListRows(el, state, rows, html);
+        el.dataset.listSlot = key;
         this._listHTMLCache.set(key, html);
         return true;
     }
@@ -38187,11 +42091,14 @@ ZaliMixin(ZaliInterface, class {
                 const sub = ch.topic
                     ? this.esc(ch.topic)
                     : (kind === 'voice' ? (inCall ? 'Вы в канале' : 'Голосовой канал') : 'Текстовый канал');
-                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
+                // is-generic — подпись лишь повторяет иконку («Текстовый канал»):
+                // оформление «Фокус» её прячет, тема канала и «Вы в канале» остаются.
+                const genericSub = !ch.topic && !inCall;
+                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}${count > 0 ? ' has-unread' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
                     <span class="sidebar-channel-icon ${kind}">${this.channelKindIcon(kind, 'sidebar-channel-glyph')}</span>
                     <div class="contact-info">
                         <div class="contact-name">${this.esc(ch.name)}</div>
-                        <div class="contact-prev">${sub}</div>
+                        <div class="contact-prev${genericSub ? ' is-generic' : ''}">${sub}</div>
                     </div>
                     <div class="contact-actions">
                         ${badge}
@@ -38744,12 +42651,15 @@ ZaliMixin(ZaliInterface, class {
             this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
                 box.innerHTML = `<div class="empty-state">
+                    <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">Нет сообщений в канале</div>
                     <div class="empty-sub">${channel ? `#${this.esc(channel.name)}` : 'Выберите канал'}</div>
                 </div>`;
                 return;
             }
+            // empty-art — иллюстрация «как доходит сообщение» (оформление «Фокус»).
             box.innerHTML = `<div class="empty-state">
+                <div class="empty-art" aria-hidden="true"></div>
                 <div class="empty-ttl">Нет сообщений</div>
                 <div class="empty-sub">Начните разговор</div>
             </div>`;
@@ -38761,9 +42671,12 @@ ZaliMixin(ZaliInterface, class {
             stickToBottom,
         });
         const renderedMsgs = windowInfo.useWindow ? msgs.slice(windowInfo.start, windowInfo.end) : msgs;
-        let html = '';
+        // Одна строка массива = ровно один элемент верхнего уровня в #msgs (разделитель
+        // дня, пузырь, распорка окна). На этом держится точечное обновление ниже:
+        // пришло одно сообщение — меняется одна строка, а не весь список.
+        const rows = [];
         if (windowInfo.useWindow && windowInfo.topSpacer > 0) {
-            html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`;
+            rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`);
         }
         const GROUP_WINDOW_MS = 5 * 60 * 1000;
         const items = renderedMsgs.map(msg => {
@@ -38774,7 +42687,7 @@ ZaliMixin(ZaliInterface, class {
 
         let activeGroup = null;
         items.forEach((item) => {
-            const isGroupable = item.msg?.kind !== 'call' && !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
+            const isGroupable = !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
             const withinWindow = !!(activeGroup && item.ts && activeGroup.lastTs && (item.ts - activeGroup.lastTs) <= GROUP_WINDOW_MS);
@@ -38818,13 +42731,13 @@ ZaliMixin(ZaliInterface, class {
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
             const isSending = isOut && msg.status === 'sending';
             const messageId = String(msg.id || '').trim();
-            const hoverTimeLabel = !isCall ? this.messageHoverTimeLabel(msg) : '';
-            const showInlineTime = !isCall && (item.groupPos === 'single' || item.groupPos === 'end');
-            const inlineTimeLabel = !isCall ? this.messageInlineTimeLabel(msg) : '';
+            const hoverTimeLabel = this.messageHoverTimeLabel(msg);
+            const showInlineTime = item.groupPos === 'single' || item.groupPos === 'end';
+            const inlineTimeLabel = this.messageInlineTimeLabel(msg);
             const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
-            const showAvatar = !isCall && !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
+            const showAvatar = !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
             if (dateStr && dateStr !== lastDate) {
-                html += `<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`;
+                rows.push(`<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`);
                 lastDate = dateStr;
             }
 
@@ -38848,7 +42761,7 @@ ZaliMixin(ZaliInterface, class {
             // уведомления о переводе: у карточки есть кнопка, и «системная» плашка
             // читалась бы как то, на что нажимать не нужно.
             if (coinCard) {
-                html += `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -38859,6 +42772,7 @@ ZaliMixin(ZaliInterface, class {
                     ${this.renderCoinCard(coinCard, msg)}
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
+                rows.push(html);
                 return;
             }
 
@@ -38878,7 +42792,7 @@ ZaliMixin(ZaliInterface, class {
                         messageTimestamp: msg.timestamp,
                     });
                 }
-                html += `<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
+                rows.push(`<div class="msg notice notice-${noticeType}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>
                     <div class="notice-stack">
                         ${senderLabelHtml}
                         <div class="notice-pill"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>
@@ -38886,7 +42800,7 @@ ZaliMixin(ZaliInterface, class {
                             <span class="notice-text">${this.renderMessageText(msg.text)}</span>
                         </div>
                     </div>
-                </div>`;
+                </div>`);
                 return;
             }
 
@@ -38898,7 +42812,7 @@ ZaliMixin(ZaliInterface, class {
             if (isImageCaption) {
                 const attachments = this.normalizeAttachments(msg.attachments);
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
-                html += `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -38910,34 +42824,41 @@ ZaliMixin(ZaliInterface, class {
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
+                rows.push(html);
                 return;
             }
 
-            const bubbleClass = isCall ? '' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
+            // Звонок — обычное облачко (сторона, цвет, сгруппированные углы, время),
+            // внутри только своя строка: иконка, заголовок, длительность.
+            const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            html += `<div class="msg ${dir} ${isCall ? 'call-msg' : `group-${item.groupPos}`} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
-            if (!isCall && !isOut && showAvatar) {
+            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            if (!isOut && showAvatar) {
                 html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
-            } else if (!isCall && !isOut) {
+            } else if (!isOut) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
                 ${senderLabelHtml}
-                ${isCall ? this.renderMessageBody(msg) : `<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
+                ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
+            rows.push(html);
         });
 
         if (this.S.loading) {
-            html += `<div class="sk sk-bubble sk-w2"></div>
-                     <div class="sk sk-bubble sk-w3 sk-self"></div>
-                     <div class="sk sk-bubble sk-w1"></div>
-                     <div class="sk sk-bubble sk-w2 sk-self"></div>`;
+            rows.push(
+                `<div class="sk sk-bubble sk-w2"></div>`,
+                `<div class="sk sk-bubble sk-w3 sk-self"></div>`,
+                `<div class="sk sk-bubble sk-w1"></div>`,
+                `<div class="sk sk-bubble sk-w2 sk-self"></div>`,
+            );
         }
 
         if (windowInfo.useWindow && windowInfo.bottomSpacer > 0) {
-            html += `<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`;
+            rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.bottomSpacer)}px"></div>`);
         }
+        const html = rows.join('');
 
         // Redundant re-renders are common (an avatar finishing its fetch, an unrelated
         // state sync). Reassigning identical innerHTML would still destroy and rebuild
@@ -38945,7 +42866,9 @@ ZaliMixin(ZaliInterface, class {
         // on WebKit it also resets scrollTop mid-scroll. Compare first.
         const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
         if (htmlChanged) {
-            box.innerHTML = html;
+            const rowState = this._messageRowState || (this._messageRowState = {});
+            const patched = !conversationChanged && this.patchListRows(box, rowState, rows);
+            if (!patched) this.writeListRows(box, rowState, rows, html);
             this._lastMessagesHTML = html;
             this.hydrateGifMedia(box);
 
@@ -39096,6 +43019,11 @@ ZaliMixin(ZaliInterface, class {
         } else {
             this.renderContacts();
             this.scheduleRenderMessages();
+            // «Принять/Отклонить» рисуются только при открытом личном чате
+            // (renderVoiceRoomView проверяет S.current). Если входящий пришёл,
+            // когда чат ещё не был выбран (после перезагрузки, свежий вход),
+            // карточка оставалась без кнопок, и ответить было нечем.
+            if (this.voice?.status === 'incoming' || this.voice?.status === 'calling') this.renderVoicePanel();
         }
         this.updateSendButtonState();
         this.syncActiveConversation({ force: true });
@@ -39398,7 +43326,7 @@ ZaliMixin(ZaliInterface, class {
         return new Uint8Array(buf);
     }
 
-    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments, reply }) {
+    async browserSendMessage({ text, key, keyVersion, sender, receiver, serverId, channelId, clientId, attachments, reply, call }) {
         if (!key || !receiver) return false;
         if (!(await this.wasmAvailable())) return false;
 
@@ -39419,7 +43347,10 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
-        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments, '', reply || '');
+        // `call` — запись о звонке (JSON, sendCallRecordMessage). Раньше здесь стояла
+        // пустая строка: браузер отправлял запись только текстом-сводкой, и у
+        // собеседника она навсегда оставалась голым текстом без карточки звонка.
+        const archiveBytes = await window.ZaliWasm.packMessage(sender, text, key, keyVersion, wasmAttachments, call || '', reply || '');
         if (!archiveBytes || !archiveBytes.length) return false;
 
         const formData = new FormData();
@@ -39631,6 +43562,10 @@ ZaliMixin(ZaliInterface, class {
                 // Decrypted by the WASM core alongside the body; without this the
                 // browser client would render replies as ordinary messages.
                 reply: unpacked.reply || '',
+                // Запись о звонке (JSON-строка, как у нативных шеллов) — без неё
+                // история браузера показывала её голым текстом-сводкой
+                // («Исходящий звонок · 3:09») вместо карточки звонка.
+                call: unpacked.call || '',
                 timestamp: unpacked.timestamp ? unpacked.timestamp * 1000 : payload?.timestamp,
                 attachments,
                 reactions: payload?.reactions || [],
@@ -39745,11 +43680,68 @@ ZaliMixin(ZaliInterface, class {
         throw lastError || new Error('Нет ключа для расшифровки сообщения');
     }
 
+    // Архивы в ответе истории — один раз на разговор за сессию (см.
+    // loadBrowserDmHistory). Неудачный запрос (HTTP-ошибка или сеть — например,
+    // сервер ещё не поднялся при старте) отдаёт право обратно.
+    takeHistoryInlineArchives(scope) {
+        if (!this._historyInlineTaken) this._historyInlineTaken = new Set();
+        if (this._historyInlineTaken.has(scope)) return false;
+        this._historyInlineTaken.add(scope);
+        return true;
+    }
+
+    releaseHistoryInlineArchives(scope, taken) {
+        if (taken) this._historyInlineTaken?.delete(scope);
+    }
+
+    // Загрузка, после которой часть строк так и не расшифрована (ключ пришёл
+    // позже), не должна «съедать» право: иначе ровно та загрузка, что их
+    // откроет, пойдёт по одному GET /api/download/:id на строку.
+    releaseHistoryInlineIfUndecoded(scope, taken, rows) {
+        if (!taken || !Array.isArray(rows)) return;
+        const decoded = this._decodedBrowserMessageIds;
+        const missing = rows.some(row => {
+            const id = String(row?.id || '').trim();
+            return id && !(decoded && decoded.has(id));
+        });
+        if (missing) this.releaseHistoryInlineArchives(scope, taken);
+    }
+
     // Fallback for loading DM history from a plain browser tab (no native shell to do
     // it via REFRESH_HISTORY). Downloads + decrypts each message metadata row returned
     // by GET /api/messages/:user and feeds it through receiveMessage(), same as above.
+    // Параллельные загрузки истории одного чата (старт, переподключение,
+    // догонялка контактов, refreshAfterKey) склеиваются: пока идёт одна, вторая
+    // не стартует, а ставит один повтор после неё. Иначе каждая параллельная
+    // качала все ещё не расшифрованные строки сама — по 3 GET /api/download на
+    // строку после рестарта сервера, — и без права на архивы в ответе, которое
+    // держала первая.
     async loadBrowserDmHistory(peer, key) {
         if (!peer || !key) return;
+        const inflight = this._dmHistoryInflight || (this._dmHistoryInflight = new Map());
+        const running = inflight.get(peer);
+        if (running) {
+            running.again = key;
+            return running.promise;
+        }
+        const entry = { again: '', promise: null };
+        inflight.set(peer, entry);
+        entry.promise = (async () => {
+            try {
+                let nextKey = key;
+                while (nextKey) {
+                    entry.again = '';
+                    await this._loadBrowserDmHistoryOnce(peer, nextKey);
+                    nextKey = entry.again;
+                }
+            } finally {
+                inflight.delete(peer);
+            }
+        })();
+        return entry.promise;
+    }
+
+    async _loadBrowserDmHistoryOnce(peer, key) {
         if (!(await this.wasmAvailable())) return;
         // Cleared before the walk, not after: every row is fed through
         // handleIncomingBrowserMessage below, which re-marks the gap for anything it
@@ -39757,10 +43749,32 @@ ZaliMixin(ZaliInterface, class {
         // and a conversation that has been repaired stops asking for reloads.
         this.clearBrowserDecryptGap({ peer });
         try {
-            const res = await this.apiFetch(this.apiRoutes.messages.direct(peer));
-            if (!res.ok) return;
-            const rows = await res.json();
-            if (!Array.isArray(rows)) return;
+            // Первая загрузка чата за сессию просит архивы прямо в ответе
+            // (`inlineArchives`, server/src/messages.rs) — иначе каждая строка
+            // истории — отдельный GET /api/download/:id. Повторные синхронизации
+            // их не просят: всё уже расшифрованное отсекает
+            // _decodedBrowserMessageIds, и байты гонялись бы впустую.
+            //
+            // Постранично, как каналы: без limit сервер отдаёт 50 САМЫХ СТАРЫХ
+            // строк, и всё, что новее, в браузер после перезагрузки не попадало.
+            const inlineScope = `dm:${peer}`;
+            const inlineArchives = this.takeHistoryInlineArchives(inlineScope);
+            const PAGE = 200;
+            let rows = [];
+            let complete = false;
+            try {
+                for (let offset = 0; ; offset += PAGE) {
+                    const res = await this.apiFetch(this.apiRoutes.messages.direct(peer, { inlineArchives, limit: PAGE, offset }));
+                    if (!res.ok) break;
+                    const page = await res.json();
+                    if (!Array.isArray(page)) break;
+                    rows = rows.concat(page);
+                    if (page.length < PAGE) { complete = true; break; }
+                }
+            } finally {
+                if (!complete) this.releaseHistoryInlineArchives(inlineScope, inlineArchives);
+            }
+            if (!complete && !rows.length) return;
             // Bounded concurrency instead of one strictly serial pass. Each row is an
             // independent download plus a WASM unpack, and doing them one after another
             // made a history load take the sum of every round trip. Kept small on
@@ -39778,6 +43792,9 @@ ZaliMixin(ZaliInterface, class {
             await Promise.all(
                 Array.from({ length: Math.min(HISTORY_CONCURRENCY, rows.length) }, worker)
             );
+            // Строки, которые не открылись (ключ ещё не пришёл), будут скачиваться
+            // заново — пусть следующая загрузка снова попросит их архивы в ответе.
+            this.releaseHistoryInlineIfUndecoded(inlineScope, inlineArchives, rows);
         } catch (e) {
             this.trace(`loadBrowserDmHistory failed peer=${peer} error=${e?.message || e}`);
         }
@@ -39813,7 +43830,7 @@ ZaliMixin(ZaliInterface, class {
     receiveMessage(payload = {}) {
         // Call records are not chat text and DM-only, so they take their own path
         // instead of being threaded through both branches of the logic below.
-        const callRecord = this.parseCallRecordPayload(payload);
+        const callRecord = this.parseCallRecordPayload(payload) || this.legacyCallRecordFromText(payload);
         if (callRecord) {
             const clientId = String(payload?.clientId || payload?.client_id || '').trim();
             if (clientId) this.dropPendingOutbox(clientId);
@@ -40006,11 +44023,14 @@ ZaliMixin(ZaliInterface, class {
         }
         if (this.isDmChatVisible(peer)) {
             this.scheduleRenderMessages();
-        } else {
-            // Unread/notification bookkeeping (own-echo filtering included) already
-            // happened above via notifyBackgroundMessage; just refresh the sidebar.
-            this.renderContacts();
         }
+        // The sidebar row (preview, time, order, unread badge) changes whether or
+        // not the chat is open. Skipping it for the open chat left its row showing
+        // the previous message until something unrelated repainted the list; the
+        // repaint now touches only the rows that changed (commitListRows).
+        // Unread/notification bookkeeping (own-echo filtering included) already
+        // happened above via notifyBackgroundMessage.
+        this.renderContacts();
         this.addLogEntry({ type: 'SUCCESS', msg: `Получено: ${sender} → ${receiver}`, ts: new Date().toLocaleTimeString() });
     }
 });
@@ -40289,6 +44309,11 @@ ZaliMixin(ZaliInterface, class {
                 <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
                        class="peer-context-menu-range" aria-label="Громкость собеседника">
             </div>
+            ${isSelf ? '' : `
+            <div class="peer-context-menu-sep" aria-hidden="true"></div>
+            <button type="button" class="peer-context-menu-item is-danger" role="menuitem" data-action="remove">
+                ${this.uiIcon('trash')}<span>Удалить из контактов</span>
+            </button>`}
         `;
         if (!isSelf) this.applyContactRelationToMenu(menu, relation);
         document.body.appendChild(menu);
@@ -40334,6 +44359,13 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
+        });
+        // Тот же removeContact(), что и у крестика в строке: в оформлении
+        // «Фокус» крестик скрыт, и удаление живёт только здесь — рядом с
+        // остальными действиями над контактом, а не на каждой строке списка.
+        menu.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.removeContact(name);
         });
         const range = menu.querySelector('#contactVolumeRange');
         const label = menu.querySelector('#contactVolumeValue');
@@ -40866,6 +44898,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Клик по уведомлению (web/service-worker.js, notificationclick): открытой вкладке
+"""#,
+    #"""
     // приходит postMessage, новая открывается с ?open=… в адресе.
     installWebPushClickRouting() {
         if (this.hasNativeBridge() || this._webPushClickRoutingInstalled) return;
@@ -41305,7 +45339,11 @@ ZaliMixin(ZaliInterface, class {
             touchedPeers.forEach(peer => {
                 const arr = this.S.chats[peer];
                 if (Array.isArray(arr)) {
-                    arr.sort((a, b) => this.compareMessagesByTime(a, b));
+                    // Записи о звонках из истории — в одну карточку, без
+                    // дубля-текста «Вызов отклонён» (collapseCallRecordRows сортирует сам).
+                    if (!this.collapseCallRecordRows(arr)) {
+                        arr.sort((a, b) => this.compareMessagesByTime(a, b));
+                    }
                 }
             });
             this.normalizeDmChatStore();
@@ -41368,6 +45406,11 @@ ZaliMixin(ZaliInterface, class {
         // (the desktop #wsPill is hidden on mobile). Only marks "not connected"
         // once a first status has arrived, so the strip doesn't flash on boot.
         document.body?.classList.toggle('ws-offline', !connected);
+        // Частота страховочного опроса зависит от того, жив ли сокет
+        // (scheduleConversationSyncPolling) — пересчитать при смене состояния.
+        if (wasOn !== !!connected && this.messageSyncTimer) this.scheduleConversationSyncPolling();
+        // Частые обрывы — повод для автоматического отчёта (diagnostic_reports.js).
+        if (wasOn && !connected) this.noteRealtimeDrop();
         this.addLogEntry({ type: connected ? 'SUCCESS' : 'WARN', msg: connected ? 'WebSocket соединение установлено' : 'WebSocket соединение разорвано', ts: new Date().toLocaleTimeString() });
         if (connected) {
             // Connection (re)established — drain the outbox immediately instead of
@@ -41686,8 +45729,6 @@ ZaliMixin(ZaliInterface, class {
         const sender = String(msg.sender || '').trim();
         if (!id || !sender) return null;
         const attachments = this.normalizeAttachments(msg.attachments);
-"""#,
-    #"""
         const text = String(this.coinCardSummary(msg.text) || msg.text || '').trim().slice(0, ZaliInterface.REPLY_QUOTE_MAX_CHARS);
         return { id, sender, text, attachmentCount: attachments.length };
     }
@@ -43963,21 +48004,49 @@ ZaliMixin(ZaliInterface, class {
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
 // перенесены сюда дословно; ZaliMixin копирует дескрипторы на прототип,
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
+const ZALI_LOG_BODY_LIMIT = 300;
+
 ZaliMixin(ZaliInterface, class {
 
     addLogEntry({ type, msg, ts }) {
         // Mirror to console so the native console-hook persists the full in-app
         // journal to zali-debug.log on disk (readable without the UI).
         try { console.log(`[ZALI][JOURNAL] ${type}: ${msg}`); } catch (e) {}
+        // Копия для диагностического отчёта (diagnostic_reports.js): журнал в DOM
+        // читать оттуда не годится — его очищают кнопкой и обрезают.
+        this.pushDiagRing('_journalRing', `${ts} ${type}: ${msg}`);
+        // В DOM журнал уходит пачкой раз в кадр. Прямая вставка читала
+        // body.scrollHeight сразу после того, как вызывающий (receiveMessage,
+        // отправка, звонок) только что поменял сайдбар или список, — это
+        // принудительная синхронная раскладка всего документа на каждую строку
+        // журнала: 9 из 13 мс приёма одного сообщения на аккаунте со 150 чатами.
+        const pending = this._pendingLogEntries || (this._pendingLogEntries = []);
+        pending.push({ type, msg, ts });
+        if (pending.length > ZALI_LOG_BODY_LIMIT) pending.splice(0, pending.length - ZALI_LOG_BODY_LIMIT);
+        if (this._logFlushScheduled) return;
+        this._logFlushScheduled = true;
+        const flush = () => this.flushLogEntries();
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+        else setTimeout(flush, 16);
+    }
+
+    // Выгружает накопленные строки журнала в #logBody одной вставкой. Зовётся из
+    // кадра, а также синхронно теми, кто читает журнал из DOM (отчёт о сбое
+    // расшифровки), чтобы они видели и ещё не отрисованные строки.
+    flushLogEntries() {
+        this._logFlushScheduled = false;
+        const pending = this._pendingLogEntries;
+        if (!pending || !pending.length) return;
+        this._pendingLogEntries = [];
         const body = document.getElementById('logBody');
-        if (body) {
-            const div = document.createElement('div');
-            div.className = `log-entry log-${type}`;
-            div.innerHTML = `<span class="ts">[${ts}]</span>${this.esc(type)}: ${this.esc(msg)}`;
-            body.appendChild(div);
-            body.scrollTop = body.scrollHeight;
-            if (body.childElementCount > 300) body.removeChild(body.firstElementChild);
+        if (!body) return;
+        let html = '';
+        for (const { type, msg, ts } of pending) {
+            html += `<div class="log-entry log-${this.esc(type)}"><span class="ts">[${this.esc(ts)}]</span>${this.esc(type)}: ${this.esc(msg)}</div>`;
         }
+        body.insertAdjacentHTML('beforeend', html);
+        while (body.childElementCount > ZALI_LOG_BODY_LIMIT) body.removeChild(body.firstElementChild);
+        body.scrollTop = body.scrollHeight;
     }
 
     // Always-on counterpart of voiceTrace, for the handful of facts that decide
@@ -44320,6 +48389,282 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
+// --- MODULE: interface/diagnostic_reports.js ---
+// --- ZaliInterface: Диагностические отчёты на сервер (вручную и при сбоях). ---
+// Часть класса ZaliInterface (см. web/src/interface.js).
+//
+// До этого с устройства на сервер уходили только отчёты о неудачной
+// расшифровке (reportDecryptFailure). Звонки, доставка, обрывы соединения и
+// ошибки JS оставались в журнале устройства, и разбор начинался с «пришли
+// лог». Здесь клиент собирает снимок своего состояния из ограниченных колец
+// (журнал, трасса, голосовая диагностика, неудачные запросы, очередь отправки)
+// и отправляет его в POST /api/diagnostics/report (server/src/diagnostics.rs):
+//   • вручную — кнопка «Отправить диагностику» в Настройках → Журнал событий;
+//   • сам — при сбое звонка, зависшей отправке, частых обрывах WS, ошибке JS.
+// Читает оператор: scripts/diag_reports.py.
+//
+// Кольца — короткие строки, без payload-ов и ссылок на объекты (инварианты
+// производительности: ничего, что держит память). Длинные токены вычищаются
+// перед отправкой (scrubDiagnosticText) — ключи и JWT в отчёт не попадают.
+
+const ZALI_DIAG_RING_LIMIT = 400;
+// Сервер принимает до 256 КиБ (server/src/diagnostics.rs); запас на заголовки.
+const ZALI_DIAG_MAX_REPORT_BYTES = 240 * 1024;
+const ZALI_DIAG_LINE_MAX = 400;
+// Один автоматический отчёт каждого вида не чаще, чем раз в столько.
+const ZALI_DIAG_AUTO_INTERVAL_MS = 10 * 60 * 1000;
+// Сообщение, висящее в очереди дольше этого при живом соединении, — сбой доставки.
+const ZALI_DIAG_STUCK_OUTBOX_MS = 2 * 60 * 1000;
+// Столько обрывов WS за окно — «нестабильное соединение».
+const ZALI_DIAG_WS_DROPS = 5;
+const ZALI_DIAG_WS_WINDOW_MS = 10 * 60 * 1000;
+
+ZaliMixin(ZaliInterface, class {
+
+    pushDiagRing(name, line) {
+        const ring = this[name] || (this[name] = []);
+        ring.push(String(line).slice(0, ZALI_DIAG_LINE_MAX));
+        if (ring.length > ZALI_DIAG_RING_LIMIT) ring.shift();
+    }
+
+    // Неудачный HTTP-запрос (статус ≥ 400 или транспортная ошибка) — для отчёта.
+    // request_id тот же, что в логе сервера: по нему видна вторая половина.
+    noteFailedRequest({ method, path, status = 0, requestId = '', error = '' }) {
+        // 404 на необязательный ресурс — норма, а не сбой: у большинства контактов
+        // нет аватарки, у серверов — баннера. Без фильтра такие строки вытесняли
+        // из кольца единственный 500/таймаут, который и объяснял проблему.
+        if (status === 404 && /\/api\/(avatar|profile)\/|\/assets\//.test(String(path || ''))) return;
+        const at = new Date().toISOString();
+        this.pushDiagRing('_requestFailureRing',
+            `${at} ${method} ${String(path || '').split('?')[0]} status=${status}${error ? ` err=${error}` : ''} request_id=${requestId}`);
+    }
+
+    // Ключи, токены, base64 — длинные непрерывные строки. Id сообщений (uuid с
+    // дефисами) короче порога и остаются: без них отчёт нельзя сопоставить.
+    scrubDiagnosticText(value) {
+        return String(value || '')
+            .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]')
+            .replace(/[A-Za-z0-9+/_=]{40,}/g, '[redacted]');
+    }
+
+    diagnosticPlatform() {
+        const transport = String(this.nativeBridge()?.transport || 'none');
+        const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+        if (transport === 'webkit') return /iPhone|iPad|iPod/.test(ua) ? 'ios' : 'macos';
+        if (transport === 'webview2') return 'windows';
+        if (transport === 'ipc') return /Windows/.test(ua) ? 'windows' : 'rust-shell';
+        if (transport === 'android') return 'android';
+        return /Mobi|Android|iPhone/.test(ua) ? 'browser-mobile' : 'browser';
+    }
+
+    collectDiagnosticsSnapshot(kind, extra = {}) {
+        const scrubLines = (ring, tail) => (Array.isArray(ring) ? ring.slice(-tail) : [])
+            .map(line => this.scrubDiagnosticText(line));
+        let outbox = [];
+        try { outbox = this.loadPendingOutbox() || []; } catch (e) {}
+        const now = Date.now();
+        const voiceLines = (Array.isArray(this._voiceDiagRing) ? this._voiceDiagRing : [])
+            .slice(-200)
+            .map(line => this.scrubDiagnosticText(`[${line.ts}] ${line.level} ${line.message}`).slice(0, ZALI_DIAG_LINE_MAX));
+        const memory = (typeof performance !== 'undefined' && performance.memory)
+            ? { usedMb: Math.round(performance.memory.usedJSHeapSize / 1048576), limitMb: Math.round(performance.memory.jsHeapSizeLimit / 1048576) }
+            : null;
+        return {
+            kind,
+            appVersion: String(window.__ZALI_NATIVE_APP_VERSION || '').trim() || 'web',
+            platform: this.diagnosticPlatform(),
+            reportedAt: new Date().toISOString(),
+            userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+            deviceId: this.currentDeviceId?.() || '',
+            designMode: document.body?.dataset?.designMode || '',
+            online: typeof navigator !== 'undefined' ? navigator.onLine : null,
+            visible: !document.hidden,
+            uptimeSec: Math.round((typeof performance !== 'undefined' ? performance.now() : 0) / 1000),
+            ws: { connected: !!this.S.wsOn, recentDrops: (this._wsDropTimes || []).length },
+            navMode: this.S.navMode || '',
+            activeChat: this.S.current || '',
+            voice: {
+                status: this.voice?.status || '',
+                roomId: this.voice?.roomId || '',
+                peers: this.voice?.peerConnections?.size || 0,
+            },
+            outbox: {
+                count: outbox.length,
+                oldestAgeSec: outbox.length
+                    ? Math.round(Math.max(...outbox.map(item => now - (Date.parse(item.timestamp) || now))) / 1000)
+                    : 0,
+                items: outbox.slice(0, 20).map(item => ({
+                    clientId: item.clientId,
+                    receiver: item.receiver,
+                    serverId: item.serverId || '',
+                    attempts: item.attemptCount || 0,
+                    ageSec: Math.round((now - (Date.parse(item.timestamp) || now)) / 1000),
+                    inFlight: !!item.inFlight,
+                })),
+            },
+            memory,
+            failedRequests: scrubLines(this._requestFailureRing, 60),
+            journal: scrubLines(this._journalRing, 200),
+            // Строки трассы начинаются с performance.now() в мс (дёшево на горячем
+            // пути, см. trace()); абсолютное время = traceTimeOrigin + это число.
+            traceTimeOrigin: typeof performance !== 'undefined' ? Math.round(performance.timeOrigin || 0) : 0,
+            trace: scrubLines(this._traceRing, 300),
+            voiceDiag: voiceLines,
+            ...extra,
+        };
+    }
+
+    // Сервер не примет больше 256 КиБ (413) — и отчёт, нужный сильнее всего
+    // (после долгого плохого звонка), пропал бы целиком. Режем самые объёмные
+    // кольца с головы (старое), пока не влезет; свежий хвост остаётся.
+    fitDiagnosticReport(snapshot) {
+        const LIMIT = ZALI_DIAG_MAX_REPORT_BYTES;
+        const bytes = (value) => new Blob([value]).size;
+        let body = JSON.stringify(snapshot);
+        for (let round = 0; round < 8 && bytes(body) > LIMIT; round += 1) {
+            for (const key of ['trace', 'journal', 'voiceDiag', 'failedRequests']) {
+                const list = snapshot[key];
+                if (Array.isArray(list) && list.length > 10) snapshot[key] = list.slice(Math.floor(list.length / 2));
+            }
+            snapshot.truncated = true;
+            body = JSON.stringify(snapshot);
+        }
+        return body;
+    }
+
+    // Отправляет отчёт. Автоматические — не чаще раза в 10 минут на вид;
+    // ручной — всегда. Возвращает id отчёта на сервере или '' (не отправлен).
+    async sendDiagnosticReport(kind, extra = {}, { manual = false } = {}) {
+        if (!this.S.session?.token || this.S.session?.guest) return '';
+        this._diagLastReportStatus = 0;
+        if (!manual) {
+            const last = (this._diagLastAutoReportAt || (this._diagLastAutoReportAt = {}))[kind] || 0;
+            if (Date.now() - last < ZALI_DIAG_AUTO_INTERVAL_MS) return '';
+            this._diagLastAutoReportAt[kind] = Date.now();
+        }
+        try {
+            this.flushTrace?.();
+            const body = this.fitDiagnosticReport(this.collectDiagnosticsSnapshot(kind, extra));
+            const res = await this.apiFetch(this.apiRoutes.diagnostics.report, { method: 'POST', body });
+            this._diagLastReportStatus = res.status;
+            if (!res.ok) {
+                this.trace(`sendDiagnosticReport kind=${kind} status=${res.status}`);
+                return '';
+            }
+            const data = await res.json().catch(() => ({}));
+            const id = String(data?.id || '');
+            this.trace(`sendDiagnosticReport kind=${kind} id=${id} bytes=${body.length}`);
+            return id;
+        } catch (e) {
+            this.trace(`sendDiagnosticReport failed kind=${kind} error=${e?.message || e}`);
+            return '';
+        }
+    }
+
+    // Кнопка в Настройках. Id отчёта показываем человеку — его называют,
+    // когда описывают проблему, и по нему оператор находит снимок.
+    async sendManualDiagnosticReport() {
+        const btn = document.getElementById('sendDiagnosticsBtn');
+        const note = document.getElementById('sendDiagnosticsNote');
+        if (btn) btn.disabled = true;
+        if (note) note.textContent = 'Отправляем…';
+        const id = await this.sendDiagnosticReport('manual', {}, { manual: true });
+        if (btn) btn.disabled = false;
+        if (note) {
+            note.textContent = id
+                ? `Отправлено. Номер отчёта: ${id.slice(0, 8)}`
+                : this._diagLastReportStatus === 429
+                    ? 'Слишком много отчётов за последний час — попробуйте позже.'
+                    : 'Не удалось отправить — проверьте соединение и попробуйте ещё раз.';
+        }
+        this.addLogEntry({
+            type: id ? 'SUCCESS' : 'WARN',
+            msg: id ? `Диагностика отправлена, отчёт ${id}` : 'Диагностику отправить не удалось',
+            ts: new Date().toLocaleTimeString(),
+        });
+    }
+
+    // Обрыв WS: ZALI_DIAG_WS_DROPS обрывов за окно — отчёт ws_unstable.
+    noteRealtimeDrop() {
+        const now = Date.now();
+        const drops = (this._wsDropTimes || []).filter(t => now - t < ZALI_DIAG_WS_WINDOW_MS);
+        drops.push(now);
+        this._wsDropTimes = drops;
+        if (drops.length >= ZALI_DIAG_WS_DROPS) {
+            void this.sendDiagnosticReport('ws_unstable', { drops: drops.length, windowMin: ZALI_DIAG_WS_WINDOW_MS / 60000 });
+        }
+    }
+
+    // Сообщение висит в очереди дольше двух минут, хотя соединение есть, —
+    // значит, оно не уходит не из-за сети. Отчёт один на сообщение.
+    //
+    // Возраст считается от момента, когда проверка впервые увидела сообщение при
+    // живом соединении, а не от времени самого сообщения: написанное офлайн
+    // (самолёт) иначе считалось «зависшим» сразу после переподключения, ещё до
+    // того, как очередь успела уйти. Пока соединения нет — отсчёт сбрасывается.
+    // Сообщение с вложениями, которое прямо сейчас загружается, не в счёт:
+    // большой файл законно грузится дольше двух минут.
+    checkStuckOutbox() {
+        const seen = this._diagOutboxSeenAt || (this._diagOutboxSeenAt = new Map());
+        if (!this.S.wsOn || !this.S.session?.token) {
+            seen.clear();
+            return;
+        }
+        let outbox = [];
+        try { outbox = this.loadPendingOutbox() || []; } catch (e) { return; }
+        const now = Date.now();
+        const present = new Set(outbox.map(item => String(item.clientId || '')));
+        for (const id of seen.keys()) if (!present.has(id)) seen.delete(id);
+        for (const id of present) if (!seen.has(id)) seen.set(id, now);
+        const reported = this._diagStuckReported || (this._diagStuckReported = new Set());
+        const stuck = outbox.filter(item => {
+            const id = String(item.clientId || '');
+            const uploading = item.inFlight && Array.isArray(item.attachments) && item.attachments.length > 0;
+            return !uploading && now - (seen.get(id) || now) > ZALI_DIAG_STUCK_OUTBOX_MS && !reported.has(id);
+        });
+        if (!stuck.length) return;
+        for (const item of stuck) reported.add(String(item.clientId || ''));
+        if (reported.size > 500) reported.delete(reported.values().next().value);
+        void this.sendDiagnosticReport('delivery_failed', {
+            stuck: stuck.slice(0, 10).map(item => ({
+                clientId: item.clientId,
+                receiver: item.receiver,
+                serverId: item.serverId || '',
+                attempts: item.attemptCount || 0,
+                ageSec: Math.round((now - (Date.parse(item.timestamp) || now)) / 1000),
+                hasCall: !!item.call,
+                attachments: Array.isArray(item.attachments) ? item.attachments.length : 0,
+            })),
+        });
+    }
+
+    // Ставится один раз при запуске (bindNativeBridgeEvents).
+    installDiagnosticAutoReports() {
+        if (this._diagAutoInstalled) return;
+        this._diagAutoInstalled = true;
+        const onJsError = (message, stack) => {
+            const text = this.scrubDiagnosticText(String(message || '')).slice(0, 500);
+            if (!text) return;
+            this.pushDiagRing('_traceRing', `[JS-ERROR] ${text}`);
+            void this.sendDiagnosticReport('js_error', {
+                error: text,
+                stack: this.scrubDiagnosticText(String(stack || '')).slice(0, 4000),
+            });
+        };
+        window.addEventListener('error', (event) => {
+            onJsError(event?.message || event?.error?.message, event?.error?.stack
+                || `${event?.filename || ''}:${event?.lineno || ''}:${event?.colno || ''}`);
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+            const reason = event?.reason;
+            onJsError(`unhandledrejection: ${reason?.message || reason}`, reason?.stack || '');
+        });
+        if (this._diagOutboxTimer) clearInterval(this._diagOutboxTimer);
+        this._diagOutboxTimer = setInterval(() => this.checkStuckOutbox(), 60 * 1000);
+    }
+});
+
+
 // --- MODULE: interface/events.js ---
 // --- ZaliInterface: Привязка DOM-событий и инерция прокрутки. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
@@ -44483,16 +48828,7 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const cancelBtn = e.target.closest('#voiceCancelBtn');
                 if (cancelBtn) {
-                    const invite = this.voice.outgoingInvite;
-                    if (invite?.roomId && invite?.target) {
-                        this.sendVoiceEvent({
-                            type: 'voice_call_cancel',
-                            roomId: invite.roomId,
-                            target: invite.target,
-                        });
-                    }
-                    this.recordVoiceCallHistory({ outcome: 'cancelled', endedAt: Date.now() });
-                    this.resetVoiceState({ preserveInvite: false });
+                    this.cancelOutgoingVoiceCall();
                 }
             });
             voicePanel.addEventListener('keydown', (e) => {
@@ -44505,11 +48841,44 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // Компактный звонок (renderVoiceCompactCall) — в титлбаре и в полосе на
+        // телефоне. Кнопки адресуются data-voice-action: фрагмент один, мест два.
+        const handleCompactCallAction = (e) => {
+            const btn = e.target.closest('[data-voice-action]');
+            if (!btn) return false;
+            const action = btn.getAttribute('data-voice-action');
+            if (action === 'open') this.openActiveVoiceCall();
+            else if (action === 'mute') this.toggleVoiceMute();
+            else if (action === 'deafen') this.toggleVoiceDeafen();
+            else if (action === 'leave') void this.leaveVoiceRoom({ announce: true });
+            return true;
+        };
+        document.getElementById('tbCall')?.addEventListener('click', (e) => {
+            handleCompactCallAction(e);
+        });
+
+        // Шапка чата в состоянии «звонит» (renderChatHeaderCallState): принять,
+        // отклонить, отменить исходящий; и полоса над вкладками с тем же.
+        const handleRingingAction = (e) => {
+            const btn = e.target.closest('[data-ring-action]');
+            if (!btn) return false;
+            const action = btn.getAttribute('data-ring-action');
+            if (action === 'accept') void this.acceptIncomingCall();
+            else if (action === 'reject') void this.rejectIncomingCall();
+            else if (action === 'cancel') this.cancelOutgoingVoiceCall();
+            return true;
+        };
+        document.getElementById('chatHdrCallCtl')?.addEventListener('click', (e) => {
+            handleRingingAction(e);
+        });
+
         // The strip above every tab: its mute/deafen act in place, anywhere else
         // on it goes back to the call.
         const voiceCallStrip = document.getElementById('voiceCallStrip');
         if (voiceCallStrip) {
             voiceCallStrip.addEventListener('click', (e) => {
+                if (handleCompactCallAction(e)) return;
+                if (handleRingingAction(e)) return;
                 // A DM call ringing over the voice channel we are in (renderVoiceIncomingStrip).
                 if (e.target.closest('#voiceStripAcceptBtn')) {
                     void this.acceptIncomingCall();
@@ -44523,6 +48892,8 @@ ZaliMixin(ZaliInterface, class {
                     this.toggleVoiceMute();
                     return;
                 }
+"""#,
+    #"""
                 if (e.target.closest('#voiceDeafenBtn')) {
                     this.toggleVoiceDeafen();
                     return;
@@ -44961,6 +49332,24 @@ ZaliMixin(ZaliInterface, class {
 
         const authNetworkSaveBtn = document.getElementById('authNetworkSaveBtn');
         const authApiBaseUrl = document.getElementById('authApiBaseUrl');
+        // В оформлении «Фокус» блок адреса сервера свёрнут до одной строки —
+        // нужен редко, а занимал треть формы входа.
+        const authNetworkHead = document.getElementById('authNetworkHead');
+        if (authNetworkHead) {
+            const toggleAuthNetwork = () => {
+                const box = authNetworkHead.closest('.auth-network');
+                const open = !box?.classList.contains('is-open');
+                box?.classList.toggle('is-open', open);
+                authNetworkHead.setAttribute('aria-expanded', open ? 'true' : 'false');
+                if (open) authApiBaseUrl?.focus({ preventScroll: true });
+            };
+            authNetworkHead.addEventListener('click', toggleAuthNetwork);
+            authNetworkHead.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleAuthNetwork();
+            });
+        }
         if (authApiBaseUrl) {
             authApiBaseUrl.addEventListener('input', () => {
                 authApiBaseUrl.dataset.dirty = '1';
@@ -45065,6 +49454,9 @@ ZaliMixin(ZaliInterface, class {
         const serverRoleNameInput = document.getElementById('serverRoleNameInput');
         const settingsLogoutBtn = document.getElementById('settingsLogoutBtn');
         const clearLogsBtn = document.getElementById('clearLogs');
+        document.getElementById('sendDiagnosticsBtn')?.addEventListener('click', () => {
+            void this.sendManualDiagnosticReport();
+        });
         const closeSettings = document.getElementById('closeSettings');
         const resetEncryptionKeysBtn = document.getElementById('resetEncryptionKeysBtn');
         const networkConfigSaveBtn = document.getElementById('networkConfigSaveBtn');
@@ -45626,6 +50018,7 @@ ZaliMixin(ZaliInterface, class {
         if (meAva) meAva.title = 'Мой профиль';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
+                this._pendingLogEntries = [];
                 const logBody = document.getElementById('logBody');
                 if (logBody) logBody.innerHTML = '';
             });
@@ -45768,8 +50161,6 @@ ZaliMixin(ZaliInterface, class {
 
     /** Выбор темы и селекторы стилизатора. Вызывается только из bindEvents(). */
     bindStylerEvents() {
-"""#,
-    #"""
         // 6. Dynamic styler selector events
         document.querySelectorAll('.btn-theme').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -46002,7 +50393,7 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
@@ -46029,6 +50420,13 @@ ZaliMixin(ZaliInterface, class {
             if (tbL && wsPill) {
                 tbL.insertBefore(wsPill, tbL.firstChild);
             }
+            // Компактный идущий звонок — на стороне, противоположной кнопкам окна:
+            // на Windows они справа, звонок уходит влево, следом за индикатором
+            // связи. В macOS (светофор слева) и в браузере он остаётся справа.
+            const tbCall = document.getElementById('tbCall');
+            if (tbL && tbCall) {
+                tbL.insertBefore(tbCall, wsPill ? wsPill.nextSibling : tbL.firstChild);
+            }
             document.getElementById('winMinBtn')?.addEventListener('click', () => {
                 this.postNativeMessage({ type: NativeMessageTypes.MINIMIZE_WINDOW });
             });
@@ -46039,7 +50437,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

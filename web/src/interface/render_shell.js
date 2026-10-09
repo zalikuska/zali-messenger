@@ -22,15 +22,17 @@ ZaliMixin(ZaliInterface, class {
                 lastMessageAt: this.conversationLastMessageAt(contact),
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }) || a.index - b.index)
+            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => item.name);
 
         if (list.length === 0) {
-            this.commitListHTML(el, 'contacts', `<div style="text-align:center;color:var(--text3);font-size:11px;padding:24px 0">${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</div>`);
+            // contacts-empty-art — иллюстрация «найти → добавить → написать»
+            // (оформление «Фокус»); при пустом поиске она не к месту.
+            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span></div>`);
             return;
         }
 
-        const html = list.map(contact => {
+        const rows = list.map(contact => {
             this.initChat(contact);
             const msgs = this.S.chats[contact];
             const last = msgs[msgs.length-1];
@@ -48,13 +50,13 @@ ZaliMixin(ZaliInterface, class {
             // otherwise a short date — same helpers the message list uses.
             let timeLabel = '';
             if (last && last.timestamp) {
-                const d = new Date(last.timestamp);
-                const now = new Date();
-                timeLabel = d.toDateString() === now.toDateString()
-                    ? this.fmtTime(last.timestamp)
-                    : this.fmtDate(last.timestamp);
+                // fmtDate() answers «Сегодня» exactly when the row wants a time.
+                const day = this.fmtDate(last.timestamp);
+                timeLabel = day === 'Сегодня' ? this.fmtTime(last.timestamp) : day;
             }
-            return `<div class="contact ${active}" data-name="${this.esc(contact)}">
+            // has-unread — чтобы строку с новым можно было выделить целиком
+            // (имя, превью), а не только бейджем в углу.
+            return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
                 <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}</div>
@@ -67,8 +69,8 @@ ZaliMixin(ZaliInterface, class {
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
-        }).join('');
-        this.commitListHTML(el, 'contacts', html);
+        });
+        this.commitListRows(el, 'contacts', rows);
     }
 
     // renderContacts()/renderServers() are called from ~30 places (every incoming
@@ -110,6 +112,134 @@ ZaliMixin(ZaliInterface, class {
         }
         el.dataset.listSlot = key;
         el.innerHTML = html;
+        this._listHTMLCache.set(key, html);
+        return true;
+    }
+
+    // Полная запись списка из строк (одна строка разметки = ровно один элемент
+    // верхнего уровня). Запоминает соответствие «строка разметки → узел», если
+    // каждая строка дала ровно один узел верхнего уровня; иначе соответствия нет и
+    // следующий кадр тоже пишется целиком — как было до точечного обновления.
+    writeListRows(el, state, rows, html = rows.join('')) {
+        el.innerHTML = html;
+        const nodes = el.childNodes;
+        if (nodes && nodes.length === rows.length) {
+            state.rows = rows;
+            state.nodes = Array.from(nodes);
+        } else {
+            state.rows = null;
+            state.nodes = null;
+        }
+    }
+
+    // Точечное обновление списка (#msgs, сайдбар контактов): узлы строк, которые не изменились, остаются на месте,
+    // создаются только новые. Новое сообщение, смена статуса «отправляется»,
+    // реакция — это одна-две строки, а раньше каждое такое событие пересоздавало
+    // все пузыри окна (и все их <img>/<video>) и заново раскладывало список.
+    //
+    // Сопоставление — по самой строке разметки, по порядку: для каждой новой строки
+    // берётся первый ещё не занятый старый узел с той же разметкой правее
+    // предыдущего взятого. Так покрывается и сдвиг виртуального окна (сверху ушла
+    // строка, снизу пришла, распорка сменила высоту), а не только правка хвоста.
+    //
+    // Возвращает false, если патч неприменим, — вызывающий пишет список целиком:
+    //  - соответствие строк узлам потеряно (кто-то менял #msgs мимо рендера —
+    //    пустое состояние, голосовой канал; проверяется поузлово, а не по флагу);
+    //  - новых строк больше половины — полная запись не дороже;
+    //  - новые строки разобрались не в один узел на строку.
+    patchListRows(box, state, rows) {
+        if (!state) return false;
+        const prevRows = state.rows;
+        const prevNodes = state.nodes;
+        if (!Array.isArray(prevRows) || !Array.isArray(prevNodes) || prevRows.length !== prevNodes.length) return false;
+        const children = box.childNodes;
+        if (!children || children.length !== prevNodes.length) return false;
+        for (let i = 0; i < prevNodes.length; i += 1) {
+            if (children[i] !== prevNodes[i]) return false;
+        }
+
+        const byRow = new Map();
+        for (let i = 0; i < prevRows.length; i += 1) {
+            const list = byRow.get(prevRows[i]);
+            if (list) list.push(i);
+            else byRow.set(prevRows[i], [i]);
+        }
+        const matched = new Array(rows.length);
+        const reused = new Uint8Array(prevRows.length);
+        const freshRows = [];
+        let lastOld = -1;
+        for (let i = 0; i < rows.length; i += 1) {
+            const list = byRow.get(rows[i]);
+            let found = -1;
+            if (list) {
+                while (list.length && list[0] <= lastOld) list.shift();
+                if (list.length) found = list.shift();
+            }
+            if (found >= 0) {
+                matched[i] = prevNodes[found];
+                reused[found] = 1;
+                lastOld = found;
+            } else {
+                matched[i] = null;
+                freshRows.push(rows[i]);
+            }
+        }
+        if (freshRows.length * 2 > rows.length) return false;
+
+        let fresh = [];
+        if (freshRows.length) {
+            const tpl = document.createElement('template');
+            tpl.innerHTML = freshRows.join('');
+            if (tpl.content.childNodes.length !== freshRows.length) return false;
+            fresh = Array.from(tpl.content.childNodes);
+        }
+        for (let i = 0; i < prevNodes.length; i += 1) {
+            if (!reused[i]) prevNodes[i].remove();
+        }
+        // После удаления в #msgs остались только переиспользованные узлы, уже в
+        // нужном порядке; новые вставляются перед следующим переиспользованным.
+        let ref = box.firstChild;
+        let freshIndex = 0;
+        const nodes = new Array(rows.length);
+        for (let i = 0; i < rows.length; i += 1) {
+            if (matched[i]) {
+                nodes[i] = matched[i];
+                ref = matched[i].nextSibling;
+            } else {
+                const node = fresh[freshIndex++];
+                box.insertBefore(node, ref);
+                nodes[i] = node;
+            }
+        }
+
+        state.rows = rows;
+        state.nodes = nodes;
+        return true;
+    }
+
+    // commitListHTML() для списков, собранных построчно: та же защёлка «не
+    // изменилось — не трогать», но изменение применяется точечно (patchListRows),
+    // а не перезаписью всего контейнера. Кэш commitListHTML обновляется тем же
+    // значением, чтобы обычная запись в тот же слот (пустое состояние) не сочла
+    // себя «неизменившейся» по устаревшей строке.
+    commitListRows(el, slot, rows) {
+        if (!el) return false;
+        const html = rows.join('');
+        this._listHTMLCache = this._listHTMLCache || new Map();
+        const key = `${slot}`;
+        const unchanged = this._listHTMLCache.get(key) === html
+            && el.dataset.listSlot === key
+            && (el.childElementCount > 0 || !html);
+        if (unchanged) return false;
+        this._listRowState = this._listRowState || new Map();
+        let state = this._listRowState.get(key);
+        if (!state) {
+            state = {};
+            this._listRowState.set(key, state);
+        }
+        const patched = el.dataset.listSlot === key && this.patchListRows(el, state, rows);
+        if (!patched) this.writeListRows(el, state, rows, html);
+        el.dataset.listSlot = key;
         this._listHTMLCache.set(key, html);
         return true;
     }
@@ -376,11 +506,14 @@ ZaliMixin(ZaliInterface, class {
                 const sub = ch.topic
                     ? this.esc(ch.topic)
                     : (kind === 'voice' ? (inCall ? 'Вы в канале' : 'Голосовой канал') : 'Текстовый канал');
-                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
+                // is-generic — подпись лишь повторяет иконку («Текстовый канал»):
+                // оформление «Фокус» её прячет, тема канала и «Вы в канале» остаются.
+                const genericSub = !ch.topic && !inCall;
+                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}${count > 0 ? ' has-unread' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
                     <span class="sidebar-channel-icon ${kind}">${this.channelKindIcon(kind, 'sidebar-channel-glyph')}</span>
                     <div class="contact-info">
                         <div class="contact-name">${this.esc(ch.name)}</div>
-                        <div class="contact-prev">${sub}</div>
+                        <div class="contact-prev${genericSub ? ' is-generic' : ''}">${sub}</div>
                     </div>
                     <div class="contact-actions">
                         ${badge}
