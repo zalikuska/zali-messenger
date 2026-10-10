@@ -6003,11 +6003,12 @@ body[data-nav-mode="servers"] .contacts {
     position: fixed;
     z-index: 140;
     display: none;
-    align-items: center;
-    gap: 1px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
     padding: 5px;
     border: 1px solid var(--menu-border);
-    border-radius: 999px;
+    border-radius: 18px;
     background: var(--menu-bg);
     box-shadow: var(--menu-shadow);
     backdrop-filter: var(--menu-blur);
@@ -6057,47 +6058,70 @@ body[data-nav-mode="servers"] .contacts {
     height: 18px;
 }
 
-/* Ответ / правка — линейные иконки того же набора, что и везде в
-   интерфейсе. Раньше это были типографские глифы ↩ ✎ 🗑, которые каждая
-   ОС рисует своим шрифтом: рядом с цветными эмодзи они выглядели то
-   бледной палочкой, то вторым эмодзи. */
-.reaction-btn-action {
-    color: var(--text2);
+/* Ряд реакций и ряд действий с подписями: слова вместо иконок без текста. */
+.reaction-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 1px;
 }
 
-.reaction-menu .reaction-btn-action:hover,
-.reaction-menu .reaction-btn-action:focus-visible {
+.reaction-menu-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-top: 3px;
+    border-top: 1px solid var(--menu-border);
+}
+
+.reaction-menu-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 34px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.25;
+    text-align: left;
+    cursor: pointer;
+    transition: background .12s var(--ease-out), color .12s var(--ease-out);
+}
+
+.reaction-menu-action[hidden] { display: none; }
+
+.reaction-menu-action .ui-icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--menu-icon);
+}
+
+.reaction-menu-action:hover,
+.reaction-menu-action:focus-visible {
+    background: var(--menu-hover);
+    outline: 0;
+}
+
+.reaction-menu-action:hover .ui-icon,
+.reaction-menu-action:focus-visible .ui-icon {
     color: var(--text);
 }
 
-/* Trash icon appended to the same popup, shown only when canDeleteMessage()
-   allows it (own message, or manage rights on the channel it's in) — kept in
-   the reaction picker rather than a separate menu so there's one place to
-   long-press/right-click a message for any per-message action. */
-.reaction-btn-delete {
-    color: rgba(255, 92, 118, .82);
+/* Единственный цветной пункт — цвет тут несёт смысл (действие необратимое). */
+.reaction-menu-action.is-danger,
+.reaction-menu-action.is-danger .ui-icon {
+    color: rgba(255, 92, 118, .9);
 }
 
-/* Единственный цветной пункт в меню — и цвет тут несёт смысл (действие
-   необратимое), а не украшает. */
-.reaction-menu .reaction-btn-delete:hover,
-.reaction-menu .reaction-btn-delete:focus-visible {
-    border-color: transparent;
+.reaction-menu-action.is-danger:hover,
+.reaction-menu-action.is-danger:focus-visible {
     background: rgba(255, 92, 118, .16);
-    box-shadow: none;
     color: rgb(255, 108, 132);
-}
-
-/* Reply / edit actions live in the same popup as the reactions — one
-   long-press/right-click surface for every per-message action, rather than a
-   second menu the user has to discover separately. */
-.reaction-menu-sep {
-    flex: none;
-    align-self: center;
-    width: 1px;
-    height: 20px;
-    margin: 0 5px;
-    background: var(--menu-border);
 }
 
 /* Quote of the message being replied to, rendered at the top of the bubble.
@@ -10349,25 +10373,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .contact.press-hold,
     .sidebar-channel.press-hold { transform: scale(.975); }
 
-    /* Reaction menu: bigger touch targets on a phone. */
-    /* Шесть эмодзи, разделитель и три действия — это девять кнопок в один
-       ряд. По 44 px ряд занимает 388 px и на 375-пиксельном экране просто
-       уезжает за край: showReactionMenu прижимает меню к левому отступу, а
-       «Удалить» оказывается за границей экрана. 36 укладывает весь ряд в
-       352 px, а max-width + горизонтальная прокрутка страхуют экраны уже
-       375 px и любую будущую кнопку. */
+    /* Reaction menu: bigger touch targets on a phone. Шесть эмодзи по 40 px
+       и действия с подписями — в колонку, на 375-пиксельный экран влезает. */
     .reaction-menu {
-        padding: 5px;
-        border-radius: 999px;
+        padding: 6px;
         max-width: calc(100vw - 16px);
-        overflow-x: auto;
-        overscroll-behavior-x: contain;
-        scrollbar-width: none;
     }
-    .reaction-menu::-webkit-scrollbar { display: none; }
-    .reaction-menu .reaction-btn { width: 36px; height: 36px; font-size: 21px; }
+    .reaction-menu .reaction-btn { width: 40px; height: 40px; font-size: 21px; }
     .reaction-menu .reaction-btn .ui-icon { width: 19px; height: 19px; }
-    .reaction-menu-sep { height: 22px; margin: 0 3px; }
+    .reaction-menu-action { min-height: 44px; font-size: 15px; }
 }
 
 /* ============================================================================
@@ -14779,6 +14793,74 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
         top: 50%;
         width: max(100%, 44px);
         height: max(100%, 44px);
+        transform: translate(-50%, -50%);
+    }
+}
+
+/* Видимый вход в меню сообщения («⋯» у верхнего внешнего угла пузыря). */
+.bwrap { position: relative; }
+
+.msg-more {
+    position: absolute;
+    top: -12px;
+    right: -10px;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--menu-border);
+    border-radius: 50%;
+    background: var(--menu-bg);
+    color: var(--text2);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .14s var(--ease-out), color .12s var(--ease-out), background .12s var(--ease-out);
+}
+
+.msg.out .msg-more { right: auto; left: -10px; }
+.msg-more .ui-icon { width: 16px; height: 16px; }
+.msg-more:hover { color: var(--text); background: var(--menu-hover); }
+
+.msg:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 3px;
+    border-radius: 12px;
+}
+
+#msgs:focus-visible {
+    outline: 2px solid rgba(203,255,0,.5);
+    outline-offset: -2px;
+}
+
+@media (hover: hover) {
+    .msg:hover .msg-more,
+    .msg:focus-within .msg-more,
+    .msg-more:focus-visible {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+/* Тач-экраны: у последнего сообщения кнопка видна всегда, остальные
+   открываются долгим нажатием (подсказка в пустом поле не нужна). */
+@media (hover: none), (pointer: coarse) {
+    #msgs > .msg:last-child .msg-more {
+        opacity: .9;
+        pointer-events: auto;
+    }
+}
+
+@media (pointer: coarse), (max-width: 760px) {
+    .msg-more::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44px;
+        height: 44px;
         transform: translate(-50%, -50%);
     }
 }

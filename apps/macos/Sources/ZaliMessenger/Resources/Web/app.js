@@ -2408,6 +2408,7 @@ ZaliMixin(ZaliInterface, class {
             pencil: `<svg ${attrs} fill="none"><path d="M15.05 5.5 18.5 8.95" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m16.05 4.5 1.5 1.5a1.6 1.6 0 0 1 0 2.26L9.4 16.4l-3.4 1.1 1.1-3.4 8.14-8.15a1.6 1.6 0 0 1 2.26 0Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4.9 20.3h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             // Монета ZaliCoin — тот же «Ƶ», что в coinGiftIcon и на кнопке композера.
             coin: `<svg ${attrs} fill="none"><circle cx="12" cy="12" r="8.6" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9h5l-5 6h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 12h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+            more: `<svg ${attrs} fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>`,
             trash: `<svg ${attrs} fill="none"><path d="M4.9 6.9h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.7 6.9V5.5a1.4 1.4 0 0 1 1.4-1.4h1.8a1.4 1.4 0 0 1 1.4 1.4v1.4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m6.8 6.9.75 11.5a1.6 1.6 0 0 0 1.6 1.5h5.7a1.6 1.6 0 0 0 1.6-1.5l.75-11.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
         };
         return icons[name] || '';
@@ -25622,18 +25623,44 @@ ZaliMixin(ZaliInterface, class {
         menu.id = 'reactionMenu';
         menu.className = 'reaction-menu';
         menu.setAttribute('aria-hidden', 'true');
-        menu.innerHTML = this.reactionOptions.map(emoji => (
+        menu.setAttribute('role', 'group');
+        menu.setAttribute('aria-label', 'Действия с сообщением');
+        // Два ряда: реакции (эмодзи говорят сами за себя) и действия с текстовой
+        // подписью — раньше это были две иконки без слов (↩ и корзина).
+        // Иконки — общего набора (uiIcon), а не глифы ↩ ✎ 🗑: последние
+        // рисуются шрифтом ОС и выглядели по-разному на macOS, Windows и Android.
+        menu.innerHTML = `<div class="reaction-menu-row">${this.reactionOptions.map(emoji => (
             `<button class="reaction-btn" type="button" data-menu-reaction="${this.esc(emoji)}" aria-label="${this.esc(emoji)}"><span class="reaction-btn-emoji">${this.esc(emoji)}</span></button>`
-        )).join('')
-            // Действия — иконки общего набора (uiIcon), а не глифы ↩ ✎ 🗑:
-            // последние рисуются шрифтом ОС и рядом с цветными эмодзи
-            // выглядели то бледной палочкой, то ещё одним эмодзи, причём
-            // по-разному на macOS, Windows и Android.
-            + `<span class="reaction-menu-sep" aria-hidden="true"></span>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-reply title="Ответить" aria-label="Ответить на сообщение">${this.uiIcon('reply')}</button>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-edit title="Изменить" aria-label="Изменить сообщение" hidden>${this.uiIcon('pencil')}</button>`
-            + `<button class="reaction-btn reaction-btn-delete" type="button" data-menu-delete title="Удалить" aria-label="Удалить сообщение" hidden>${this.uiIcon('trash')}</button>`;
+        )).join('')}</div>`
+            + `<div class="reaction-menu-actions">`
+            + `<button class="reaction-menu-action" type="button" data-menu-reply>${this.uiIcon('reply')}<span>Ответить</span></button>`
+            + `<button class="reaction-menu-action" type="button" data-menu-edit hidden>${this.uiIcon('pencil')}<span>Изменить</span></button>`
+            + `<button class="reaction-menu-action is-danger" type="button" data-menu-delete hidden>${this.uiIcon('trash')}<span>Удалить</span></button>`
+            + `</div>`;
         document.body.appendChild(menu);
+
+        menu.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.hideReactionMenu({ restoreFocus: true });
+                return;
+            }
+            const items = [...menu.querySelectorAll('button:not([hidden])')];
+            if (!items.length) return;
+            const idx = items.indexOf(document.activeElement);
+            if (e.key === 'Tab') {
+                // Меню небольшое: фокус не уходит из него в ленту, пока оно открыто.
+                e.preventDefault();
+                items[(idx + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+                return;
+            }
+            const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+            if (step && idx >= 0) {
+                e.preventDefault();
+                items[(idx + step + items.length) % items.length].focus();
+            }
+        });
 
         menu.addEventListener('click', (e) => {
             const replyBtn = e.target.closest('[data-menu-reply]');
@@ -25672,9 +25699,10 @@ ZaliMixin(ZaliInterface, class {
         return menu;
     }
 
-    showReactionMenu(messageEl, messageId, x, y) {
+    showReactionMenu(messageEl, messageId, x, y, { focus = false } = {}) {
         const menu = this.ensureReactionMenu();
         if (!menu || !messageEl) return;
+        this._reactionMenuOpener = focus ? document.activeElement : null;
         menu.setAttribute('data-message-id', messageId);
         const found = this.findMessageById(messageId);
         const deleteBtn = menu.querySelector('[data-menu-delete]');
@@ -25723,14 +25751,29 @@ ZaliMixin(ZaliInterface, class {
         const top = Math.max(topInset, Math.min(Number.isFinite(preferredTop) ? preferredTop : fallbackTop, maxTop));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
+        // С клавиатуры или с кнопки «⋯» фокус переходит в меню (на первую реакцию).
+        if (focus) menu.querySelector('button:not([hidden])')?.focus();
     }
 
-    hideReactionMenu() {
+    hideReactionMenu({ restoreFocus = false } = {}) {
         const menu = document.getElementById('reactionMenu');
         if (!menu) return;
+        const opener = this._reactionMenuOpener;
+        this._reactionMenuOpener = null;
+        const hadFocus = menu.contains(document.activeElement);
         menu.classList.remove('visible');
         menu.setAttribute('aria-hidden', 'true');
         menu.removeAttribute('data-message-id');
+        if ((restoreFocus || hadFocus) && opener && document.contains(opener)) {
+            try { opener.focus(); } catch (e) { /* элемента уже нет */ }
+        }
+    }
+
+    /** Видимый вход в меню сообщения: на десктопе при наведении и фокусе, на
+     *  телефоне — у последнего сообщения (остальные открываются долгим нажатием). */
+    renderMessageMoreButton(messageId, msg) {
+        if (!messageId || !msg || msg.kind === 'call') return '';
+        return `<button class="msg-more" type="button" data-msg-more tabindex="-1" aria-haspopup="true" aria-label="Действия с сообщением">${this.uiIcon('more')}</button>`;
     }
 
     markMessageSeen(msg) {
@@ -27237,7 +27280,7 @@ ZaliMixin(ZaliInterface, class {
                     ${senderLabelHtml}
                     ${this.renderCoinCard(coinCard, msg)}
                     ${this.renderMessageReactions(msg)}
-                </div></div>`;
+                ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
                 rows.push(html);
                 return;
             }
@@ -27290,7 +27333,7 @@ ZaliMixin(ZaliInterface, class {
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageState(msg, isOut)}
                     ${this.renderMessageReactions(msg)}
-                </div></div>`;
+                ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
                 rows.push(html);
                 return;
             }
@@ -27310,7 +27353,7 @@ ZaliMixin(ZaliInterface, class {
                 ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${this.renderMessageState(msg, isOut)}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
-            </div></div>`;
+            ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
             rows.push(html);
         });
 
@@ -33595,7 +33638,10 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const discardBtn = e.target.closest('[data-msg-discard]');
                 if (discardBtn) void this.deleteMessage(discardBtn.getAttribute('data-msg-discard'));
+                const moreBtn = e.target.closest('[data-msg-more]');
+                if (moreBtn) this.toggleMessageMenuFromButton(moreBtn);
             });
+            this.bindMessageKeyboardNav(msgsEl);
             msgsEl.addEventListener('contextmenu', (e) => {
                 // ПКМ по аватарке или нику — меню человека (подписаться, в друзья),
                 // а не меню сообщения: реакция к отправителю отношения не имеет.
@@ -33641,6 +33687,61 @@ ZaliMixin(ZaliInterface, class {
             }
         });
 
+    }
+
+    /** Кнопка «⋯» у сообщения: открывает или закрывает то же меню, что ПКМ и долгое нажатие. */
+    toggleMessageMenuFromButton(btn) {
+        const msgEl = btn.closest('.msg[data-message-id]');
+        const messageId = msgEl?.getAttribute('data-message-id');
+        if (!messageId) return;
+        const menu = document.getElementById('reactionMenu');
+        if (menu?.classList.contains('visible') && menu.getAttribute('data-message-id') === messageId) {
+            this.hideReactionMenu({ restoreFocus: true });
+            return;
+        }
+        const rect = btn.getBoundingClientRect();
+        this.showReactionMenu(msgEl, messageId, rect.left + rect.width / 2, rect.top, { focus: true });
+    }
+
+    /**
+     * Лента сообщений с клавиатуры: Tab попадает в ленту, стрелки идут по
+     * сообщениям, Enter / ContextMenu / Shift+F10 открывают меню действий.
+     * Лента одна точка остановки Tab, а не по кнопке на каждое сообщение.
+     */
+    bindMessageKeyboardNav(msgsEl) {
+        msgsEl.tabIndex = 0;
+        msgsEl.setAttribute('aria-label', 'Сообщения. Стрелки — выбор сообщения, Enter — действия');
+        const rows = () => [...msgsEl.querySelectorAll('.msg[data-message-id]:not(.notice)')];
+        const focusRow = (el) => {
+            if (!el) return;
+            el.tabIndex = -1;
+            el.focus({ preventScroll: false });
+        };
+        msgsEl.addEventListener('keydown', (e) => {
+            if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+            const msgEl = e.target.closest?.('.msg[data-message-id]');
+            const onList = e.target === msgsEl;
+            if (!msgEl && !onList) return;
+            const list = rows();
+            if (!list.length) return;
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End') {
+                if (e.target !== msgsEl && e.target !== msgEl) return;
+                e.preventDefault();
+                let idx = msgEl ? list.indexOf(msgEl) : list.length;
+                if (e.key === 'ArrowUp') idx -= 1;
+                else if (e.key === 'ArrowDown') idx += 1;
+                else idx = e.key === 'Home' ? 0 : list.length - 1;
+                focusRow(list[Math.max(0, Math.min(list.length - 1, idx))]);
+                return;
+            }
+            const opensMenu = e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)
+                || ((e.key === 'Enter' || e.key === ' ') && e.target === msgEl);
+            if (opensMenu && msgEl) {
+                e.preventDefault();
+                const rect = (msgEl.querySelector('.bwrap') || msgEl).getBoundingClientRect();
+                this.showReactionMenu(msgEl, msgEl.getAttribute('data-message-id'), rect.left, rect.top, { focus: true });
+            }
+        });
     }
 
     /** Добавление контакта и подсказки. Вызывается только из bindEvents(). */

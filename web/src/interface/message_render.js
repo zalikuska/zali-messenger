@@ -663,18 +663,44 @@ ZaliMixin(ZaliInterface, class {
         menu.id = 'reactionMenu';
         menu.className = 'reaction-menu';
         menu.setAttribute('aria-hidden', 'true');
-        menu.innerHTML = this.reactionOptions.map(emoji => (
+        menu.setAttribute('role', 'group');
+        menu.setAttribute('aria-label', 'Действия с сообщением');
+        // Два ряда: реакции (эмодзи говорят сами за себя) и действия с текстовой
+        // подписью — раньше это были две иконки без слов (↩ и корзина).
+        // Иконки — общего набора (uiIcon), а не глифы ↩ ✎ 🗑: последние
+        // рисуются шрифтом ОС и выглядели по-разному на macOS, Windows и Android.
+        menu.innerHTML = `<div class="reaction-menu-row">${this.reactionOptions.map(emoji => (
             `<button class="reaction-btn" type="button" data-menu-reaction="${this.esc(emoji)}" aria-label="${this.esc(emoji)}"><span class="reaction-btn-emoji">${this.esc(emoji)}</span></button>`
-        )).join('')
-            // Действия — иконки общего набора (uiIcon), а не глифы ↩ ✎ 🗑:
-            // последние рисуются шрифтом ОС и рядом с цветными эмодзи
-            // выглядели то бледной палочкой, то ещё одним эмодзи, причём
-            // по-разному на macOS, Windows и Android.
-            + `<span class="reaction-menu-sep" aria-hidden="true"></span>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-reply title="Ответить" aria-label="Ответить на сообщение">${this.uiIcon('reply')}</button>`
-            + `<button class="reaction-btn reaction-btn-action" type="button" data-menu-edit title="Изменить" aria-label="Изменить сообщение" hidden>${this.uiIcon('pencil')}</button>`
-            + `<button class="reaction-btn reaction-btn-delete" type="button" data-menu-delete title="Удалить" aria-label="Удалить сообщение" hidden>${this.uiIcon('trash')}</button>`;
+        )).join('')}</div>`
+            + `<div class="reaction-menu-actions">`
+            + `<button class="reaction-menu-action" type="button" data-menu-reply>${this.uiIcon('reply')}<span>Ответить</span></button>`
+            + `<button class="reaction-menu-action" type="button" data-menu-edit hidden>${this.uiIcon('pencil')}<span>Изменить</span></button>`
+            + `<button class="reaction-menu-action is-danger" type="button" data-menu-delete hidden>${this.uiIcon('trash')}<span>Удалить</span></button>`
+            + `</div>`;
         document.body.appendChild(menu);
+
+        menu.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.hideReactionMenu({ restoreFocus: true });
+                return;
+            }
+            const items = [...menu.querySelectorAll('button:not([hidden])')];
+            if (!items.length) return;
+            const idx = items.indexOf(document.activeElement);
+            if (e.key === 'Tab') {
+                // Меню небольшое: фокус не уходит из него в ленту, пока оно открыто.
+                e.preventDefault();
+                items[(idx + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+                return;
+            }
+            const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+            if (step && idx >= 0) {
+                e.preventDefault();
+                items[(idx + step + items.length) % items.length].focus();
+            }
+        });
 
         menu.addEventListener('click', (e) => {
             const replyBtn = e.target.closest('[data-menu-reply]');
@@ -713,9 +739,10 @@ ZaliMixin(ZaliInterface, class {
         return menu;
     }
 
-    showReactionMenu(messageEl, messageId, x, y) {
+    showReactionMenu(messageEl, messageId, x, y, { focus = false } = {}) {
         const menu = this.ensureReactionMenu();
         if (!menu || !messageEl) return;
+        this._reactionMenuOpener = focus ? document.activeElement : null;
         menu.setAttribute('data-message-id', messageId);
         const found = this.findMessageById(messageId);
         const deleteBtn = menu.querySelector('[data-menu-delete]');
@@ -764,14 +791,29 @@ ZaliMixin(ZaliInterface, class {
         const top = Math.max(topInset, Math.min(Number.isFinite(preferredTop) ? preferredTop : fallbackTop, maxTop));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
+        // С клавиатуры или с кнопки «⋯» фокус переходит в меню (на первую реакцию).
+        if (focus) menu.querySelector('button:not([hidden])')?.focus();
     }
 
-    hideReactionMenu() {
+    hideReactionMenu({ restoreFocus = false } = {}) {
         const menu = document.getElementById('reactionMenu');
         if (!menu) return;
+        const opener = this._reactionMenuOpener;
+        this._reactionMenuOpener = null;
+        const hadFocus = menu.contains(document.activeElement);
         menu.classList.remove('visible');
         menu.setAttribute('aria-hidden', 'true');
         menu.removeAttribute('data-message-id');
+        if ((restoreFocus || hadFocus) && opener && document.contains(opener)) {
+            try { opener.focus(); } catch (e) { /* элемента уже нет */ }
+        }
+    }
+
+    /** Видимый вход в меню сообщения: на десктопе при наведении и фокусе, на
+     *  телефоне — у последнего сообщения (остальные открываются долгим нажатием). */
+    renderMessageMoreButton(messageId, msg) {
+        if (!messageId || !msg || msg.kind === 'call') return '';
+        return `<button class="msg-more" type="button" data-msg-more tabindex="-1" aria-haspopup="true" aria-label="Действия с сообщением">${this.uiIcon('more')}</button>`;
     }
 
     markMessageSeen(msg) {

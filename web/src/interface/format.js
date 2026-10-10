@@ -121,6 +121,7 @@ ZaliMixin(ZaliInterface, class {
             pencil: `<svg ${attrs} fill="none"><path d="M15.05 5.5 18.5 8.95" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m16.05 4.5 1.5 1.5a1.6 1.6 0 0 1 0 2.26L9.4 16.4l-3.4 1.1 1.1-3.4 8.14-8.15a1.6 1.6 0 0 1 2.26 0Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4.9 20.3h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             // Монета ZaliCoin — тот же «Ƶ», что в coinGiftIcon и на кнопке композера.
             coin: `<svg ${attrs} fill="none"><circle cx="12" cy="12" r="8.6" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9h5l-5 6h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 12h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+            more: `<svg ${attrs} fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>`,
             trash: `<svg ${attrs} fill="none"><path d="M4.9 6.9h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.7 6.9V5.5a1.4 1.4 0 0 1 1.4-1.4h1.8a1.4 1.4 0 0 1 1.4 1.4v1.4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m6.8 6.9.75 11.5a1.6 1.6 0 0 0 1.6 1.5h5.7a1.6 1.6 0 0 0 1.6-1.5l.75-11.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
         };
         return icons[name] || '';

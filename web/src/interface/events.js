@@ -357,7 +357,10 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const discardBtn = e.target.closest('[data-msg-discard]');
                 if (discardBtn) void this.deleteMessage(discardBtn.getAttribute('data-msg-discard'));
+                const moreBtn = e.target.closest('[data-msg-more]');
+                if (moreBtn) this.toggleMessageMenuFromButton(moreBtn);
             });
+            this.bindMessageKeyboardNav(msgsEl);
             msgsEl.addEventListener('contextmenu', (e) => {
                 // ПКМ по аватарке или нику — меню человека (подписаться, в друзья),
                 // а не меню сообщения: реакция к отправителю отношения не имеет.
@@ -403,6 +406,61 @@ ZaliMixin(ZaliInterface, class {
             }
         });
 
+    }
+
+    /** Кнопка «⋯» у сообщения: открывает или закрывает то же меню, что ПКМ и долгое нажатие. */
+    toggleMessageMenuFromButton(btn) {
+        const msgEl = btn.closest('.msg[data-message-id]');
+        const messageId = msgEl?.getAttribute('data-message-id');
+        if (!messageId) return;
+        const menu = document.getElementById('reactionMenu');
+        if (menu?.classList.contains('visible') && menu.getAttribute('data-message-id') === messageId) {
+            this.hideReactionMenu({ restoreFocus: true });
+            return;
+        }
+        const rect = btn.getBoundingClientRect();
+        this.showReactionMenu(msgEl, messageId, rect.left + rect.width / 2, rect.top, { focus: true });
+    }
+
+    /**
+     * Лента сообщений с клавиатуры: Tab попадает в ленту, стрелки идут по
+     * сообщениям, Enter / ContextMenu / Shift+F10 открывают меню действий.
+     * Лента одна точка остановки Tab, а не по кнопке на каждое сообщение.
+     */
+    bindMessageKeyboardNav(msgsEl) {
+        msgsEl.tabIndex = 0;
+        msgsEl.setAttribute('aria-label', 'Сообщения. Стрелки — выбор сообщения, Enter — действия');
+        const rows = () => [...msgsEl.querySelectorAll('.msg[data-message-id]:not(.notice)')];
+        const focusRow = (el) => {
+            if (!el) return;
+            el.tabIndex = -1;
+            el.focus({ preventScroll: false });
+        };
+        msgsEl.addEventListener('keydown', (e) => {
+            if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+            const msgEl = e.target.closest?.('.msg[data-message-id]');
+            const onList = e.target === msgsEl;
+            if (!msgEl && !onList) return;
+            const list = rows();
+            if (!list.length) return;
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End') {
+                if (e.target !== msgsEl && e.target !== msgEl) return;
+                e.preventDefault();
+                let idx = msgEl ? list.indexOf(msgEl) : list.length;
+                if (e.key === 'ArrowUp') idx -= 1;
+                else if (e.key === 'ArrowDown') idx += 1;
+                else idx = e.key === 'Home' ? 0 : list.length - 1;
+                focusRow(list[Math.max(0, Math.min(list.length - 1, idx))]);
+                return;
+            }
+            const opensMenu = e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)
+                || ((e.key === 'Enter' || e.key === ' ') && e.target === msgEl);
+            if (opensMenu && msgEl) {
+                e.preventDefault();
+                const rect = (msgEl.querySelector('.bwrap') || msgEl).getBoundingClientRect();
+                this.showReactionMenu(msgEl, msgEl.getAttribute('data-message-id'), rect.left, rect.top, { focus: true });
+            }
+        });
     }
 
     /** Добавление контакта и подсказки. Вызывается только из bindEvents(). */

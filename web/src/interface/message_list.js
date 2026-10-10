@@ -331,7 +331,7 @@ ZaliMixin(ZaliInterface, class {
                     ${senderLabelHtml}
                     ${this.renderCoinCard(coinCard, msg)}
                     ${this.renderMessageReactions(msg)}
-                </div></div>`;
+                ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
                 rows.push(html);
                 return;
             }
@@ -384,7 +384,7 @@ ZaliMixin(ZaliInterface, class {
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageState(msg, isOut)}
                     ${this.renderMessageReactions(msg)}
-                </div></div>`;
+                ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
                 rows.push(html);
                 return;
             }
@@ -404,7 +404,7 @@ ZaliMixin(ZaliInterface, class {
                 ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${this.renderMessageState(msg, isOut)}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
-            </div></div>`;
+            ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
             rows.push(html);
         });
 
