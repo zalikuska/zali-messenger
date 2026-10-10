@@ -46,8 +46,11 @@ struct WebAssets {
     --bg: #090b0e;
     --sidebar: rgba(11,13,16,.9);
     --text: #f2f2f2;
-    --text2: rgba(255,255,255,.5);
-    --text3: rgba(255,255,255,.25);
+    --text2: rgba(255,255,255,.65);
+    /* Контраст на --bg (#090b0e): text2 ≈ 8:1, text3 ≈ 5,3:1 (раньше .5 и .25,
+       то есть 5,3:1 и 2,2:1 — справка, время и подписи не проходили 4,5:1).
+       Серые по-прежнему белый с прозрачностью, палитра та же. */
+    --text3: rgba(255,255,255,.5);
     --border: rgba(255,255,255,.07);
     --red: #ff4d6d;
     --accent-rgb: 203,255,0;
@@ -61,7 +64,7 @@ struct WebAssets {
     --contact-suggest-item-pad-y: 8px;
     --contact-suggest-item-pad-x: 8px;
     --contact-suggest-font: 13.5px;
-    --contact-suggest-hint: rgba(255,255,255,.42);
+    --contact-suggest-hint: rgba(255,255,255,.5);
     --msg-gap: 2;
     --titlebar-h: 40px;
     --control-h: 40px;
@@ -443,7 +446,7 @@ button {
     border: 1px solid var(--border);
     border-radius: 999px;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     background: rgba(255,255,255,.03);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 6px 18px rgba(0,0,0,.18);
@@ -506,7 +509,7 @@ button {
     border-radius: 22px;
     background: transparent;
     color: var(--text2);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: .01em;
     text-transform: none;
@@ -688,7 +691,7 @@ body[data-ui-v2="on"] .mode-switch {
     border-radius: 999px;
     background: transparent;
     color: var(--text2);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 950;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -735,7 +738,7 @@ body[data-ui-v2="on"] .mode-switch {
     place-items: center;
     background: var(--lime);
     color: #050505;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 900;
     line-height: 1;
     border: 2px solid var(--sidebar);
@@ -759,7 +762,7 @@ body[data-ui-v2="on"] .mode-switch {
     border-radius: 999px;
     background: transparent;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -831,7 +834,7 @@ body[data-ui-v2="on"] .mode-switch {
 .nav-label {
     padding: 0 18px 8px;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
 }
@@ -841,7 +844,7 @@ body[data-ui-v2="on"] .mode-switch {
     padding: 0 6px;
     min-height: 16px;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.3;
 }
 
@@ -994,7 +997,7 @@ body[data-ui-v2="on"] .mode-switch {
 .contact-suggest-hint {
     margin-top: 2px;
     color: var(--contact-suggest-hint);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 /* Плюс проявляется под курсором. Постоянно горящий акцент в каждой строке
@@ -1195,7 +1198,7 @@ body[data-nav-mode="servers"] .contacts {
     overflow: hidden;
     margin-top: 3px;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -1209,7 +1212,7 @@ body[data-nav-mode="servers"] .contacts {
     place-items: center;
     background: var(--lime);
     color: #050505;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 900;
     animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) both;
 }
@@ -1311,7 +1314,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-prev {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.3;
     white-space: normal;
     word-break: break-word;
@@ -1383,7 +1386,7 @@ body[data-nav-mode="servers"] .contacts {
 .me-sub {
     margin-top: 2px;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .online-dot {
@@ -1562,7 +1565,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .hub-card-kicker {
     color: var(--lime);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 950;
     letter-spacing: .14em;
     text-transform: uppercase;
@@ -1619,7 +1622,7 @@ body[data-nav-mode="servers"] .contacts {
 .hub-components-head > span {
     flex: none;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -1669,7 +1672,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     color: var(--lime);
     background: rgba(var(--accent-rgb), .07);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 900;
     text-transform: uppercase;
 }
@@ -1690,7 +1693,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .hub-component-meta small {
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.4;
 }
 
@@ -1750,7 +1753,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     color: var(--text2);
     background: rgba(255,255,255,.03);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     white-space: nowrap;
 }
@@ -1773,7 +1776,7 @@ body[data-nav-mode="servers"] .contacts {
     max-width: 100%;
     color: var(--lime);
     font-family: "SF Mono", "Menlo", "Monaco", Consolas, monospace;
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.3;
     word-break: break-all;
     overflow-wrap: anywhere;
@@ -1941,7 +1944,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     background: var(--lime);
     color: #050505;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 900;
     line-height: 1;
     pointer-events: none;
@@ -2178,7 +2181,7 @@ body[data-nav-mode="servers"] .contacts {
     border: 1px solid var(--border);
     background: rgba(255,255,255,.03);
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -2323,7 +2326,7 @@ body[data-nav-mode="servers"] .contacts {
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #fff;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
 }
 
@@ -2347,7 +2350,7 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(0,0,0,.6);
     backdrop-filter: blur(2px);
     color: #fff;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: .02em;
     max-width: calc(100% - 12px);
@@ -2380,7 +2383,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-meter-name {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -2388,7 +2391,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-meter-value {
     color: var(--text);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .04em;
 }
@@ -2469,7 +2472,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-health-name {
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: .12em;
@@ -2484,7 +2487,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-health-sub {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.35;
 }
 
@@ -2498,7 +2501,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     background: linear-gradient(180deg, rgba(var(--accent-rgb), .98), rgba(var(--accent-rgb), .84));
     color: #0b0b0b;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -2659,7 +2662,7 @@ body[data-nav-mode="servers"] .contacts {
     min-width: 34px;
     text-align: right;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
@@ -2862,7 +2865,7 @@ body[data-nav-mode="servers"] .contacts {
     align-items: baseline;
     min-width: 0;
     color: var(--text2);
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.3;
     word-break: break-word;
 }
@@ -2892,7 +2895,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-room-label {
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -3007,7 +3010,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     background: linear-gradient(180deg, rgba(var(--accent-rgb), .98), rgba(var(--accent-rgb), .84));
     color: #0b0b0b;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .06em;
     text-transform: uppercase;
@@ -3208,7 +3211,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .settings-kicker {
     color: var(--lime);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: .14em;
@@ -3336,7 +3339,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     background: rgba(255,255,255,.04);
     color: var(--text);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -3378,7 +3381,7 @@ body[data-nav-mode="servers"] .contacts {
 .settings-card-note {
     flex: none;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -3404,7 +3407,7 @@ body[data-nav-mode="servers"] .contacts {
     -webkit-background-clip: padding-box;
     color: #0b0b0b;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -3702,7 +3705,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .hub-segment-option small {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.4;
 }
 
@@ -3812,7 +3815,7 @@ body[data-nav-mode="servers"] .contacts {
     justify-content: space-between;
     gap: 10px;
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: .07em;
     text-transform: uppercase;
@@ -3820,7 +3823,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .peer-context-menu-volume-head strong {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: .02em;
     font-variant-numeric: tabular-nums;
@@ -3898,7 +3901,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .settings-label {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -4012,7 +4015,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .color-picker-sub {
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.4;
 }
 
@@ -4336,7 +4339,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-modal-sidebar-kicker {
     color: var(--lime);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .18em;
     text-transform: uppercase;
@@ -4404,7 +4407,7 @@ body[data-nav-mode="servers"] .contacts {
 .server-modal-nav-desc {
     display: block;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.4;
 }
 
@@ -4556,7 +4559,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-asset-sub {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.5;
 }
 
@@ -4664,7 +4667,7 @@ body[data-nav-mode="servers"] .contacts {
     display: block;
     margin-top: 2px;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .server-member-add {
@@ -4710,7 +4713,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-channel-create-sub {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .server-channel-create-body {
@@ -4790,7 +4793,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-role-create-sub {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .server-role-create-body {
@@ -5094,7 +5097,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-role-meta {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .server-role-summary {
@@ -5174,7 +5177,7 @@ body[data-nav-mode="servers"] .contacts {
     display: block;
     margin-top: 2px;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.45;
 }
 
@@ -5219,7 +5222,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-member-meta {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .server-member-role {
@@ -5293,7 +5296,7 @@ body[data-nav-mode="servers"] .contacts {
 .settings-help {
     margin: 0;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.55;
 }
 
@@ -5307,7 +5310,7 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(255,255,255,.04);
     color: var(--text);
     font-family: "SF Mono", "Menlo", "Monaco", Consolas, monospace;
-    font-size: 11px;
+    font-size: 12px;
     word-break: break-all;
     overflow-wrap: anywhere;
 }
@@ -5373,7 +5376,7 @@ body[data-nav-mode="servers"] .contacts {
     justify-content: space-between;
     gap: 12px;
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: .14em;
     line-height: 1;
@@ -5436,7 +5439,7 @@ body[data-nav-mode="servers"] .contacts {
 .recent-account-meta {
     margin-top: 2px;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .recent-account-actions {
@@ -5509,7 +5512,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .settings-body .log-body {
     padding: 14px;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .msgs {
@@ -5668,7 +5671,7 @@ body[data-nav-mode="servers"] .contacts {
     min-height: 14px;
     padding: 0;
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     line-height: 1;
     white-space: nowrap;
@@ -5807,7 +5810,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .server-msg-time {
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
 }
@@ -5971,7 +5974,7 @@ body[data-nav-mode="servers"] .contacts {
     justify-content: center;
     min-width: 7px;
     color: rgba(255,255,255,.94);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 900;
     line-height: 1;
     text-align: center;
@@ -6160,7 +6163,7 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .msg-quote-author {
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: .01em;
 }
@@ -6213,7 +6216,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .composer-context-title {
     color: var(--lime);
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 700;
 }
 
@@ -6536,7 +6539,7 @@ body[data-nav-mode="servers"] .contacts {
 .file-chip-size,
 .file-message-size {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.2;
 }
 
@@ -6579,7 +6582,7 @@ body[data-nav-mode="servers"] .contacts {
 .media-audio-size {
     flex: none;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
 }
 
 /* No box of its own, same reasoning as .media-audio above — this always sits
@@ -6616,7 +6619,7 @@ body[data-nav-mode="servers"] .contacts {
 .btime {
     margin-top: 2px;
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
 }
 
 .out .btime {
@@ -6634,7 +6637,7 @@ body[data-nav-mode="servers"] .contacts {
     border-radius: 999px;
     background: rgba(255,255,255,.06);
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     /* No entry animation: the message list is rebuilt wholesale on every new
        message, so an animation here replayed on every separator each time a
@@ -6661,7 +6664,7 @@ body[data-nav-mode="servers"] .contacts {
 .msg.notice .msg-sender {
     margin: 0;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-align: center;
 }
@@ -6801,7 +6804,7 @@ body[data-nav-mode="servers"] .contacts {
     margin-top: 8px;
     overflow: hidden;
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -7298,7 +7301,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .auth-network-note {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
 }
 
@@ -7738,7 +7741,7 @@ body[data-nav-mode="servers"] .contacts {
 
     .tb-c {
         text-align: left;
-        font-size: 11px;
+        font-size: 12px;
     }
 
     .tb-brand {
@@ -8087,7 +8090,7 @@ body[data-nav-mode="servers"] .contacts {
         height: 21px;
     }
     .mobile-dock-label {
-        font-size: 9px;
+        font-size: 11px;
         letter-spacing: 0;
     }
     .body {
@@ -8432,6 +8435,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     column-gap: 20px;
     row-gap: 16px;
     padding: 24px;
+"""#,
+    #"""
     border-radius: 24px;
     background:
         linear-gradient(135deg, rgba(var(--accent-rgb), .13), transparent 42%),
@@ -8439,8 +8444,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .zc-wallet > * {
-"""#,
-    #"""
     position: relative;
     z-index: 1;
 }
@@ -9351,7 +9354,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .treasury-op-meta {
     color: var(--text2);
-    font-size: 11.5px;
+    font-size: 12px;
 }
 
 .treasury-op-note {
@@ -9448,7 +9451,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .zc-card-caption {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.15;
     color: var(--text3);
     white-space: nowrap;
@@ -9460,7 +9463,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     align-self: flex-start;
     margin-left: auto;
     padding-top: 1px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text3);
     font-variant-numeric: tabular-nums;
 }
@@ -9613,7 +9616,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     display: inline-block;
     min-width: 22px;
     text-align: right;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text3);
     font-variant-numeric: tabular-nums;
@@ -9649,7 +9652,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     -webkit-backdrop-filter: var(--menu-blur);
     backdrop-filter: var(--menu-blur);
     color: var(--text);
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 600;
     line-height: 1.2;
     white-space: nowrap;
@@ -9772,7 +9775,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .zc-card-note {
     margin-top: 10px;
-    font-size: 11.5px;
+    font-size: 12px;
     line-height: 1.35;
     text-align: center;
     color: var(--text3);
@@ -10215,7 +10218,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         background: rgba(255,255,255,.06);
         border-radius: 12px;
         padding: 3px 12px;
-        font-size: 11px;
+        font-size: 12px;
     }
 }
 
@@ -10703,7 +10706,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     border-radius: 999px;
     background: rgba(255,255,255,.04);
     border: 1px solid var(--border);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text2);
 }
 .profile-policy-chip strong { color: var(--text); }
@@ -10732,7 +10735,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .profile-editor-kicker {
     color: var(--lime);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: .14em;
@@ -10964,7 +10967,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .profile-comment-author { font-size: 13px; font-weight: 600; cursor: pointer; }
 .profile-comment-author:hover { color: var(--lime); }
-.profile-comment-date { font-size: 11px; color: var(--text3); margin-right: auto; }
+.profile-comment-date { font-size: 12px; color: var(--text3); margin-right: auto; }
 .profile-comment-text { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
 /* --- Люди (друзья и заявки) --- */
@@ -11013,7 +11016,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .profile-person-copy { display: grid; gap: 2px; min-width: 0; }
 .profile-person-name { font-size: 13px; font-weight: 600; cursor: pointer; }
 .profile-person-name:hover { color: var(--lime); }
-.profile-person-note { font-size: 11px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-person-note { font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-person-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* --- Стена автографов (полностью векторная) --- */
@@ -11072,7 +11075,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     border-radius: 999px;
     background: rgba(255,255,255,.03);
     border: 1px solid var(--border);
-    font-size: 11px;
+    font-size: 12px;
 }
 .autograph-legend-author { color: var(--text); font-weight: 600; }
 .autograph-legend-date { color: var(--text3); }
@@ -11098,7 +11101,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     overflow: hidden;
 }
 .autograph-preview-svg { width: 100%; height: 100%; }
-.moderation-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.moderation-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
 .moderation-author { font-weight: 600; }
 .moderation-date { color: var(--text3); }
 .moderation-actions { display: flex; gap: 6px; }
@@ -11242,7 +11245,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .design-mode-copy small {
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.4;
 }
 
@@ -11250,7 +11253,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     flex: none;
     align-self: start;
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -11329,13 +11332,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .cache-mode-copy strong { color: var(--text); font-size: 13px; font-weight: 800; }
-.cache-mode-copy small { color: var(--text2); font-size: 11px; line-height: 1.4; }
+.cache-mode-copy small { color: var(--text2); font-size: 12px; line-height: 1.4; }
 
 .cache-mode-note {
     flex: none;
     align-self: start;
     color: var(--text3);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -11394,7 +11397,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     display: grid;
     align-items: baseline;
     gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text2);
 }
 
@@ -11422,7 +11425,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     border-radius: 5px;
     background: rgba(255,255,255,.06);
     color: var(--text3);
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: .04em;
     text-transform: uppercase;
@@ -11607,7 +11610,7 @@ body[data-design-mode="focus"] .settings-group-title,
 body[data-design-mode="focus"] .settings-kicker,
 body[data-design-mode="focus"] .hub-card-kicker {
     color: var(--lime);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -12025,7 +12028,7 @@ body[data-design-mode="focus"] .contact-time {
     display: block;
     grid-column: 1 / -1;
     grid-row: 1;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     line-height: 16px;
@@ -12426,7 +12429,7 @@ body[data-design-mode="focus"] #viewChat .input-bar {
 }
 
 body[data-design-mode="focus"] #viewChat .input-bar:focus-within {
-    border-color: rgba(255,255,255,.12);
+    border-color: rgba(203,255,0,.4);
 }
 
 body[data-design-mode="focus"] #viewChat .input-bar.drop-active {
@@ -13154,7 +13157,7 @@ body[data-design-mode="focus"] .voice-room-state {
     border: 0;
     background: transparent;
     color: var(--lime);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: .08em;
 }
@@ -13910,7 +13913,7 @@ body[data-design-mode="focus"] .voice-call-expanded-actions .call-ctrl-btn[data-
     left: 50%;
     transform: translateX(-50%);
     color: var(--text2);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     white-space: nowrap;
     pointer-events: none;
@@ -13959,7 +13962,7 @@ body[data-design-mode="focus"] .voice-tile-mic {
     }
 
     body[data-design-mode="focus"] .voice-call-expanded-actions .call-ctrl-btn[data-short]::after {
-        font-size: 10px;
+        font-size: 12px;
     }
 }
 
@@ -13997,7 +14000,7 @@ body[data-design-mode="focus"] .voice-tile-mic {
 .contacts-empty {
     padding: 24px 0;
     color: var(--text3);
-    font-size: 11px;
+    font-size: 12px;
     text-align: center;
 }
 
@@ -14744,6 +14747,70 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 @media (max-width: 760px) {
     .sidebar .empty-actions { display: flex; }
     #viewChat .empty-actions { display: none; }
+}
+
+/* Подсказки в полях: браузерный серый давал ~2–3:1. */
+::placeholder {
+    color: var(--text3);
+    opacity: 1;
+}
+
+/* Видимый фокус с клавиатуры: у большинства кнопок он был только на hover. */
+:where(button, a[href], [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 2px;
+}
+
+/* Поле ввода без рамки: фокус показывает акцентная линия контейнера. */
+#viewChat .input-bar:focus-within {
+    box-shadow: inset 0 2px 0 rgba(203,255,0,.5);
+}
+
+/* Область нажатия не меньше 44×44, при этом вид кнопок не меняется:
+   невидимый ::after расширяет зону, на сенсорных экранах — только для них. */
+@media (pointer: coarse), (max-width: 760px) {
+    .settings-btn,
+    .contact-add-btn,
+    .chat-call-btn,
+    .server-settings-btn,
+    .attach-btn,
+    .send-btn,
+    .profile-tab,
+    .mode-btn,
+    .color-picker-toggle,
+    .server-modal-close,
+    .tb-announce-close,
+    .settings-chip,
+    .avatar-crop-close {
+        position: relative;
+    }
+
+    .settings-btn::after,
+    .contact-add-btn::after,
+    .chat-call-btn::after,
+    .server-settings-btn::after,
+    .attach-btn::after,
+    .send-btn::after,
+    .profile-tab::after,
+    .mode-btn::after,
+    .color-picker-toggle::after,
+    .server-modal-close::after,
+    .tb-announce-close::after,
+    .settings-chip::after,
+    .avatar-crop-close::after,
+    .me-ava-btn::after,
+    .hub-segment-btn::after,
+    .btn-flat::after,
+    .mobile-dock-btn::after,
+    .profile-close::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: max(100%, 44px);
+        height: max(100%, 44px);
+        transform: translate(-50%, -50%);
+    }
 }
 
 </style>
@@ -17629,8 +17696,8 @@ class ZaliStyler {
                 '--bg': '#090b0e',
                 '--sidebar': 'rgba(11,13,16,.9)',
                 '--text': '#f2f2f2',
-                '--text2': 'rgba(255,255,255,.5)',
-                '--text3': 'rgba(255,255,255,.25)',
+                '--text2': 'rgba(255,255,255,0.65)',
+                '--text3': 'rgba(255,255,255,0.5)',
                 '--border': 'rgba(255,255,255,.07)',
             },
             cyber: {
@@ -17642,8 +17709,8 @@ class ZaliStyler {
                 '--bg': '#0a0512',
                 '--sidebar': 'rgba(20,10,32,.92)',
                 '--text': '#00ffcc',
-                '--text2': 'rgba(0,255,204,.6)',
-                '--text3': 'rgba(0,255,204,.3)',
+                '--text2': 'rgba(0,255,204,0.65)',
+                '--text3': 'rgba(0,255,204,0.5)',
                 '--border': 'rgba(0,255,204,.15)',
             },
             matrix: {
@@ -17655,8 +17722,8 @@ class ZaliStyler {
                 '--bg': '#020502',
                 '--sidebar': 'rgba(4,16,6,.95)',
                 '--text': '#39ff14',
-                '--text2': 'rgba(57,255,20,.65)',
-                '--text3': 'rgba(57,255,20,.35)',
+                '--text2': 'rgba(57,255,20,0.65)',
+                '--text3': 'rgba(57,255,20,0.5)',
                 '--border': 'rgba(57,255,20,.2)',
             },
             ocean: {
@@ -17668,8 +17735,8 @@ class ZaliStyler {
                 '--bg': '#050f1e',
                 '--sidebar': 'rgba(6,22,38,.93)',
                 '--text': '#e0f5ff',
-                '--text2': 'rgba(224,245,255,.6)',
-                '--text3': 'rgba(224,245,255,.3)',
+                '--text2': 'rgba(224,245,255,0.65)',
+                '--text3': 'rgba(224,245,255,0.5)',
                 '--border': 'rgba(224,245,255,.1)',
             },
             mono: {
@@ -17681,8 +17748,8 @@ class ZaliStyler {
                 '--bg': '#121212',
                 '--sidebar': 'rgba(26,26,26,.9)',
                 '--text': '#ffffff',
-                '--text2': 'rgba(255,255,255,.6)',
-                '--text3': 'rgba(255,255,255,.35)',
+                '--text2': 'rgba(255,255,255,0.65)',
+                '--text3': 'rgba(255,255,255,0.5)',
                 '--border': 'rgba(255,255,255,.12)',
             },
             ember: {
@@ -17694,8 +17761,8 @@ class ZaliStyler {
                 '--bg': '#120805',
                 '--sidebar': 'rgba(27,12,8,.93)',
                 '--text': '#fff0e5',
-                '--text2': 'rgba(255,240,229,.62)',
-                '--text3': 'rgba(255,240,229,.32)',
+                '--text2': 'rgba(255,240,229,0.65)',
+                '--text3': 'rgba(255,240,229,0.5)',
                 '--border': 'rgba(255,194,150,.13)',
             },
             aurora: {
@@ -17707,8 +17774,8 @@ class ZaliStyler {
                 '--bg': '#041012',
                 '--sidebar': 'rgba(5,22,24,.94)',
                 '--text': '#e8fff8',
-                '--text2': 'rgba(232,255,248,.6)',
-                '--text3': 'rgba(232,255,248,.3)',
+                '--text2': 'rgba(232,255,248,0.65)',
+                '--text3': 'rgba(232,255,248,0.5)',
                 '--border': 'rgba(128,255,221,.12)',
             },
             graphite: {
@@ -17720,8 +17787,8 @@ class ZaliStyler {
                 '--bg': '#0b0d10',
                 '--sidebar': 'rgba(17,20,25,.94)',
                 '--text': '#f4f6f8',
-                '--text2': 'rgba(244,246,248,.58)',
-                '--text3': 'rgba(244,246,248,.3)',
+                '--text2': 'rgba(244,246,248,0.65)',
+                '--text3': 'rgba(244,246,248,0.5)',
                 '--border': 'rgba(244,246,248,.1)',
             },
             rose: {
@@ -17733,8 +17800,8 @@ class ZaliStyler {
                 '--bg': '#12070c',
                 '--sidebar': 'rgba(28,10,17,.93)',
                 '--text': '#fff0f4',
-                '--text2': 'rgba(255,240,244,.62)',
-                '--text3': 'rgba(255,240,244,.32)',
+                '--text2': 'rgba(255,240,244,0.65)',
+                '--text3': 'rgba(255,240,244,0.5)',
                 '--border': 'rgba(255,178,198,.13)',
             },
             violet: {
@@ -17746,8 +17813,8 @@ class ZaliStyler {
                 '--bg': '#0d0718',
                 '--sidebar': 'rgba(18,10,34,.94)',
                 '--text': '#f6efff',
-                '--text2': 'rgba(246,239,255,.62)',
-                '--text3': 'rgba(246,239,255,.32)',
+                '--text2': 'rgba(246,239,255,0.65)',
+                '--text3': 'rgba(246,239,255,0.5)',
                 '--border': 'rgba(208,174,255,.14)',
             }
         };
@@ -21194,9 +21261,9 @@ ZaliMixin(ZaliInterface, class {
     // Состояние карточек запрашивается пачкой: отрисовка ленты ставит id в
     // очередь, а один таймер собирает всё, что набралось за кадр, в один запрос.
     ensureCoinGiftState(id) {
-        if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return;
 """#,
     #"""
+        if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return;
         const store = this.coinGiftStore();
         if (store.inFlight.has(id) || store.queue.has(id)) return;
         const entry = store.states.get(id);
@@ -25479,9 +25546,9 @@ ZaliMixin(ZaliInterface, class {
                     reason: `takeover:${reason}`,
                 });
             } else {
-                const peer = this.peerFromConversationScope(scoped);
 """#,
     #"""
+                const peer = this.peerFromConversationScope(scoped);
                 if (peer) void this.publishConversationKeyToPeer({ peer, scope: scoped, key: local, reason: `takeover:${reason}` });
             }
             return local;
@@ -29471,9 +29538,9 @@ ZaliMixin(ZaliInterface, class {
             ? this.normalizeIceServers(baseIceServers)
             : this.normalizeIceServers(this.loadNetworkConfig().iceServers);
         const turnEntry = this.buildTurnIceServerFromInputs();
-        const next = [...current.filter(server => {
 """#,
     #"""
+        const next = [...current.filter(server => {
             const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
             const turnUrls = Array.isArray(turnEntry.urls) ? turnEntry.urls : [turnEntry.urls];
             return !urls.some(url => turnUrls.includes(url));
@@ -33509,9 +33576,9 @@ ZaliMixin(ZaliInterface, class {
                 // stream (browsers keep the transceiver, just mute it) — so the old
                 // code (trace-only) left the last frame frozen on screen forever, and
                 // a later toggle-on reused the same stream/track objects, which
-                // attachRemoteVideoStream's reference-equality check then skipped as
 """#,
     #"""
+                // attachRemoteVideoStream's reference-equality check then skipped as
                 // "already attached", so the picture never resumed either. Route these
                 // lifecycle events back through the same attach/detach helpers so the
                 // element actually reflects live track state.
@@ -37173,10 +37240,10 @@ ZaliMixin(ZaliInterface, class {
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
-                        <div class="voice-room-sub">${this.esc(sub)}</div>
-                    </div>
 """#,
     #"""
+                        <div class="voice-room-sub">${this.esc(sub)}</div>
+                    </div>
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
                 ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
@@ -41414,10 +41481,10 @@ ZaliMixin(ZaliInterface, class {
                 reason: details.reason || this.decryptFailureReasonSlug(details.placeholderText || ''),
                 placeholderText: String(details.placeholderText || '').slice(0, 200),
                 clientError: String(details.clientError || '').slice(0, 500),
-                messageId: details.messageId || '',
-                clientId: details.clientId || '',
 """#,
     #"""
+                messageId: details.messageId || '',
+                clientId: details.clientId || '',
                 sender: details.sender || '',
                 receiver: details.receiver || '',
                 serverId: details.serverId || '',
@@ -45424,10 +45491,10 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Single choke point for "a message arrived in a chat the user isn't currently
-    // looking at". Both the live WS push path AND the reconnect / background
 """#,
     #"""
+    // Single choke point for "a message arrived in a chat the user isn't currently
+    // looking at". Both the live WS push path AND the reconnect / background
     // history-catch-up paths (loadHistory, mergeServerChatMessages) route through
     // here — those catch-up paths used to update S.chats/S.serverChats silently with
     // no notification and no unread badge, which was the root cause of notifications
@@ -49403,10 +49470,10 @@ ZaliMixin(ZaliInterface, class {
         let outbox = [];
         try { outbox = this.loadPendingOutbox() || []; } catch (e) { return; }
         const now = Date.now();
-        const present = new Set(outbox.map(item => String(item.clientId || '')));
-        for (const id of seen.keys()) if (!present.has(id)) seen.delete(id);
 """#,
     #"""
+        const present = new Set(outbox.map(item => String(item.clientId || '')));
+        for (const id of seen.keys()) if (!present.has(id)) seen.delete(id);
         for (const id of present) if (!seen.has(id)) seen.set(id, now);
         const reported = this._diagStuckReported || (this._diagStuckReported = new Set());
         const stuck = outbox.filter(item => {
