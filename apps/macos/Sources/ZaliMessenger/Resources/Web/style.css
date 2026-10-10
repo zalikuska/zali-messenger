@@ -15088,3 +15088,56 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 /* «sync» рядом с аватаром — пометка для разработчика. */
 #avatarTargetLabel { display: none; }
+
+/* Сегменты главной навигации: у активного — иконка и слово, как в нижнем доке
+   телефона; у остальных иконка (смысл — в title и aria-label). */
+.hub-segment-label { display: none; }
+
+.hub-segment-btn.active { flex-grow: 2.4; gap: 6px; }
+
+.hub-segment-btn.active .hub-segment-label {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: .04em;
+}
+
+/* Карточки Хаба: ссылка внизу выглядит кнопкой со стрелкой, а не подписью. */
+.hub-card em.hub-card-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255,255,255,.05);
+    letter-spacing: .04em;
+    transition: background .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+
+.hub-card em.hub-card-action::after { content: "→"; font-weight: 700; }
+.hub-card:hover em.hub-card-action,
+.hub-card:focus-visible em.hub-card-action {
+    border-color: rgba(var(--accent-rgb), .45);
+    background: rgba(255,255,255,.09);
+}
+
+/* Кикеры карточек Хаба и ZaliCoin — серые: лайм остаётся главному действию и
+   активному состоянию (тридцать лаймовых надписей подряд ничего не выделяют). */
+.hub-card-kicker,
+.hub-view .settings-kicker,
+.zc-view .settings-kicker {
+    color: var(--text2);
+}
+
+@media (max-width: 760px) {
+    /* «Орба» занимала треть первого экрана телефона. */
+    .hub-orb { display: none; }
+    .hub-hero { grid-template-columns: minmax(0, 1fr); padding: 18px; }
+    .hub-hero h2 { font-size: clamp(22px, 7vw, 28px); line-height: 1.05; letter-spacing: -.03em; }
+}

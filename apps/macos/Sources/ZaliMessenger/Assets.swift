@@ -15119,6 +15119,59 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 /* «sync» рядом с аватаром — пометка для разработчика. */
 #avatarTargetLabel { display: none; }
 
+/* Сегменты главной навигации: у активного — иконка и слово, как в нижнем доке
+   телефона; у остальных иконка (смысл — в title и aria-label). */
+.hub-segment-label { display: none; }
+
+.hub-segment-btn.active { flex-grow: 2.4; gap: 6px; }
+
+.hub-segment-btn.active .hub-segment-label {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: .04em;
+}
+
+/* Карточки Хаба: ссылка внизу выглядит кнопкой со стрелкой, а не подписью. */
+.hub-card em.hub-card-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255,255,255,.05);
+    letter-spacing: .04em;
+    transition: background .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+
+.hub-card em.hub-card-action::after { content: "→"; font-weight: 700; }
+.hub-card:hover em.hub-card-action,
+.hub-card:focus-visible em.hub-card-action {
+    border-color: rgba(var(--accent-rgb), .45);
+    background: rgba(255,255,255,.09);
+}
+
+/* Кикеры карточек Хаба и ZaliCoin — серые: лайм остаётся главному действию и
+   активному состоянию (тридцать лаймовых надписей подряд ничего не выделяют). */
+.hub-card-kicker,
+.hub-view .settings-kicker,
+.zc-view .settings-kicker {
+    color: var(--text2);
+}
+
+@media (max-width: 760px) {
+    /* «Орба» занимала треть первого экрана телефона. */
+    .hub-orb { display: none; }
+    .hub-hero { grid-template-columns: minmax(0, 1fr); padding: 18px; }
+    .hub-hero h2 { font-size: clamp(22px, 7vw, 28px); line-height: 1.05; letter-spacing: -.03em; }
+}
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -15661,7 +15714,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                             <div>
                                 <span class="settings-kicker">Zali Hub</span>
                                 <h2>Главная панель Zali Messenger</h2>
-                                <p>Новости, уведомления, обновления и быстрый вход в подприложения. Это стартовая точка нового интерфейса.</p>
+                                <p>Уведомления, обновления и быстрый вход в разделы приложения.</p>
                             </div>
                             <div class="hub-orb" aria-hidden="true">HUB</div>
                         </section>
@@ -22902,6 +22955,7 @@ ZaliMixin(ZaliInterface, class {
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
                 ${this.hubSegmentIcon(item.id)}
+                <span class="hub-segment-label">${this.esc(item.label)}</span>
                 <span class="hub-segment-badge" hidden></span>
             </button>
         `).join('');
@@ -25836,10 +25890,10 @@ ZaliMixin(ZaliInterface, class {
             if (channel) {
                 void this.publishConversationKeyToServerMembers({
                     serverId: channel.serverId,
-                    channelId: channel.channelId,
-                    scope: scoped,
 """#,
     #"""
+                    channelId: channel.channelId,
+                    scope: scoped,
                     key: local,
                     reason: `takeover:${reason}`,
                 });
@@ -29830,10 +29884,10 @@ ZaliMixin(ZaliInterface, class {
 
     appendTurnPresetToIceServers(baseIceServers = null) {
         const iceInput = document.getElementById('inputIceServers');
-        const current = Array.isArray(baseIceServers)
-            ? this.normalizeIceServers(baseIceServers)
 """#,
     #"""
+        const current = Array.isArray(baseIceServers)
+            ? this.normalizeIceServers(baseIceServers)
             : this.normalizeIceServers(this.loadNetworkConfig().iceServers);
         const turnEntry = this.buildTurnIceServerFromInputs();
         const next = [...current.filter(server => {
@@ -33869,9 +33923,9 @@ ZaliMixin(ZaliInterface, class {
                 const stream = event.streams?.[0] || new MediaStream([event.track]);
                 const track = event.track;
                 // A remote camera/screen toggle-off doesn't remove the track from the
-                // stream (browsers keep the transceiver, just mute it) — so the old
 """#,
     #"""
+                // stream (browsers keep the transceiver, just mute it) — so the old
                 // code (trace-only) left the last frame frozen on screen forever, and
                 // a later toggle-on reused the same stream/track objects, which
                 // attachRemoteVideoStream's reference-equality check then skipped as
@@ -37532,9 +37586,9 @@ ZaliMixin(ZaliInterface, class {
             ? 'Нажмите «Присоединиться», чтобы войти в канал'
             : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
         return `
-            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}" data-voice-status="${this.esc(String(this.voice.status || 'idle'))}">
 """#,
     #"""
+            <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}" data-voice-status="${this.esc(String(this.voice.status || 'idle'))}">
                 <div class="voice-room-top">
                     <div>
                         <div class="voice-room-title">${this.esc(title)}</div>
@@ -41764,13 +41818,13 @@ ZaliMixin(ZaliInterface, class {
             this._reportedDecryptFailures.add(key);
             // Bounded so a long-lived tab doesn't grow this forever.
             if (this._reportedDecryptFailures.size > 500) {
+"""#,
+    #"""
                 this._reportedDecryptFailures.delete(this._reportedDecryptFailures.values().next().value);
             }
         }
         try {
             const scope = details.scope || this.conversationScopeKey(
-"""#,
-    #"""
                 details.sender === this.myName() ? details.receiver : details.sender,
                 details.serverId,
                 details.channelId,
@@ -43092,7 +43146,6 @@ ZaliMixin(ZaliInterface, class {
         box.innerHTML = `
             <div class="hub-components-head">
                 <div>
-                    <span class="settings-kicker">Components</span>
                     <h3>Компоненты приложения</h3>
                 </div>
                 <span>${components.length} модулей</span>
@@ -43125,14 +43178,6 @@ ZaliMixin(ZaliInterface, class {
         const serversCount = Array.isArray(this.S.servers) ? this.S.servers.length : 0;
         const onlineLabel = this.S.wsOn ? 'WebSocket активен' : 'WebSocket не подключён';
         const cards = [
-            {
-                kind: 'news',
-                title: 'Главные новости',
-                value: 'UI v2',
-                body: 'Новая сегментная навигация живёт отдельно от протокола сообщений.',
-                action: 'Открыть ЛС',
-                segment: 'dm',
-            },
             {
                 kind: 'notifications',
                 title: 'Уведомления',
@@ -43167,17 +43212,9 @@ ZaliMixin(ZaliInterface, class {
                 };
             })(),
             {
-                kind: 'apps',
-                title: 'Подприложения',
-                value: 'Плитки',
-                body: 'Будущий дом для мини-модулей, виджетов и быстрых действий.',
-                action: 'Открыть хаб',
-                segment: 'hub',
-            },
-            {
                 kind: 'components',
                 title: 'Компоненты',
-                value: 'Модули',
+                value: `${this.componentRegistry().length} модулей`,
                 body: 'Список частей приложения, их версий, зависимостей и зон ответственности.',
                 action: 'Смотреть список',
                 actionId: 'components',
@@ -43185,7 +43222,7 @@ ZaliMixin(ZaliInterface, class {
             {
                 kind: 'settings',
                 title: 'Настройки',
-                value: 'Control',
+                value: 'Аккаунт',
                 body: 'Профиль, тема, ключи, быстрые аккаунты и журнал событий.',
                 action: 'Открыть настройки',
                 segment: 'settings',
@@ -43196,7 +43233,7 @@ ZaliMixin(ZaliInterface, class {
                 <span class="hub-card-kicker">${this.esc(card.title)}</span>
                 <strong>${this.esc(card.value)}</strong>
                 <span>${this.esc(card.body)}</span>
-                <em>${this.esc(card.action)}</em>
+                <em class="hub-card-action">${this.esc(card.action)}</em>
             </button>
         `).join('');
         this.renderHubComponents();
@@ -45761,8 +45798,6 @@ ZaliMixin(ZaliInterface, class {
             Math.max(frequency * 1.6, 300),
             startTime + duration
         );
-"""#,
-    #"""
         voice.connect(filter);
         filter.connect(bus);
 
@@ -45773,6 +45808,8 @@ ZaliMixin(ZaliInterface, class {
             { ratio: 4.16, gain: 0.11, decay: 0.28 },
             { ratio: 5.43, gain: 0.05, decay: 0.19 },
         ];
+"""#,
+    #"""
         for (const partial of voicePartials) {
             const osc = ctx.createOscillator();
             osc.type = 'sine';
@@ -48209,9 +48246,9 @@ ZaliMixin(ZaliInterface, class {
         }
 
         return `
-            <button class="auth-btn primary profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
+            <button class="btn-flat profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
             ${friendButton}
-            <button class="btn-flat" type="button" data-profile-action="message">Написать</button>
+            <button class="auth-btn primary" type="button" data-profile-action="message">Написать</button>
         `;
     }
 
@@ -48381,7 +48418,7 @@ ZaliMixin(ZaliInterface, class {
             </div>`
             : `<div class="autograph-toolbar">
                 ${canDraw
-                    ? `<button class="auth-btn primary" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
+                    ? `<button class="btn-flat" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
                     : `<p class="profile-help">${this.esc(data.isSelf ? 'Это ваша стена — здесь появляются автографы других людей.' : 'Владелец закрыл автографы для вас.')}</p>`}
                 ${canDraw && !data.isSelf && data.autographAutoApprove === 'nobody'
                     ? `<span class="profile-policy-chip">Автографы публикуются после одобрения владельца</span>`
@@ -49747,8 +49784,6 @@ ZaliMixin(ZaliInterface, class {
     // Отправляет отчёт. Автоматические — не чаще раза в 10 минут на вид;
     // ручной — всегда. Возвращает id отчёта на сервере или '' (не отправлен).
     async sendDiagnosticReport(kind, extra = {}, { manual = false } = {}) {
-"""#,
-    #"""
         if (!this.S.session?.token || this.S.session?.guest) return '';
         this._diagLastReportStatus = 0;
         if (!manual) {
@@ -49757,6 +49792,8 @@ ZaliMixin(ZaliInterface, class {
             this._diagLastAutoReportAt[kind] = Date.now();
         }
         try {
+"""#,
+    #"""
             this.flushTrace?.();
             const body = this.fitDiagnosticReport(this.collectDiagnosticsSnapshot(kind, extra));
             const res = await this.apiFetch(this.apiRoutes.diagnostics.report, { method: 'POST', body });

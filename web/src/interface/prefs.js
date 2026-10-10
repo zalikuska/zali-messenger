@@ -629,6 +629,7 @@ ZaliMixin(ZaliInterface, class {
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
                 ${this.hubSegmentIcon(item.id)}
+                <span class="hub-segment-label">${this.esc(item.label)}</span>
                 <span class="hub-segment-badge" hidden></span>
             </button>
         `).join('');

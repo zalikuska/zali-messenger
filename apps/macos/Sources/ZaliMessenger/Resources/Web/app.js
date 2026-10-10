@@ -6251,6 +6251,7 @@ ZaliMixin(ZaliInterface, class {
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
                 ${this.hubSegmentIcon(item.id)}
+                <span class="hub-segment-label">${this.esc(item.label)}</span>
                 <span class="hub-segment-badge" hidden></span>
             </button>
         `).join('');
@@ -26431,7 +26432,6 @@ ZaliMixin(ZaliInterface, class {
         box.innerHTML = `
             <div class="hub-components-head">
                 <div>
-                    <span class="settings-kicker">Components</span>
                     <h3>Компоненты приложения</h3>
                 </div>
                 <span>${components.length} модулей</span>
@@ -26464,14 +26464,6 @@ ZaliMixin(ZaliInterface, class {
         const serversCount = Array.isArray(this.S.servers) ? this.S.servers.length : 0;
         const onlineLabel = this.S.wsOn ? 'WebSocket активен' : 'WebSocket не подключён';
         const cards = [
-            {
-                kind: 'news',
-                title: 'Главные новости',
-                value: 'UI v2',
-                body: 'Новая сегментная навигация живёт отдельно от протокола сообщений.',
-                action: 'Открыть ЛС',
-                segment: 'dm',
-            },
             {
                 kind: 'notifications',
                 title: 'Уведомления',
@@ -26506,17 +26498,9 @@ ZaliMixin(ZaliInterface, class {
                 };
             })(),
             {
-                kind: 'apps',
-                title: 'Подприложения',
-                value: 'Плитки',
-                body: 'Будущий дом для мини-модулей, виджетов и быстрых действий.',
-                action: 'Открыть хаб',
-                segment: 'hub',
-            },
-            {
                 kind: 'components',
                 title: 'Компоненты',
-                value: 'Модули',
+                value: `${this.componentRegistry().length} модулей`,
                 body: 'Список частей приложения, их версий, зависимостей и зон ответственности.',
                 action: 'Смотреть список',
                 actionId: 'components',
@@ -26524,7 +26508,7 @@ ZaliMixin(ZaliInterface, class {
             {
                 kind: 'settings',
                 title: 'Настройки',
-                value: 'Control',
+                value: 'Аккаунт',
                 body: 'Профиль, тема, ключи, быстрые аккаунты и журнал событий.',
                 action: 'Открыть настройки',
                 segment: 'settings',
@@ -26535,7 +26519,7 @@ ZaliMixin(ZaliInterface, class {
                 <span class="hub-card-kicker">${this.esc(card.title)}</span>
                 <strong>${this.esc(card.value)}</strong>
                 <span>${this.esc(card.body)}</span>
-                <em>${this.esc(card.action)}</em>
+                <em class="hub-card-action">${this.esc(card.action)}</em>
             </button>
         `).join('');
         this.renderHubComponents();
@@ -31546,9 +31530,9 @@ ZaliMixin(ZaliInterface, class {
         }
 
         return `
-            <button class="auth-btn primary profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
+            <button class="btn-flat profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
             ${friendButton}
-            <button class="btn-flat" type="button" data-profile-action="message">Написать</button>
+            <button class="auth-btn primary" type="button" data-profile-action="message">Написать</button>
         `;
     }
 
@@ -31718,7 +31702,7 @@ ZaliMixin(ZaliInterface, class {
             </div>`
             : `<div class="autograph-toolbar">
                 ${canDraw
-                    ? `<button class="auth-btn primary" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
+                    ? `<button class="btn-flat" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
                     : `<p class="profile-help">${this.esc(data.isSelf ? 'Это ваша стена — здесь появляются автографы других людей.' : 'Владелец закрыл автографы для вас.')}</p>`}
                 ${canDraw && !data.isSelf && data.autographAutoApprove === 'nobody'
                     ? `<span class="profile-policy-chip">Автографы публикуются после одобрения владельца</span>`

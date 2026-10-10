@@ -363,7 +363,6 @@ ZaliMixin(ZaliInterface, class {
         box.innerHTML = `
             <div class="hub-components-head">
                 <div>
-                    <span class="settings-kicker">Components</span>
                     <h3>Компоненты приложения</h3>
                 </div>
                 <span>${components.length} модулей</span>
@@ -396,14 +395,6 @@ ZaliMixin(ZaliInterface, class {
         const serversCount = Array.isArray(this.S.servers) ? this.S.servers.length : 0;
         const onlineLabel = this.S.wsOn ? 'WebSocket активен' : 'WebSocket не подключён';
         const cards = [
-            {
-                kind: 'news',
-                title: 'Главные новости',
-                value: 'UI v2',
-                body: 'Новая сегментная навигация живёт отдельно от протокола сообщений.',
-                action: 'Открыть ЛС',
-                segment: 'dm',
-            },
             {
                 kind: 'notifications',
                 title: 'Уведомления',
@@ -438,17 +429,9 @@ ZaliMixin(ZaliInterface, class {
                 };
             })(),
             {
-                kind: 'apps',
-                title: 'Подприложения',
-                value: 'Плитки',
-                body: 'Будущий дом для мини-модулей, виджетов и быстрых действий.',
-                action: 'Открыть хаб',
-                segment: 'hub',
-            },
-            {
                 kind: 'components',
                 title: 'Компоненты',
-                value: 'Модули',
+                value: `${this.componentRegistry().length} модулей`,
                 body: 'Список частей приложения, их версий, зависимостей и зон ответственности.',
                 action: 'Смотреть список',
                 actionId: 'components',
@@ -456,7 +439,7 @@ ZaliMixin(ZaliInterface, class {
             {
                 kind: 'settings',
                 title: 'Настройки',
-                value: 'Control',
+                value: 'Аккаунт',
                 body: 'Профиль, тема, ключи, быстрые аккаунты и журнал событий.',
                 action: 'Открыть настройки',
                 segment: 'settings',
@@ -467,7 +450,7 @@ ZaliMixin(ZaliInterface, class {
                 <span class="hub-card-kicker">${this.esc(card.title)}</span>
                 <strong>${this.esc(card.value)}</strong>
                 <span>${this.esc(card.body)}</span>
-                <em>${this.esc(card.action)}</em>
+                <em class="hub-card-action">${this.esc(card.action)}</em>
             </button>
         `).join('');
         this.renderHubComponents();

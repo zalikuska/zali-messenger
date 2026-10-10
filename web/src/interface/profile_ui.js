@@ -184,9 +184,9 @@ ZaliMixin(ZaliInterface, class {
         }
 
         return `
-            <button class="auth-btn primary profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
+            <button class="btn-flat profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
             ${friendButton}
-            <button class="btn-flat" type="button" data-profile-action="message">Написать</button>
+            <button class="auth-btn primary" type="button" data-profile-action="message">Написать</button>
         `;
     }
 
@@ -356,7 +356,7 @@ ZaliMixin(ZaliInterface, class {
             </div>`
             : `<div class="autograph-toolbar">
                 ${canDraw
-                    ? `<button class="auth-btn primary" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
+                    ? `<button class="btn-flat" type="button" data-profile-action="start-drawing">Оставить автограф</button>`
                     : `<p class="profile-help">${this.esc(data.isSelf ? 'Это ваша стена — здесь появляются автографы других людей.' : 'Владелец закрыл автографы для вас.')}</p>`}
                 ${canDraw && !data.isSelf && data.autographAutoApprove === 'nobody'
                     ? `<span class="profile-policy-chip">Автографы публикуются после одобрения владельца</span>`
