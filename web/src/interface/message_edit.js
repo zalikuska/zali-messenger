@@ -367,7 +367,12 @@ ZaliMixin(ZaliInterface, class {
         if (!id) return;
         const found = this.findMessageById(id);
         if (!found || !this.canDeleteMessage(found.msg)) return;
-        if (!confirm('Удалить сообщение?')) return;
+        const confirmed = await this.confirmAction({
+            title: 'Удалить сообщение?',
+            message: 'Сообщение будет удалено.',
+            confirmLabel: 'Удалить сообщение',
+        });
+        if (!confirmed) return;
 
         const hasRealServerId = !!found.msg.id && (!found.msg.clientId || String(found.msg.id) !== String(found.msg.clientId));
         if (!hasRealServerId) {

@@ -14619,6 +14619,24 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     margin: 0;
 }
 
+/* ── Подтверждение опасного действия (confirmAction, confirm_dialog.js) ──
+   Опасная кнопка красная (--red), остальное — как в других модальных
+   окнах. Безопасная «Отмена» стоит слева и получает фокус первой. */
+.confirm-dialog { z-index: 90; }
+
+.confirm-dialog-text {
+    margin: 0;
+    color: var(--text2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.auth-btn.primary.is-danger {
+    background: var(--red);
+    color: #fff;
+    box-shadow: 0 14px 28px rgba(255,77,109,.2);
+}
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -31459,7 +31477,11 @@ ZaliMixin(ZaliInterface, class {
         if (!serverId || this.S.serverModal.mode !== 'edit') return;
         const cid = String(channelId || '').trim();
         const channel = (this.S.serverModal.channels || []).find(item => String(item.id || '') === cid);
-        const confirmDelete = confirm(`Удалить канал "${channel?.name || cid}"?`);
+        const confirmDelete = await this.confirmAction({
+            title: 'Удалить канал?',
+            message: `Канал «${channel?.name || cid}» будет удалён.`,
+            confirmLabel: 'Удалить канал',
+        });
         if (!confirmDelete) return;
         this.setServerModalState({ saving: true, error: '' });
         this.renderServerModal();
@@ -33376,9 +33398,9 @@ ZaliMixin(ZaliInterface, class {
                         if (track.kind === 'video') refreshRemoteVideoTrack();
                     };
                     track.onmute = () => {
-                        this.voiceTrace('remote-track-mute', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
 """#,
     #"""
+                        this.voiceTrace('remote-track-mute', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
                         if (track.kind === 'video') refreshRemoteVideoTrack();
                     };
                     track.onended = () => {
@@ -37037,10 +37059,10 @@ ZaliMixin(ZaliInterface, class {
                             ${voiceHealth.map(item => `
                                 <div class="voice-health-card" data-tone="${this.esc(item.tone)}">
                                     <span class="voice-health-name">${this.esc(item.label)}</span>
-                                    <strong class="voice-health-value">${this.esc(item.value)}</strong>
-                                    <span class="voice-health-sub">${this.esc(item.sub || '')}</span>
 """#,
     #"""
+                                    <strong class="voice-health-value">${this.esc(item.value)}</strong>
+                                    <span class="voice-health-sub">${this.esc(item.sub || '')}</span>
                                 </div>
                             `).join('')}
                         </div>
@@ -41282,11 +41304,11 @@ ZaliMixin(ZaliInterface, class {
             // we are missing some OTHER key of that scope, so ask.
             // Explicitly caught: every helper it calls swallows its own errors today,
             // but this is fire-and-forget from a render path — one future throw in
+"""#,
+    #"""
             // that chain would surface as an unhandled rejection instead of a trace.
             if (scope) {
                 this.requestKeyRepublishForDecryptFailure(scope)
-"""#,
-    #"""
                     .catch(err => this.trace(`requestKeyRepublishForDecryptFailure failed error=${err?.message || err}`));
             }
         } catch (e) {
@@ -45288,10 +45310,10 @@ ZaliMixin(ZaliInterface, class {
     // incoming-invite busy-guard and the foreign-room-state guard key off this exact set;
     // inlining it twice risks one copy going stale and silently re-opening the
     // active-call-clobber bug.
-    // Rooms this client deliberately walked away from (invite glare). Events for
-    // them are already in flight when we leave, and applying those would restore
 """#,
     #"""
+    // Rooms this client deliberately walked away from (invite glare). Events for
+    // them are already in flight when we leave, and applying those would restore
     // state for a call that no longer exists. Bounded: a handful per session.
     abandonVoiceRoom(roomId) {
         const id = String(roomId || '').trim();
@@ -46569,7 +46591,12 @@ ZaliMixin(ZaliInterface, class {
         if (!id) return;
         const found = this.findMessageById(id);
         if (!found || !this.canDeleteMessage(found.msg)) return;
-        if (!confirm('Удалить сообщение?')) return;
+        const confirmed = await this.confirmAction({
+            title: 'Удалить сообщение?',
+            message: 'Сообщение будет удалено.',
+            confirmLabel: 'Удалить сообщение',
+        });
+        if (!confirmed) return;
 
         const hasRealServerId = !!found.msg.id && (!found.msg.clientId || String(found.msg.id) !== String(found.msg.clientId));
         if (!hasRealServerId) {
@@ -49160,6 +49187,87 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
+// --- MODULE: interface/confirm_dialog.js ---
+// --- ZaliInterface: подтверждение опасных действий внутри приложения. ---
+// Часть класса ZaliInterface (см. web/src/interface.js).
+//
+// Заменяет window.confirm(): WKWebView без runJavaScriptConfirmPanel отвечает
+// на confirm() молча и сразу `false` (macOS/iOS-шеллы его не реализуют), а в
+// WebView2 и Android WebView системный диалог выглядит у каждой платформы по-своему.
+// Свой диалог одинаков везде, а кнопка называется действием, не «ОК».
+ZaliMixin(ZaliInterface, class {
+
+    /**
+     * @param {{title: string, message?: string, confirmLabel?: string,
+     *          cancelLabel?: string, danger?: boolean}} options
+     * @returns {Promise<boolean>} true, если пользователь подтвердил.
+     */
+    confirmAction({ title, message = '', confirmLabel = 'Подтвердить', cancelLabel = 'Отмена', danger = true } = {}) {
+        const host = document.querySelector('.main') || document.body;
+        if (!host) return Promise.resolve(false);
+        // Один диалог за раз: повторный вызов закрывает предыдущий как «Отмена».
+        if (this._confirmDialogDismiss) this._confirmDialogDismiss(false);
+
+        return new Promise((resolve) => {
+            const previousFocus = document.activeElement;
+            const overlay = document.createElement('div');
+            overlay.className = 'coin-transfer-modal confirm-dialog';
+            overlay.innerHTML = `
+                <div class="coin-transfer-box confirm-dialog-box" role="alertdialog" aria-modal="true"
+                     aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogText">
+                    <div class="coin-transfer-head"><h2 id="confirmDialogTitle"></h2></div>
+                    <p class="confirm-dialog-text" id="confirmDialogText"></p>
+                    <div class="coin-transfer-actions">
+                        <button class="btn-flat" type="button" data-confirm-cancel></button>
+                        <button class="auth-btn primary${danger ? ' is-danger' : ''}" type="button" data-confirm-ok></button>
+                    </div>
+                </div>`;
+            overlay.querySelector('#confirmDialogTitle').textContent = title || '';
+            const textEl = overlay.querySelector('#confirmDialogText');
+            textEl.textContent = message;
+            textEl.hidden = !message;
+            const cancelBtn = overlay.querySelector('[data-confirm-cancel]');
+            const okBtn = overlay.querySelector('[data-confirm-ok]');
+            cancelBtn.textContent = cancelLabel;
+            okBtn.textContent = confirmLabel;
+
+            const onKey = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    finish(false);
+                    return;
+                }
+                if (e.key === 'Tab') {
+                    // Фокус не уходит за диалог.
+                    const order = [cancelBtn, okBtn];
+                    const idx = order.indexOf(document.activeElement);
+                    e.preventDefault();
+                    order[(idx + (e.shiftKey ? order.length - 1 : 1)) % order.length].focus();
+                }
+            };
+            const finish = (result) => {
+                if (this._confirmDialogDismiss !== finish) return;
+                this._confirmDialogDismiss = null;
+                document.removeEventListener('keydown', onKey, true);
+                overlay.remove();
+                try { previousFocus?.focus?.(); } catch (e) { /* элемента уже нет */ }
+                resolve(result);
+            };
+            this._confirmDialogDismiss = finish;
+
+            cancelBtn.addEventListener('click', () => finish(false));
+            okBtn.addEventListener('click', () => finish(true));
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+            document.addEventListener('keydown', onKey, true);
+            host.appendChild(overlay);
+            // По умолчанию в фокусе безопасная кнопка: случайный Enter ничего не удалит.
+            cancelBtn.focus();
+        });
+    }
+});
+
+
 // --- MODULE: interface/events.js ---
 // --- ZaliInterface: Привязка DOM-событий и инерция прокрутки. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
@@ -49182,6 +49290,8 @@ ZaliMixin(ZaliInterface, class {
         this.bindMessageInputEvents();                    // поле ввода: ввод, вставка, drag-and-drop
         this.bindSearchAndModeEvents();                   // поиск, переключение режима и сегментов хаба
         this.bindAuthEvents();                            // экран входа: форма, сеть, гость
+"""#,
+    #"""
         this.bindSettingsEvents();                        // настройки, сетевая конфигурация и модалка сервера
         this.bindStylerEvents();                          // выбор темы и селекторы стилизатора
         this.bindStyleSliderEvents();                     // слайдеры оформления
@@ -49273,8 +49383,6 @@ ZaliMixin(ZaliInterface, class {
                     await this.joinVoiceChannel();
                     return;
                 }
-"""#,
-    #"""
                 const leaveBtn = e.target.closest('#voiceLeaveBtn');
                 if (leaveBtn) {
                     await this.leaveVoiceRoom({ announce: true });
@@ -50223,7 +50331,11 @@ ZaliMixin(ZaliInterface, class {
                 const serverId = this.S.serverModal.serverId || this.S.activeServer;
                 const server = (this.S.servers || []).find(item => item.id === serverId);
                 if (!server || this.normalizeMemberRole(server.myRole || server.my_role || '') !== 'owner') return;
-                const confirmDelete = confirm(`Удалить сервер "${server.name}"?`);
+                const confirmDelete = await this.confirmAction({
+                    title: 'Удалить сервер?',
+                    message: `Сервер «${server.name}» будет удалён. Это нельзя отменить.`,
+                    confirmLabel: 'Удалить сервер',
+                });
                 if (!confirmDelete) return;
                 try {
                     const res = await this.apiFetch(this.apiRoutes.servers.byId(serverId), { method: 'DELETE' });
@@ -50457,7 +50569,12 @@ ZaliMixin(ZaliInterface, class {
                 resetStatusEl.hidden = !text;
             };
             resetEncryptionKeysBtn.addEventListener('click', async () => {
-                if (!confirm('Сбросить все ключи шифрования?\n\nВсе локальные ключи будут удалены, серверные энвелопы — тоже. После сброса ключи переустановятся автоматически при следующем сообщении.')) return;
+                const confirmReset = await this.confirmAction({
+                    title: 'Сбросить ключи шифрования?',
+                    message: 'Ключи всех переписок будут удалены на этом устройстве и на сервере. Новые ключи создадутся автоматически при следующей отправке сообщения.',
+                    confirmLabel: 'Сбросить ключи',
+                });
+                if (!confirmReset) return;
                 resetEncryptionKeysBtn.disabled = true;
                 resetEncryptionKeysBtn.textContent = 'Сбрасываем…';
                 setResetStatus('');
@@ -50804,7 +50921,11 @@ ZaliMixin(ZaliInterface, class {
                     const roleId = deleteBtn.getAttribute('data-role-delete');
                     if (!roleId) return;
                     const role = (this.S.serverModal.roles || []).find(item => String(item.roleId || '') === roleId);
-                    const confirmDelete = confirm(`Удалить роль "${role?.name || roleId}"?`);
+                    const confirmDelete = await this.confirmAction({
+                        title: 'Удалить роль?',
+                        message: `Роль «${role?.name || roleId}» будет удалена.`,
+                        confirmLabel: 'Удалить роль',
+                    });
                     if (!confirmDelete) return;
                     try {
                         await this.deleteServerRole(roleId);

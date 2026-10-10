@@ -14588,3 +14588,21 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     flex: 1 1 220px;
     margin: 0;
 }
+
+/* ── Подтверждение опасного действия (confirmAction, confirm_dialog.js) ──
+   Опасная кнопка красная (--red), остальное — как в других модальных
+   окнах. Безопасная «Отмена» стоит слева и получает фокус первой. */
+.confirm-dialog { z-index: 90; }
+
+.confirm-dialog-text {
+    margin: 0;
+    color: var(--text2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.auth-btn.primary.is-danger {
+    background: var(--red);
+    color: #fff;
+    box-shadow: 0 14px 28px rgba(255,77,109,.2);
+}

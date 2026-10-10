@@ -1696,7 +1696,11 @@ ZaliMixin(ZaliInterface, class {
         if (!serverId || this.S.serverModal.mode !== 'edit') return;
         const cid = String(channelId || '').trim();
         const channel = (this.S.serverModal.channels || []).find(item => String(item.id || '') === cid);
-        const confirmDelete = confirm(`Удалить канал "${channel?.name || cid}"?`);
+        const confirmDelete = await this.confirmAction({
+            title: 'Удалить канал?',
+            message: `Канал «${channel?.name || cid}» будет удалён.`,
+            confirmLabel: 'Удалить канал',
+        });
         if (!confirmDelete) return;
         this.setServerModalState({ saving: true, error: '' });
         this.renderServerModal();

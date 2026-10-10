@@ -81,6 +81,7 @@
     "interface/autographs.js",
     "interface/diagnostics.js",
     "interface/diagnostic_reports.js",
+    "interface/confirm_dialog.js",
     "interface/events.js"
   ],
   "boot": [

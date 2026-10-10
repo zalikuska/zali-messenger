@@ -1058,7 +1058,11 @@ ZaliMixin(ZaliInterface, class {
                 const serverId = this.S.serverModal.serverId || this.S.activeServer;
                 const server = (this.S.servers || []).find(item => item.id === serverId);
                 if (!server || this.normalizeMemberRole(server.myRole || server.my_role || '') !== 'owner') return;
-                const confirmDelete = confirm(`Удалить сервер "${server.name}"?`);
+                const confirmDelete = await this.confirmAction({
+                    title: 'Удалить сервер?',
+                    message: `Сервер «${server.name}» будет удалён. Это нельзя отменить.`,
+                    confirmLabel: 'Удалить сервер',
+                });
                 if (!confirmDelete) return;
                 try {
                     const res = await this.apiFetch(this.apiRoutes.servers.byId(serverId), { method: 'DELETE' });
@@ -1292,7 +1296,12 @@ ZaliMixin(ZaliInterface, class {
                 resetStatusEl.hidden = !text;
             };
             resetEncryptionKeysBtn.addEventListener('click', async () => {
-                if (!confirm('Сбросить все ключи шифрования?\n\nВсе локальные ключи будут удалены, серверные энвелопы — тоже. После сброса ключи переустановятся автоматически при следующем сообщении.')) return;
+                const confirmReset = await this.confirmAction({
+                    title: 'Сбросить ключи шифрования?',
+                    message: 'Ключи всех переписок будут удалены на этом устройстве и на сервере. Новые ключи создадутся автоматически при следующей отправке сообщения.',
+                    confirmLabel: 'Сбросить ключи',
+                });
+                if (!confirmReset) return;
                 resetEncryptionKeysBtn.disabled = true;
                 resetEncryptionKeysBtn.textContent = 'Сбрасываем…';
                 setResetStatus('');
@@ -1639,7 +1648,11 @@ ZaliMixin(ZaliInterface, class {
                     const roleId = deleteBtn.getAttribute('data-role-delete');
                     if (!roleId) return;
                     const role = (this.S.serverModal.roles || []).find(item => String(item.roleId || '') === roleId);
-                    const confirmDelete = confirm(`Удалить роль "${role?.name || roleId}"?`);
+                    const confirmDelete = await this.confirmAction({
+                        title: 'Удалить роль?',
+                        message: `Роль «${role?.name || roleId}» будет удалена.`,
+                        confirmLabel: 'Удалить роль',
+                    });
                     if (!confirmDelete) return;
                     try {
                         await this.deleteServerRole(roleId);
