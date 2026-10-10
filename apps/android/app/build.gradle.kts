@@ -30,7 +30,7 @@ android {
         // MAJOR*10000 + MINOR*1000 + BUILD: 0.2b33 → 2033. Порядок сохраняется, пока
         // BUILD < 1000, чего с запасом хватает.
         versionCode = 2048
-        versionName = "0.2b48"
+        versionName = "0.2a48"
     }
 
     buildTypes {
