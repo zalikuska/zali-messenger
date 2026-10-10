@@ -2058,6 +2058,21 @@ struct WebView {
                     }
                 }
 
+                case .addonRequest:
+                    // Хранилище аддонов хаба (Services/AddonStore.swift): диск — в своей
+                    // последовательной очереди, ответ — на главном потоке.
+                    AddonStore.queue.async { [weak self] in
+                        let response: [String: Any]
+                        do {
+                            response = ["requestId": requestId, "ok": true, "data": try AddonStore.handle(dict)]
+                        } catch let failure as AddonStore.Failure {
+                            response = ["requestId": requestId, "ok": false, "error": failure.message]
+                        } catch {
+                            response = ["requestId": requestId, "ok": false, "error": error.localizedDescription]
+                        }
+                        DispatchQueue.main.async { self?.sendNativeResponse(response) }
+                    }
+
                 case .autostartRequest:
                     // Windows-only («Запускать при входе в Windows», свёрнутым в трей — see
                     // apps/windows/src/native/autostart.rs). `autostart` is never advertised
@@ -2303,6 +2318,8 @@ struct WebView {
             // userContentController(didReceive:) отбрасывает !isMainFrame — веб
             // может запускать песочницу аддонов (web/src/interface/addons*.js).
             "addonFrames": true,
+            // Хранилище аддонов на диске (ADDON_REQUEST, Services/AddonStore.swift).
+            "addonStore": true,
         ]
         let nativeCapsBootstrap = "window.__ZALI_NATIVE_CAPS__ = \(WebView.javascriptLiteral(nativeCapabilities));"
         config.userContentController.addUserScript(WKUserScript(source: nativeCapsBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))

@@ -10,6 +10,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+mod addons;
+pub(crate) use addons::*;
 mod api;
 pub(crate) use api::*;
 mod autostart;
@@ -46,7 +48,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2a49.16";
+const APP_DISPLAY_VERSION: &str = "0.2a49.17";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -281,6 +283,8 @@ struct NativeCapabilities {
     /// только в верхнем фрейме, сообщения только с `bridgeNonce`. Без этого
     /// веб не запускает песочницу аддонов.
     addon_frames: bool,
+    /// Хранилище аддонов хаба на диске (ADDON_REQUEST, native/addons.rs).
+    addon_store: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -306,6 +310,7 @@ impl Default for NativeCapabilities {
             window_controls: cfg!(target_os = "windows"),
             autostart: cfg!(target_os = "windows"),
             addon_frames: true,
+            addon_store: true,
         }
     }
 }
@@ -1268,6 +1273,23 @@ pub fn handle_ipc_message(
                         }),
                     ),
                 }
+            });
+        }
+        BridgeProtocolMessageType::AddonRequest => {
+            // Файлы до 32 МБ — с диска в пуле блокирующих задач, не в потоке окна.
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let proxy = proxy.clone();
+            runtime.spawn_blocking(move || {
+                let response = match handle_addon_request(&addons_root(), &payload) {
+                    Ok(data) => json!({ "requestId": request_id, "ok": true, "data": data }),
+                    Err(error) => json!({ "requestId": request_id, "ok": false, "error": error }),
+                };
+                dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, response);
             });
         }
         BridgeProtocolMessageType::AutostartRequest => {

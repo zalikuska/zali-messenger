@@ -16003,6 +16003,16 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     "CLEAR_LOCAL_DATA": {
       "fields": []
     },
+    "ADDON_REQUEST": {
+      "fields": [
+        "op",
+        "addonId",
+        "path",
+        "meta",
+        "dataBase64",
+        "requestId"
+      ]
+    },
     "AUTOSTART_REQUEST": {
       "fields": [
         "requestId",
@@ -17496,6 +17506,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
      * @enum {string}
      */
     const ZaliNativeMessageTypes = Object.freeze({
+        ADDON_REQUEST: "ADDON_REQUEST",
         ADD_CONTACT_REQUEST: "ADD_CONTACT_REQUEST",
         API_REQUEST: "API_REQUEST",
         AUTH_REQUEST: "AUTH_REQUEST",
@@ -18076,9 +18087,9 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
             }
         }
 
-        function takeBits(n) {
 """#,
     #"""
+        function takeBits(n) {
             if (n === 0) return 0;
             needBits(n);
             const value = bitBuffer & ((1 << n) - 1);
@@ -19798,6 +19809,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     INSTALL_UPDATE_REQUEST: 'INSTALL_UPDATE_REQUEST',
     MOBILE_NAV_PROGRESS: 'MOBILE_NAV_PROGRESS',
     AUTOSTART_REQUEST: 'AUTOSTART_REQUEST',
+    ADDON_REQUEST: 'ADDON_REQUEST',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
@@ -22328,9 +22340,9 @@ ZaliMixin(ZaliInterface, class {
         const valid = Number.isFinite(amount) && amount > 0;
         const total = valid ? amount * claims : 0;
         if (available) available.textContent = known ? `Доступно: ${this.formatCoinAmount(balance)} ZC` : 'Доступно: …';
-        const maxBtn = document.getElementById('coinTransferMaxBtn');
 """#,
     #"""
+        const maxBtn = document.getElementById('coinTransferMaxBtn');
         if (maxBtn) maxBtn.disabled = known && this.coinModalMaxAmount() <= 0;
 
         // Блокируем только по свежему балансу: устаревшее число не должно
@@ -26558,9 +26570,9 @@ ZaliMixin(ZaliInterface, class {
     consumeForceClaimScope(scope) {
         const scoped = String(scope || '').trim();
         if (!scoped) return false;
-        const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
 """#,
     #"""
+        const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
         if (!Object.prototype.hasOwnProperty.call(map, scoped)) return false;
         delete map[scoped];
         this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);

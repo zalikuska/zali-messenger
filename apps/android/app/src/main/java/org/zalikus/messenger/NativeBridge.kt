@@ -267,7 +267,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             pushDevice: true,
             // Мост закрыт от вложенных фреймов (bridgeNonce + проверка верхнего
             // фрейма выше) — веб может запускать песочницу аддонов.
-            addonFrames: true
+            addonFrames: true,
+            // Хранилище аддонов (ADDON_REQUEST, AddonStore.kt). IndexedDB на file:// нет.
+            addonStore: true
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
@@ -318,6 +320,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 }
             }
             "API_REQUEST" -> handleApiRequest(dict)
+            "ADDON_REQUEST" -> handleAddonRequest(dict)
             "PERSIST_DEVICE_IDENTITY" -> handlePersistDeviceIdentity(dict)
             "SET_KEY" -> {
                 if (dict.has("key")) currentE2eKey = dict.optString("key", currentE2eKey)
@@ -599,6 +602,28 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             type == "application/javascript" ||
             type == "application/xml" ||
             type == "application/x-www-form-urlencoded"
+    }
+
+    // MARK: - Hub addons storage (ADDON_REQUEST)
+    //
+    // Файлы до 32 МБ: postMessage вызывается синхронно из JS, поэтому диск — в
+    // своём однопоточном исполнителе (операции одного аддона не перемешиваются).
+    private val addonExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "zali-addons").apply { isDaemon = true }
+    }
+
+    private fun handleAddonRequest(dict: JSONObject) {
+        val requestId = dict.optString("requestId", "")
+        addonExecutor.execute {
+            try {
+                val data = AddonStore.handle(File(context.filesDir, "addons"), dict)
+                sendNativeResponse(requestId, true, data = data)
+            } catch (e: AddonStore.Failure) {
+                sendNativeResponse(requestId, false, error = e.message ?: "Ошибка хранилища аддонов")
+            } catch (e: Exception) {
+                sendNativeResponse(requestId, false, error = "Ошибка хранилища аддонов: ${e.message}")
+            }
+        }
     }
 
     /** Delivers a native bridge response into the JS bus (`onNativeResponse` in interface.js). */

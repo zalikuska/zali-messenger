@@ -182,6 +182,7 @@
      * @enum {string}
      */
     const ZaliNativeMessageTypes = Object.freeze({
+        ADDON_REQUEST: "ADDON_REQUEST",
         ADD_CONTACT_REQUEST: "ADD_CONTACT_REQUEST",
         API_REQUEST: "API_REQUEST",
         AUTH_REQUEST: "AUTH_REQUEST",
@@ -2482,6 +2483,7 @@ const NativeMessageTypes = window.ZaliNativeMessageTypes || Object.freeze({
     INSTALL_UPDATE_REQUEST: 'INSTALL_UPDATE_REQUEST',
     MOBILE_NAV_PROGRESS: 'MOBILE_NAV_PROGRESS',
     AUTOSTART_REQUEST: 'AUTOSTART_REQUEST',
+    ADDON_REQUEST: 'ADDON_REQUEST',
 });
 
 const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;

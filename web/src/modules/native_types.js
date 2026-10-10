@@ -5,6 +5,7 @@
      * @enum {string}
      */
     const ZaliNativeMessageTypes = Object.freeze({
+        ADDON_REQUEST: "ADDON_REQUEST",
         ADD_CONTACT_REQUEST: "ADD_CONTACT_REQUEST",
         API_REQUEST: "API_REQUEST",
         AUTH_REQUEST: "AUTH_REQUEST",

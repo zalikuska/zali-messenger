@@ -1,6 +1,7 @@
 import Foundation
 
 enum BridgeProtocolMessageType: String, CaseIterable {
+    case addonRequest = "ADDON_REQUEST"
     case addContactRequest = "ADD_CONTACT_REQUEST"
     case apiRequest = "API_REQUEST"
     case authRequest = "AUTH_REQUEST"

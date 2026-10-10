@@ -219,6 +219,16 @@
     "CLEAR_LOCAL_DATA": {
       "fields": []
     },
+    "ADDON_REQUEST": {
+      "fields": [
+        "op",
+        "addonId",
+        "path",
+        "meta",
+        "dataBase64",
+        "requestId"
+      ]
+    },
     "AUTOSTART_REQUEST": {
       "fields": [
         "requestId",
