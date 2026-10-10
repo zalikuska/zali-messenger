@@ -26549,6 +26549,8 @@ ZaliMixin(ZaliInterface, class {
         const scoped = String(scope || '').trim();
         if (!scoped) return false;
         const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
+"""#,
+    #"""
         if (!Object.prototype.hasOwnProperty.call(map, scoped)) return false;
         delete map[scoped];
         this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
@@ -26560,8 +26562,6 @@ ZaliMixin(ZaliInterface, class {
     //
     // Two conditions, both required, because either alone gives false positives:
     //
-"""#,
-    #"""
     //  * the window. Elapsed time since the FIRST failure, so a peer that is merely
     //    asleep, offline or mid-reinstall gets a long grace period;
     //  * the attempt count. Time alone is not evidence of anything — open a chat
@@ -27151,8 +27151,6 @@ ZaliMixin(ZaliInterface, class {
                 ts: new Date().toLocaleTimeString(),
             });
             // The takeover only means the registry now names a key that exists. It
-"""#,
-    #"""
             // still has to reach everyone, or the next device to reconcile would find
             // the very same situation and take the scope over again.
             void this.publishConversationKeyToOwnDevices({ scope: scoped, key: local, reason: `takeover:${reason}` });
@@ -30446,14 +30444,14 @@ ZaliMixin(ZaliInterface, class {
                 outAttachments = this.getPendingOutboxAttachments(item.clientId).filter(att => att.dataUrl);
             }
             if (declaredAttachments.length && !outAttachments.length) {
+"""#,
+    #"""
                 // The attachment bytes are gone (dataUrl is not persisted across
                 // restarts). Sending now would deliver the message without its files —
                 // or completely empty for attachment-only messages. Fail it visibly
                 // instead of silently delivering wrong content.
                 this.trace(`flushPendingOutbox attachments lost clientId=${String(item.clientId || '').trim()} declared=${declaredAttachments.length}`);
                 this.markMessageStatus(item.clientId, 'error');
-"""#,
-    #"""
                 this.dropPendingOutbox(item.clientId);
                 this.addLogEntry({ type: 'ERROR', msg: 'Вложения сообщения утеряны после перезапуска, отправка отменена. Прикрепите файлы заново.', ts: new Date().toLocaleTimeString() });
                 continue;
@@ -31144,8 +31142,6 @@ ZaliMixin(ZaliInterface, class {
         const entry = {
             urls: urlList.length === 1 ? urlList[0] : urlList,
         };
-"""#,
-    #"""
         const username = String(turnUsernameInput?.value || '').trim();
         const credential = String(turnCredentialInput?.value || '').trim();
         if (username) entry.username = username;
@@ -34553,6 +34549,8 @@ ZaliMixin(ZaliInterface, class {
         } else {
             stream = await getAudioOnlyStream();
         }
+"""#,
+    #"""
         this.voice.localStream = stream;
         this.voice.micError = '';
         this.voice.muted = false;
@@ -34567,8 +34565,6 @@ ZaliMixin(ZaliInterface, class {
     attachLocalVideoPreview() {
         if (!this.voice.localStream || !this.voice.localStream.getVideoTracks().length) return;
         let video = this.voice.localVideoEl;
-"""#,
-    #"""
         if (!video) {
             video = document.createElement('video');
             video.autoplay = true;
@@ -35185,8 +35181,6 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceTrace('ice-gathering', { peer: name, state: entry.pc.iceGatheringState, roomId: this.voice.roomId || '' });
             };
             entry.pc.oniceconnectionstatechange = () => {
-"""#,
-    #"""
                 this.voiceTrace('ice-connection', { peer: name, state: entry.pc.iceConnectionState, roomId: this.voice.roomId || '' });
             };
             entry.pc.onsignalingstatechange = () => {
@@ -38411,6 +38405,8 @@ ZaliMixin(ZaliInterface, class {
         }
 
         // A payload the shell could not deliver and will not retry (its outbound
+"""#,
+    #"""
         // queue overflowed, or the payload could not be serialised). On the browser
         // path sendVoiceEvent returns false and the caller unlatches offerSent
         // itself; over a native bridge the send is fire-and-forget, so this event is
@@ -38419,8 +38415,6 @@ ZaliMixin(ZaliInterface, class {
             const failedType = String(payload.eventType || '').trim();
             const failedSignal = String(payload.signalType || '').trim();
             const target = String(payload.to || '').trim();
-"""#,
-    #"""
             this.voiceDiag('transport-send-failed', {
                 eventType: failedType,
                 signalType: failedSignal,
@@ -38852,8 +38846,6 @@ ZaliMixin(ZaliInterface, class {
         // #voiceCallStrip above every tab (renderVoiceCallStrip). Inside its own
         // voice channel the call is the whole view; a DM call only takes over the
         // chat when the user opened the fullscreen grid.
-"""#,
-    #"""
         // The call timer is owned by renderVoiceCallStrip, which runs on every
         // renderVoicePanel — not here, where a non-call view used to stop it.
         if (activeRoom) {
@@ -42446,6 +42438,8 @@ ZaliMixin(ZaliInterface, class {
         const registering = this.S.auth.mode === 'register';
         document.getElementById('authPassword')?.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
         if (authTitle) authTitle.textContent = this.S.auth.mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
+"""#,
+    #"""
         if (authHint) authHint.textContent = this.S.auth.mode === 'register'
             ? 'Зарегистрируйтесь, чтобы сохранить контакты и историю.'
             : 'Войдите, чтобы синхронизировать сообщения и контакты.';
@@ -42455,8 +42449,6 @@ ZaliMixin(ZaliInterface, class {
                 : 'Ключи переписки останутся только на этом устройстве.';
         }
         if (authError) authError.textContent = this.S.auth.error || '';
-"""#,
-    #"""
         if (loginBtn) loginBtn.textContent = this.S.auth.loading
             ? 'Входим...'
             : (this.S.auth.mode === 'register' ? 'Создать аккаунт' : 'Войти');
@@ -43081,8 +43073,6 @@ ZaliMixin(ZaliInterface, class {
         try { await this.fetchCanonicalKeyIds(scopes); } catch (e) {}
         for (const details of batch) {
             await this.reportDecryptFailure({ ...details, useCachedCanonicalKeyIds: true });
-"""#,
-    #"""
         }
     }
 
@@ -46464,6 +46454,8 @@ ZaliMixin(ZaliInterface, class {
                 // notification for messages arriving in that channel. The window itself
                 // must also be in front of the user — see isAppAttended().
                 if (!this.isServerChatAttended(key)) {
+"""#,
+    #"""
                     this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId, messageId });
                 }
             }
@@ -46473,8 +46465,6 @@ ZaliMixin(ZaliInterface, class {
             // in the DM view, so rendering on that alone painted channel messages into the
             // DM pane (and wasted work). Mirror the notification-visibility check above.
             if (this.isServerChatVisible(key)) {
-"""#,
-    #"""
                 this.scheduleRenderMessages();
             } else {
                 this.renderServerInterface();
@@ -47073,8 +47063,6 @@ ZaliMixin(ZaliInterface, class {
         const bus = this.soundBus(ctx);
         const voice = ctx.createGain();
         voice.gain.value = gain;
-"""#,
-    #"""
         const filter = ctx.createBiquadFilter();
         filter.type = 'lowpass';
         filter.Q.value = 0.7;
@@ -50488,6 +50476,8 @@ ZaliMixin(ZaliInterface, class {
         this.setProfileState({ drawing: { ...drawing, submitting: true, error: '' } });
         try {
             const res = await this.apiFetch(this.apiRoutes.profiles.autographs(owner), {
+"""#,
+    #"""
                 method: 'POST',
                 interactive: true,
                 headers: { 'Content-Type': 'application/json' },
@@ -50502,8 +50492,6 @@ ZaliMixin(ZaliInterface, class {
                 }),
             });
             if (res.status === 403) {
-"""#,
-    #"""
                 this.setProfileState({ drawing: { ...this.ensureProfileState().drawing, submitting: false, error: 'Владелец закрыл автографы для вас' } });
                 return;
             }
@@ -51061,8 +51049,6 @@ ZaliMixin(ZaliInterface, class {
                 if (Array.isArray(list) && list.length > 10) snapshot[key] = list.slice(Math.floor(list.length / 2));
             }
             snapshot.truncated = true;
-"""#,
-    #"""
             body = JSON.stringify(snapshot);
         }
         return body;
@@ -54540,6 +54526,8 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
+"""#,
+    #"""
                 if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
@@ -54551,8 +54539,6 @@ ZaliMixin(ZaliInterface, class {
         this.resizeComposer();
         this.syncMobileChrome();
         this.setupMobileNavGestures();
-"""#,
-    #"""
         this.setupMobileForwardNavGesture();
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();
