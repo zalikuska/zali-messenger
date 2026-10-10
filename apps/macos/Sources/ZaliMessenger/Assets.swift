@@ -14895,6 +14895,49 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     }
 }
 
+/* «⋯» в строке контакта: видимый вход в меню (профиль, заглушить, громкость).
+   На десктопе появляется при наведении и фокусе, на сенсорных — всегда. */
+.contact-more {
+    width: 24px;
+    height: 24px;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text3);
+    cursor: pointer;
+    transition: color .18s var(--ease-out), background .18s var(--ease-out), opacity .14s var(--ease-out);
+}
+
+.contact-more .ui-icon { width: 16px; height: 16px; }
+.contact-more:hover { color: var(--text); background: rgba(255,255,255,.06); }
+
+@media (hover: hover) and (pointer: fine) {
+    .contact-more { opacity: 0; }
+    .contact:hover .contact-more,
+    .contact:focus-within .contact-more,
+    .contact-more:focus-visible { opacity: 1; }
+}
+
+@media (pointer: coarse), (max-width: 760px) {
+    .contact-more,
+    .contact-remove { position: relative; }
+    /* В колонке время / «⋯» / × кнопки стоят в ~36 px друг от друга, поэтому
+       зона по высоте 36, чтобы не перекрывать соседа. */
+    .contact-more::after,
+    .contact-remove::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44px;
+        height: 34px;
+        transform: translate(-50%, -50%);
+    }
+}
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -15392,6 +15435,9 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
                         <!-- Server rail: avatars of the servers (renderServerRails, interface/server_rail.js).
                              The selected server's channels are the sidebar list. -->
                         <div class="server-rail server-rail--header" id="serverRail" hidden><div class="server-rail-track"></div></div>
+                        <button class="server-settings-btn chat-call-btn" id="serverMenuBtn" type="button" title="Управление сервером" aria-label="Управление сервером: казна, настройки, участники" aria-haspopup="menu" hidden>
+                                <svg class="ui-icon ui-icon-more" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>
+                            </button>
                     </div>
 
                     <div class="voice-panel" id="voicePanel" hidden></div>
@@ -38292,6 +38338,10 @@ ZaliMixin(ZaliInterface, class {
         if (chatVideoCallBtn) {
             chatVideoCallBtn.hidden = isServers || !this.S.current;
         }
+        // Казна, настройки и участники раньше жили только в меню по аватарке
+        // сервера (ПКМ / долгое нажатие) — теперь у них есть и видимая кнопка.
+        const serverMenuBtn = document.getElementById('serverMenuBtn');
+        if (serverMenuBtn) serverMenuBtn.hidden = !(isServers && server);
         if (!isServers) {
             if (chatHdrAva) {
                 chatHdrAva.style.background = '';
@@ -41558,12 +41608,12 @@ ZaliMixin(ZaliInterface, class {
             this.flushLogEntries();
             const logBody = document.getElementById('logBody');
             const recentLog = logBody
+"""#,
+    #"""
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
                 : [];
             const payload = {
                 reason: details.reason || this.decryptFailureReasonSlug(details.placeholderText || ''),
-"""#,
-    #"""
                 placeholderText: String(details.placeholderText || '').slice(0, 200),
                 clientError: String(details.clientError || '').slice(0, 500),
                 messageId: details.messageId || '',
@@ -42566,6 +42616,7 @@ ZaliMixin(ZaliInterface, class {
                     ${timeLabel ? `<span class="contact-time">${this.esc(timeLabel)}</span>` : ''}
                     ${badge}
                     ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
+                    <button class="contact-more" type="button" data-contact-more="${this.esc(contact)}" title="Действия с контактом" aria-label="${this.esc(`Действия с контактом ${contact}`)}" aria-haspopup="menu">${this.uiIcon('more')}</button>
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
@@ -45550,6 +45601,8 @@ ZaliMixin(ZaliInterface, class {
             // exponentialRampToValueAtTime can't touch zero, hence the epsilons.
             env.gain.setValueAtTime(0.0001, startTime);
             env.gain.exponentialRampToValueAtTime(partial.gain, startTime + 0.006);
+"""#,
+    #"""
             env.gain.exponentialRampToValueAtTime(0.0001, startTime + partialDuration);
             osc.connect(env);
             env.connect(voice);
@@ -45561,8 +45614,6 @@ ZaliMixin(ZaliInterface, class {
     // Incoming message: a warm two-note rise (B5 → E6, a perfect fourth). Rising
     // intervals read as "new/arrived"; falling ones read as dismissal or error.
     // Synthesized (no audio asset) so it ships to every platform — macOS,
-"""#,
-    #"""
     // Windows, Android, browser — through bundle_web.py with nothing to bundle.
     playMessageChime() {
         const ctx = this.ensureSoundContext();
@@ -49535,6 +49586,8 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json().catch(() => ({}));
             const id = String(data?.id || '');
+"""#,
+    #"""
             this.trace(`sendDiagnosticReport kind=${kind} id=${id} bytes=${body.length}`);
             return id;
         } catch (e) {
@@ -49546,8 +49599,6 @@ ZaliMixin(ZaliInterface, class {
     // Кнопка в Настройках. Id отчёта показываем человеку — его называют,
     // когда описывают проблему, и по нему оператор находит снимок.
     async sendManualDiagnosticReport() {
-"""#,
-    #"""
         const btn = document.getElementById('sendDiagnosticsBtn');
         const note = document.getElementById('sendDiagnosticsNote');
         if (btn) btn.disabled = true;
@@ -49790,6 +49841,16 @@ ZaliMixin(ZaliInterface, class {
                     e.stopPropagation();
                     return;
                 }
+                const moreBtn = e.target.closest('.contact-more');
+                if (moreBtn) {
+                    const username = moreBtn.getAttribute('data-contact-more');
+                    if (username) {
+                        const rect = moreBtn.getBoundingClientRect();
+                        this.openContactContextMenu(username, rect.right, rect.bottom + 6);
+                    }
+                    e.stopPropagation();
+                    return;
+                }
                 const removeBtn = e.target.closest('.contact-remove');
                 if (removeBtn) {
                     const username = removeBtn.getAttribute('data-remove-contact');
@@ -50000,6 +50061,15 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        const serverMenuBtn = document.getElementById('serverMenuBtn');
+        if (serverMenuBtn) {
+            serverMenuBtn.addEventListener('click', () => {
+                const server = this.currentServer();
+                if (!server) return;
+                const rect = serverMenuBtn.getBoundingClientRect();
+                this.openServerRailContextMenu(server.id, rect.right, rect.bottom + 6);
+            });
+        }
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
         if (chatVideoCallBtn) {
             chatVideoCallBtn.addEventListener('click', async () => {

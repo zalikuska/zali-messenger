@@ -66,6 +66,7 @@ ZaliMixin(ZaliInterface, class {
                     ${timeLabel ? `<span class="contact-time">${this.esc(timeLabel)}</span>` : ''}
                     ${badge}
                     ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
+                    <button class="contact-more" type="button" data-contact-more="${this.esc(contact)}" title="Действия с контактом" aria-label="${this.esc(`Действия с контактом ${contact}`)}" aria-haspopup="menu">${this.uiIcon('more')}</button>
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;

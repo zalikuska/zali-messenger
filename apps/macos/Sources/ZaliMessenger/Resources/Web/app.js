@@ -21846,6 +21846,10 @@ ZaliMixin(ZaliInterface, class {
         if (chatVideoCallBtn) {
             chatVideoCallBtn.hidden = isServers || !this.S.current;
         }
+        // Казна, настройки и участники раньше жили только в меню по аватарке
+        // сервера (ПКМ / долгое нажатие) — теперь у них есть и видимая кнопка.
+        const serverMenuBtn = document.getElementById('serverMenuBtn');
+        if (serverMenuBtn) serverMenuBtn.hidden = !(isServers && server);
         if (!isServers) {
             if (chatHdrAva) {
                 chatHdrAva.style.background = '';
@@ -26118,6 +26122,7 @@ ZaliMixin(ZaliInterface, class {
                     ${timeLabel ? `<span class="contact-time">${this.esc(timeLabel)}</span>` : ''}
                     ${badge}
                     ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
+                    <button class="contact-more" type="button" data-contact-more="${this.esc(contact)}" title="Действия с контактом" aria-label="${this.esc(`Действия с контактом ${contact}`)}" aria-haspopup="menu">${this.uiIcon('more')}</button>
                     <button class="contact-remove" type="button" data-remove-contact="${this.esc(contact)}" title="Удалить контакт">×</button>
                 </div>
             </div>`;
@@ -33338,6 +33343,16 @@ ZaliMixin(ZaliInterface, class {
                     e.stopPropagation();
                     return;
                 }
+                const moreBtn = e.target.closest('.contact-more');
+                if (moreBtn) {
+                    const username = moreBtn.getAttribute('data-contact-more');
+                    if (username) {
+                        const rect = moreBtn.getBoundingClientRect();
+                        this.openContactContextMenu(username, rect.right, rect.bottom + 6);
+                    }
+                    e.stopPropagation();
+                    return;
+                }
                 const removeBtn = e.target.closest('.contact-remove');
                 if (removeBtn) {
                     const username = removeBtn.getAttribute('data-remove-contact');
@@ -33548,6 +33563,15 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        const serverMenuBtn = document.getElementById('serverMenuBtn');
+        if (serverMenuBtn) {
+            serverMenuBtn.addEventListener('click', () => {
+                const server = this.currentServer();
+                if (!server) return;
+                const rect = serverMenuBtn.getBoundingClientRect();
+                this.openServerRailContextMenu(server.id, rect.right, rect.bottom + 6);
+            });
+        }
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
         if (chatVideoCallBtn) {
             chatVideoCallBtn.addEventListener('click', async () => {

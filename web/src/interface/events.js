@@ -57,6 +57,16 @@ ZaliMixin(ZaliInterface, class {
                     e.stopPropagation();
                     return;
                 }
+                const moreBtn = e.target.closest('.contact-more');
+                if (moreBtn) {
+                    const username = moreBtn.getAttribute('data-contact-more');
+                    if (username) {
+                        const rect = moreBtn.getBoundingClientRect();
+                        this.openContactContextMenu(username, rect.right, rect.bottom + 6);
+                    }
+                    e.stopPropagation();
+                    return;
+                }
                 const removeBtn = e.target.closest('.contact-remove');
                 if (removeBtn) {
                     const username = removeBtn.getAttribute('data-remove-contact');
@@ -267,6 +277,15 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        const serverMenuBtn = document.getElementById('serverMenuBtn');
+        if (serverMenuBtn) {
+            serverMenuBtn.addEventListener('click', () => {
+                const server = this.currentServer();
+                if (!server) return;
+                const rect = serverMenuBtn.getBoundingClientRect();
+                this.openServerRailContextMenu(server.id, rect.right, rect.bottom + 6);
+            });
+        }
         const chatVideoCallBtn = document.getElementById('chatVideoCallBtn');
         if (chatVideoCallBtn) {
             chatVideoCallBtn.addEventListener('click', async () => {

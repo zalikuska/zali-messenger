@@ -14864,3 +14864,46 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
         transform: translate(-50%, -50%);
     }
 }
+
+/* «⋯» в строке контакта: видимый вход в меню (профиль, заглушить, громкость).
+   На десктопе появляется при наведении и фокусе, на сенсорных — всегда. */
+.contact-more {
+    width: 24px;
+    height: 24px;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text3);
+    cursor: pointer;
+    transition: color .18s var(--ease-out), background .18s var(--ease-out), opacity .14s var(--ease-out);
+}
+
+.contact-more .ui-icon { width: 16px; height: 16px; }
+.contact-more:hover { color: var(--text); background: rgba(255,255,255,.06); }
+
+@media (hover: hover) and (pointer: fine) {
+    .contact-more { opacity: 0; }
+    .contact:hover .contact-more,
+    .contact:focus-within .contact-more,
+    .contact-more:focus-visible { opacity: 1; }
+}
+
+@media (pointer: coarse), (max-width: 760px) {
+    .contact-more,
+    .contact-remove { position: relative; }
+    /* В колонке время / «⋯» / × кнопки стоят в ~36 px друг от друга, поэтому
+       зона по высоте 36, чтобы не перекрывать соседа. */
+    .contact-more::after,
+    .contact-remove::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44px;
+        height: 34px;
+        transform: translate(-50%, -50%);
+    }
+}

@@ -561,6 +561,10 @@ ZaliMixin(ZaliInterface, class {
         if (chatVideoCallBtn) {
             chatVideoCallBtn.hidden = isServers || !this.S.current;
         }
+        // Казна, настройки и участники раньше жили только в меню по аватарке
+        // сервера (ПКМ / долгое нажатие) — теперь у них есть и видимая кнопка.
+        const serverMenuBtn = document.getElementById('serverMenuBtn');
+        if (serverMenuBtn) serverMenuBtn.hidden = !(isServers && server);
         if (!isServers) {
             if (chatHdrAva) {
                 chatHdrAva.style.background = '';

@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261010-a497">
+    <link rel="stylesheet" href="style.css?v=20261010-a498">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -260,6 +260,9 @@
                         <!-- Server rail: avatars of the servers (renderServerRails, interface/server_rail.js).
                              The selected server's channels are the sidebar list. -->
                         <div class="server-rail server-rail--header" id="serverRail" hidden><div class="server-rail-track"></div></div>
+                        <button class="server-settings-btn chat-call-btn" id="serverMenuBtn" type="button" title="Управление сервером" aria-label="Управление сервером: казна, настройки, участники" aria-haspopup="menu" hidden>
+                                <svg class="ui-icon ui-icon-more" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>
+                            </button>
                     </div>
 
                     <div class="voice-panel" id="voicePanel" hidden></div>
@@ -1297,6 +1300,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261010-a497"></script>
+    <script src="app.js?v=20261010-a498"></script>
 </body>
 </html>
