@@ -10194,7 +10194,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 /* Mobile chat header: presence-style subtitle, drop the crypto-debug key line
    and the redundant "Диалог с …" prefix clutter to a single quiet line. */
 @media (max-width: 760px) {
-    #viewChat .chat-hdr-key { display: none; }
+    #viewChat .chat-hdr-key:not(.is-missing) { display: none; }
     #viewChat .chat-hdr-info { gap: 1px; }
     #viewChat .chat-hdr-name { font-size: 16px; font-weight: 800; }
     #viewChat .chat-hdr-sub,
@@ -14673,4 +14673,45 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 
 .msg-state-btn.is-quiet {
     color: var(--text2);
+}
+
+/* ── Пустые состояния: заголовок и подпись рядом (а не в разных концах
+   экрана, как у grid с растянутыми строками), под ними одна главная кнопка. */
+.empty-state {
+    align-content: center;
+}
+
+.empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+/* Ключа нет — единственный случай, когда строка про ключ вообще показывается. */
+.chat-hdr-key.is-missing {
+    color: var(--red);
+    font-family: inherit;
+    font-size: 12px;
+}
+
+/* Отключённые поле ввода и вложения (нет собеседника или канала). */
+.attach-btn:disabled,
+#msgInput:disabled {
+    cursor: not-allowed;
+    opacity: .5;
+}
+
+/* Кнопки пустого состояния показываются в одном месте: на десктопе в области
+   чата (список слева остаётся без дубля), на телефоне — в списке, потому что
+   экран чата там не виден. */
+.sidebar .empty-actions { display: none; }
+
+.server-empty,
+.sidebar-channel-empty { align-content: center; }
+
+@media (max-width: 760px) {
+    .sidebar .empty-actions { display: flex; }
+    #viewChat .empty-actions { display: none; }
 }

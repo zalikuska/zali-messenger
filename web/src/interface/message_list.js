@@ -192,11 +192,28 @@ ZaliMixin(ZaliInterface, class {
             this._lastMessagesHTML = null;
             this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
-                box.innerHTML = `<div class="empty-state">
+                const hasServers = (this.S.servers || []).some(Boolean);
+                box.innerHTML = !channel
+                    ? `<div class="empty-state">
+                    <div class="empty-art" aria-hidden="true"></div>
+                    <div class="empty-ttl">${hasServers ? 'Выберите канал' : 'Серверов пока нет'}</div>
+                    <div class="empty-sub">${hasServers ? 'Каналы сервера — в списке слева' : 'Создайте свой сервер или войдите по коду'}</div>
+                    ${hasServers ? '' : this.emptyActionsHTML('servers')}
+                </div>`
+                    : `<div class="empty-state">
                     <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">Нет сообщений в канале</div>
-                    <div class="empty-sub">${channel ? `#${this.esc(channel.name)}` : 'Выберите канал'}</div>
+                    <div class="empty-sub">#${this.esc(channel.name)}</div>
                 </div>`;
+                return;
+            }
+            if (!this.S.current) {
+                box.innerHTML = `<div class="empty-state">
+                <div class="empty-art" aria-hidden="true"></div>
+                <div class="empty-ttl">Пока нет диалогов</div>
+                <div class="empty-sub">Найдите человека по логину и напишите ему</div>
+                ${this.emptyActionsHTML('contacts')}
+            </div>`;
                 return;
             }
             // empty-art — иллюстрация «как доходит сообщение» (оформление «Фокус»).

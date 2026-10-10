@@ -27,8 +27,21 @@ ZaliMixin(ZaliInterface, class {
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
     }
 
+    /** Кнопки пустых состояний («Создать сервер», «Найти человека»). Вызывается из bindContactListEvents(). */
+    bindEmptyActionEvents() {
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest?.('[data-empty-action]');
+            if (!btn) return;
+            const action = btn.getAttribute('data-empty-action');
+            if (action === 'server-create') this.openServerModal('create');
+            else if (action === 'server-join') this.openJoinCodeModal();
+            else if (action === 'find-person') document.getElementById('contactAddBtn')?.click();
+        });
+    }
+
     /** Списки контактов и каналов сервера. Вызывается только из bindEvents(). */
     bindContactListEvents() {
+        this.bindEmptyActionEvents();
         // 1. Click on contacts
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {

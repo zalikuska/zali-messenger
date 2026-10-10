@@ -787,6 +787,22 @@ ZaliMixin(ZaliInterface, class {
             ? !!(this.currentServer() && channel && !this.isVoiceChannel(channel))
             : !!this.S.current;
         if (btn) btn.disabled = !(hasText || hasAttachments) || !canSend;
+        // Без собеседника или канала писать некуда: поле и вложения отключены с
+        // причиной в подсказке (в голосовом канале поле остаётся как было).
+        // Режим берём из навигации, а не из currentConversationMode(): без выбранного
+        // канала тот честно отвечает 'dm', и поле осталось бы живым для чужого диалога.
+        const servers = this.S.navMode === 'servers';
+        const noTarget = servers ? !(this.currentServer() && channel) : !this.S.current;
+        if (inp) {
+            inp.disabled = noTarget;
+            inp.placeholder = noTarget
+                ? (servers ? 'Выберите канал, чтобы написать' : 'Выберите собеседника, чтобы написать')
+                : 'Сообщение...';
+        }
+        for (const id of ['attachBtn', 'coinTransferBtn']) {
+            const control = document.getElementById(id);
+            if (control) control.disabled = noTarget;
+        }
     }
 
     // --- Bus Command Handlers ---

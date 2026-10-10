@@ -574,14 +574,25 @@ ZaliMixin(ZaliInterface, class {
                 if (this.S.current) {
                     this.updateChatHeaderCryptoKey({ peer: this.S.current });
                 } else {
-                    chatHdrSub.textContent = 'Личное сообщение';
+                    chatHdrSub.textContent = '';
                 }
             }
             return;
         }
         if (!server) {
-            // The sidebar shows the «выберите сервер» / «серверов нет» state.
+            // The sidebar shows the «выберите сервер» / «серверов нет» state. Шапка
+            // не должна оставаться от прошлого собеседника: раньше здесь висели
+            // «bob / Диалог с bob» и активное поле ввода.
+            const hasServers = (this.S.servers || []).some(Boolean);
+            if (chatHdrAva) {
+                chatHdrAva.style.background = '';
+                this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(this.myName(), 'avatar-img', this.myName()));
+            }
+            if (chatHdrName) chatHdrName.textContent = hasServers ? 'Выберите сервер' : 'Серверов пока нет';
+            if (chatHdrSub) chatHdrSub.textContent = '';
+            if (tbChat) tbChat.textContent = 'Сервера';
             this.renderContacts();
+            this.updateSendButtonState();
             return;
         }
 

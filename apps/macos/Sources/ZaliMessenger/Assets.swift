@@ -10222,7 +10222,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 /* Mobile chat header: presence-style subtitle, drop the crypto-debug key line
    and the redundant "Диалог с …" prefix clutter to a single quiet line. */
 @media (max-width: 760px) {
-    #viewChat .chat-hdr-key { display: none; }
+    #viewChat .chat-hdr-key:not(.is-missing) { display: none; }
     #viewChat .chat-hdr-info { gap: 1px; }
     #viewChat .chat-hdr-name { font-size: 16px; font-weight: 800; }
     #viewChat .chat-hdr-sub,
@@ -14703,6 +14703,47 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 
 .msg-state-btn.is-quiet {
     color: var(--text2);
+}
+
+/* ── Пустые состояния: заголовок и подпись рядом (а не в разных концах
+   экрана, как у grid с растянутыми строками), под ними одна главная кнопка. */
+.empty-state {
+    align-content: center;
+}
+
+.empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+/* Ключа нет — единственный случай, когда строка про ключ вообще показывается. */
+.chat-hdr-key.is-missing {
+    color: var(--red);
+    font-family: inherit;
+    font-size: 12px;
+}
+
+/* Отключённые поле ввода и вложения (нет собеседника или канала). */
+.attach-btn:disabled,
+#msgInput:disabled {
+    cursor: not-allowed;
+    opacity: .5;
+}
+
+/* Кнопки пустого состояния показываются в одном месте: на десктопе в области
+   чата (список слева остаётся без дубля), на телефоне — в списке, потому что
+   экран чата там не виден. */
+.sidebar .empty-actions { display: none; }
+
+.server-empty,
+.sidebar-channel-empty { align-content: center; }
+
+@media (max-width: 760px) {
+    .sidebar .empty-actions { display: flex; }
+    #viewChat .empty-actions { display: none; }
 }
 
 </style>
@@ -27691,11 +27732,12 @@ ZaliMixin(ZaliInterface, class {
             chatHdrSub.textContent = desc;
             return;
         }
-        const desc = peer ? `Диалог с ${String(peer).trim()}` : 'Личное сообщение';
-        chatHdrSub.innerHTML = `
-            <span class="chat-hdr-desc">${this.esc(desc)}</span>
-            <span class="chat-hdr-key${key ? '' : ' is-missing'}">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
-        `;
+        // Имя собеседника уже в заголовке, а «Ключ: задан» — нормальное состояние,
+        // о котором не нужно напоминать при каждом взгляде на шапку. Остаётся
+        // только предупреждение, когда ключа нет.
+        chatHdrSub.innerHTML = key
+            ? ''
+            : `<span class="chat-hdr-key is-missing">Ключ не задан: сообщения не расшифруются</span>`;
     }
 
     saveStoredCryptoKey(key) {
@@ -38113,14 +38155,25 @@ ZaliMixin(ZaliInterface, class {
                 if (this.S.current) {
                     this.updateChatHeaderCryptoKey({ peer: this.S.current });
                 } else {
-                    chatHdrSub.textContent = 'Личное сообщение';
+                    chatHdrSub.textContent = '';
                 }
             }
             return;
         }
         if (!server) {
-            // The sidebar shows the «выберите сервер» / «серверов нет» state.
+            // The sidebar shows the «выберите сервер» / «серверов нет» state. Шапка
+            // не должна оставаться от прошлого собеседника: раньше здесь висели
+            // «bob / Диалог с bob» и активное поле ввода.
+            const hasServers = (this.S.servers || []).some(Boolean);
+            if (chatHdrAva) {
+                chatHdrAva.style.background = '';
+                this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(this.myName(), 'avatar-img', this.myName()));
+            }
+            if (chatHdrName) chatHdrName.textContent = hasServers ? 'Выберите сервер' : 'Серверов пока нет';
+            if (chatHdrSub) chatHdrSub.textContent = '';
+            if (tbChat) tbChat.textContent = 'Сервера';
             this.renderContacts();
+            this.updateSendButtonState();
             return;
         }
 
@@ -41363,6 +41416,8 @@ ZaliMixin(ZaliInterface, class {
                 clientError: String(details.clientError || '').slice(0, 500),
                 messageId: details.messageId || '',
                 clientId: details.clientId || '',
+"""#,
+    #"""
                 sender: details.sender || '',
                 receiver: details.receiver || '',
                 serverId: details.serverId || '',
@@ -41375,8 +41430,6 @@ ZaliMixin(ZaliInterface, class {
                 keyMatches: (localKeyId && canonicalKeyId) ? (localKeyId === canonicalKeyId) : null,
                 deviceId: this.currentDeviceId(),
                 platform: this.hasNativeBridge() ? 'native' : 'browser',
-"""#,
-    #"""
                 userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
                 recentLog,
                 reportedAt: new Date().toISOString(),
@@ -42283,7 +42336,7 @@ ZaliMixin(ZaliInterface, class {
         if (list.length === 0) {
             // contacts-empty-art — иллюстрация «найти → добавить → написать»
             // (оформление «Фокус»); при пустом поиске она не к месту.
-            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span></div>`);
+            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span>${q ? '' : this.emptyActionsHTML('contacts')}</div>`);
             return;
         }
 
@@ -42727,6 +42780,26 @@ ZaliMixin(ZaliInterface, class {
         this.renderHubComponents();
     }
 
+    /**
+     * Кнопки пустого состояния. Главное действие одно, залитое; остальное тише.
+     * Обработчик — один на документ (bindEmptyActionEvents в events.js), поэтому
+     * разметка остаётся статической строкой без интерполяций.
+     */
+    emptyActionsHTML(kind) {
+        if (kind === 'servers') {
+            return '<div class="empty-actions">'
+                + '<button class="auth-btn primary" type="button" data-empty-action="server-create">Создать сервер</button>'
+                + '<button class="btn-flat" type="button" data-empty-action="server-join">Войти по коду</button>'
+                + '</div>';
+        }
+        if (kind === 'contacts') {
+            return '<div class="empty-actions">'
+                + '<button class="auth-btn primary" type="button" data-empty-action="find-person">Найти человека</button>'
+                + '</div>';
+        }
+        return '';
+    }
+
     renderServers(el = null) {
         const target = el || document.getElementById('contacts');
         if (!target) return;
@@ -42735,15 +42808,16 @@ ZaliMixin(ZaliInterface, class {
         // sidebar lists the selected server's channels.
         this.renderServerRails();
         const server = this.currentServer();
-        const empty = (title, sub) => `<div class="server-empty sidebar-channel-empty">
+        const empty = (title, sub, actions = '') => `<div class="server-empty sidebar-channel-empty">
             <div class="empty-ttl">${title}</div>
             <div class="empty-sub">${sub}</div>
+            ${actions}
         </div>`;
         if (!server) {
             const hasServers = (this.S.servers || []).some(Boolean);
             this.commitListHTML(target, 'servers', hasServers
                 ? empty('Выберите сервер', 'Серверы — в ленте сверху')
-                : empty('Серверов пока нет', 'Создайте сервер или войдите по коду — кнопки в ленте сверху'));
+                : empty('Серверов пока нет', 'Создайте свой сервер или войдите по коду', this.emptyActionsHTML('servers')));
             return;
         }
         const q = String(this.S.searchQ || '').toLowerCase();
@@ -43323,11 +43397,28 @@ ZaliMixin(ZaliInterface, class {
             this._lastMessagesHTML = null;
             this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
-                box.innerHTML = `<div class="empty-state">
+                const hasServers = (this.S.servers || []).some(Boolean);
+                box.innerHTML = !channel
+                    ? `<div class="empty-state">
+                    <div class="empty-art" aria-hidden="true"></div>
+                    <div class="empty-ttl">${hasServers ? 'Выберите канал' : 'Серверов пока нет'}</div>
+                    <div class="empty-sub">${hasServers ? 'Каналы сервера — в списке слева' : 'Создайте свой сервер или войдите по коду'}</div>
+                    ${hasServers ? '' : this.emptyActionsHTML('servers')}
+                </div>`
+                    : `<div class="empty-state">
                     <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">Нет сообщений в канале</div>
-                    <div class="empty-sub">${channel ? `#${this.esc(channel.name)}` : 'Выберите канал'}</div>
+                    <div class="empty-sub">#${this.esc(channel.name)}</div>
                 </div>`;
+                return;
+            }
+            if (!this.S.current) {
+                box.innerHTML = `<div class="empty-state">
+                <div class="empty-art" aria-hidden="true"></div>
+                <div class="empty-ttl">Пока нет диалогов</div>
+                <div class="empty-sub">Найдите человека по логину и напишите ему</div>
+                ${this.emptyActionsHTML('contacts')}
+            </div>`;
                 return;
             }
             // empty-art — иллюстрация «как доходит сообщение» (оформление «Фокус»).
@@ -44499,6 +44590,22 @@ ZaliMixin(ZaliInterface, class {
             ? !!(this.currentServer() && channel && !this.isVoiceChannel(channel))
             : !!this.S.current;
         if (btn) btn.disabled = !(hasText || hasAttachments) || !canSend;
+        // Без собеседника или канала писать некуда: поле и вложения отключены с
+        // причиной в подсказке (в голосовом канале поле остаётся как было).
+        // Режим берём из навигации, а не из currentConversationMode(): без выбранного
+        // канала тот честно отвечает 'dm', и поле осталось бы живым для чужого диалога.
+        const servers = this.S.navMode === 'servers';
+        const noTarget = servers ? !(this.currentServer() && channel) : !this.S.current;
+        if (inp) {
+            inp.disabled = noTarget;
+            inp.placeholder = noTarget
+                ? (servers ? 'Выберите канал, чтобы написать' : 'Выберите собеседника, чтобы написать')
+                : 'Сообщение...';
+        }
+        for (const id of ['attachBtn', 'coinTransferBtn']) {
+            const control = document.getElementById(id);
+            if (control) control.disabled = noTarget;
+        }
     }
 
     // --- Bus Command Handlers ---
@@ -45319,6 +45426,8 @@ ZaliMixin(ZaliInterface, class {
 
     // Single choke point for "a message arrived in a chat the user isn't currently
     // looking at". Both the live WS push path AND the reconnect / background
+"""#,
+    #"""
     // history-catch-up paths (loadHistory, mergeServerChatMessages) route through
     // here — those catch-up paths used to update S.chats/S.serverChats silently with
     // no notification and no unread badge, which was the root cause of notifications
@@ -45385,8 +45494,6 @@ ZaliMixin(ZaliInterface, class {
     // immediately when there is no native bridge, so a live tab shows its own
     // notification here — with the message text, which a Web Push can never carry.
     //
-"""#,
-    #"""
     // Only fires while the user isn't looking at the app (isAppAttended): with the app
     // in front of them the in-app unread badges already cover it. A window that is
     // visible but sits behind another app used to count as "looking" here too.
@@ -49298,6 +49405,8 @@ ZaliMixin(ZaliInterface, class {
         const now = Date.now();
         const present = new Set(outbox.map(item => String(item.clientId || '')));
         for (const id of seen.keys()) if (!present.has(id)) seen.delete(id);
+"""#,
+    #"""
         for (const id of present) if (!seen.has(id)) seen.set(id, now);
         const reported = this._diagStuckReported || (this._diagStuckReported = new Set());
         const stuck = outbox.filter(item => {
@@ -49366,8 +49475,6 @@ ZaliMixin(ZaliInterface, class {
     confirmAction({ title, message = '', confirmLabel = 'Подтвердить', cancelLabel = 'Отмена', danger = true } = {}) {
         const host = document.querySelector('.main') || document.body;
         if (!host) return Promise.resolve(false);
-"""#,
-    #"""
         // Один диалог за раз: повторный вызов закрывает предыдущий как «Отмена».
         if (this._confirmDialogDismiss) this._confirmDialogDismiss(false);
 
@@ -49461,8 +49568,21 @@ ZaliMixin(ZaliInterface, class {
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
     }
 
+    /** Кнопки пустых состояний («Создать сервер», «Найти человека»). Вызывается из bindContactListEvents(). */
+    bindEmptyActionEvents() {
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest?.('[data-empty-action]');
+            if (!btn) return;
+            const action = btn.getAttribute('data-empty-action');
+            if (action === 'server-create') this.openServerModal('create');
+            else if (action === 'server-join') this.openJoinCodeModal();
+            else if (action === 'find-person') document.getElementById('contactAddBtn')?.click();
+        });
+    }
+
     /** Списки контактов и каналов сервера. Вызывается только из bindEvents(). */
     bindContactListEvents() {
+        this.bindEmptyActionEvents();
         // 1. Click on contacts
         const contactsEl = document.getElementById('contacts');
         if (contactsEl) {

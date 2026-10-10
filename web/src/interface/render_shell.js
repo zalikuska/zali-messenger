@@ -28,7 +28,7 @@ ZaliMixin(ZaliInterface, class {
         if (list.length === 0) {
             // contacts-empty-art — иллюстрация «найти → добавить → написать»
             // (оформление «Фокус»); при пустом поиске она не к месту.
-            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span></div>`);
+            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span>${q ? '' : this.emptyActionsHTML('contacts')}</div>`);
             return;
         }
 
@@ -472,6 +472,26 @@ ZaliMixin(ZaliInterface, class {
         this.renderHubComponents();
     }
 
+    /**
+     * Кнопки пустого состояния. Главное действие одно, залитое; остальное тише.
+     * Обработчик — один на документ (bindEmptyActionEvents в events.js), поэтому
+     * разметка остаётся статической строкой без интерполяций.
+     */
+    emptyActionsHTML(kind) {
+        if (kind === 'servers') {
+            return '<div class="empty-actions">'
+                + '<button class="auth-btn primary" type="button" data-empty-action="server-create">Создать сервер</button>'
+                + '<button class="btn-flat" type="button" data-empty-action="server-join">Войти по коду</button>'
+                + '</div>';
+        }
+        if (kind === 'contacts') {
+            return '<div class="empty-actions">'
+                + '<button class="auth-btn primary" type="button" data-empty-action="find-person">Найти человека</button>'
+                + '</div>';
+        }
+        return '';
+    }
+
     renderServers(el = null) {
         const target = el || document.getElementById('contacts');
         if (!target) return;
@@ -480,15 +500,16 @@ ZaliMixin(ZaliInterface, class {
         // sidebar lists the selected server's channels.
         this.renderServerRails();
         const server = this.currentServer();
-        const empty = (title, sub) => `<div class="server-empty sidebar-channel-empty">
+        const empty = (title, sub, actions = '') => `<div class="server-empty sidebar-channel-empty">
             <div class="empty-ttl">${title}</div>
             <div class="empty-sub">${sub}</div>
+            ${actions}
         </div>`;
         if (!server) {
             const hasServers = (this.S.servers || []).some(Boolean);
             this.commitListHTML(target, 'servers', hasServers
                 ? empty('Выберите сервер', 'Серверы — в ленте сверху')
-                : empty('Серверов пока нет', 'Создайте сервер или войдите по коду — кнопки в ленте сверху'));
+                : empty('Серверов пока нет', 'Создайте свой сервер или войдите по коду', this.emptyActionsHTML('servers')));
             return;
         }
         const q = String(this.S.searchQ || '').toLowerCase();

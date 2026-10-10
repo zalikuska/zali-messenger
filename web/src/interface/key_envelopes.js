@@ -917,11 +917,12 @@ ZaliMixin(ZaliInterface, class {
             chatHdrSub.textContent = desc;
             return;
         }
-        const desc = peer ? `Диалог с ${String(peer).trim()}` : 'Личное сообщение';
-        chatHdrSub.innerHTML = `
-            <span class="chat-hdr-desc">${this.esc(desc)}</span>
-            <span class="chat-hdr-key${key ? '' : ' is-missing'}">${this.esc(key ? 'Ключ: задан' : 'Ключ: не задан')}</span>
-        `;
+        // Имя собеседника уже в заголовке, а «Ключ: задан» — нормальное состояние,
+        // о котором не нужно напоминать при каждом взгляде на шапку. Остаётся
+        // только предупреждение, когда ключа нет.
+        chatHdrSub.innerHTML = key
+            ? ''
+            : `<span class="chat-hdr-key is-missing">Ключ не задан: сообщения не расшифруются</span>`;
     }
 
     saveStoredCryptoKey(key) {
