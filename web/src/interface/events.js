@@ -469,7 +469,7 @@ ZaliMixin(ZaliInterface, class {
         }
         const coinGiftClaimsInput = document.getElementById('coinGiftClaimsInput');
         if (coinGiftClaimsInput) {
-            coinGiftClaimsInput.addEventListener('input', () => this.updateCoinGiftSummary());
+            coinGiftClaimsInput.addEventListener('input', () => this.updateCoinModalSummary());
             coinGiftClaimsInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
@@ -486,6 +486,13 @@ ZaliMixin(ZaliInterface, class {
                 if (e.target === coinTransferModal) this.closeCoinTransferModal();
             });
         }
+        const coinTransferMaxBtn = document.getElementById('coinTransferMaxBtn');
+        if (coinTransferMaxBtn) coinTransferMaxBtn.addEventListener('click', () => this.fillCoinModalMax());
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || e.defaultPrevented || !this.coinModalOpen()) return;
+            e.preventDefault();
+            this.closeCoinTransferModal();
+        });
         const updateModalDeclineBtn = document.getElementById('updateModalDeclineBtn');
         const updateModalAcceptBtn = document.getElementById('updateModalAcceptBtn');
         if (updateModalDeclineBtn) updateModalDeclineBtn.addEventListener('click', () => this.declineAppUpdate());
@@ -495,7 +502,7 @@ ZaliMixin(ZaliInterface, class {
             coinTransferAmountInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
-            coinTransferAmountInput.addEventListener('input', () => this.updateCoinGiftSummary());
+            coinTransferAmountInput.addEventListener('input', () => this.updateCoinModalSummary());
         }
         const coinTransferRecipientInput = document.getElementById('coinTransferRecipientInput');
         if (coinTransferRecipientInput) {

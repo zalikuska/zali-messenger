@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261010-net1">
+    <link rel="stylesheet" href="style.css?v=20261010-zc1">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -314,24 +314,21 @@
                 <!-- ZALICOIN VIEW -->
                 <div id="viewZaliCoin" class="view">
                     <div class="hub-view zc-view">
-                        <section class="hub-hero">
-                            <div>
-                                <span class="settings-kicker">ZaliCoin</span>
-                                <h2>Ваш баланс ZaliCoin</h2>
-                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата, а в каналах раздавайте их карточками.</p>
+                        <section class="settings-card zc-wallet" aria-labelledby="zaliCoinBalanceLabel">
+                            <div class="zc-wallet-coin zc-orb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width=".9" opacity=".4"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg></div>
+                            <div class="zc-wallet-copy">
+                                <span class="zc-balance-label" id="zaliCoinBalanceLabel">Ваш баланс ZaliCoin</span>
+                                <div class="zc-balance-main">
+                                    <span class="zc-balance-value" id="zaliCoinBalanceValue">0</span>
+                                    <span class="zc-balance-unit">ZC</span>
+                                </div>
+                                <div class="zc-balance-meta">
+                                    <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
+                                    <span class="zc-balance-held" id="zaliCoinHeldValue" hidden></span>
+                                </div>
                             </div>
-                            <div class="hub-orb zc-orb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width=".9" opacity=".4"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg></div>
-                        </section>
-
-                        <section class="settings-card zc-balance-card">
-                            <div class="zc-balance-main">
-                                <span class="zc-balance-label">Баланс</span>
-                                <span class="zc-balance-value" id="zaliCoinBalanceValue">0</span>
-                                <span class="zc-balance-unit">ZC</span>
-                            </div>
-                            <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
-                            <span class="zc-balance-held" id="zaliCoinHeldValue" hidden></span>
-                            <button class="btn-flat" id="zaliCoinSendBtn" type="button">Отправить ZaliCoin</button>
+                            <button class="auth-btn primary zc-send-btn" id="zaliCoinSendBtn" type="button">Отправить</button>
+                            <p class="zc-wallet-hint">Фиксированная эмиссия — 100 000 ZC. В личном чате монеты переводятся сразу, в канале — раздаются карточкой.</p>
                         </section>
 
                         <section class="settings-card zc-gifts-card" id="zaliCoinGiftsCard" hidden>
@@ -713,29 +710,38 @@
                 </div>
 
                 <div class="coin-transfer-modal" id="coinTransferModal" role="dialog" aria-modal="true" aria-labelledby="coinTransferTitle" hidden>
-                    <div class="coin-transfer-box">
+                    <div class="coin-transfer-box zc-send">
                         <div class="coin-transfer-head">
                             <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
                             <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
                         </div>
+                        <p class="zc-send-target" id="coinGiftTarget" hidden></p>
                         <label class="coin-transfer-field" id="coinTransferRecipientField">
-                            <span>Получатель</span>
-                            <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
+                            <span>Кому</span>
+                            <input type="text" id="coinTransferRecipientInput" placeholder="Имя пользователя" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next" list="coinTransferContacts">
+                            <datalist id="coinTransferContacts"></datalist>
                         </label>
-                        <label class="coin-transfer-field">
-                            <span id="coinTransferAmountLabel">Сумма (ZC)</span>
-                            <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
-                        </label>
+                        <div class="coin-transfer-field">
+                            <div class="zc-field-row">
+                                <label for="coinTransferAmountInput" id="coinTransferAmountLabel">Сумма</label>
+                                <span class="zc-available" id="coinTransferAvailable">Доступно: —</span>
+                            </div>
+                            <div class="zc-amount-box">
+                                <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0" inputmode="numeric" enterkeyhint="done">
+                                <span class="zc-amount-unit" aria-hidden="true">ZC</span>
+                                <button class="zc-amount-max" id="coinTransferMaxBtn" type="button" aria-label="Подставить всю доступную сумму">Всё</button>
+                            </div>
+                        </div>
                         <div class="coin-transfer-field" id="coinGiftClaimsField" hidden>
                             <span id="coinGiftClaimsLabel">Сколько человек смогут получить</span>
                             <div class="zc-stepper">
                                 <button class="zc-stepper-btn" type="button" data-zc-step="-1" aria-label="Меньше">−</button>
-                                <input type="number" id="coinGiftClaimsInput" min="1" max="100" step="1" value="1" aria-labelledby="coinGiftClaimsLabel">
+                                <input type="number" id="coinGiftClaimsInput" min="1" max="100" step="1" value="1" inputmode="numeric" aria-labelledby="coinGiftClaimsLabel">
                                 <button class="zc-stepper-btn" type="button" data-zc-step="1" aria-label="Больше">+</button>
                             </div>
                         </div>
-                        <p class="coin-gift-summary" id="coinGiftSummary" hidden></p>
-                        <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
+                        <div class="coin-gift-summary" id="coinGiftSummary" role="status" aria-live="polite" hidden></div>
+                        <p class="coin-transfer-status" id="coinTransferStatus" role="status" aria-live="polite" hidden></p>
                         <div class="coin-transfer-actions">
                             <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
                             <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
@@ -1291,6 +1297,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261010-net1"></script>
+    <script src="app.js?v=20261010-zc1"></script>
 </body>
 </html>

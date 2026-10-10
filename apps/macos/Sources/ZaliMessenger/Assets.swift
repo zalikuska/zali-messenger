@@ -8404,6 +8404,12 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     width: 100%;
 }
 
+/* Колонка ограниченной высоты: без flex:none карточки сжимались под соседей
+   и обрезали содержимое (кнопку «Отправить», строки карточек). Лишнее — в скролл. */
+.zc-view > * {
+    flex: none;
+}
+
 .zc-orb {
     font-weight: 800;
     letter-spacing: -.03em;
@@ -8414,53 +8420,127 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     height: 58%;
 }
 
-.zc-balance-card {
-    display: flex;
-    flex-wrap: wrap;
+/* Кошелёк. Баланс — главное на экране, «Отправить» — единственное
+   выделенное действие; остальное (эмиссия, правила) — тихой строкой ниже. */
+.zc-wallet {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 14px;
+    column-gap: 20px;
+    row-gap: 16px;
+    padding: 24px;
+    border-radius: 24px;
+    background:
+        linear-gradient(135deg, rgba(var(--accent-rgb), .13), transparent 42%),
+        linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
 }
 
-.zc-balance-card > * {
+.zc-wallet > * {
     position: relative;
     z-index: 1;
+}
+
+.zc-wallet-coin {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    aspect-ratio: 1;
+"""#,
+    #"""
+    border: 1px solid rgba(var(--accent-rgb), .34);
+    border-radius: 38%;
+    background:
+        radial-gradient(circle at 35% 28%, rgba(255,255,255,.52), transparent 18%),
+        linear-gradient(145deg, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), .46));
+    color: #050505;
+    box-shadow: 0 12px 28px rgba(var(--accent-rgb), .16);
+}
+
+.zc-wallet-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.zc-balance-label {
+    color: var(--text2);
+    font-size: 14px;
+    line-height: 1.4;
 }
 
 .zc-balance-main {
     display: flex;
     align-items: baseline;
+    flex-wrap: wrap;
     gap: 8px;
 }
 
-.zc-balance-label {
-    color: var(--text2);
-    font-size: 13px;
-}
-
 .zc-balance-value {
-    font-size: 34px;
-    font-weight: 800;
-    letter-spacing: -.03em;
     color: var(--text);
+    font-size: clamp(36px, 7vw, 56px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -.03em;
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
 }
 
 .zc-balance-unit {
     color: var(--lime);
-    font-weight: 700;
-    font-size: 14px;
+    font-weight: 800;
+    font-size: 20px;
+}
+
+.zc-balance-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
 }
 
 .zc-balance-share {
     color: var(--text2);
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.zc-send-btn {
+    min-height: 48px;
+    padding: 0 32px;
+    font-size: 15px;
+}
+
+.zc-wallet-hint {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--text2);
     font-size: 13px;
-    margin-right: auto;
+    line-height: 1.5;
+}
+
+@media (max-width: 560px) {
+    .zc-wallet {
+        grid-template-columns: auto minmax(0, 1fr);
+        padding: 20px;
+    }
+
+    .zc-wallet-coin {
+        width: 56px;
+    }
+
+    .zc-send-btn {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
 }
 
 .zc-distribution-card {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 16px;
 }
 
 .zc-distribution-card > * {
@@ -8468,13 +8548,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     z-index: 1;
 }
 
+.zc-distribution-card .settings-card-head {
+    margin-bottom: 0;
+}
+
 .zc-bar {
     display: flex;
     align-items: stretch;
     gap: 2px;
-    height: 28px;
-"""#,
-    #"""
+    height: 24px;
     border-radius: 999px;
     overflow: hidden;
     background: var(--zc-series-unassigned);
@@ -8506,48 +8588,85 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     transform: scaleY(1.08);
 }
 
+.zc-segment:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+}
+
 .zc-segment--me {
     box-shadow: inset 0 0 0 2px rgba(255,255,255,.55);
 }
 
 .zc-legend {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 4px 24px;
 }
 
 .zc-legend-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    font-size: 13px;
+    gap: 12px;
+    min-height: 40px;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 14px;
+}
+
+.zc-legend-item.is-me {
+    background: rgba(var(--accent-rgb), .08);
 }
 
 .zc-legend-swatch {
     flex: none;
-    width: 11px;
-    height: 11px;
-    border-radius: 3px;
+    width: 12px;
+    height: 12px;
+    border-radius: 4px;
 }
 
 .zc-legend-label {
-    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
     flex: 1;
     min-width: 0;
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.zc-legend-value {
-    color: var(--text2);
-    font-variant-numeric: tabular-nums;
+.zc-legend-me {
     flex: none;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb), .16);
+    color: rgb(var(--accent-rgb));
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.zc-legend-value {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 10px;
+    flex: none;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-legend-pct {
+    min-width: 48px;
+    color: var(--text2);
+    font-size: 13px;
+    text-align: right;
 }
 
 .zc-legend-empty {
     color: var(--text2);
-    font-size: 13px;
+    font-size: 14px;
 }
 
 .coin-transfer-modal {
@@ -8629,17 +8748,215 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     gap: 10px;
 }
 
-.coin-gift-summary {
-    margin: -4px 0 0;
-    font-size: 12px;
-    line-height: 1.45;
+.coin-transfer-status.is-error {
+    color: var(--red);
+}
+
+.coin-transfer-status.is-busy {
     color: var(--text2);
+}
+
+/* ---- Окно отправки: перевод и карточка ----
+   Формат «спросить → показать итог → подтвердить». Всё специфичное для окна
+   живёт под .zc-send: базовые .coin-transfer-* делят с ним казна и окно
+   обновления, их внешний вид здесь не меняется. */
+.zc-send {
+    width: min(100%, 420px);
+    gap: 16px;
+    padding: 24px;
+    border-radius: 24px;
+}
+
+.coin-transfer-modal:not([hidden]) .zc-send {
+    animation: zc-send-in .2s var(--ease-out) both;
+}
+
+@keyframes zc-send-in {
+    from { opacity: 0; transform: translateY(8px) scale(.98); }
+    to { opacity: 1; transform: none; }
+}
+
+.zc-send .coin-transfer-head h2 {
+    font-size: 20px;
+    line-height: 1.3;
+}
+
+.zc-send-target {
+    margin: -8px 0 0;
+    color: var(--text2);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.zc-send .coin-transfer-field {
+    gap: 8px;
+    font-size: 14px;
+}
+
+.zc-send .coin-transfer-field input {
+    height: 48px;
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 16px;
+}
+
+.zc-send .coin-transfer-field input.is-locked {
+    border-style: dashed;
+    background: transparent;
+    color: var(--text2);
+    cursor: default;
+}
+
+.zc-field-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.zc-available {
+    color: var(--text2);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-amount-box {
+    display: flex;
+    align-items: center;
+    height: 48px;
+    padding-right: 6px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+    transition: border-color .15s var(--ease-out), box-shadow .15s var(--ease-out);
+}
+
+.zc-amount-box:focus-within {
+    border-color: var(--lime);
+    box-shadow: 0 0 0 2px var(--lime-dim);
+}
+
+.zc-send .zc-amount-box input,
+.zc-send .zc-amount-box input:focus {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 8px 0 14px;
+    border: 0;
+    border-radius: 12px 0 0 12px;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    font-size: 22px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+}
+
+.zc-amount-box input::-webkit-outer-spin-button,
+.zc-amount-box input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.zc-amount-unit {
+    flex: none;
+    padding: 0 10px 0 4px;
+    color: var(--lime);
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.zc-amount-max {
+    position: relative;
+    flex: none;
+    min-width: 48px;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color .15s var(--ease-out), background .15s var(--ease-out);
+}
+
+/* Видимая кнопка 36px, зона нажатия — 48px, как у поля. */
+.zc-amount-max::before {
+    content: "";
+    position: absolute;
+    inset: -6px -3px;
+}
+
+.zc-amount-max:hover:not(:disabled) {
+    border-color: rgba(var(--accent-rgb), .45);
+    background: rgba(255,255,255,.1);
+}
+
+.zc-amount-max:disabled {
+    opacity: .4;
+    cursor: default;
+}
+
+.coin-gift-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.03);
+    color: var(--text2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.coin-gift-summary[hidden] {
+    display: none;
+}
+
+.coin-gift-summary.is-error {
+    border-color: rgba(255,77,109,.4);
+    background: rgba(255,77,109,.08);
+}
+
+.zc-sum-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-sum-row > span:first-child {
+    color: var(--text2);
+}
+
+.zc-sum-row.is-strong > span:last-child {
+    font-weight: 800;
+}
+
+.zc-sum-note {
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.coin-gift-summary.is-error .zc-sum-note {
+    color: var(--red);
+    font-size: 14px;
 }
 
 .zc-stepper {
     display: flex;
     align-items: stretch;
-    gap: 6px;
+    gap: 8px;
 }
 
 .coin-transfer-field .zc-stepper input {
@@ -8658,12 +8975,13 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .zc-stepper-btn {
     flex: none;
-    width: var(--control-h);
-    border-radius: 11px;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.04);
     color: var(--text);
-    font-size: 18px;
+    font-size: 22px;
     line-height: 1;
     cursor: pointer;
     transition: border-color .15s var(--ease-out), background .15s var(--ease-out);
@@ -8674,12 +8992,40 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     background: rgba(255,255,255,.07);
 }
 
+.zc-send .coin-transfer-status {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.zc-send .coin-transfer-actions {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+}
+
+.zc-send .coin-transfer-actions .btn-flat,
+.zc-send .coin-transfer-actions .auth-btn {
+    min-height: 48px;
+    font-size: 15px;
+}
+
+.zc-send .coin-transfer-actions .btn-flat {
+    padding: 0 20px;
+}
+
+.zc-send .auth-btn.primary:disabled {
+    opacity: .45;
+    cursor: default;
+    box-shadow: none;
+}
+
 .zc-balance-held {
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px dashed rgba(var(--accent-rgb), .35);
     color: var(--text2);
     font-size: 13px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px dashed rgba(var(--accent-rgb), .3);
+    line-height: 1.4;
     font-variant-numeric: tabular-nums;
 }
 
@@ -8694,6 +9040,10 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     z-index: 1;
 }
 
+.zc-gifts-card .settings-card-head {
+    margin-bottom: 0;
+}
+
 .zc-gifts-list {
     display: flex;
     flex-direction: column;
@@ -8704,7 +9054,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 12px;
+    padding: 12px 14px;
     border-radius: 14px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.025);
@@ -8721,23 +9071,24 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 .zc-gift-row-amount {
     color: var(--text);
     font-weight: 800;
-    font-size: 15px;
+    font-size: 16px;
     font-variant-numeric: tabular-nums;
 }
 
 .zc-gift-row-meta {
     color: var(--text2);
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 13px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
 }
 
 .zc-card-btn.zc-gift-row-btn {
     width: auto;
     flex: none;
+    height: 44px;
     margin-top: 0;
-    padding: 0 14px;
+    padding: 0 16px;
+    font-size: 14px;
 }
 
 /* ---- «От серверов»: выплаты из казны ---- */
@@ -8745,7 +9096,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     align-self: center;
     color: rgb(var(--accent-rgb));
     font-weight: 800;
-    font-size: 15px;
+    font-size: 16px;
     font-variant-numeric: tabular-nums;
 }
 
@@ -8760,34 +9111,42 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     overflow-y: auto;
 }
 
+/* Пустой раздел не должен стоять над распределением: он ничего не требует.
+   Он уходит вниз и сжимается до заголовка и одной строки. */
+.zc-payouts-card.is-empty {
+    order: 1;
+    padding-block: 16px;
+    gap: 8px;
+}
+
 .zc-payouts-empty {
     color: var(--text2);
-    font-size: 13px;
-    line-height: 1.45;
+    font-size: 14px;
+    line-height: 1.5;
 }
 
 .zc-payout-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 12px;
+    padding: 12px 14px;
     border-radius: 14px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,.025);
 }
 
 .server-avatar.zc-payout-avatar {
-    width: 34px;
-    height: 34px;
+    width: 40px;
+    height: 40px;
     flex: none;
-    border-radius: 11px;
-    font-size: 14px;
+    border-radius: 12px;
+    font-size: 15px;
 }
 
 .zc-payout-server {
     color: var(--text);
     font-weight: 700;
-    font-size: 14px;
+    font-size: 15px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -8795,7 +9154,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 
 .zc-payout-note {
     color: var(--text2);
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.4;
     font-style: italic;
     overflow-wrap: anywhere;
 }
@@ -8804,7 +9164,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     flex: none;
     color: rgb(var(--accent-rgb));
     font-weight: 800;
-    font-size: 15px;
+    font-size: 16px;
     font-variant-numeric: tabular-nums;
 }
 
@@ -11104,6 +11464,40 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         position: fixed;
         inset: 0;
     }
+}
+
+/* Окно отправки на телефоне — нижний лист: поля и кнопка под большим пальцем,
+   а не посреди экрана под клавиатурой. */
+@media (max-width: 760px) {
+    #coinTransferModal {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    #coinTransferModal .zc-send {
+        width: 100%;
+        max-height: 100%;
+        overflow-y: auto;
+        padding: 20px 16px calc(20px + var(--m-safe-bottom));
+        border-radius: 24px 24px 0 0;
+    }
+
+    .coin-transfer-modal:not([hidden]) .zc-send {
+        animation-name: zc-sheet-in;
+    }
+}
+
+@keyframes zc-sheet-in {
+    from { transform: translateY(24px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+}
+
+/* «Фокус»: монета кошелька без свечения — акцент только у «Отправить». */
+body[data-design-mode="focus"] .zc-wallet-coin {
+    border: 0;
+    background: rgba(255,255,255,.06);
+    box-shadow: none;
+    color: var(--lime);
 }
 
 
@@ -13581,9 +13975,9 @@ body[data-design-mode="focus"] .voice-tile-mic {
 :root {
     --decor-zalicoin: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22coin%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2222%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216.5%22/%3E%3Cpath d=%22M25.5 24.5h13l-13 15h13%22/%3E%3C/g%3E%3Cg id=%22coin3d%22%3E%3Cellipse cx=%2232%22 cy=%2225%22 rx=%2222%22 ry=%2210%22/%3E%3Cpath d=%22M10 25v9c0 5.5 9.85 10 22 10s22-4.5 22-10v-9%22/%3E%3Cpath d=%22M26.5 21.5h11l-11 7h11%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22phone%22%3E%3Crect x=%2218%22 y=%226%22 width=%2228%22 height=%2252%22 rx=%226%22/%3E%3Cpath d=%22M28 11.5h8%22/%3E%3Ccircle cx=%2232%22 cy=%2231%22 r=%227%22/%3E%3Cpath d=%22M29 28.5h6l-6 5h6%22/%3E%3Cpath d=%22M24 46h16%22 opacity=%22.6%22/%3E%3C/g%3E%3Cg id=%22piggy%22%3E%3Cpath d=%22M12 34c0-9.6 9.4-16.5 21.5-16.5 7.5 0 13.5 2.6 16.9 7l5.1-1.2c1.4-.3 2.7.7 2.7 2.1v7.4c0 1.2-1 2.2-2.2 2.2h-4.2c-1.6 3.4-4.3 6.1-7.8 7.9l.9 5.6c.2 1.2-.7 2.3-1.9 2.3h-4.2c-.9 0-1.7-.6-1.9-1.5l-.7-3.5c-1.6.3-3.3.4-5 .4s-3.4-.1-5-.4l-.7 3.5c-.2.9-1 1.5-1.9 1.5h-4.2c-1.2 0-2.1-1.1-1.9-2.3l1-5.9C14.6 44.4 12 39.6 12 34z%22/%3E%3Cpath d=%22M42.5 19.2l1.6-6.3c.2-.9 1.3-1.2 2-.6l4.6 4.9%22/%3E%3Cpath d=%22M27 22.5h9%22/%3E%3Cpath d=%22M12.6 31.6c-3.3.3-5.4-1.6-4.9-3.7.4-1.6 2.4-2.1 3.4-.9%22/%3E%3Cpath d=%22M53.2 26.6v4.2%22/%3E%3Ccircle class=%22f%22 cx=%2246.6%22 cy=%2227.2%22 r=%221.7%22/%3E%3C/g%3E%3Cg id=%22plus%22%3E%3Cpath d=%22M32 22v20M22 32h20%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22stack%22%3E%3Cellipse cx=%2232%22 cy=%2218%22 rx=%2219%22 ry=%227%22/%3E%3Cpath d=%22M13 18v6c0 3.9 8.5 7 19 7s19-3.1 19-7v-6%22/%3E%3Cpath d=%22M13 24v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3Cpath d=%22M13 31v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3Cpath d=%22M13 38v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3C/g%3E%3Cg id=%22s-coin%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2222%22/%3E%3C/g%3E%3Cg id=%22s-coin3d%22%3E%3Cpath d=%22M10 25c0-5.5 9.85-10 22-10s22 4.5 22 10v9c0 5.5-9.85 10-22 10S10 39.5 10 34z%22/%3E%3C/g%3E%3Cg id=%22s-phone%22%3E%3Crect x=%2218%22 y=%226%22 width=%2228%22 height=%2252%22 rx=%226%22/%3E%3C/g%3E%3Cg id=%22s-piggy%22%3E%3Cpath d=%22M12 34c0-9.6 9.4-16.5 21.5-16.5 7.5 0 13.5 2.6 16.9 7l5.1-1.2c1.4-.3 2.7.7 2.7 2.1v7.4c0 1.2-1 2.2-2.2 2.2h-4.2c-1.6 3.4-4.3 6.1-7.8 7.9l.9 5.6c.2 1.2-.7 2.3-1.9 2.3h-4.2c-.9 0-1.7-.6-1.9-1.5l-.7-3.5c-1.6.3-3.3.4-5 .4s-3.4-.1-5-.4l-.7 3.5c-.2.9-1 1.5-1.9 1.5h-4.2c-1.2 0-2.1-1.1-1.9-2.3l1-5.9C14.6 44.4 12 39.6 12 34z%22/%3E%3Cpath d=%22M42.5 19.2l1.6-6.3c.2-.9 1.3-1.2 2-.6l4.6 4.9z%22/%3E%3C/g%3E%3Cg id=%22s-stack%22%3E%3Cpath d=%22M13 18c0-3.9 8.5-7 19-7s19 3.1 19 7v27c0 3.9-8.5 7-19 7s-19-3.1-19-7z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m8%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m9%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m10%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M295.6 240.5C268.1 248.7 213.7 235.0 179.5 228.1C145.2 221.1 109.6 213.2 89.9 198.6C70.3 184.0 61.2 160.3 61.7 140.5C62.2 120.7 70.8 95.7 92.9 79.7C114.9 63.7 160.5 45.0 194.2 44.4C227.9 43.7 266.3 63.2 295.1 75.8C324.0 88.4 358.9 102.9 367.2 120.1C375.4 137.3 356.5 158.7 344.6 178.8C332.6 198.9 323.1 232.3 295.6 240.5Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Ccircle cx=%22318%22 cy=%2262%22 r=%2240%22 fill=%22%23000%22 fill-opacity=%22.18%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cpath d=%22M84 70C120 6 236 -4 292 40C334 74 304 120 252 120%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(252 120) rotate(172)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cpath d=%22M154.1 61.6L144.9 65.0 M152.0 56.0L137.9 61.1 M149.9 50.4L140.8 53.7%22 opacity=%220.5%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m8)%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m9)%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m10)%22%3E%3Cpath d=%22M277.5 49.4L268.0 45.0 M280.0 44.0L265.5 37.2 M282.5 38.6L273.1 34.2%22 opacity=%220.5%22/%3E%3C/g%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(40 34) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(376 112) rotate(0) scale(0.34) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(200 236) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(262 18) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(22 160) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(104 150) rotate(0) scale(0.48) translate(-32 -32)%22 opacity=%220.55%22/%3E%3Cuse href=%22%23plus%22 transform=%22translate(372 240) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.5%22/%3E%3C/svg%3E");
     --decor-hub: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bell%22%3E%3Cpath d=%22M32 11.5a3.6 3.6 0 0 1 3.6 3.6v1.6c6.2 1.6 10.6 7.2 10.6 13.8v8.3l4.3 6.2h-37l4.3-6.2v-8.3c0-6.6 4.4-12.2 10.6-13.8v-1.6a3.6 3.6 0 0 1 3.6-3.6z%22/%3E%3Cpath d=%22M26.8 49.8a5.2 5.2 0 0 0 10.4 0%22/%3E%3C/g%3E%3Cg id=%22box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3Cpath d=%22M11 19.7l21 10.2 21-10.2M32 29.9v24.6M21.5 14.6l21 10.2%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22planet%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2212.5%22/%3E%3Cpath d=%22M43.3 26.2c7.4-3.2 12.6-3.8 13.5-1.9 1.4 3-9.2 10.2-23.7 16.1S9.7 49.6 8.3 46.6c-.9-1.9 2.8-5.6 9.5-9.8%22/%3E%3C/g%3E%3Cg id=%22plus%22%3E%3Cpath d=%22M32 22v20M22 32h20%22/%3E%3C/g%3E%3Cg id=%22puzzle%22%3E%3Cpath d=%22M14 20h9.5a4.5 4.5 0 1 1 9 0H42v9.5a4.5 4.5 0 1 1 0 9V48H32.5a4.5 4.5 0 1 0-9 0H14v-9.5a4.5 4.5 0 1 0 0-9z%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22rocket%22%3E%3Cpath d=%22M32 7.5c8.4 6 12.6 15 12.6 25.3L40.4 45H23.6l-4.2-12.2C19.4 22.5 23.6 13.5 32 7.5z%22/%3E%3Ccircle cx=%2232%22 cy=%2225%22 r=%225%22/%3E%3Cpath d=%22M19.8 33.5l-6.5 8.8 8.2 2M44.2 33.5l6.5 8.8-8.2 2%22/%3E%3Cpath d=%22M27.5 49.5c0 4.8 4.5 8 4.5 8s4.5-3.2 4.5-8%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22star%22%3E%3Cpath d=%22M32.00 13.00 L37.00 26.12 L51.02 26.82 L40.08 35.63 L43.76 49.18 L32.00 41.50 L20.24 49.18 L23.92 35.63 L12.98 26.82 L27.00 26.12Z%22/%3E%3C/g%3E%3Cg id=%22s-bell%22%3E%3Cpath d=%22M32 11.5a3.6 3.6 0 0 1 3.6 3.6v1.6c6.2 1.6 10.6 7.2 10.6 13.8v8.3l4.3 6.2h-37l4.3-6.2v-8.3c0-6.6 4.4-12.2 10.6-13.8v-1.6a3.6 3.6 0 0 1 3.6-3.6z%22/%3E%3C/g%3E%3Cg id=%22s-box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3C/g%3E%3Cg id=%22s-planet%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2212.5%22/%3E%3C/g%3E%3Cg id=%22s-puzzle%22%3E%3Cpath d=%22M14 20h9.5a4.5 4.5 0 1 1 9 0H42v9.5a4.5 4.5 0 1 1 0 9V48H32.5a4.5 4.5 0 1 0-9 0H14v-9.5a4.5 4.5 0 1 0 0-9z%22/%3E%3C/g%3E%3Cg id=%22s-rocket%22%3E%3Cpath d=%22M32 7.5c8.4 6 12.6 15 12.6 25.3L40.4 45H23.6l-4.2-12.2C19.4 22.5 23.6 13.5 32 7.5z%22/%3E%3C/g%3E%3Cg id=%22s-star%22%3E%3Cpath d=%22M32.00 13.00 L37.00 26.12 L51.02 26.82 L40.08 35.63 L43.76 49.18 L32.00 41.50 L20.24 49.18 L23.92 35.63 L12.98 26.82 L27.00 26.12Z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m8%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M75.5 195.6C59.3 177.7 49.4 157.7 50.4 136.9C51.4 116.0 57.2 83.7 81.4 70.5C105.6 57.4 158.9 57.4 195.7 57.9C232.4 58.4 279.5 60.7 302.1 73.3C324.7 86.0 323.8 113.4 331.1 134.0C338.4 154.6 357.7 179.1 345.9 196.9C334.2 214.7 293.6 232.9 260.4 240.8C227.3 248.7 178.1 251.9 147.2 244.4C116.4 236.9 91.6 213.5 75.5 195.6Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cellipse cx=%22206%22 cy=%22146%22 rx=%22158%22 ry=%2254%22 transform=%22rotate(-20 206 146)%22 stroke-dasharray=%220.1 7%22 opacity=%22.7%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Ccircle cx=%22120%22 cy=%22180%22 r=%229%22 opacity=%22.45%22/%3E%3Ccircle cx=%22104%22 cy=%22166%22 r=%226%22 opacity=%22.4%22/%3E%3Ccircle cx=%22136%22 cy=%22190%22 r=%225%22 opacity=%22.35%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m8)%22%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(232 24) rotate(0) scale(0.44) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(380 140) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(22 62) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(160 30) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(376 30) rotate(0) scale(0.46) translate(-32 -32)%22 opacity=%220.55%22/%3E%3Cuse href=%22%23plus%22 transform=%22translate(22 210) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.5%22/%3E%3C/svg%3E");
-    --decor-chat: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 210%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3Cpath d=%22M21 28v-6.5a11 11 0 0 1 22 0V28%22/%3E%3Ccircle cx=%2232%22 cy=%2239%22 r=%223.2%22/%3E%3Cpath d=%22M32 42.2v4.3%22/%3E%3C/g%3E%3Cg id=%22person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18%22/%3E%3C/g%3E%3Cg id=%22plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3Cpath d=%22M24 37l31-25.5M31.5 41l-7.5-4%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22s-heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22s-lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3C/g%3E%3Cg id=%22s-person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18z%22/%3E%3C/g%3E%3Cg id=%22s-plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.1 46.4C124.5 34.3 164.7 18.6 192.7 20.8C220.7 23.0 247.0 45.9 268.1 59.5C289.2 73.2 313.8 86.3 319.3 102.5C324.7 118.8 316.3 141.3 300.9 156.8C285.5 172.3 256.5 189.6 227.1 195.6C197.7 201.7 150.1 201.7 124.6 193.2C99.2 184.6 87.3 161.1 74.3 144.5C61.3 127.8 42.4 109.5 46.7 93.1C51.0 76.8 75.8 58.4 100.1 46.4Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cpath d=%22M152 30C176 -2 222 0 224 26C226 50 192 52 196 30C200 8 252 4 290 44%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(290 44) rotate(48)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(30 150) rotate(0) scale(0.4) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(186 196) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(344 110) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(76 22) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
 """#,
     #"""
+    --decor-chat: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 210%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3Cpath d=%22M21 28v-6.5a11 11 0 0 1 22 0V28%22/%3E%3Ccircle cx=%2232%22 cy=%2239%22 r=%223.2%22/%3E%3Cpath d=%22M32 42.2v4.3%22/%3E%3C/g%3E%3Cg id=%22person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18%22/%3E%3C/g%3E%3Cg id=%22plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3Cpath d=%22M24 37l31-25.5M31.5 41l-7.5-4%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22s-heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22s-lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3C/g%3E%3Cg id=%22s-person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18z%22/%3E%3C/g%3E%3Cg id=%22s-plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.1 46.4C124.5 34.3 164.7 18.6 192.7 20.8C220.7 23.0 247.0 45.9 268.1 59.5C289.2 73.2 313.8 86.3 319.3 102.5C324.7 118.8 316.3 141.3 300.9 156.8C285.5 172.3 256.5 189.6 227.1 195.6C197.7 201.7 150.1 201.7 124.6 193.2C99.2 184.6 87.3 161.1 74.3 144.5C61.3 127.8 42.4 109.5 46.7 93.1C51.0 76.8 75.8 58.4 100.1 46.4Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cpath d=%22M152 30C176 -2 222 0 224 26C226 50 192 52 196 30C200 8 252 4 290 44%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(290 44) rotate(48)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(30 150) rotate(0) scale(0.4) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(186 196) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(344 110) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(76 22) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
     --decor-contacts: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 260 150%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22badge-plus%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216%22/%3E%3Cpath d=%22M32 24.5v15M24.5 32h15%22/%3E%3C/g%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22card%22%3E%3Crect x=%226%22 y=%2214%22 width=%2252%22 height=%2236%22 rx=%226%22/%3E%3Ccircle cx=%2220%22 cy=%2228%22 r=%225.5%22/%3E%3Cpath d=%22M11.5 42c1.4-3.8 4.6-5.8 8.5-5.8s7.1 2 8.5 5.8M35 27h15M35 34h10%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22search%22%3E%3Ccircle cx=%2227%22 cy=%2227%22 r=%2214%22/%3E%3Cpath d=%22M37.5 37.5L52 52%22/%3E%3Cpath d=%22M20 22a8 8 0 0 1 6-5%22 opacity=%22.6%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-badge-plus%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-card%22%3E%3Crect x=%226%22 y=%2214%22 width=%2252%22 height=%2236%22 rx=%226%22/%3E%3C/g%3E%3Cg id=%22s-search%22%3E%3Ccircle cx=%2227%22 cy=%2227%22 r=%2214%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.3 135.8C81.1 131.6 70.6 116.7 57.3 106.4C44.0 96.1 20.4 84.9 20.5 73.8C20.6 62.7 41.1 49.2 58.0 39.8C74.9 30.5 100.3 18.3 121.9 17.8C143.6 17.4 171.1 28.9 187.8 37.1C204.6 45.4 216.2 56.3 222.3 67.6C228.5 78.9 233.1 94.2 224.8 104.9C216.6 115.6 193.5 126.5 172.7 131.6C151.9 136.8 119.5 140.0 100.3 135.8Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(26 110) rotate(0) scale(0.34) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(150 18) rotate(0) scale(0.28) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(244 28) rotate(0) scale(0.28) translate(-32 -32)%22 opacity=%220.7%22/%3E%3C/svg%3E");
     --decor-settings: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22gear%22%3E%3Cpath d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%226.5%22/%3E%3C/g%3E%3Cg id=%22palette%22%3E%3Cpath d=%22M32 10.5c-12.4 0-22 9.1-22 20.9C10 43 18.4 53 29 53c2.7 0 4-1.7 4-3.7 0-2.6-2.1-3.4-2.1-5.7 0-2.6 2.1-4.2 4.7-4.2H41c7.1 0 12-4.4 12-10.6 0-10.6-9.4-18.3-21-18.3z%22/%3E%3Ccircle class=%22f%22 cx=%2221.5%22 cy=%2231%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2226%22 cy=%2221.5%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2236.5%22 cy=%2219.5%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2244.5%22 cy=%2226.5%22 r=%222.8%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sliders%22%3E%3Cpath d=%22M18 11v42M32 11v42M46 11v42%22/%3E%3Crect x=%2213%22 y=%2217%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3Crect x=%2227%22 y=%2236%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3Crect x=%2241%22 y=%2225%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22toggle%22%3E%3Crect x=%228%22 y=%2222%22 width=%2248%22 height=%2220%22 rx=%2210%22/%3E%3Ccircle class=%22f%22 cx=%2246%22 cy=%2232%22 r=%226%22/%3E%3C/g%3E%3Cg id=%22window%22%3E%3Crect x=%226%22 y=%2212%22 width=%2252%22 height=%2240%22 rx=%225%22/%3E%3Cpath d=%22M6 20h52%22/%3E%3Ccircle class=%22f%22 cx=%2211%22 cy=%2216%22 r=%221.3%22/%3E%3Ccircle class=%22f%22 cx=%2215.5%22 cy=%2216%22 r=%221.3%22/%3E%3Ccircle class=%22f%22 cx=%2220%22 cy=%2216%22 r=%221.3%22/%3E%3Cpath d=%22M13 28h24M13 34h32M13 40h18%22 opacity=%22.7%22/%3E%3Crect x=%2236%22 y=%2239%22 width=%2215%22 height=%227%22 rx=%223.5%22 opacity=%22.7%22/%3E%3C/g%3E%3Cg id=%22s-gear%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3C/g%3E%3Cg id=%22s-gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3C/g%3E%3Cg id=%22s-palette%22%3E%3Cpath d=%22M32 10.5c-12.4 0-22 9.1-22 20.9C10 43 18.4 53 29 53c2.7 0 4-1.7 4-3.7 0-2.6-2.1-3.4-2.1-5.7 0-2.6 2.1-4.2 4.7-4.2H41c7.1 0 12-4.4 12-10.6 0-10.6-9.4-18.3-21-18.3z%22/%3E%3C/g%3E%3Cg id=%22s-toggle%22%3E%3Crect x=%228%22 y=%2222%22 width=%2248%22 height=%2220%22 rx=%2210%22/%3E%3C/g%3E%3Cg id=%22s-window%22%3E%3Crect x=%226%22 y=%2212%22 width=%2252%22 height=%2240%22 rx=%225%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M198.4 44.0C231.2 46.9 272.1 56.5 291.1 71.5C310.1 86.4 307.7 111.6 312.3 133.5C316.9 155.5 333.8 185.9 318.7 203.0C303.6 220.0 255.7 230.4 221.7 235.8C187.6 241.2 141.2 245.0 114.3 235.1C87.3 225.3 70.7 196.8 59.8 176.8C49.0 156.9 43.6 135.9 49.4 115.5C55.1 95.0 69.4 66.3 94.2 54.4C119.1 42.5 165.6 41.2 198.4 44.0Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23sliders%22 transform=%22translate(296 214) rotate(8) scale(0.95) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(34 128) rotate(0) scale(0.38) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(200 22) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(340 32) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(200 240) rotate(0) scale(0.44) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
 }
@@ -13625,6 +14019,7 @@ body[data-design-mode="focus"] #viewZaliCoin .zc-view > * {
 
 body[data-design-mode="focus"] #viewZaliCoin .zc-view::after {
     --decor: var(--decor-zalicoin);
+    order: 2;
     flex: 0 0 auto;
     align-self: center;
     width: min(440px, 92%);
@@ -14775,24 +15170,21 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
                 <!-- ZALICOIN VIEW -->
                 <div id="viewZaliCoin" class="view">
                     <div class="hub-view zc-view">
-                        <section class="hub-hero">
-                            <div>
-                                <span class="settings-kicker">ZaliCoin</span>
-                                <h2>Ваш баланс ZaliCoin</h2>
-                                <p>Фиксированная эмиссия — 100 000 ZaliCoin на всех. Переводите монеты собеседникам прямо из чата, а в каналах раздавайте их карточками.</p>
+                        <section class="settings-card zc-wallet" aria-labelledby="zaliCoinBalanceLabel">
+                            <div class="zc-wallet-coin zc-orb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width=".9" opacity=".4"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg></div>
+                            <div class="zc-wallet-copy">
+                                <span class="zc-balance-label" id="zaliCoinBalanceLabel">Ваш баланс ZaliCoin</span>
+                                <div class="zc-balance-main">
+                                    <span class="zc-balance-value" id="zaliCoinBalanceValue">0</span>
+                                    <span class="zc-balance-unit">ZC</span>
+                                </div>
+                                <div class="zc-balance-meta">
+                                    <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
+                                    <span class="zc-balance-held" id="zaliCoinHeldValue" hidden></span>
+                                </div>
                             </div>
-                            <div class="hub-orb zc-orb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="6.7" stroke="currentColor" stroke-width=".9" opacity=".4"/><path d="M9.7 9.3h4.6l-4.6 5.4h4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 12h2.8" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg></div>
-                        </section>
-
-                        <section class="settings-card zc-balance-card">
-                            <div class="zc-balance-main">
-                                <span class="zc-balance-label">Баланс</span>
-                                <span class="zc-balance-value" id="zaliCoinBalanceValue">0</span>
-                                <span class="zc-balance-unit">ZC</span>
-                            </div>
-                            <span class="zc-balance-share" id="zaliCoinBalanceShare">0% от эмиссии</span>
-                            <span class="zc-balance-held" id="zaliCoinHeldValue" hidden></span>
-                            <button class="btn-flat" id="zaliCoinSendBtn" type="button">Отправить ZaliCoin</button>
+                            <button class="auth-btn primary zc-send-btn" id="zaliCoinSendBtn" type="button">Отправить</button>
+                            <p class="zc-wallet-hint">Фиксированная эмиссия — 100 000 ZC. В личном чате монеты переводятся сразу, в канале — раздаются карточкой.</p>
                         </section>
 
                         <section class="settings-card zc-gifts-card" id="zaliCoinGiftsCard" hidden>
@@ -15174,29 +15566,38 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
                 </div>
 
                 <div class="coin-transfer-modal" id="coinTransferModal" role="dialog" aria-modal="true" aria-labelledby="coinTransferTitle" hidden>
-                    <div class="coin-transfer-box">
+                    <div class="coin-transfer-box zc-send">
                         <div class="coin-transfer-head">
                             <h2 id="coinTransferTitle">Перевести ZaliCoin</h2>
                             <button class="avatar-crop-close" id="coinTransferCloseBtn" type="button" aria-label="Закрыть">×</button>
                         </div>
+                        <p class="zc-send-target" id="coinGiftTarget" hidden></p>
                         <label class="coin-transfer-field" id="coinTransferRecipientField">
-                            <span>Получатель</span>
-                            <input type="text" id="coinTransferRecipientInput" placeholder="username" autocomplete="off">
+                            <span>Кому</span>
+                            <input type="text" id="coinTransferRecipientInput" placeholder="Имя пользователя" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next" list="coinTransferContacts">
+                            <datalist id="coinTransferContacts"></datalist>
                         </label>
-                        <label class="coin-transfer-field">
-                            <span id="coinTransferAmountLabel">Сумма (ZC)</span>
-                            <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0">
-                        </label>
+                        <div class="coin-transfer-field">
+                            <div class="zc-field-row">
+                                <label for="coinTransferAmountInput" id="coinTransferAmountLabel">Сумма</label>
+                                <span class="zc-available" id="coinTransferAvailable">Доступно: —</span>
+                            </div>
+                            <div class="zc-amount-box">
+                                <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0" inputmode="numeric" enterkeyhint="done">
+                                <span class="zc-amount-unit" aria-hidden="true">ZC</span>
+                                <button class="zc-amount-max" id="coinTransferMaxBtn" type="button" aria-label="Подставить всю доступную сумму">Всё</button>
+                            </div>
+                        </div>
                         <div class="coin-transfer-field" id="coinGiftClaimsField" hidden>
                             <span id="coinGiftClaimsLabel">Сколько человек смогут получить</span>
                             <div class="zc-stepper">
                                 <button class="zc-stepper-btn" type="button" data-zc-step="-1" aria-label="Меньше">−</button>
-                                <input type="number" id="coinGiftClaimsInput" min="1" max="100" step="1" value="1" aria-labelledby="coinGiftClaimsLabel">
+                                <input type="number" id="coinGiftClaimsInput" min="1" max="100" step="1" value="1" inputmode="numeric" aria-labelledby="coinGiftClaimsLabel">
                                 <button class="zc-stepper-btn" type="button" data-zc-step="1" aria-label="Больше">+</button>
                             </div>
                         </div>
-                        <p class="coin-gift-summary" id="coinGiftSummary" hidden></p>
-                        <p class="coin-transfer-status" id="coinTransferStatus" hidden></p>
+                        <div class="coin-gift-summary" id="coinGiftSummary" role="status" aria-live="polite" hidden></div>
+                        <p class="coin-transfer-status" id="coinTransferStatus" role="status" aria-live="polite" hidden></p>
                         <div class="coin-transfer-actions">
                             <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
                             <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
@@ -19779,12 +20180,12 @@ ZaliMixin(ZaliInterface, class {
                 if (shareText === '100.0') shareText = '>99.9';
                 if (shareText === '0.0') shareText = '<0.1';
             }
-            balanceShare.textContent = `${shareText}% от эмиссии`;
+            balanceShare.textContent = `${shareText}% от всей эмиссии`;
         }
         const heldValue = document.getElementById('zaliCoinHeldValue');
         if (heldValue) {
             const held = Math.max(0, Number(this.S.zaliCoinHeld) || 0);
-            heldValue.textContent = `На удержании ${held.toLocaleString('ru-RU')} ZC`;
+            heldValue.textContent = `${held.toLocaleString('ru-RU')} ZC на удержании`;
             heldValue.hidden = held <= 0;
         }
 
@@ -19831,10 +20232,10 @@ ZaliMixin(ZaliInterface, class {
         if (legend) {
             legend.innerHTML = segments.map(seg => {
                 const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
-                return `<div class="zc-legend-item">
+                return `<div class="zc-legend-item${seg.isMe ? ' is-me' : ''}">
                     <span class="zc-legend-swatch" style="background:${seg.color}"></span>
-                    <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? ' (вы)' : ''}</span>
-                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} · ${pct.toFixed(1)}%</span>
+                    <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? '<span class="zc-legend-me">вы</span>' : ''}</span>
+                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} ZC<span class="zc-legend-pct">${pct.toFixed(1)}%</span></span>
                 </div>`;
             }).join('') || '<div class="zc-legend-empty">Пока никто не держит ZaliCoin</div>';
         }
@@ -19889,12 +20290,14 @@ ZaliMixin(ZaliInterface, class {
         const total = document.getElementById('zaliCoinPayoutsTotal');
         if (!list) return;
         const payouts = Array.isArray(this.S.zaliCoinServerPayouts) ? this.S.zaliCoinServerPayouts : [];
+        // Пустой раздел уходит под распределение: сверху — то, что требует внимания.
+        document.getElementById('zaliCoinPayoutsCard')?.classList.toggle('is-empty', !payouts.length);
         if (total) {
             const sum = payouts.reduce((acc, payout) => acc + (Number(payout.amount) || 0), 0);
             total.textContent = sum > 0 ? `+${this.formatCoinAmount(sum)} ZC` : '';
         }
         if (!payouts.length) {
-            list.innerHTML = '<div class="zc-payouts-empty">Серверы пока ничего вам не перечисляли. Выплаты из казны сервера появятся здесь.</div>';
+            list.innerHTML = '<div class="zc-payouts-empty">Пока пусто. Выплаты из казны серверов появятся здесь.</div>';
             return;
         }
         list.innerHTML = payouts.map(payout => {
@@ -19965,6 +20368,7 @@ ZaliMixin(ZaliInterface, class {
         if (!modal) return;
         const isGift = mode === 'gift';
         this._coinModal = { mode, serverId, channelId, fromWallet: !isGift && !recipient };
+        this._coinModalOpener = document.activeElement;
         this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
         // clientId будущей карточки перевода. Живёт в паре с ключом: повтор того же
         // перевода обязан сослаться на ту же карточку, иначе сервер вернёт перевод,
@@ -19974,41 +20378,72 @@ ZaliMixin(ZaliInterface, class {
         // submitCoinTransfer, which rotates it whenever the payload changes.
         this._coinTransferLastPayload = '';
         this._coinTransferInFlight = false;
+        this._coinModalFresh = false;
         const title = document.getElementById('coinTransferTitle');
+        const target = document.getElementById('coinGiftTarget');
         const recipientField = document.getElementById('coinTransferRecipientField');
         const recipientInput = document.getElementById('coinTransferRecipientInput');
+        const contacts = document.getElementById('coinTransferContacts');
         const amountLabel = document.getElementById('coinTransferAmountLabel');
         const amountInput = document.getElementById('coinTransferAmountInput');
         const claimsField = document.getElementById('coinGiftClaimsField');
         const claimsInput = document.getElementById('coinGiftClaimsInput');
-        const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const status = document.getElementById('coinTransferStatus');
-        if (title) title.textContent = isGift ? 'ZaliCoin-карточка' : 'Перевести ZaliCoin';
+        if (title) title.textContent = isGift ? 'Отправить карточку' : 'Перевести ZaliCoin';
+        if (target) {
+            target.hidden = !isGift;
+            target.textContent = isGift
+                ? `Карточка появится в канале: ${this.coinGiftChannelLabel({ serverId, channelId })}`
+                : '';
+        }
         if (recipientField) recipientField.hidden = isGift;
         if (recipientInput) {
             recipientInput.value = recipient || '';
-            recipientInput.disabled = !!recipient;
+            // readOnly, а не disabled: значение видно, его можно выделить, а
+            // «заблокированное» поле не выпадает из чтения экранным диктором.
+            recipientInput.readOnly = !!recipient;
+            recipientInput.classList.toggle('is-locked', !!recipient);
         }
-        if (amountLabel) amountLabel.textContent = isGift ? 'Сумма на одного (ZC)' : 'Сумма (ZC)';
+        if (contacts) {
+            const me = this.myName();
+            contacts.innerHTML = recipient ? '' : (this.S.contacts || [])
+                .filter(name => name && name !== me)
+                .map(name => `<option value="${this.esc(name)}"></option>`)
+                .join('');
+        }
+        if (amountLabel) amountLabel.textContent = isGift ? 'Сумма каждому' : 'Сумма';
         if (amountInput) amountInput.value = '';
         if (claimsField) claimsField.hidden = !isGift;
         if (claimsInput) {
             claimsInput.value = '1';
             claimsInput.max = String(ZaliInterface.COIN_GIFT_MAX_CLAIMS);
         }
-        if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.textContent = isGift ? 'Отправить карточку' : 'Отправить';
-        }
         if (status) { status.textContent = ''; status.hidden = true; }
-        this.updateCoinGiftSummary();
+        this.updateCoinModalSummary();
         modal.hidden = false;
         (isGift || recipient ? amountInput : recipientInput)?.focus();
+        // Баланс на экране мог устареть (его грузит только вкладка ZaliCoin).
+        // Показываем, что есть, и уточняем; блокировать отправку по нему можно
+        // только после свежего ответа.
+        const ctx = this._coinModal;
+        void this.loadZaliCoinBalance().then(() => {
+            if (this._coinModal !== ctx || modal.hidden) return;
+            this._coinModalFresh = true;
+            this.updateCoinModalSummary();
+        });
     }
 
     closeCoinTransferModal() {
         const modal = document.getElementById('coinTransferModal');
         if (modal) modal.hidden = true;
+        const opener = this._coinModalOpener;
+        this._coinModalOpener = null;
+        if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+    }
+
+    coinModalOpen() {
+        const modal = document.getElementById('coinTransferModal');
+        return !!modal && !modal.hidden;
     }
 
     coinGiftClaimsValue() {
@@ -20021,29 +20456,94 @@ ZaliMixin(ZaliInterface, class {
         const input = document.getElementById('coinGiftClaimsInput');
         if (!input) return;
         input.value = String(Math.min(ZaliInterface.COIN_GIFT_MAX_CLAIMS, Math.max(1, this.coinGiftClaimsValue() + delta)));
-        this.updateCoinGiftSummary();
+        this.updateCoinModalSummary();
     }
 
-    updateCoinGiftSummary() {
+    /** Сколько ZC можно вписать в «Сумму»: для карточки — на одного, чтобы всё влезло. */
+    coinModalMaxAmount() {
+        const balance = Math.max(0, Math.trunc(Number(this.S.zaliCoinBalance)));
+        if (!Number.isFinite(balance)) return 0;
+        return this._coinModal?.mode === 'gift' ? Math.floor(balance / this.coinGiftClaimsValue()) : balance;
+    }
+
+    fillCoinModalMax() {
+        const amountInput = document.getElementById('coinTransferAmountInput');
+        if (!amountInput) return;
+        const max = this.coinModalMaxAmount();
+        amountInput.value = max > 0 ? String(max) : '';
+        this.updateCoinModalSummary();
+        amountInput.focus();
+    }
+
+    /**
+     * Всё, что в окне зависит от введённого: «Доступно», итог, подпись и
+     * доступность кнопки. Вызывается на каждый ввод и при открытии.
+     */
+    updateCoinModalSummary() {
+        const ctx = this._coinModal;
         const summary = document.getElementById('coinGiftSummary');
-        if (!summary) return;
-        if (this._coinModal?.mode !== 'gift') {
-            summary.hidden = true;
-            return;
-        }
+        const available = document.getElementById('coinTransferAvailable');
+        if (!ctx || !summary) return;
+        const isGift = ctx.mode === 'gift';
+        const rawBalance = this.S.zaliCoinBalance;
+        const known = rawBalance !== undefined && rawBalance !== null && Number.isFinite(Number(rawBalance));
+        const balance = known ? Math.max(0, Math.trunc(Number(rawBalance))) : 0;
         const amount = Math.trunc(Number(document.getElementById('coinTransferAmountInput')?.value));
-        const claims = this.coinGiftClaimsValue();
-        const people = this.coinPlural(claims, ['человек', 'человека', 'человек']);
-        if (!Number.isFinite(amount) || amount <= 0) {
-            summary.textContent = claims > 1
-                ? `Карточку смогут получить ${claims} ${people} — по одному разу на аккаунт.`
-                : 'Карточку сможет получить один человек.';
-        } else if (claims > 1) {
-            summary.textContent = `Каждый из ${claims} получит ${this.formatCoinAmount(amount)} ZC. На удержание уйдёт ${this.formatCoinAmount(amount * claims)} ZC — неполученное вернётся, если отменить карточку.`;
-        } else {
-            summary.textContent = `На удержание уйдёт ${this.formatCoinAmount(amount)} ZC — они вернутся, если отменить карточку до того, как её получат.`;
+        const claims = isGift ? this.coinGiftClaimsValue() : 1;
+        const valid = Number.isFinite(amount) && amount > 0;
+        const total = valid ? amount * claims : 0;
+        if (available) available.textContent = known ? `Доступно: ${this.formatCoinAmount(balance)} ZC` : 'Доступно: …';
+        const maxBtn = document.getElementById('coinTransferMaxBtn');
+        if (maxBtn) maxBtn.disabled = known && this.coinModalMaxAmount() <= 0;
+
+        // Блокируем только по свежему балансу: устаревшее число не должно
+        // запретить перевод, на который монет на самом деле хватает.
+        const short = valid && known && this._coinModalFresh && total > balance;
+        this._coinModalBlocked = short;
+
+        const row = (label, value, strong = false) =>
+            `<div class="zc-sum-row${strong ? ' is-strong' : ''}"><span>${this.esc(label)}</span><span>${this.esc(value)}</span></div>`;
+        let html = '';
+        let tone = '';
+        if (short) {
+            tone = 'is-error';
+            html = `<div class="zc-sum-note">Не хватает ${this.esc(this.formatCoinAmount(total - balance))} ZC: нужно ${this.esc(this.formatCoinAmount(total))}, на балансе ${this.esc(this.formatCoinAmount(balance))}.</div>`;
+        } else if (isGift) {
+            if (!valid) {
+                const people = this.coinPlural(claims, ['человек', 'человека', 'человек']);
+                html = `<div class="zc-sum-note">${claims > 1 ? `Карточку смогут получить ${claims} ${people}` : 'Карточку сможет получить один человек'} — по одному разу на аккаунт.</div>`;
+            } else {
+                html = (claims > 1 ? row('Каждый получит', `${this.formatCoinAmount(amount)} ZC`) : '')
+                    + row('Уйдёт на удержание', `${this.formatCoinAmount(total)} ZC`, true)
+                    + '<div class="zc-sum-note">Неполученное вернётся, если отменить карточку.</div>';
+            }
+        } else if (valid && known) {
+            html = row('Останется на балансе', `${this.formatCoinAmount(Math.max(0, balance - total))} ZC`);
         }
-        summary.hidden = false;
+        summary.hidden = !html;
+        summary.className = `coin-gift-summary${tone ? ` ${tone}` : ''}`;
+        summary.innerHTML = html;
+        this.renderCoinModalSubmit(valid ? total : 0);
+        // Ошибка отправки относилась к прежним значениям — после правки она не актуальна.
+        if (!this._coinTransferInFlight) this.setCoinModalStatus('');
+    }
+
+    renderCoinModalSubmit(total = 0) {
+        const submitBtn = document.getElementById('coinTransferSubmitBtn');
+        if (!submitBtn) return;
+        const isGift = this._coinModal?.mode === 'gift';
+        const busy = !!this._coinTransferInFlight;
+        const amountText = total > 0 ? ` · ${this.formatCoinAmount(total)} ZC` : '';
+        this._coinModalSubmitTotal = total;
+        submitBtn.textContent = busy ? 'Отправка…' : (isGift ? 'Отправить карточку' : 'Отправить') + amountText;
+        submitBtn.disabled = busy || !!this._coinModalBlocked;
+    }
+
+    /** Блокирует окно на время запроса: повторное нажатие Enter не должно слать второй. */
+    setCoinModalBusy(busy) {
+        this._coinTransferInFlight = !!busy;
+        this.renderCoinModalSubmit(this._coinModalSubmitTotal || 0);
+        if (busy) this.setCoinModalStatus('Отправка…', 'busy');
     }
 
     async submitCoinTransfer() {
@@ -20054,13 +20554,14 @@ ZaliMixin(ZaliInterface, class {
         // submits (server-side idempotency makes the money safe, but the client
         // would close/re-log/post the chat notice once per call).
         if (this._coinTransferInFlight) return;
+        // Монет заведомо не хватает — об этом уже сказано в окне, запрос бесполезен.
+        if (this._coinModalBlocked) return;
         if (this._coinModal?.mode === 'gift') {
             await this.submitCoinGift();
             return;
         }
         const recipientInput = document.getElementById('coinTransferRecipientInput');
         const amountInput = document.getElementById('coinTransferAmountInput');
-        const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const setStatus = (msg) => this.setCoinModalStatus(msg);
 
         const to = String(recipientInput?.value || '').trim();
@@ -20082,9 +20583,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this._coinTransferLastPayload = payloadSignature;
 
-        this._coinTransferInFlight = true;
-        if (submitBtn) submitBtn.disabled = true;
-        setStatus('Отправка...');
+        this.setCoinModalBusy(true);
 
         // The network call is isolated from everything after it: a timeout or
         // dropped connection here doesn't tell us whether the server already
@@ -20099,16 +20598,14 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {
             setStatus('Не удалось связаться с сервером, попробуйте ещё раз');
             this.trace(`submitCoinTransfer transport_error=${e}`);
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
 
         if (!res.ok) {
             const text = await res.text().catch(() => '');
             setStatus(text || 'Не удалось выполнить перевод');
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
 
@@ -20121,8 +20618,7 @@ ZaliMixin(ZaliInterface, class {
         const transactionId = String(data?.transactionId || '').trim();
         const fromWallet = !!this._coinModal?.fromWallet;
         const cardClientId = this._coinTransferCardClientId;
-        this._coinTransferInFlight = false;
-        if (submitBtn) submitBtn.disabled = false;
+        this.setCoinModalBusy(false);
         setStatus('');
         this.closeCoinTransferModal();
         this.addLogEntry({ type: 'INFO', msg: `Отправлено ${amount} ZaliCoin пользователю ${to}`, ts: new Date().toLocaleTimeString() });
@@ -20146,7 +20642,6 @@ ZaliMixin(ZaliInterface, class {
     async submitCoinGift() {
         const ctx = this._coinModal || {};
         const amountInput = document.getElementById('coinTransferAmountInput');
-        const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const setStatus = (msg) => this.setCoinModalStatus(msg);
 
         const amount = Math.trunc(Number(amountInput?.value));
@@ -20162,9 +20657,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this._coinTransferLastPayload = payloadSignature;
 
-        this._coinTransferInFlight = true;
-        if (submitBtn) submitBtn.disabled = true;
-        setStatus('Отправка...');
+        this.setCoinModalBusy(true);
 
         let res;
         try {
@@ -20178,16 +20671,14 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {
             setStatus('Не удалось связаться с сервером, попробуйте ещё раз');
             this.trace(`submitCoinGift transport_error=${e}`);
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
         const data = await res.json().catch(() => null);
         const gift = data?.gift;
         if (!res.ok || !gift?.id) {
             setStatus(data?.message || 'Не удалось создать карточку');
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
 
@@ -20195,8 +20686,7 @@ ZaliMixin(ZaliInterface, class {
         this.applyCoinGiftState(gift);
         if (Number.isFinite(Number(data.balance))) this.S.zaliCoinBalance = Number(data.balance);
         if (Number.isFinite(Number(data.held))) this.S.zaliCoinHeld = Number(data.held);
-        this._coinTransferInFlight = false;
-        if (submitBtn) submitBtn.disabled = false;
+        this.setCoinModalBusy(false);
         setStatus('');
         this.closeCoinTransferModal();
         this.addLogEntry({ type: 'INFO', msg: `Карточка ZaliCoin: ${amount} ZC × ${claims}`, ts: new Date().toLocaleTimeString() });
@@ -20219,11 +20709,13 @@ ZaliMixin(ZaliInterface, class {
         );
     }
 
-    setCoinModalStatus(msg) {
+    setCoinModalStatus(msg, tone = 'error') {
         const status = document.getElementById('coinTransferStatus');
         if (!status) return;
         status.textContent = msg;
         status.hidden = !msg;
+        status.classList.toggle('is-error', !!msg && tone === 'error');
+        status.classList.toggle('is-busy', !!msg && tone === 'busy');
     }
 
     async postCoinCardMessage(text, failureMessage, clientId = '') {
@@ -20580,6 +21072,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async flushCoinGiftQueue() {
+"""#,
+    #"""
         const store = this.coinGiftStore();
         const ids = Array.from(store.queue).slice(0, 50);
         if (!ids.length) return;
@@ -20697,8 +21191,6 @@ ZaliMixin(ZaliInterface, class {
     async claimCoinGift(id) {
         const store = this.coinGiftStore();
         if (!id || store.pending.has(id)) return;
-"""#,
-    #"""
         store.pending.set(id, 'claim');
         store.notes.delete(id);
         this.patchCoinGiftCards(id);
@@ -24859,6 +25351,8 @@ ZaliMixin(ZaliInterface, class {
         }
         // Not here yet — ask, and let the next reconcile pick it up. The mark stays
         // set, but the winner's fresh `updated_at` means the server refuses another
+"""#,
+    #"""
         // takeover for a full window, which is what gives convergence time to happen.
         await this.requestKeyRepublish(scoped, { reason: `${reason}:takeoverLost` });
         return '';
@@ -24952,8 +25446,6 @@ ZaliMixin(ZaliInterface, class {
                 ? window.__ZALI_CONVERSATION_KEYS
                 : null;
             const injected = injectedRef || {};
-"""#,
-    #"""
             const rawLocal = readRaw(localStorage);
             const rawSession = readRaw(sessionStorage);
             // Результат запоминается против того, из чего он собран: двух сырых строк
@@ -28853,6 +29345,8 @@ ZaliMixin(ZaliInterface, class {
             this.postNativeMessage({
                 type: NativeMessageTypes.NETWORK_CONFIG,
                 apiBaseUrl: config.apiBaseUrl,
+"""#,
+    #"""
                 wsBaseUrl: config.wsBaseUrl,
                 iceServers: config.iceServers,
             });
@@ -28980,8 +29474,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     draftServerRoleList() {
-"""#,
-    #"""
         return Array.isArray(this.S.serverModal.draftRoles) ? this.S.serverModal.draftRoles : [];
     }
 
@@ -32885,6 +33377,8 @@ ZaliMixin(ZaliInterface, class {
                     };
                     track.onmute = () => {
                         this.voiceTrace('remote-track-mute', { peer: name, kind: track.kind, readyState: track.readyState }, 'WARN');
+"""#,
+    #"""
                         if (track.kind === 'video') refreshRemoteVideoTrack();
                     };
                     track.onended = () => {
@@ -32969,8 +33463,6 @@ ZaliMixin(ZaliInterface, class {
                     if (this.voice.status !== 'connected') {
                         this.voice.status = 'connecting';
                         this.renderVoicePanel();
-"""#,
-    #"""
                     }
                     const isDmCall = this.voice.roomType === 'dm';
                     const shouldWatchHealth = isDmCall;
@@ -36547,6 +37039,8 @@ ZaliMixin(ZaliInterface, class {
                                     <span class="voice-health-name">${this.esc(item.label)}</span>
                                     <strong class="voice-health-value">${this.esc(item.value)}</strong>
                                     <span class="voice-health-sub">${this.esc(item.sub || '')}</span>
+"""#,
+    #"""
                                 </div>
                             `).join('')}
                         </div>
@@ -36644,8 +37138,6 @@ ZaliMixin(ZaliInterface, class {
         const roomId = String(this.voice.roomId || '').trim();
         if (!roomId) return '';
         const status = String(this.voice.status || '');
-"""#,
-    #"""
         const me = String(this.myName() || '').trim().toLowerCase();
         const joined = !!me && (Array.isArray(this.voice.participants) ? this.voice.participants : [])
             .some(name => String(name || '').trim().toLowerCase() === me);
@@ -40793,6 +41285,8 @@ ZaliMixin(ZaliInterface, class {
             // that chain would surface as an unhandled rejection instead of a trace.
             if (scope) {
                 this.requestKeyRepublishForDecryptFailure(scope)
+"""#,
+    #"""
                     .catch(err => this.trace(`requestKeyRepublishForDecryptFailure failed error=${err?.message || err}`));
             }
         } catch (e) {
@@ -40896,8 +41390,6 @@ ZaliMixin(ZaliInterface, class {
         // box-shaping aspect-ratio is set from mediaSizeCache at render time, but on
         // first render nothing is cached yet, so it falls back to a hardcoded 16:9 box.
         // If the real photo isn't 16:9, its actual (height:auto) box disagrees with that
-"""#,
-    #"""
         // fallback and the shell's `overflow:hidden` crops it. Once the image decodes we
         // know its true size — cache it AND correct the already-rendered shell in place
         // so the crop clears immediately instead of waiting for an unrelated re-render.
@@ -44799,6 +45291,8 @@ ZaliMixin(ZaliInterface, class {
     abandonVoiceRoom(roomId) {
         const id = String(roomId || '').trim();
         if (!id) return;
+"""#,
+    #"""
         if (!this._abandonedVoiceRooms) this._abandonedVoiceRooms = new Set();
         this._abandonedVoiceRooms.add(id);
         if (this._abandonedVoiceRooms.size > 32) {
@@ -44898,8 +45392,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Клик по уведомлению (web/service-worker.js, notificationclick): открытой вкладке
-"""#,
-    #"""
     // приходит postMessage, новая открывается с ?open=… в адресе.
     installWebPushClickRouting() {
         if (this.hasNativeBridge() || this._webPushClickRoutingInstalled) return;
@@ -48783,6 +49275,8 @@ ZaliMixin(ZaliInterface, class {
                     await this.leaveVoiceRoom({ announce: true });
                     return;
                 }
+"""#,
+    #"""
                 const muteBtn = e.target.closest('#voiceMuteBtn');
                 if (muteBtn) {
                     this.toggleVoiceMute();
@@ -48892,8 +49386,6 @@ ZaliMixin(ZaliInterface, class {
                     this.toggleVoiceMute();
                     return;
                 }
-"""#,
-    #"""
                 if (e.target.closest('#voiceDeafenBtn')) {
                     this.toggleVoiceDeafen();
                     return;
@@ -49139,7 +49631,7 @@ ZaliMixin(ZaliInterface, class {
         }
         const coinGiftClaimsInput = document.getElementById('coinGiftClaimsInput');
         if (coinGiftClaimsInput) {
-            coinGiftClaimsInput.addEventListener('input', () => this.updateCoinGiftSummary());
+            coinGiftClaimsInput.addEventListener('input', () => this.updateCoinModalSummary());
             coinGiftClaimsInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
@@ -49156,6 +49648,13 @@ ZaliMixin(ZaliInterface, class {
                 if (e.target === coinTransferModal) this.closeCoinTransferModal();
             });
         }
+        const coinTransferMaxBtn = document.getElementById('coinTransferMaxBtn');
+        if (coinTransferMaxBtn) coinTransferMaxBtn.addEventListener('click', () => this.fillCoinModalMax());
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || e.defaultPrevented || !this.coinModalOpen()) return;
+            e.preventDefault();
+            this.closeCoinTransferModal();
+        });
         const updateModalDeclineBtn = document.getElementById('updateModalDeclineBtn');
         const updateModalAcceptBtn = document.getElementById('updateModalAcceptBtn');
         if (updateModalDeclineBtn) updateModalDeclineBtn.addEventListener('click', () => this.declineAppUpdate());
@@ -49165,7 +49664,7 @@ ZaliMixin(ZaliInterface, class {
             coinTransferAmountInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
-            coinTransferAmountInput.addEventListener('input', () => this.updateCoinGiftSummary());
+            coinTransferAmountInput.addEventListener('input', () => this.updateCoinModalSummary());
         }
         const coinTransferRecipientInput = document.getElementById('coinTransferRecipientInput');
         if (coinTransferRecipientInput) {
