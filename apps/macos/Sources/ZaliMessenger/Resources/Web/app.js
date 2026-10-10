@@ -24014,10 +24014,16 @@ ZaliMixin(ZaliInterface, class {
             return true;
         } catch (e) {
             const raw = e.message || 'Ошибка входа';
-            const apiBaseUrl = this.getApiBaseUrl();
-            const friendly = /load failed|failed to fetch|network error|abort/i.test(raw)
-                ? `Не удалось связаться с сервером (${apiBaseUrl}). Проверь адрес или запусти backend.`
+            const networkFailure = /load failed|failed to fetch|network error|abort/i.test(raw);
+            const friendly = networkFailure
+                ? 'Не удалось связаться с сервером. Проверьте интернет или адрес в разделе «Свой сервер» ниже.'
                 : raw;
+            // Адрес сервера свёрнут по умолчанию; при сбое связи он как раз нужен.
+            if (networkFailure && !silent) {
+                const box = document.querySelector('#authNetworkHead')?.closest('.auth-network');
+                box?.classList.add('is-open');
+                document.getElementById('authNetworkHead')?.setAttribute('aria-expanded', 'true');
+            }
             // silent: this is the register-flow's internal "maybe it's already my
             // account" login probe, not a user-facing login attempt — its own
             // generic "Неверный логин или пароль" (deliberately the same wording
@@ -24428,6 +24434,9 @@ ZaliMixin(ZaliInterface, class {
         if (overlay) {
             const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;
             overlay.classList.toggle('visible', shouldShow);
+            // Пока нет сессии, в заголовке окна не показываем чужое состояние
+            // (имя чата, индикатор соединения): см. body.auth-open в style.css.
+            document.body.classList.toggle('auth-open', shouldShow);
             // The overlay covers whichever view is active underneath, so a
             // native bottom bar must come back while it is up and re-hide once
             // it closes onto the chat screen (notifyNativeMobileNav reads it).
@@ -24441,6 +24450,9 @@ ZaliMixin(ZaliInterface, class {
         const regBtn = document.getElementById('authRegisterBtn');
         const guestBtn = document.getElementById('authGuestBtn');
         const vaultSyncNote = document.getElementById('authVaultSyncNote');
+        // Менеджеры паролей различают вход и регистрацию по autocomplete.
+        const registering = this.S.auth.mode === 'register';
+        document.getElementById('authPassword')?.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
         if (authTitle) authTitle.textContent = this.S.auth.mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
         if (authHint) authHint.textContent = this.S.auth.mode === 'register'
             ? 'Зарегистрируйтесь, чтобы сохранить контакты и историю.'

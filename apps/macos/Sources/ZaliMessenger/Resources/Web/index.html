@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261010-a498">
+    <link rel="stylesheet" href="style.css?v=20261010-a499">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -1271,25 +1271,25 @@
             <p id="authHint">Войдите, чтобы синхронизировать сообщения и контакты.</p>
             <p class="auth-vault-sync" id="authVaultSyncNote">Ключи переписки подгрузятся из облака при входе.</p>
             <form class="auth-form" id="authForm">
-                <input id="authUsername" class="auth-input" type="text" placeholder="Логин" autocomplete="off" autocapitalize="none" spellcheck="false">
-                <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" autocomplete="off">
+                <input id="authUsername" class="auth-input" type="text" placeholder="Логин" aria-label="Логин" autocomplete="username" autocapitalize="none" spellcheck="false">
+                <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" aria-label="Пароль" autocomplete="current-password">
                 <div class="auth-actions">
                     <button id="authLoginBtn" class="auth-btn primary" type="submit">Войти</button>
                 </div>
+                <div class="auth-footer">
+                    <button id="authGuestBtn" class="auth-link" type="button">Продолжить как гость</button>
+                    <button id="authRegisterBtn" class="auth-link" type="button">Создать аккаунт</button>
+                </div>
                 <div class="auth-network">
                     <div class="auth-network-head" id="authNetworkHead" role="button" tabindex="0" aria-expanded="false">
-                        <div class="auth-network-title">Адрес сервера</div>
+                        <div class="auth-network-title">Свой сервер</div>
                         <div class="auth-network-note" id="authNetworkNote">Автоматически подставляется из настроек</div>
                     </div>
                     <div class="auth-network-row">
                         <input id="authApiBaseUrl" class="auth-input auth-input--compact" type="url" placeholder="https://msgs.zalikus.org" autocomplete="off">
                         <button id="authNetworkSaveBtn" class="auth-btn auth-btn--ghost" type="button">Сохранить</button>
                     </div>
-                    <p class="auth-network-help">Если сервер не найден, укажите публичный `https://` адрес и попробуйте снова.</p>
-                </div>
-                <div class="auth-footer">
-                    <button id="authGuestBtn" class="auth-link" type="button">Продолжить как гость</button>
-                    <button id="authRegisterBtn" class="auth-link" type="button">Создать аккаунт</button>
+                    <p class="auth-network-help">Если сервер не найден, укажите его публичный адрес, начиная с https://, и попробуйте снова.</p>
                 </div>
                 <div class="auth-error" id="authError"></div>
             </form>
@@ -1300,6 +1300,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261010-a498"></script>
+    <script src="app.js?v=20261010-a499"></script>
 </body>
 </html>

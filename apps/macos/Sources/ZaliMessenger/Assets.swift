@@ -14938,6 +14938,83 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     }
 }
 
+/* Экран входа: заголовок окна без чужого состояния. */
+body.auth-open .tb-sep,
+body.auth-open .tb-chat,
+body.auth-open .ws-pill {
+    visibility: hidden;
+}
+
+body.auth-open .m-net-strip {
+    display: none;
+}
+
+/* Адрес сервера нужен редко: свёрнут до одной строки «Свой сервер», раскрывается
+   по нажатию (в «Фокусе» он свёрнут ещё и вынесен вниз, там действуют свои правила). */
+.auth-network-head {
+    cursor: pointer;
+    user-select: none;
+    align-items: center;
+}
+
+.auth-network-head::after {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: -3px 2px 0 auto;
+    border-right: 1.8px solid var(--text2);
+    border-bottom: 1.8px solid var(--text2);
+    transform: rotate(45deg);
+    transition: transform .2s var(--ease-out);
+}
+
+.auth-network.is-open .auth-network-head::after {
+    margin-top: 3px;
+    transform: rotate(-135deg);
+}
+
+.auth-network-head:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+.auth-network-row,
+.auth-network-help {
+    display: none;
+}
+
+.auth-network.is-open .auth-network-row { display: flex; }
+.auth-network.is-open .auth-network-help { display: block; }
+
+/* «Создать аккаунт» и «Продолжить как гость» — вторичные кнопки, а не мелкие
+   ссылки: для нового пользователя это главный путь. */
+.auth-footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.auth-link {
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.auth-link:hover { background: rgba(255,255,255,.07); opacity: 1; }
+.auth-link:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+
+@media (max-width: 760px) {
+    .auth-footer { grid-template-columns: 1fr; }
+}
+
+body[data-design-mode="focus"] .auth-link { border: 0; }
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -16446,25 +16523,25 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
             <p id="authHint">Войдите, чтобы синхронизировать сообщения и контакты.</p>
             <p class="auth-vault-sync" id="authVaultSyncNote">Ключи переписки подгрузятся из облака при входе.</p>
             <form class="auth-form" id="authForm">
-                <input id="authUsername" class="auth-input" type="text" placeholder="Логин" autocomplete="off" autocapitalize="none" spellcheck="false">
-                <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" autocomplete="off">
+                <input id="authUsername" class="auth-input" type="text" placeholder="Логин" aria-label="Логин" autocomplete="username" autocapitalize="none" spellcheck="false">
+                <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" aria-label="Пароль" autocomplete="current-password">
                 <div class="auth-actions">
                     <button id="authLoginBtn" class="auth-btn primary" type="submit">Войти</button>
                 </div>
+                <div class="auth-footer">
+                    <button id="authGuestBtn" class="auth-link" type="button">Продолжить как гость</button>
+                    <button id="authRegisterBtn" class="auth-link" type="button">Создать аккаунт</button>
+                </div>
                 <div class="auth-network">
                     <div class="auth-network-head" id="authNetworkHead" role="button" tabindex="0" aria-expanded="false">
-                        <div class="auth-network-title">Адрес сервера</div>
+                        <div class="auth-network-title">Свой сервер</div>
                         <div class="auth-network-note" id="authNetworkNote">Автоматически подставляется из настроек</div>
                     </div>
                     <div class="auth-network-row">
                         <input id="authApiBaseUrl" class="auth-input auth-input--compact" type="url" placeholder="https://msgs.zalikus.org" autocomplete="off">
                         <button id="authNetworkSaveBtn" class="auth-btn auth-btn--ghost" type="button">Сохранить</button>
                     </div>
-                    <p class="auth-network-help">Если сервер не найден, укажите публичный `https://` адрес и попробуйте снова.</p>
-                </div>
-                <div class="auth-footer">
-                    <button id="authGuestBtn" class="auth-link" type="button">Продолжить как гость</button>
-                    <button id="authRegisterBtn" class="auth-link" type="button">Создать аккаунт</button>
+                    <p class="auth-network-help">Если сервер не найден, укажите его публичный адрес, начиная с https://, и попробуйте снова.</p>
                 </div>
                 <div class="auth-error" id="authError"></div>
             </form>
@@ -40506,10 +40583,16 @@ ZaliMixin(ZaliInterface, class {
             return true;
         } catch (e) {
             const raw = e.message || 'Ошибка входа';
-            const apiBaseUrl = this.getApiBaseUrl();
-            const friendly = /load failed|failed to fetch|network error|abort/i.test(raw)
-                ? `Не удалось связаться с сервером (${apiBaseUrl}). Проверь адрес или запусти backend.`
+            const networkFailure = /load failed|failed to fetch|network error|abort/i.test(raw);
+            const friendly = networkFailure
+                ? 'Не удалось связаться с сервером. Проверьте интернет или адрес в разделе «Свой сервер» ниже.'
                 : raw;
+            // Адрес сервера свёрнут по умолчанию; при сбое связи он как раз нужен.
+            if (networkFailure && !silent) {
+                const box = document.querySelector('#authNetworkHead')?.closest('.auth-network');
+                box?.classList.add('is-open');
+                document.getElementById('authNetworkHead')?.setAttribute('aria-expanded', 'true');
+            }
             // silent: this is the register-flow's internal "maybe it's already my
             // account" login probe, not a user-facing login attempt — its own
             // generic "Неверный логин или пароль" (deliberately the same wording
@@ -40920,6 +41003,9 @@ ZaliMixin(ZaliInterface, class {
         if (overlay) {
             const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;
             overlay.classList.toggle('visible', shouldShow);
+            // Пока нет сессии, в заголовке окна не показываем чужое состояние
+            // (имя чата, индикатор соединения): см. body.auth-open в style.css.
+            document.body.classList.toggle('auth-open', shouldShow);
             // The overlay covers whichever view is active underneath, so a
             // native bottom bar must come back while it is up and re-hide once
             // it closes onto the chat screen (notifyNativeMobileNav reads it).
@@ -40933,6 +41019,9 @@ ZaliMixin(ZaliInterface, class {
         const regBtn = document.getElementById('authRegisterBtn');
         const guestBtn = document.getElementById('authGuestBtn');
         const vaultSyncNote = document.getElementById('authVaultSyncNote');
+        // Менеджеры паролей различают вход и регистрацию по autocomplete.
+        const registering = this.S.auth.mode === 'register';
+        document.getElementById('authPassword')?.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
         if (authTitle) authTitle.textContent = this.S.auth.mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
         if (authHint) authHint.textContent = this.S.auth.mode === 'register'
             ? 'Зарегистрируйтесь, чтобы сохранить контакты и историю.'
@@ -41590,6 +41679,8 @@ ZaliMixin(ZaliInterface, class {
         }
         try {
             const scope = details.scope || this.conversationScopeKey(
+"""#,
+    #"""
                 details.sender === this.myName() ? details.receiver : details.sender,
                 details.serverId,
                 details.channelId,
@@ -41608,8 +41699,6 @@ ZaliMixin(ZaliInterface, class {
             this.flushLogEntries();
             const logBody = document.getElementById('logBody');
             const recentLog = logBody
-"""#,
-    #"""
                 ? Array.from(logBody.children).slice(-30).map(el => String(el.textContent || '').slice(0, 300))
                 : [];
             const payload = {
@@ -45582,6 +45671,8 @@ ZaliMixin(ZaliInterface, class {
             Math.max(frequency * 1.6, 300),
             startTime + duration
         );
+"""#,
+    #"""
         voice.connect(filter);
         filter.connect(bus);
 
@@ -45601,8 +45692,6 @@ ZaliMixin(ZaliInterface, class {
             // exponentialRampToValueAtTime can't touch zero, hence the epsilons.
             env.gain.setValueAtTime(0.0001, startTime);
             env.gain.exponentialRampToValueAtTime(partial.gain, startTime + 0.006);
-"""#,
-    #"""
             env.gain.exponentialRampToValueAtTime(0.0001, startTime + partialDuration);
             osc.connect(env);
             env.connect(voice);
@@ -49568,6 +49657,8 @@ ZaliMixin(ZaliInterface, class {
     // Отправляет отчёт. Автоматические — не чаще раза в 10 минут на вид;
     // ручной — всегда. Возвращает id отчёта на сервере или '' (не отправлен).
     async sendDiagnosticReport(kind, extra = {}, { manual = false } = {}) {
+"""#,
+    #"""
         if (!this.S.session?.token || this.S.session?.guest) return '';
         this._diagLastReportStatus = 0;
         if (!manual) {
@@ -49586,8 +49677,6 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json().catch(() => ({}));
             const id = String(data?.id || '');
-"""#,
-    #"""
             this.trace(`sendDiagnosticReport kind=${kind} id=${id} bytes=${body.length}`);
             return id;
         } catch (e) {

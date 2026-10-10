@@ -14907,3 +14907,80 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
         transform: translate(-50%, -50%);
     }
 }
+
+/* Экран входа: заголовок окна без чужого состояния. */
+body.auth-open .tb-sep,
+body.auth-open .tb-chat,
+body.auth-open .ws-pill {
+    visibility: hidden;
+}
+
+body.auth-open .m-net-strip {
+    display: none;
+}
+
+/* Адрес сервера нужен редко: свёрнут до одной строки «Свой сервер», раскрывается
+   по нажатию (в «Фокусе» он свёрнут ещё и вынесен вниз, там действуют свои правила). */
+.auth-network-head {
+    cursor: pointer;
+    user-select: none;
+    align-items: center;
+}
+
+.auth-network-head::after {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: -3px 2px 0 auto;
+    border-right: 1.8px solid var(--text2);
+    border-bottom: 1.8px solid var(--text2);
+    transform: rotate(45deg);
+    transition: transform .2s var(--ease-out);
+}
+
+.auth-network.is-open .auth-network-head::after {
+    margin-top: 3px;
+    transform: rotate(-135deg);
+}
+
+.auth-network-head:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+.auth-network-row,
+.auth-network-help {
+    display: none;
+}
+
+.auth-network.is-open .auth-network-row { display: flex; }
+.auth-network.is-open .auth-network-help { display: block; }
+
+/* «Создать аккаунт» и «Продолжить как гость» — вторичные кнопки, а не мелкие
+   ссылки: для нового пользователя это главный путь. */
+.auth-footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.auth-link {
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.auth-link:hover { background: rgba(255,255,255,.07); opacity: 1; }
+.auth-link:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+
+@media (max-width: 760px) {
+    .auth-footer { grid-template-columns: 1fr; }
+}
+
+body[data-design-mode="focus"] .auth-link { border: 0; }
