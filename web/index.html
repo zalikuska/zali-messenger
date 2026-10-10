@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261010-a499">
+    <link rel="stylesheet" href="style.css?v=20261010-a4910">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -372,28 +372,12 @@
                 <div id="viewSettings" class="view">
                     <div class="logs-bar settings-topbar">
                         <div class="settings-topcopy">
-                            <span class="settings-kicker">Центр управления</span>
                             <span class="logs-title">Настройки</span>
-                            <p class="settings-lead">Кастомизация интерфейса, журнал событий и действия аккаунта в одном месте.</p>
                         </div>
                         <button class="btn-flat" id="closeSettings">Назад</button>
                     </div>
                     <div class="settings-body settings-scroll">
                         <div class="settings-shell">
-                            <section class="settings-card settings-hero">
-                                <div class="settings-hero-copy">
-                                    <span class="settings-kicker">Быстрый обзор</span>
-                                    <h2>Настройте внешний вид, проверьте журнал и управляйте параметрами без лишних переходов.</h2>
-                                    <p>Меню разделено на понятные блоки, чтобы основные действия были под рукой и не терялись в длинном списке.</p>
-                                </div>
-                                <div class="settings-chips">
-                                    <span class="settings-chip">Styler</span>
-                                    <span class="settings-chip">Logs</span>
-                                    <span class="settings-chip">Crypto</span>
-                                    <span class="settings-chip">Account</span>
-                                </div>
-                            </section>
-
                             <section class="settings-card" data-settings-section="profile">
                                 <div class="settings-card-head">
                                     <div>
@@ -498,7 +482,7 @@
                                         <span>Громкость собеседников: <span id="masterVolumeValue">100%</span></span>
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
                                     </label>
-                                    <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
+                                    <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через кнопку «⋯» у контакта в списке чатов.</p>
                                 </div>
                             </section>
 
@@ -625,7 +609,10 @@
                                             <span class="settings-card-note">zali_crypto</span>
                                         </div>
                                         <div class="settings-stack">
-                                            <input type="text" id="inputCryptoKey" class="settings-input" placeholder="Введите общий E2E-ключ">
+                                            <div class="settings-secret-row">
+                                                <input type="password" id="inputCryptoKey" class="settings-input" placeholder="Введите общий E2E-ключ" aria-label="Ключ шифрования" autocomplete="off" spellcheck="false" autocapitalize="none">
+                                                <button class="btn-flat" id="cryptoKeyToggleBtn" type="button" aria-pressed="false">Показать</button>
+                                            </div>
                                             <p class="settings-help">Текущий ключ: <code id="currentCryptoKeyValue" class="crypto-key-value">не задан</code></p>
                                             <p class="settings-help" id="currentCryptoKeyMeta">Контекст: общий ключ</p>
                                             <p class="settings-help">Измените секретную фразу для E2E-шифрования. Для чтения переписки собеседники должны использовать одинаковый ключ, и он не должен храниться в коде.</p>
@@ -662,18 +649,17 @@
                                 </div>
                             </div>
 
-                            <!-- Заголовки групп. Видны только в оформлении «Фокус»: там
-                                 .settings-grid/.settings-column становятся display:contents,
+                            <!-- Заголовки групп. .settings-grid/.settings-column становятся display:contents,
                                  все карточки — соседями в одной колонке, и CSS-свойство
                                  order раскладывает их по группам под этими заголовками
-                                 (раздел «DESIGN MODE: FOCUS» в style.css). В остальных
-                                 режимах — display:none, раскладка прежняя. -->
+                                 (раздел «Настройки: одна колонка» в style.css). Группа
+                                 «Для разработчиков» свёрнута, пока её не раскроют. -->
                             <h2 class="settings-group-title" data-settings-group="profile">Профиль</h2>
                             <h2 class="settings-group-title" data-settings-group="appearance">Оформление</h2>
                             <h2 class="settings-group-title" data-settings-group="sound">Звук и звонки</h2>
                             <h2 class="settings-group-title" data-settings-group="account">Аккаунт и безопасность</h2>
                             <h2 class="settings-group-title" data-settings-group="app">Приложение</h2>
-                            <h2 class="settings-group-title" data-settings-group="dev">Для разработчиков</h2>
+                            <h2 class="settings-group-title settings-group-toggle" data-settings-group="dev" id="settingsDevToggle" role="button" tabindex="0" aria-expanded="false">Для разработчиков</h2>
                         </div>
                     </div>
                 </div>
@@ -1300,6 +1286,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261010-a499"></script>
+    <script src="app.js?v=20261010-a4910"></script>
 </body>
 </html>

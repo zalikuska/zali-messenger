@@ -15015,6 +15015,110 @@ body.auth-open .m-net-strip {
 
 body[data-design-mode="focus"] .auth-link { border: 0; }
 
+/* ── Настройки: одна колонка, группы по смыслу (все режимы) ─────────────
+   Раньше так выглядел только «Фокус»; в остальных режимах была длинная
+   двухколоночная свалка с пустой половиной. Раскладка та же: двухколоночная
+   сетка распадается, карточки становятся соседями и встают по order. */
+.settings-shell {
+    max-width: 720px;
+    gap: 12px;
+}
+
+.settings-grid,
+.settings-column {
+    display: contents;
+}
+
+.settings-group-title {
+    display: block;
+    margin: 22px 4px 0;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+[data-settings-group="profile"] { order: 10; margin-top: 4px; }
+[data-settings-section="profile"] { order: 11; }
+[data-settings-group="appearance"] { order: 20; }
+[data-settings-section="theme"] { order: 21; }
+[data-settings-section="design"] { order: 22; }
+[data-settings-section="navigation"] { order: 23; }
+[data-settings-group="sound"] { order: 30; }
+[data-settings-section="audio"] { order: 31; }
+[data-settings-section="notify-sound"] { order: 32; }
+[data-settings-group="account"] { order: 40; }
+[data-settings-section="session"] { order: 41; }
+[data-settings-section="crypto"] { order: 42; }
+[data-settings-group="app"] { order: 50; }
+[data-settings-section="updates"] { order: 51; }
+[data-settings-section="autostart"] { order: 52; }
+[data-settings-section="cache"] { order: 53; }
+[data-settings-group="dev"] { order: 60; }
+[data-settings-section="voice-trace"] { order: 61; }
+[data-settings-section="logs"] { order: 62; }
+
+/* Английские кикеры («Profile», «Styler», «Telemetry») и статичные пометки
+   справа («sync», «zali_crypto», «dev») — подписи для разработчика. Пометки с
+   id живые (версия, «3 / 4») — остаются. */
+#viewSettings .settings-card-head .settings-kicker,
+.settings-card-note:not([id]) {
+    display: none;
+}
+
+/* Группа «Для разработчиков» свёрнута, пока её не раскроют. */
+.settings-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text2);
+}
+
+.settings-group-toggle::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-right: 1.8px solid currentColor;
+    border-bottom: 1.8px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform .2s var(--ease-out);
+}
+
+.settings-shell.dev-open .settings-group-toggle::after {
+    margin-top: 3px;
+    transform: rotate(-135deg);
+}
+
+.settings-group-toggle:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 3px;
+    border-radius: 6px;
+}
+
+.settings-shell:not(.dev-open) [data-settings-section="voice-trace"],
+.settings-shell:not(.dev-open) [data-settings-section="logs"] {
+    display: none;
+}
+
+.settings-secret-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.settings-secret-row .settings-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+
+/* «sync» рядом с аватаром — пометка для разработчика. */
+#avatarTargetLabel { display: none; }
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -15624,28 +15728,12 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                 <div id="viewSettings" class="view">
                     <div class="logs-bar settings-topbar">
                         <div class="settings-topcopy">
-                            <span class="settings-kicker">Центр управления</span>
                             <span class="logs-title">Настройки</span>
-                            <p class="settings-lead">Кастомизация интерфейса, журнал событий и действия аккаунта в одном месте.</p>
                         </div>
                         <button class="btn-flat" id="closeSettings">Назад</button>
                     </div>
                     <div class="settings-body settings-scroll">
                         <div class="settings-shell">
-                            <section class="settings-card settings-hero">
-                                <div class="settings-hero-copy">
-                                    <span class="settings-kicker">Быстрый обзор</span>
-                                    <h2>Настройте внешний вид, проверьте журнал и управляйте параметрами без лишних переходов.</h2>
-                                    <p>Меню разделено на понятные блоки, чтобы основные действия были под рукой и не терялись в длинном списке.</p>
-                                </div>
-                                <div class="settings-chips">
-                                    <span class="settings-chip">Styler</span>
-                                    <span class="settings-chip">Logs</span>
-                                    <span class="settings-chip">Crypto</span>
-                                    <span class="settings-chip">Account</span>
-                                </div>
-                            </section>
-
                             <section class="settings-card" data-settings-section="profile">
                                 <div class="settings-card-head">
                                     <div>
@@ -15750,7 +15838,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                                         <span>Громкость собеседников: <span id="masterVolumeValue">100%</span></span>
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
                                     </label>
-                                    <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через правый клик по контакту в списке чатов.</p>
+                                    <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через кнопку «⋯» у контакта в списке чатов.</p>
                                 </div>
                             </section>
 
@@ -15877,7 +15965,10 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                                             <span class="settings-card-note">zali_crypto</span>
                                         </div>
                                         <div class="settings-stack">
-                                            <input type="text" id="inputCryptoKey" class="settings-input" placeholder="Введите общий E2E-ключ">
+                                            <div class="settings-secret-row">
+                                                <input type="password" id="inputCryptoKey" class="settings-input" placeholder="Введите общий E2E-ключ" aria-label="Ключ шифрования" autocomplete="off" spellcheck="false" autocapitalize="none">
+                                                <button class="btn-flat" id="cryptoKeyToggleBtn" type="button" aria-pressed="false">Показать</button>
+                                            </div>
                                             <p class="settings-help">Текущий ключ: <code id="currentCryptoKeyValue" class="crypto-key-value">не задан</code></p>
                                             <p class="settings-help" id="currentCryptoKeyMeta">Контекст: общий ключ</p>
                                             <p class="settings-help">Измените секретную фразу для E2E-шифрования. Для чтения переписки собеседники должны использовать одинаковый ключ, и он не должен храниться в коде.</p>
@@ -15914,18 +16005,17 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                                 </div>
                             </div>
 
-                            <!-- Заголовки групп. Видны только в оформлении «Фокус»: там
-                                 .settings-grid/.settings-column становятся display:contents,
+                            <!-- Заголовки групп. .settings-grid/.settings-column становятся display:contents,
                                  все карточки — соседями в одной колонке, и CSS-свойство
                                  order раскладывает их по группам под этими заголовками
-                                 (раздел «DESIGN MODE: FOCUS» в style.css). В остальных
-                                 режимах — display:none, раскладка прежняя. -->
+                                 (раздел «Настройки: одна колонка» в style.css). Группа
+                                 «Для разработчиков» свёрнута, пока её не раскроют. -->
                             <h2 class="settings-group-title" data-settings-group="profile">Профиль</h2>
                             <h2 class="settings-group-title" data-settings-group="appearance">Оформление</h2>
                             <h2 class="settings-group-title" data-settings-group="sound">Звук и звонки</h2>
                             <h2 class="settings-group-title" data-settings-group="account">Аккаунт и безопасность</h2>
                             <h2 class="settings-group-title" data-settings-group="app">Приложение</h2>
-                            <h2 class="settings-group-title" data-settings-group="dev">Для разработчиков</h2>
+                            <h2 class="settings-group-title settings-group-toggle" data-settings-group="dev" id="settingsDevToggle" role="button" tabindex="0" aria-expanded="false">Для разработчиков</h2>
                         </div>
                     </div>
                 </div>
@@ -22222,14 +22312,14 @@ ZaliMixin(ZaliInterface, class {
 
     designModeCatalog() {
         return [
-            { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
-            { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+            { id: 'classic', label: 'Классический', note: 'По умолчанию', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
+            { id: 'flat', label: 'Плоский', note: '', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
             // «Фокус» — не очередная перекраска, а другая иерархия: акцент
             // остаётся только у «моего» (исходящие, мой аватар), «нового»
             // (непрочитанное) и главного действия (отправить), служебное
             // прячется до наведения или до проблемы. Слой CSS — в конце
             // web/style.css, раздел «DESIGN MODE: FOCUS».
-            { id: 'focus', label: 'Фокус', note: 'focus', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
+            { id: 'focus', label: 'Фокус', note: '', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
         ];
     }
 
@@ -23679,25 +23769,25 @@ ZaliMixin(ZaliInterface, class {
             {
                 id: 'all',
                 label: 'Кешировать всё',
-                note: 'all',
+                note: 'Всё',
                 hint: 'Аватарки, ассеты серверов, профили, стикеры и любые вложения — включая видео и файлы.',
             },
             {
                 id: 'light',
                 label: 'Кешировать легковесное',
-                note: 'default',
+                note: 'По умолчанию',
                 hint: 'Всё необходимое плюс стикеры и медиа до 2 МБ. Тяжёлые вложения качаются заново.',
             },
             {
                 id: 'essential',
                 label: 'Кешировать необходимое',
-                note: 'min',
+                note: 'Минимум',
                 hint: 'Только аватарки, иконки и баннеры серверов и карточки профилей.',
             },
             {
                 id: 'off',
                 label: 'Не кешировать',
-                note: 'off',
+                note: 'Выкл.',
                 hint: 'Ничего не хранится между запусками. Всё подгружается заново при каждом открытии.',
             },
         ];
@@ -51704,6 +51794,31 @@ ZaliMixin(ZaliInterface, class {
                 const newKey = e.target.value.trim();
                 this.saveStoredCryptoKey(newKey);
                 this.bus.send('zali_styler:set_key', newKey);
+            });
+        }
+        // Ключ скрыт точками: его видно по кнопке, а не любому, кто смотрит на экран.
+        const cryptoKeyToggleBtn = document.getElementById('cryptoKeyToggleBtn');
+        if (inputCryptoKey && cryptoKeyToggleBtn) {
+            cryptoKeyToggleBtn.addEventListener('click', () => {
+                const show = inputCryptoKey.type === 'password';
+                inputCryptoKey.type = show ? 'text' : 'password';
+                cryptoKeyToggleBtn.textContent = show ? 'Скрыть' : 'Показать';
+                cryptoKeyToggleBtn.setAttribute('aria-pressed', String(show));
+            });
+        }
+        // «Для разработчиков» (журнал, трассировка звонков) свёрнуто по умолчанию.
+        const devToggle = document.getElementById('settingsDevToggle');
+        if (devToggle) {
+            const toggleDev = () => {
+                const open = !devToggle.closest('.settings-shell')?.classList.contains('dev-open');
+                devToggle.closest('.settings-shell')?.classList.toggle('dev-open', open);
+                devToggle.setAttribute('aria-expanded', String(open));
+            };
+            devToggle.addEventListener('click', toggleDev);
+            devToggle.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleDev();
             });
         }
 

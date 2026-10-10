@@ -14984,3 +14984,107 @@ body.auth-open .m-net-strip {
 }
 
 body[data-design-mode="focus"] .auth-link { border: 0; }
+
+/* ── Настройки: одна колонка, группы по смыслу (все режимы) ─────────────
+   Раньше так выглядел только «Фокус»; в остальных режимах была длинная
+   двухколоночная свалка с пустой половиной. Раскладка та же: двухколоночная
+   сетка распадается, карточки становятся соседями и встают по order. */
+.settings-shell {
+    max-width: 720px;
+    gap: 12px;
+}
+
+.settings-grid,
+.settings-column {
+    display: contents;
+}
+
+.settings-group-title {
+    display: block;
+    margin: 22px 4px 0;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+[data-settings-group="profile"] { order: 10; margin-top: 4px; }
+[data-settings-section="profile"] { order: 11; }
+[data-settings-group="appearance"] { order: 20; }
+[data-settings-section="theme"] { order: 21; }
+[data-settings-section="design"] { order: 22; }
+[data-settings-section="navigation"] { order: 23; }
+[data-settings-group="sound"] { order: 30; }
+[data-settings-section="audio"] { order: 31; }
+[data-settings-section="notify-sound"] { order: 32; }
+[data-settings-group="account"] { order: 40; }
+[data-settings-section="session"] { order: 41; }
+[data-settings-section="crypto"] { order: 42; }
+[data-settings-group="app"] { order: 50; }
+[data-settings-section="updates"] { order: 51; }
+[data-settings-section="autostart"] { order: 52; }
+[data-settings-section="cache"] { order: 53; }
+[data-settings-group="dev"] { order: 60; }
+[data-settings-section="voice-trace"] { order: 61; }
+[data-settings-section="logs"] { order: 62; }
+
+/* Английские кикеры («Profile», «Styler», «Telemetry») и статичные пометки
+   справа («sync», «zali_crypto», «dev») — подписи для разработчика. Пометки с
+   id живые (версия, «3 / 4») — остаются. */
+#viewSettings .settings-card-head .settings-kicker,
+.settings-card-note:not([id]) {
+    display: none;
+}
+
+/* Группа «Для разработчиков» свёрнута, пока её не раскроют. */
+.settings-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text2);
+}
+
+.settings-group-toggle::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-right: 1.8px solid currentColor;
+    border-bottom: 1.8px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform .2s var(--ease-out);
+}
+
+.settings-shell.dev-open .settings-group-toggle::after {
+    margin-top: 3px;
+    transform: rotate(-135deg);
+}
+
+.settings-group-toggle:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 3px;
+    border-radius: 6px;
+}
+
+.settings-shell:not(.dev-open) [data-settings-section="voice-trace"],
+.settings-shell:not(.dev-open) [data-settings-section="logs"] {
+    display: none;
+}
+
+.settings-secret-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.settings-secret-row .settings-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+
+/* «sync» рядом с аватаром — пометка для разработчика. */
+#avatarTargetLabel { display: none; }

@@ -5661,14 +5661,14 @@ ZaliMixin(ZaliInterface, class {
 
     designModeCatalog() {
         return [
-            { id: 'classic', label: 'Классический', note: 'default', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
-            { id: 'flat', label: 'Плоский', note: 'flat', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
+            { id: 'classic', label: 'Классический', note: 'По умолчанию', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
+            { id: 'flat', label: 'Плоский', note: '', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
             // «Фокус» — не очередная перекраска, а другая иерархия: акцент
             // остаётся только у «моего» (исходящие, мой аватар), «нового»
             // (непрочитанное) и главного действия (отправить), служебное
             // прячется до наведения или до проблемы. Слой CSS — в конце
             // web/style.css, раздел «DESIGN MODE: FOCUS».
-            { id: 'focus', label: 'Фокус', note: 'focus', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
+            { id: 'focus', label: 'Фокус', note: '', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
         ];
     }
 
@@ -7118,25 +7118,25 @@ ZaliMixin(ZaliInterface, class {
             {
                 id: 'all',
                 label: 'Кешировать всё',
-                note: 'all',
+                note: 'Всё',
                 hint: 'Аватарки, ассеты серверов, профили, стикеры и любые вложения — включая видео и файлы.',
             },
             {
                 id: 'light',
                 label: 'Кешировать легковесное',
-                note: 'default',
+                note: 'По умолчанию',
                 hint: 'Всё необходимое плюс стикеры и медиа до 2 МБ. Тяжёлые вложения качаются заново.',
             },
             {
                 id: 'essential',
                 label: 'Кешировать необходимое',
-                note: 'min',
+                note: 'Минимум',
                 hint: 'Только аватарки, иконки и баннеры серверов и карточки профилей.',
             },
             {
                 id: 'off',
                 label: 'Не кешировать',
-                note: 'off',
+                note: 'Выкл.',
                 hint: 'Ничего не хранится между запусками. Всё подгружается заново при каждом открытии.',
             },
         ];
@@ -35129,6 +35129,31 @@ ZaliMixin(ZaliInterface, class {
                 const newKey = e.target.value.trim();
                 this.saveStoredCryptoKey(newKey);
                 this.bus.send('zali_styler:set_key', newKey);
+            });
+        }
+        // Ключ скрыт точками: его видно по кнопке, а не любому, кто смотрит на экран.
+        const cryptoKeyToggleBtn = document.getElementById('cryptoKeyToggleBtn');
+        if (inputCryptoKey && cryptoKeyToggleBtn) {
+            cryptoKeyToggleBtn.addEventListener('click', () => {
+                const show = inputCryptoKey.type === 'password';
+                inputCryptoKey.type = show ? 'text' : 'password';
+                cryptoKeyToggleBtn.textContent = show ? 'Скрыть' : 'Показать';
+                cryptoKeyToggleBtn.setAttribute('aria-pressed', String(show));
+            });
+        }
+        // «Для разработчиков» (журнал, трассировка звонков) свёрнуто по умолчанию.
+        const devToggle = document.getElementById('settingsDevToggle');
+        if (devToggle) {
+            const toggleDev = () => {
+                const open = !devToggle.closest('.settings-shell')?.classList.contains('dev-open');
+                devToggle.closest('.settings-shell')?.classList.toggle('dev-open', open);
+                devToggle.setAttribute('aria-expanded', String(open));
+            };
+            devToggle.addEventListener('click', toggleDev);
+            devToggle.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleDev();
             });
         }
 

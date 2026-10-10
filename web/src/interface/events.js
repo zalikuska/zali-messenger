@@ -1833,6 +1833,31 @@ ZaliMixin(ZaliInterface, class {
                 this.bus.send('zali_styler:set_key', newKey);
             });
         }
+        // Ключ скрыт точками: его видно по кнопке, а не любому, кто смотрит на экран.
+        const cryptoKeyToggleBtn = document.getElementById('cryptoKeyToggleBtn');
+        if (inputCryptoKey && cryptoKeyToggleBtn) {
+            cryptoKeyToggleBtn.addEventListener('click', () => {
+                const show = inputCryptoKey.type === 'password';
+                inputCryptoKey.type = show ? 'text' : 'password';
+                cryptoKeyToggleBtn.textContent = show ? 'Скрыть' : 'Показать';
+                cryptoKeyToggleBtn.setAttribute('aria-pressed', String(show));
+            });
+        }
+        // «Для разработчиков» (журнал, трассировка звонков) свёрнуто по умолчанию.
+        const devToggle = document.getElementById('settingsDevToggle');
+        if (devToggle) {
+            const toggleDev = () => {
+                const open = !devToggle.closest('.settings-shell')?.classList.contains('dev-open');
+                devToggle.closest('.settings-shell')?.classList.toggle('dev-open', open);
+                devToggle.setAttribute('aria-expanded', String(open));
+            };
+            devToggle.addEventListener('click', toggleDev);
+            devToggle.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleDev();
+            });
+        }
 
     }
 
