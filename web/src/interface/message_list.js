@@ -272,6 +272,7 @@ ZaliMixin(ZaliInterface, class {
             const mediaCard = !isCall && this.messageHasMedia(msg) ? 'media-card' : '';
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
             const isSending = isOut && msg.status === 'sending';
+            const isFailed = isOut && (msg.status === 'error' || !!msg.error);
             const messageId = String(msg.id || '').trim();
             const hoverTimeLabel = this.messageHoverTimeLabel(msg);
             const showInlineTime = item.groupPos === 'single' || item.groupPos === 'end';
@@ -354,7 +355,7 @@ ZaliMixin(ZaliInterface, class {
             if (isImageCaption) {
                 const attachments = this.normalizeAttachments(msg.attachments);
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
-                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -364,6 +365,7 @@ ZaliMixin(ZaliInterface, class {
                     ${senderLabelHtml}
                     <div class="image-caption-media">${mediaHtml}</div>
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
+                    ${this.renderMessageState(msg, isOut)}
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
                 rows.push(html);
@@ -374,7 +376,7 @@ ZaliMixin(ZaliInterface, class {
             // внутри только своя строка: иконка, заголовок, длительность.
             const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (!isOut && showAvatar) {
                 html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (!isOut) {
@@ -383,6 +385,7 @@ ZaliMixin(ZaliInterface, class {
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
                 ${senderLabelHtml}
                 ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
+                ${this.renderMessageState(msg, isOut)}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
             rows.push(html);

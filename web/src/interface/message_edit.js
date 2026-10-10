@@ -377,7 +377,9 @@ ZaliMixin(ZaliInterface, class {
         const hasRealServerId = !!found.msg.id && (!found.msg.clientId || String(found.msg.id) !== String(found.msg.clientId));
         if (!hasRealServerId) {
             // Never made it past the outbox (still pending/failed to upload) —
-            // nothing exists server-side to delete, just drop it locally.
+            // nothing exists server-side to delete, just drop it locally — and out
+            // of the outbox too, иначе очередь отправит «удалённое» сообщение позже.
+            this.dropPendingOutbox(found.msg.clientId || id);
             this.removeMessageFromState(id);
             return;
         }

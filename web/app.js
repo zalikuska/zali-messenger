@@ -12463,6 +12463,7 @@ ZaliMixin(ZaliInterface, class {
             }
 
             item.attemptCount = Number(item.attemptCount || 0) + 1;
+            if (item.attemptCount >= 3) this.markMessageStalled(item.clientId, true);
             item.lastAttemptAt = now;
             item.nextRetryAt = now + Math.min(30000, Math.max(1500, 1000 * Math.min(item.attemptCount, 6)));
             item.inFlight = true;
@@ -25732,6 +25733,8 @@ ZaliMixin(ZaliInterface, class {
         return [
             this.messageRenderKey(msg),
             String(msg.status || ''),
+            msg.stalled ? 'stalled' : '',
+            msg.error ? 'error' : '',
             String(msg.text || '').length,
             // messageRenderKey collapses to `id:<id>` once a message is stored and
             // the text is only sampled by LENGTH above, so an edit that keeps the
@@ -25766,8 +25769,6 @@ ZaliMixin(ZaliInterface, class {
                     break;
                 }
             }
-            // No visible status badges in the message UI, so avoid full rerender.
-            // The data is still updated for persistence / history consistency.
             if (updated) break;
         }
         if (!updated) {
@@ -25784,6 +25785,73 @@ ZaliMixin(ZaliInterface, class {
                 if (updated) break;
             }
         }
+        // «Не отправлено» видно в пузыре (renderMessageState), поэтому ошибка
+        // перерисовывает список; остальные статусы по-прежнему тихие.
+        if (updated && status === 'error') this.scheduleRenderMessages();
+    }
+
+    /** Сообщение, которое уходит уже несколько попыток подряд: показываем «нет связи» вместо молчаливого «отправляется». */
+    markMessageStalled(clientId, stalled = true) {
+        const pendingId = String(clientId || '').trim();
+        if (!pendingId) return false;
+        const lists = [
+            ...Object.values(this.S.chats || {}),
+            ...Object.values(this.S.serverChats || {}),
+        ];
+        for (const msgs of lists) {
+            if (!Array.isArray(msgs)) continue;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (String(msgs[i].clientId || '').trim() !== pendingId) continue;
+                if (!!msgs[i].stalled === !!stalled) return false;
+                if (stalled) msgs[i].stalled = true; else delete msgs[i].stalled;
+                this.scheduleRenderMessages();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Строка состояния под своим пузырём: «Отправляется…» (появляется, только если
+     * отправка заняла больше секунды), «Нет связи» (несколько неудачных попыток,
+     * повтор идёт сам) и «Не отправлено» (попытки кончились или пропали вложения).
+     */
+    renderMessageState(msg, isOut) {
+        if (!isOut || !msg || msg.kind === 'call') return '';
+        const id = String(msg.clientId || msg.id || '');
+        if (msg.status === 'error' || msg.error) {
+            return `<div class="msg-state is-error" role="status">Не отправлено`
+                + `<button type="button" class="msg-state-btn" data-msg-retry="${this.esc(id)}">Повторить</button>`
+                + `<button type="button" class="msg-state-btn is-quiet" data-msg-discard="${this.esc(id)}">Удалить</button></div>`;
+        }
+        if (msg.status === 'sending') {
+            if (msg.stalled) {
+                return `<div class="msg-state is-warn" role="status">Нет связи, отправим сами`
+                    + `<button type="button" class="msg-state-btn" data-msg-retry="${this.esc(id)}">Повторить сейчас</button></div>`;
+            }
+            return `<div class="msg-state is-pending" role="status">Отправляется…</div>`;
+        }
+        return '';
+    }
+
+    /** «Повторить»: возвращает сообщение в очередь отправки с чистого листа. */
+    retryMessageSend(clientId) {
+        const pendingId = String(clientId || '').trim();
+        const found = pendingId ? this.findMessageById(pendingId) : null;
+        if (!found || !found.msg) return false;
+        const msg = found.msg;
+        msg.status = 'sending';
+        delete msg.error;
+        delete msg.stalled;
+        const patch = { attemptCount: 0, nextRetryAt: 0, inFlight: false };
+        if (!this.updatePendingOutboxItem(pendingId, patch)) {
+            // Очередь уже выбросила запись (кончились попытки): собираем заново.
+            this.enqueuePendingOutbox({ ...msg, clientId: pendingId, key: '', ...patch });
+        }
+        this.scheduleSaveStoredMessageCache();
+        this.scheduleRenderMessages();
+        this.scheduleFlushPendingOutbox(0);
+        return true;
     }
 
     finalizePendingMessage(clientId, messageId, { render = true } = {}) {
@@ -25797,6 +25865,7 @@ ZaliMixin(ZaliInterface, class {
                 if (String(msgs[i].clientId || '').trim() === pendingId) {
                     msgs[i].status = 'sent';
                     delete msgs[i].error;
+                    delete msgs[i].stalled;
                     if (serverId) msgs[i].id = serverId;
                     updated = true;
                     break;
@@ -25811,6 +25880,7 @@ ZaliMixin(ZaliInterface, class {
                     if (String(msgs[i].clientId || '').trim() === pendingId) {
                         msgs[i].status = 'sent';
                         delete msgs[i].error;
+                        delete msgs[i].stalled;
                         if (serverId) msgs[i].id = serverId;
                         updated = true;
                         break;
@@ -27057,6 +27127,7 @@ ZaliMixin(ZaliInterface, class {
             const mediaCard = !isCall && this.messageHasMedia(msg) ? 'media-card' : '';
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
             const isSending = isOut && msg.status === 'sending';
+            const isFailed = isOut && (msg.status === 'error' || !!msg.error);
             const messageId = String(msg.id || '').trim();
             const hoverTimeLabel = this.messageHoverTimeLabel(msg);
             const showInlineTime = item.groupPos === 'single' || item.groupPos === 'end';
@@ -27139,7 +27210,7 @@ ZaliMixin(ZaliInterface, class {
             if (isImageCaption) {
                 const attachments = this.normalizeAttachments(msg.attachments);
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
-                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+                let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (!isOut && showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (!isOut) {
@@ -27149,6 +27220,7 @@ ZaliMixin(ZaliInterface, class {
                     ${senderLabelHtml}
                     <div class="image-caption-media">${mediaHtml}</div>
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
+                    ${this.renderMessageState(msg, isOut)}
                     ${this.renderMessageReactions(msg)}
                 </div></div>`;
                 rows.push(html);
@@ -27159,7 +27231,7 @@ ZaliMixin(ZaliInterface, class {
             // внутри только своя строка: иконка, заголовок, длительность.
             const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (!isOut && showAvatar) {
                 html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (!isOut) {
@@ -27168,6 +27240,7 @@ ZaliMixin(ZaliInterface, class {
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
                 ${senderLabelHtml}
                 ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
+                ${this.renderMessageState(msg, isOut)}
                 ${!isCall ? this.renderMessageReactions(msg) : ''}
             </div></div>`;
             rows.push(html);
@@ -30409,7 +30482,9 @@ ZaliMixin(ZaliInterface, class {
         const hasRealServerId = !!found.msg.id && (!found.msg.clientId || String(found.msg.id) !== String(found.msg.clientId));
         if (!hasRealServerId) {
             // Never made it past the outbox (still pending/failed to upload) —
-            // nothing exists server-side to delete, just drop it locally.
+            // nothing exists server-side to delete, just drop it locally — and out
+            // of the outbox too, иначе очередь отправит «удалённое» сообщение позже.
+            this.dropPendingOutbox(found.msg.clientId || id);
             this.removeMessageFromState(id);
             return;
         }
@@ -33414,6 +33489,15 @@ ZaliMixin(ZaliInterface, class {
                     return;
                 }
                 this.hideReactionMenu();
+            });
+            msgsEl.addEventListener('click', (e) => {
+                const retryBtn = e.target.closest('[data-msg-retry]');
+                if (retryBtn) {
+                    this.retryMessageSend(retryBtn.getAttribute('data-msg-retry'));
+                    return;
+                }
+                const discardBtn = e.target.closest('[data-msg-discard]');
+                if (discardBtn) void this.deleteMessage(discardBtn.getAttribute('data-msg-discard'));
             });
             msgsEl.addEventListener('contextmenu', (e) => {
                 // ПКМ по аватарке или нику — меню человека (подписаться, в друзья),

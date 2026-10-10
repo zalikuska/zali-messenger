@@ -526,6 +526,7 @@ ZaliMixin(ZaliInterface, class {
             }
 
             item.attemptCount = Number(item.attemptCount || 0) + 1;
+            if (item.attemptCount >= 3) this.markMessageStalled(item.clientId, true);
             item.lastAttemptAt = now;
             item.nextRetryAt = now + Math.min(30000, Math.max(1500, 1000 * Math.min(item.attemptCount, 6)));
             item.inFlight = true;

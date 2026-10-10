@@ -336,6 +336,15 @@ ZaliMixin(ZaliInterface, class {
                 }
                 this.hideReactionMenu();
             });
+            msgsEl.addEventListener('click', (e) => {
+                const retryBtn = e.target.closest('[data-msg-retry]');
+                if (retryBtn) {
+                    this.retryMessageSend(retryBtn.getAttribute('data-msg-retry'));
+                    return;
+                }
+                const discardBtn = e.target.closest('[data-msg-discard]');
+                if (discardBtn) void this.deleteMessage(discardBtn.getAttribute('data-msg-discard'));
+            });
             msgsEl.addEventListener('contextmenu', (e) => {
                 // ПКМ по аватарке или нику — меню человека (подписаться, в друзья),
                 // а не меню сообщения: реакция к отправителю отношения не имеет.

@@ -804,6 +804,8 @@ ZaliMixin(ZaliInterface, class {
         return [
             this.messageRenderKey(msg),
             String(msg.status || ''),
+            msg.stalled ? 'stalled' : '',
+            msg.error ? 'error' : '',
             String(msg.text || '').length,
             // messageRenderKey collapses to `id:<id>` once a message is stored and
             // the text is only sampled by LENGTH above, so an edit that keeps the
@@ -838,8 +840,6 @@ ZaliMixin(ZaliInterface, class {
                     break;
                 }
             }
-            // No visible status badges in the message UI, so avoid full rerender.
-            // The data is still updated for persistence / history consistency.
             if (updated) break;
         }
         if (!updated) {
@@ -856,6 +856,73 @@ ZaliMixin(ZaliInterface, class {
                 if (updated) break;
             }
         }
+        // «Не отправлено» видно в пузыре (renderMessageState), поэтому ошибка
+        // перерисовывает список; остальные статусы по-прежнему тихие.
+        if (updated && status === 'error') this.scheduleRenderMessages();
+    }
+
+    /** Сообщение, которое уходит уже несколько попыток подряд: показываем «нет связи» вместо молчаливого «отправляется». */
+    markMessageStalled(clientId, stalled = true) {
+        const pendingId = String(clientId || '').trim();
+        if (!pendingId) return false;
+        const lists = [
+            ...Object.values(this.S.chats || {}),
+            ...Object.values(this.S.serverChats || {}),
+        ];
+        for (const msgs of lists) {
+            if (!Array.isArray(msgs)) continue;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (String(msgs[i].clientId || '').trim() !== pendingId) continue;
+                if (!!msgs[i].stalled === !!stalled) return false;
+                if (stalled) msgs[i].stalled = true; else delete msgs[i].stalled;
+                this.scheduleRenderMessages();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Строка состояния под своим пузырём: «Отправляется…» (появляется, только если
+     * отправка заняла больше секунды), «Нет связи» (несколько неудачных попыток,
+     * повтор идёт сам) и «Не отправлено» (попытки кончились или пропали вложения).
+     */
+    renderMessageState(msg, isOut) {
+        if (!isOut || !msg || msg.kind === 'call') return '';
+        const id = String(msg.clientId || msg.id || '');
+        if (msg.status === 'error' || msg.error) {
+            return `<div class="msg-state is-error" role="status">Не отправлено`
+                + `<button type="button" class="msg-state-btn" data-msg-retry="${this.esc(id)}">Повторить</button>`
+                + `<button type="button" class="msg-state-btn is-quiet" data-msg-discard="${this.esc(id)}">Удалить</button></div>`;
+        }
+        if (msg.status === 'sending') {
+            if (msg.stalled) {
+                return `<div class="msg-state is-warn" role="status">Нет связи, отправим сами`
+                    + `<button type="button" class="msg-state-btn" data-msg-retry="${this.esc(id)}">Повторить сейчас</button></div>`;
+            }
+            return `<div class="msg-state is-pending" role="status">Отправляется…</div>`;
+        }
+        return '';
+    }
+
+    /** «Повторить»: возвращает сообщение в очередь отправки с чистого листа. */
+    retryMessageSend(clientId) {
+        const pendingId = String(clientId || '').trim();
+        const found = pendingId ? this.findMessageById(pendingId) : null;
+        if (!found || !found.msg) return false;
+        const msg = found.msg;
+        msg.status = 'sending';
+        delete msg.error;
+        delete msg.stalled;
+        const patch = { attemptCount: 0, nextRetryAt: 0, inFlight: false };
+        if (!this.updatePendingOutboxItem(pendingId, patch)) {
+            // Очередь уже выбросила запись (кончились попытки): собираем заново.
+            this.enqueuePendingOutbox({ ...msg, clientId: pendingId, key: '', ...patch });
+        }
+        this.scheduleSaveStoredMessageCache();
+        this.scheduleRenderMessages();
+        this.scheduleFlushPendingOutbox(0);
+        return true;
     }
 
     finalizePendingMessage(clientId, messageId, { render = true } = {}) {
@@ -869,6 +936,7 @@ ZaliMixin(ZaliInterface, class {
                 if (String(msgs[i].clientId || '').trim() === pendingId) {
                     msgs[i].status = 'sent';
                     delete msgs[i].error;
+                    delete msgs[i].stalled;
                     if (serverId) msgs[i].id = serverId;
                     updated = true;
                     break;
@@ -883,6 +951,7 @@ ZaliMixin(ZaliInterface, class {
                     if (String(msgs[i].clientId || '').trim() === pendingId) {
                         msgs[i].status = 'sent';
                         delete msgs[i].error;
+                        delete msgs[i].stalled;
                         if (serverId) msgs[i].id = serverId;
                         updated = true;
                         break;

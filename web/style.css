@@ -14606,3 +14606,65 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     color: #fff;
     box-shadow: 0 14px 28px rgba(255,77,109,.2);
 }
+
+/* ── Статус отправки (renderMessageState, message_render.js) ──
+   «Отправляется…» появляется только если отправка длится дольше секунды,
+   чтобы не мигать на каждом сообщении. «Нет связи» и «Не отправлено» видны
+   сразу и дают кнопку повтора. Цвета — токены темы, новых нет. */
+.msg.sending .bubble,
+.msg.failed .bubble {
+    opacity: .72;
+}
+
+.msg.failed .bubble {
+    box-shadow: 0 0 0 1px rgba(255,77,109,.55);
+}
+
+.msg-state {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-top: 4px;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.msg.out .msg-state {
+    justify-content: flex-end;
+}
+
+.msg-state.is-error {
+    color: var(--red);
+}
+
+.msg-state.is-pending {
+    opacity: 0;
+    animation: msg-state-in .2s var(--ease-out) 1.2s forwards;
+}
+
+@keyframes msg-state-in {
+    from { opacity: 0; transform: translateY(-2px); }
+    to   { opacity: 1; transform: none; }
+}
+
+.msg-state-btn {
+    min-height: 32px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .18s var(--ease-out);
+}
+
+.msg-state-btn:hover {
+    background: var(--menu-hover);
+}
+
+.msg-state-btn.is-quiet {
+    color: var(--text2);
+}
