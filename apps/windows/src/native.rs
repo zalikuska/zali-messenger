@@ -10,6 +10,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+mod addon_elevated;
+pub(crate) use addon_elevated::*;
 mod addons;
 pub(crate) use addons::*;
 mod api;
@@ -48,7 +50,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2a49.17";
+const APP_DISPLAY_VERSION: &str = "0.2a49.18";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -106,6 +108,8 @@ enum UiBusEvent {
     /// Разбор целиком в JS (dispatchRealtimeEvent), чтобы новый тип события
     /// с сервера не требовал правки в каждой из трёх оболочек.
     RealtimeEvent,
+    /// События аддона хаба от оболочки: строки бэкенд-процесса, его выход.
+    AddonEvent,
 }
 
 impl UiBusEvent {
@@ -134,6 +138,7 @@ impl UiBusEvent {
             UiBusEvent::AvatarUpdated => "avatar_updated",
             UiBusEvent::SyncActiveConversation => "sync_active_conversation",
             UiBusEvent::UpdateEvent => "update_event",
+            UiBusEvent::AddonEvent => "addon_event",
         }
     }
 }
@@ -285,6 +290,12 @@ struct NativeCapabilities {
     addon_frames: bool,
     /// Хранилище аддонов хаба на диске (ADDON_REQUEST, native/addons.rs).
     addon_store: bool,
+    /// Повышенные права аддонов (native/addon_elevated.rs): файлы на всём
+    /// диске, запуск программ, свой процесс. Нужен системный диалог
+    /// подтверждения — он есть только в Windows-сборке.
+    addon_fs: bool,
+    addon_launch: bool,
+    addon_process: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -311,6 +322,9 @@ impl Default for NativeCapabilities {
             autostart: cfg!(target_os = "windows"),
             addon_frames: true,
             addon_store: true,
+            addon_fs: cfg!(target_os = "windows"),
+            addon_launch: cfg!(target_os = "windows"),
+            addon_process: cfg!(target_os = "windows"),
         }
     }
 }
@@ -1005,6 +1019,45 @@ fn script_eval_command(command: &str, payload: Value) -> String {
     )
 }
 
+/// Диалоги и события для аддонов хаба (native/addon_elevated.rs).
+struct ShellAddonHost {
+    proxy: EventLoopProxy<AppEvent>,
+}
+
+impl AddonHost for ShellAddonHost {
+    /// Системное окно «Да/Нет» поверх всего, «Нет» по умолчанию. Вызывается из
+    /// пула блокирующих задач, поэтому поток окна не ждёт ответа.
+    #[cfg(target_os = "windows")]
+    fn confirm(&self, title: &str, message: &str) -> bool {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+        };
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let text = wide(message);
+        let caption = wide(title);
+        let answer = unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND,
+            )
+        };
+        answer == IDYES
+    }
+
+    /// Экспериментальный macOS Rust-шелл диалога не умеет — и повышенные права
+    /// там не объявлены (NativeCapabilities::addon_fs и др.).
+    #[cfg(not(target_os = "windows"))]
+    fn confirm(&self, _title: &str, _message: &str) -> bool {
+        false
+    }
+
+    fn emit(&self, payload: Value) {
+        dispatch_ui_event(&self.proxy, UiBusEvent::AddonEvent, payload);
+    }
+}
+
 fn dispatch_ui_event(proxy: &EventLoopProxy<AppEvent>, event: UiBusEvent, payload: Value) {
     let command = format!("zali_interface:{}", event.as_str());
     let _ = proxy.send_event(AppEvent::EvaluateScript(script_eval_command(
@@ -1283,9 +1336,10 @@ pub fn handle_ipc_message(
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            let host: Arc<dyn AddonHost> = Arc::new(ShellAddonHost { proxy: proxy.clone() });
             let proxy = proxy.clone();
             runtime.spawn_blocking(move || {
-                let response = match handle_addon_request(&addons_root(), &payload) {
+                let response = match handle_addon_request_with_host(host, &addons_root(), &payload) {
                     Ok(data) => json!({ "requestId": request_id, "ok": true, "data": data }),
                     Err(error) => json!({ "requestId": request_id, "ok": false, "error": error }),
                 };

@@ -193,4 +193,30 @@ section('permissions (web/src/interface/addons_permissions.js)');
         && /failAddon[\s\S]{0,500}?addonStopRecorder/.test(read(RUNTIME_PATH)));
 }
 
+section('elevated permissions (native shells)');
+{
+    const rust = stripLineComments(read('apps/windows/src/native/addon_elevated.rs'));
+    const swift = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Services/AddonElevated.swift'));
+    const rustStore = stripLineComments(read('apps/windows/src/native/addons.rs'));
+    const swiftStore = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Services/AddonStore.swift'));
+    record('Windows: install of elevated permissions asks the user before writing',
+        /fn store_put[\s\S]{0,1500}?confirm_install\([\s\S]{0,200}?write_atomic\(&dir\.join\("addon\.zali"\)/.test(rustStore));
+    record('macOS: install of elevated permissions asks the user before writing',
+        /confirmInstall\(archive[\s\S]{0,200}?writeAtomic\(data, to: dir\.appendingPathComponent\("addon\.zali"\)\)/.test(swiftStore));
+    record('Windows: every launch re-checks the fingerprint and asks again',
+        /fn session_start[\s\S]{0,2000}?sha256[\s\S]{0,400}?переустановите[\s\S]{0,600}?host\.confirm\(/.test(rust));
+    record('macOS: every launch re-checks the fingerprint and asks again',
+        /func sessionStart[\s\S]{0,1500}?== sha256[\s\S]{0,400}?переустановите[\s\S]{0,600}?confirm\(title:/.test(swift));
+    const rustOps = (rust.match(/fn fs_op[\s\S]*?\n}\n/) || [''])[0];
+    const unguarded = (rustOps.match(/"fs\.[a-z]+" => (?!with_session)/g) || []);
+    record('Windows: every fs.* operation runs inside a session', rustOps.length > 0 && unguarded.length === 0, unguarded.join(', '));
+    record('Windows: system.* and backend.* need their session permission',
+        /fn system_op[\s\S]{0,120}?with_session\(payload, "launch"/.test(rust) && /fn backend_send[\s\S]{0,200}?with_session\(payload, "process"/.test(rust));
+    const swiftCases = swift.split(/\n        case "/).slice(1).filter(c => /^(fs|system|backend)\./.test(c));
+    const swiftOpen = swiftCases.filter(c => !/^\S+":\s*\n\s*(_ = )?(let s = )?try session\(dict, /.test(c)).map(c => c.split('"')[0]);
+    record('macOS: every fs/system/backend operation runs inside a session', swiftCases.length >= 10 && swiftOpen.length === 0, swiftOpen.join(', '));
+    record('the default button of the system dialog is the safe one',
+        /MB_DEFBUTTON2/.test(read('apps/windows/src/native.rs')) && /addButton\(withTitle: "Отмена"\)\s*\n\s*alert\.addButton\(withTitle: action\)/.test(swift));
+}
+
 finish('addons');

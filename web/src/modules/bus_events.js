@@ -36,6 +36,9 @@
         UPDATE_EVENT: 'update_event',
         SCREEN_CAPTURE_FRAME: 'screen_capture_frame',
         SCREEN_CAPTURE_ERROR: 'screen_capture_error',
+        // События аддона хаба от оболочки (строки процесса-бэкенда, его выход) —
+        // см. onNativeAddonEvent в interface/addons_elevated.js.
+        ADDON_EVENT: 'addon_event',
     });
 
     window.ZaliBusEvents = ZaliBusEvents;

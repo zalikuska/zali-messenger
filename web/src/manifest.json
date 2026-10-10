@@ -87,6 +87,7 @@
     "interface/addons_store.js",
     "interface/addons_runtime.js",
     "interface/addons_permissions.js",
+    "interface/addons_elevated.js",
     "interface/addons_ui.js",
     "interface/events.js"
   ],

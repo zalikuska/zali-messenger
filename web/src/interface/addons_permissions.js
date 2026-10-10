@@ -30,6 +30,7 @@ ZaliMixin(ZaliInterface, class {
             'mic.start': { permission: 'microphone', run: (i) => this.addonMicStart(i) },
             'mic.stop': { permission: 'microphone', run: (i) => this.addonMicStop(i) },
             'mic.cancel': { permission: 'microphone', run: (i) => { this.addonStopRecorder(i); return true; } },
+            ...(this.addonElevatedRpcMethods?.() || {}),
         };
     }
 

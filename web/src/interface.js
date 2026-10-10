@@ -482,6 +482,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.UPDATE_EVENT || 'update_event', (payload) => this.handleUpdateEvent(payload));
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_FRAME || 'screen_capture_frame', (payload) => this.onNativeScreenCaptureFrame(payload));
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_ERROR || 'screen_capture_error', (payload) => this.onNativeScreenCaptureError(payload));
+        this.bus.registerCommand('zali_interface', E.ADDON_EVENT || 'addon_event', (payload) => this.onNativeAddonEvent?.(payload));
 
         // Bind events after DOM is loaded
         if (document.readyState === 'loading') {

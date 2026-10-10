@@ -19,6 +19,9 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use super::addon_elevated::{confirm_install, handle_elevated_request, parse_addon_archive, write_grant, AddonHost};
 
 const ADDON_MAGIC: &[u8; 8] = b"ZALIEXTN";
 const MAX_ARCHIVE_BYTES: usize = 32 * 1024 * 1024;
@@ -143,7 +146,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
@@ -177,6 +180,45 @@ fn list_data(dir: &Path, rel: &str, prefix: &str, out: &mut Vec<Value>) -> Resul
 }
 
 /// Обрабатывает один `ADDON_REQUEST`; ответ кладётся в `data` NativeResponse.
+/// Повышенные права (сессии, fs.*, system.*, backend.*) — native/addon_elevated.rs.
+pub(crate) fn handle_addon_request_with_host(host: Arc<dyn AddonHost>, root: &Path, payload: &Value) -> Result<Value, String> {
+    if let Some(result) = handle_elevated_request(host.clone(), root, payload) {
+        return result;
+    }
+    if str_field(payload, "op") == "store.put" {
+        return store_put(host.as_ref(), root, payload);
+    }
+    handle_addon_request(root, payload)
+}
+
+/// Установка: файл разбирается здесь же, права берутся из его манифеста, а
+/// повышенные подтверждает пользователь в системном диалоге — до записи.
+fn store_put(host: &dyn AddonHost, root: &Path, payload: &Value) -> Result<Value, String> {
+    let dir = addon_dir(root, payload)?;
+    let id = str_field(payload, "addonId");
+    let meta = payload.get("meta").filter(|m| m.is_object()).ok_or("Нет сведений об аддоне")?;
+    if meta.get("id").and_then(Value::as_str) != Some(id) {
+        return Err("Сведения не от этого аддона".into());
+    }
+    let meta_bytes = serde_json::to_vec(meta).map_err(|e| e.to_string())?;
+    if meta_bytes.len() > MAX_META_BYTES {
+        return Err("Сведения об аддоне слишком большие".into());
+    }
+    let bytes = decode_base64(payload, MAX_ARCHIVE_BYTES)?;
+    if bytes.len() < ADDON_MAGIC.len() || &bytes[..ADDON_MAGIC.len()] != ADDON_MAGIC {
+        return Err("Это не файл аддона".into());
+    }
+    let sha256 = sha256_hex(&bytes);
+    let archive = parse_addon_archive(bytes)?;
+    let elevated = confirm_install(host, &archive, &sha256, &dir)?;
+    write_atomic(&dir.join("addon.zali"), &archive.bytes)?;
+    write_atomic(&dir.join("meta.json"), &meta_bytes)?;
+    write_grant(&dir, &sha256, &elevated)?;
+    Ok(json!({ "sha256": sha256, "granted": elevated }))
+}
+
+/// Операции без повышенных прав и без диалогов (store.put — только через
+/// handle_addon_request_with_host).
 pub(crate) fn handle_addon_request(root: &Path, payload: &Value) -> Result<Value, String> {
     match str_field(payload, "op") {
         "store.list" => {
@@ -206,25 +248,7 @@ pub(crate) fn handle_addon_request(root: &Path, payload: &Value) -> Result<Value
                 "sha256": sha256_hex(&bytes),
             }))
         }
-        "store.put" => {
-            let dir = addon_dir(root, payload)?;
-            let id = str_field(payload, "addonId");
-            let meta = payload.get("meta").filter(|m| m.is_object()).ok_or("Нет сведений об аддоне")?;
-            if meta.get("id").and_then(Value::as_str) != Some(id) {
-                return Err("Сведения не от этого аддона".into());
-            }
-            let meta_bytes = serde_json::to_vec(meta).map_err(|e| e.to_string())?;
-            if meta_bytes.len() > MAX_META_BYTES {
-                return Err("Сведения об аддоне слишком большие".into());
-            }
-            let bytes = decode_base64(payload, MAX_ARCHIVE_BYTES)?;
-            if bytes.len() < ADDON_MAGIC.len() || &bytes[..ADDON_MAGIC.len()] != ADDON_MAGIC {
-                return Err("Это не файл аддона".into());
-            }
-            write_atomic(&dir.join("addon.zali"), &bytes)?;
-            write_atomic(&dir.join("meta.json"), &meta_bytes)?;
-            Ok(json!({ "sha256": sha256_hex(&bytes) }))
-        }
+        "store.put" => Err("Установка идёт через handle_addon_request_with_host".into()),
         "store.remove" => {
             let dir = addon_dir(root, payload)?;
             if dir.exists() {
@@ -288,12 +312,34 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
+    struct NoDialogs;
+    impl AddonHost for NoDialogs {
+        fn confirm(&self, _title: &str, _message: &str) -> bool {
+            false
+        }
+        fn emit(&self, _payload: Value) {}
+    }
+
+    fn archive() -> Vec<u8> {
+        let manifest = br#"{"name":"T","permissions":["cache"]}"#;
+        let mut out = ADDON_MAGIC.to_vec();
+        out.extend_from_slice(&[1, 0, 5]);
+        out.extend_from_slice(b"addon");
+        out.push(0);
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&13u16.to_le_bytes());
+        out.extend_from_slice(b"manifest.json");
+        out.extend_from_slice(&(manifest.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(manifest.len() as u64).to_le_bytes());
+        out.extend_from_slice(manifest);
+        out
+    }
+
     fn put(root: &Path, id: &str) -> Result<Value, String> {
-        let mut archive = ADDON_MAGIC.to_vec();
-        archive.extend_from_slice(b"rest");
-        handle_addon_request(
+        handle_addon_request_with_host(
+            Arc::new(NoDialogs),
             root,
-            &json!({ "op": "store.put", "addonId": id, "meta": { "id": id, "manifest": { "name": "T" } }, "dataBase64": b64(&archive) }),
+            &json!({ "op": "store.put", "addonId": id, "meta": { "id": id, "manifest": { "name": "T" } }, "dataBase64": b64(&archive()) }),
         )
     }
 
@@ -325,7 +371,7 @@ mod tests {
         assert_eq!(list["addons"][0]["meta"]["manifest"]["name"], "T");
         let got = handle_addon_request(&root, &json!({ "op": "store.get", "addonId": "org.example.test" })).unwrap();
         assert_eq!(got["sha256"].as_str().unwrap(), sha);
-        assert!(got["dataBase64"].as_str().unwrap().starts_with(&b64(ADDON_MAGIC)[..8]));
+        assert_eq!(got["dataBase64"].as_str().unwrap(), b64(&archive()));
         handle_addon_request(&root, &json!({ "op": "store.remove", "addonId": "org.example.test" })).unwrap();
         let list = handle_addon_request(&root, &json!({ "op": "store.list" })).unwrap();
         assert_eq!(list["addons"].as_array().unwrap().len(), 0);
@@ -335,10 +381,13 @@ mod tests {
     #[test]
     fn store_refuses_foreign_files_and_mismatched_meta() {
         let root = temp_root();
+        let host: Arc<dyn AddonHost> = Arc::new(NoDialogs);
         let wrong_magic = json!({ "op": "store.put", "addonId": "org.x.y", "meta": { "id": "org.x.y" }, "dataBase64": b64(b"ZALIARCHxxxx") });
-        assert!(handle_addon_request(&root, &wrong_magic).is_err());
-        let mismatched = json!({ "op": "store.put", "addonId": "org.x.y", "meta": { "id": "org.other" }, "dataBase64": b64(b"ZALIEXTNxxxx") });
-        assert!(handle_addon_request(&root, &mismatched).is_err());
+        assert!(handle_addon_request_with_host(host.clone(), &root, &wrong_magic).is_err());
+        let broken = json!({ "op": "store.put", "addonId": "org.x.y", "meta": { "id": "org.x.y" }, "dataBase64": b64(b"ZALIEXTNxxxx") });
+        assert!(handle_addon_request_with_host(host.clone(), &root, &broken).is_err());
+        let mismatched = json!({ "op": "store.put", "addonId": "org.x.y", "meta": { "id": "org.other" }, "dataBase64": b64(&archive()) });
+        assert!(handle_addon_request_with_host(host, &root, &mismatched).is_err());
         assert!(put(&root, "../evil").is_err());
         let _ = fs::remove_dir_all(&root);
     }

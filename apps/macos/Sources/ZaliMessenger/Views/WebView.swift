@@ -295,6 +295,7 @@ struct WebView {
             case authResponse = "zali_interface:auth_response"
             case nativeResponse = "zali_interface:native_response"
             case updateEvent = "zali_interface:update_event"
+            case addonEvent = "zali_interface:addon_event"
         }
 
         fileprivate enum WindowFunction: String {
@@ -2061,6 +2062,11 @@ struct WebView {
                 case .addonRequest:
                     // Хранилище аддонов хаба (Services/AddonStore.swift): диск — в своей
                     // последовательной очереди, ответ — на главном потоке.
+                    // События бэкенда аддона (строки stdout, выход) — в веб, bus `addon_event`.
+                    AddonElevated.emit = { [weak self] payload in
+                        let literal = WebView.javascriptLiteral(payload)
+                        DispatchQueue.main.async { self?.sendBusEvent(.addonEvent, payload: literal) }
+                    }
                     AddonStore.queue.async { [weak self] in
                         let response: [String: Any]
                         do {
@@ -2320,6 +2326,11 @@ struct WebView {
             "addonFrames": true,
             // Хранилище аддонов на диске (ADDON_REQUEST, Services/AddonStore.swift).
             "addonStore": true,
+            // Повышенные права аддонов (Services/AddonElevated.swift): системный
+            // диалог при установке и каждом запуске.
+            "addonFs": true,
+            "addonLaunch": true,
+            "addonProcess": true,
         ]
         let nativeCapsBootstrap = "window.__ZALI_NATIVE_CAPS__ = \(WebView.javascriptLiteral(nativeCapabilities));"
         config.userContentController.addUserScript(WKUserScript(source: nativeCapsBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))

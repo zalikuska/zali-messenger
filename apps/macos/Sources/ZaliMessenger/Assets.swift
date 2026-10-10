@@ -17371,6 +17371,9 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
         UPDATE_EVENT: 'update_event',
         SCREEN_CAPTURE_FRAME: 'screen_capture_frame',
         SCREEN_CAPTURE_ERROR: 'screen_capture_error',
+        // События аддона хаба от оболочки (строки процесса-бэкенда, его выход) —
+        // см. onNativeAddonEvent в interface/addons_elevated.js.
+        ADDON_EVENT: 'addon_event',
     });
 
     window.ZaliBusEvents = ZaliBusEvents;
@@ -18080,6 +18083,8 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
         function needBits(n) {
             while (bitCount < n) {
+"""#,
+    #"""
                 if (pos >= input.length) throw new Error('tgs: truncated deflate stream');
                 bitBuffer |= input[pos] << bitCount;
                 pos += 1;
@@ -18087,8 +18092,6 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
             }
         }
 
-"""#,
-    #"""
         function takeBits(n) {
             if (n === 0) return 0;
             needBits(n);
@@ -20247,6 +20250,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.UPDATE_EVENT || 'update_event', (payload) => this.handleUpdateEvent(payload));
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_FRAME || 'screen_capture_frame', (payload) => this.onNativeScreenCaptureFrame(payload));
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_ERROR || 'screen_capture_error', (payload) => this.onNativeScreenCaptureError(payload));
+        this.bus.registerCommand('zali_interface', E.ADDON_EVENT || 'addon_event', (payload) => this.onNativeAddonEvent?.(payload));
 
         // Bind events after DOM is loaded
         if (document.readyState === 'loading') {
@@ -22335,13 +22339,13 @@ ZaliMixin(ZaliInterface, class {
         const rawBalance = this.S.zaliCoinBalance;
         const known = rawBalance !== undefined && rawBalance !== null && Number.isFinite(Number(rawBalance));
         const balance = known ? Math.max(0, Math.trunc(Number(rawBalance))) : 0;
+"""#,
+    #"""
         const amount = Math.trunc(Number(document.getElementById('coinTransferAmountInput')?.value));
         const claims = isGift ? this.coinGiftClaimsValue() : 1;
         const valid = Number.isFinite(amount) && amount > 0;
         const total = valid ? amount * claims : 0;
         if (available) available.textContent = known ? `Доступно: ${this.formatCoinAmount(balance)} ZC` : 'Доступно: …';
-"""#,
-    #"""
         const maxBtn = document.getElementById('coinTransferMaxBtn');
         if (maxBtn) maxBtn.disabled = known && this.coinModalMaxAmount() <= 0;
 
@@ -26562,6 +26566,8 @@ ZaliMixin(ZaliInterface, class {
             const scoped = String(scope || '').trim();
             if (scoped) map[scoped] = Date.now();
         }
+"""#,
+    #"""
         this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
     }
 
@@ -26570,8 +26576,6 @@ ZaliMixin(ZaliInterface, class {
     consumeForceClaimScope(scope) {
         const scoped = String(scope || '').trim();
         if (!scoped) return false;
-"""#,
-    #"""
         const map = this.loadScopeMarkMap(this.forceClaimScopesStorageKey());
         if (!Object.prototype.hasOwnProperty.call(map, scoped)) return false;
         delete map[scoped];
@@ -30460,14 +30464,14 @@ ZaliMixin(ZaliInterface, class {
                 continue;
             }
 
+"""#,
+    #"""
             const declaredAttachments = this.normalizeAttachments(item.attachments);
             let outAttachments = declaredAttachments.filter(att => att.dataUrl);
             if (declaredAttachments.length && !outAttachments.length) {
                 outAttachments = this.getPendingOutboxAttachments(item.clientId).filter(att => att.dataUrl);
             }
             if (declaredAttachments.length && !outAttachments.length) {
-"""#,
-    #"""
                 // The attachment bytes are gone (dataUrl is not persisted across
                 // restarts). Sending now would deliver the message without its files —
                 // or completely empty for attachment-only messages. Fail it visibly
@@ -34563,6 +34567,8 @@ ZaliMixin(ZaliInterface, class {
                 });
                 this.voice.cameraOn = true;
             } catch (error) {
+"""#,
+    #"""
                 this.voiceTrace('camera-request-failed', { error: error?.message || String(error) }, 'WARN');
                 this.addLogEntry({ type: 'WARN', msg: 'Камера недоступна — продолжаем аудиозвонком', ts: new Date().toLocaleTimeString() });
                 this.voice.videoEnabled = false;
@@ -34571,8 +34577,6 @@ ZaliMixin(ZaliInterface, class {
         } else {
             stream = await getAudioOnlyStream();
         }
-"""#,
-    #"""
         this.voice.localStream = stream;
         this.voice.micError = '';
         this.voice.muted = false;
@@ -38416,6 +38420,8 @@ ZaliMixin(ZaliInterface, class {
                 state,
                 reason: String(payload.reason || ''),
                 roomId: this.voice.roomId || '',
+"""#,
+    #"""
                 status: this.voice.status || '',
                 queued: payload.queued ?? '',
             }, state === 'up' ? 'INFO' : 'WARN');
@@ -38427,8 +38433,6 @@ ZaliMixin(ZaliInterface, class {
         }
 
         // A payload the shell could not deliver and will not retry (its outbound
-"""#,
-    #"""
         // queue overflowed, or the payload could not be serialised). On the browser
         // path sendVoiceEvent returns false and the caller unlatches offerSent
         // itself; over a native bridge the send is fire-and-forget, so this event is
@@ -42454,14 +42458,14 @@ ZaliMixin(ZaliInterface, class {
         const authError = document.getElementById('authError');
         const loginBtn = document.getElementById('authLoginBtn');
         const regBtn = document.getElementById('authRegisterBtn');
+"""#,
+    #"""
         const guestBtn = document.getElementById('authGuestBtn');
         const vaultSyncNote = document.getElementById('authVaultSyncNote');
         // Менеджеры паролей различают вход и регистрацию по autocomplete.
         const registering = this.S.auth.mode === 'register';
         document.getElementById('authPassword')?.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
         if (authTitle) authTitle.textContent = this.S.auth.mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
-"""#,
-    #"""
         if (authHint) authHint.textContent = this.S.auth.mode === 'register'
             ? 'Зарегистрируйтесь, чтобы сохранить контакты и историю.'
             : 'Войдите, чтобы синхронизировать сообщения и контакты.';
@@ -46470,14 +46474,14 @@ ZaliMixin(ZaliInterface, class {
                     serverId,
                     channelId,
                 });
+"""#,
+    #"""
                 // "Visible" requires both the matching channel AND the servers view being
                 // active — currentServerChatKey() keeps returning the selected channel
                 // even while the user is looking at DMs, which used to swallow the
                 // notification for messages arriving in that channel. The window itself
                 // must also be in front of the user — see isAppAttended().
                 if (!this.isServerChatAttended(key)) {
-"""#,
-    #"""
                     this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId, messageId });
                 }
             }
@@ -50489,6 +50493,8 @@ ZaliMixin(ZaliInterface, class {
         const boxWidth = Math.max(1, maxX - minX);
         const boxHeight = Math.max(1, maxY - minY);
 
+"""#,
+    #"""
         const payloadStrokes = strokes.map(stroke => ({
             d: this.autographPathData(stroke.points.map(point => ({ x: point.x - minX, y: point.y - minY }))),
             color: this.safeCssColor(stroke.color) || '#cbff00',
@@ -50498,8 +50504,6 @@ ZaliMixin(ZaliInterface, class {
         this.setProfileState({ drawing: { ...drawing, submitting: true, error: '' } });
         try {
             const res = await this.apiFetch(this.apiRoutes.profiles.autographs(owner), {
-"""#,
-    #"""
                 method: 'POST',
                 interactive: true,
                 headers: { 'Content-Type': 'application/json' },
@@ -52284,6 +52288,7 @@ ZaliMixin(ZaliInterface, class {
             'mic.start': { permission: 'microphone', run: (i) => this.addonMicStart(i) },
             'mic.stop': { permission: 'microphone', run: (i) => this.addonMicStop(i) },
             'mic.cancel': { permission: 'microphone', run: (i) => { this.addonStopRecorder(i); return true; } },
+            ...(this.addonElevatedRpcMethods?.() || {}),
         };
     }
 
@@ -52525,6 +52530,107 @@ ZaliMixin(ZaliInterface, class {
         rec.chunks = [];
         this.renderAddonTitlebar();
         this.renderHubAddons?.();
+    }
+});
+
+
+// --- MODULE: interface/addons_elevated.js ---
+// --- ZaliInterface: повышенные права аддонов хаба — файлы на всём диске, ---
+// --- запуск программ, собственный процесс-бэкенд. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Дизайн — docs/ADDONS.md.
+//
+// Всё здесь делает нативная оболочка (Windows: native/addon_elevated.rs, macOS:
+// Services/AddonElevated.swift) через ADDON_REQUEST, и только в рамках сессии:
+// session.start показывает системный диалог при каждом запуске и выдаёт
+// sessionId, без которого оболочка не выполнит ни одной операции. Права сессии
+// оболочка берёт из манифеста внутри файла аддона и сверяет отпечаток с тем,
+// что подтвердили при установке, — проверка разрешения здесь (dispatchAddonRpc)
+// лишь первая из двух.
+
+const ZALI_ADDON_SESSION_TIMEOUT_MS = 10 * 60 * 1000;
+
+ZaliMixin(ZaliInterface, class {
+
+    /** Вызывается из launchAddon до создания фрейма; отказ в диалоге — исключение. */
+    async addonSessionStart(instance) {
+        const F = window.ZaliAddonFormat;
+        const elevated = instance.manifest.permissions.filter(p => F.isElevated(p));
+        if (!elevated.length) return;
+        // Системный диалог ждёт ответа пользователя — таймаут с запасом.
+        const res = await this.addonNativeRequest('session.start', { addonId: instance.id }, ZALI_ADDON_SESSION_TIMEOUT_MS);
+        if (!res?.sessionId) throw this.addonError('denied', 'Запуск отменён');
+        instance.sessionId = String(res.sessionId);
+    }
+
+    addonSessionEnd(instance) {
+        const sessionId = instance?.sessionId;
+        if (!sessionId) return;
+        instance.sessionId = '';
+        this.addonNativeRequest('session.end', { sessionId }, 15000).catch(() => {});
+    }
+
+    /** Методы SDK с повышенными правами — подмешиваются в addonRpcExtraMethods(). */
+    addonElevatedRpcMethods() {
+        const call = (op, fields = {}) => (instance) => {
+            if (!instance.sessionId) throw this.addonError('denied', 'Аддон запущен без повышенных прав');
+            return this.addonNativeRequest(op, { sessionId: instance.sessionId, ...fields });
+        };
+        const pathOf = (params) => String(params?.path ?? '');
+        return {
+            'fs.paths': {
+                run: (instance) => {
+                    const p = instance.manifest.permissions;
+                    if (!p.includes('fs.read') && !p.includes('fs.write')) {
+                        throw this.addonError('permission_denied', 'Аддон не просил доступ к файлам');
+                    }
+                    return call('fs.paths')(instance);
+                },
+            },
+            'fs.read': {
+                permission: 'fs.read',
+                run: async (instance, params) => {
+                    const data = await call('fs.read', { path: pathOf(params) })(instance);
+                    const buffer = this.addonBase64ToBytes(data?.dataBase64 || '').buffer;
+                    return { result: buffer, transfer: [buffer] };
+                },
+            },
+            'fs.stat': { permission: 'fs.read', run: (i, p) => call('fs.stat', { path: pathOf(p) })(i) },
+            'fs.list': { permission: 'fs.read', run: (i, p) => call('fs.list', { path: pathOf(p) })(i) },
+            'fs.write': {
+                permission: 'fs.write',
+                run: (instance, params) => {
+                    const bytes = this.addonBytesParam(params);
+                    return call('fs.write', { path: pathOf(params), append: !!params?.append, dataBase64: this.addonBytesToBase64(bytes) })(instance);
+                },
+            },
+            'fs.mkdir': { permission: 'fs.write', run: (i, p) => call('fs.mkdir', { path: pathOf(p) })(i) },
+            'fs.remove': { permission: 'fs.write', run: (i, p) => call('fs.remove', { path: pathOf(p), recursive: !!p?.recursive })(i) },
+            'system.open': { permission: 'launch', run: (i, p) => call('system.open', { path: pathOf(p) })(i) },
+            'system.exec': {
+                permission: 'launch',
+                run: (i, p) => call('system.exec', {
+                    path: pathOf(p),
+                    args: Array.isArray(p?.args) ? p.args.slice(0, 64).map(String) : [],
+                    cwd: String(p?.cwd ?? ''),
+                })(i),
+            },
+            'backend.send': { permission: 'process', run: (i, p) => call('backend.send', { message: p?.message ?? null })(i) },
+            'backend.restart': { permission: 'process', run: (i) => call('backend.restart')(i) },
+        };
+    }
+
+    /** Событие от оболочки (bus `addon_event`): строка бэкенда, его выход. */
+    onNativeAddonEvent(payload) {
+        const sessionId = String(payload?.sessionId || '');
+        if (!sessionId) return;
+        for (const instance of this.addonInstances().values()) {
+            if (instance.sessionId !== sessionId) continue;
+            const event = String(payload.event || '');
+            if (event === 'backend' || event === 'backend-exit' || event === 'backend-error') {
+                this.emitAddonEvent(instance, event, payload.data ?? null);
+            }
+            return;
+        }
     }
 });
 
@@ -54447,6 +54553,8 @@ ZaliMixin(ZaliInterface, class {
                 } catch (error) {
                     this.addLogEntry({
                         type: 'ERROR',
+"""#,
+    #"""
                         msg: `Не удалось сохранить network config: ${error?.message || error}`,
                         ts: new Date().toLocaleTimeString(),
                     });
@@ -54568,8 +54676,6 @@ ZaliMixin(ZaliInterface, class {
                 if (!removeBtn) return;
                 const serverId = this.S.serverModal.serverId;
                 const username = removeBtn.getAttribute('data-member-remove');
-"""#,
-    #"""
                 if (!serverId || !username) return;
                 try {
                     const res = await this.apiFetch(this.apiRoutes.servers.member(serverId, username), {

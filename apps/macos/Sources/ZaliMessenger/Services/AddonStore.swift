@@ -69,8 +69,11 @@ enum AddonStore {
         return segments
     }
 
-    static func handle(_ dict: [String: Any]) throws -> [String: Any] {
+    /// Ответ кладётся в `data` NativeResponse. Повышенные права (сессии, fs.*,
+    /// system.*, backend.*) — Services/AddonElevated.swift.
+    static func handle(_ dict: [String: Any]) throws -> Any {
         guard let root else { throw Failure("Нет папки данных приложения") }
+        if let result = try AddonElevated.handle(dict, root: root) { return result }
         return try handle(dict, root: root)
     }
 
@@ -111,9 +114,15 @@ enum AddonStore {
             guard data.count >= magic.count, Array(data.prefix(magic.count)) == magic else {
                 throw Failure("Это не файл аддона")
             }
+            // Права — из манифеста внутри файла; повышенные подтверждает
+            // пользователь в системном диалоге, до записи.
+            let sha256 = sha256Hex(data)
+            let archive = try AddonElevated.parseArchive(data)
+            let elevated = try AddonElevated.confirmInstall(archive, sha256: sha256)
             try writeAtomic(data, to: dir.appendingPathComponent("addon.zali"))
             try writeAtomic(metaData, to: dir.appendingPathComponent("meta.json"))
-            return ["sha256": sha256Hex(data)]
+            try AddonElevated.writeGrant(dir, sha256: sha256, elevated: elevated)
+            return ["sha256": sha256, "granted": elevated]
 
         case "store.remove":
             let dir = try addonDir(dict, root: root)
@@ -199,7 +208,7 @@ enum AddonStore {
         }
     }
 
-    private static func sha256Hex(_ data: Data) -> String {
+    static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
