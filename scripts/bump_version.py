@@ -13,7 +13,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION_RE = re.compile(r"^(\d+)\.(\d+)([abr])(\d+)$")
+# Необязательный хвост «.K» — подсборка альфы (0.2a48.1): в Cargo и versionCode
+# не попадает, там только BUILD.
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)([abr])(\d+)(?:\.(\d+))?$")
 
 # (файл, regex с двумя группами вокруг значения). Якоря нужны, чтобы не задеть
 # комментарии: в build.gradle.kts те же слова встречаются в тексте.
@@ -25,7 +27,7 @@ ANDROID_CODE = (ROOT / "apps/android/app/build.gradle.kts", r"^(\s*versionCode =
 
 
 def expected_values(version):
-    major, minor, _, build = VERSION_RE.match(version).groups()
+    major, minor, _, build, _sub = VERSION_RE.match(version).groups()
     return [
         (MACOS, version),
         (WINDOWS, version),
@@ -62,7 +64,7 @@ def check():
 
 def bump(version):
     if not VERSION_RE.match(version):
-        print(f"нужна схема MAJOR.MINOR{{a|b|r}}BUILD, например 0.2b46, а не {version!r}", file=sys.stderr)
+        print(f"нужна схема MAJOR.MINOR{{a|b|r}}BUILD[.K], например 0.2b46 или 0.2a48.1, а не {version!r}", file=sys.stderr)
         return 2
     # Сначала считаем новые тексты всех файлов и только потом пишем: сбой на
     # четвёртом месте не должен оставить три файла уже изменёнными.

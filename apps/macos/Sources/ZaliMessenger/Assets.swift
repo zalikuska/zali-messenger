@@ -42732,14 +42732,14 @@ ZaliMixin(ZaliInterface, class {
         try { localStorage.removeItem(this.updateInstallAttemptsStorageKey()); } catch (e) {}
     }
 
-    // App version scheme: MAJOR.MINOR{a|b|r}BUILD, e.g. "0.2b9" (r=release >
+    // App version scheme: MAJOR.MINOR{a|b|r}BUILD[.K], e.g. "0.2b9" or "0.2a48.1" (r=release >
     // b=beta > a=alpha at the same MAJOR.MINOR). Falls back to plain dotted
     // numeric versions (e.g. legacy "1.1.3") for compatibility with whatever the
     // server already has published in app_releases — those are treated as the
     // top ("release") channel so they compare purely by major.minor.patch.
     parseAppVersion(v) {
         const str = String(v || '').trim();
-        const channeled = str.match(/^(\d+)\.(\d+)([abr])(\d+)$/i);
+        const channeled = str.match(/^(\d+)\.(\d+)([abr])(\d+)(?:\.(\d+))?$/i);
         if (channeled) {
             const channelRank = { a: 0, b: 1, r: 2 };
             return {
@@ -42747,6 +42747,7 @@ ZaliMixin(ZaliInterface, class {
                 minor: parseInt(channeled[2], 10) || 0,
                 channel: channelRank[channeled[3].toLowerCase()],
                 build: parseInt(channeled[4], 10) || 0,
+                sub: parseInt(channeled[5], 10) || 0,
             };
         }
         const parts = str.split('.').map(n => parseInt(n, 10) || 0);
@@ -42755,6 +42756,7 @@ ZaliMixin(ZaliInterface, class {
             minor: parts[1] || 0,
             channel: 2,
             build: parts[2] || 0,
+            sub: 0,
         };
     }
 
@@ -42765,11 +42767,12 @@ ZaliMixin(ZaliInterface, class {
         if (va.minor !== vb.minor) return va.minor > vb.minor ? 1 : -1;
         if (va.channel !== vb.channel) return va.channel > vb.channel ? 1 : -1;
         if (va.build !== vb.build) return va.build > vb.build ? 1 : -1;
+        if (va.sub !== vb.sub) return va.sub > vb.sub ? 1 : -1;
         return 0;
     }
 
     isNewSchemeVersion(v) {
-        return /^\d+\.\d+[abr]\d+$/i.test(String(v || '').trim());
+        return /^\d+\.\d+[abr]\d+(?:\.\d+)?$/i.test(String(v || '').trim());
     }
 
     // Unix-seconds cutoff for the one-time version-scheme migration: the
@@ -45287,12 +45290,12 @@ ZaliMixin(ZaliInterface, class {
     // active-call-clobber bug.
     // Rooms this client deliberately walked away from (invite glare). Events for
     // them are already in flight when we leave, and applying those would restore
+"""#,
+    #"""
     // state for a call that no longer exists. Bounded: a handful per session.
     abandonVoiceRoom(roomId) {
         const id = String(roomId || '').trim();
         if (!id) return;
-"""#,
-    #"""
         if (!this._abandonedVoiceRooms) this._abandonedVoiceRooms = new Set();
         this._abandonedVoiceRooms.add(id);
         if (this._abandonedVoiceRooms.size > 32) {
@@ -49270,13 +49273,13 @@ ZaliMixin(ZaliInterface, class {
                     await this.joinVoiceChannel();
                     return;
                 }
+"""#,
+    #"""
                 const leaveBtn = e.target.closest('#voiceLeaveBtn');
                 if (leaveBtn) {
                     await this.leaveVoiceRoom({ announce: true });
                     return;
                 }
-"""#,
-    #"""
                 const muteBtn = e.target.closest('#voiceMuteBtn');
                 if (muteBtn) {
                     this.toggleVoiceMute();
