@@ -15123,7 +15123,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
    телефона; у остальных иконка (смысл — в title и aria-label). */
 .hub-segment-label { display: none; }
 
-.hub-segment-btn.active { flex-grow: 2.4; gap: 6px; }
+.hub-segment-btn.active { flex-grow: 4.6; gap: 6px; padding: 0 6px; }
 
 .hub-segment-btn.active .hub-segment-label {
     display: inline;
@@ -15170,6 +15170,28 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     .hub-orb { display: none; }
     .hub-hero { grid-template-columns: minmax(0, 1fr); padding: 18px; }
     .hub-hero h2 { font-size: clamp(22px, 7vw, 28px); line-height: 1.05; letter-spacing: -.03em; }
+}
+
+/* Окно «Создать сервер»: название, иконка и «публичный». Боковая навигация,
+   цвет, описание, аватар, баннер и код входа доступны в настройках сервера
+   после создания (то же окно в режиме правки). */
+.server-create-simple .server-modal-sidebar,
+.server-create-simple .server-modal-kicker,
+.server-create-simple #serverBasicsCard > .settings-card-head,
+.server-create-simple .color-picker,
+.server-create-simple #serverDescriptionInput,
+.server-create-simple .server-assets {
+    display: none;
+}
+
+.server-create-simple .server-modal-shell {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+/* Подписи для разработчика («Basics», «create», «edit», «browse») — везде. */
+#serverModal .settings-card-head .settings-kicker,
+#serverModalModeNote {
+    display: none;
 }
 
 </style>
@@ -30553,6 +30575,9 @@ ZaliMixin(ZaliInterface, class {
         this.S.serverModal.activeSection = activeSection;
 
         if (grid) grid.classList.toggle('is-discover', isDiscover);
+        // Создание: одно окно из названия, иконки и «публичный»; остальное (цвет,
+        // описание, аватар, баннер, код, роли, каналы) доступно после создания.
+        document.getElementById('serverModal')?.classList.toggle('server-create-simple', !isEdit && !isDiscover);
         if (basicsCard) basicsCard.hidden = activeSection !== 'overview';
         if (channelsCard) channelsCard.hidden = activeSection !== 'channels';
         if (membersCard) membersCard.hidden = activeSection !== 'members';
@@ -30598,8 +30623,8 @@ ZaliMixin(ZaliInterface, class {
                 ? 'Выберите публичный сервер и войдите в него через меню без автодобавления в список.'
             : activeSection === 'roles'
                 ? 'Настройте роли и доступ перед созданием.'
-                : 'Настройте имя, оформление и доступ перед созданием.';
-        if (kicker) kicker.textContent = isEdit ? 'Settings' : isDiscover ? 'Discover' : 'Creation';
+                : 'Назовите сервер. Остальное можно настроить после создания.';
+        if (kicker) kicker.textContent = isEdit ? 'Настройки' : isDiscover ? 'Каталог' : 'Новый сервер';
         if (modeNote) modeNote.textContent = isEdit ? 'edit' : isDiscover ? 'browse' : 'create';
         if (saveBtn) {
             saveBtn.hidden = isDiscover;
@@ -33919,12 +33944,12 @@ ZaliMixin(ZaliInterface, class {
                     this.renegotiateVoicePeer(name).catch(() => {});
                 }
             };
+"""#,
+    #"""
             entry.pc.ontrack = (event) => {
                 const stream = event.streams?.[0] || new MediaStream([event.track]);
                 const track = event.track;
                 // A remote camera/screen toggle-off doesn't remove the track from the
-"""#,
-    #"""
                 // stream (browsers keep the transceiver, just mute it) — so the old
                 // code (trace-only) left the last frame frozen on screen forever, and
                 // a later toggle-on reused the same stream/track objects, which
@@ -37584,10 +37609,10 @@ ZaliMixin(ZaliInterface, class {
 
         const sub = isVoice
             ? 'Нажмите «Присоединиться», чтобы войти в канал'
-            : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
-        return `
 """#,
     #"""
+            : this.voice.status === 'connected' ? 'Собеседник поднял трубку' : this.voice.status === 'incoming' ? 'Входящий звонок' : this.voice.status === 'calling' ? 'Ожидание ответа' : this.voice.status === 'connecting' ? 'Соединяемся' : 'Голос готов';
+        return `
             <div class="voice-room-card ${activeRoom ? 'active' : ''} ${isVoice ? 'voice-channel' : ''}" data-voice-status="${this.esc(String(this.voice.status || 'idle'))}">
                 <div class="voice-room-top">
                     <div>
@@ -41813,13 +41838,13 @@ ZaliMixin(ZaliInterface, class {
             details.channelId || '',
         ].join('|');
         if (!this._reportedDecryptFailures) this._reportedDecryptFailures = new Set();
+"""#,
+    #"""
         if (key && this._reportedDecryptFailures.has(key)) return;
         if (key) {
             this._reportedDecryptFailures.add(key);
             // Bounded so a long-lived tab doesn't grow this forever.
             if (this._reportedDecryptFailures.size > 500) {
-"""#,
-    #"""
                 this._reportedDecryptFailures.delete(this._reportedDecryptFailures.values().next().value);
             }
         }
@@ -45802,14 +45827,14 @@ ZaliMixin(ZaliInterface, class {
         filter.connect(bus);
 
         const voicePartials = partials || [
+"""#,
+    #"""
             { ratio: 1, gain: 1, decay: 1 },
             { ratio: 2, gain: 0.42, decay: 0.62 },
             { ratio: 3, gain: 0.2, decay: 0.42 },
             { ratio: 4.16, gain: 0.11, decay: 0.28 },
             { ratio: 5.43, gain: 0.05, decay: 0.19 },
         ];
-"""#,
-    #"""
         for (const partial of voicePartials) {
             const osc = ctx.createOscillator();
             osc.type = 'sine';
@@ -49787,13 +49812,13 @@ ZaliMixin(ZaliInterface, class {
         if (!this.S.session?.token || this.S.session?.guest) return '';
         this._diagLastReportStatus = 0;
         if (!manual) {
+"""#,
+    #"""
             const last = (this._diagLastAutoReportAt || (this._diagLastAutoReportAt = {}))[kind] || 0;
             if (Date.now() - last < ZALI_DIAG_AUTO_INTERVAL_MS) return '';
             this._diagLastAutoReportAt[kind] = Date.now();
         }
         try {
-"""#,
-    #"""
             this.flushTrace?.();
             const body = this.fitDiagnosticReport(this.collectDiagnosticsSnapshot(kind, extra));
             const res = await this.apiFetch(this.apiRoutes.diagnostics.report, { method: 'POST', body });

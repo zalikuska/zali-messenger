@@ -226,6 +226,9 @@ ZaliMixin(ZaliInterface, class {
         this.S.serverModal.activeSection = activeSection;
 
         if (grid) grid.classList.toggle('is-discover', isDiscover);
+        // Создание: одно окно из названия, иконки и «публичный»; остальное (цвет,
+        // описание, аватар, баннер, код, роли, каналы) доступно после создания.
+        document.getElementById('serverModal')?.classList.toggle('server-create-simple', !isEdit && !isDiscover);
         if (basicsCard) basicsCard.hidden = activeSection !== 'overview';
         if (channelsCard) channelsCard.hidden = activeSection !== 'channels';
         if (membersCard) membersCard.hidden = activeSection !== 'members';
@@ -271,8 +274,8 @@ ZaliMixin(ZaliInterface, class {
                 ? 'Выберите публичный сервер и войдите в него через меню без автодобавления в список.'
             : activeSection === 'roles'
                 ? 'Настройте роли и доступ перед созданием.'
-                : 'Настройте имя, оформление и доступ перед созданием.';
-        if (kicker) kicker.textContent = isEdit ? 'Settings' : isDiscover ? 'Discover' : 'Creation';
+                : 'Назовите сервер. Остальное можно настроить после создания.';
+        if (kicker) kicker.textContent = isEdit ? 'Настройки' : isDiscover ? 'Каталог' : 'Новый сервер';
         if (modeNote) modeNote.textContent = isEdit ? 'edit' : isDiscover ? 'browse' : 'create';
         if (saveBtn) {
             saveBtn.hidden = isDiscover;

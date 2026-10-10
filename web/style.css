@@ -15093,7 +15093,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
    телефона; у остальных иконка (смысл — в title и aria-label). */
 .hub-segment-label { display: none; }
 
-.hub-segment-btn.active { flex-grow: 2.4; gap: 6px; }
+.hub-segment-btn.active { flex-grow: 4.6; gap: 6px; padding: 0 6px; }
 
 .hub-segment-btn.active .hub-segment-label {
     display: inline;
@@ -15140,4 +15140,26 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     .hub-orb { display: none; }
     .hub-hero { grid-template-columns: minmax(0, 1fr); padding: 18px; }
     .hub-hero h2 { font-size: clamp(22px, 7vw, 28px); line-height: 1.05; letter-spacing: -.03em; }
+}
+
+/* Окно «Создать сервер»: название, иконка и «публичный». Боковая навигация,
+   цвет, описание, аватар, баннер и код входа доступны в настройках сервера
+   после создания (то же окно в режиме правки). */
+.server-create-simple .server-modal-sidebar,
+.server-create-simple .server-modal-kicker,
+.server-create-simple #serverBasicsCard > .settings-card-head,
+.server-create-simple .color-picker,
+.server-create-simple #serverDescriptionInput,
+.server-create-simple .server-assets {
+    display: none;
+}
+
+.server-create-simple .server-modal-shell {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+/* Подписи для разработчика («Basics», «create», «edit», «browse») — везде. */
+#serverModal .settings-card-head .settings-kicker,
+#serverModalModeNote {
+    display: none;
 }
