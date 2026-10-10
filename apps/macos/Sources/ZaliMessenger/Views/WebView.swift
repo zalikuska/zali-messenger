@@ -2299,6 +2299,10 @@ struct WebView {
             "windowDrag": true,
             "apiRequest": true,
             "appUpdate": true,
+            // Мост закрыт от вложенных фреймов: все user-скрипты forMainFrameOnly,
+            // userContentController(didReceive:) отбрасывает !isMainFrame — веб
+            // может запускать песочницу аддонов (web/src/interface/addons*.js).
+            "addonFrames": true,
         ]
         let nativeCapsBootstrap = "window.__ZALI_NATIVE_CAPS__ = \(WebView.javascriptLiteral(nativeCapabilities));"
         config.userContentController.addUserScript(WKUserScript(source: nativeCapsBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))

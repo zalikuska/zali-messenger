@@ -35314,6 +35314,29 @@ ZaliMixin(ZaliInterface, class {
 (function() {
     'use strict';
 
+    // Секрет моста на этот запуск. Мост (window.ipc, ZaliAndroidBridge) виден
+    // ЛЮБОМУ фрейму вебвью, в том числе песочнице аддона (interface/addons*.js),
+    // поэтому Windows/WRY и Android принимают только сообщения с этим полем.
+    // Оболочка кладёт его document-start скриптом только в верхний фрейм; здесь он
+    // уходит в замыкание и пропадает из window — дочерний фрейм с opaque-origin до
+    // замыкания родителя не дотянется. macOS Swift вместо этого проверяет
+    // isMainFrame и поле игнорирует.
+    const bridgeNonce = window.top === window && typeof window.__ZALI_BRIDGE_NONCE__ === 'string'
+        ? window.__ZALI_BRIDGE_NONCE__
+        : '';
+    try { delete window.__ZALI_BRIDGE_NONCE__; } catch (e) { /* не наше свойство — оставляем */ }
+
+    function serializeWithNonce(payload) {
+        let message = payload;
+        if (typeof payload === 'string') {
+            try { message = JSON.parse(payload); } catch (e) { return payload; }
+        }
+        if (!bridgeNonce || !message || typeof message !== 'object' || Array.isArray(message)) {
+            return typeof payload === 'string' ? payload : JSON.stringify(payload);
+        }
+        return JSON.stringify({ ...message, bridgeNonce });
+    }
+
     function createNativeBridge() {
         const macBridge = window.webkit?.messageHandlers?.nativeApp || null;
         const wryBridge = window.ipc?.postMessage ? window.ipc : null;
@@ -35336,8 +35359,7 @@ ZaliMixin(ZaliInterface, class {
                 ? {
                     kind: 'ipc',
                     postMessage(payload) {
-                        const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                        wryBridge.postMessage(data);
+                        wryBridge.postMessage(serializeWithNonce(payload));
                         return true;
                     },
                 }
@@ -35345,8 +35367,7 @@ ZaliMixin(ZaliInterface, class {
                     ? {
                         kind: 'webview2',
                         postMessage(payload) {
-                            const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                            webView2Bridge.postMessage(data);
+                            webView2Bridge.postMessage(serializeWithNonce(payload));
                             return true;
                         },
                     }
@@ -35354,8 +35375,7 @@ ZaliMixin(ZaliInterface, class {
                         ? {
                             kind: 'android',
                             postMessage(payload) {
-                                const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-                                androidBridge.postMessage(data);
+                                androidBridge.postMessage(serializeWithNonce(payload));
                                 return true;
                             },
                         }

@@ -86,4 +86,48 @@ section('Windows / macOS Rust shell (WRY, apps/windows)');
         /install_media_capture_policy/.test(src));
 }
 
+// Песочница аддонов — `<iframe sandbox>` ВНУТРИ того же вебвью. Origin pin её не
+// касается (srcdoc собирает сам верхний фрейм), поэтому мост и document-start
+// скрипты (токен сессии, ключи переписок, приватный ключ устройства) должны быть
+// недоступны дочерним фреймам сами по себе. Оболочка, где это сделано, объявляет
+// capability `addonFrames`; без неё веб аддоны не запускает.
+section('Frame isolation (addon sandbox)');
+{
+    const mac = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Views/WebView.swift'));
+    const userScripts = (mac.match(/addUserScript\(/g) || []).length;
+    const mainOnly = (mac.match(/forMainFrameOnly: true/g) || []).length;
+    record('macOS: every document-start script is main-frame only',
+        userScripts > 0 && mainOnly >= userScripts && !/forMainFrameOnly: false/.test(mac));
+    record('macOS: advertises addonFrames', /"addonFrames": true/.test(mac));
+
+    const bridge = stripLineComments(read('apps/android/app/src/main/java/org/zalikus/messenger/NativeBridge.kt'));
+    record('Android: document-start script bails out in subframes',
+        /fun documentStartScript\(\)[\s\S]{0,4000}?if \(window\.top !== window\) return;[\s\S]{0,400}?__ZALI_BRIDGE_NONCE__/.test(bridge),
+        'addDocumentStartJavaScript(…, setOf("*")) runs it in every frame');
+    record('Android: postMessage rejects calls without the bridge nonce',
+        /fun postMessage\(json: String\)[\s\S]{0,300}?bridgeNonceMatches\(/.test(bridge),
+        'addJavascriptInterface hands ZaliAndroidBridge to every frame');
+    record('Android: nonce comes from SecureRandom', /bridgeNonce[\s\S]{0,120}?SecureRandom/.test(bridge));
+    record('Android: advertises addonFrames', /addonFrames: true/.test(bridge));
+
+    const wryMain = stripLineComments(read('apps/windows/src/main.rs'));
+    const wryNative = stripLineComments(read('apps/windows/src/native.rs'));
+    const guard = stripLineComments(read('apps/windows/src/native/frame_guard.rs'));
+    record('WRY: init script is wrapped in the top-frame guard',
+        /let init_script = \{[\s\S]{0,1600}?top_frame_only_script\(/.test(wryMain),
+        'WebView2 runs AddScriptToExecuteOnDocumentCreated in child frames too');
+    record('WRY: guard checks window.top before exposing anything',
+        /fn top_frame_only_script[\s\S]{0,400}?window\.top !== window/.test(guard));
+    record('WRY: IPC rejects messages without the bridge nonce',
+        /pub fn handle_ipc_message[\s\S]{0,600}?bridge_nonce_matches\(&payload\)[\s\S]{0,200}?return;/.test(wryNative));
+    record('WRY: advertises addonFrames', /addon_frames: true/.test(wryNative));
+
+    const boot = stripLineComments(read('web/src/bootstrap.js'));
+    record('web: the nonce is read only in the top frame and removed from window',
+        /window\.top === window && typeof window\.__ZALI_BRIDGE_NONCE__/.test(boot)
+        && /delete window\.__ZALI_BRIDGE_NONCE__/.test(boot));
+    record('web: string transports send the nonce',
+        (boot.match(/postMessage\(serializeWithNonce\(payload\)\)/g) || []).length >= 3);
+}
+
 finish('native shells');

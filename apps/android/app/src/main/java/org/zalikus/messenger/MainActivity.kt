@@ -499,6 +499,9 @@ class MainActivity : ComponentActivity() {
                                 ): Boolean {
                                     val url = request.url ?: return true
                                     if (isBundledOrigin(url.toString())) return false
+                                    // Песочница аддона: `<iframe srcdoc>` — документ
+                                    // собирает сам верхний фрейм, грузить нечего.
+                                    if (!request.isForMainFrame && url.toString() == "about:srcdoc") return false
                                     when (url.scheme?.lowercase()) {
                                         "http", "https", "mailto", "tel" -> openExternally(url)
                                     }

@@ -57,6 +57,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * Секрет моста на жизнь этого вебвью. `addJavascriptInterface` отдаёт
+     * `ZaliAndroidBridge` КАЖДОМУ фрейму, включая песочницу аддона
+     * (`web/src/interface/addons*.js`), и не говорит, из какого фрейма пришёл
+     * вызов. Поэтому [postMessage] принимает только сообщения с этим полем:
+     * [documentStartScript] кладёт его в верхний фрейм, `bootstrap.js` прячет в
+     * замыкание. То же самое у Windows/WRY (`native/frame_guard.rs`); macOS Swift
+     * проверяет `isMainFrame`.
+     */
+    private val bridgeNonce: String = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        .joinToString("") { "%02x".format(it) }
+
+    private fun bridgeNonceMatches(value: String): Boolean =
+        java.security.MessageDigest.isEqual(value.toByteArray(Charsets.UTF_8), bridgeNonce.toByteArray(Charsets.UTF_8))
+
     /** Matches the JS default in `Web/index.html`'s server-address field. */
     @Volatile
     private var apiBaseUrl = "https://msgs.zalikus.org"
@@ -214,6 +229,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         } else ""
         return """
         (function () {
+          // addDocumentStartJavaScript(…, setOf("*")) выполняет это и во вложенных
+          // фреймах — в песочнице аддона. Ключи, личность устройства и секрет моста
+          // — только верхнему фрейму.
+          if (window.top !== window) return;
+          window.__ZALI_BRIDGE_NONCE__ = ${JSONObject.quote(bridgeNonce)};
           $injectedForUserLine
           $identityLine
           $conversationKeysLine
@@ -244,7 +264,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             screenCapture: true,
             mobileNav: true,
             // Снятие устройства с FCM-пушей при выходе (web_push.js, unregisterNativePushDevice).
-            pushDevice: true
+            pushDevice: true,
+            // Мост закрыт от вложенных фреймов (bridgeNonce + проверка верхнего
+            // фрейма выше) — веб может запускать песочницу аддонов.
+            addonFrames: true
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
@@ -283,6 +306,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     @JavascriptInterface
     fun postMessage(json: String) {
         val dict = try { JSONObject(json) } catch (e: Exception) { return }
+        // Только наш верхний фрейм — см. [bridgeNonce].
+        if (!bridgeNonceMatches(dict.optString("bridgeNonce", ""))) return
         when (dict.optString("type", "")) {
             "NETWORK_CONFIG" -> {
                 val base = dict.optString("apiBaseUrl", "")

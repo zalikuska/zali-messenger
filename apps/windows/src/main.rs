@@ -494,9 +494,11 @@ fn main() -> wry::Result<()> {
         // getUserMedia). Уходит в trace-лог шелла через ветку "IPC unknown type"
         // в handle_ipc_message — без расширения bridge-протокола.
         script.push_str(
-            "\n;try{window.ipc&&window.ipc.postMessage(JSON.stringify({type:'DIAG_ENV;secure='+window.isSecureContext+';mediaDevices='+!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)+';subtle='+!!(window.crypto&&window.crypto.subtle)+';rtc='+(typeof RTCPeerConnection!=='undefined')}));}catch(e){}",
+            "\n;try{window.ipc&&window.ipc.postMessage(JSON.stringify({type:'DIAG_ENV;secure='+window.isSecureContext+';mediaDevices='+!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)+';subtle='+!!(window.crypto&&window.crypto.subtle)+';rtc='+(typeof RTCPeerConnection!=='undefined'),bridgeNonce:window.__ZALI_BRIDGE_NONCE__}));}catch(e){}",
         );
-        script
+        // WebView2 выполняет init-скрипты и во вложенных фреймах (песочница
+        // аддона) — всё выше только для верхнего фрейма, см. native/frame_guard.rs.
+        native::top_frame_only_script(&script)
     };
 
     let event_loop = tao::event_loop::EventLoopBuilder::<AppEvent>::with_user_event().build();

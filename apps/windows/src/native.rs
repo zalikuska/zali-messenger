@@ -16,6 +16,8 @@ mod autostart;
 pub(crate) use autostart::*;
 mod cache;
 pub(crate) use cache::*;
+mod frame_guard;
+pub(crate) use frame_guard::*;
 mod http;
 pub(crate) use http::*;
 mod keyring;
@@ -44,7 +46,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2a49.12";
+const APP_DISPLAY_VERSION: &str = "0.2a49.13";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -275,6 +277,10 @@ struct NativeCapabilities {
     /// Windows-only: «Запускать при входе в Windows» свёрнутым в трей (see
     /// native/autostart.rs). Elsewhere there is no tray to start into.
     autostart: bool,
+    /// Мост изолирован от вложенных фреймов (native/frame_guard.rs): init-скрипт
+    /// только в верхнем фрейме, сообщения только с `bridgeNonce`. Без этого
+    /// веб не запускает песочницу аддонов.
+    addon_frames: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -299,6 +305,7 @@ impl Default for NativeCapabilities {
             taskbar_badge: cfg!(target_os = "windows"),
             window_controls: cfg!(target_os = "windows"),
             autostart: cfg!(target_os = "windows"),
+            addon_frames: true,
         }
     }
 }
@@ -1012,6 +1019,12 @@ pub fn handle_ipc_message(
     let Some(payload) = parsed else {
         return;
     };
+
+    // Только наш верхний фрейм: см. native/frame_guard.rs.
+    if !bridge_nonce_matches(&payload) {
+        trace("IPC rejected: missing or wrong bridgeNonce");
+        return;
+    }
 
     let Some(kind_name) = payload.get("type").and_then(Value::as_str) else {
         return;

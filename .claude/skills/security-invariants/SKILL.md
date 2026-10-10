@@ -39,6 +39,26 @@ description: Секьюрити-инварианты — origin pin нативн
 origin, на Android — ещё и по списку ресурсов (было `request.grant(request.resources)`
 — выдавал что попросят и кому попросят).
 
+## Вложенные фреймы: мост и document-start только верхнему
+
+Origin pin не защищает от фрейма, который собирает сам UI: песочница аддона —
+`<iframe sandbox="allow-scripts" srcdoc>` внутри того же вебвью. Мост виден и ей,
+а WebView2 (`with_initialization_script`) и Android
+(`addDocumentStartJavaScript(…, setOf("*"))`) выполняют document-start скрипты во
+**всех** фреймах — а они кладут в `window` токен сессии, ключи переписок и
+приватный ключ устройства. Поэтому (с 0.2a49.13):
+
+| Шелл | Как |
+|---|---|
+| macOS Swift | все `WKUserScript` с `forMainFrameOnly: true`, хендлер отбрасывает `!isMainFrame` |
+| Windows/WRY | init-скрипт завёрнут `top_frame_only_script` (`native/frame_guard.rs`), `handle_ipc_message` требует `bridgeNonce` |
+| Android | `documentStartScript()` выходит при `window.top !== window`, `postMessage` требует `bridgeNonce` |
+| веб | `bootstrap.js` забирает `__ZALI_BRIDGE_NONCE__` в замыкание, удаляет из `window` и шлёт в каждом сообщении |
+
+Шелл, где это сделано, объявляет capability `addonFrames`; без неё веб аддоны не
+запускает. iOS её не объявляет (хендлер там `isMainFrame` не проверяет).
+Проверяет `security_doctor`, раздел «Frame isolation».
+
 ## Учётные данные
 
 - **JWT не принимается из query-строки.** Query попадает в логи обратного
