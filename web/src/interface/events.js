@@ -732,7 +732,7 @@ ZaliMixin(ZaliInterface, class {
             hubSegmentNav.addEventListener('click', (e) => {
                 const btn = e.target.closest('[data-hub-segment]');
                 if (!btn) return;
-                this.handleHubSegment(btn.getAttribute('data-hub-segment'));
+                this.selectHubSegment(btn.getAttribute('data-hub-segment'));
             });
         }
 
@@ -1517,7 +1517,7 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const card = e.target.closest('[data-hub-segment]');
                 if (!card) return;
-                this.handleHubSegment(card.getAttribute('data-hub-segment'));
+                this.selectHubSegment(card.getAttribute('data-hub-segment'));
             });
         }
         if (networkConfigSaveBtn) {

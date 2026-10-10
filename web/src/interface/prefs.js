@@ -629,12 +629,11 @@ ZaliMixin(ZaliInterface, class {
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
                 ${this.hubSegmentIcon(item.id)}
-                <span class="hub-segment-label">${this.esc(item.label)}</span>
                 <span class="hub-segment-badge" hidden></span>
             </button>
         `).join('');
         nav.dataset.segmentSignature = signature;
-        this.syncHubSegmentIndicator(null);
+        this.syncHubSegmentIndicator();
         this.syncHubSegmentBadges();
     }
 
@@ -683,73 +682,76 @@ ZaliMixin(ZaliInterface, class {
         if (!nav) return;
         const previousActive = nav.querySelector('.hub-segment-btn.active');
         // Активный сегмент не сменился (переход между личками, входящее
-        // сообщение): кнопки трогать незачем, а чтение offsetLeft ниже —
-        // принудительная синхронная раскладка документа, который вызывающий
-        // только что поменял (switchChat → setNavMode). Сверка индикатора с
-        // положением кнопки откладывается в кадр, где раскладка и так будет.
+        // сообщение): кнопки трогать незачем. Сверка индикатора с положением
+        // кнопки (сменилась ширина окна) откладывается в кадр: чтение
+        // offsetLeft — принудительная раскладка документа, который вызывающий
+        // только что поменял (switchChat → setNavMode).
         if (previousActive && String(previousActive.getAttribute('data-hub-segment') || '') === active) {
-            if (!this._hubIndicatorSyncRaf) {
-                this._hubIndicatorSyncRaf = requestAnimationFrame(() => {
-                    this._hubIndicatorSyncRaf = 0;
-                    this.resyncHubSegmentIndicator();
-                });
-            }
+            this.scheduleHubSegmentIndicator(false);
             return;
         }
-        const previousPosition = previousActive
-            ? {
-                x: previousActive.offsetLeft,
-                width: previousActive.offsetWidth,
-            }
-            : null;
         nav.querySelectorAll('.hub-segment-btn').forEach(btn => {
             const isActive = String(btn.getAttribute('data-hub-segment') || '') === active;
             btn.classList.toggle('active', isActive);
             btn.setAttribute('aria-pressed', String(isActive));
         });
-        this.syncHubSegmentIndicator(previousPosition);
+        this.scheduleHubSegmentIndicator(true);
     }
 
-    syncHubSegmentIndicator(previousPosition = null) {
+    // Одна отложенная в кадр сверка индикатора на все вызовы. Раньше «просто
+    // сверить» (без анимации) и «переехать» (с анимацией) были двумя разными
+    // rAF-колбэками: при переходе из Хаба/ZaliCoin/Настроек в ЛС или Сервера
+    // первым в кадре срабатывал «просто сверить» и ставил индикатор на место
+    // мгновенно, а «переехать» затем ехал уже из точки назначения — анимации не
+    // было. Теперь запросы сливаются, и если хоть один просил анимацию, она будет.
+    scheduleHubSegmentIndicator(animate) {
+        this._hubIndicatorAnimate = !!(this._hubIndicatorAnimate || animate);
+        if (this._hubIndicatorRaf) return;
+        this._hubIndicatorRaf = requestAnimationFrame(() => {
+            this._hubIndicatorRaf = 0;
+            const animateNow = this._hubIndicatorAnimate;
+            this._hubIndicatorAnimate = false;
+            this.syncHubSegmentIndicator({ animate: animateNow });
+        });
+    }
+
+    // Ставит индикатор под активную кнопку; ничего не делает, если он уже там
+    // (или едет туда: мгновенная пересинхронизация оборвала бы идущий переезд).
+    syncHubSegmentIndicator({ animate = false } = {}) {
         const nav = document.getElementById('hubSegmentNav');
         const indicator = nav?.querySelector('.hub-segment-indicator');
         const activeBtn = nav?.querySelector('.hub-segment-btn.active');
         if (!nav || !indicator || !activeBtn) return;
-        const applyTarget = (withTransition = true) => {
-            if (withTransition) indicator.style.transition = '';
-            indicator.style.width = `${activeBtn.offsetWidth}px`;
-            indicator.style.transform = `translate3d(${activeBtn.offsetLeft}px, 0, 0)`;
-            indicator.dataset.target = `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`;
-        };
-        const samePosition = previousPosition
-            && Math.abs(Number(previousPosition.x || 0) - activeBtn.offsetLeft) < 0.5
-            && Math.abs(Number(previousPosition.width || 0) - activeBtn.offsetWidth) < 0.5;
-        if (samePosition) {
-            return;
-        }
-        if (previousPosition) {
-            indicator.getBoundingClientRect();
-            requestAnimationFrame(() => applyTarget(true));
-        } else {
-            indicator.style.transition = 'none';
-            applyTarget(false);
+        const target = `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`;
+        if (indicator.dataset.target === target) return;
+        const animated = animate && !!indicator.dataset.target;
+        indicator.style.transition = animated ? '' : 'none';
+        indicator.style.width = `${activeBtn.offsetWidth}px`;
+        indicator.style.transform = `translate3d(${activeBtn.offsetLeft}px, 0, 0)`;
+        indicator.dataset.target = target;
+        if (!animated) {
             requestAnimationFrame(() => {
-                indicator.style.transition = '';
+                if (indicator.dataset.target === target) indicator.style.transition = '';
             });
         }
     }
 
-    // Индикатор уже стоит (или едет) туда, где активная кнопка, — ничего не
-    // делать: мгновенная пересинхронизация оборвала бы идущий переезд. Иначе
-    // (кнопка сдвинулась — сменилась ширина окна, набор сегментов) — поставить
-    // на место без анимации.
-    resyncHubSegmentIndicator() {
-        const nav = document.getElementById('hubSegmentNav');
-        const indicator = nav?.querySelector('.hub-segment-indicator');
-        const activeBtn = nav?.querySelector('.hub-segment-btn.active');
-        if (!indicator || !activeBtn) return;
-        if (indicator.dataset.target === `${activeBtn.offsetLeft}:${activeBtn.offsetWidth}`) return;
-        this.syncHubSegmentIndicator(null);
+    // Клик по сегменту: индикатор трогается сразу, в этом же кадре, а тяжёлая
+    // перерисовка экрана (списки, настройки, кеш) откладывается на кадр позже.
+    // Раньше она шла синхронно в обработчике клика и держала главный поток, пока
+    // индикатор ещё не тронулся: отсюда «подлагивание» переключения. Переезд —
+    // transform-переход, после старта он идёт в композиторе и не зависит от
+    // главного потока.
+    selectHubSegment(segmentId) {
+        const id = String(segmentId || '').trim();
+        if (!id) return;
+        clearTimeout(this._hubSegmentDeferTimer);
+        cancelAnimationFrame(this._hubSegmentDeferRaf);
+        this.updateHubSegmentNavActive(id);
+        // rAF → setTimeout: обработчик стартует после кадра, в котором индикатор уже поехал.
+        this._hubSegmentDeferRaf = requestAnimationFrame(() => {
+            this._hubSegmentDeferTimer = setTimeout(() => this.handleHubSegment(id), 0);
+        });
     }
 
     renderUiV2Settings() {

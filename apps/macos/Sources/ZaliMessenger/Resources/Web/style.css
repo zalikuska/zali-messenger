@@ -640,6 +640,7 @@ body[data-ui-v2="off"] #mobileHubBtn {
         0 10px 24px rgba(var(--accent-rgb), .24),
         inset 0 1px 0 rgba(255,255,255,.34);
     pointer-events: none;
+    will-change: transform;
     transform: translate3d(4px, 0, 0);
     transition: transform .58s cubic-bezier(.22, .61, .36, 1), width .28s var(--ease-out), box-shadow .28s var(--ease-out);
 }
@@ -15088,23 +15089,6 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 /* «sync» рядом с аватаром — пометка для разработчика. */
 #avatarTargetLabel { display: none; }
-
-/* Сегменты главной навигации: у активного — иконка и слово, как в нижнем доке
-   телефона; у остальных иконка (смысл — в title и aria-label). */
-.hub-segment-label { display: none; }
-
-.hub-segment-btn.active { flex-grow: 4.6; gap: 6px; padding: 0 6px; }
-
-.hub-segment-btn.active .hub-segment-label {
-    display: inline;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12px;
-    font-weight: 900;
-    letter-spacing: .04em;
-}
 
 /* Карточки Хаба: ссылка внизу выглядит кнопкой со стрелкой, а не подписью. */
 .hub-card em.hub-card-action {
