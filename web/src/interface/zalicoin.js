@@ -124,12 +124,12 @@ ZaliMixin(ZaliInterface, class {
                 if (shareText === '100.0') shareText = '>99.9';
                 if (shareText === '0.0') shareText = '<0.1';
             }
-            balanceShare.textContent = `${shareText}% от эмиссии`;
+            balanceShare.textContent = `${shareText}% от всей эмиссии`;
         }
         const heldValue = document.getElementById('zaliCoinHeldValue');
         if (heldValue) {
             const held = Math.max(0, Number(this.S.zaliCoinHeld) || 0);
-            heldValue.textContent = `На удержании ${held.toLocaleString('ru-RU')} ZC`;
+            heldValue.textContent = `${held.toLocaleString('ru-RU')} ZC на удержании`;
             heldValue.hidden = held <= 0;
         }
 
@@ -176,10 +176,10 @@ ZaliMixin(ZaliInterface, class {
         if (legend) {
             legend.innerHTML = segments.map(seg => {
                 const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
-                return `<div class="zc-legend-item">
+                return `<div class="zc-legend-item${seg.isMe ? ' is-me' : ''}">
                     <span class="zc-legend-swatch" style="background:${seg.color}"></span>
-                    <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? ' (вы)' : ''}</span>
-                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} · ${pct.toFixed(1)}%</span>
+                    <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? '<span class="zc-legend-me">вы</span>' : ''}</span>
+                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} ZC<span class="zc-legend-pct">${pct.toFixed(1)}%</span></span>
                 </div>`;
             }).join('') || '<div class="zc-legend-empty">Пока никто не держит ZaliCoin</div>';
         }
@@ -234,12 +234,14 @@ ZaliMixin(ZaliInterface, class {
         const total = document.getElementById('zaliCoinPayoutsTotal');
         if (!list) return;
         const payouts = Array.isArray(this.S.zaliCoinServerPayouts) ? this.S.zaliCoinServerPayouts : [];
+        // Пустой раздел уходит под распределение: сверху — то, что требует внимания.
+        document.getElementById('zaliCoinPayoutsCard')?.classList.toggle('is-empty', !payouts.length);
         if (total) {
             const sum = payouts.reduce((acc, payout) => acc + (Number(payout.amount) || 0), 0);
             total.textContent = sum > 0 ? `+${this.formatCoinAmount(sum)} ZC` : '';
         }
         if (!payouts.length) {
-            list.innerHTML = '<div class="zc-payouts-empty">Серверы пока ничего вам не перечисляли. Выплаты из казны сервера появятся здесь.</div>';
+            list.innerHTML = '<div class="zc-payouts-empty">Пока пусто. Выплаты из казны серверов появятся здесь.</div>';
             return;
         }
         list.innerHTML = payouts.map(payout => {
@@ -310,6 +312,7 @@ ZaliMixin(ZaliInterface, class {
         if (!modal) return;
         const isGift = mode === 'gift';
         this._coinModal = { mode, serverId, channelId, fromWallet: !isGift && !recipient };
+        this._coinModalOpener = document.activeElement;
         this._coinTransferIdempotencyKey = this.zaliCoinNewIdempotencyKey();
         // clientId будущей карточки перевода. Живёт в паре с ключом: повтор того же
         // перевода обязан сослаться на ту же карточку, иначе сервер вернёт перевод,
@@ -319,41 +322,72 @@ ZaliMixin(ZaliInterface, class {
         // submitCoinTransfer, which rotates it whenever the payload changes.
         this._coinTransferLastPayload = '';
         this._coinTransferInFlight = false;
+        this._coinModalFresh = false;
         const title = document.getElementById('coinTransferTitle');
+        const target = document.getElementById('coinGiftTarget');
         const recipientField = document.getElementById('coinTransferRecipientField');
         const recipientInput = document.getElementById('coinTransferRecipientInput');
+        const contacts = document.getElementById('coinTransferContacts');
         const amountLabel = document.getElementById('coinTransferAmountLabel');
         const amountInput = document.getElementById('coinTransferAmountInput');
         const claimsField = document.getElementById('coinGiftClaimsField');
         const claimsInput = document.getElementById('coinGiftClaimsInput');
-        const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const status = document.getElementById('coinTransferStatus');
-        if (title) title.textContent = isGift ? 'ZaliCoin-карточка' : 'Перевести ZaliCoin';
+        if (title) title.textContent = isGift ? 'Отправить карточку' : 'Перевести ZaliCoin';
+        if (target) {
+            target.hidden = !isGift;
+            target.textContent = isGift
+                ? `Карточка появится в канале: ${this.coinGiftChannelLabel({ serverId, channelId })}`
+                : '';
+        }
         if (recipientField) recipientField.hidden = isGift;
         if (recipientInput) {
             recipientInput.value = recipient || '';
-            recipientInput.disabled = !!recipient;
+            // readOnly, а не disabled: значение видно, его можно выделить, а
+            // «заблокированное» поле не выпадает из чтения экранным диктором.
+            recipientInput.readOnly = !!recipient;
+            recipientInput.classList.toggle('is-locked', !!recipient);
         }
-        if (amountLabel) amountLabel.textContent = isGift ? 'Сумма на одного (ZC)' : 'Сумма (ZC)';
+        if (contacts) {
+            const me = this.myName();
+            contacts.innerHTML = recipient ? '' : (this.S.contacts || [])
+                .filter(name => name && name !== me)
+                .map(name => `<option value="${this.esc(name)}"></option>`)
+                .join('');
+        }
+        if (amountLabel) amountLabel.textContent = isGift ? 'Сумма каждому' : 'Сумма';
         if (amountInput) amountInput.value = '';
         if (claimsField) claimsField.hidden = !isGift;
         if (claimsInput) {
             claimsInput.value = '1';
             claimsInput.max = String(ZaliInterface.COIN_GIFT_MAX_CLAIMS);
         }
-        if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.textContent = isGift ? 'Отправить карточку' : 'Отправить';
-        }
         if (status) { status.textContent = ''; status.hidden = true; }
-        this.updateCoinGiftSummary();
+        this.updateCoinModalSummary();
         modal.hidden = false;
         (isGift || recipient ? amountInput : recipientInput)?.focus();
+        // Баланс на экране мог устареть (его грузит только вкладка ZaliCoin).
+        // Показываем, что есть, и уточняем; блокировать отправку по нему можно
+        // только после свежего ответа.
+        const ctx = this._coinModal;
+        void this.loadZaliCoinBalance().then(() => {
+            if (this._coinModal !== ctx || modal.hidden) return;
+            this._coinModalFresh = true;
+            this.updateCoinModalSummary();
+        });
     }
 
     closeCoinTransferModal() {
         const modal = document.getElementById('coinTransferModal');
         if (modal) modal.hidden = true;
+        const opener = this._coinModalOpener;
+        this._coinModalOpener = null;
+        if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+    }
+
+    coinModalOpen() {
+        const modal = document.getElementById('coinTransferModal');
+        return !!modal && !modal.hidden;
     }
 
     coinGiftClaimsValue() {
@@ -366,29 +400,94 @@ ZaliMixin(ZaliInterface, class {
         const input = document.getElementById('coinGiftClaimsInput');
         if (!input) return;
         input.value = String(Math.min(ZaliInterface.COIN_GIFT_MAX_CLAIMS, Math.max(1, this.coinGiftClaimsValue() + delta)));
-        this.updateCoinGiftSummary();
+        this.updateCoinModalSummary();
     }
 
-    updateCoinGiftSummary() {
+    /** Сколько ZC можно вписать в «Сумму»: для карточки — на одного, чтобы всё влезло. */
+    coinModalMaxAmount() {
+        const balance = Math.max(0, Math.trunc(Number(this.S.zaliCoinBalance)));
+        if (!Number.isFinite(balance)) return 0;
+        return this._coinModal?.mode === 'gift' ? Math.floor(balance / this.coinGiftClaimsValue()) : balance;
+    }
+
+    fillCoinModalMax() {
+        const amountInput = document.getElementById('coinTransferAmountInput');
+        if (!amountInput) return;
+        const max = this.coinModalMaxAmount();
+        amountInput.value = max > 0 ? String(max) : '';
+        this.updateCoinModalSummary();
+        amountInput.focus();
+    }
+
+    /**
+     * Всё, что в окне зависит от введённого: «Доступно», итог, подпись и
+     * доступность кнопки. Вызывается на каждый ввод и при открытии.
+     */
+    updateCoinModalSummary() {
+        const ctx = this._coinModal;
         const summary = document.getElementById('coinGiftSummary');
-        if (!summary) return;
-        if (this._coinModal?.mode !== 'gift') {
-            summary.hidden = true;
-            return;
-        }
+        const available = document.getElementById('coinTransferAvailable');
+        if (!ctx || !summary) return;
+        const isGift = ctx.mode === 'gift';
+        const rawBalance = this.S.zaliCoinBalance;
+        const known = rawBalance !== undefined && rawBalance !== null && Number.isFinite(Number(rawBalance));
+        const balance = known ? Math.max(0, Math.trunc(Number(rawBalance))) : 0;
         const amount = Math.trunc(Number(document.getElementById('coinTransferAmountInput')?.value));
-        const claims = this.coinGiftClaimsValue();
-        const people = this.coinPlural(claims, ['человек', 'человека', 'человек']);
-        if (!Number.isFinite(amount) || amount <= 0) {
-            summary.textContent = claims > 1
-                ? `Карточку смогут получить ${claims} ${people} — по одному разу на аккаунт.`
-                : 'Карточку сможет получить один человек.';
-        } else if (claims > 1) {
-            summary.textContent = `Каждый из ${claims} получит ${this.formatCoinAmount(amount)} ZC. На удержание уйдёт ${this.formatCoinAmount(amount * claims)} ZC — неполученное вернётся, если отменить карточку.`;
-        } else {
-            summary.textContent = `На удержание уйдёт ${this.formatCoinAmount(amount)} ZC — они вернутся, если отменить карточку до того, как её получат.`;
+        const claims = isGift ? this.coinGiftClaimsValue() : 1;
+        const valid = Number.isFinite(amount) && amount > 0;
+        const total = valid ? amount * claims : 0;
+        if (available) available.textContent = known ? `Доступно: ${this.formatCoinAmount(balance)} ZC` : 'Доступно: …';
+        const maxBtn = document.getElementById('coinTransferMaxBtn');
+        if (maxBtn) maxBtn.disabled = known && this.coinModalMaxAmount() <= 0;
+
+        // Блокируем только по свежему балансу: устаревшее число не должно
+        // запретить перевод, на который монет на самом деле хватает.
+        const short = valid && known && this._coinModalFresh && total > balance;
+        this._coinModalBlocked = short;
+
+        const row = (label, value, strong = false) =>
+            `<div class="zc-sum-row${strong ? ' is-strong' : ''}"><span>${this.esc(label)}</span><span>${this.esc(value)}</span></div>`;
+        let html = '';
+        let tone = '';
+        if (short) {
+            tone = 'is-error';
+            html = `<div class="zc-sum-note">Не хватает ${this.esc(this.formatCoinAmount(total - balance))} ZC: нужно ${this.esc(this.formatCoinAmount(total))}, на балансе ${this.esc(this.formatCoinAmount(balance))}.</div>`;
+        } else if (isGift) {
+            if (!valid) {
+                const people = this.coinPlural(claims, ['человек', 'человека', 'человек']);
+                html = `<div class="zc-sum-note">${claims > 1 ? `Карточку смогут получить ${claims} ${people}` : 'Карточку сможет получить один человек'} — по одному разу на аккаунт.</div>`;
+            } else {
+                html = (claims > 1 ? row('Каждый получит', `${this.formatCoinAmount(amount)} ZC`) : '')
+                    + row('Уйдёт на удержание', `${this.formatCoinAmount(total)} ZC`, true)
+                    + '<div class="zc-sum-note">Неполученное вернётся, если отменить карточку.</div>';
+            }
+        } else if (valid && known) {
+            html = row('Останется на балансе', `${this.formatCoinAmount(Math.max(0, balance - total))} ZC`);
         }
-        summary.hidden = false;
+        summary.hidden = !html;
+        summary.className = `coin-gift-summary${tone ? ` ${tone}` : ''}`;
+        summary.innerHTML = html;
+        this.renderCoinModalSubmit(valid ? total : 0);
+        // Ошибка отправки относилась к прежним значениям — после правки она не актуальна.
+        if (!this._coinTransferInFlight) this.setCoinModalStatus('');
+    }
+
+    renderCoinModalSubmit(total = 0) {
+        const submitBtn = document.getElementById('coinTransferSubmitBtn');
+        if (!submitBtn) return;
+        const isGift = this._coinModal?.mode === 'gift';
+        const busy = !!this._coinTransferInFlight;
+        const amountText = total > 0 ? ` · ${this.formatCoinAmount(total)} ZC` : '';
+        this._coinModalSubmitTotal = total;
+        submitBtn.textContent = busy ? 'Отправка…' : (isGift ? 'Отправить карточку' : 'Отправить') + amountText;
+        submitBtn.disabled = busy || !!this._coinModalBlocked;
+    }
+
+    /** Блокирует окно на время запроса: повторное нажатие Enter не должно слать второй. */
+    setCoinModalBusy(busy) {
+        this._coinTransferInFlight = !!busy;
+        this.renderCoinModalSubmit(this._coinModalSubmitTotal || 0);
+        if (busy) this.setCoinModalStatus('Отправка…', 'busy');
     }
 
     async submitCoinTransfer() {
@@ -399,13 +498,14 @@ ZaliMixin(ZaliInterface, class {
         // submits (server-side idempotency makes the money safe, but the client
         // would close/re-log/post the chat notice once per call).
         if (this._coinTransferInFlight) return;
+        // Монет заведомо не хватает — об этом уже сказано в окне, запрос бесполезен.
+        if (this._coinModalBlocked) return;
         if (this._coinModal?.mode === 'gift') {
             await this.submitCoinGift();
             return;
         }
         const recipientInput = document.getElementById('coinTransferRecipientInput');
         const amountInput = document.getElementById('coinTransferAmountInput');
-        const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const setStatus = (msg) => this.setCoinModalStatus(msg);
 
         const to = String(recipientInput?.value || '').trim();
@@ -427,9 +527,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this._coinTransferLastPayload = payloadSignature;
 
-        this._coinTransferInFlight = true;
-        if (submitBtn) submitBtn.disabled = true;
-        setStatus('Отправка...');
+        this.setCoinModalBusy(true);
 
         // The network call is isolated from everything after it: a timeout or
         // dropped connection here doesn't tell us whether the server already
@@ -444,16 +542,14 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {
             setStatus('Не удалось связаться с сервером, попробуйте ещё раз');
             this.trace(`submitCoinTransfer transport_error=${e}`);
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
 
         if (!res.ok) {
             const text = await res.text().catch(() => '');
             setStatus(text || 'Не удалось выполнить перевод');
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
 
@@ -466,8 +562,7 @@ ZaliMixin(ZaliInterface, class {
         const transactionId = String(data?.transactionId || '').trim();
         const fromWallet = !!this._coinModal?.fromWallet;
         const cardClientId = this._coinTransferCardClientId;
-        this._coinTransferInFlight = false;
-        if (submitBtn) submitBtn.disabled = false;
+        this.setCoinModalBusy(false);
         setStatus('');
         this.closeCoinTransferModal();
         this.addLogEntry({ type: 'INFO', msg: `Отправлено ${amount} ZaliCoin пользователю ${to}`, ts: new Date().toLocaleTimeString() });
@@ -491,7 +586,6 @@ ZaliMixin(ZaliInterface, class {
     async submitCoinGift() {
         const ctx = this._coinModal || {};
         const amountInput = document.getElementById('coinTransferAmountInput');
-        const submitBtn = document.getElementById('coinTransferSubmitBtn');
         const setStatus = (msg) => this.setCoinModalStatus(msg);
 
         const amount = Math.trunc(Number(amountInput?.value));
@@ -507,9 +601,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this._coinTransferLastPayload = payloadSignature;
 
-        this._coinTransferInFlight = true;
-        if (submitBtn) submitBtn.disabled = true;
-        setStatus('Отправка...');
+        this.setCoinModalBusy(true);
 
         let res;
         try {
@@ -523,16 +615,14 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {
             setStatus('Не удалось связаться с сервером, попробуйте ещё раз');
             this.trace(`submitCoinGift transport_error=${e}`);
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
         const data = await res.json().catch(() => null);
         const gift = data?.gift;
         if (!res.ok || !gift?.id) {
             setStatus(data?.message || 'Не удалось создать карточку');
-            this._coinTransferInFlight = false;
-            if (submitBtn) submitBtn.disabled = false;
+            this.setCoinModalBusy(false);
             return;
         }
 
@@ -540,8 +630,7 @@ ZaliMixin(ZaliInterface, class {
         this.applyCoinGiftState(gift);
         if (Number.isFinite(Number(data.balance))) this.S.zaliCoinBalance = Number(data.balance);
         if (Number.isFinite(Number(data.held))) this.S.zaliCoinHeld = Number(data.held);
-        this._coinTransferInFlight = false;
-        if (submitBtn) submitBtn.disabled = false;
+        this.setCoinModalBusy(false);
         setStatus('');
         this.closeCoinTransferModal();
         this.addLogEntry({ type: 'INFO', msg: `Карточка ZaliCoin: ${amount} ZC × ${claims}`, ts: new Date().toLocaleTimeString() });
@@ -564,11 +653,13 @@ ZaliMixin(ZaliInterface, class {
         );
     }
 
-    setCoinModalStatus(msg) {
+    setCoinModalStatus(msg, tone = 'error') {
         const status = document.getElementById('coinTransferStatus');
         if (!status) return;
         status.textContent = msg;
         status.hidden = !msg;
+        status.classList.toggle('is-error', !!msg && tone === 'error');
+        status.classList.toggle('is-busy', !!msg && tone === 'busy');
     }
 
     async postCoinCardMessage(text, failureMessage, clientId = '') {
