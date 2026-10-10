@@ -1,0 +1,11 @@
+{
+  "zaliAddon": 1,
+  "id": "org.zalimessenger.example.launcher",
+  "name": "Лаунчер",
+  "version": "1.0.0",
+  "description": "Ярлыки программ и папок компьютера. Пример повышенных прав: чтение диска и запуск программ (macOS и Windows).",
+  "author": "ZaliMessenger",
+  "icon": "icon.svg",
+  "entry": "index.html",
+  "permissions": ["fs.read", "launch"]
+}

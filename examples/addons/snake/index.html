@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Змейка</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="game">
+  <header class="bar">
+    <div class="score"><span>Счёт</span><strong id="score">0</strong></div>
+    <div class="score"><span>Рекорд</span><strong id="best">0</strong></div>
+    <button id="pause" class="btn" type="button">Пауза</button>
+  </header>
+  <div class="board-wrap">
+    <canvas id="board" width="480" height="480" aria-label="Игровое поле"></canvas>
+    <div id="overlay" class="overlay">
+      <p id="overlayText">Стрелки, WASD или свайп — управление. Пробел — пауза.</p>
+      <button id="start" class="btn primary" type="button">Начать игру</button>
+    </div>
+  </div>
+  <div class="pad" aria-label="Управление">
+    <button class="btn" type="button" data-dir="up" aria-label="Вверх">▲</button>
+    <button class="btn" type="button" data-dir="left" aria-label="Влево">◀</button>
+    <button class="btn" type="button" data-dir="down" aria-label="Вниз">▼</button>
+    <button class="btn" type="button" data-dir="right" aria-label="Вправо">▶</button>
+  </div>
+</main>
+<script src="game.js"></script>
+</body>
+</html>

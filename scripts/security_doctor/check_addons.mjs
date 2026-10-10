@@ -10,7 +10,10 @@
 //      check_native_shells.mjs, "Frame isolation").
 // (1) is exercised here against the real module; (2) is pinned statically.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, rmSync, cpSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { record, section, finish, read, stripLineComments } from './lib/report.mjs';
@@ -217,6 +220,52 @@ section('elevated permissions (native shells)');
     record('macOS: every fs/system/backend operation runs inside a session', swiftCases.length >= 10 && swiftOpen.length === 0, swiftOpen.join(', '));
     record('the default button of the system dialog is the safe one',
         /MB_DEFBUTTON2/.test(read('apps/windows/src/native.rs')) && /addButton\(withTitle: "Отмена"\)\s*\n\s*alert\.addButton\(withTitle: action\)/.test(swift));
+}
+
+section('packer and example addons');
+{
+    // scripts/addon_pack.py повторяет проверки addon_format.js на Python:
+    // всё, что он собрал, приложение должно принять, и с теми же разрешениями.
+    const dir = mkdtempSync(join(tmpdir(), 'zali-addons-'));
+    try {
+        const examples = readdirSync('examples/addons', { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
+        record('examples/addons has the three reference addons',
+            ['snake', 'voice-notes', 'launcher'].every(name => examples.includes(name)), examples.join(', '));
+        for (const name of examples) {
+            const out = join(dir, `${name}.zali`);
+            let packed = '';
+            try {
+                execFileSync('python3', ['scripts/addon_pack.py', `examples/addons/${name}`, out], { stdio: 'pipe' });
+                packed = readFileSync(out);
+            } catch (e) {
+                record(`example ${name}: packs`, false, String(e.stderr || e.message).trim().slice(0, 200));
+                continue;
+            }
+            let info = null;
+            try {
+                const { files } = F.parseContainer(packed);
+                info = { files, manifest: F.parseManifest(files) };
+            } catch (e) {
+                record(`example ${name}: the app accepts the packed file`, false, e.message);
+                continue;
+            }
+            const source = JSON.parse(readFileSync(`examples/addons/${name}/manifest.json`, 'utf8'));
+            record(`example ${name}: packed by addon_pack.py, accepted by the app with the same permissions`,
+                JSON.stringify(info.manifest.permissions) === JSON.stringify([...(source.permissions || [])].sort(
+                    (a, b) => Object.keys(F.PERMISSIONS).indexOf(a) - Object.keys(F.PERMISSIONS).indexOf(b))));
+        }
+        // Обратное направление: упаковщик отвергает то, что отвергнет приложение.
+        const bad = join(dir, 'bad');
+        cpSync('examples/addons/snake', bad, { recursive: true });
+        const m = JSON.parse(readFileSync(join(bad, 'manifest.json'), 'utf8'));
+        m.permissions = ['fs.read', 'teleport'];
+        writeFileSync(join(bad, 'manifest.json'), JSON.stringify(m));
+        let refused = false;
+        try { execFileSync('python3', ['scripts/addon_pack.py', bad, join(dir, 'bad.zali')], { stdio: 'pipe' }); } catch (e) { refused = e.status === 1; }
+        record('addon_pack.py refuses an unknown permission', refused);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 finish('addons');

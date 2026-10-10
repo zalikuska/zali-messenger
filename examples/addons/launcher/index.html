@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Лаунчер</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+  <header class="head">
+    <h1>Лаунчер</h1>
+    <button id="addBtn" class="btn primary" type="button">Добавить ярлык</button>
+  </header>
+  <p id="status" class="status" role="status"></p>
+  <ul id="shortcuts" class="grid"></ul>
+  <p id="empty" class="muted empty" hidden>Ярлыков пока нет. Нажмите «Добавить ярлык» и выберите программу, файл или папку.</p>
+
+  <section id="picker" class="picker" hidden aria-label="Выбор программы">
+    <div class="picker-head">
+      <button id="upBtn" class="btn" type="button" aria-label="На уровень выше">↑</button>
+      <input id="pathInput" class="input" type="text" spellcheck="false" aria-label="Путь">
+      <button id="goBtn" class="btn" type="button">Перейти</button>
+    </div>
+    <div id="places" class="places"></div>
+    <ul id="entries" class="entries"></ul>
+    <div class="picker-foot">
+      <input id="argsInput" class="input" type="text" spellcheck="false" placeholder="Аргументы запуска (по желанию)" aria-label="Аргументы запуска">
+      <button id="closePicker" class="btn" type="button">Отмена</button>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

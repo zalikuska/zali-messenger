@@ -1,0 +1,11 @@
+{
+  "zaliAddon": 1,
+  "id": "org.zalimessenger.example.snake",
+  "name": "Змейка",
+  "version": "1.0.0",
+  "description": "Классическая змейка. Пример аддона без разрешений: рекорд хранится в zali.storage.",
+  "author": "ZaliMessenger",
+  "icon": "icon.svg",
+  "entry": "index.html",
+  "permissions": []
+}

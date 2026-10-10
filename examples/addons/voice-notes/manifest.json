@@ -1,0 +1,11 @@
+{
+  "zaliAddon": 1,
+  "id": "org.zalimessenger.example.voice-notes",
+  "name": "Голосовые заметки",
+  "version": "1.0.0",
+  "description": "Запись коротких голосовых заметок. Пример обычных разрешений: микрофон, кеш, сохранение файлов.",
+  "author": "ZaliMessenger",
+  "icon": "icon.svg",
+  "entry": "index.html",
+  "permissions": ["cache", "files", "microphone"]
+}

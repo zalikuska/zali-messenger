@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Голосовые заметки</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+  <header class="head">
+    <h1>Голосовые заметки</h1>
+    <p id="usage" class="muted"></p>
+  </header>
+  <section class="recorder">
+    <button id="record" class="btn primary big" type="button">Начать запись</button>
+    <button id="cancel" class="btn" type="button" hidden>Отменить</button>
+    <span id="timer" class="timer" hidden>0:00</span>
+  </section>
+  <p id="status" class="status" role="status"></p>
+  <ul id="list" class="list"></ul>
+  <p id="empty" class="muted empty" hidden>Заметок пока нет. Нажмите «Начать запись».</p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
