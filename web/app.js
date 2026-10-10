@@ -3293,9 +3293,21 @@ ZaliMixin(ZaliInterface, class {
         body.classList.toggle('mobile-nav-instant', !animate);
         const vc = document.getElementById('viewChat');
         if (vc) vc.style.transform = `translateX(${((1 - clamped) * 100).toFixed(4)}%)`;
-        const dock = document.querySelector('.mobile-dock');
-        if (dock) dock.style.transform = `translate(-50%, ${(clamped * 140).toFixed(4)}%)`;
+        this.applyMobileDockTransform(clamped);
         this.notifyNativeMobileNav(clamped, animate);
+    }
+
+    // Док уезжает вниз только на экране чата (там под ним поле ввода). Хаб,
+    // ZaliCoin и Настройки — полные экраны, между которыми переходят этим же
+    // доком; нативная панель Android с самого начала оставляет себя видимой на
+    // них (см. notifyNativeMobileNav), а веб-док прятался вместе с чатом и
+    // оставлял Хаб без пути назад.
+    applyMobileDockTransform(progress) {
+        const dock = document.querySelector('.mobile-dock');
+        if (!dock) return;
+        const chatScreen = !!document.getElementById('viewChat')?.classList.contains('active');
+        const value = chatScreen ? Math.max(0, Math.min(1, Number(progress) || 0)) : 0;
+        dock.style.transform = `translate(-50%, ${(value * 140).toFixed(4)}%)`;
     }
 
     // The Android shell hides the web .mobile-dock and draws its own native bar
@@ -3736,7 +3748,13 @@ ZaliMixin(ZaliInterface, class {
             dock.classList.toggle('visible', isMobile);
         }
 
-        if (isMobile) this.syncNativeMobileNav();
+        if (isMobile) {
+            this.syncNativeMobileNav();
+            // Экран мог смениться без движения самой навигации (чат -> Хаб).
+            if (!document.body?.classList.contains('mobile-nav-dragging')) {
+                this.applyMobileDockTransform(this.currentMobileNavProgress());
+            }
+        }
 
         // Одна функция на обе панели — веб-док и нативную: разъехаться им теперь
         // негде, потому что подсветка считается в одном месте.

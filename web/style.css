@@ -7868,6 +7868,9 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     #viewChat .msgs {
+        /* Десктопный margin-right: -12px (под скроллбар) на телефоне выталкивал
+           список на 12 px за экран, и пузырь упирался в край. */
+        margin-right: 0;
         padding: 14px 12px calc(208px + var(--kbd-inset, 0px));
         scroll-padding-bottom: calc(208px + var(--kbd-inset, 0px));
     }
@@ -10001,6 +10004,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .chat-back-btn:active { background: rgba(255,255,255,.06); transform: scale(.92); }
     #viewChat .chat-hdr-ava { width: 40px; height: 40px; font-size: 16px; }
     #viewChat .msgs {
+        margin-right: 0;
         padding: 12px 10px calc(96px + var(--kbd-inset, 0px) + var(--m-safe-bottom));
         scroll-padding-bottom: calc(96px + var(--kbd-inset, 0px) + var(--m-safe-bottom));
     }
@@ -10122,13 +10126,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         text-align: right;
         margin: 1px 0 -1px;
         padding: 0;
-        font-size: 10.5px;
-        opacity: .5;
+        font-size: 12px;
+        opacity: 1;
         pointer-events: none;
     }
-    .msg.in .msg-time  { color: var(--text3); }
-    .msg.out .msg-time { color: rgba(15,20,0,.5); }
-    .msg.time-visible .msg-time { opacity: .6; }
+    /* Контраст времени в пузыре: у своего (тёмный на лайме) около 7:1,
+       у чужого — второй серый, а не третий. Раньше было .5 × .5 ≈ 1,7:1. */
+    .msg.in .msg-time  { color: var(--text2); }
+    .msg.out .msg-time { color: rgba(15,20,0,.72); }
+    .msg.time-visible .msg-time { opacity: 1; }
 
     /* Received-message avatar sits at the bottom of the last bubble in a group.
        36px = single-line mobile .bubble height: 7px+6px padding + 2px border +

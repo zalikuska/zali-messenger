@@ -7894,6 +7894,9 @@ body[data-nav-mode="servers"] .contacts {
     }
 
     #viewChat .msgs {
+        /* Десктопный margin-right: -12px (под скроллбар) на телефоне выталкивал
+           список на 12 px за экран, и пузырь упирался в край. */
+        margin-right: 0;
         padding: 14px 12px calc(208px + var(--kbd-inset, 0px));
         scroll-padding-bottom: calc(208px + var(--kbd-inset, 0px));
     }
@@ -8436,6 +8439,8 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .zc-wallet > * {
+"""#,
+    #"""
     position: relative;
     z-index: 1;
 }
@@ -8445,8 +8450,6 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     place-items: center;
     width: 72px;
     aspect-ratio: 1;
-"""#,
-    #"""
     border: 1px solid rgba(var(--accent-rgb), .34);
     border-radius: 38%;
     background:
@@ -10029,6 +10032,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     .chat-back-btn:active { background: rgba(255,255,255,.06); transform: scale(.92); }
     #viewChat .chat-hdr-ava { width: 40px; height: 40px; font-size: 16px; }
     #viewChat .msgs {
+        margin-right: 0;
         padding: 12px 10px calc(96px + var(--kbd-inset, 0px) + var(--m-safe-bottom));
         scroll-padding-bottom: calc(96px + var(--kbd-inset, 0px) + var(--m-safe-bottom));
     }
@@ -10150,13 +10154,15 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         text-align: right;
         margin: 1px 0 -1px;
         padding: 0;
-        font-size: 10.5px;
-        opacity: .5;
+        font-size: 12px;
+        opacity: 1;
         pointer-events: none;
     }
-    .msg.in .msg-time  { color: var(--text3); }
-    .msg.out .msg-time { color: rgba(15,20,0,.5); }
-    .msg.time-visible .msg-time { opacity: .6; }
+    /* Контраст времени в пузыре: у своего (тёмный на лайме) около 7:1,
+       у чужого — второй серый, а не третий. Раньше было .5 × .5 ≈ 1,7:1. */
+    .msg.in .msg-time  { color: var(--text2); }
+    .msg.out .msg-time { color: rgba(15,20,0,.72); }
+    .msg.time-visible .msg-time { opacity: 1; }
 
     /* Received-message avatar sits at the bottom of the last bubble in a group.
        36px = single-line mobile .bubble height: 7px+6px padding + 2px border +
@@ -19533,9 +19539,21 @@ ZaliMixin(ZaliInterface, class {
         body.classList.toggle('mobile-nav-instant', !animate);
         const vc = document.getElementById('viewChat');
         if (vc) vc.style.transform = `translateX(${((1 - clamped) * 100).toFixed(4)}%)`;
-        const dock = document.querySelector('.mobile-dock');
-        if (dock) dock.style.transform = `translate(-50%, ${(clamped * 140).toFixed(4)}%)`;
+        this.applyMobileDockTransform(clamped);
         this.notifyNativeMobileNav(clamped, animate);
+    }
+
+    // Док уезжает вниз только на экране чата (там под ним поле ввода). Хаб,
+    // ZaliCoin и Настройки — полные экраны, между которыми переходят этим же
+    // доком; нативная панель Android с самого начала оставляет себя видимой на
+    // них (см. notifyNativeMobileNav), а веб-док прятался вместе с чатом и
+    // оставлял Хаб без пути назад.
+    applyMobileDockTransform(progress) {
+        const dock = document.querySelector('.mobile-dock');
+        if (!dock) return;
+        const chatScreen = !!document.getElementById('viewChat')?.classList.contains('active');
+        const value = chatScreen ? Math.max(0, Math.min(1, Number(progress) || 0)) : 0;
+        dock.style.transform = `translate(-50%, ${(value * 140).toFixed(4)}%)`;
     }
 
     // The Android shell hides the web .mobile-dock and draws its own native bar
@@ -19976,7 +19994,13 @@ ZaliMixin(ZaliInterface, class {
             dock.classList.toggle('visible', isMobile);
         }
 
-        if (isMobile) this.syncNativeMobileNav();
+        if (isMobile) {
+            this.syncNativeMobileNav();
+            // Экран мог смениться без движения самой навигации (чат -> Хаб).
+            if (!document.body?.classList.contains('mobile-nav-dragging')) {
+                this.applyMobileDockTransform(this.currentMobileNavProgress());
+            }
+        }
 
         // Одна функция на обе панели — веб-док и нативную: разъехаться им теперь
         // негде, потому что подсветка считается в одном месте.
@@ -21130,6 +21154,8 @@ ZaliMixin(ZaliInterface, class {
     // очередь, а один таймер собирает всё, что набралось за кадр, в один запрос.
     ensureCoinGiftState(id) {
         if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return;
+"""#,
+    #"""
         const store = this.coinGiftStore();
         if (store.inFlight.has(id) || store.queue.has(id)) return;
         const entry = store.states.get(id);
@@ -21152,8 +21178,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async flushCoinGiftQueue() {
-"""#,
-    #"""
         const store = this.coinGiftStore();
         const ids = Array.from(store.queue).slice(0, 50);
         if (!ids.length) return;
@@ -25415,6 +25439,8 @@ ZaliMixin(ZaliInterface, class {
                 });
             } else {
                 const peer = this.peerFromConversationScope(scoped);
+"""#,
+    #"""
                 if (peer) void this.publishConversationKeyToPeer({ peer, scope: scoped, key: local, reason: `takeover:${reason}` });
             }
             return local;
@@ -25431,8 +25457,6 @@ ZaliMixin(ZaliInterface, class {
         }
         // Not here yet — ask, and let the next reconcile pick it up. The mark stays
         // set, but the winner's fresh `updated_at` means the server refuses another
-"""#,
-    #"""
         // takeover for a full window, which is what gives convergence time to happen.
         await this.requestKeyRepublish(scoped, { reason: `${reason}:takeoverLost` });
         return '';
@@ -29406,6 +29430,8 @@ ZaliMixin(ZaliInterface, class {
             : this.normalizeIceServers(this.loadNetworkConfig().iceServers);
         const turnEntry = this.buildTurnIceServerFromInputs();
         const next = [...current.filter(server => {
+"""#,
+    #"""
             const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
             const turnUrls = Array.isArray(turnEntry.urls) ? turnEntry.urls : [turnEntry.urls];
             return !urls.some(url => turnUrls.includes(url));
@@ -29424,8 +29450,6 @@ ZaliMixin(ZaliInterface, class {
         const config = this.loadNetworkConfig();
         try {
             this.postNativeMessage({
-"""#,
-    #"""
                 type: NativeMessageTypes.NETWORK_CONFIG,
                 apiBaseUrl: config.apiBaseUrl,
                 wsBaseUrl: config.wsBaseUrl,
@@ -33444,6 +33468,8 @@ ZaliMixin(ZaliInterface, class {
                 // code (trace-only) left the last frame frozen on screen forever, and
                 // a later toggle-on reused the same stream/track objects, which
                 // attachRemoteVideoStream's reference-equality check then skipped as
+"""#,
+    #"""
                 // "already attached", so the picture never resumed either. Route these
                 // lifecycle events back through the same attach/detach helpers so the
                 // element actually reflects live track state.
@@ -33458,8 +33484,6 @@ ZaliMixin(ZaliInterface, class {
                 if (track) {
                     track.onunmute = () => {
                         this.voiceTrace('remote-track-unmute', { peer: name, kind: track.kind, readyState: track.readyState }, 'INFO');
-"""#,
-    #"""
                         if (track.kind === 'video') refreshRemoteVideoTrack();
                     };
                     track.onmute = () => {
@@ -37109,6 +37133,8 @@ ZaliMixin(ZaliInterface, class {
                         <div class="voice-room-title">${this.esc(title)}</div>
                         <div class="voice-room-sub">${this.esc(sub)}</div>
                     </div>
+"""#,
+    #"""
                     <div class="voice-room-state">${this.esc(activeRoom ? 'В эфире' : isVoice ? 'Выбрано' : 'Ожидание')}</div>
                 </div>
                 ${this.voice.micError ? `<div class="voice-room-alert">${this.esc(this.voice.micError)}</div>` : ''}
@@ -37121,8 +37147,6 @@ ZaliMixin(ZaliInterface, class {
                         <div class="voice-health-grid">
                             ${voiceHealth.map(item => `
                                 <div class="voice-health-card" data-tone="${this.esc(item.tone)}">
-"""#,
-    #"""
                                     <span class="voice-health-name">${this.esc(item.label)}</span>
                                     <strong class="voice-health-value">${this.esc(item.value)}</strong>
                                     <span class="voice-health-sub">${this.esc(item.sub || '')}</span>
@@ -41351,6 +41375,8 @@ ZaliMixin(ZaliInterface, class {
                 keyMatches: (localKeyId && canonicalKeyId) ? (localKeyId === canonicalKeyId) : null,
                 deviceId: this.currentDeviceId(),
                 platform: this.hasNativeBridge() ? 'native' : 'browser',
+"""#,
+    #"""
                 userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
                 recentLog,
                 reportedAt: new Date().toISOString(),
@@ -41366,8 +41392,6 @@ ZaliMixin(ZaliInterface, class {
             // decrypt while we do hold a key for the scope is the exact signal that
             // we are missing some OTHER key of that scope, so ask.
             // Explicitly caught: every helper it calls swallows its own errors today,
-"""#,
-    #"""
             // but this is fire-and-forget from a render path — one future throw in
             // that chain would surface as an unhandled rejection instead of a trace.
             if (scope) {
@@ -45361,6 +45385,8 @@ ZaliMixin(ZaliInterface, class {
     // immediately when there is no native bridge, so a live tab shows its own
     // notification here — with the message text, which a Web Push can never carry.
     //
+"""#,
+    #"""
     // Only fires while the user isn't looking at the app (isAppAttended): with the app
     // in front of them the in-app unread badges already cover it. A window that is
     // visible but sits behind another app used to count as "looking" here too.
@@ -45373,8 +45399,6 @@ ZaliMixin(ZaliInterface, class {
     // one entry per message in the OS notification centre.
     showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null, messageId = '' }) {
         if (this.hasNativeBridge()) return;
-"""#,
-    #"""
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
         if (this.isAppAttended()) return;
 
@@ -49342,6 +49366,8 @@ ZaliMixin(ZaliInterface, class {
     confirmAction({ title, message = '', confirmLabel = 'Подтвердить', cancelLabel = 'Отмена', danger = true } = {}) {
         const host = document.querySelector('.main') || document.body;
         if (!host) return Promise.resolve(false);
+"""#,
+    #"""
         // Один диалог за раз: повторный вызов закрывает предыдущий как «Отмена».
         if (this._confirmDialogDismiss) this._confirmDialogDismiss(false);
 
@@ -49356,8 +49382,6 @@ ZaliMixin(ZaliInterface, class {
                     <p class="confirm-dialog-text" id="confirmDialogText"></p>
                     <div class="coin-transfer-actions">
                         <button class="btn-flat" type="button" data-confirm-cancel></button>
-"""#,
-    #"""
                         <button class="auth-btn primary${danger ? ' is-danger' : ''}" type="button" data-confirm-ok></button>
                     </div>
                 </div>`;
