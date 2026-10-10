@@ -21,6 +21,13 @@ import { record, section, finish, read, stripLineComments } from './lib/report.m
 const FORMAT_PATH = 'web/src/modules/addon_format.js';
 const RUNTIME_PATH = 'web/src/interface/addons_runtime.js';
 
+function loadSdkSource() {
+    const sandbox = { window: {} };
+    vm.createContext(sandbox);
+    vm.runInContext(readFileSync('web/src/modules/addon_sdk.js', 'utf8'), sandbox, { filename: 'web/src/modules/addon_sdk.js' });
+    return sandbox.window.ZaliAddonSdk.source();
+}
+
 function loadFormat() {
     const sandbox = { window: {}, TextEncoder, TextDecoder, crypto: webcrypto };
     sandbox.globalThis = sandbox;
@@ -174,6 +181,23 @@ section('sandbox (web/src/interface/addons_runtime.js)');
     record('launch is gated on bridge isolation', /launchAddon[\s\S]{0,600}?addonsSandboxAvailable\(\)/.test(src)
         && /addonsSandboxAvailable\(\) \{\s*return !this\.hasNativeBridge\(\) \|\| this\.nativeSupports\('addonFrames'\)/.test(src));
     record('every RPC method is checked against the addon\'s permissions', /dispatchAddonRpc[\s\S]{0,1200}?permissions\.includes/.test(src));
+    record('ui.collapse touches only the caller, and only while expanded',
+        /'ui\.collapse': \{ run: \(instance\) => \{ if \(instance\.expanded\) this\.collapseAddon\(\)/.test(src),
+        'collapseAddon() collapses whichever addon is on screen — a background addon must not hide another');
+    {
+        // WebRTC is outside CSP; the SDK prefix must remove it before addon code runs.
+        const sdk = loadSdkSource();
+        const win = { RTCPeerConnection: function () {}, webkitRTCPeerConnection: function () {}, RTCDataChannel: function () {},
+            addEventListener() {}, parent: { postMessage() {} } };
+        const box = { window: win, TextEncoder, TextDecoder, Blob, URL, Object, Map, Set, Promise, Uint8Array, ArrayBuffer, setTimeout };
+        win.window = win;
+        vm.createContext(box);
+        let ok = true;
+        try { vm.runInContext(sdk, vm.createContext(Object.assign(win, box, { window: win })), { filename: 'addon_sdk' }); } catch (e) { ok = false; }
+        record('WebRTC is removed from the sandbox before addon code runs',
+            ok && win.RTCPeerConnection === undefined && win.webkitRTCPeerConnection === undefined && win.RTCDataChannel === undefined,
+            'connect-src does not cover RTCPeerConnection; ICE/TURN credentials would exfiltrate data around the network permission');
+    }
     record('the stored file is re-verified on every launch', /launchAddon[\s\S]{0,1500}?meta\.sha256 !== info\.sha256/.test(src));
 }
 

@@ -147,10 +147,17 @@ ZaliMixin(ZaliInterface, class {
             <div class="addon-frame-state" role="status" aria-live="polite">
                 <span class="addon-frame-spinner" aria-hidden="true"></span>
                 <span class="addon-frame-state-text"></span>
-                <button class="auth-btn primary addon-frame-close" type="button" hidden>Закрыть аддон</button>
+                <div class="addon-frame-error-actions" hidden>
+                    <button class="auth-btn primary addon-frame-restart" type="button">Перезапустить</button>
+                    <button class="btn-flat addon-frame-close" type="button">Закрыть аддон</button>
+                </div>
             </div>`;
         wrap.querySelector('.addon-frame-state-text').textContent = `Запуск «${instance.manifest.name}»…`;
         wrap.querySelector('.addon-frame-close').addEventListener('click', () => this.stopAddon(instance.id));
+        wrap.querySelector('.addon-frame-restart').addEventListener('click', () => {
+            this.stopAddon(instance.id);
+            this.openAddonFromHub?.(instance.id);
+        });
 
         const iframe = document.createElement('iframe');
         iframe.className = 'addon-frame';
@@ -195,8 +202,8 @@ ZaliMixin(ZaliInterface, class {
             wrap.classList.add('is-error');
             const text = wrap.querySelector('.addon-frame-state-text');
             if (text) text.textContent = message;
-            const close = wrap.querySelector('.addon-frame-close');
-            if (close) close.hidden = false;
+            const actions = wrap.querySelector('.addon-frame-error-actions');
+            if (actions) actions.hidden = false;
         }
         this.addLogEntry?.({ type: 'WARN', msg: `Аддон ${instance.id}: ${message}`, ts: new Date().toLocaleTimeString() });
         this.renderHubAddons?.();
@@ -517,7 +524,9 @@ ZaliMixin(ZaliInterface, class {
         if (this._addonRpcMethods) return this._addonRpcMethods;
         const methods = {
             hello: { run: (instance) => this.addonHello(instance) },
-            'ui.collapse': { run: () => { this.collapseAddon(); return true; } },
+            // Только свой аддон и только пока он развёрнут: collapseAddon() сворачивает
+            // «текущий», и без проверки фоновый аддон гасил бы чужой на экране.
+            'ui.collapse': { run: (instance) => { if (instance.expanded) this.collapseAddon(); return true; } },
             'ui.close': { run: (instance) => { setTimeout(() => this.stopAddon(instance.id), 0); return true; } },
             'ui.setTitle': {
                 run: (instance, params) => {

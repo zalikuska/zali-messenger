@@ -260,7 +260,10 @@ ZaliMixin(ZaliInterface, class {
 
         const fields = Array.isArray(schema.fields) ? schema.fields : [];
         if (fields.length > 0 && typeof console !== 'undefined' && console.warn) {
-            const missing = fields.filter((field) => !(field in payload));
+            // `optional` — поля, которые бывают не у каждой операции сообщения
+            // (ADDON_REQUEST: у store.list нет addonId/path/meta).
+            const optional = Array.isArray(schema.optional) ? schema.optional : [];
+            const missing = fields.filter((field) => !(field in payload) && !optional.includes(field));
             if (missing.length > 0) {
                 console.warn('[bridge] Missing fields for', type, ':', missing);
             }

@@ -20,6 +20,7 @@ ZaliMixin(ZaliInterface, class {
             const id = btn.closest('[data-addon-id]')?.getAttribute('data-addon-id') || '';
             this.handleAddonAction(btn.getAttribute('data-addon-action'), id);
         });
+        this.bindAddonDropZone(document.getElementById('hubAddons'));
         const input = document.getElementById('addonFileInput');
         input?.addEventListener('change', () => {
             const file = input.files?.[0];
@@ -37,21 +38,70 @@ ZaliMixin(ZaliInterface, class {
         this.refreshAddonsList();
     }
 
+    /** Файл .zali, брошенный на раздел «Аддоны», идёт тем же путём, что выбор через «Установить». */
+    bindAddonDropZone(zone) {
+        if (!zone) return;
+        const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+        let depth = 0;
+        const clear = () => { depth = 0; zone.classList.remove('is-dropping'); };
+        zone.addEventListener('dragenter', (e) => {
+            if (!hasFiles(e) || !this.addonsAvailable()) return;
+            e.preventDefault();
+            depth += 1;
+            zone.classList.add('is-dropping');
+        });
+        zone.addEventListener('dragover', (e) => {
+            if (!hasFiles(e) || !this.addonsAvailable()) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        zone.addEventListener('dragleave', () => {
+            depth = Math.max(0, depth - 1);
+            if (!depth) zone.classList.remove('is-dropping');
+        });
+        zone.addEventListener('drop', (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            clear();
+            if (!this.addonsAvailable()) return;
+            const files = Array.from(e.dataTransfer.files || []);
+            const file = files.find(f => /\.zali$/i.test(f.name)) || files[0];
+            if (!file) return;
+            if (files.length > 1) this.setAddonsStatus('Брошено несколько файлов — ставлю первый .zali; остальные ставьте по одному.');
+            this.installAddonFromFile(file);
+        });
+    }
+
     handleAddonAction(action, id) {
         if (action === 'install') {
             document.getElementById('addonFileInput')?.click();
         } else if (action === 'retry') {
             this.refreshAddonsList();
         } else if (action === 'open') {
-            this.setAddonsStatus('');
-            this.launchAddon(id).catch((error) => {
-                this.setAddonsStatus(`Не удалось открыть аддон: ${error?.message || error}`, 'error');
-            });
+            this.openAddonFromHub(id);
         } else if (action === 'stop') {
             this.stopAddon(id);
         } else if (action === 'details') {
             const meta = (this._addonsList || []).find(item => item.id === id);
             if (meta) this.showAddonDetailsDialog(meta);
+        }
+    }
+
+    /** «Открыть»: пока идёт запуск (чтение файла, системное подтверждение), кнопка занята — двойной клик не стартует дважды. */
+    async openAddonFromHub(id) {
+        if (!this._addonLaunching) this._addonLaunching = new Set();
+        if (this._addonLaunching.has(id)) return;
+        this._addonLaunching.add(id);
+        if (this._addonJustInstalled === id) this._addonJustInstalled = null;
+        this.setAddonsStatus('');
+        this.renderHubAddons();
+        try {
+            await this.launchAddon(id);
+        } catch (error) {
+            this.setAddonsStatus(`Не удалось открыть аддон: ${error?.message || error}`, 'error');
+        } finally {
+            this._addonLaunching.delete(id);
+            this.renderHubAddons();
         }
     }
 
@@ -131,19 +181,22 @@ ZaliMixin(ZaliInterface, class {
             const instance = this.addonInstances().get(meta.id);
             const running = !!instance;
             const elevated = m.permissions.some(p => F.isElevated(p));
-            return `<article class="hub-addon-item${running ? ' is-running' : ''}" data-addon-id="${this.esc(meta.id)}">
+            const launching = !!this._addonLaunching?.has(meta.id);
+            const fresh = this._addonJustInstalled === meta.id;
+            return `<article class="hub-addon-item${running ? ' is-running' : ''}${fresh ? ' is-new' : ''}" data-addon-id="${this.esc(meta.id)}">
                 ${this.addonIconHtml(meta)}
                 <div class="hub-addon-main">
                     <div class="hub-component-top">
                         <strong>${this.esc(m.name)}</strong>
                         <span class="hub-component-version">${this.esc(m.version)}</span>
+                        ${fresh ? '<span class="hub-addon-flag is-new">Новый</span>' : ''}
                         ${elevated ? '<span class="hub-addon-flag is-elevated">Повышенные права</span>' : ''}
                         ${running ? (instance.recorder ? '<span class="hub-addon-flag is-recording">Идёт запись</span>' : '<span class="hub-addon-flag is-running">Работает</span>') : ''}
                     </div>
                     <p>${this.esc(m.description || 'Без описания')}</p>
                 </div>
                 <div class="hub-addon-actions">
-                    <button class="auth-btn primary" type="button" data-addon-action="open">${running ? 'Развернуть' : 'Открыть'}</button>
+                    <button class="auth-btn primary" type="button" data-addon-action="open"${launching ? ' disabled aria-busy="true"' : ''}>${launching ? 'Запуск…' : running ? 'Развернуть' : 'Открыть'}</button>
                     ${running ? '<button class="btn-flat" type="button" data-addon-action="stop">Остановить</button>' : ''}
                     <button class="hub-addon-more" type="button" data-addon-action="details" title="Об аддоне" aria-label="Об аддоне «${this.esc(m.name)}»">
                         <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="4.5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/></svg>
@@ -151,6 +204,11 @@ ZaliMixin(ZaliInterface, class {
                 </div>
             </article>`;
         }).join('');
+        const fresh = list.querySelector('.hub-addon-item.is-new');
+        if (fresh && this._addonScrollToNew) {
+            this._addonScrollToNew = false;
+            try { fresh.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* без прокрутки */ }
+        }
     }
 
     // ---- Установка ----
@@ -193,6 +251,8 @@ ZaliMixin(ZaliInterface, class {
                 updatedAt: now,
             };
             await this.addonStorePut(meta, info.bytes);
+            this._addonJustInstalled = existing ? null : m.id;
+            this._addonScrollToNew = !existing;
             await this.refreshAddonsList();
             this.setAddonsStatus(existing ? `«${m.name}» обновлён до ${m.version}.` : `«${m.name}» установлен — откройте его кнопкой «Открыть».`, 'success');
         } catch (error) {
@@ -216,6 +276,14 @@ ZaliMixin(ZaliInterface, class {
         if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1).replace('.', ',')} МБ`;
         if (n >= 1024) return `${Math.max(1, Math.round(n / 1024))} КБ`;
         return `${n} Б`;
+    }
+
+    addonFilesWord(n) {
+        const last = n % 10;
+        const tens = n % 100;
+        if (tens >= 11 && tens <= 14) return 'файлов';
+        if (last === 1) return 'файл';
+        return last >= 2 && last <= 4 ? 'файла' : 'файлов';
     }
 
     addonFingerprintLabel(sha256) {
@@ -290,8 +358,22 @@ ZaliMixin(ZaliInterface, class {
         return this.openAddonDialog(html).then(action => action === 'ok');
     }
 
+    /** Сколько места занимают данные аддона (настройки и кеш) на этом устройстве; null — не удалось узнать. */
+    async addonDataUsage(id) {
+        try {
+            const entries = await this.addonDataList(id, '');
+            return { files: entries.length, bytes: entries.reduce((sum, e) => sum + Number(e.size || 0), 0), entries };
+        } catch (error) {
+            return null;
+        }
+    }
+
     async showAddonDetailsDialog(meta) {
         const m = meta.manifest;
+        const usage = await this.addonDataUsage(meta.id);
+        const dataLine = usage
+            ? (usage.files ? `Данные аддона: ${this.addonSizeLabel(usage.bytes)} (${usage.files} ${this.addonFilesWord(usage.files)})` : 'Данных аддон пока не сохранил')
+            : '';
         const sub = [`Версия ${m.version}`, m.author, this.addonSizeLabel(meta.size)].filter(Boolean).join(' · ');
         const installed = meta.updatedAt ? new Date(meta.updatedAt).toLocaleDateString('ru-RU') : '';
         const html = `
@@ -307,12 +389,33 @@ ZaliMixin(ZaliInterface, class {
                 <h3>Разрешения</h3>
                 ${this.addonPermissionsHtml(m)}
             </section>
-            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}</p>
+            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}${dataLine ? `<br>${this.esc(dataLine)}` : ''}</p>
             <div class="coin-transfer-actions addon-dialog-actions">
-                <button class="btn-flat addon-dialog-danger" type="button" data-dialog-action="remove">Удалить аддон</button>
+                <span class="addon-dialog-danger-group">
+                    <button class="btn-flat addon-dialog-danger" type="button" data-dialog-action="remove">Удалить аддон</button>
+                    ${usage?.files ? '<button class="btn-flat" type="button" data-dialog-action="clear">Очистить данные</button>' : ''}
+                </span>
                 <button class="auth-btn primary" type="button" data-dialog-action="cancel">Закрыть</button>
             </div>`;
         const action = await this.openAddonDialog(html);
+        if (action === 'clear') {
+            const sure = await this.confirmAction({
+                title: `Очистить данные «${m.name}»?`,
+                message: 'Настройки и кеш аддона будут стёрты с этого устройства. Сам аддон останется установленным.',
+                confirmLabel: 'Очистить',
+            });
+            if (!sure) return;
+            try {
+                // Запущенный аддон держит настройки в памяти и записал бы их обратно.
+                const wasRunning = this.addonInstances().has(meta.id);
+                if (wasRunning) this.stopAddon(meta.id);
+                for (const entry of usage.entries) await this.addonDataDelete(meta.id, entry.path);
+                this.setAddonsStatus(`Данные «${m.name}» очищены${wasRunning ? '; аддон остановлен — откройте его заново' : ''}.`, 'success');
+            } catch (error) {
+                this.setAddonsStatus(`Не удалось очистить данные «${m.name}»: ${error?.message || error}`, 'error');
+            }
+            return;
+        }
         if (action !== 'remove') return;
         const confirmed = await this.confirmAction({
             title: `Удалить «${m.name}»?`,

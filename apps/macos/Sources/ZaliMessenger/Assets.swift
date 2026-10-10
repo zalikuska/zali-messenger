@@ -15353,9 +15353,26 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     display: none;
 }
 
-.addon-frame-close {
-    min-height: 44px;
-    padding: 0 20px;
+.addon-frame-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.addon-frame-error-actions[hidden] {
+    display: none;
+}
+
+.addon-frame-close,
+.addon-frame-restart {
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 .addon-frame-spinner {
@@ -15374,10 +15391,15 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 }
 
 /* Хаб: раздел «Аддоны». Каркас — .hub-components. */
-.hub-addons-install {
+.auth-btn.hub-addons-install {
     flex: none;
-    min-height: 44px;
-    padding: 0 18px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 .hub-addons-status {
@@ -15450,6 +15472,26 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     border-color: rgba(var(--accent-rgb), .22);
 }
 
+.hub-addon-item.is-new {
+    border-color: rgba(var(--accent-rgb), .45);
+}
+
+.hub-addons.is-dropping {
+    outline: 2px dashed rgba(var(--accent-rgb), .55);
+    outline-offset: 4px;
+    border-radius: 16px;
+}
+
+.hub-component-top .hub-addon-flag.is-new {
+    background: var(--lime);
+    color: #000;
+}
+
+.hub-addon-actions .auth-btn[disabled] {
+    opacity: .7;
+    cursor: progress;
+}
+
 .hub-addon-icon {
     display: grid;
     place-items: center;
@@ -15508,8 +15550,13 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 .hub-addon-actions .auth-btn,
 .hub-addon-actions .btn-flat {
-    min-height: 44px;
-    padding: 0 16px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 /* На телефоне у .btn-flat есть ::after-зона нажатия 44px (absolute) — без
@@ -15523,10 +15570,10 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 .hub-addon-more {
     display: grid;
     place-items: center;
-    width: 44px;
-    height: 44px;
+    width: 34px;
+    height: 34px;
     border: 1px solid transparent;
-    border-radius: 12px;
+    border-radius: 10px;
     background: transparent;
     color: var(--text2);
     cursor: pointer;
@@ -15684,8 +15731,13 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 .addon-dialog .coin-transfer-actions .auth-btn,
 .addon-dialog .coin-transfer-actions .btn-flat {
-    min-height: 44px;
-    padding: 0 18px;
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 .addon-dialog .auth-btn[disabled] {
@@ -15698,6 +15750,12 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     justify-content: space-between;
 }
 
+.addon-dialog-danger-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .addon-dialog-danger {
     color: var(--red);
 }
@@ -15705,6 +15763,36 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 .addon-dialog-danger:hover {
     border-color: rgba(255, 77, 109, .4);
     background: rgba(255, 77, 109, .1);
+}
+
+/* Режимы дизайна (focus, плоский) задают кнопкам свою высоту и кегль через
+   body[data-design-mode] .auth-btn.primary — префиксом забираем специфичность,
+   чтобы кнопки аддонов оставались компактными в любом режиме. */
+body[data-design-mode] .hub-addons .auth-btn,
+body[data-design-mode] .hub-addons .btn-flat,
+body[data-design-mode] .addon-dialog .coin-transfer-actions .auth-btn,
+body[data-design-mode] .addon-dialog .coin-transfer-actions .btn-flat,
+body[data-design-mode] .addon-frame-state .auth-btn,
+body[data-design-mode] .addon-frame-state .btn-flat {
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: none;
+}
+
+body[data-design-mode] .addon-dialog .coin-transfer-actions .auth-btn,
+body[data-design-mode] .addon-dialog .coin-transfer-actions .btn-flat,
+body[data-design-mode] .addon-frame-state .auth-btn,
+body[data-design-mode] .addon-frame-state .btn-flat {
+    min-height: 36px;
+}
+
+body[data-design-mode] .hub-addons .hub-addon-more {
+    width: 34px;
+    height: 34px;
 }
 
 @media (max-width: 760px) {
@@ -15743,6 +15831,29 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
     .hub-addon-item {
         grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .auth-btn.hub-addons-install,
+    .hub-addon-actions .auth-btn,
+    .hub-addon-actions .btn-flat,
+    .addon-dialog .coin-transfer-actions .auth-btn,
+    .addon-dialog .coin-transfer-actions .btn-flat {
+        min-height: 40px;
+    }
+
+    .hub-addon-more,
+    body[data-design-mode] .hub-addons .hub-addon-more {
+        width: 40px;
+        height: 40px;
+    }
+
+    body[data-design-mode] .hub-addons .auth-btn,
+    body[data-design-mode] .hub-addons .btn-flat,
+    body[data-design-mode] .addon-dialog .coin-transfer-actions .auth-btn,
+    body[data-design-mode] .addon-dialog .coin-transfer-actions .btn-flat,
+    body[data-design-mode] .addon-frame-state .auth-btn,
+    body[data-design-mode] .addon-frame-state .btn-flat {
+        min-height: 40px;
     }
 
     .hub-addon-actions {
@@ -16006,6 +16117,13 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     "ADDON_REQUEST": {
       "fields": [
         "op",
+        "addonId",
+        "path",
+        "meta",
+        "dataBase64",
+        "requestId"
+      ],
+      "optional": [
         "addonId",
         "path",
         "meta",
@@ -18936,6 +19054,19 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     function zaliAddonSdk() {
         'use strict';
         if (window.zali) return;
+        // WebRTC не подчиняется CSP (`connect-src` его не касается): через
+        // ICE/TURN-адрес и учётные данные аддон без разрешения `network` мог бы
+        // вынести данные на чужой сервер. Звук идёт через zali.mic, поэтому
+        // конструкторы убираем до кода аддона. Вложенные фреймы закрыты
+        // `frame-src 'none'`, в воркерах RTCPeerConnection нет — свежего окна,
+        // где он остался бы, аддону взять негде.
+        ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'RTCDataChannel'].forEach(function (name) {
+            try {
+                Object.defineProperty(window, name, { value: undefined, writable: false, configurable: false });
+            } catch (e) {
+                try { window[name] = undefined; } catch (e2) { /* не вышло — CSP и песочница остаются */ }
+            }
+        });
         var host = window.parent;
         var RPC = 'zali-addon-rpc';
         var EVENT = 'zali-addon-event';
@@ -20770,7 +20901,10 @@ ZaliMixin(ZaliInterface, class {
 
         const fields = Array.isArray(schema.fields) ? schema.fields : [];
         if (fields.length > 0 && typeof console !== 'undefined' && console.warn) {
-            const missing = fields.filter((field) => !(field in payload));
+            // `optional` — поля, которые бывают не у каждой операции сообщения
+            // (ADDON_REQUEST: у store.list нет addonId/path/meta).
+            const optional = Array.isArray(schema.optional) ? schema.optional : [];
+            const missing = fields.filter((field) => !(field in payload) && !optional.includes(field));
             if (missing.length > 0) {
                 console.warn('[bridge] Missing fields for', type, ':', missing);
             }
@@ -22314,6 +22448,8 @@ ZaliMixin(ZaliInterface, class {
     coinModalMaxAmount() {
         const balance = Math.max(0, Math.trunc(Number(this.S.zaliCoinBalance)));
         if (!Number.isFinite(balance)) return 0;
+"""#,
+    #"""
         return this._coinModal?.mode === 'gift' ? Math.floor(balance / this.coinGiftClaimsValue()) : balance;
     }
 
@@ -22339,8 +22475,6 @@ ZaliMixin(ZaliInterface, class {
         const rawBalance = this.S.zaliCoinBalance;
         const known = rawBalance !== undefined && rawBalance !== null && Number.isFinite(Number(rawBalance));
         const balance = known ? Math.max(0, Math.trunc(Number(rawBalance))) : 0;
-"""#,
-    #"""
         const amount = Math.trunc(Number(document.getElementById('coinTransferAmountInput')?.value));
         const claims = isGift ? this.coinGiftClaimsValue() : 1;
         const valid = Number.isFinite(amount) && amount > 0;
@@ -26537,6 +26671,8 @@ ZaliMixin(ZaliInterface, class {
     /// not fit costs two PBKDF2-SHA256 passes at 210 000 iterations (the archive
     /// session key, then the body), charged per message — so an account that has
     /// accumulated dozens of `alt:` keys was spending seconds of CPU on each
+"""#,
+    #"""
     /// unreadable message, and repeating it on every refresh. Kept identical to the
     /// native shells (`Coordinator.maxDecryptCandidates`, `MAX_DECRYPT_CANDIDATES`).
     static get MAX_DECRYPT_CANDIDATES() { return 12; }
@@ -26566,8 +26702,6 @@ ZaliMixin(ZaliInterface, class {
             const scoped = String(scope || '').trim();
             if (scoped) map[scoped] = Date.now();
         }
-"""#,
-    #"""
         this.saveScopeMarkMap(this.forceClaimScopesStorageKey(), map);
     }
 
@@ -30436,6 +30570,8 @@ ZaliMixin(ZaliInterface, class {
                 // this, when MAX_CONCURRENT_SENDS items are all stalled at once,
                 // inFlightCount never drops below the cap, so the throttle check below
                 // always breaks the loop — the queue deadlocks and nothing is retried.
+"""#,
+    #"""
                 inFlightCount = Math.max(0, inFlightCount - 1);
             }
             if (inFlightCount >= MAX_CONCURRENT_SENDS) {
@@ -30464,8 +30600,6 @@ ZaliMixin(ZaliInterface, class {
                 continue;
             }
 
-"""#,
-    #"""
             const declaredAttachments = this.normalizeAttachments(item.attachments);
             let outAttachments = declaredAttachments.filter(att => att.dataUrl);
             if (declaredAttachments.length && !outAttachments.length) {
@@ -34545,6 +34679,8 @@ ZaliMixin(ZaliInterface, class {
             throw new Error('Голосовые звонки не поддерживаются в этом окружении');
         }
         const micConstraint = this.audioPrefs?.micDeviceId
+"""#,
+    #"""
             ? { deviceId: { exact: this.audioPrefs.micDeviceId } }
             : true;
         const getAudioOnlyStream = async () => {
@@ -34567,8 +34703,6 @@ ZaliMixin(ZaliInterface, class {
                 });
                 this.voice.cameraOn = true;
             } catch (error) {
-"""#,
-    #"""
                 this.voiceTrace('camera-request-failed', { error: error?.message || String(error) }, 'WARN');
                 this.addLogEntry({ type: 'WARN', msg: 'Камера недоступна — продолжаем аудиозвонком', ts: new Date().toLocaleTimeString() });
                 this.voice.videoEnabled = false;
@@ -38400,6 +38534,8 @@ ZaliMixin(ZaliInterface, class {
             // never on the human-readable message, which is Russian prose that a
             // wording change would silently detach this from.
             if (code === 'room_not_found') {
+"""#,
+    #"""
                 this.concludeVanishedVoiceRoom(errorRoomId, String(payload.message || ''));
             } else if (code === 'session_moved') {
                 this.concludeMovedVoiceSession(errorRoomId);
@@ -38420,8 +38556,6 @@ ZaliMixin(ZaliInterface, class {
                 state,
                 reason: String(payload.reason || ''),
                 roomId: this.voice.roomId || '',
-"""#,
-    #"""
                 status: this.voice.status || '',
                 queued: payload.queued ?? '',
             }, state === 'up' ? 'INFO' : 'WARN');
@@ -42440,6 +42574,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     updateAuthView() {
+"""#,
+    #"""
         const overlay = document.getElementById('authOverlay');
         if (overlay) {
             const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;
@@ -42458,8 +42594,6 @@ ZaliMixin(ZaliInterface, class {
         const authError = document.getElementById('authError');
         const loginBtn = document.getElementById('authLoginBtn');
         const regBtn = document.getElementById('authRegisterBtn');
-"""#,
-    #"""
         const guestBtn = document.getElementById('authGuestBtn');
         const vaultSyncNote = document.getElementById('authVaultSyncNote');
         // Менеджеры паролей различают вход и регистрацию по autocomplete.
@@ -46452,6 +46586,8 @@ ZaliMixin(ZaliInterface, class {
                     receiver: receiver || prev.receiver || '',
                     text: incomingText || prev.text || '',
                     attachments: incomingAttachments.length ? incomingAttachments : this.normalizeAttachments(prev.attachments),
+"""#,
+    #"""
                     reactions: incomingReactions.length ? incomingReactions : this.normalizeReactions(prev.reactions),
                     myReactions: this.normalizeMyReactions(myReactions?.length ? myReactions : prev.myReactions),
                     timestamp: ts || prev.timestamp || new Date().toISOString(),
@@ -46474,8 +46610,6 @@ ZaliMixin(ZaliInterface, class {
                     serverId,
                     channelId,
                 });
-"""#,
-    #"""
                 // "Visible" requires both the matching channel AND the servers view being
                 // active — currentServerChatKey() keeps returning the selected channel
                 // even while the user is looking at DMs, which used to swallow the
@@ -50468,6 +50602,8 @@ ZaliMixin(ZaliInterface, class {
         const state = this.ensureProfileState();
         const drawing = state.drawing;
         const owner = state.username;
+"""#,
+    #"""
         if (!drawing || !owner || drawing.submitting) return;
         const strokes = (drawing.strokes || []).filter(stroke => stroke.points?.length);
         if (!strokes.length) {
@@ -50493,8 +50629,6 @@ ZaliMixin(ZaliInterface, class {
         const boxWidth = Math.max(1, maxX - minX);
         const boxHeight = Math.max(1, maxY - minY);
 
-"""#,
-    #"""
         const payloadStrokes = strokes.map(stroke => ({
             d: this.autographPathData(stroke.points.map(point => ({ x: point.x - minX, y: point.y - minY }))),
             color: this.safeCssColor(stroke.color) || '#cbff00',
@@ -51679,10 +51813,17 @@ ZaliMixin(ZaliInterface, class {
             <div class="addon-frame-state" role="status" aria-live="polite">
                 <span class="addon-frame-spinner" aria-hidden="true"></span>
                 <span class="addon-frame-state-text"></span>
-                <button class="auth-btn primary addon-frame-close" type="button" hidden>Закрыть аддон</button>
+                <div class="addon-frame-error-actions" hidden>
+                    <button class="auth-btn primary addon-frame-restart" type="button">Перезапустить</button>
+                    <button class="btn-flat addon-frame-close" type="button">Закрыть аддон</button>
+                </div>
             </div>`;
         wrap.querySelector('.addon-frame-state-text').textContent = `Запуск «${instance.manifest.name}»…`;
         wrap.querySelector('.addon-frame-close').addEventListener('click', () => this.stopAddon(instance.id));
+        wrap.querySelector('.addon-frame-restart').addEventListener('click', () => {
+            this.stopAddon(instance.id);
+            this.openAddonFromHub?.(instance.id);
+        });
 
         const iframe = document.createElement('iframe');
         iframe.className = 'addon-frame';
@@ -51727,8 +51868,8 @@ ZaliMixin(ZaliInterface, class {
             wrap.classList.add('is-error');
             const text = wrap.querySelector('.addon-frame-state-text');
             if (text) text.textContent = message;
-            const close = wrap.querySelector('.addon-frame-close');
-            if (close) close.hidden = false;
+            const actions = wrap.querySelector('.addon-frame-error-actions');
+            if (actions) actions.hidden = false;
         }
         this.addLogEntry?.({ type: 'WARN', msg: `Аддон ${instance.id}: ${message}`, ts: new Date().toLocaleTimeString() });
         this.renderHubAddons?.();
@@ -52049,7 +52190,9 @@ ZaliMixin(ZaliInterface, class {
         if (this._addonRpcMethods) return this._addonRpcMethods;
         const methods = {
             hello: { run: (instance) => this.addonHello(instance) },
-            'ui.collapse': { run: () => { this.collapseAddon(); return true; } },
+            // Только свой аддон и только пока он развёрнут: collapseAddon() сворачивает
+            // «текущий», и без проверки фоновый аддон гасил бы чужой на экране.
+            'ui.collapse': { run: (instance) => { if (instance.expanded) this.collapseAddon(); return true; } },
             'ui.close': { run: (instance) => { setTimeout(() => this.stopAddon(instance.id), 0); return true; } },
             'ui.setTitle': {
                 run: (instance, params) => {
@@ -52658,6 +52801,7 @@ ZaliMixin(ZaliInterface, class {
             const id = btn.closest('[data-addon-id]')?.getAttribute('data-addon-id') || '';
             this.handleAddonAction(btn.getAttribute('data-addon-action'), id);
         });
+        this.bindAddonDropZone(document.getElementById('hubAddons'));
         const input = document.getElementById('addonFileInput');
         input?.addEventListener('change', () => {
             const file = input.files?.[0];
@@ -52675,21 +52819,70 @@ ZaliMixin(ZaliInterface, class {
         this.refreshAddonsList();
     }
 
+    /** Файл .zali, брошенный на раздел «Аддоны», идёт тем же путём, что выбор через «Установить». */
+    bindAddonDropZone(zone) {
+        if (!zone) return;
+        const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+        let depth = 0;
+        const clear = () => { depth = 0; zone.classList.remove('is-dropping'); };
+        zone.addEventListener('dragenter', (e) => {
+            if (!hasFiles(e) || !this.addonsAvailable()) return;
+            e.preventDefault();
+            depth += 1;
+            zone.classList.add('is-dropping');
+        });
+        zone.addEventListener('dragover', (e) => {
+            if (!hasFiles(e) || !this.addonsAvailable()) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        zone.addEventListener('dragleave', () => {
+            depth = Math.max(0, depth - 1);
+            if (!depth) zone.classList.remove('is-dropping');
+        });
+        zone.addEventListener('drop', (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            clear();
+            if (!this.addonsAvailable()) return;
+            const files = Array.from(e.dataTransfer.files || []);
+            const file = files.find(f => /\.zali$/i.test(f.name)) || files[0];
+            if (!file) return;
+            if (files.length > 1) this.setAddonsStatus('Брошено несколько файлов — ставлю первый .zali; остальные ставьте по одному.');
+            this.installAddonFromFile(file);
+        });
+    }
+
     handleAddonAction(action, id) {
         if (action === 'install') {
             document.getElementById('addonFileInput')?.click();
         } else if (action === 'retry') {
             this.refreshAddonsList();
         } else if (action === 'open') {
-            this.setAddonsStatus('');
-            this.launchAddon(id).catch((error) => {
-                this.setAddonsStatus(`Не удалось открыть аддон: ${error?.message || error}`, 'error');
-            });
+            this.openAddonFromHub(id);
         } else if (action === 'stop') {
             this.stopAddon(id);
         } else if (action === 'details') {
             const meta = (this._addonsList || []).find(item => item.id === id);
             if (meta) this.showAddonDetailsDialog(meta);
+        }
+    }
+
+    /** «Открыть»: пока идёт запуск (чтение файла, системное подтверждение), кнопка занята — двойной клик не стартует дважды. */
+    async openAddonFromHub(id) {
+        if (!this._addonLaunching) this._addonLaunching = new Set();
+        if (this._addonLaunching.has(id)) return;
+        this._addonLaunching.add(id);
+        if (this._addonJustInstalled === id) this._addonJustInstalled = null;
+        this.setAddonsStatus('');
+        this.renderHubAddons();
+        try {
+            await this.launchAddon(id);
+        } catch (error) {
+            this.setAddonsStatus(`Не удалось открыть аддон: ${error?.message || error}`, 'error');
+        } finally {
+            this._addonLaunching.delete(id);
+            this.renderHubAddons();
         }
     }
 
@@ -52769,19 +52962,22 @@ ZaliMixin(ZaliInterface, class {
             const instance = this.addonInstances().get(meta.id);
             const running = !!instance;
             const elevated = m.permissions.some(p => F.isElevated(p));
-            return `<article class="hub-addon-item${running ? ' is-running' : ''}" data-addon-id="${this.esc(meta.id)}">
+            const launching = !!this._addonLaunching?.has(meta.id);
+            const fresh = this._addonJustInstalled === meta.id;
+            return `<article class="hub-addon-item${running ? ' is-running' : ''}${fresh ? ' is-new' : ''}" data-addon-id="${this.esc(meta.id)}">
                 ${this.addonIconHtml(meta)}
                 <div class="hub-addon-main">
                     <div class="hub-component-top">
                         <strong>${this.esc(m.name)}</strong>
                         <span class="hub-component-version">${this.esc(m.version)}</span>
+                        ${fresh ? '<span class="hub-addon-flag is-new">Новый</span>' : ''}
                         ${elevated ? '<span class="hub-addon-flag is-elevated">Повышенные права</span>' : ''}
                         ${running ? (instance.recorder ? '<span class="hub-addon-flag is-recording">Идёт запись</span>' : '<span class="hub-addon-flag is-running">Работает</span>') : ''}
                     </div>
                     <p>${this.esc(m.description || 'Без описания')}</p>
                 </div>
                 <div class="hub-addon-actions">
-                    <button class="auth-btn primary" type="button" data-addon-action="open">${running ? 'Развернуть' : 'Открыть'}</button>
+                    <button class="auth-btn primary" type="button" data-addon-action="open"${launching ? ' disabled aria-busy="true"' : ''}>${launching ? 'Запуск…' : running ? 'Развернуть' : 'Открыть'}</button>
                     ${running ? '<button class="btn-flat" type="button" data-addon-action="stop">Остановить</button>' : ''}
                     <button class="hub-addon-more" type="button" data-addon-action="details" title="Об аддоне" aria-label="Об аддоне «${this.esc(m.name)}»">
                         <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="4.5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/></svg>
@@ -52789,6 +52985,11 @@ ZaliMixin(ZaliInterface, class {
                 </div>
             </article>`;
         }).join('');
+        const fresh = list.querySelector('.hub-addon-item.is-new');
+        if (fresh && this._addonScrollToNew) {
+            this._addonScrollToNew = false;
+            try { fresh.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* без прокрутки */ }
+        }
     }
 
     // ---- Установка ----
@@ -52831,6 +53032,8 @@ ZaliMixin(ZaliInterface, class {
                 updatedAt: now,
             };
             await this.addonStorePut(meta, info.bytes);
+            this._addonJustInstalled = existing ? null : m.id;
+            this._addonScrollToNew = !existing;
             await this.refreshAddonsList();
             this.setAddonsStatus(existing ? `«${m.name}» обновлён до ${m.version}.` : `«${m.name}» установлен — откройте его кнопкой «Открыть».`, 'success');
         } catch (error) {
@@ -52854,6 +53057,14 @@ ZaliMixin(ZaliInterface, class {
         if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1).replace('.', ',')} МБ`;
         if (n >= 1024) return `${Math.max(1, Math.round(n / 1024))} КБ`;
         return `${n} Б`;
+    }
+
+    addonFilesWord(n) {
+        const last = n % 10;
+        const tens = n % 100;
+        if (tens >= 11 && tens <= 14) return 'файлов';
+        if (last === 1) return 'файл';
+        return last >= 2 && last <= 4 ? 'файла' : 'файлов';
     }
 
     addonFingerprintLabel(sha256) {
@@ -52928,8 +53139,22 @@ ZaliMixin(ZaliInterface, class {
         return this.openAddonDialog(html).then(action => action === 'ok');
     }
 
+    /** Сколько места занимают данные аддона (настройки и кеш) на этом устройстве; null — не удалось узнать. */
+    async addonDataUsage(id) {
+        try {
+            const entries = await this.addonDataList(id, '');
+            return { files: entries.length, bytes: entries.reduce((sum, e) => sum + Number(e.size || 0), 0), entries };
+        } catch (error) {
+            return null;
+        }
+    }
+
     async showAddonDetailsDialog(meta) {
         const m = meta.manifest;
+        const usage = await this.addonDataUsage(meta.id);
+        const dataLine = usage
+            ? (usage.files ? `Данные аддона: ${this.addonSizeLabel(usage.bytes)} (${usage.files} ${this.addonFilesWord(usage.files)})` : 'Данных аддон пока не сохранил')
+            : '';
         const sub = [`Версия ${m.version}`, m.author, this.addonSizeLabel(meta.size)].filter(Boolean).join(' · ');
         const installed = meta.updatedAt ? new Date(meta.updatedAt).toLocaleDateString('ru-RU') : '';
         const html = `
@@ -52945,12 +53170,33 @@ ZaliMixin(ZaliInterface, class {
                 <h3>Разрешения</h3>
                 ${this.addonPermissionsHtml(m)}
             </section>
-            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}</p>
+            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}${dataLine ? `<br>${this.esc(dataLine)}` : ''}</p>
             <div class="coin-transfer-actions addon-dialog-actions">
-                <button class="btn-flat addon-dialog-danger" type="button" data-dialog-action="remove">Удалить аддон</button>
+                <span class="addon-dialog-danger-group">
+                    <button class="btn-flat addon-dialog-danger" type="button" data-dialog-action="remove">Удалить аддон</button>
+                    ${usage?.files ? '<button class="btn-flat" type="button" data-dialog-action="clear">Очистить данные</button>' : ''}
+                </span>
                 <button class="auth-btn primary" type="button" data-dialog-action="cancel">Закрыть</button>
             </div>`;
         const action = await this.openAddonDialog(html);
+        if (action === 'clear') {
+            const sure = await this.confirmAction({
+                title: `Очистить данные «${m.name}»?`,
+                message: 'Настройки и кеш аддона будут стёрты с этого устройства. Сам аддон останется установленным.',
+                confirmLabel: 'Очистить',
+            });
+            if (!sure) return;
+            try {
+                // Запущенный аддон держит настройки в памяти и записал бы их обратно.
+                const wasRunning = this.addonInstances().has(meta.id);
+                if (wasRunning) this.stopAddon(meta.id);
+                for (const entry of usage.entries) await this.addonDataDelete(meta.id, entry.path);
+                this.setAddonsStatus(`Данные «${m.name}» очищены${wasRunning ? '; аддон остановлен — откройте его заново' : ''}.`, 'success');
+            } catch (error) {
+                this.setAddonsStatus(`Не удалось очистить данные «${m.name}»: ${error?.message || error}`, 'error');
+            }
+            return;
+        }
         if (action !== 'remove') return;
         const confirmed = await this.confirmAction({
             title: `Удалить «${m.name}»?`,
@@ -54420,6 +54666,8 @@ ZaliMixin(ZaliInterface, class {
                 resetStatusEl.hidden = !text;
             };
             resetEncryptionKeysBtn.addEventListener('click', async () => {
+"""#,
+    #"""
                 const confirmReset = await this.confirmAction({
                     title: 'Сбросить ключи шифрования?',
                     message: 'Ключи всех переписок будут удалены на этом устройстве и на сервере. Новые ключи создадутся автоматически при следующей отправке сообщения.',
@@ -54553,8 +54801,6 @@ ZaliMixin(ZaliInterface, class {
                 } catch (error) {
                     this.addLogEntry({
                         type: 'ERROR',
-"""#,
-    #"""
                         msg: `Не удалось сохранить network config: ${error?.message || error}`,
                         ts: new Date().toLocaleTimeString(),
                     });

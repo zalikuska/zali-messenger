@@ -17,6 +17,19 @@
     function zaliAddonSdk() {
         'use strict';
         if (window.zali) return;
+        // WebRTC не подчиняется CSP (`connect-src` его не касается): через
+        // ICE/TURN-адрес и учётные данные аддон без разрешения `network` мог бы
+        // вынести данные на чужой сервер. Звук идёт через zali.mic, поэтому
+        // конструкторы убираем до кода аддона. Вложенные фреймы закрыты
+        // `frame-src 'none'`, в воркерах RTCPeerConnection нет — свежего окна,
+        // где он остался бы, аддону взять негде.
+        ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'RTCDataChannel'].forEach(function (name) {
+            try {
+                Object.defineProperty(window, name, { value: undefined, writable: false, configurable: false });
+            } catch (e) {
+                try { window[name] = undefined; } catch (e2) { /* не вышло — CSP и песочница остаются */ }
+            }
+        });
         var host = window.parent;
         var RPC = 'zali-addon-rpc';
         var EVENT = 'zali-addon-event';

@@ -15323,9 +15323,26 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     display: none;
 }
 
-.addon-frame-close {
-    min-height: 44px;
-    padding: 0 20px;
+.addon-frame-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.addon-frame-error-actions[hidden] {
+    display: none;
+}
+
+.addon-frame-close,
+.addon-frame-restart {
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 .addon-frame-spinner {
@@ -15344,10 +15361,15 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 }
 
 /* Хаб: раздел «Аддоны». Каркас — .hub-components. */
-.hub-addons-install {
+.auth-btn.hub-addons-install {
     flex: none;
-    min-height: 44px;
-    padding: 0 18px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 .hub-addons-status {
@@ -15420,6 +15442,26 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     border-color: rgba(var(--accent-rgb), .22);
 }
 
+.hub-addon-item.is-new {
+    border-color: rgba(var(--accent-rgb), .45);
+}
+
+.hub-addons.is-dropping {
+    outline: 2px dashed rgba(var(--accent-rgb), .55);
+    outline-offset: 4px;
+    border-radius: 16px;
+}
+
+.hub-component-top .hub-addon-flag.is-new {
+    background: var(--lime);
+    color: #000;
+}
+
+.hub-addon-actions .auth-btn[disabled] {
+    opacity: .7;
+    cursor: progress;
+}
+
 .hub-addon-icon {
     display: grid;
     place-items: center;
@@ -15478,8 +15520,13 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 .hub-addon-actions .auth-btn,
 .hub-addon-actions .btn-flat {
-    min-height: 44px;
-    padding: 0 16px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 /* На телефоне у .btn-flat есть ::after-зона нажатия 44px (absolute) — без
@@ -15493,10 +15540,10 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 .hub-addon-more {
     display: grid;
     place-items: center;
-    width: 44px;
-    height: 44px;
+    width: 34px;
+    height: 34px;
     border: 1px solid transparent;
-    border-radius: 12px;
+    border-radius: 10px;
     background: transparent;
     color: var(--text2);
     cursor: pointer;
@@ -15654,8 +15701,13 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 .addon-dialog .coin-transfer-actions .auth-btn,
 .addon-dialog .coin-transfer-actions .btn-flat {
-    min-height: 44px;
-    padding: 0 18px;
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
 }
 
 .addon-dialog .auth-btn[disabled] {
@@ -15668,6 +15720,12 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     justify-content: space-between;
 }
 
+.addon-dialog-danger-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .addon-dialog-danger {
     color: var(--red);
 }
@@ -15675,6 +15733,36 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 .addon-dialog-danger:hover {
     border-color: rgba(255, 77, 109, .4);
     background: rgba(255, 77, 109, .1);
+}
+
+/* Режимы дизайна (focus, плоский) задают кнопкам свою высоту и кегль через
+   body[data-design-mode] .auth-btn.primary — префиксом забираем специфичность,
+   чтобы кнопки аддонов оставались компактными в любом режиме. */
+body[data-design-mode] .hub-addons .auth-btn,
+body[data-design-mode] .hub-addons .btn-flat,
+body[data-design-mode] .addon-dialog .coin-transfer-actions .auth-btn,
+body[data-design-mode] .addon-dialog .coin-transfer-actions .btn-flat,
+body[data-design-mode] .addon-frame-state .auth-btn,
+body[data-design-mode] .addon-frame-state .btn-flat {
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: none;
+}
+
+body[data-design-mode] .addon-dialog .coin-transfer-actions .auth-btn,
+body[data-design-mode] .addon-dialog .coin-transfer-actions .btn-flat,
+body[data-design-mode] .addon-frame-state .auth-btn,
+body[data-design-mode] .addon-frame-state .btn-flat {
+    min-height: 36px;
+}
+
+body[data-design-mode] .hub-addons .hub-addon-more {
+    width: 34px;
+    height: 34px;
 }
 
 @media (max-width: 760px) {
@@ -15713,6 +15801,29 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
     .hub-addon-item {
         grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .auth-btn.hub-addons-install,
+    .hub-addon-actions .auth-btn,
+    .hub-addon-actions .btn-flat,
+    .addon-dialog .coin-transfer-actions .auth-btn,
+    .addon-dialog .coin-transfer-actions .btn-flat {
+        min-height: 40px;
+    }
+
+    .hub-addon-more,
+    body[data-design-mode] .hub-addons .hub-addon-more {
+        width: 40px;
+        height: 40px;
+    }
+
+    body[data-design-mode] .hub-addons .auth-btn,
+    body[data-design-mode] .hub-addons .btn-flat,
+    body[data-design-mode] .addon-dialog .coin-transfer-actions .auth-btn,
+    body[data-design-mode] .addon-dialog .coin-transfer-actions .btn-flat,
+    body[data-design-mode] .addon-frame-state .auth-btn,
+    body[data-design-mode] .addon-frame-state .btn-flat {
+        min-height: 40px;
     }
 
     .hub-addon-actions {

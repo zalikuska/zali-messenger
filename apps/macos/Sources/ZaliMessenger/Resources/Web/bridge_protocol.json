@@ -227,6 +227,13 @@
         "meta",
         "dataBase64",
         "requestId"
+      ],
+      "optional": [
+        "addonId",
+        "path",
+        "meta",
+        "dataBase64",
+        "requestId"
       ]
     },
     "AUTOSTART_REQUEST": {
