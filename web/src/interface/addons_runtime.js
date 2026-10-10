@@ -187,6 +187,7 @@ ZaliMixin(ZaliInterface, class {
         // Фрейм выгружается сразу: чужой документ в нём не должен жить ни секунды.
         try { instance.iframe?.remove(); } catch (e) { /* уже нет */ }
         instance.iframe = null;
+        this.addonStopRecorder?.(instance);
         this.addonSessionEnd?.(instance);
         const wrap = instance.wrap;
         if (wrap) {
@@ -686,9 +687,12 @@ ZaliMixin(ZaliInterface, class {
         titlebar.classList.toggle('addon-expanded', !!expanded);
         document.body.classList.toggle('addon-expanded', !!expanded);
         if (titleEl) titleEl.textContent = expanded ? (expanded.title || expanded.manifest.name) : '';
+        // Идущая запись с микрофона видна всегда — и в развёрнутом, и в свёрнутом виде.
+        const recDot = '<span class="tb-addon-rec" title="Идёт запись с микрофона" aria-label="Идёт запись с микрофона"></span>';
         if (expanded) {
             const name = expanded.manifest.name;
             slot.innerHTML = `<button class="tb-addon-btn" type="button" data-addon-tb="collapse" title="Свернуть «${this.esc(name)}»" aria-label="Свернуть аддон «${this.esc(name)}»">
+                ${expanded.recorder ? recDot : ''}
                 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 6.25 8 10.75l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <span class="tb-addon-btn-label">Свернуть</span>
             </button>`;
@@ -696,7 +700,7 @@ ZaliMixin(ZaliInterface, class {
             const last = running.slice().sort((a, b) => b.collapsedAt - a.collapsedAt)[0];
             const more = running.length - 1;
             slot.innerHTML = `<button class="tb-addon-chip" type="button" data-addon-tb="expand" data-addon-id="${this.esc(last.id)}" title="Развернуть «${this.esc(last.manifest.name)}»" aria-label="Развернуть аддон «${this.esc(last.manifest.name)}»">
-                <span class="tb-addon-dot" aria-hidden="true"></span>
+                ${running.some(i => i.recorder) ? recDot : '<span class="tb-addon-dot" aria-hidden="true"></span>'}
                 <span class="tb-addon-chip-name">${this.esc(last.title || last.manifest.name)}</span>
                 ${more > 0 ? `<span class="tb-addon-more">+${Number(more)}</span>` : ''}
             </button>`;

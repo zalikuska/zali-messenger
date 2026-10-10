@@ -15222,6 +15222,15 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     box-shadow: 0 0 0 3px var(--lime-dim);
 }
 
+.tb-addon-rec {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+    box-shadow: 0 0 0 3px rgba(255, 77, 109, .22);
+}
+
 .tb-addon-chip-name {
     min-width: 0;
     overflow: hidden;
@@ -15449,7 +15458,8 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     color: var(--text2);
 }
 
-.hub-component-top .hub-addon-flag.is-elevated {
+.hub-component-top .hub-addon-flag.is-elevated,
+.hub-component-top .hub-addon-flag.is-recording {
     border-color: rgba(255, 77, 109, .3);
     background: rgba(255, 77, 109, .08);
     color: var(--red);

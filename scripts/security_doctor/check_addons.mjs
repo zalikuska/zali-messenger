@@ -174,4 +174,23 @@ section('sandbox (web/src/interface/addons_runtime.js)');
     record('the stored file is re-verified on every launch', /launchAddon[\s\S]{0,1500}?meta\.sha256 !== info\.sha256/.test(src));
 }
 
+section('permissions (web/src/interface/addons_permissions.js)');
+{
+    const src = stripLineComments(read('web/src/interface/addons_permissions.js'));
+    const block = /addonRpcExtraMethods\(\) \{\s*return \{([\s\S]*?)\n        \};/.exec(src)?.[1] || '';
+    const rows = block.split('\n').filter(line => /^\s*('[^']+'|[a-z]+):\s*\{/.test(line));
+    const open = rows.filter(line => !/permission: '[a-z.]+'/.test(line));
+    record('every extra RPC method names its permission', rows.length > 0 && open.length === 0,
+        open.length ? `without one: ${open.map(l => l.trim().split(':')[0]).join(', ')}` : `${rows.length} methods`);
+    record('user-visible actions need the addon on screen',
+        /addonSaveFile[\s\S]{0,120}?addonRequireVisible/.test(src)
+        && /addonMicStart[\s\S]{0,200}?addonRequireVisible/.test(src)
+        && /addonClipboardWrite[\s\S]{0,300}?addonRequireVisible/.test(src));
+    record('notifications carry the addon\'s name, not a chat sender', /const sender = `Аддон «\$\{instance\.manifest\.name\}»`/.test(src));
+    record('the microphone is released when the addon stops',
+        /addonStopRecorder\(instance\) \{[\s\S]{0,400}?getTracks\(\)\.forEach\(t => t\.stop\(\)\)/.test(src)
+        && /stopAddon[\s\S]{0,300}?addonStopRecorder/.test(read(RUNTIME_PATH))
+        && /failAddon[\s\S]{0,500}?addonStopRecorder/.test(read(RUNTIME_PATH)));
+}
+
 finish('addons');

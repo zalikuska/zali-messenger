@@ -138,7 +138,7 @@ ZaliMixin(ZaliInterface, class {
                         <strong>${this.esc(m.name)}</strong>
                         <span class="hub-component-version">${this.esc(m.version)}</span>
                         ${elevated ? '<span class="hub-addon-flag is-elevated">Повышенные права</span>' : ''}
-                        ${running ? '<span class="hub-addon-flag is-running">Работает</span>' : ''}
+                        ${running ? (instance.recorder ? '<span class="hub-addon-flag is-recording">Идёт запись</span>' : '<span class="hub-addon-flag is-running">Работает</span>') : ''}
                     </div>
                     <p>${this.esc(m.description || 'Без описания')}</p>
                 </div>
