@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git push origin HEAD:main)",
+      "Bash(git push origin main)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
