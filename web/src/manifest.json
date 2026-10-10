@@ -28,7 +28,9 @@
     "modules/servers.js",
     "modules/voice.js",
     "modules/wasm_bridge.js",
-    "modules/tgs.js"
+    "modules/tgs.js",
+    "modules/addon_format.js",
+    "modules/addon_sdk.js"
   ],
   "core": [
     "bus.js",
@@ -82,6 +84,9 @@
     "interface/diagnostics.js",
     "interface/diagnostic_reports.js",
     "interface/confirm_dialog.js",
+    "interface/addons_store.js",
+    "interface/addons_runtime.js",
+    "interface/addons_ui.js",
     "interface/events.js"
   ],
   "boot": [

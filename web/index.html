@@ -122,11 +122,16 @@
         <header class="titlebar" id="titlebar">
             <div class="tb-l">
                 <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false" onclick="try{window.loader.modules.get('zali_interface').toggleMobileSidebar()}catch(e){}">☰</button>
+                <!-- Аддон хаба: «Свернуть», пока он развёрнут, или плашка свёрнутого.
+                     Встаёт сразу после кнопок окна — на Windows переезжает к
+                     #winControls (placeAddonTitlebarSlot() в addons_runtime.js). -->
+                <div class="tb-addon" id="tbAddon" hidden></div>
             </div>
             <div class="tb-c">
                 <span class="tb-brand">ZaliMessenger</span>
                 <span class="tb-sep">/</span>
                 <span class="tb-chat" id="tbChat">Загрузка...</span>
+                <span class="tb-addon-title" id="tbAddonTitle"></span>
                 <!-- Server-pushed announcement (titlebar_announcement WS event) —
                      replaces the brand/chat name above until dismissed. See
                      showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
@@ -160,6 +165,13 @@
                 </div>
             </div>
         </header>
+
+        <!-- Развёрнутый аддон хаба: на всё приложение под верхней полосой.
+             Фреймы-песочницы кладёт mountAddonFrame() (addons_runtime.js).
+             На телефоне верхней полосы нет — «Свернуть» в своей полоске сцены. -->
+        <div class="addon-stage" id="addonStage" hidden>
+            <div class="addon-stage-bar" id="addonStageBar"></div>
+        </div>
 
         <button class="mobile-backdrop" id="mobileBackdrop" type="button" aria-label="Закрыть меню" hidden onclick="document.body.classList.remove('mobile-sidebar-open'); this.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')"></button>
 
@@ -310,6 +322,18 @@
                             <div class="hub-orb" aria-hidden="true">HUB</div>
                         </section>
                         <div class="hub-grid" id="hubGrid"></div>
+                        <section class="hub-components hub-addons" id="hubAddons" aria-labelledby="hubAddonsTitle">
+                            <div class="hub-components-head">
+                                <div>
+                                    <span class="settings-kicker">Аддоны</span>
+                                    <h3 id="hubAddonsTitle">Мини-приложения</h3>
+                                </div>
+                                <button class="auth-btn primary hub-addons-install" id="hubAddonsInstallBtn" type="button" data-addon-action="install" hidden>Установить аддон</button>
+                            </div>
+                            <p class="hub-addons-status" id="hubAddonsStatus" role="status" aria-live="polite" hidden></p>
+                            <div class="hub-addons-list" id="hubAddonsList"></div>
+                            <input type="file" id="addonFileInput" accept=".zali" hidden>
+                        </section>
                         <section class="hub-components" id="hubComponents"></section>
                     </div>
                 </div>

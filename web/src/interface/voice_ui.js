@@ -496,6 +496,8 @@ ZaliMixin(ZaliInterface, class {
         // …но если открыт чат именно с этим человеком, звонок уже в его шапке.
         const ringing = this.voiceRingingState();
         if (ringing) {
+            // Развёрнутый аддон хаба закрывает приложение целиком — входящий его сворачивает.
+            if (ringing.kind === 'incoming') this.collapseAddonForIncomingCall?.(this.voice.incomingInvite);
             if (this.isRingingInChatHeader(ringing)) setStrip('', '');
             else if (ringing.kind === 'incoming') setStrip('incoming', this.renderVoiceIncomingStrip(this.voice.incomingInvite));
             else setStrip('incoming', this.renderVoiceOutgoingStrip(ringing.peer));

@@ -25,6 +25,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindCryptoKeyEvents();                       // ручной ввод ключа шифрования
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
+        this.bindAddonEvents();                           // аддоны хаба и «Свернуть» в верхней полосе (после кнопок окна)
     }
 
     /** Кнопки пустых состояний («Создать сервер», «Найти человека»). Вызывается из bindContactListEvents(). */
@@ -1867,7 +1868,7 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
@@ -1911,7 +1912,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });

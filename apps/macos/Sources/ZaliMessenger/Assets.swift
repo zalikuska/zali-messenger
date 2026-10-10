@@ -15178,6 +15178,580 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     display: none;
 }
 
+/* ── Аддоны хаба: сцена развёрнутого аддона, «Свернуть» в верхней полосе,
+   список в хабе, окно установки. Логика — web/src/interface/addons_*.js. ── */
+
+.tb-addon {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.tb-addon[hidden] {
+    display: none;
+}
+
+/* macOS: светофор нативный и лежит поверх левой колонки — слот встаёт сразу за ним. */
+.titlebar.has-traffic-lights .tb-l {
+    padding-left: 62px;
+}
+
+/* Windows: слот вплотную к кнопкам окна. */
+.titlebar.tb-addon-right .tb-addon {
+    margin-right: 4px;
+}
+
+.tb-addon-btn,
+.tb-addon-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    max-width: 220px;
+    padding: 0 12px 0 10px;
+    border: 1px solid rgba(var(--accent-rgb), .22);
+    border-radius: 10px;
+    background: rgba(var(--accent-rgb), .08);
+    color: var(--lime);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s var(--ease-out), border-color .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.tb-addon-btn:hover,
+.tb-addon-chip:hover {
+    border-color: rgba(var(--accent-rgb), .4);
+    background: rgba(var(--accent-rgb), .14);
+}
+
+.tb-addon-btn:focus-visible,
+.tb-addon-chip:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lime-dim), 0 0 0 1px var(--lime);
+}
+
+.tb-addon-btn svg {
+    flex: none;
+}
+
+.tb-addon-chip {
+    border-color: var(--border);
+    background: rgba(255,255,255,.05);
+    color: var(--text);
+}
+
+.tb-addon-dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lime);
+    box-shadow: 0 0 0 3px var(--lime-dim);
+}
+
+.tb-addon-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tb-addon-more {
+    flex: none;
+    color: var(--text3);
+}
+
+.tb-addon-title {
+    display: none;
+    color: var(--lime);
+}
+
+.titlebar.addon-expanded .tb-chat {
+    display: none;
+}
+
+.titlebar.addon-expanded:not(.has-announcement) .tb-addon-title {
+    display: inline;
+}
+
+.addon-stage {
+    position: absolute;
+    top: var(--titlebar-h);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 650;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+}
+
+.addon-stage[hidden] {
+    display: none;
+}
+
+.addon-stage-bar {
+    display: none;
+}
+
+.addon-frame-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+.addon-frame-wrap[hidden] {
+    display: none;
+}
+
+.addon-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color-scheme: dark;
+}
+
+.addon-frame-state {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    color: var(--text2);
+    font-size: 13px;
+    text-align: center;
+    background: var(--bg);
+}
+
+.addon-frame-wrap.is-loading .addon-frame-state,
+.addon-frame-wrap.is-error .addon-frame-state {
+    display: flex;
+}
+
+.addon-frame-wrap.is-error .addon-frame-state-text {
+    max-width: 420px;
+    color: var(--text);
+}
+
+.addon-frame-wrap.is-error .addon-frame-spinner {
+    display: none;
+}
+
+.addon-frame-close {
+    min-height: 44px;
+    padding: 0 20px;
+}
+
+.addon-frame-spinner {
+    display: inline-block;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(var(--accent-rgb), .2);
+    border-top-color: var(--lime);
+    border-radius: 50%;
+    animation: addon-spin .8s linear infinite;
+}
+
+@keyframes addon-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Хаб: раздел «Аддоны». Каркас — .hub-components. */
+.hub-addons-install {
+    flex: none;
+    min-height: 44px;
+    padding: 0 18px;
+}
+
+.hub-addons-status {
+    margin: 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.hub-addons-status[hidden] {
+    display: none;
+}
+
+.hub-addons-status.is-error {
+    color: var(--red);
+}
+
+.hub-addons-status.is-success {
+    color: var(--lime);
+}
+
+.hub-addons-list {
+    display: grid;
+    gap: 10px;
+}
+
+.hub-addons-note {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    margin: 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.hub-addons-note.is-error > span {
+    color: var(--red);
+}
+
+.hub-addons-empty {
+    display: grid;
+    gap: 4px;
+    padding: 18px;
+    border: 1px dashed rgba(255,255,255,.1);
+    border-radius: 16px;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.hub-addons-empty strong {
+    color: var(--text);
+    font-size: 14px;
+}
+
+.hub-addon-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+    padding: 12px 12px 12px 14px;
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 16px;
+    background: rgba(255,255,255,.025);
+}
+
+.hub-addon-item.is-running {
+    border-color: rgba(var(--accent-rgb), .22);
+}
+
+.hub-addon-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    overflow: hidden;
+    border: 1px solid rgba(var(--accent-rgb), .16);
+    border-radius: 12px;
+    background: rgba(var(--accent-rgb), .07);
+    color: var(--lime);
+    font-size: 18px;
+    font-weight: 900;
+}
+
+.hub-addon-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.hub-addon-main {
+    min-width: 0;
+}
+
+.hub-addon-main p {
+    margin: 6px 0 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.hub-component-top .hub-addon-flag {
+    border-color: var(--border);
+    background: rgba(255,255,255,.05);
+    color: var(--text2);
+}
+
+.hub-component-top .hub-addon-flag.is-elevated {
+    border-color: rgba(255, 77, 109, .3);
+    background: rgba(255, 77, 109, .08);
+    color: var(--red);
+}
+
+.hub-component-top .hub-addon-flag.is-running {
+    border-color: rgba(var(--accent-rgb), .22);
+    color: var(--lime);
+}
+
+.hub-addon-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hub-addon-actions .auth-btn,
+.hub-addon-actions .btn-flat {
+    min-height: 44px;
+    padding: 0 16px;
+}
+
+/* На телефоне у .btn-flat есть ::after-зона нажатия 44px (absolute) — без
+   своего position она растягивается на ближайшего позиционированного предка
+   и перекрывает соседние кнопки. */
+.hub-addon-actions .btn-flat,
+.addon-dialog .btn-flat {
+    position: relative;
+}
+
+.hub-addon-more {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text2);
+    cursor: pointer;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.hub-addon-more svg {
+    fill: currentColor;
+}
+
+.hub-addon-more:hover {
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+}
+
+/* Окно установки и сведений аддона — каркас .coin-transfer-modal. */
+.addon-dialog-box {
+    width: min(100%, 460px);
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+}
+
+.addon-dialog-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.addon-dialog-head h2 {
+    margin: 0;
+    color: var(--text);
+    font-size: 18px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.addon-dialog-sub,
+.addon-dialog-desc,
+.addon-dialog-fp {
+    margin: 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.addon-dialog-sub {
+    margin-top: 4px;
+    color: var(--text3);
+}
+
+.addon-dialog-desc {
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.addon-dialog-fp code {
+    color: var(--text);
+    font-size: 11px;
+    word-break: break-all;
+}
+
+.addon-dialog-perms {
+    display: grid;
+    gap: 10px;
+}
+
+.addon-dialog-perms h3,
+.addon-perm-elevated h3 {
+    margin: 0;
+    color: var(--text3);
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.addon-perm-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.addon-perm {
+    display: grid;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.03);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-perm strong {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.addon-perm span {
+    color: var(--text2);
+}
+
+.addon-perm .addon-perm-hosts {
+    color: var(--text3);
+    overflow-wrap: anywhere;
+}
+
+.addon-perm.is-unsupported {
+    border-color: rgba(255, 77, 109, .3);
+}
+
+.addon-perm-new {
+    margin-left: 6px;
+    color: var(--lime);
+    font-size: 11px;
+    font-style: normal;
+    text-transform: uppercase;
+}
+
+.addon-perm-none {
+    margin: 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-perm-elevated {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid rgba(255, 77, 109, .3);
+    border-radius: 14px;
+    background: rgba(255, 77, 109, .06);
+}
+
+.addon-perm-elevated h3 {
+    color: var(--red);
+}
+
+.addon-perm-elevated p {
+    margin: 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-dialog-error {
+    margin: 0;
+    color: var(--red);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-dialog .coin-transfer-actions .auth-btn,
+.addon-dialog .coin-transfer-actions .btn-flat {
+    min-height: 44px;
+    padding: 0 18px;
+}
+
+.addon-dialog .auth-btn[disabled] {
+    opacity: .45;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.addon-dialog-actions {
+    justify-content: space-between;
+}
+
+.addon-dialog-danger {
+    color: var(--red);
+}
+
+.addon-dialog-danger:hover {
+    border-color: rgba(255, 77, 109, .4);
+    background: rgba(255, 77, 109, .1);
+}
+
+@media (max-width: 760px) {
+    /* Верхней полосы на телефоне нет — сцена с самого верха, «Свернуть» в своей полоске. */
+    .addon-stage {
+        top: 0;
+        z-index: 900;
+    }
+
+    .addon-stage-bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: none;
+        min-height: 52px;
+        padding: var(--m-safe-top) 10px 0;
+        border-bottom: 1px solid var(--border);
+        background: var(--sidebar);
+    }
+
+    .addon-stage-bar .tb-addon-btn {
+        height: 44px;
+        padding: 0 14px 0 12px;
+        font-size: 13px;
+    }
+
+    .addon-stage-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 800;
+    }
+
+    .hub-addon-item {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .hub-addon-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-end;
+    }
+
+    .hub-components-head.hub-addons-head,
+    .hub-addons .hub-components-head {
+        flex-wrap: wrap;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .addon-frame-spinner {
+        animation-duration: 2.4s;
+    }
+}
+
 </style>
     <title>ZaliMessenger</title>
 
@@ -15537,11 +16111,16 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
         <header class="titlebar" id="titlebar">
             <div class="tb-l">
                 <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false" onclick="try{window.loader.modules.get('zali_interface').toggleMobileSidebar()}catch(e){}">☰</button>
+                <!-- Аддон хаба: «Свернуть», пока он развёрнут, или плашка свёрнутого.
+                     Встаёт сразу после кнопок окна — на Windows переезжает к
+                     #winControls (placeAddonTitlebarSlot() в addons_runtime.js). -->
+                <div class="tb-addon" id="tbAddon" hidden></div>
             </div>
             <div class="tb-c">
                 <span class="tb-brand">ZaliMessenger</span>
                 <span class="tb-sep">/</span>
                 <span class="tb-chat" id="tbChat">Загрузка...</span>
+                <span class="tb-addon-title" id="tbAddonTitle"></span>
                 <!-- Server-pushed announcement (titlebar_announcement WS event) —
                      replaces the brand/chat name above until dismissed. See
                      showTitlebarAnnouncement()/hideTitlebarAnnouncement() in
@@ -15575,6 +16154,13 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                 </div>
             </div>
         </header>
+
+        <!-- Развёрнутый аддон хаба: на всё приложение под верхней полосой.
+             Фреймы-песочницы кладёт mountAddonFrame() (addons_runtime.js).
+             На телефоне верхней полосы нет — «Свернуть» в своей полоске сцены. -->
+        <div class="addon-stage" id="addonStage" hidden>
+            <div class="addon-stage-bar" id="addonStageBar"></div>
+        </div>
 
         <button class="mobile-backdrop" id="mobileBackdrop" type="button" aria-label="Закрыть меню" hidden onclick="document.body.classList.remove('mobile-sidebar-open'); this.hidden = true; var m=document.getElementById('mobileMenuBtn'); if (m) m.setAttribute('aria-expanded', 'false')"></button>
 
@@ -15725,6 +16311,18 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
                             <div class="hub-orb" aria-hidden="true">HUB</div>
                         </section>
                         <div class="hub-grid" id="hubGrid"></div>
+                        <section class="hub-components hub-addons" id="hubAddons" aria-labelledby="hubAddonsTitle">
+                            <div class="hub-components-head">
+                                <div>
+                                    <span class="settings-kicker">Аддоны</span>
+                                    <h3 id="hubAddonsTitle">Мини-приложения</h3>
+                                </div>
+                                <button class="auth-btn primary hub-addons-install" id="hubAddonsInstallBtn" type="button" data-addon-action="install" hidden>Установить аддон</button>
+                            </div>
+                            <p class="hub-addons-status" id="hubAddonsStatus" role="status" aria-live="polite" hidden></p>
+                            <div class="hub-addons-list" id="hubAddonsList"></div>
+                            <input type="file" id="addonFileInput" accept=".zali" hidden>
+                        </section>
                         <section class="hub-components" id="hubComponents"></section>
                     </div>
                 </div>
@@ -17872,6 +18470,662 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
         gunzip,
         hydrate,
     };
+})();
+
+
+// --- MODULE: modules/addon_format.js ---
+// @ts-check
+// --- window.ZaliAddonFormat: файл аддона хаба (.zali с магиком ZALIEXTN). ---
+//
+// Контейнер тот же, что у архивов сообщений (sdk/Rust ZaliSession, sdk/Swift
+// ZaliArc), другой только магик, и шифрование запрещено: аддон должен читаться
+// ДО установки, чтобы показать пользователю, что он просит. Здесь — разбор и
+// проверка файла и манифеста, каталог разрешений и сборка (для тестов и
+// упаковщика). Без DOM и без состояния: модуль грузят и харнессы в Node.
+// Дизайн: /docs/ADDONS.md. Упаковщик: scripts/addon_pack.py.
+//
+// Раскладка (little-endian):
+//   "ZALIEXTN" | u8 version=1 | u8 len + id | u8 len + dom | u8 flags=0 | u32 count
+//   count × ( u16 nameLen | name | u64 size | u64 stored(=size) | данные )
+(function () {
+    'use strict';
+
+    const MAGIC = 'ZALIEXTN';
+    const FORMAT_VERSION = 1;
+    const MANIFEST_PATH = 'manifest.json';
+    const LIMITS = Object.freeze({
+        fileBytes: 32 * 1024 * 1024,
+        entries: 2000,
+        manifestBytes: 64 * 1024,
+        pathBytes: 255,
+        storageBytes: 1024 * 1024,
+        cacheBytes: 256 * 1024 * 1024,
+        networkHosts: 16,
+        backendArgs: 32,
+    });
+
+    const ID_RE = /^[a-z0-9][a-z0-9._-]{2,63}$/;
+    const SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+    const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/;
+    const HOST_RE = /^(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:\d{1,5})?$/;
+    const CONTROL_RE = /[\u0000-\u001f\u007f]/;
+
+    // Ключи платформ в manifest.backend.commands. Оболочка выбирает свой.
+    const BACKEND_PLATFORMS = Object.freeze(['macos-arm64', 'macos-x64', 'windows-x64', 'windows-arm64']);
+
+    /**
+     * Каталог разрешений. Порядок — порядок показа в диалоге установки.
+     * `normal` перечисляются при установке; `elevated` подтверждает ещё и
+     * система — при установке и при каждом запуске (только macOS и Windows).
+     */
+    const PERMISSIONS = Object.freeze({
+        cache: { level: 'normal', title: 'Кеш приложения', description: 'Хранить свои файлы в кеше приложения, до 256 МБ.' },
+        notifications: { level: 'normal', title: 'Уведомления', description: 'Показывать уведомления от своего имени.' },
+        clipboard: { level: 'normal', title: 'Буфер обмена', description: 'Копировать текст в буфер обмена.' },
+        files: { level: 'normal', title: 'Сохранение файлов', description: 'Сохранять файлы на компьютер через загрузки.' },
+        microphone: { level: 'normal', title: 'Микрофон', description: 'Записывать звук с микрофона, пока аддон открыт.' },
+        network: { level: 'normal', title: 'Интернет', description: 'Обмениваться данными с сайтами из списка.' },
+        'fs.read': { level: 'elevated', title: 'Чтение файлов на всём диске', description: 'Читать любые файлы и папки компьютера.' },
+        'fs.write': { level: 'elevated', title: 'Запись файлов на всём диске', description: 'Создавать, менять и удалять любые файлы компьютера.' },
+        launch: { level: 'elevated', title: 'Запуск программ', description: 'Открывать файлы и запускать программы компьютера.' },
+        process: { level: 'elevated', title: 'Собственная программа', description: 'Запускать свою программу с вашими правами.' },
+    });
+
+    const MIME_BY_EXT = Object.freeze({
+        html: 'text/html', htm: 'text/html', js: 'text/javascript', mjs: 'text/javascript',
+        css: 'text/css', json: 'application/json', txt: 'text/plain', md: 'text/markdown',
+        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+        webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon', avif: 'image/avif',
+        mp3: 'audio/mpeg', ogg: 'audio/ogg', oga: 'audio/ogg', wav: 'audio/wav', m4a: 'audio/mp4',
+        weba: 'audio/webm', mp4: 'video/mp4', webm: 'video/webm',
+        woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
+        wasm: 'application/wasm',
+    });
+    const ICON_EXTS = Object.freeze(['png', 'svg', 'webp', 'jpg', 'jpeg']);
+
+    class AddonFormatError extends Error {
+        /** @param {string} message */
+        constructor(message) {
+            super(message);
+            this.name = 'AddonFormatError';
+        }
+    }
+
+    const fail = (message) => { throw new AddonFormatError(message); };
+
+    /** @param {any} input @returns {Uint8Array} */
+    function toBytes(input) {
+        if (input instanceof Uint8Array) return input;
+        if (input instanceof ArrayBuffer) return new Uint8Array(input);
+        if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+        return fail('Нужны байты файла.');
+    }
+
+    const utf8Strict = new TextDecoder('utf-8', { fatal: true });
+    const utf8Encoder = new TextEncoder();
+
+    /** @param {Uint8Array} bytes */
+    function decodeUtf8(bytes, what) {
+        try {
+            return utf8Strict.decode(bytes);
+        } catch (e) {
+            return fail(`${what}: не UTF-8.`);
+        }
+    }
+
+    function extOf(path) {
+        const name = String(path || '').split('/').pop() || '';
+        const dot = name.lastIndexOf('.');
+        return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+    }
+
+    function mimeForPath(path) {
+        return MIME_BY_EXT[extOf(path)] || 'application/octet-stream';
+    }
+
+    /**
+     * Путь внутри архива: сегменты [A-Za-z0-9._-] через «/». Те же правила
+     * проверяют нативные оболочки, когда распаковывают bin/ на диск, — путь
+     * не должен суметь выйти из папки аддона ни на одной файловой системе.
+     * @returns {string} текст ошибки или '' если путь годится
+     */
+    function pathError(path) {
+        const value = String(path ?? '');
+        if (!value) return 'пустой путь';
+        if (utf8Encoder.encode(value).length > LIMITS.pathBytes) return 'путь длиннее 255 байт';
+        if (value.startsWith('/') || value.endsWith('/')) return 'путь начинается или кончается «/»';
+        for (const segment of value.split('/')) {
+            if (!segment) return 'пустой сегмент пути';
+            if (segment === '.' || segment === '..') return 'сегмент «.» или «..»';
+            if (!SEGMENT_RE.test(segment)) return 'недопустимые символы в пути';
+        }
+        return '';
+    }
+
+    function readU32(view, offset) { return view.getUint32(offset, true); }
+
+    // u64 без BigInt (WKWebView старых macOS): старшая половина у файлов до 32 МБ
+    // обязана быть нулём.
+    function readU64(view, offset) {
+        const lo = view.getUint32(offset, true);
+        const hi = view.getUint32(offset + 4, true);
+        return hi === 0 ? lo : Number.POSITIVE_INFINITY;
+    }
+
+    /**
+     * Разбирает контейнер. Данные записей — подмассивы исходного буфера, без копий.
+     * @param {ArrayBuffer|Uint8Array} input
+     * @returns {{headerId: string, files: Map<string, Uint8Array>}}
+     */
+    function parseContainer(input) {
+        const bytes = toBytes(input);
+        if (bytes.length > LIMITS.fileBytes) fail('Файл больше 32 МБ.');
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        let offset = 0;
+        const need = (count) => {
+            if (offset + count > bytes.length) fail('Файл обрезан.');
+        };
+
+        need(8);
+        let magic = '';
+        for (let i = 0; i < 8; i += 1) magic += String.fromCharCode(bytes[i]);
+        if (magic !== MAGIC) {
+            fail(magic.startsWith('ZALI') ? `Это не аддон, а файл ${magic}.` : 'Это не файл аддона ZaliMessenger.');
+        }
+        offset = 8;
+        need(1);
+        const version = bytes[offset];
+        offset += 1;
+        if (version !== FORMAT_VERSION) fail(`Версия формата ${version} не поддерживается — обновите приложение.`);
+
+        const readShortString = (what) => {
+            need(1);
+            const len = bytes[offset];
+            offset += 1;
+            need(len);
+            const value = decodeUtf8(bytes.subarray(offset, offset + len), what);
+            offset += len;
+            return value;
+        };
+        const headerId = readShortString('Заголовок');
+        readShortString('Заголовок');
+
+        need(1);
+        const flags = bytes[offset];
+        offset += 1;
+        if (flags !== 0) fail('Файл аддона зашифрован — так нельзя: его нужно проверить до установки.');
+
+        need(4);
+        const count = readU32(view, offset);
+        offset += 4;
+        if (count > LIMITS.entries) fail(`В файле больше ${LIMITS.entries} записей.`);
+
+        /** @type {Map<string, Uint8Array>} */
+        const files = new Map();
+        const seen = new Set();
+        for (let i = 0; i < count; i += 1) {
+            need(2);
+            const nameLen = view.getUint16(offset, true);
+            offset += 2;
+            need(nameLen);
+            const name = decodeUtf8(bytes.subarray(offset, offset + nameLen), 'Имя файла');
+            offset += nameLen;
+            const problem = pathError(name);
+            if (problem) fail(`Файл «${name.slice(0, 80)}»: ${problem}.`);
+            const folded = name.toLowerCase();
+            if (seen.has(folded)) fail(`Файл «${name}» встречается дважды.`);
+            seen.add(folded);
+
+            need(16);
+            const size = readU64(view, offset);
+            const stored = readU64(view, offset + 8);
+            offset += 16;
+            if (stored !== size) fail(`Файл «${name}»: размеры не сходятся.`);
+            need(size);
+            files.set(name, bytes.subarray(offset, offset + size));
+            offset += size;
+        }
+        if (offset !== bytes.length) fail('После последнего файла лишние данные.');
+        return { headerId, files };
+    }
+
+    function optionalText(value, field, max) {
+        if (value === undefined || value === null) return '';
+        if (typeof value !== 'string') fail(`Манифест: «${field}» должно быть строкой.`);
+        const text = value.trim();
+        if (text.length > max) fail(`Манифест: «${field}» длиннее ${max} символов.`);
+        if (CONTROL_RE.test(text.replace(/\n/g, ''))) fail(`Манифест: «${field}» содержит управляющие символы.`);
+        return text;
+    }
+
+    function requiredText(value, field, max) {
+        const text = optionalText(value, field, max);
+        if (!text) fail(`Манифест: нет «${field}».`);
+        return text;
+    }
+
+    function fileRef(value, field, files) {
+        if (typeof value !== 'string') fail(`Манифест: «${field}» должно быть путём к файлу.`);
+        const problem = pathError(value);
+        if (problem) fail(`Манифест: «${field}»: ${problem}.`);
+        if (!files.has(value)) fail(`Манифест: «${field}» ссылается на «${value}», а его нет в файле.`);
+        return value;
+    }
+
+    /**
+     * Проверяет и нормализует manifest.json. Неизвестные поля пропускаются
+     * (на будущее), неизвестные разрешения — нет: старое приложение не должно
+     * молча выдать аддону меньше, чем он рассчитывал, или не то.
+     * @param {Map<string, Uint8Array>} files
+     */
+    function parseManifest(files) {
+        const raw = files.get(MANIFEST_PATH);
+        if (!raw) fail('В файле нет manifest.json.');
+        if (raw.length > LIMITS.manifestBytes) fail('manifest.json больше 64 КБ.');
+        let data;
+        try {
+            data = JSON.parse(decodeUtf8(raw, 'manifest.json'));
+        } catch (e) {
+            if (e instanceof AddonFormatError) throw e;
+            fail('manifest.json — не JSON.');
+        }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) fail('manifest.json должен быть объектом.');
+        if (data.zaliAddon !== 1) fail('Манифест: нужно "zaliAddon": 1.');
+
+        const id = requiredText(data.id, 'id', 64);
+        if (!ID_RE.test(id) || id.includes('..')) {
+            fail('Манифест: id — от 3 до 64 символов a-z, 0-9, «.», «_», «-», начинается с буквы или цифры.');
+        }
+        const name = requiredText(data.name, 'name', 64);
+        const version = requiredText(data.version, 'version', 32);
+        if (!VERSION_RE.test(version)) fail('Манифест: version — например 1.0.0.');
+        const description = optionalText(data.description, 'description', 300);
+        const author = optionalText(data.author, 'author', 80);
+
+        const entry = fileRef(data.entry ?? 'index.html', 'entry', files);
+        if (!['html', 'htm'].includes(extOf(entry))) fail('Манифест: entry должен быть .html.');
+
+        let icon = '';
+        if (data.icon !== undefined && data.icon !== null && data.icon !== '') {
+            icon = fileRef(data.icon, 'icon', files);
+            if (!ICON_EXTS.includes(extOf(icon))) fail('Манифест: icon — png, svg, webp или jpeg.');
+        }
+
+        const permissionsRaw = data.permissions ?? [];
+        if (!Array.isArray(permissionsRaw)) fail('Манифест: permissions должен быть списком.');
+        const permissions = [];
+        for (const item of permissionsRaw) {
+            const key = String(item);
+            if (!Object.prototype.hasOwnProperty.call(PERMISSIONS, key)) {
+                fail(`Манифест: неизвестное разрешение «${key.slice(0, 40)}». Возможно, нужно обновить приложение.`);
+            }
+            if (!permissions.includes(key)) permissions.push(key);
+        }
+        // Порядок каталога — порядок показа.
+        permissions.sort((a, b) => Object.keys(PERMISSIONS).indexOf(a) - Object.keys(PERMISSIONS).indexOf(b));
+
+        const network = [];
+        if (data.network !== undefined && data.network !== null) {
+            if (!Array.isArray(data.network)) fail('Манифест: network должен быть списком хостов.');
+            for (const item of data.network) {
+                const host = String(item || '').trim().toLowerCase();
+                if (!HOST_RE.test(host)) fail(`Манифест: «${host.slice(0, 80)}» — не имя хоста (без схемы и пути).`);
+                if (!network.includes(host)) network.push(host);
+            }
+            if (network.length > LIMITS.networkHosts) fail(`Манифест: в network больше ${LIMITS.networkHosts} хостов.`);
+        }
+        if (network.length && !permissions.includes('network')) fail('Манифест: network указан без разрешения «network».');
+        if (permissions.includes('network') && !network.length) fail('Манифест: разрешение «network» без списка хостов в network.');
+
+        let backend = null;
+        if (data.backend !== undefined && data.backend !== null) {
+            const b = data.backend;
+            if (typeof b !== 'object' || Array.isArray(b)) fail('Манифест: backend должен быть объектом.');
+            if (b.type !== 'process') fail('Манифест: backend.type — только "process".');
+            if (!permissions.includes('process')) fail('Манифест: backend без разрешения «process».');
+            const commandsRaw = b.commands;
+            if (!commandsRaw || typeof commandsRaw !== 'object' || Array.isArray(commandsRaw)) {
+                fail('Манифест: backend.commands — объект «платформа → путь».');
+            }
+            /** @type {Record<string, string>} */
+            const commands = {};
+            for (const [platform, path] of Object.entries(commandsRaw)) {
+                if (!BACKEND_PLATFORMS.includes(platform)) {
+                    fail(`Манифест: платформа «${platform.slice(0, 40)}» в backend.commands не поддерживается.`);
+                }
+                commands[platform] = fileRef(path, `backend.commands.${platform}`, files);
+            }
+            if (!Object.keys(commands).length) fail('Манифест: backend.commands пуст.');
+            const argsRaw = b.args ?? [];
+            if (!Array.isArray(argsRaw) || argsRaw.length > LIMITS.backendArgs) {
+                fail(`Манифест: backend.args — список до ${LIMITS.backendArgs} строк.`);
+            }
+            const args = argsRaw.map((arg, i) => {
+                if (typeof arg !== 'string' || arg.length > 256 || arg.includes('\u0000')) {
+                    fail(`Манифест: backend.args[${i}] — строка до 256 символов.`);
+                }
+                return arg;
+            });
+            backend = { type: 'process', commands, args };
+        }
+        if (permissions.includes('process') && !backend) fail('Манифест: разрешение «process» без backend.');
+
+        return { zaliAddon: 1, id, name, version, description, author, entry, icon, permissions, network, backend };
+    }
+
+    async function sha256Hex(bytes) {
+        const subtle = globalThis.crypto?.subtle;
+        if (!subtle) return '';
+        const digest = await subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /**
+     * Полная проверка файла перед установкой.
+     * @param {ArrayBuffer|Uint8Array} input
+     */
+    async function inspect(input) {
+        const bytes = toBytes(input);
+        const { files } = parseContainer(bytes);
+        const manifest = parseManifest(files);
+        const sha256 = await sha256Hex(bytes);
+        return { bytes, files, manifest, sha256, size: bytes.length };
+    }
+
+    /**
+     * Собирает файл аддона. Нужен упаковщику-харнессу и тестам; приложение
+     * аддоны не собирает.
+     * @param {Array<[string, Uint8Array|string]>} entries
+     * @param {{id?: string}} [options]
+     */
+    function build(entries, options = {}) {
+        const encoded = entries.map(([name, data]) => {
+            const problem = pathError(name);
+            if (problem) fail(`«${name}»: ${problem}.`);
+            return [utf8Encoder.encode(name), typeof data === 'string' ? utf8Encoder.encode(data) : toBytes(data)];
+        });
+        const id = utf8Encoder.encode(String(options.id || '')).subarray(0, 255);
+        const dom = utf8Encoder.encode('addon');
+        let total = 8 + 1 + 1 + id.length + 1 + dom.length + 1 + 4;
+        for (const [name, data] of encoded) total += 2 + name.length + 16 + data.length;
+        const out = new Uint8Array(total);
+        const view = new DataView(out.buffer);
+        let offset = 0;
+        for (let i = 0; i < 8; i += 1) out[offset++] = MAGIC.charCodeAt(i);
+        out[offset++] = FORMAT_VERSION;
+        out[offset++] = id.length; out.set(id, offset); offset += id.length;
+        out[offset++] = dom.length; out.set(dom, offset); offset += dom.length;
+        out[offset++] = 0;
+        view.setUint32(offset, encoded.length, true); offset += 4;
+        for (const [name, data] of encoded) {
+            view.setUint16(offset, name.length, true); offset += 2;
+            out.set(name, offset); offset += name.length;
+            view.setUint32(offset, data.length, true); view.setUint32(offset + 4, 0, true); offset += 8;
+            view.setUint32(offset, data.length, true); view.setUint32(offset + 4, 0, true); offset += 8;
+            out.set(data, offset); offset += data.length;
+        }
+        return out;
+    }
+
+    const permissionInfo = (id) => PERMISSIONS[id] || null;
+    const isElevated = (id) => PERMISSIONS[id]?.level === 'elevated';
+
+    window.ZaliAddonFormat = Object.freeze({
+        MAGIC,
+        FORMAT_VERSION,
+        MANIFEST_PATH,
+        LIMITS,
+        PERMISSIONS,
+        BACKEND_PLATFORMS,
+        AddonFormatError,
+        pathError,
+        mimeForPath,
+        extOf,
+        parseContainer,
+        parseManifest,
+        inspect,
+        build,
+        sha256Hex,
+        permissionInfo,
+        isElevated,
+    });
+})();
+
+
+// --- MODULE: modules/addon_sdk.js ---
+// --- window.ZaliAddonSdk: SDK `window.zali`, который получает песочница аддона. ---
+//
+// Функция ниже НЕ выполняется в приложении. Хост (interface/addons_runtime.js)
+// берёт её исходник (Function.prototype.toString) и кладёт первым скриптом в
+// srcdoc песочницы — до кода аддона. Поэтому она самодостаточна: никаких
+// ссылок на внешние переменные, только то, что есть в окне фрейма.
+//
+// Протокол: postMessage к window.parent.
+//   фрейм → хост   {channel: 'zali-addon-rpc', id, method, params}
+//   хост → фрейм   {channel: 'zali-addon-rpc', id, ok, result | error: {code, message}}
+//   хост → фрейм   {channel: 'zali-addon-event', event, data}
+// Байты ходят ArrayBuffer'ами с передачей владения. Разрешения проверяет хост;
+// SDK лишь даёт удобные обёртки. Описание для авторов — docs/ADDONS.md.
+(function () {
+    'use strict';
+
+    function zaliAddonSdk() {
+        'use strict';
+        if (window.zali) return;
+        var host = window.parent;
+        var RPC = 'zali-addon-rpc';
+        var EVENT = 'zali-addon-event';
+        var seq = 0;
+        var pending = new Map();
+        var listeners = new Map();
+        var encoder = new TextEncoder();
+        var decoder = new TextDecoder();
+
+        function ZaliAddonError(code, message) {
+            var error = new Error(message || 'Ошибка');
+            error.name = 'ZaliAddonError';
+            error.code = code || 'error';
+            return error;
+        }
+
+        function call(method, params, transfer) {
+            return new Promise(function (resolve, reject) {
+                seq += 1;
+                var id = seq;
+                pending.set(id, { resolve: resolve, reject: reject });
+                try {
+                    host.postMessage({ channel: RPC, id: id, method: method, params: params || {} }, '*', transfer || []);
+                } catch (e) {
+                    pending.delete(id);
+                    reject(ZaliAddonError('bad_params', (e && e.message) || String(e)));
+                }
+            });
+        }
+
+        function emit(name, data) {
+            var set = listeners.get(name);
+            if (!set) return;
+            set.forEach(function (fn) {
+                try { fn(data); } catch (e) { setTimeout(function () { throw e; }, 0); }
+            });
+        }
+
+        window.addEventListener('message', function (event) {
+            if (event.source !== host) return;
+            var msg = event.data;
+            if (!msg || typeof msg !== 'object') return;
+            if (msg.channel === RPC) {
+                var entry = pending.get(msg.id);
+                if (!entry) return;
+                pending.delete(msg.id);
+                if (msg.ok) entry.resolve(msg.result);
+                else entry.reject(ZaliAddonError(msg.error && msg.error.code, msg.error && msg.error.message));
+            } else if (msg.channel === EVENT) {
+                emit(String(msg.event || ''), msg.data);
+            }
+        });
+
+        function on(name, fn) {
+            if (typeof fn !== 'function') return function () {};
+            var key = String(name);
+            if (!listeners.has(key)) listeners.set(key, new Set());
+            listeners.get(key).add(fn);
+            return function () { off(key, fn); };
+        }
+
+        function off(name, fn) {
+            var set = listeners.get(String(name));
+            if (set) set.delete(fn);
+        }
+
+        function bytesOf(data) {
+            if (data instanceof Uint8Array) return Promise.resolve(data);
+            if (data instanceof ArrayBuffer) return Promise.resolve(new Uint8Array(data));
+            if (ArrayBuffer.isView(data)) return Promise.resolve(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+            if (typeof Blob !== 'undefined' && data instanceof Blob) {
+                return data.arrayBuffer().then(function (buf) { return new Uint8Array(buf); });
+            }
+            if (typeof data === 'string') return Promise.resolve(encoder.encode(data));
+            return Promise.reject(ZaliAddonError('bad_params', 'Нужны байты: Uint8Array, ArrayBuffer, Blob или строка'));
+        }
+
+        // Копия байт отдельным буфером — его владение уходит хосту, исходный
+        // массив аддона остаётся целым.
+        function withBytes(method, params, data) {
+            return bytesOf(data).then(function (bytes) {
+                var buffer = bytes.slice().buffer;
+                var full = Object.assign({}, params, { data: buffer });
+                return call(method, full, [buffer]);
+            });
+        }
+
+        function asBytes(value) {
+            return value === null || value === undefined ? null : new Uint8Array(value);
+        }
+
+        var assetUrls = new Map();
+
+        var zali = {
+            sdkVersion: 1,
+            ready: call('hello'),
+            on: on,
+            off: off,
+            ui: {
+                collapse: function () { return call('ui.collapse'); },
+                close: function () { return call('ui.close'); },
+                setTitle: function (title) { return call('ui.setTitle', { title: String(title == null ? '' : title) }); },
+            },
+            storage: {
+                get: function (key) {
+                    return call('storage.get', { key: String(key) }).then(function (json) {
+                        return json === null || json === undefined ? null : JSON.parse(json);
+                    });
+                },
+                set: function (key, value) {
+                    var json;
+                    try { json = JSON.stringify(value === undefined ? null : value); } catch (e) {
+                        return Promise.reject(ZaliAddonError('bad_params', 'Значение не сериализуется в JSON'));
+                    }
+                    return call('storage.set', { key: String(key), json: json });
+                },
+                remove: function (key) { return call('storage.remove', { key: String(key) }); },
+                keys: function () { return call('storage.keys'); },
+                clear: function () { return call('storage.clear'); },
+            },
+            assets: {
+                read: function (path) {
+                    return call('assets.read', { path: String(path) }).then(function (r) { return new Uint8Array(r.data); });
+                },
+                text: function (path) {
+                    return zali.assets.read(path).then(function (bytes) { return decoder.decode(bytes); });
+                },
+                url: function (path) {
+                    var key = String(path);
+                    if (assetUrls.has(key)) return Promise.resolve(assetUrls.get(key));
+                    return call('assets.read', { path: key }).then(function (r) {
+                        var url = URL.createObjectURL(new Blob([r.data], { type: r.mimeType || '' }));
+                        assetUrls.set(key, url);
+                        return url;
+                    });
+                },
+            },
+            cache: {
+                write: function (path, data) { return withBytes('cache.write', { path: String(path) }, data); },
+                read: function (path) { return call('cache.read', { path: String(path) }).then(asBytes); },
+                text: function (path) {
+                    return zali.cache.read(path).then(function (b) { return b === null ? null : decoder.decode(b); });
+                },
+                list: function (prefix) { return call('cache.list', { prefix: String(prefix || '') }); },
+                remove: function (path) { return call('cache.remove', { path: String(path) }); },
+                usage: function () { return call('cache.usage'); },
+            },
+            notify: function (options) {
+                var o = options || {};
+                return call('notify', { title: String(o.title == null ? '' : o.title), body: String(o.body == null ? '' : o.body) });
+            },
+            clipboard: {
+                writeText: function (text) { return call('clipboard.writeText', { text: String(text == null ? '' : text) }); },
+            },
+            files: {
+                save: function (options) {
+                    var o = options || {};
+                    return withBytes('files.save', { name: String(o.name || 'file'), mimeType: String(o.mimeType || '') }, o.data);
+                },
+            },
+            mic: {
+                start: function () { return call('mic.start'); },
+                stop: function () {
+                    return call('mic.stop').then(function (r) {
+                        return { data: new Uint8Array(r.data), mimeType: r.mimeType, durationMs: r.durationMs };
+                    });
+                },
+                cancel: function () { return call('mic.cancel'); },
+            },
+            fs: {
+                paths: function () { return call('fs.paths'); },
+                read: function (path) { return call('fs.read', { path: String(path) }).then(asBytes); },
+                readText: function (path) {
+                    return zali.fs.read(path).then(function (b) { return decoder.decode(b); });
+                },
+                write: function (path, data, options) {
+                    return withBytes('fs.write', { path: String(path), append: !!(options && options.append) }, data);
+                },
+                list: function (path) { return call('fs.list', { path: String(path) }); },
+                stat: function (path) { return call('fs.stat', { path: String(path) }); },
+                mkdir: function (path) { return call('fs.mkdir', { path: String(path) }); },
+                remove: function (path, options) {
+                    return call('fs.remove', { path: String(path), recursive: !!(options && options.recursive) });
+                },
+            },
+            system: {
+                open: function (path) { return call('system.open', { path: String(path) }); },
+                exec: function (path, args, options) {
+                    return call('system.exec', {
+                        path: String(path),
+                        args: (args || []).map(String),
+                        cwd: options && options.cwd ? String(options.cwd) : '',
+                    });
+                },
+            },
+            backend: {
+                send: function (message) { return call('backend.send', { message: message }); },
+                restart: function () { return call('backend.restart'); },
+                on: function (fn) { return on('backend', fn); },
+            },
+        };
+
+        ['ui', 'storage', 'assets', 'cache', 'clipboard', 'files', 'mic', 'fs', 'system', 'backend'].forEach(function (k) {
+            Object.freeze(zali[k]);
+        });
+        Object.defineProperty(window, 'zali', { value: Object.freeze(zali), enumerable: true });
+    }
+
+    window.ZaliAddonSdk = Object.freeze({
+        /** Исходник SDK, готовый для вставки в <script> песочницы. */
+        source() {
+            return `(${zaliAddonSdk.toString()})();`;
+        },
+    });
 })();
 
 
@@ -20521,6 +21775,7 @@ ZaliMixin(ZaliInterface, class {
     // sliding back, because renderHubSegmentNav()'s layout reads in between
     // forced the browser to commit the intermediate transform).
     openChatView({ showList = false } = {}) {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -20540,6 +21795,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openSettingsView() {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -20575,6 +21831,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openHubView() {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -20597,6 +21854,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openZaliCoinView() {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -21061,6 +22319,8 @@ ZaliMixin(ZaliInterface, class {
         const total = valid ? amount * claims : 0;
         if (available) available.textContent = known ? `Доступно: ${this.formatCoinAmount(balance)} ZC` : 'Доступно: …';
         const maxBtn = document.getElementById('coinTransferMaxBtn');
+"""#,
+    #"""
         if (maxBtn) maxBtn.disabled = known && this.coinModalMaxAmount() <= 0;
 
         // Блокируем только по свежему балансу: устаревшее число не должно
@@ -21614,8 +22874,6 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Состояние карточек запрашивается пачкой: отрисовка ленты ставит id в
-"""#,
-    #"""
     // очередь, а один таймер собирает всё, что набралось за кадр, в один запрос.
     ensureCoinGiftState(id) {
         if (!/^[A-Za-z0-9-]{8,64}$/.test(String(id || ''))) return;
@@ -25302,6 +26560,8 @@ ZaliMixin(ZaliInterface, class {
     //
     // Two conditions, both required, because either alone gives false positives:
     //
+"""#,
+    #"""
     //  * the window. Elapsed time since the FIRST failure, so a peer that is merely
     //    asleep, offline or mid-reinstall gets a long grace period;
     //  * the attempt count. Time alone is not evidence of anything — open a chat
@@ -29192,6 +30452,8 @@ ZaliMixin(ZaliInterface, class {
                 // instead of silently delivering wrong content.
                 this.trace(`flushPendingOutbox attachments lost clientId=${String(item.clientId || '').trim()} declared=${declaredAttachments.length}`);
                 this.markMessageStatus(item.clientId, 'error');
+"""#,
+    #"""
                 this.dropPendingOutbox(item.clientId);
                 this.addLogEntry({ type: 'ERROR', msg: 'Вложения сообщения утеряны после перезапуска, отправка отменена. Прикрепите файлы заново.', ts: new Date().toLocaleTimeString() });
                 continue;
@@ -33305,6 +34567,8 @@ ZaliMixin(ZaliInterface, class {
     attachLocalVideoPreview() {
         if (!this.voice.localStream || !this.voice.localStream.getVideoTracks().length) return;
         let video = this.voice.localVideoEl;
+"""#,
+    #"""
         if (!video) {
             video = document.createElement('video');
             video.autoplay = true;
@@ -37155,6 +38419,8 @@ ZaliMixin(ZaliInterface, class {
             const failedType = String(payload.eventType || '').trim();
             const failedSignal = String(payload.signalType || '').trim();
             const target = String(payload.to || '').trim();
+"""#,
+    #"""
             this.voiceDiag('transport-send-failed', {
                 eventType: failedType,
                 signalType: failedSignal,
@@ -37825,6 +39091,8 @@ ZaliMixin(ZaliInterface, class {
         // …но если открыт чат именно с этим человеком, звонок уже в его шапке.
         const ringing = this.voiceRingingState();
         if (ringing) {
+            // Развёрнутый аддон хаба закрывает приложение целиком — входящий его сворачивает.
+            if (ringing.kind === 'incoming') this.collapseAddonForIncomingCall?.(this.voice.incomingInvite);
             if (this.isRingingInChatHeader(ringing)) setStrip('', '');
             else if (ringing.kind === 'incoming') setStrip('incoming', this.renderVoiceIncomingStrip(this.voice.incomingInvite));
             else setStrip('incoming', this.renderVoiceOutgoingStrip(ringing.peer));
@@ -41187,6 +42455,8 @@ ZaliMixin(ZaliInterface, class {
                 : 'Ключи переписки останутся только на этом устройстве.';
         }
         if (authError) authError.textContent = this.S.auth.error || '';
+"""#,
+    #"""
         if (loginBtn) loginBtn.textContent = this.S.auth.loading
             ? 'Входим...'
             : (this.S.auth.mode === 'register' ? 'Создать аккаунт' : 'Войти');
@@ -45203,6 +46473,8 @@ ZaliMixin(ZaliInterface, class {
             // in the DM view, so rendering on that alone painted channel messages into the
             // DM pane (and wasted work). Mirror the notification-visibility check above.
             if (this.isServerChatVisible(key)) {
+"""#,
+    #"""
                 this.scheduleRenderMessages();
             } else {
                 this.renderServerInterface();
@@ -49230,6 +50502,8 @@ ZaliMixin(ZaliInterface, class {
                 }),
             });
             if (res.status === 403) {
+"""#,
+    #"""
                 this.setProfileState({ drawing: { ...this.ensureProfileState().drawing, submitting: false, error: 'Владелец закрыл автографы для вас' } });
                 return;
             }
@@ -50008,6 +51282,1349 @@ ZaliMixin(ZaliInterface, class {
 });
 
 
+// --- MODULE: interface/addons_store.js ---
+// --- ZaliInterface: хранилище аддонов хаба — файлы аддонов и их данные. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Дизайн — docs/ADDONS.md.
+//
+// Две реализации за одним набором методов addonStore*/addonData*:
+//  - нативная (capability `addonStore`, сообщение ADDON_REQUEST): папка
+//    <данные приложения>/addons/<id>/ у оболочки. Обязательна на Android — там
+//    документ живёт на file:// и IndexedDB не открывается (см. шапку cache.js);
+//    на macOS/Windows нужна ещё и потому, что бэкенд-процесс и права оболочка
+//    берёт из СВОЕЙ копии файла;
+//  - IndexedDB `zali_addons_v1` — браузер/PWA.
+// Данные аддона — плоское «путь → байты»: storage живёт одним файлом kv.json,
+// кеш — под cache/. Пути проверяет ZaliAddonFormat.pathError и здесь, и в нативе.
+
+const ZALI_ADDONS_DB_NAME = 'zali_addons_v1';
+const ZALI_ADDONS_DB_VERSION = 1;
+const ZALI_ADDONS_OPEN_TIMEOUT_MS = 4000;
+// Мост гоняет байты base64-строкой: 32 МБ файла — ~43 МБ строки, отдельный потолок.
+const ZALI_ADDON_NATIVE_TIMEOUT_MS = 60000;
+
+ZaliMixin(ZaliInterface, class {
+
+    addonStoreKind() {
+        if (this.hasNativeBridge()) return this.nativeSupports('addonStore') ? 'native' : 'none';
+        return window.indexedDB ? 'idb' : 'none';
+    }
+
+    async addonNativeRequest(op, fields = {}, timeoutMs = ZALI_ADDON_NATIVE_TIMEOUT_MS) {
+        const res = await this.requestNativeAction({ type: NativeMessageTypes.ADDON_REQUEST, op, ...fields }, timeoutMs);
+        return res?.data ?? null;
+    }
+
+    addonBytesToBase64(bytes) {
+        const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < view.length; i += CHUNK) {
+            binary += String.fromCharCode.apply(null, view.subarray(i, i + CHUNK));
+        }
+        return btoa(binary);
+    }
+
+    addonBase64ToBytes(value) {
+        const binary = atob(String(value || ''));
+        const out = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+        return out;
+    }
+
+    // ---- IndexedDB ----
+
+    openAddonsDb() {
+        if (this._addonsDbPromise) return this._addonsDbPromise;
+        this._addonsDbPromise = new Promise((resolve, reject) => {
+            let settled = false;
+            const done = (fn, value) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                fn(value);
+            };
+            const timer = setTimeout(() => done(reject, new Error('Хранилище аддонов не открылось')), ZALI_ADDONS_OPEN_TIMEOUT_MS);
+            let request;
+            try {
+                request = window.indexedDB.open(ZALI_ADDONS_DB_NAME, ZALI_ADDONS_DB_VERSION);
+            } catch (error) {
+                done(reject, error);
+                return;
+            }
+            request.onupgradeneeded = () => {
+                const db = request.result;
+                if (!db.objectStoreNames.contains('addons')) db.createObjectStore('addons', { keyPath: 'id' });
+                if (!db.objectStoreNames.contains('archives')) db.createObjectStore('archives');
+                if (!db.objectStoreNames.contains('data')) db.createObjectStore('data');
+            };
+            request.onsuccess = () => done(resolve, request.result);
+            request.onerror = () => done(reject, request.error || new Error('Хранилище аддонов не открылось'));
+            request.onblocked = () => done(reject, new Error('Хранилище аддонов занято другой вкладкой'));
+        }).catch((error) => {
+            // Следующая попытка — заново, а не навсегда закешированный отказ.
+            this._addonsDbPromise = null;
+            throw error;
+        });
+        return this._addonsDbPromise;
+    }
+
+    async addonsIdb(storeNames, mode, work) {
+        const db = await this.openAddonsDb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction(storeNames, mode);
+            let result;
+            Promise.resolve(work(tx)).then((value) => { result = value; }, (error) => {
+                try { tx.abort(); } catch (e) { /* уже завершена */ }
+                reject(error);
+            });
+            tx.oncomplete = () => resolve(result);
+            tx.onerror = () => reject(tx.error || new Error('Ошибка хранилища аддонов'));
+            tx.onabort = () => reject(tx.error || new Error('Запись в хранилище аддонов отменена'));
+        });
+    }
+
+    addonsIdbRequest(request) {
+        return new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error || new Error('Ошибка хранилища аддонов'));
+        });
+    }
+
+    addonDataKeyRange(id, prefix = '') {
+        // Ключ данных — [id, путь]; '￿' больше любого символа пути.
+        return IDBKeyRange.bound([id, prefix], [id, `${prefix}￿`]);
+    }
+
+    // ---- Общий интерфейс ----
+
+    /** @returns {Promise<Array<{id: string, manifest: any, sha256: string, size: number, installedAt: number, updatedAt: number}>>} */
+    async addonStoreList() {
+        const kind = this.addonStoreKind();
+        if (kind === 'native') {
+            const data = await this.addonNativeRequest('store.list', {}, 15000);
+            return Array.isArray(data?.addons) ? data.addons.map(item => ({ ...(item.meta || {}), id: item.addonId })) : [];
+        }
+        if (kind === 'idb') {
+            return await this.addonsIdb(['addons'], 'readonly', (tx) => this.addonsIdbRequest(tx.objectStore('addons').getAll()));
+        }
+        throw new Error('Хранилище аддонов недоступно в этой версии приложения');
+    }
+
+    async addonStoreGetArchive(id) {
+        const kind = this.addonStoreKind();
+        if (kind === 'native') {
+            const data = await this.addonNativeRequest('store.get', { addonId: id });
+            if (!data?.dataBase64) throw new Error('Файл аддона не найден');
+            return this.addonBase64ToBytes(data.dataBase64);
+        }
+        const buffer = await this.addonsIdb(['archives'], 'readonly', (tx) => this.addonsIdbRequest(tx.objectStore('archives').get(id)));
+        if (!buffer) throw new Error('Файл аддона не найден');
+        return new Uint8Array(buffer);
+    }
+
+    /**
+     * Сохраняет файл аддона. Нативная оболочка показывает здесь системное
+     * подтверждение повышенных прав и может отказать — тогда исключение.
+     * @returns {Promise<{granted?: string[]}>}
+     */
+    async addonStorePut(meta, bytes) {
+        const kind = this.addonStoreKind();
+        if (kind === 'native') {
+            const data = await this.addonNativeRequest('store.put', {
+                addonId: meta.id,
+                meta,
+                dataBase64: this.addonBytesToBase64(bytes),
+            }, 10 * 60 * 1000);
+            return data || {};
+        }
+        const copy = bytes.slice().buffer;
+        await this.addonsIdb(['addons', 'archives'], 'readwrite', (tx) => {
+            tx.objectStore('addons').put(meta);
+            tx.objectStore('archives').put(copy, meta.id);
+        });
+        return {};
+    }
+
+    async addonStoreRemove(id) {
+        const kind = this.addonStoreKind();
+        if (kind === 'native') {
+            await this.addonNativeRequest('store.remove', { addonId: id }, 15000);
+            return;
+        }
+        await this.addonsIdb(['addons', 'archives', 'data'], 'readwrite', (tx) => {
+            tx.objectStore('addons').delete(id);
+            tx.objectStore('archives').delete(id);
+            tx.objectStore('data').delete(this.addonDataKeyRange(id));
+        });
+    }
+
+    addonDataPathOrThrow(path) {
+        const problem = window.ZaliAddonFormat?.pathError(path);
+        if (problem) throw Object.assign(new Error(`Путь «${String(path).slice(0, 80)}»: ${problem}`), { code: 'bad_path' });
+        return path;
+    }
+
+    /** @returns {Promise<Uint8Array|null>} */
+    async addonDataRead(id, path) {
+        this.addonDataPathOrThrow(path);
+        if (this.addonStoreKind() === 'native') {
+            const data = await this.addonNativeRequest('data.read', { addonId: id, path });
+            return data?.exists ? this.addonBase64ToBytes(data.dataBase64) : null;
+        }
+        const value = await this.addonsIdb(['data'], 'readonly', (tx) => this.addonsIdbRequest(tx.objectStore('data').get([id, path])));
+        return value ? new Uint8Array(value.bytes) : null;
+    }
+
+    async addonDataWrite(id, path, bytes) {
+        this.addonDataPathOrThrow(path);
+        if (this.addonStoreKind() === 'native') {
+            await this.addonNativeRequest('data.write', { addonId: id, path, dataBase64: this.addonBytesToBase64(bytes) });
+            return;
+        }
+        const copy = bytes.slice().buffer;
+        await this.addonsIdb(['data'], 'readwrite', (tx) => {
+            tx.objectStore('data').put({ size: copy.byteLength, bytes: copy }, [id, path]);
+        });
+    }
+
+    async addonDataDelete(id, path) {
+        this.addonDataPathOrThrow(path);
+        if (this.addonStoreKind() === 'native') {
+            await this.addonNativeRequest('data.delete', { addonId: id, path });
+            return;
+        }
+        await this.addonsIdb(['data'], 'readwrite', (tx) => { tx.objectStore('data').delete([id, path]); });
+    }
+
+    /** @returns {Promise<Array<{path: string, size: number}>>} */
+    async addonDataList(id, prefix = '') {
+        if (this.addonStoreKind() === 'native') {
+            const data = await this.addonNativeRequest('data.list', { addonId: id, path: prefix });
+            return Array.isArray(data?.entries) ? data.entries : [];
+        }
+        return await this.addonsIdb(['data'], 'readonly', (tx) => new Promise((resolve, reject) => {
+            const out = [];
+            const request = tx.objectStore('data').openCursor(this.addonDataKeyRange(id, prefix));
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) { resolve(out); return; }
+                out.push({ path: cursor.key[1], size: Number(cursor.value?.size || 0) });
+                cursor.continue();
+            };
+            request.onerror = () => reject(request.error);
+        }));
+    }
+});
+
+
+// --- MODULE: interface/addons_runtime.js ---
+// --- ZaliInterface: запуск аддонов хаба — песочница, RPC, «Свернуть». ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Дизайн — docs/ADDONS.md.
+//
+// Аддон работает в <iframe sandbox="allow-scripts allow-pointer-lock" srcdoc>:
+// opaque-origin, ни DOM, ни localStorage/IndexedDB, ни глобалов приложения ему
+// не видно. Документ собирается здесь: CSP первым тегом, затем SDK `window.zali`
+// (modules/addon_sdk.js) и CSS-переменные темы, затем разметка аддона, где его
+// скрипты и стили встроены, а картинки/медиа заменены data:-URL. Наружу аддон
+// ходит только RPC через postMessage, и только сюда: каждое сообщение
+// сверяется с event.source его фрейма, каждый метод — с его разрешениями.
+//
+// Нативный мост виден всем фреймам вебвью, поэтому песочница запускается лишь
+// там, где оболочка закрыла мост от дочерних фреймов (capability `addonFrames`,
+// см. скилл security-invariants), или без моста вовсе — в браузере.
+
+const ZALI_ADDON_RPC = 'zali-addon-rpc';
+const ZALI_ADDON_EVENT = 'zali-addon-event';
+const ZALI_ADDON_MAX_RUNNING = 4;
+const ZALI_ADDON_MAX_INFLIGHT = 64;
+const ZALI_ADDON_HELLO_TIMEOUT_MS = 15000;
+const ZALI_ADDON_KV_PATH = 'kv.json';
+
+ZaliMixin(ZaliInterface, class {
+
+    addonsSandboxAvailable() {
+        return !this.hasNativeBridge() || this.nativeSupports('addonFrames');
+    }
+
+    /** 'macos' | 'windows' | 'android' | 'ios' | 'web' */
+    addonPlatform() {
+        const bridge = this.nativeBridge();
+        if (!bridge?.available) return 'web';
+        if (bridge.transport === 'android') return 'android';
+        const ua = navigator.userAgent || '';
+        const touchMac = /Macintosh/.test(ua) && Number(navigator.maxTouchPoints || 0) > 1;
+        if (bridge.transport === 'webkit') return /iPhone|iPad|iPod/.test(ua) || touchMac ? 'ios' : 'macos';
+        return /Macintosh|Mac OS X/.test(ua) ? 'macos' : 'windows';
+    }
+
+    /** Может ли эта сборка выдать разрешение (повышенные — только с нативной поддержкой). */
+    addonPermissionSupported(permission, manifest = null) {
+        switch (permission) {
+            case 'fs.read':
+            case 'fs.write':
+                return this.nativeSupports('addonFs');
+            case 'launch':
+                return this.nativeSupports('addonLaunch');
+            case 'process': {
+                if (!this.nativeSupports('addonProcess')) return false;
+                const os = this.addonPlatform();
+                const commands = manifest?.backend?.commands || {};
+                return Object.keys(commands).some(key => key.startsWith(`${os}-`));
+            }
+            case 'microphone':
+                return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+            default:
+                return true;
+        }
+    }
+
+    addonInstances() {
+        if (!this._addonInstances) this._addonInstances = new Map();
+        return this._addonInstances;
+    }
+
+    expandedAddonInstance() {
+        for (const instance of this.addonInstances().values()) {
+            if (instance.expanded) return instance;
+        }
+        return null;
+    }
+
+    addonError(code, message) {
+        return Object.assign(new Error(message), { code });
+    }
+
+    // ---- Запуск и жизненный цикл ----
+
+    async launchAddon(id) {
+        const running = this.addonInstances().get(id);
+        if (running) {
+            this.expandAddon(id);
+            return running;
+        }
+        if (!this.addonsSandboxAvailable()) throw this.addonError('unsupported', 'Аддоны недоступны в этой версии приложения');
+        if (this.addonInstances().size >= ZALI_ADDON_MAX_RUNNING) {
+            throw this.addonError('busy', `Работает уже ${ZALI_ADDON_MAX_RUNNING} аддона — остановите один из них в хабе`);
+        }
+        const meta = (this._addonsList || []).find(item => item.id === id);
+        if (!meta) throw this.addonError('not_found', 'Аддон не установлен');
+
+        const F = window.ZaliAddonFormat;
+        const bytes = await this.addonStoreGetArchive(id);
+        // Файл перепроверяется при каждом запуске: в хранилище он мог быть
+        // подменён, а права выдавались конкретному отпечатку.
+        const info = await F.inspect(bytes);
+        if (meta.sha256 && info.sha256 && meta.sha256 !== info.sha256) {
+            throw this.addonError('tampered', 'Файл аддона изменился после установки — переустановите его');
+        }
+        if (info.manifest.id !== id) throw this.addonError('tampered', 'Файл аддона не совпадает с установленным');
+        for (const permission of info.manifest.permissions) {
+            if (!this.addonPermissionSupported(permission, info.manifest)) {
+                throw this.addonError('unsupported', `Нужно разрешение «${F.permissionInfo(permission)?.title || permission}», а здесь его нет`);
+            }
+        }
+
+        const instance = {
+            id,
+            manifest: info.manifest,
+            sha256: info.sha256,
+            files: info.files,
+            iframe: null,
+            wrap: null,
+            expanded: false,
+            ready: false,
+            title: '',
+            loadCount: 0,
+            inflight: 0,
+            kv: null,
+            kvWrite: Promise.resolve(),
+            startedAt: Date.now(),
+            collapsedAt: 0,
+            helloTimer: 0,
+        };
+        this.addonInstances().set(id, instance);
+        try {
+            await this.addonSessionStart?.(instance);
+            this.mountAddonFrame(instance);
+        } catch (error) {
+            this.addonInstances().delete(id);
+            throw error;
+        }
+        this.expandAddon(id);
+        this.renderHubAddons?.();
+        return instance;
+    }
+
+    mountAddonFrame(instance) {
+        this.installAddonMessageListener();
+        const stage = document.getElementById('addonStage');
+        if (!stage) throw this.addonError('failed', 'Нет места для аддона в разметке');
+        const wrap = document.createElement('div');
+        wrap.className = 'addon-frame-wrap is-loading';
+        wrap.dataset.addonId = instance.id;
+        wrap.hidden = true;
+        wrap.innerHTML = `
+            <div class="addon-frame-state" role="status" aria-live="polite">
+                <span class="addon-frame-spinner" aria-hidden="true"></span>
+                <span class="addon-frame-state-text"></span>
+                <button class="auth-btn primary addon-frame-close" type="button" hidden>Закрыть аддон</button>
+            </div>`;
+        wrap.querySelector('.addon-frame-state-text').textContent = `Запуск «${instance.manifest.name}»…`;
+        wrap.querySelector('.addon-frame-close').addEventListener('click', () => this.stopAddon(instance.id));
+
+        const iframe = document.createElement('iframe');
+        iframe.className = 'addon-frame';
+        // Без allow-same-origin: opaque-origin. Без allow-popups/-top-navigation/
+        // -forms/-downloads/-modals: окна, уход приложения, формы, загрузки и
+        // alert идут только через SDK. Пустой allow — никаких возможностей
+        // (камера, микрофон, геолокация) фрейму не делегируется.
+        iframe.setAttribute('sandbox', 'allow-scripts allow-pointer-lock');
+        iframe.setAttribute('allow', '');
+        iframe.setAttribute('referrerpolicy', 'no-referrer');
+        iframe.setAttribute('title', instance.manifest.name);
+        iframe.addEventListener('load', () => {
+            instance.loadCount += 1;
+            // Первый load — наш srcdoc. Любой следующий — аддон увёл свой фрейм
+            // (location, ссылка, reload): там уже не наш документ и не наш CSP.
+            if (instance.loadCount > 1) {
+                this.failAddon(instance, 'Аддон попытался открыть другую страницу и был остановлен.');
+            }
+        });
+        iframe.srcdoc = this.buildAddonDocument(instance);
+        wrap.appendChild(iframe);
+        stage.appendChild(wrap);
+        instance.iframe = iframe;
+        instance.wrap = wrap;
+        instance.helloTimer = setTimeout(() => {
+            if (!instance.ready) this.failAddon(instance, 'Аддон не запустился: документ не загрузился.');
+        }, ZALI_ADDON_HELLO_TIMEOUT_MS);
+    }
+
+    failAddon(instance, message) {
+        if (!this.addonInstances().has(instance.id)) return;
+        clearTimeout(instance.helloTimer);
+        instance.ready = false;
+        // Фрейм выгружается сразу: чужой документ в нём не должен жить ни секунды.
+        try { instance.iframe?.remove(); } catch (e) { /* уже нет */ }
+        instance.iframe = null;
+        this.addonSessionEnd?.(instance);
+        const wrap = instance.wrap;
+        if (wrap) {
+            wrap.classList.remove('is-loading');
+            wrap.classList.add('is-error');
+            const text = wrap.querySelector('.addon-frame-state-text');
+            if (text) text.textContent = message;
+            const close = wrap.querySelector('.addon-frame-close');
+            if (close) close.hidden = false;
+        }
+        this.addLogEntry?.({ type: 'WARN', msg: `Аддон ${instance.id}: ${message}`, ts: new Date().toLocaleTimeString() });
+        this.renderHubAddons?.();
+    }
+
+    expandAddon(id) {
+        const target = this.addonInstances().get(id);
+        if (!target) return;
+        for (const instance of this.addonInstances().values()) {
+            const show = instance === target;
+            if (instance.expanded !== show) {
+                instance.expanded = show;
+                if (!show) instance.collapsedAt = Date.now();
+                this.emitAddonEvent(instance, 'visibility', { visible: show });
+            }
+            if (instance.wrap) instance.wrap.hidden = !show;
+        }
+        const stage = document.getElementById('addonStage');
+        if (stage) stage.hidden = false;
+        this.closeMobileSidebar?.();
+        this.renderAddonTitlebar();
+        requestAnimationFrame(() => {
+            try { target.iframe?.focus(); } catch (e) { /* фрейма уже нет */ }
+        });
+    }
+
+    collapseAddon() {
+        const instance = this.expandedAddonInstance();
+        if (!instance) return false;
+        instance.expanded = false;
+        instance.collapsedAt = Date.now();
+        if (instance.wrap) instance.wrap.hidden = true;
+        const stage = document.getElementById('addonStage');
+        if (stage) stage.hidden = true;
+        this.emitAddonEvent(instance, 'visibility', { visible: false });
+        this.renderAddonTitlebar();
+        this.renderHubAddons?.();
+        return true;
+    }
+
+    /** Навигация приложения (хаб, чаты, настройки, нижняя панель) прячет аддон. */
+    collapseAddonForNavigation() {
+        if (this.expandedAddonInstance()) this.collapseAddon();
+    }
+
+    /** Входящий звонок важнее аддона: сворачиваем один раз на звонок, дальше — как решит пользователь. */
+    collapseAddonForIncomingCall(invite) {
+        if (!invite || this._addonCallInvite === invite) return;
+        this._addonCallInvite = invite;
+        this.collapseAddonForNavigation();
+    }
+
+    stopAddon(id) {
+        const instance = this.addonInstances().get(id);
+        if (!instance) return;
+        clearTimeout(instance.helloTimer);
+        this.addonInstances().delete(id);
+        this.addonStopRecorder?.(instance);
+        this.addonSessionEnd?.(instance);
+        try { instance.iframe?.remove(); } catch (e) { /* уже нет */ }
+        try { instance.wrap?.remove(); } catch (e) { /* уже нет */ }
+        if (!this.expandedAddonInstance()) {
+            const stage = document.getElementById('addonStage');
+            if (stage) stage.hidden = true;
+        }
+        this.renderAddonTitlebar();
+        this.renderHubAddons?.();
+    }
+
+    // ---- Документ песочницы ----
+
+    addonDirname(path) {
+        const index = String(path || '').lastIndexOf('/');
+        return index > 0 ? path.slice(0, index) : '';
+    }
+
+    /** Ссылка из разметки/CSS → путь файла в архиве, или '' (внешняя, якорь, нет файла). */
+    resolveAddonPath(instance, ref, fromDir) {
+        let value = String(ref || '').trim();
+        if (!value || value.startsWith('#')) return '';
+        if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) return '';
+        value = value.split('#')[0].split('?')[0];
+        try { value = decodeURIComponent(value); } catch (e) { /* как есть */ }
+        const parts = value.startsWith('/') || !fromDir ? [] : fromDir.split('/');
+        for (const segment of value.split('/')) {
+            if (!segment || segment === '.') continue;
+            if (segment === '..') {
+                if (!parts.length) return '';
+                parts.pop();
+            } else {
+                parts.push(segment);
+            }
+        }
+        const path = parts.join('/');
+        return instance.files.has(path) ? path : '';
+    }
+
+    addonText(instance, path) {
+        return new TextDecoder().decode(instance.files.get(path) || new Uint8Array());
+    }
+
+    addonDataUrl(instance, path, mimeOverride = '') {
+        const mime = mimeOverride || window.ZaliAddonFormat.mimeForPath(path);
+        return `data:${mime};base64,${this.addonBytesToBase64(instance.files.get(path) || new Uint8Array())}`;
+    }
+
+    rewriteAddonCss(instance, css, fromDir, depth = 0) {
+        const toUrl = (path) => {
+            if (window.ZaliAddonFormat.extOf(path) === 'css' && depth < 4) {
+                const nested = this.rewriteAddonCss(instance, this.addonText(instance, path), this.addonDirname(path), depth + 1);
+                return `data:text/css;base64,${this.addonBytesToBase64(new TextEncoder().encode(nested))}`;
+            }
+            return this.addonDataUrl(instance, path);
+        };
+        return String(css || '')
+            .replace(/@import\s+(['"])([^'"]+)\1/gi, (match, quote, ref) => {
+                const path = this.resolveAddonPath(instance, ref, fromDir);
+                return path ? `@import url("${toUrl(path)}")` : match;
+            })
+            .replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi, (match, quote, ref) => {
+                const path = this.resolveAddonPath(instance, ref, fromDir);
+                return path ? `url("${toUrl(path)}")` : match;
+            });
+    }
+
+    addonCsp(manifest) {
+        const hosts = (manifest.permissions.includes('network') ? manifest.network : [])
+            .flatMap(host => [`https://${host}`, `wss://${host}`]);
+        const remote = hosts.length ? ` ${hosts.join(' ')}` : '';
+        const httpsHosts = hosts.filter(h => h.startsWith('https://'));
+        const remoteMedia = httpsHosts.length ? ` ${httpsHosts.join(' ')}` : '';
+        return [
+            "default-src 'none'",
+            "script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
+            "style-src 'unsafe-inline' blob: data:",
+            `img-src data: blob:${remoteMedia}`,
+            `media-src data: blob: mediastream:${remoteMedia}`,
+            'font-src data: blob:',
+            `connect-src data: blob:${remote}`,
+            'worker-src blob:',
+            'child-src blob:',
+            "frame-src 'none'",
+            "object-src 'none'",
+            "manifest-src 'none'",
+            "form-action 'none'",
+            "base-uri 'none'",
+        ].join('; ');
+    }
+
+    addonThemeCss() {
+        const root = getComputedStyle(document.documentElement);
+        const safe = (value, fallback) => {
+            const text = String(value || '').trim();
+            return text && !/[<>{};\\]/.test(text) ? text : fallback;
+        };
+        const get = (name, fallback) => safe(root.getPropertyValue(name), fallback);
+        const font = safe(getComputedStyle(document.body || document.documentElement).fontFamily, 'system-ui, sans-serif');
+        return [
+            ':root{color-scheme:dark;',
+            `--zali-accent:${get('--lime', '#cbff00')};`,
+            `--zali-accent-rgb:${get('--accent-rgb', '203,255,0')};`,
+            `--zali-bg:${get('--bg', '#090b0e')};`,
+            '--zali-surface:rgba(255,255,255,.04);',
+            `--zali-text:${get('--text', '#f2f2f2')};`,
+            `--zali-text2:${get('--text2', 'rgba(255,255,255,.65)')};`,
+            `--zali-text3:${get('--text3', 'rgba(255,255,255,.5)')};`,
+            `--zali-border:${get('--border', 'rgba(255,255,255,.07)')};`,
+            `--zali-danger:${get('--red', '#ff4d6d')};`,
+            '--zali-radius:14px;',
+            `--zali-font:${font}}`,
+            'html{background:var(--zali-bg);color:var(--zali-text);font-family:var(--zali-font)}',
+            'body{margin:0}',
+        ].join('');
+    }
+
+    buildAddonDocument(instance) {
+        const { manifest } = instance;
+        const baseDir = this.addonDirname(manifest.entry);
+        const doc = new DOMParser().parseFromString(this.addonText(instance, manifest.entry), 'text/html');
+        const resolve = (ref, dir = baseDir) => this.resolveAddonPath(instance, ref, dir);
+        // Текст встраиваемого скрипта/стиля не должен закрыть свой тег раньше времени.
+        const escapeClosing = (text, tag) => text.replace(new RegExp(`</(${tag})`, 'gi'), '<\\/$1');
+
+        // <base> переписал бы разрешение ссылок, http-equiv — CSP или refresh-навигацию.
+        doc.querySelectorAll('base, meta[http-equiv]').forEach(el => el.remove());
+
+        const deferred = [];
+        for (const script of Array.from(doc.querySelectorAll('script[src]'))) {
+            const path = resolve(script.getAttribute('src'));
+            script.removeAttribute('src');
+            // Внешний скрипт — это код, которого не было в проверенном файле.
+            if (!path) {
+                script.remove();
+                continue;
+            }
+            script.textContent = escapeClosing(this.addonText(instance, path), 'script');
+            // Встроенный скрипт выполняется сразу, defer у него не работает —
+            // такой переезжает в конец <body>, где defer и выполнил бы его.
+            const isModule = String(script.getAttribute('type') || '').toLowerCase() === 'module';
+            if (script.hasAttribute('defer') && !isModule) {
+                script.removeAttribute('defer');
+                script.remove();
+                deferred.push(script);
+            }
+        }
+        for (const script of deferred) doc.body.appendChild(script);
+        for (const link of Array.from(doc.querySelectorAll('link[href]'))) {
+            const rel = String(link.getAttribute('rel') || '').toLowerCase().split(/\s+/);
+            const path = resolve(link.getAttribute('href'));
+            if (rel.includes('stylesheet') && path) {
+                const style = doc.createElement('style');
+                style.textContent = escapeClosing(this.rewriteAddonCss(instance, this.addonText(instance, path), this.addonDirname(path)), 'style');
+                link.replaceWith(style);
+            } else if (rel.includes('icon') && path) {
+                link.setAttribute('href', this.addonDataUrl(instance, path));
+            } else {
+                link.remove();
+            }
+        }
+        for (const style of Array.from(doc.querySelectorAll('style'))) {
+            style.textContent = escapeClosing(this.rewriteAddonCss(instance, style.textContent, baseDir), 'style');
+        }
+        for (const el of Array.from(doc.querySelectorAll('[style]'))) {
+            el.setAttribute('style', this.rewriteAddonCss(instance, el.getAttribute('style'), baseDir));
+        }
+        const mediaAttrs = [
+            ['img', 'src'], ['audio', 'src'], ['video', 'src'], ['video', 'poster'], ['source', 'src'],
+            ['track', 'src'], ['input', 'src'], ['image', 'href'], ['image', 'xlink:href'], ['embed', 'src'],
+        ];
+        for (const [tag, attr] of mediaAttrs) {
+            for (const el of Array.from(doc.getElementsByTagName(tag))) {
+                if (!el.hasAttribute(attr)) continue;
+                const path = resolve(el.getAttribute(attr));
+                if (path) el.setAttribute(attr, this.addonDataUrl(instance, path));
+            }
+        }
+
+        const csp = doc.createElement('meta');
+        csp.setAttribute('http-equiv', 'Content-Security-Policy');
+        csp.setAttribute('content', this.addonCsp(manifest));
+        const theme = doc.createElement('style');
+        theme.textContent = this.addonThemeCss();
+        const sdk = doc.createElement('script');
+        sdk.textContent = escapeClosing(window.ZaliAddonSdk.source(), 'script');
+        doc.head.prepend(csp, theme, sdk);
+        return `<!doctype html>\n${doc.documentElement.outerHTML}`;
+    }
+
+    // ---- RPC ----
+
+    installAddonMessageListener() {
+        if (this._addonMessageListener) return;
+        this._addonMessageListener = (event) => this.onAddonWindowMessage(event);
+        window.addEventListener('message', this._addonMessageListener);
+    }
+
+    addonInstanceBySource(source) {
+        if (!source) return null;
+        for (const instance of this.addonInstances().values()) {
+            if (instance.iframe && instance.iframe.contentWindow === source) return instance;
+        }
+        return null;
+    }
+
+    postToAddon(instance, message, transfer = []) {
+        const target = instance?.iframe?.contentWindow;
+        if (!target) return;
+        try {
+            target.postMessage(message, '*', transfer);
+        } catch (error) {
+            // Непередаваемый результат — ответить ошибкой, а не оставить промис висеть.
+            if (message.channel === ZALI_ADDON_RPC && message.ok) {
+                target.postMessage({ channel: ZALI_ADDON_RPC, id: message.id, ok: false, error: { code: 'failed', message: String(error?.message || error) } }, '*');
+            }
+        }
+    }
+
+    emitAddonEvent(instance, event, data, transfer = []) {
+        this.postToAddon(instance, { channel: ZALI_ADDON_EVENT, event, data }, transfer);
+    }
+
+    onAddonWindowMessage(event) {
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object' || msg.channel !== ZALI_ADDON_RPC) return;
+        const instance = this.addonInstanceBySource(event.source);
+        if (!instance) return;
+        const id = Number(msg.id);
+        if (!Number.isSafeInteger(id) || id <= 0) return;
+        const method = String(msg.method || '');
+        const params = msg.params && typeof msg.params === 'object' ? msg.params : {};
+        if (instance.inflight >= ZALI_ADDON_MAX_INFLIGHT) {
+            this.postToAddon(instance, { channel: ZALI_ADDON_RPC, id, ok: false, error: { code: 'busy', message: 'Слишком много одновременных вызовов' } });
+            return;
+        }
+        instance.inflight += 1;
+        Promise.resolve()
+            .then(() => this.dispatchAddonRpc(instance, method, params))
+            .then((outcome) => {
+                const result = outcome && typeof outcome === 'object' && 'result' in outcome ? outcome.result : outcome;
+                const transfer = outcome && typeof outcome === 'object' && Array.isArray(outcome.transfer) ? outcome.transfer : [];
+                this.postToAddon(instance, { channel: ZALI_ADDON_RPC, id, ok: true, result: result === undefined ? null : result }, transfer);
+            }, (error) => {
+                this.postToAddon(instance, {
+                    channel: ZALI_ADDON_RPC,
+                    id,
+                    ok: false,
+                    error: { code: String(error?.code || 'failed'), message: String(error?.message || error || 'Ошибка') },
+                });
+            })
+            .finally(() => { instance.inflight = Math.max(0, instance.inflight - 1); });
+    }
+
+    /**
+     * Таблица методов SDK: разрешение, без которого метод не вызвать, и
+     * обработчик. Ответ — значение или {result, transfer}.
+     */
+    addonRpcMethods() {
+        if (this._addonRpcMethods) return this._addonRpcMethods;
+        const methods = {
+            hello: { run: (instance) => this.addonHello(instance) },
+            'ui.collapse': { run: () => { this.collapseAddon(); return true; } },
+            'ui.close': { run: (instance) => { setTimeout(() => this.stopAddon(instance.id), 0); return true; } },
+            'ui.setTitle': {
+                run: (instance, params) => {
+                    instance.title = String(params.title || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64);
+                    this.renderAddonTitlebar();
+                    return true;
+                },
+            },
+            'storage.get': { run: (i, p) => this.addonKvGet(i, p) },
+            'storage.set': { run: (i, p) => this.addonKvSet(i, p) },
+            'storage.remove': { run: (i, p) => this.addonKvRemove(i, p) },
+            'storage.keys': { run: (i) => this.addonKvKeys(i) },
+            'storage.clear': { run: (i) => this.addonKvClear(i) },
+            'assets.read': {
+                run: (instance, params) => {
+                    const path = String(params.path || '').replace(/^\/+/, '');
+                    const bytes = instance.files.get(path);
+                    if (!bytes) throw this.addonError('not_found', `Нет файла «${path.slice(0, 80)}» в аддоне`);
+                    const data = bytes.slice().buffer;
+                    return { result: { data, mimeType: window.ZaliAddonFormat.mimeForPath(path) }, transfer: [data] };
+                },
+            },
+        };
+        Object.assign(methods, this.addonRpcExtraMethods?.() || {});
+        this._addonRpcMethods = methods;
+        return methods;
+    }
+
+    async dispatchAddonRpc(instance, method, params) {
+        const entry = Object.prototype.hasOwnProperty.call(this.addonRpcMethods(), method) ? this.addonRpcMethods()[method] : null;
+        if (!entry) throw this.addonError('unknown_method', `Метода «${method.slice(0, 40)}» нет в этой версии приложения`);
+        if (entry.permission && !instance.manifest.permissions.includes(entry.permission)) {
+            const title = window.ZaliAddonFormat.permissionInfo(entry.permission)?.title || entry.permission;
+            throw this.addonError('permission_denied', `Аддон не просил разрешение «${title}»`);
+        }
+        return await entry.run(instance, params);
+    }
+
+    addonHello(instance) {
+        if (!instance.ready) {
+            instance.ready = true;
+            clearTimeout(instance.helloTimer);
+            instance.wrap?.classList.remove('is-loading');
+        }
+        const m = instance.manifest;
+        const root = getComputedStyle(document.documentElement);
+        return {
+            id: m.id,
+            name: m.name,
+            version: m.version,
+            permissions: m.permissions.slice(),
+            network: m.network.slice(),
+            platform: this.addonPlatform(),
+            visible: !!instance.expanded,
+            theme: {
+                accent: root.getPropertyValue('--lime').trim() || '#cbff00',
+                background: root.getPropertyValue('--bg').trim() || '#090b0e',
+                text: root.getPropertyValue('--text').trim() || '#f2f2f2',
+            },
+        };
+    }
+
+    // ---- zali.storage: один kv.json на аддон, до 1 МБ ----
+
+    async addonKvLoad(instance) {
+        if (instance.kv) return instance.kv;
+        const bytes = await this.addonDataRead(instance.id, ZALI_ADDON_KV_PATH).catch(() => null);
+        let data = {};
+        if (bytes) {
+            try {
+                const parsed = JSON.parse(new TextDecoder().decode(bytes));
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed;
+            } catch (e) { /* испорченный файл — начать заново */ }
+        }
+        instance.kv = Object.assign(Object.create(null), data);
+        return instance.kv;
+    }
+
+    addonKvPersist(instance) {
+        const json = JSON.stringify(instance.kv || {});
+        const bytes = new TextEncoder().encode(json);
+        if (bytes.length > window.ZaliAddonFormat.LIMITS.storageBytes) {
+            throw this.addonError('quota', 'Настройки аддона больше 1 МБ — сохраняйте крупное через zali.cache');
+        }
+        // Записи по очереди: иначе поздняя могла бы лечь раньше ранней.
+        instance.kvWrite = instance.kvWrite.catch(() => {}).then(() => this.addonDataWrite(instance.id, ZALI_ADDON_KV_PATH, bytes));
+        return instance.kvWrite;
+    }
+
+    addonKvKey(params) {
+        const key = String(params.key ?? '');
+        if (!key || key.length > 256) throw this.addonError('bad_params', 'Ключ — строка от 1 до 256 символов');
+        return key;
+    }
+
+    async addonKvGet(instance, params) {
+        const kv = await this.addonKvLoad(instance);
+        const key = this.addonKvKey(params);
+        return Object.prototype.hasOwnProperty.call(kv, key) ? JSON.stringify(kv[key]) : null;
+    }
+
+    async addonKvSet(instance, params) {
+        const kv = await this.addonKvLoad(instance);
+        const key = this.addonKvKey(params);
+        let value;
+        try { value = JSON.parse(String(params.json ?? 'null')); } catch (e) {
+            throw this.addonError('bad_params', 'Значение не JSON');
+        }
+        const previous = Object.prototype.hasOwnProperty.call(kv, key) ? kv[key] : undefined;
+        kv[key] = value;
+        try {
+            await this.addonKvPersist(instance);
+        } catch (error) {
+            if (previous === undefined) delete kv[key]; else kv[key] = previous;
+            throw error;
+        }
+        return true;
+    }
+
+    async addonKvRemove(instance, params) {
+        const kv = await this.addonKvLoad(instance);
+        const key = this.addonKvKey(params);
+        if (!Object.prototype.hasOwnProperty.call(kv, key)) return false;
+        delete kv[key];
+        await this.addonKvPersist(instance);
+        return true;
+    }
+
+    async addonKvKeys(instance) {
+        return Object.keys(await this.addonKvLoad(instance));
+    }
+
+    async addonKvClear(instance) {
+        instance.kv = Object.create(null);
+        await this.addonKvPersist(instance);
+        return true;
+    }
+
+    // ---- Верхняя полоса: «Свернуть» и плашка свёрнутого аддона ----
+
+    /**
+     * Ставит слот кнопки «сразу после трёх кнопок окна»: в Windows кнопки окна
+     * свои, справа — слот встаёт вплотную к ним; в macOS светофор нативный,
+     * слева — слот в левой колонке, отодвинутый от него (.has-traffic-lights).
+     * В браузере и на телефонах — в начале полосы.
+     */
+    placeAddonTitlebarSlot() {
+        const titlebar = document.getElementById('titlebar');
+        const slot = document.getElementById('tbAddon');
+        if (!titlebar || !slot) return;
+        const winControls = document.getElementById('winControls');
+        if (this.nativeSupports('windowControls') && winControls?.parentElement) {
+            winControls.parentElement.insertBefore(slot, winControls);
+            titlebar.classList.add('tb-addon-right');
+            return;
+        }
+        if (this.addonPlatform() === 'macos') titlebar.classList.add('has-traffic-lights');
+    }
+
+    renderAddonTitlebar() {
+        const titlebar = document.getElementById('titlebar');
+        const slot = document.getElementById('tbAddon');
+        const titleEl = document.getElementById('tbAddonTitle');
+        if (!titlebar || !slot) return;
+        const expanded = this.expandedAddonInstance();
+        const running = Array.from(this.addonInstances().values());
+        titlebar.classList.toggle('addon-expanded', !!expanded);
+        document.body.classList.toggle('addon-expanded', !!expanded);
+        if (titleEl) titleEl.textContent = expanded ? (expanded.title || expanded.manifest.name) : '';
+        if (expanded) {
+            const name = expanded.manifest.name;
+            slot.innerHTML = `<button class="tb-addon-btn" type="button" data-addon-tb="collapse" title="Свернуть «${this.esc(name)}»" aria-label="Свернуть аддон «${this.esc(name)}»">
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 6.25 8 10.75l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="tb-addon-btn-label">Свернуть</span>
+            </button>`;
+        } else if (running.length) {
+            const last = running.slice().sort((a, b) => b.collapsedAt - a.collapsedAt)[0];
+            const more = running.length - 1;
+            slot.innerHTML = `<button class="tb-addon-chip" type="button" data-addon-tb="expand" data-addon-id="${this.esc(last.id)}" title="Развернуть «${this.esc(last.manifest.name)}»" aria-label="Развернуть аддон «${this.esc(last.manifest.name)}»">
+                <span class="tb-addon-dot" aria-hidden="true"></span>
+                <span class="tb-addon-chip-name">${this.esc(last.title || last.manifest.name)}</span>
+                ${more > 0 ? `<span class="tb-addon-more">+${Number(more)}</span>` : ''}
+            </button>`;
+        } else {
+            slot.innerHTML = '';
+        }
+        slot.hidden = !expanded && !running.length;
+        // Телефон: верхней полосы нет (style.css, ≤760px) — та же кнопка в полоске сцены.
+        const stageBar = document.getElementById('addonStageBar');
+        if (stageBar) {
+            stageBar.innerHTML = expanded
+                ? `<button class="tb-addon-btn" type="button" data-addon-tb="collapse" aria-label="Свернуть аддон «${this.esc(expanded.manifest.name)}»">
+                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.5 6.25 8 10.75l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span class="tb-addon-btn-label">Свернуть</span>
+                </button>
+                <span class="addon-stage-title">${this.esc(expanded.title || expanded.manifest.name)}</span>`
+                : '';
+        }
+    }
+});
+
+
+// --- MODULE: interface/addons_ui.js ---
+// --- ZaliInterface: аддоны в хабе — список, установка, сведения, удаление. ---
+// Часть класса ZaliInterface (см. web/src/interface.js). Дизайн — docs/ADDONS.md.
+// Запуск и песочница — addons_runtime.js, хранилище — addons_store.js.
+
+const ZALI_ADDON_ICON_MAX_BYTES = 256 * 1024;
+
+ZaliMixin(ZaliInterface, class {
+
+    addonsAvailable() {
+        return this.addonsSandboxAvailable() && this.addonStoreKind() !== 'none';
+    }
+
+    /** Вызывается из bindEvents(): слот в верхней полосе, клики хаба, первый список. */
+    bindAddonEvents() {
+        this.placeAddonTitlebarSlot();
+        this.renderAddonTitlebar();
+        document.getElementById('hubAddons')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-addon-action]');
+            if (!btn || btn.disabled) return;
+            const id = btn.closest('[data-addon-id]')?.getAttribute('data-addon-id') || '';
+            this.handleAddonAction(btn.getAttribute('data-addon-action'), id);
+        });
+        const input = document.getElementById('addonFileInput');
+        input?.addEventListener('change', () => {
+            const file = input.files?.[0];
+            input.value = '';
+            if (file) this.installAddonFromFile(file);
+        });
+        const onTitlebarClick = (e) => {
+            const btn = e.target.closest('[data-addon-tb]');
+            if (!btn) return;
+            if (btn.getAttribute('data-addon-tb') === 'collapse') this.collapseAddon();
+            else this.expandAddon(btn.getAttribute('data-addon-id') || '');
+        };
+        document.getElementById('tbAddon')?.addEventListener('click', onTitlebarClick);
+        document.getElementById('addonStageBar')?.addEventListener('click', onTitlebarClick);
+        this.refreshAddonsList();
+    }
+
+    handleAddonAction(action, id) {
+        if (action === 'install') {
+            document.getElementById('addonFileInput')?.click();
+        } else if (action === 'retry') {
+            this.refreshAddonsList();
+        } else if (action === 'open') {
+            this.setAddonsStatus('');
+            this.launchAddon(id).catch((error) => {
+                this.setAddonsStatus(`Не удалось открыть аддон: ${error?.message || error}`, 'error');
+            });
+        } else if (action === 'stop') {
+            this.stopAddon(id);
+        } else if (action === 'details') {
+            const meta = (this._addonsList || []).find(item => item.id === id);
+            if (meta) this.showAddonDetailsDialog(meta);
+        }
+    }
+
+    async refreshAddonsList() {
+        if (!this.addonsAvailable()) {
+            this._addonsList = [];
+            this.renderHubAddons();
+            return;
+        }
+        this._addonsLoading = true;
+        this.renderHubAddons();
+        try {
+            const list = await this.addonStoreList();
+            this._addonsList = list
+                .filter(item => item && item.id && item.manifest)
+                .sort((a, b) => String(a.manifest.name).localeCompare(String(b.manifest.name), 'ru'));
+            this._addonsError = '';
+        } catch (error) {
+            this._addonsError = error?.message || String(error);
+        } finally {
+            this._addonsLoading = false;
+            this.renderHubAddons();
+        }
+    }
+
+    setAddonsStatus(text, tone = '') {
+        const el = document.getElementById('hubAddonsStatus');
+        if (!el) return;
+        el.textContent = text || '';
+        el.hidden = !text;
+        el.classList.toggle('is-error', tone === 'error');
+        el.classList.toggle('is-success', tone === 'success');
+    }
+
+    addonIconHtml(meta) {
+        const src = String(meta?.iconDataUrl || '');
+        if (/^data:image\/(png|jpeg|webp|svg\+xml);base64,/.test(src)) {
+            return `<span class="hub-addon-icon"><img src="${this.esc(src)}" alt=""></span>`;
+        }
+        const letter = String(meta?.manifest?.name || '?').trim().charAt(0).toUpperCase() || '?';
+        return `<span class="hub-addon-icon" aria-hidden="true">${this.esc(letter)}</span>`;
+    }
+
+    renderHubAddons() {
+        const list = document.getElementById('hubAddonsList');
+        const installBtn = document.getElementById('hubAddonsInstallBtn');
+        if (!list) return;
+        const available = this.addonsAvailable();
+        if (installBtn) {
+            installBtn.hidden = !available;
+            installBtn.disabled = !!this._addonInstallBusy;
+        }
+        if (!available) {
+            list.innerHTML = '<p class="hub-addons-note">Аддоны недоступны в этой версии приложения.</p>';
+            return;
+        }
+        if (this._addonsError) {
+            list.innerHTML = `<div class="hub-addons-note is-error">
+                <span>Не удалось открыть хранилище аддонов: ${this.esc(this._addonsError)}</span>
+                <button class="btn-flat" type="button" data-addon-action="retry">Повторить</button>
+            </div>`;
+            return;
+        }
+        const items = this._addonsList || [];
+        if (!items.length) {
+            list.innerHTML = this._addonsLoading
+                ? '<p class="hub-addons-note"><span class="addon-frame-spinner" aria-hidden="true"></span>Загрузка аддонов…</p>'
+                : `<div class="hub-addons-empty">
+                    <strong>Аддонов пока нет</strong>
+                    <span>Установите мини-приложение из файла .zali: игру, запись голоса, лаунчер.</span>
+                </div>`;
+            return;
+        }
+        const F = window.ZaliAddonFormat;
+        list.innerHTML = items.map((meta) => {
+            const m = meta.manifest;
+            const instance = this.addonInstances().get(meta.id);
+            const running = !!instance;
+            const elevated = m.permissions.some(p => F.isElevated(p));
+            return `<article class="hub-addon-item${running ? ' is-running' : ''}" data-addon-id="${this.esc(meta.id)}">
+                ${this.addonIconHtml(meta)}
+                <div class="hub-addon-main">
+                    <div class="hub-component-top">
+                        <strong>${this.esc(m.name)}</strong>
+                        <span class="hub-component-version">${this.esc(m.version)}</span>
+                        ${elevated ? '<span class="hub-addon-flag is-elevated">Повышенные права</span>' : ''}
+                        ${running ? '<span class="hub-addon-flag is-running">Работает</span>' : ''}
+                    </div>
+                    <p>${this.esc(m.description || 'Без описания')}</p>
+                </div>
+                <div class="hub-addon-actions">
+                    <button class="auth-btn primary" type="button" data-addon-action="open">${running ? 'Развернуть' : 'Открыть'}</button>
+                    ${running ? '<button class="btn-flat" type="button" data-addon-action="stop">Остановить</button>' : ''}
+                    <button class="hub-addon-more" type="button" data-addon-action="details" title="Об аддоне" aria-label="Об аддоне «${this.esc(m.name)}»">
+                        <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="4.5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/></svg>
+                    </button>
+                </div>
+            </article>`;
+        }).join('');
+    }
+
+    // ---- Установка ----
+
+    async installAddonFromFile(file) {
+        const F = window.ZaliAddonFormat;
+        if (this._addonInstallBusy) return;
+        this.setAddonsStatus('');
+        if (!this.addonsAvailable()) return;
+        if (Number(file?.size || 0) > F.LIMITS.fileBytes) {
+            this.setAddonsStatus('Файл не подошёл: аддон больше 32 МБ.', 'error');
+            return;
+        }
+        let info;
+        try {
+            info = await F.inspect(new Uint8Array(await file.arrayBuffer()));
+        } catch (error) {
+            this.setAddonsStatus(`Файл не подошёл: ${error?.message || error}`, 'error');
+            return;
+        }
+        const m = info.manifest;
+        const existing = (this._addonsList || []).find(item => item.id === m.id) || null;
+        const unsupported = m.permissions.filter(p => !this.addonPermissionSupported(p, m));
+        const confirmed = await this.showAddonInstallDialog(info, existing, unsupported);
+        if (!confirmed) return;
+
+        this._addonInstallBusy = true;
+        this.renderHubAddons();
+        this.setAddonsStatus(existing ? `Обновляем «${m.name}»…` : `Устанавливаем «${m.name}»…`);
+        try {
+            if (this.addonInstances().has(m.id)) this.stopAddon(m.id);
+            const now = Date.now();
+            const meta = {
+                id: m.id,
+                manifest: m,
+                sha256: info.sha256,
+                size: info.size,
+                iconDataUrl: this.addonIconDataUrl(info),
+                installedAt: existing?.installedAt || now,
+                updatedAt: now,
+            };
+            await this.addonStorePut(meta, info.bytes);
+            await this.refreshAddonsList();
+            this.setAddonsStatus(existing ? `«${m.name}» обновлён до ${m.version}.` : `«${m.name}» установлен — откройте его кнопкой «Открыть».`, 'success');
+        } catch (error) {
+            this.setAddonsStatus(`Не удалось установить «${m.name}»: ${error?.message || error}`, 'error');
+        } finally {
+            this._addonInstallBusy = false;
+            this.renderHubAddons();
+        }
+    }
+
+    addonIconDataUrl(info) {
+        const path = info.manifest.icon;
+        const bytes = path ? info.files.get(path) : null;
+        if (!bytes || bytes.length > ZALI_ADDON_ICON_MAX_BYTES) return '';
+        const mime = window.ZaliAddonFormat.mimeForPath(path);
+        return `data:${mime};base64,${this.addonBytesToBase64(bytes)}`;
+    }
+
+    addonSizeLabel(bytes) {
+        const n = Number(bytes || 0);
+        if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1).replace('.', ',')} МБ`;
+        if (n >= 1024) return `${Math.max(1, Math.round(n / 1024))} КБ`;
+        return `${n} Б`;
+    }
+
+    addonFingerprintLabel(sha256) {
+        const hex = String(sha256 || '');
+        return hex ? hex.slice(0, 32).match(/.{1,4}/g).join(' ') : '—';
+    }
+
+    /** Список разрешений по уровням. newSet — подсветить новые при обновлении. */
+    addonPermissionsHtml(manifest, { newSet = null, unsupported = [] } = {}) {
+        const F = window.ZaliAddonFormat;
+        const row = (permission) => {
+            const info = F.permissionInfo(permission);
+            const hosts = permission === 'network' && manifest.network.length
+                ? `<span class="addon-perm-hosts">Сайты: ${this.esc(manifest.network.join(', '))}</span>`
+                : '';
+            const isNew = newSet && newSet.has(permission);
+            return `<li class="addon-perm${unsupported.includes(permission) ? ' is-unsupported' : ''}">
+                <strong>${this.esc(info?.title || permission)}${isNew ? ' <em class="addon-perm-new">новое</em>' : ''}</strong>
+                <span>${this.esc(info?.description || '')}</span>
+                ${hosts}
+            </li>`;
+        };
+        const normal = manifest.permissions.filter(p => !F.isElevated(p));
+        const elevated = manifest.permissions.filter(p => F.isElevated(p));
+        let html = '';
+        if (!normal.length && !elevated.length) {
+            html += '<p class="addon-perm-none">Только свой интерфейс и свои настройки — без файлов, сети и микрофона.</p>';
+        }
+        if (normal.length) html += `<ul class="addon-perm-list">${normal.map(row).join('')}</ul>`;
+        if (elevated.length) {
+            html += `<div class="addon-perm-elevated">
+                <h3>Повышенные права</h3>
+                <ul class="addon-perm-list">${elevated.map(row).join('')}</ul>
+                <p>Система попросит подтвердить их при установке и при каждом запуске. Давайте их только аддонам, автору которых доверяете.</p>
+            </div>`;
+        }
+        return html;
+    }
+
+    showAddonInstallDialog(info, existing, unsupported) {
+        const F = window.ZaliAddonFormat;
+        const m = info.manifest;
+        const oldPermissions = new Set(existing?.manifest?.permissions || []);
+        const newSet = existing ? new Set(m.permissions.filter(p => !oldPermissions.has(p))) : null;
+        const sub = [
+            existing ? `Обновление ${existing.manifest.version} → ${m.version}` : `Версия ${m.version}`,
+            m.author,
+            this.addonSizeLabel(info.size),
+        ].filter(Boolean).join(' · ');
+        const blocked = unsupported.length
+            ? `<p class="addon-dialog-error" role="alert">Здесь нельзя выдать: ${this.esc(unsupported.map(p => F.permissionInfo(p)?.title || p).join(', '))}. ${unsupported.some(p => F.isElevated(p)) ? 'Такие аддоны работают в приложении для macOS и Windows.' : ''}</p>`
+            : '';
+        const html = `
+            <div class="addon-dialog-head">
+                ${this.addonIconHtml({ manifest: m, iconDataUrl: this.addonIconDataUrl(info) })}
+                <div>
+                    <h2 id="addonDialogTitle">${existing ? 'Обновить' : 'Установить'} «${this.esc(m.name)}»?</h2>
+                    <p class="addon-dialog-sub">${this.esc(sub)}</p>
+                </div>
+            </div>
+            ${m.description ? `<p class="addon-dialog-desc">${this.esc(m.description)}</p>` : ''}
+            <section class="addon-dialog-perms" aria-label="Что сможет аддон">
+                <h3>Что сможет аддон</h3>
+                ${this.addonPermissionsHtml(m, { newSet, unsupported })}
+            </section>
+            ${blocked}
+            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(info.sha256))}</code></p>
+            <div class="coin-transfer-actions">
+                <button class="btn-flat" type="button" data-dialog-action="cancel">Отмена</button>
+                <button class="auth-btn primary" type="button" data-dialog-action="ok"${unsupported.length ? ' disabled' : ''}>${existing ? 'Обновить' : 'Установить'}</button>
+            </div>`;
+        return this.openAddonDialog(html).then(action => action === 'ok');
+    }
+
+    async showAddonDetailsDialog(meta) {
+        const m = meta.manifest;
+        const sub = [`Версия ${m.version}`, m.author, this.addonSizeLabel(meta.size)].filter(Boolean).join(' · ');
+        const installed = meta.updatedAt ? new Date(meta.updatedAt).toLocaleDateString('ru-RU') : '';
+        const html = `
+            <div class="addon-dialog-head">
+                ${this.addonIconHtml(meta)}
+                <div>
+                    <h2 id="addonDialogTitle">${this.esc(m.name)}</h2>
+                    <p class="addon-dialog-sub">${this.esc(sub)}</p>
+                </div>
+            </div>
+            ${m.description ? `<p class="addon-dialog-desc">${this.esc(m.description)}</p>` : ''}
+            <section class="addon-dialog-perms" aria-label="Разрешения">
+                <h3>Разрешения</h3>
+                ${this.addonPermissionsHtml(m)}
+            </section>
+            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}</p>
+            <div class="coin-transfer-actions addon-dialog-actions">
+                <button class="btn-flat addon-dialog-danger" type="button" data-dialog-action="remove">Удалить аддон</button>
+                <button class="auth-btn primary" type="button" data-dialog-action="cancel">Закрыть</button>
+            </div>`;
+        const action = await this.openAddonDialog(html);
+        if (action !== 'remove') return;
+        const confirmed = await this.confirmAction({
+            title: `Удалить «${m.name}»?`,
+            message: 'Аддон и всё, что он сохранил, будут удалены с этого устройства.',
+            confirmLabel: 'Удалить аддон',
+        });
+        if (!confirmed) return;
+        try {
+            this.stopAddon(meta.id);
+            await this.addonStoreRemove(meta.id);
+            await this.refreshAddonsList();
+            this.setAddonsStatus(`«${m.name}» удалён.`, 'success');
+        } catch (error) {
+            this.setAddonsStatus(`Не удалось удалить «${m.name}»: ${error?.message || error}`, 'error');
+        }
+    }
+
+    /**
+     * Модальное окно аддонов: тот же каркас, что у confirmAction (фокус внутри,
+     * Esc и клик мимо — «Отмена»). Кнопки помечаются data-dialog-action.
+     * @returns {Promise<string>} действие нажатой кнопки или 'cancel'
+     */
+    openAddonDialog(innerHtml) {
+        const host = document.querySelector('.main') || document.body;
+        if (this._addonDialogDismiss) this._addonDialogDismiss('cancel');
+        return new Promise((resolve) => {
+            const previousFocus = document.activeElement;
+            const overlay = document.createElement('div');
+            overlay.className = 'coin-transfer-modal addon-dialog';
+            overlay.innerHTML = `<div class="coin-transfer-box addon-dialog-box" role="dialog" aria-modal="true" aria-labelledby="addonDialogTitle">${innerHtml}</div>`;
+            const buttons = () => Array.from(overlay.querySelectorAll('button:not([disabled])'));
+            const finish = (action) => {
+                if (this._addonDialogDismiss !== finish) return;
+                this._addonDialogDismiss = null;
+                document.removeEventListener('keydown', onKey, true);
+                overlay.remove();
+                try { previousFocus?.focus?.(); } catch (e) { /* элемента уже нет */ }
+                resolve(action);
+            };
+            const onKey = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    finish('cancel');
+                } else if (e.key === 'Tab') {
+                    const order = buttons();
+                    if (!order.length) return;
+                    const idx = order.indexOf(document.activeElement);
+                    e.preventDefault();
+                    order[(idx + (e.shiftKey ? order.length - 1 : 1) + order.length) % order.length].focus();
+                }
+            };
+            this._addonDialogDismiss = finish;
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    finish('cancel');
+                    return;
+                }
+                const btn = e.target.closest('[data-dialog-action]');
+                if (btn && !btn.disabled) finish(btn.getAttribute('data-dialog-action'));
+            });
+            document.addEventListener('keydown', onKey, true);
+            host.appendChild(overlay);
+            // По умолчанию в фокусе «Отмена»/«Закрыть»: случайный Enter ничего не ставит и не удаляет.
+            (overlay.querySelector('[data-dialog-action="cancel"]') || buttons()[0])?.focus();
+        });
+    }
+});
+
+
 // --- MODULE: interface/events.js ---
 // --- ZaliInterface: Привязка DOM-событий и инерция прокрутки. ---
 // Часть класса ZaliInterface (см. web/src/interface.js). Тела методов
@@ -50036,6 +52653,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindCryptoKeyEvents();                       // ручной ввод ключа шифрования
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
+        this.bindAddonEvents();                           // аддоны хаба и «Свернуть» в верхней полосе (после кнопок окна)
     }
 
     /** Кнопки пустых состояний («Создать сервер», «Найти человека»). Вызывается из bindContactListEvents(). */
@@ -51878,7 +54496,7 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
                 }
             });
@@ -51922,7 +54540,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });
@@ -51933,6 +54551,8 @@ ZaliMixin(ZaliInterface, class {
         this.resizeComposer();
         this.syncMobileChrome();
         this.setupMobileNavGestures();
+"""#,
+    #"""
         this.setupMobileForwardNavGesture();
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();

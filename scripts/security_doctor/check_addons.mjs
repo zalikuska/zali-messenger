@@ -1,0 +1,177 @@
+// Addon sandbox invariants (hub addons, .zali files with the ZALIEXTN magic).
+//
+// An addon is someone else's code running inside the messenger. What keeps it
+// away from the session token, the conversation keys and the native bridge is:
+//   1. the file is parsed strictly before anything is shown or stored — paths
+//      cannot escape the addon's folder, permissions are a closed list;
+//   2. it runs in an opaque-origin <iframe sandbox> without allow-same-origin,
+//      with its own CSP, and talks to the app only through checked postMessage;
+//   3. the shells keep the native bridge away from child frames (pinned in
+//      check_native_shells.mjs, "Frame isolation").
+// (1) is exercised here against the real module; (2) is pinned statically.
+
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
+import { record, section, finish, read, stripLineComments } from './lib/report.mjs';
+
+const FORMAT_PATH = 'web/src/modules/addon_format.js';
+const RUNTIME_PATH = 'web/src/interface/addons_runtime.js';
+
+function loadFormat() {
+    const sandbox = { window: {}, TextEncoder, TextDecoder, crypto: webcrypto };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(readFileSync(FORMAT_PATH, 'utf8'), sandbox, { filename: FORMAT_PATH });
+    return sandbox.window.ZaliAddonFormat;
+}
+
+const F = loadFormat();
+const enc = new TextEncoder();
+
+const manifest = (extra = {}) => JSON.stringify({
+    zaliAddon: 1,
+    id: 'org.example.test',
+    name: 'Тест',
+    version: '1.0.0',
+    entry: 'index.html',
+    ...extra,
+});
+
+const baseEntries = (extra = {}) => [
+    ['manifest.json', manifest(extra)],
+    ['index.html', '<!doctype html><p>hi</p>'],
+];
+
+async function rejects(fn) {
+    try {
+        await fn();
+        return '';
+    } catch (error) {
+        return error?.name === 'AddonFormatError' ? 'ok' : `wrong error: ${error?.message || error}`;
+    }
+}
+
+async function expectReject(name, fn) {
+    const result = await rejects(fn);
+    record(name, result === 'ok', result === '' ? 'was accepted' : result === 'ok' ? '' : result);
+}
+
+section('format: round trip');
+{
+    const bytes = F.build(baseEntries({ permissions: ['cache', 'notifications'] }), { id: 'org.example.test' });
+    const info = await F.inspect(bytes);
+    record('a built file inspects back', info.manifest.id === 'org.example.test' && info.files.size === 2);
+    record('magic is ZALIEXTN', new TextDecoder().decode(bytes.subarray(0, 8)) === 'ZALIEXTN');
+    record('sha-256 fingerprint is computed', /^[0-9a-f]{64}$/.test(info.sha256));
+    record('permissions keep catalog order', info.manifest.permissions.join(',') === 'cache,notifications');
+}
+
+section('format: hostile containers are refused');
+{
+    const good = F.build(baseEntries());
+    await expectReject('wrong magic', () => {
+        const copy = good.slice();
+        copy.set(enc.encode('ZALIARCH'), 0);
+        return F.inspect(copy);
+    });
+    await expectReject('encrypted flag', () => {
+        const copy = good.slice();
+        // magic 8, version 1, id len 1 (+0), dom len 1 + "addon"
+        copy[8 + 1 + 1 + 1 + 5] = 1;
+        return F.inspect(copy);
+    });
+    await expectReject('truncated file', () => F.inspect(good.subarray(0, good.length - 3)));
+    await expectReject('trailing garbage', () => {
+        const copy = new Uint8Array(good.length + 1);
+        copy.set(good);
+        return F.inspect(copy);
+    });
+    await expectReject('entry size with a non-zero high half (u64 > 4 GiB)', () => {
+        const copy = good.slice();
+        const view = new DataView(copy.buffer);
+        // first entry: header(8+1+1+0+1+5+1+4) + nameLen(2) + "manifest.json"(13) + size lo(4) → hi
+        view.setUint32(8 + 1 + 1 + 0 + 1 + 5 + 1 + 4 + 2 + 13 + 4, 1, true);
+        return F.inspect(copy);
+    });
+    await expectReject('more entries declared than present', () => {
+        const copy = good.slice();
+        new DataView(copy.buffer).setUint32(8 + 1 + 1 + 0 + 1 + 5 + 1, 3, true);
+        return F.inspect(copy);
+    });
+    for (const bad of ['../evil.js', 'a/../../evil', '/etc/passwd', 'a//b', 'a\\b', 'C:x', 'dir/', '.', 'name with space']) {
+        record(`path «${bad}» is refused`, F.pathError(bad) !== '');
+    }
+    record('a nested path is fine', F.pathError('assets/img/logo.png') === '');
+    await expectReject('a path that escapes the folder cannot be smuggled in (raw container)', () => {
+        // build() refuses it, so write the entry by hand.
+        const name = enc.encode('../x');
+        const head = F.build(baseEntries());
+        const count = new DataView(head.buffer).getUint32(17, true);
+        const extra = new Uint8Array(2 + name.length + 16 + 1);
+        const v = new DataView(extra.buffer);
+        v.setUint16(0, name.length, true);
+        extra.set(name, 2);
+        v.setUint32(2 + name.length, 1, true);
+        v.setUint32(2 + name.length + 8, 1, true);
+        const out = new Uint8Array(head.length + extra.length);
+        out.set(head);
+        out.set(extra, head.length);
+        new DataView(out.buffer).setUint32(17, count + 1, true);
+        return F.inspect(out);
+    });
+    await expectReject('duplicate names differing only in case', () => F.inspect(F.build([
+        ...baseEntries(), ['Index.html', 'x'],
+    ])));
+}
+
+section('format: manifest is a closed contract');
+{
+    await expectReject('missing manifest', () => F.inspect(F.build([['index.html', 'x']])));
+    await expectReject('unknown permission', () => F.inspect(F.build(baseEntries({ permissions: ['everything'] }))));
+    await expectReject('network hosts without the network permission', () => F.inspect(F.build(baseEntries({ network: ['example.com'] }))));
+    await expectReject('network permission without hosts', () => F.inspect(F.build(baseEntries({ permissions: ['network'] }))));
+    await expectReject('a network "host" carrying a scheme or path', () => F.inspect(F.build(baseEntries({ permissions: ['network'], network: ['https://example.com/x'] }))));
+    await expectReject('process permission without a backend', () => F.inspect(F.build(baseEntries({ permissions: ['process'] }))));
+    await expectReject('backend without the process permission', () => F.inspect(F.build([
+        ...baseEntries({ backend: { type: 'process', commands: { 'windows-x64': 'bin/a.exe' } } }),
+        ['bin/a.exe', 'MZ'],
+    ])));
+    await expectReject('backend command that is not in the file', () => F.inspect(F.build(baseEntries({
+        permissions: ['process'], backend: { type: 'process', commands: { 'windows-x64': 'bin/missing.exe' } },
+    }))));
+    await expectReject('entry that is not html', () => F.inspect(F.build([
+        ['manifest.json', manifest({ entry: 'main.js' })], ['main.js', 'x'],
+    ])));
+    await expectReject('id with path characters', () => F.inspect(F.build(baseEntries({ id: '../x' }))));
+    const elevated = Object.keys(F.PERMISSIONS).filter(key => F.isElevated(key)).sort().join(',');
+    record('elevated permissions are exactly fs.read, fs.write, launch, process', elevated === 'fs.read,fs.write,launch,process', elevated);
+}
+
+section('sandbox (web/src/interface/addons_runtime.js)');
+{
+    const src = stripLineComments(read(RUNTIME_PATH));
+    const sandboxAttr = /setAttribute\('sandbox', '([^']*)'\)/.exec(src)?.[1] ?? null;
+    record('the frame is sandboxed', sandboxAttr !== null);
+    record('sandbox grants only scripts and pointer lock',
+        sandboxAttr === 'allow-scripts allow-pointer-lock',
+        `got "${sandboxAttr}" — allow-same-origin would hand the frame the app's origin, storage and bridge`);
+    record('no feature is delegated to the frame', /setAttribute\('allow', ''\)/.test(src));
+    record('the document comes from srcdoc, not a URL', /iframe\.srcdoc = this\.buildAddonDocument\(/.test(src) && !/iframe\.src =/.test(src));
+    record('CSP starts from default-src \'none\'', /"default-src 'none'"/.test(src));
+    record('CSP is the first thing in the document',
+        /setAttribute\('http-equiv', 'Content-Security-Policy'\)/.test(src)
+        && /doc\.head\.prepend\(csp,/.test(src)
+        && /querySelectorAll\('base, meta\[http-equiv\]'\)[\s\S]{0,40}?\.remove\(\)/.test(src),
+        'the addon\'s own <base>/<meta http-equiv> are dropped so it cannot loosen or redirect');
+    record('RPC is accepted only from the addon\'s own frame',
+        /addonInstanceBySource\(event\.source\)/.test(src)
+        && /addonInstanceBySource\(source\) \{[\s\S]{0,300}?instance\.iframe\.contentWindow === source/.test(src));
+    record('a frame that navigates away is torn down', /loadCount > 1[\s\S]{0,200}?failAddon/.test(src));
+    record('launch is gated on bridge isolation', /launchAddon[\s\S]{0,600}?addonsSandboxAvailable\(\)/.test(src)
+        && /addonsSandboxAvailable\(\) \{\s*return !this\.hasNativeBridge\(\) \|\| this\.nativeSupports\('addonFrames'\)/.test(src));
+    record('every RPC method is checked against the addon\'s permissions', /dispatchAddonRpc[\s\S]{0,1200}?permissions\.includes/.test(src));
+    record('the stored file is re-verified on every launch', /launchAddon[\s\S]{0,1500}?meta\.sha256 !== info\.sha256/.test(src));
+}
+
+finish('addons');

@@ -621,6 +621,7 @@ ZaliMixin(ZaliInterface, class {
     // sliding back, because renderHubSegmentNav()'s layout reads in between
     // forced the browser to commit the intermediate transform).
     openChatView({ showList = false } = {}) {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -640,6 +641,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openSettingsView() {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -675,6 +677,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openHubView() {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -697,6 +700,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openZaliCoinView() {
+        this.collapseAddonForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');

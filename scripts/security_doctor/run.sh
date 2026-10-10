@@ -31,6 +31,7 @@ run() {
 run "native shells (origin pin, media capture)" node scripts/security_doctor/check_native_shells.mjs
 run "server (credentials, rate limits, stored secrets, headers)" node scripts/security_doctor/check_server.mjs
 run "web UI (escaping, sinks, links, key material)" node scripts/security_doctor/check_web.mjs
+run "hub addons (file format, sandbox)" node scripts/security_doctor/check_addons.mjs
 
 if [ "$WITH_TESTS" = "1" ]; then
   # Behaviour, against a real server on a real socket. Slower than the rules
