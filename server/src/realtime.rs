@@ -262,6 +262,8 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
     );
 
     send_voice_room_snapshot_to_user(&state, &username).await;
+    // Кто из друзей и соседей по серверам сейчас во что играет — см. activity.rs.
+    crate::activity::send_activity_snapshot_to_user(&state, &username).await;
 
     // Server-initiated keepalive: a steady voice call generates no WebSocket
     // traffic of its own (media is P2P), and the client's own app-level ping is a
@@ -332,6 +334,16 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                                         value["attended"].as_bool().unwrap_or(false),
                                         value["deviceId"].as_str(),
                                     );
+                                } else if event_type == "client_activity" {
+                                    // Игровой статус: уже определён и отфильтрован настройкой
+                                    // приватности на клиенте — см. activity.rs.
+                                    crate::activity::set_connection_activity(
+                                        &state,
+                                        presence_id,
+                                        &username,
+                                        &value["activity"],
+                                    )
+                                    .await;
                                 } else if event_type == "ping" {
                                     let pong = serde_json::json!({
                                         "type": "pong",
@@ -372,7 +384,8 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
         }
     }
 
-    crate::remove_connection_presence(&state, presence_id);
+    // Вместе с записью присутствия уходит и игровой статус этого соединения.
+    crate::activity::connection_closed(&state, presence_id, &username).await;
 
     // Clean up closed senders
     if let Some(mut conns) = state.user_connections.get_mut(&username) {

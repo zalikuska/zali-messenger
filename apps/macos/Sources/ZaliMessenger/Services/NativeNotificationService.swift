@@ -12,6 +12,7 @@ final class NativeNotificationService {
         let attachmentCount: Int
         let serverId: String?
         let channelId: String?
+        let silent: Bool
     }
 
     private var authorizationKnown = false
@@ -41,7 +42,9 @@ final class NativeNotificationService {
         }
     }
 
-    func showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?) {
+    /// `silent` — режим «в игре» получателя: уведомление показывается, но без звука
+    /// и не пробивает фокус (web/src/interface/game_focus.js).
+    func showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?, silent: Bool = false) {
         refreshAuthorizationStatusIfNeeded()
         if !authorizationKnown {
             pendingNotifications.append(PendingNotification(
@@ -49,7 +52,8 @@ final class NativeNotificationService {
                 text: text,
                 attachmentCount: attachmentCount,
                 serverId: serverId,
-                channelId: channelId
+                channelId: channelId,
+                silent: silent
             ))
             requestAuthorization()
             return
@@ -64,7 +68,8 @@ final class NativeNotificationService {
             text: text,
             attachmentCount: attachmentCount,
             serverId: serverId,
-            channelId: channelId
+            channelId: channelId,
+            silent: silent
         )
     }
 
@@ -78,12 +83,13 @@ final class NativeNotificationService {
                 text: notification.text,
                 attachmentCount: notification.attachmentCount,
                 serverId: notification.serverId,
-                channelId: notification.channelId
+                channelId: notification.channelId,
+                silent: notification.silent
             )
         }
     }
 
-    private func deliverMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?) {
+    private func deliverMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?, silent: Bool) {
         let cleanSender = sender.trimmingCharacters(in: .whitespacesAndNewlines)
         let titleSender = cleanSender.isEmpty ? "Zali Messenger" : cleanSender
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,12 +106,13 @@ final class NativeNotificationService {
         let content = UNMutableNotificationContent()
         content.title = serverId == nil && channelId == nil ? titleSender : "\(titleSender) в канале"
         content.body = body
-        content.sound = .default
+        content.sound = silent ? nil : .default
         content.threadIdentifier = serverId ?? "dm"
         content.categoryIdentifier = "zali-message"
         if #available(macOS 12.0, *) {
-            content.interruptionLevel = .timeSensitive
-            content.relevanceScore = 1.0
+            // Тихое уведомление не должно пробивать «Не беспокоить» и игру на весь экран.
+            content.interruptionLevel = silent ? .passive : .timeSensitive
+            content.relevanceScore = silent ? 0.2 : 1.0
         }
 
         let request = UNNotificationRequest(

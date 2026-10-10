@@ -22,3 +22,21 @@ description: Windows-клиент, apps/windows/src/native.rs — централ
   `.zali`/E2E-ключей — скилл `messaging-protocol`. Для origin pin навигации в
   WRY — скилл `security-invariants`. Для сборки/дистрибуции (installer, трей,
   автозапуск, cross-compile) — скилл `windows-build-distribution`.
+
+## Кружок непрочитанного на панели задач (`native/taskbar_badge.rs`)
+
+Растеризация вынесена в `native/badge_render.rs` (чистый код, `cargo test badge_render`
+работает на любой платформе); `taskbar_badge.rs` отдаёт ей только размер по DPI
+окна и маску цифр из GDI.
+
+- **Цвет — парами (r, g, b), упаковка в одном месте (`pack`).** DIB 32 bpp — это
+  `0xAARRGGBB`; прежняя константа `0xFF2A2AE6` («красный» в голове автора) была
+  R=0x2A, B=0xE6, то есть синей. Тест `the_badge_is_red_not_blue` держит это.
+- **Размер от DPI окна** (`GetDpiForWindow` → `badge_size_for_dpi`: 16/20/24/32),
+  а не константа 16: на 150–200 % оболочка растягивала 16 px и значок был
+  «пиксельным».
+- **Края и цифры сглажены:** круг — суперсэмплинг 4×4, цифры — Segoe UI Bold через
+  GDI (`ANTIALIASED_QUALITY`, серый на чёрном → карта покрытия). Блоки 3×5 не
+  возвращать. Пиксели в DIB — **предумноженные**.
+- Живой Windows этот рендер не видел (проверено только компиляцией под
+  `x86_64-pc-windows-msvc` и тестами `badge_render`).

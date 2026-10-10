@@ -85,6 +85,20 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Игровой статус: чужие (server/src/activity.rs) и свой, найденный оболочкой
+        // (native_game_activity — оболочка отдаёт его тем же проходом, что кадры сервера).
+        if (type === 'user_activity' || type === 'activity_snapshot' || type === 'native_game_activity') {
+            this.handleGameActivityRealtime(payload);
+            return true;
+        }
+
+        // Режим «в игре» (server/src/focus.rs): политика уведомления, заметка
+        // отправителю, «Всё равно оповестить», конец игровой сессии.
+        if (['notify_policy', 'notify_now', 'focus_flush', 'delivery_note', 'delivery_note_done'].includes(type)) {
+            this.handleFocusRealtime(payload);
+            return true;
+        }
+
         // Карточку ZaliCoin активировали или отменили (server/src/coins.rs).
         // Без дедупликации: у одной карточки много разных обновлений, а
         // applyCoinGiftState сам отбрасывает устаревшие.
@@ -465,6 +479,8 @@ ZaliMixin(ZaliInterface, class {
             // waiting out each message's retry backoff (which grows up to 30s). This
             // was the cause of the long send delay after an account switch / blip.
             this.kickPendingOutboxNow('reconnect');
+            // У нового соединения сервер не знает, во что мы играем (game_activity.js).
+            this.onGameActivityConnected?.();
             // Don't wait out the keepalive tick to get back into the voice room: if
             // the blip outlasted the server's 12 s eviction window we are already out
             // of it, and every second here is a second of one-sided silence.

@@ -22,6 +22,8 @@ mod cache;
 pub(crate) use cache::*;
 mod frame_guard;
 pub(crate) use frame_guard::*;
+// Игровой статус: опрос процессов (web/src/interface/game_activity.js).
+mod game_detector;
 mod http;
 pub(crate) use http::*;
 mod keyring;
@@ -34,6 +36,8 @@ mod updates;
 pub(crate) use updates::*;
 mod util;
 pub(crate) use util::*;
+// Растеризация кружка (чистый код, тестируется на любой платформе).
+mod badge_render;
 #[cfg(target_os = "windows")]
 mod taskbar_badge;
 #[cfg(target_os = "windows")]
@@ -50,7 +54,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b49";
+const APP_DISPLAY_VERSION: &str = "0.2b50";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -284,6 +288,10 @@ struct NativeCapabilities {
     /// Windows-only: «Запускать при входе в Windows» свёрнутым в трей (see
     /// native/autostart.rs). Elsewhere there is no tray to start into.
     autostart: bool,
+    /// Windows-only: определение запущенной игры для статуса «Играет в …»
+    /// (native/game_detector.rs). Экспериментальный macOS Rust-шелл процессы не
+    /// опрашивает — основной macOS-клиент это Swift.
+    game_activity: bool,
     /// Мост изолирован от вложенных фреймов (native/frame_guard.rs): init-скрипт
     /// только в верхнем фрейме, сообщения только с `bridgeNonce`. Без этого
     /// веб не запускает песочницу аддонов.
@@ -320,6 +328,7 @@ impl Default for NativeCapabilities {
             taskbar_badge: cfg!(target_os = "windows"),
             window_controls: cfg!(target_os = "windows"),
             autostart: cfg!(target_os = "windows"),
+            game_activity: cfg!(target_os = "windows"),
             addon_frames: true,
             addon_store: true,
             addon_fs: cfg!(target_os = "windows"),
@@ -1346,6 +1355,20 @@ pub fn handle_ipc_message(
                 dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, response);
             });
         }
+        BridgeProtocolMessageType::GameDetectorConfig => {
+            // Игровой статус: веб включает опрос процессов и присылает каталог игр.
+            // Ответа нет — результат приходит событием native_game_activity.
+            let enabled = payload
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let games = payload
+                .get("games")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            game_detector::configure(&proxy, enabled, &games);
+        }
         BridgeProtocolMessageType::AutostartRequest => {
             // No `enabled` = the settings card asking what the state is; a boolean sets
             // it. A few registry calls — answered inline, no runtime task needed.
@@ -2115,13 +2138,17 @@ pub fn handle_ipc_message(
                 .cloned()
                 .unwrap_or_else(|| payload.clone());
             let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
-            trace(format!(
-                "VOICE_EVENT queued type={} roomId={} roomType={} to={}",
-                event_type,
-                event.get("roomId").and_then(Value::as_str).unwrap_or(""),
-                event.get("roomType").and_then(Value::as_str).unwrap_or(""),
-                event.get("to").and_then(Value::as_str).unwrap_or("")
-            ));
+            // client_activity (игровой статус) повторяется раз в ~25 с — в трассу звонков
+            // он не пишется.
+            if event_type != "client_activity" {
+                trace(format!(
+                    "VOICE_EVENT queued type={} roomId={} roomType={} to={}",
+                    event_type,
+                    event.get("roomId").and_then(Value::as_str).unwrap_or(""),
+                    event.get("roomType").and_then(Value::as_str).unwrap_or(""),
+                    event.get("to").and_then(Value::as_str).unwrap_or("")
+                ));
+            }
             voice_bridge.send_event(event);
         }
         BridgeProtocolMessageType::SendMessage => {

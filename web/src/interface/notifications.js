@@ -625,6 +625,29 @@ ZaliMixin(ZaliInterface, class {
         }
         this.syncTaskbarBadge();
         if ((this.S.mutedChats || {})[muteKey]) return;
+        // Режим «в игре» получателя (game_focus.js): сервер прислал политику до самого
+        // сообщения. Счётчик непрочитанного уже вырос — меняется только шум.
+        let silent = false;
+        if (!isChannel) {
+            const policy = this.takeFocusPolicy?.(messageId);
+            const note = { sender: from, text, attachmentCount, messageId: String(messageId || '') };
+            if (policy?.mode === 'defer') {
+                this.deferFocusNotification(note);
+                return;
+            }
+            if (policy) this.rememberFocusMessage?.(note);
+            silent = policy?.mode === 'silent';
+        }
+        this.presentMessageNotification({
+            sender: from, text, attachmentCount, serverId, channelId, messageId, silent,
+        });
+    }
+
+    // Показ уведомления о сообщении: сигнал, нативное и браузерное. Вынесено, чтобы
+    // тем же путём шли и отложенные (flush), и «Всё равно оповестить» (force).
+    presentMessageNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null, messageId = '', silent = false, force = false }) {
+        const from = String(sender || '').trim();
+        if (!from) return;
         // Native OS notifications (UNUserNotificationCenter / toast / Android
         // channel) already carry their own default sound when granted — but that
         // depends on OS-level permission the user may never have granted, and the
@@ -633,7 +656,7 @@ ZaliMixin(ZaliInterface, class {
         // is always audible while its chat isn't the one on screen, independent
         // of native notification permission state, including when the window is
         // minimized or not frontmost (see playMessageChime).
-        this.playMessageChime();
+        if (!silent) this.playMessageChime();
         this.postNativeMessage({
             type: NativeMessageTypes.SHOW_NOTIFICATION,
             sender: from,
@@ -644,6 +667,11 @@ ZaliMixin(ZaliInterface, class {
             // Android выводит из него id уведомления: живая доставка и FCM-пуш об одном
             // сообщении дают одно уведомление, а не два (MessageNotifier.kt).
             messageId: String(messageId || ''),
+            // Режим «в игре»: показать, но без звука.
+            silent: !!silent,
+            // «Всё равно оповестить»: заменить уже стоящее (тихое) уведомление и
+            // зазвучать — Android иначе считает повтор тем же сообщением.
+            force: !!force,
         });
         this.showBrowserNotification({
             sender: from,
@@ -652,6 +680,8 @@ ZaliMixin(ZaliInterface, class {
             serverId,
             channelId,
             messageId,
+            silent,
+            force,
         });
     }
 
@@ -680,7 +710,7 @@ ZaliMixin(ZaliInterface, class {
     // in service-worker.js by re-showing silently. Tagged per conversation with
     // renotify, so a long-backgrounded tab alerts on each message without piling up
     // one entry per message in the OS notification centre.
-    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null, messageId = '' }) {
+    showBrowserNotification({ sender, text, attachmentCount = 0, serverId = null, channelId = null, messageId = '', silent = false, force = false }) {
         if (this.hasNativeBridge()) return;
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
         if (this.isAppAttended()) return;
@@ -694,7 +724,9 @@ ZaliMixin(ZaliInterface, class {
             icon: './icon-192.png',
             badge: './icon-192.png',
             tag: isChannel ? `zali:${serverId}:${channelId}` : `zali:dm:${from}`,
-            renotify: true,
+            // silent + renotify в одном вызове браузер отвергает (TypeError).
+            renotify: !silent,
+            silent: !!silent,
             data: {
                 sender: from,
                 serverId: serverId || null,
@@ -711,7 +743,9 @@ ZaliMixin(ZaliInterface, class {
                 navigator.serviceWorker.ready
                     .then(async registration => {
                         const id = options.data.messageId;
-                        if (id && typeof registration.getNotifications === 'function') {
+                        // force — «Всё равно оповестить»: тихое уведомление об этом же
+                        // сообщении уже стоит, и именно его надо повторить со звуком.
+                        if (!force && id && typeof registration.getNotifications === 'function') {
                             const existing = await registration.getNotifications({ tag: options.tag });
                             if (existing.some(notification => notification.data?.messageId === id)) return;
                         }
@@ -743,11 +777,35 @@ ZaliMixin(ZaliInterface, class {
         // unconditionally, before the native-only branch below: a browser/PWA
         // session has no taskbar at all but still has the segment nav.
         this.syncHubSegmentBadges();
-        if (!this.nativeSupports('taskbarBadge')) return;
-        this.postNativeMessage({
-            type: NativeMessageTypes.SET_UNREAD_BADGE,
-            count: this.computeTotalUnreadCount(),
-        });
+        // Режим «в игре» (game_focus.js): прочитанное в чате снимает отложенное
+        // уведомление о нём — через сводку сообщать о прочитанном незачем.
+        this.syncFocusHeldWithUnread?.();
+        const count = this.computeTotalUnreadCount();
+        // Кружок на значке приложения: единственное, что видно поверх игры, когда
+        // тост и сигнал придержаны. Windows — оверлей на панели задач, macOS — Dock,
+        // установленный PWA — Badging API; на Android значок рисует лаунчер по
+        // уведомлению (тихий канал, game_focus.js → syncQuietBadges).
+        if (this.nativeSupports('taskbarBadge')) {
+            this.postNativeMessage({ type: NativeMessageTypes.SET_UNREAD_BADGE, count });
+        } else if (!this.hasNativeBridge()) {
+            this.syncPwaAppBadge(count);
+        }
+    }
+
+    // Badging API: работает у установленного PWA (Chrome/Edge, Safari 17+); во
+    // вкладке вызов безвреден. Только при изменении — вызов идёт на каждый
+    // инкремент счётчика.
+    syncPwaAppBadge(count) {
+        if (typeof navigator === 'undefined') return;
+        if (this._pwaBadgeCount === count) return;
+        if (typeof navigator.setAppBadge !== 'function') return;
+        this._pwaBadgeCount = count;
+        try {
+            const result = count > 0
+                ? navigator.setAppBadge(count)
+                : (navigator.clearAppBadge ? navigator.clearAppBadge() : navigator.setAppBadge(0));
+            result?.catch?.(() => {});
+        } catch (e) {}
     }
 
     // The set of statuses that mean "a call is live and must not be clobbered". Both the

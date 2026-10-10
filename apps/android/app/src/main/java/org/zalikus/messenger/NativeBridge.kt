@@ -263,6 +263,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             windowDrag: false,
             screenCapture: true,
             mobileNav: true,
+            // Кружок на значке в режиме «в игре»: тихое уведомление на канале LOW
+            // (SHOW_NOTIFICATION с quiet, MessageNotifier.showQuiet).
+            quietBadge: true,
             // Снятие устройства с FCM-пушей при выходе (web_push.js, unregisterNativePushDevice).
             pushDevice: true,
             // Мост закрыт от вложенных фреймов (bridgeNonce + проверка верхнего
@@ -355,13 +358,23 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             }
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
             "STOP_SCREEN_CAPTURE" -> handleStopScreenCapture()
-            "SHOW_NOTIFICATION" -> showMessageNotification(
+            "SHOW_NOTIFICATION" -> if (dict.optBoolean("quiet", false)) {
+                // Режим «в игре»: тихое уведомление ради кружка на значке (или его снятие).
+                val sender = dict.optString("sender", "").trim()
+                if (dict.optBoolean("clear", false)) {
+                    MessageNotifier.clearQuiet(context, sender)
+                } else if (hasNotificationPermission()) {
+                    MessageNotifier.showQuiet(context, sender, dict.optInt("count", 1).coerceAtLeast(1))
+                }
+            } else showMessageNotification(
                 sender = dict.optString("sender", "").trim(),
                 text = dict.optString("text", ""),
                 attachmentCount = dict.optInt("attachmentCount", 0),
                 serverId = dict.optString("serverId", "").ifEmpty { null },
                 channelId = dict.optString("channelId", "").ifEmpty { null },
                 messageId = dict.optString("messageId", "").trim(),
+                silent = dict.optBoolean("silent", false),
+                alertAgain = dict.optBoolean("force", false),
             )
         }
     }
@@ -1240,12 +1253,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     // Показ — в MessageNotifier: тем же кодом пользуется фоновый приём FCM, и id
     // уведомления там и здесь выводится из id сообщения. Иначе живая доставка по
     // WebSocket и пуш об одном сообщении давали бы два уведомления.
-    private fun showMessageNotification(sender: String, text: String, attachmentCount: Int, serverId: String?, channelId: String?, messageId: String) {
+    private fun showMessageNotification(
+        sender: String,
+        text: String,
+        attachmentCount: Int,
+        serverId: String?,
+        channelId: String?,
+        messageId: String,
+        silent: Boolean = false,
+        alertAgain: Boolean = false,
+    ) {
         if (!hasNotificationPermission()) {
             requestNotificationPermissionIfNeeded()
             return
         }
-        MessageNotifier.show(context, sender, text, attachmentCount, serverId, channelId, messageId)
+        MessageNotifier.show(context, sender, text, attachmentCount, serverId, channelId, messageId, silent, alertAgain)
     }
 
     private fun emitTenorResolution(requestId: String, sourceUrl: String, mediaUrl: String?, mimeType: String?, kind: String?) {

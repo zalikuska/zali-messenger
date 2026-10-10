@@ -1012,6 +1012,9 @@ ZaliMixin(ZaliInterface, class {
                 void this.checkForAppUpdateFromSettings();
             });
         }
+        this.bindGameActivitySettings();
+        this.bindGameFocusSettings();
+        this.bindComposerFocusNote();
         const inputAutostart = document.getElementById('inputAutostart');
         if (inputAutostart) {
             inputAutostart.addEventListener('change', () => {

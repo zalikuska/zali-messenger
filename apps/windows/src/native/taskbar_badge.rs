@@ -15,64 +15,79 @@
 //! param is a plain `HICON` not `Option<HICON>`) — fixed against that feedback.
 //! A failure here is still designed to be silent (a missing badge), never a crash.
 
+use super::badge_render::{badge_label, badge_size_for_dpi, compose_badge};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+    DrawTextW, SelectObject, SetBkMode, SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
+    DIB_RGB_COLORS, DT_CENTER, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, OUT_DEFAULT_PRECIS,
+    TRANSPARENT,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, HICON, ICONINFO};
 
-const SIZE: i32 = 16;
+/// Рисует `label` белым на чёрном в DIB `size`×`size` (GDI, сглаженный шрифт) и
+/// возвращает карту покрытия 0..=255. Цифры получаются гладкими штрихами Segoe UI,
+/// а не блоками 3×5 пикселей, как раньше.
+///
+/// # Safety
+/// `dc` — валидный совместимый DC; `pixels` указывает на `size*size` u32 DIB-секции,
+/// выбранной в этот DC.
+unsafe fn render_text_coverage(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    pixels: *mut u32,
+    size: i32,
+    label: &str,
+) -> Vec<u8> {
+    let count = (size * size) as usize;
+    std::ptr::write_bytes(pixels, 0, count);
 
-/// 3x5 bitmap font, one row per byte, 3 bits per row (bit 2 = leftmost column).
-fn glyph_rows(ch: char) -> [u8; 5] {
-    match ch {
-        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
-        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
-        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
-        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
-        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
-        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
-        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
-        '7' => [0b111, 0b001, 0b001, 0b001, 0b001],
-        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
-        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
-        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
-        _ => [0, 0, 0, 0, 0],
-    }
+    // Высота знака ~58 % стороны: две цифры «9+» ещё помещаются в круг.
+    let height = -((size as f32 * 0.58).round() as i32).max(8);
+    let face: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
+    let font = CreateFontW(
+        height,
+        0,
+        0,
+        0,
+        FW_BOLD.0 as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY,
+        DEFAULT_PITCH.0 as u32,
+        PCWSTR(face.as_ptr()),
+    );
+    let previous = SelectObject(dc, font.into());
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, COLORREF(0x00FF_FFFF));
+
+    let mut text: Vec<u16> = label.encode_utf16().collect();
+    let mut rect = RECT { left: 0, top: 0, right: size, bottom: size };
+    DrawTextW(dc, &mut text, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    SelectObject(dc, previous);
+    let _ = DeleteObject(font.into());
+
+    // Серый на чёрном: любой цветовой канал — это покрытие.
+    let raw = std::slice::from_raw_parts(pixels, count);
+    raw.iter().map(|px| ((px >> 8) & 0xFF) as u8).collect()
 }
 
-/// Draws `ch` at (origin_x, origin_y) into a `canvas_size`-square top-down BGRA pixel
-/// buffer, each font pixel scaled to a `scale`x`scale` block.
-fn draw_glyph(pixels: &mut [u32], canvas_size: i32, ch: char, origin_x: i32, origin_y: i32, scale: i32, color: u32) {
-    for (row_idx, row) in glyph_rows(ch).iter().enumerate() {
-        for col in 0..3 {
-            if (row >> (2 - col)) & 1 == 0 {
-                continue;
-            }
-            for sy in 0..scale {
-                for sx in 0..scale {
-                    let x = origin_x + col * scale + sx;
-                    let y = origin_y + row_idx as i32 * scale + sy;
-                    if x >= 0 && y >= 0 && x < canvas_size && y < canvas_size {
-                        pixels[(y * canvas_size + x) as usize] = color;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Builds a 16x16 red-circle badge icon with `label` (1-2 characters, e.g. "9" or
-/// "9+") in white. Returns `None` on any GDI failure.
-fn build_badge_icon(label: &str) -> Option<HICON> {
+/// Строит иконку-бейдж `size`×`size` с подписью `label`. `None` — при любой
+/// ошибке GDI.
+fn build_badge_icon(label: &str, size: i32) -> Option<HICON> {
     let mut bmi = BITMAPINFO::default();
     bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-    bmi.bmiHeader.biWidth = SIZE;
-    bmi.bmiHeader.biHeight = -SIZE; // negative height = top-down DIB
+    bmi.bmiHeader.biWidth = size;
+    bmi.bmiHeader.biHeight = -size; // negative height = top-down DIB
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB.0 as u32;
@@ -94,38 +109,25 @@ fn build_badge_icon(label: &str) -> Option<HICON> {
         return None;
     }
 
-    let pixel_count = (SIZE * SIZE) as usize;
-    let pixels = unsafe { std::slice::from_raw_parts_mut(bits_ptr as *mut u32, pixel_count) };
+    let pixel_ptr = bits_ptr as *mut u32;
+    let coverage = unsafe {
+        let previous = SelectObject(dc, color_bitmap.into());
+        let coverage = render_text_coverage(dc, pixel_ptr, size, label);
+        SelectObject(dc, previous);
+        coverage
+    };
 
-    // BGRA, one solid red circle; fully transparent outside it.
-    const RED: u32 = 0xFF2A2AE6;
-    const WHITE: u32 = 0xFFFFFFFF;
-    let radius = SIZE as f32 / 2.0;
-    let center = radius - 0.5;
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f32 - center;
-            let dy = y as f32 - center;
-            let inside = (dx * dx + dy * dy).sqrt() <= radius;
-            pixels[(y * SIZE + x) as usize] = if inside { RED } else { 0 };
-        }
-    }
-
-    let chars: Vec<char> = label.chars().take(2).collect();
-    match chars.as_slice() {
-        [a] => draw_glyph(pixels, SIZE, *a, 5, 3, 2, WHITE),
-        [a, b] => {
-            draw_glyph(pixels, SIZE, *a, 1, 3, 2, WHITE);
-            draw_glyph(pixels, SIZE, *b, 9, 3, 2, WHITE);
-        }
-        _ => {}
-    }
+    // Круг и текст собираются в чистом коде (badge_render.rs) и пишутся в тот же
+    // DIB: предумноженный ARGB, красный круг с гладким краем.
+    let composed = compose_badge(size, &coverage);
+    let pixels = unsafe { std::slice::from_raw_parts_mut(pixel_ptr, composed.len()) };
+    pixels.copy_from_slice(&composed);
 
     // Fully-zero 1bpp mask: the color bitmap's own alpha channel drives
     // transparency for a 32bpp icon, so the mask just needs to not black out
     // anything. Unlike CreateDIBSection, CreateBitmap returns the handle
     // directly (not a Result) — a failure comes back as a null/invalid handle.
-    let mask_bitmap = unsafe { CreateBitmap(SIZE, SIZE, 1, 1, None) };
+    let mask_bitmap = unsafe { CreateBitmap(size, size, 1, 1, None) };
     if mask_bitmap.is_invalid() {
         unsafe {
             let _ = DeleteObject(color_bitmap.into());
@@ -175,8 +177,11 @@ pub fn set_unread_badge(hwnd_raw: isize, count: u32) {
         return;
     }
 
-    let label = if count > 9 { "9+".to_string() } else { count.to_string() };
-    let Some(hicon) = build_badge_icon(&label) else {
+    // Размер — по DPI окна: на 150 % оболочка не растягивает 16 px до 24.
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let size = badge_size_for_dpi(dpi);
+    let label = badge_label(count);
+    let Some(hicon) = build_badge_icon(&label, size) else {
         return;
     };
     let description: Vec<u16> = format!("{count} непрочитанных")

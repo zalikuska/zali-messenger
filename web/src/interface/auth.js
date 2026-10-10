@@ -1041,6 +1041,9 @@ ZaliMixin(ZaliInterface, class {
         this.syncTaskbarBadge();
         this.resetVoiceState({ preserveInvite: false });
         this.disconnectBrowserVoiceSocket();
+        // Выход: оболочка перестаёт опрашивать процессы, чужие статусы забываются.
+        this.syncGameDetector();
+        this.publishGameActivity();
         // A rotating TURN credential encodes the account it was issued to, so the
         // next person to sign in on this device must not inherit it.
         this._voiceTurnCredentials = null;

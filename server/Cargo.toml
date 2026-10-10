@@ -114,3 +114,11 @@ zali_sdk = { path = "../sdk/Rust" }
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 tokio-tungstenite = "0.23"
 futures-util = "0.3"
+
+[[test]]
+name = "activity"
+path = "../tests/activity.rs"
+
+[[test]]
+name = "focus"
+path = "../tests/focus.rs"

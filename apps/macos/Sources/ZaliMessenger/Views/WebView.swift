@@ -2014,8 +2014,14 @@ struct WebView {
                 case .voiceEvent: do {
                     let payload = dict["payload"] as? [String: Any] ?? dict["event"] as? [String: Any] ?? dict
                     let voiceType = payload["type"] as? String ?? ""
-                    print("[VOICE][BRIDGE][OUT] type=\(voiceType) roomId=\(payload["roomId"] as? String ?? "") roomType=\(payload["roomType"] as? String ?? "") to=\(payload["to"] as? String ?? "") target=\(payload["target"] as? String ?? "")")
+                    // client_activity (игровой статус) повторяется раз в ~25 с по этому же
+                    // каналу — в лог звонков и в журнал интерфейса он не пишется.
+                    let quiet = voiceType == "client_activity"
+                    if !quiet {
+                        print("[VOICE][BRIDGE][OUT] type=\(voiceType) roomId=\(payload["roomId"] as? String ?? "") roomType=\(payload["roomType"] as? String ?? "") to=\(payload["to"] as? String ?? "") target=\(payload["target"] as? String ?? "")")
+                    }
                     NetworkService.shared.sendVoiceEvent(payload) { success in
+                        if quiet { return }
                         DispatchQueue.main.async {
                             let level = success ? "SUCCESS" : "ERROR"
                             let text = success ? "Голосовое событие отправлено" : "Не удалось отправить голосовое событие"
@@ -2039,12 +2045,14 @@ struct WebView {
                     let attachmentCount = (dict["attachmentCount"] as? NSNumber)?.intValue ?? 0
                     let serverId = dict["serverId"] as? String
                     let channelId = dict["channelId"] as? String
+                    let silent = (dict["silent"] as? Bool) ?? false
                     NativeNotificationService.shared.showMessageNotification(
                         sender: sender,
                         text: text,
                         attachmentCount: attachmentCount,
                         serverId: serverId,
-                        channelId: channelId
+                        channelId: channelId,
+                        silent: silent
                     )
                 }
 
@@ -2079,6 +2087,15 @@ struct WebView {
                         DispatchQueue.main.async { self?.sendNativeResponse(response) }
                     }
 
+                case .gameDetectorConfig: do {
+                    // Игровой статус (web/src/interface/game_activity.js): веб включает
+                    // опрос процессов и присылает каталог игр. Ответа нет — результат
+                    // приходит событием native_game_activity (см. onChange ниже).
+                    let enabled = dict["enabled"] as? Bool ?? false
+                    let games = dict["games"] as? [[String: Any]] ?? []
+                    GameDetector.shared.configure(enabled: enabled, games: games)
+                }
+
                 case .autostartRequest:
                     // Windows-only («Запускать при входе в Windows», свёрнутым в трей — see
                     // apps/windows/src/native/autostart.rs). `autostart` is never advertised
@@ -2087,11 +2104,14 @@ struct WebView {
                     break
 
                 case .setUnreadBadge:
-                    // Windows-only feature (taskbar overlay badge, see CLAUDE.md /
-                    // apps/windows/src/native/taskbar_badge.rs) — `taskbarBadge` is never
-                    // advertised as a supported capability here, so the JS side never
-                    // actually sends this on macOS. No-op kept only for switch exhaustiveness.
-                    break
+                    // Кружок со счётчиком непрочитанного на значке в Dock — то же, что
+                    // оверлей на панели задач в Windows (taskbar_badge.rs). Нужен в
+                    // том числе режиму «в игре»: когда тост и сигнал придержаны,
+                    // это единственное, что видно поверх игры.
+                    let count = (dict["count"] as? NSNumber)?.intValue ?? 0
+                    DispatchQueue.main.async {
+                        NSApp.dockTile.badgeLabel = count > 0 ? (count > 99 ? "99+" : String(count)) : nil
+                    }
 
                 case .startScreenCapture, .stopScreenCapture:
                     // Android-only (MediaProjection capture, see NativeBridge.kt /
@@ -2320,6 +2340,10 @@ struct WebView {
             "windowDrag": true,
             "apiRequest": true,
             "appUpdate": true,
+            // Определение запущенной игры (Services/GameDetector.swift, GAME_DETECTOR_CONFIG).
+            "gameActivity": true,
+            // Счётчик непрочитанного на значке в Dock (SET_UNREAD_BADGE).
+            "taskbarBadge": true,
             // Мост закрыт от вложенных фреймов: все user-скрипты forMainFrameOnly,
             // userContentController(didReceive:) отбрасывает !isMainFrame — веб
             // может запускать песочницу аддонов (web/src/interface/addons*.js).
@@ -2492,6 +2516,19 @@ struct WebView {
             DispatchQueue.main.async {
                 coordinator.receiveRealtimeEvent(payload)
             }
+        }
+        // Найденная игра отдаётся вебу тем же проходом, что кадры сервера: решает, что с
+        // ней делать (включено ли, ручной статус, отправка), только game_activity.js.
+        GameDetector.shared.onChange = { detection in
+            var event: [String: Any] = ["type": "native_game_activity"]
+            if let detection {
+                event["activity"] = [
+                    "name": detection.name,
+                    "id": detection.id,
+                    "source": detection.source,
+                ]
+            }
+            coordinator.receiveRealtimeEvent(event)
         }
         NetworkService.shared.onWebSocketConnected = {
             coordinator.setConnectionStatus(true)

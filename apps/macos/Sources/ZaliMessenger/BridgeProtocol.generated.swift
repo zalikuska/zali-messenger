@@ -12,6 +12,7 @@ enum BridgeProtocolMessageType: String, CaseIterable {
     case downloadAttachment = "DOWNLOAD_ATTACHMENT"
     case downloadUpdateRequest = "DOWNLOAD_UPDATE_REQUEST"
     case editMessage = "EDIT_MESSAGE"
+    case gameDetectorConfig = "GAME_DETECTOR_CONFIG"
     case installUpdateRequest = "INSTALL_UPDATE_REQUEST"
     case loadAvatarRequest = "LOAD_AVATAR_REQUEST"
     case loadServerHistory = "LOAD_SERVER_HISTORY"

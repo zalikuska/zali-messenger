@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261010-a4918">
+    <link rel="stylesheet" href="style.css?v=20261011-b5000">
     <title>ZaliMessenger</title>
 </head>
 <body>
@@ -285,6 +285,9 @@
                         <!-- Shown while replying to, or editing, a message. Contents are
                              filled in by renderComposerContext() in interface.js. -->
                         <div class="composer-context" id="composerContext" hidden></div>
+                        <!-- Режим «в игре» у собеседника: сообщение придёт тихо или позже.
+                             Наполняет renderComposerFocusNote() в game_focus.js. -->
+                        <div class="composer-focus-note" id="composerFocusNote" hidden role="status"></div>
                         <div class="draft-attachments" id="draftAttachments"></div>
                         <div class="input-bar" id="inputBar">
                             <button class="attach-btn" id="attachBtn" type="button" title="Прикрепить картинку или GIF" aria-label="Прикрепить картинку или GIF">
@@ -544,6 +547,83 @@
                                         </span>
                                     </label>
                                     <p class="settings-help" id="autostartStatusText"></p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card" id="gameActivitySettingsCard" data-settings-section="game-activity">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Статус</span>
+                                        <h3 class="settings-card-title">Игровой статус</h3>
+                                    </div>
+                                    <span class="settings-card-note">game</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputGameActivity" type="checkbox">
+                                        <span>
+                                            <strong>Показывать, во что я играю</strong>
+                                            <small>Друзья и участники ваших серверов увидят «Играет в …». Показывается только название игры, список программ никуда не отправляется</small>
+                                        </span>
+                                    </label>
+                                    <label class="settings-field">
+                                        <span class="settings-label">Игра вручную</span>
+                                        <input id="inputGameActivityManual" class="settings-input" type="text" maxlength="64" placeholder="Например, Minecraft — вместо автоопределения" autocomplete="off">
+                                    </label>
+                                    <p class="settings-help" id="gameActivityStatusText"></p>
+                                    <div class="settings-inline-actions">
+                                        <button id="gameActivityNotGameBtn" class="btn-flat" type="button" hidden>Это не игра</button>
+                                    </div>
+                                    <div class="settings-inline-actions" id="gameActivityIgnored" hidden></div>
+                                </div>
+                            </section>
+
+                            <section class="settings-card" id="gameFocusSettingsCard" data-settings-section="game-focus">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Уведомления</span>
+                                        <h3 class="settings-card-title">Режим «в игре»</h3>
+                                    </div>
+                                    <span class="settings-card-note">focus</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="settings-field">
+                                        <span class="settings-label">Когда вы в игре</span>
+                                        <select id="inputGameFocusMode" class="settings-input">
+                                            <option value="off">Уведомления приходят как обычно</option>
+                                            <option value="defer">Откладывать уведомления до конца игры</option>
+                                            <option value="silent">Получать уведомления без звука</option>
+                                        </select>
+                                    </label>
+                                    <div id="gameFocusScope" hidden>
+                                        <label class="settings-field">
+                                            <span class="settings-label">Для чьих сообщений</span>
+                                            <select id="inputGameFocusAudience" class="settings-input">
+                                                <option value="everyone">Всем</option>
+                                                <option value="friends">Только друзьям</option>
+                                                <option value="only">Только выбранным людям</option>
+                                                <option value="except">Всем, кроме выбранных людей</option>
+                                                <option value="nobody">Никому</option>
+                                            </select>
+                                        </label>
+                                        <div id="gameFocusPeopleBox" hidden>
+                                            <span class="settings-label" id="gameFocusPeopleTitle">Люди</span>
+                                            <div class="settings-inline-actions" id="gameFocusPeopleList"></div>
+                                            <input id="inputGameFocusPerson" class="settings-input" type="text" maxlength="64" placeholder="Логин и Enter" autocomplete="off">
+                                        </div>
+                                        <div>
+                                            <span class="settings-label">В каких играх</span>
+                                            <div class="settings-inline-actions" id="gameFocusGamesList"></div>
+                                            <input id="inputGameFocusGame" class="settings-input" type="text" maxlength="64" list="gameFocusOptions" placeholder="Название игры и Enter" autocomplete="off">
+                                            <datalist id="gameFocusOptions"></datalist>
+                                            <div class="settings-inline-actions">
+                                                <button id="gameFocusCurrentGameBtn" class="btn-flat" type="button">Добавить текущую игру</button>
+                                            </div>
+                                            <p class="settings-help" id="gameFocusGamesHint"></p>
+                                        </div>
+                                    </div>
+                                    <p class="settings-help" id="gameFocusStatusText"></p>
+                                    <p class="settings-help">Сами сообщения приходят сразу — откладывается только уведомление. Отправитель увидит над полем ввода, что вы в игре (название игры он не узнаёт), и сможет нажать «Всё равно оповестить».</p>
                                 </div>
                             </section>
 
@@ -1310,6 +1390,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261010-a4918"></script>
+    <script src="app.js?v=20261011-b5000"></script>
 </body>
 </html>

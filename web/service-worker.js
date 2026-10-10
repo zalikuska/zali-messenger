@@ -42,7 +42,10 @@ self.addEventListener('activate', (event) => {
 async function showMessageNotification(title, options) {
     const tag = options.tag || '';
     const messageId = options.data && options.data.messageId;
-    if (tag && messageId) {
+    // force — «Всё равно оповестить» (server/src/focus.rs): тихое уведомление об этом
+    // сообщении уже стоит, и именно его надо повторить со звуком.
+    const forced = !!(options.data && options.data.force);
+    if (tag && messageId && !forced) {
         const existing = await self.registration.getNotifications({ tag });
         if (existing.some((notification) => notification.data && notification.data.messageId === messageId)) {
             return self.registration.showNotification(title, { ...options, renotify: false, silent: true });
@@ -67,6 +70,12 @@ self.addEventListener('push', (event) => {
         // Одна запись на переписку в центре уведомлений, но каждое новое сообщение звучит.
         options.tag = data.tag;
         options.renotify = true;
+    }
+    if (data.silent) {
+        // Режим «в игре» получателя: показать, но без звука. Браузер отвергает
+        // silent вместе с renotify (TypeError), поэтому повтор сигнала выключается.
+        options.silent = true;
+        options.renotify = false;
     }
     event.waitUntil(showMessageNotification(title, options));
 });

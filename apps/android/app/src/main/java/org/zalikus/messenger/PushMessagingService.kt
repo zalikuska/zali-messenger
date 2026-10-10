@@ -44,7 +44,9 @@ class PushMessagingService : FirebaseMessagingService() {
         if (!MessageNotifier.canNotify(applicationContext)) return
 
         val messageId = data["messageId"].orEmpty()
-        if (MessageNotifier.isShowing(applicationContext, messageId)) return
+        // force — «Всё равно оповестить»: тихое уведомление уже стоит, его надо повторить.
+        val alertAgain = data["force"] == "1"
+        if (!alertAgain && MessageNotifier.isShowing(applicationContext, messageId)) return
         val sender = data["sender"].orEmpty()
         val serverId = data["serverId"].orEmpty().ifEmpty { null }
         val channelId = data["channelId"].orEmpty().ifEmpty { null }
@@ -55,7 +57,7 @@ class PushMessagingService : FirebaseMessagingService() {
         // Запись о звонке — не сообщение; веб её и сам не показывает уведомлением.
         if (payload?.call != null) return
         // Пока расшифровывали, сообщение могло прийти по сокету и уже быть показано.
-        if (MessageNotifier.isShowing(applicationContext, messageId)) return
+        if (!alertAgain && MessageNotifier.isShowing(applicationContext, messageId)) return
 
         MessageNotifier.show(
             context = applicationContext,
@@ -65,6 +67,8 @@ class PushMessagingService : FirebaseMessagingService() {
             serverId = serverId,
             channelId = channelId,
             messageId = messageId,
+            silent = data["silent"] == "1",
+            alertAgain = alertAgain,
         )
     }
 

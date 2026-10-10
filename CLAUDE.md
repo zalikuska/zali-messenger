@@ -106,7 +106,7 @@ cargo test --manifest-path server/Cargo.toml   # интеграционные, �
 # Новый файл в tests/ НЕ подхватывается сам — нужен свой [[test]] (name+path) в server/Cargo.toml
 ```
 
-Проверки области — `./scripts/{voice,notify,perf,security,crypto,memory}_doctor/run.sh`
+Проверки области — `./scripts/{voice,notify,perf,security,crypto,memory,activity}_doctor/run.sh`
 (подсказка, какой запускать, приходит хуком при открытии файла области). Данные с живых
 устройств: клиенты сами шлют отчёты (кнопка «Отправить диагностику» и автоматически при
 сбое звонка/доставки/WS/JS — `web/src/interface/diagnostic_reports.js`), читать —
@@ -121,9 +121,12 @@ cargo test --manifest-path server/Cargo.toml   # интеграционные, �
 по пути файла; `auto_bundle.py` в конце хода сам пересобирает `bundle_web.py`, если
 `web/src` новее бандла; `android_core_reminder.py` после правки `core/`/`sdk/Rust` напоминает
 пересобрать `.so` для Android. Версию ставить `python3 scripts/bump_version.py <версия>`.
-Сгенерированные `web/app.js`, `Assets.swift`, `BridgeProtocol.generated.swift`, `Resources/Web/*` скрыты от
-поиска файлом `.ignore` (иначе каждый поиск возвращает 4–5 копий одного совпадения); правь `web/src/`, а сами
-файлы читаются по прямому пути как обычно.
+Сгенерированные `web/app.js`, `Assets.swift` и `Resources/Web/*` **не лежат в git** (`.gitignore`): каждый
+коммит тянул за собой по ~2,5 МБ дублей бандла. На свежем клоне — `python3 scripts/bundle_web.py`; сборочные
+скрипты (`build_app.sh`, `run_macos_app.sh`, `build_windows_app.ps1`, `build_macos_rust_app.sh`) делают это
+сами. В git остались крошечные `BridgeProtocol.generated.swift` и `web/src/modules/native_types.js` — их читают
+doctor-проверки и `bridge_check.sh`. От поиска все они скрыты файлом `.ignore`; правь `web/src/`, а сами файлы
+читаются по прямому пути как обычно.
 
 Копировать `.env.example` → `.env`, задать реальный `JWT_SECRET` для любого
 не-локального деплоя. В git не должны попадать: `zali_messenger.db`, `uploads/`,
@@ -171,6 +174,7 @@ cargo test --manifest-path server/Cargo.toml   # интеграционные, �
 | Голосовые звонки (WebRTC), WS keepalive/heartbeat | `voice-calls` |
 | Standalone browser/PWA клиент | `browser-pwa-client` |
 | Уведомления (push, toast, badge, focus-детект) | `notifications` |
+| Игровой статус «Играет в …» (детектор, `client_activity`, каталог игр) | `game-activity` |
 | Производительность (рендер, кеш, память, путь отправки) | `performance` |
 | Секьюрити-инварианты (origin pin, креды, секреты) | `security-invariants` |
 | Сборка/дистрибуция Windows: cross-compile, installer, трей, автозапуск | `windows-build-distribution` |

@@ -61,6 +61,10 @@ mod realtime;
 pub(crate) use realtime::*;
 mod push;
 pub(crate) use push::*;
+// Игровой статус «Играет в …» — без glob-реэкспорта: имена модуля короткие.
+mod activity;
+// Режим «в игре»: откладывание уведомлений о сообщениях. Тоже без glob-реэкспорта.
+mod focus;
 mod fcm;
 pub(crate) use fcm::*;
 mod coins;
@@ -494,6 +498,9 @@ pub struct AppState {
     // Per-socket presence for the Web Push decision, keyed by connection id — see
     // push.rs::push_suppressed_for.
     push_presence: DashMap<u64, ConnectionPresence>,
+    // Сообщения, уведомление о которых отложено или ушло тихо (focus.rs), по id
+    // сообщения. Живёт в памяти: теряется только отсрочка пуша, не сообщения.
+    focus_pending: focus::PendingMap,
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
     // Voice rooms (DM: room id; channel: room id + username) that were ended by an
@@ -1586,6 +1593,22 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .ok();
 
     // Дружба хранится ОДНОЙ строкой на пару, в лексикографическом порядке.
+    // Режим «в игре» (focus.rs): одна строка на аккаунт. `games` и `people` — JSON-
+    // массивы строк; пустой `games` означает «в любой игре».
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS game_focus_settings (
+            username TEXT PRIMARY KEY,
+            mode TEXT NOT NULL DEFAULT 'off',
+            audience TEXT NOT NULL DEFAULT 'everyone',
+            games TEXT NOT NULL DEFAULT '[]',
+            people TEXT NOT NULL DEFAULT '[]',
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы game_focus_settings");
+
     // Две зеркальные строки пришлось бы держать согласованными при каждом
     // удалении, а рассинхрон дал бы "друг у одного, не друг у другого".
     sqlx::query(
@@ -1748,6 +1771,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         releases_dir,
         user_connections: DashMap::new(),
         push_presence: DashMap::new(),
+        focus_pending: DashMap::new(),
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
         ended_voice_rooms: DashMap::new(),
@@ -1986,6 +2010,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/servers/:server_id/treasury", get(get_server_treasury))
         .route("/api/servers/:server_id/treasury/deposit", post(deposit_to_treasury))
         .route("/api/servers/:server_id/treasury/payout", post(payout_from_treasury))
+        .route("/api/activity", get(activity::get_activity))
+        .route(
+            "/api/game-focus",
+            get(focus::get_settings).put(focus::put_settings),
+        )
+        .route("/api/message/:id/notify-now", post(focus::notify_now))
         .route("/api/version", get(get_latest_version).post(publish_version))
         .route("/api/announcement", post(publish_announcement))
         .route("/health", get(health_check))

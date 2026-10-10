@@ -83,6 +83,8 @@
     "interface/autographs.js",
     "interface/diagnostics.js",
     "interface/diagnostic_reports.js",
+    "interface/game_activity.js",
+    "interface/game_focus.js",
     "interface/confirm_dialog.js",
     "interface/addons_store.js",
     "interface/addons_runtime.js",

@@ -175,6 +175,14 @@
         "attachmentCount",
         "serverId",
         "channelId"
+      ],
+      "optional": [
+        "messageId",
+        "silent",
+        "force",
+        "quiet",
+        "clear",
+        "count"
       ]
     },
     "PERSIST_DEVICE_IDENTITY": {
@@ -240,6 +248,12 @@
       "fields": [
         "requestId",
         "enabled"
+      ]
+    },
+    "GAME_DETECTOR_CONFIG": {
+      "fields": [
+        "enabled",
+        "games"
       ]
     }
   }

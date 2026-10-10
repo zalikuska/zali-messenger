@@ -62,3 +62,17 @@ ops/
 
 # Приватные ops-скиллы (инфраструктура прода; репозиторий публичный)
 .claude/skills/zali-ops-*/
+
+# Вывод scripts/bundle_web.py. Источник правды — web/src/, web/index.html,
+# web/style.css, web/bridge_protocol.json; всё ниже собирается из них и раздувало
+# каждый коммит на мегабайты (Assets.swift и Resources/Web/app.js — по ~2,5 МБ,
+# web/app.js — столько же). Все сборочные скрипты запускают bundle_web.py сами;
+# на свежем клоне: `python3 scripts/bundle_web.py`.
+# BridgeProtocol.generated.swift и web/src/modules/native_types.js остаются в git:
+# они крошечные, а первый читают doctor-проверки и bridge_check.sh.
+/web/app.js
+/apps/macos/Sources/ZaliMessenger/Assets.swift
+/apps/macos/Sources/ZaliMessenger/Resources/Web/*
+# Папка нужна SwiftPM (Package.swift: .copy("Resources/Web")) ещё до первой сборки
+# бандла, поэтому в git лежит только заглушка.
+!/apps/macos/Sources/ZaliMessenger/Resources/Web/.gitkeep

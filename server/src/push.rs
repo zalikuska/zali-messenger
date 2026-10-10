@@ -83,6 +83,10 @@ pub(crate) struct ConnectionPresence {
     /// них всё равно нет.
     pub(crate) attended: bool,
     pub(crate) last_inbound: Instant,
+    /// Во что играет пользователь на этом соединении (activity.rs). Не про пуши —
+    /// лежит здесь, потому что это единственная запись «что известно о живом сокете»
+    /// и она уже создаётся и удаляется вместе с ним.
+    pub(crate) activity: Option<crate::activity::ConnectionActivity>,
 }
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
@@ -96,6 +100,7 @@ pub(crate) fn register_connection_presence(state: &AppState, username: &str) -> 
             device_id: None,
             attended: false,
             last_inbound: Instant::now(),
+            activity: None,
         },
     );
     id
@@ -159,6 +164,9 @@ pub(crate) struct PushNotification {
     body: String,
     tag: String,
     data: serde_json::Value,
+    /// Показать, но без звука и вибрации (режим «в игре», focus.rs). Service
+    /// worker передаёт это в `showNotification({silent})`, Android — в канал.
+    silent: bool,
 }
 
 impl PushNotification {
@@ -173,7 +181,24 @@ impl PushNotification {
                 "channelId": null,
                 "messageId": message_id,
             }),
+            silent: false,
         }
+    }
+
+    /// То же уведомление, но без звука.
+    pub(crate) fn silenced(mut self) -> Self {
+        self.silent = true;
+        self
+    }
+
+    /// «Всё равно оповестить» (focus.rs): показать, даже если уведомление об этом
+    /// сообщении уже висит (тихое), и со звуком. Без метки service worker и
+    /// Android считают такой пуш повтором и подавляют его.
+    pub(crate) fn forced(mut self) -> Self {
+        if let Some(data) = self.data.as_object_mut() {
+            data.insert("force".to_string(), serde_json::Value::Bool(true));
+        }
+        self
     }
 
     /// The same notification as FCM `data` for the native Android app (fcm.rs): flat
@@ -198,6 +223,12 @@ impl PushNotification {
             ("serverId", field("serverId")),
             ("channelId", field("channelId")),
             ("messageId", field("messageId")),
+            ("silent", if self.silent { "1" } else { "" }.to_string()),
+            (
+                "force",
+                if self.data.get("force").and_then(|v| v.as_bool()).unwrap_or(false) { "1" } else { "" }
+                    .to_string(),
+            ),
         ] {
             data.insert(key.to_string(), serde_json::Value::String(value));
         }
@@ -220,6 +251,7 @@ impl PushNotification {
                 "channelId": channel_id,
                 "messageId": message_id,
             }),
+            silent: false,
         }
     }
 }

@@ -43,6 +43,10 @@ cd "$(dirname "$0")/.."
 
 ensure_turn_server
 
+# 0. Веб-ассеты — вывод bundle_web.py, в git не лежат (см. .gitignore).
+echo "🌐 Сборка веб-ассетов..."
+python3 scripts/bundle_web.py
+
 # 1. Сборка Rust-ядра
 echo "⚙️  Сборка Rust Core..."
 cd core && cargo build --release && cd ..

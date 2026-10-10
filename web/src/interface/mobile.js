@@ -661,6 +661,8 @@ ZaliMixin(ZaliInterface, class {
         this.renderNotificationVolumeSettings();
         this.renderUpdateSettings();
         void this.renderAutostartSettings();
+        this.renderGameActivitySettings();
+        this.renderGameFocusSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         // Индекс сводок кеша поднимается лениво, первым обращением. Открытие

@@ -54,12 +54,21 @@ ZaliMixin(ZaliInterface, class {
                 const day = this.fmtDate(last.timestamp);
                 timeLabel = day === 'Сегодня' ? this.fmtTime(last.timestamp) : day;
             }
+            // «Играет в …» занимает место превью, пока нет непрочитанного: счётчик и
+            // текст новых сообщений важнее. Значок игры в имени остаётся всегда.
+            const game = this.gameActivityFor(contact);
+            if (game && cnt === 0) {
+                preview = `<span class="contact-game"><span class="game-activity-text">${this.esc(this.gameActivityLabel(game))}</span></span>`;
+            }
+            const gameBadge = game
+                ? `<span class="contact-game-badge" title="${this.esc(this.gameActivityLabel(game))}">${this.gameActivityIconHTML()}</span>`
+                : '';
             // has-unread — чтобы строку с новым можно было выделить целиком
             // (имя, превью), а не только бейджем в углу.
             return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
                 <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
-                    <div class="contact-name">${this.esc(contact)}</div>
+                    <div class="contact-name">${this.esc(contact)}${gameBadge}</div>
                     <div class="contact-prev">${preview}</div>
                 </div>
                 <div class="contact-actions">

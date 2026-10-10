@@ -5,7 +5,7 @@
 - `core/` - Rust core library and C ABI used by native clients.
 - `sdk/Rust/` - archive format SDK used by `core`.
 - `server/` - Axum backend, SQLite storage, uploads, auth, WebSocket delivery.
-- `web/` - browser/WKWebView UI sources. `scripts/bundle_web.py` generates `web/app.js` and macOS web assets.
+- `web/` - browser/WKWebView UI sources. `scripts/bundle_web.py` generates `web/app.js` and macOS web assets (they are git-ignored: run it after a fresh clone).
 - `apps/macos/` - Swift Package Manager app that links `core/target/release/libzali_messenger_core.a`.
 - `apps/windows/` - Rust desktop shell with WRY/TAO, embedded web assets, and a native bridge for message sending/style persistence.
 

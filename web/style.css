@@ -12600,6 +12600,9 @@ body[data-design-mode="focus"] .settings-group-title {
 
 body[data-design-mode="focus"] [data-settings-group="profile"] { order: 10; margin-top: 4px; }
 body[data-design-mode="focus"] [data-settings-section="profile"] { order: 11; }
+body[data-design-mode="focus"] [data-settings-section="game-activity"] { order: 12; }
+body[data-design-mode="focus"] [data-settings-section="game-focus"] { order: 13; }
+[data-settings-section="game-focus"] { order: 13; }
 body[data-design-mode="focus"] [data-settings-group="appearance"] { order: 20; }
 body[data-design-mode="focus"] [data-settings-section="theme"] { order: 21; }
 body[data-design-mode="focus"] [data-settings-section="design"] { order: 22; }
@@ -15012,6 +15015,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 [data-settings-group="profile"] { order: 10; margin-top: 4px; }
 [data-settings-section="profile"] { order: 11; }
+[data-settings-section="game-activity"] { order: 12; }
 [data-settings-group="appearance"] { order: 20; }
 [data-settings-section="theme"] { order: 21; }
 [data-settings-section="design"] { order: 22; }
@@ -15841,4 +15845,63 @@ body[data-design-mode] .hub-addons .hub-addon-more {
     .addon-frame-spinner {
         animation-duration: 2.4s;
     }
+}
+
+
+/* ============================================================
+   Игровой статус («Играет в …») — web/src/interface/game_activity.js
+   Акцент — сплошной --lime: полупрозрачные оттенки читаются грязно-оливковыми.
+   ============================================================ */
+.game-activity-icon { flex: 0 0 auto; vertical-align: -1px; }
+.game-activity-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    min-width: 0;
+    color: var(--lime);
+    font-size: 12px;
+    line-height: 1.3;
+}
+.game-activity-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-activity-since { color: var(--text2); white-space: nowrap; }
+.game-activity-since::before { content: "·"; margin-right: 5px; }
+.contact-game {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    color: var(--lime);
+}
+.contact-game-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    color: var(--lime);
+    vertical-align: middle;
+}
+.profile-game { margin-top: 6px; }
+.server-member-meta .game-activity-line { font-size: inherit; }
+
+/* Режим «в игре» — web/src/interface/game_focus.js */
+.composer-focus-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--lime);
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+    font-size: 12.5px;
+    line-height: 1.35;
+}
+.composer-focus-note[hidden] { display: none; }
+.composer-focus-icon { flex: none; display: inline-flex; color: var(--lime); }
+.composer-focus-text { flex: 1; min-width: 0; color: var(--text2); }
+.composer-focus-text strong { color: var(--text); font-weight: 700; }
+.composer-focus-btn { flex: none; white-space: nowrap; }
+.game-focus-chip { padding: 4px 10px; }
+@media (max-width: 560px) {
+    .composer-focus-note { flex-wrap: wrap; }
+    .composer-focus-btn { margin-left: auto; }
 }

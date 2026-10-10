@@ -149,7 +149,9 @@ be forced `true` on login regardless of whether a socket existed at all.
   `Package.swift` copies the whole `Resources/Web` directory), and
   `web/app.js` (explicitly for opening `web/index.html` directly in a browser
   during debugging). **If you edit JS and don't see the change, you forgot to
-  run `python3 scripts/bundle_web.py`.**
+  run `python3 scripts/bundle_web.py`.** None of these generated outputs is
+  committed (see `.gitignore`): a fresh clone has to run the bundler once, and
+  every build script does it first.
 - **The root `.zip` files** (`zali-messenger-*.zip`, `zali-windows-*.zip`) are
   not build output or stray clutter — they are deliberate point-in-time
   snapshots of the working tree, kept after a real incident where

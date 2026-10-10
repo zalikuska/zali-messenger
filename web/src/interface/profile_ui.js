@@ -105,6 +105,7 @@ ZaliMixin(ZaliInterface, class {
             <div class="profile-head-copy">
                 <h2 class="profile-name" id="profileModalName">${this.esc(title)}</h2>
                 <div class="profile-handle">@${this.esc(username)}</div>
+                ${this.gameActivityFor(username) ? `<div class="profile-game">${this.gameActivityLineHTML(username)}</div>` : ''}
                 ${data.bio ? `<div class="profile-bio-inline">${this.esc(data.bio)}</div>` : ''}
                 ${this.renderProfileLinks(data)}
                 <div class="profile-counters">

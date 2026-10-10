@@ -1378,6 +1378,14 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
         "WS deliver_to_user start username={} message_id={} active_conns={}",
         username, msg.id, active
     );
+    // Режим «в игре» получателя (focus.rs). Политика уходит клиенту РАНЬШЕ самого
+    // сообщения — по одному соединению порядок сохраняется, и к моменту, когда
+    // клиент решает, показывать ли тост, он уже знает, что делать.
+    let focus_mode = if msg.sender != username && msg.server_id.is_none() {
+        crate::focus::apply_to_delivery(state, &msg.sender, username, &msg.id).await
+    } else {
+        None
+    };
     let payload = match message_payload_with_inline_archive(state, msg).await {
         Some(json) => json,
         None => {
@@ -1407,9 +1415,22 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
         let state = Arc::clone(state);
         let username = username.to_string();
         let notification = crate::PushNotification::direct_message(&msg.sender, &msg.id);
-        tokio::spawn(async move {
-            send_push(&state, &username, &notification).await;
-        });
+        match focus_mode {
+            // Получатель в игре и просил не тревожить до её конца: пуш уйдёт одним
+            // сводным уведомлением, когда сессия кончится (focus.rs).
+            Some(crate::focus::FocusMode::Defer) => {}
+            Some(crate::focus::FocusMode::Silent) => {
+                let notification = notification.silenced();
+                tokio::spawn(async move {
+                    send_push(&state, &username, &notification).await;
+                });
+            }
+            _ => {
+                tokio::spawn(async move {
+                    send_push(&state, &username, &notification).await;
+                });
+            }
+        }
     }
 }
 

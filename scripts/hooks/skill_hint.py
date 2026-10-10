@@ -25,6 +25,7 @@ RULES = [
     (r"^server/src/hash_chain\.rs|^web/src/interface/message_edit\.js", "message-lifecycle"),
     (r"^server/src/(coins|treasury)\.rs|^web/src/interface/(zalicoin|treasury)\.js", "zalicoin-treasury"),
     (r"^server/src/(push|fcm)\.rs|^web/src/interface/(notifications|web_push)\.js|^web/service-worker\.js", "notifications"),
+    (r"^web/src/interface/game_(activity|focus)\.js|^server/src/(activity|focus)\.rs|^apps/macos/Sources/ZaliMessenger/Services/GameDetector\.swift|^apps/windows/src/native/game_detector\.rs", "game-activity"),
     (r"^web/src/interface/(cache|attachments|message_list|message_render)\.js", "performance"),
     (r"^web/src/(interface\.js|mixin\.js|manifest\.json)", "web-ui-architecture"),
     (r"^server/src/(auth|devices)\.rs", "security-invariants"),
@@ -43,6 +44,7 @@ SUBFILES = [
 DOCTORS = {
     "voice-calls": "./scripts/voice_doctor/run.sh (~3 с)",
     "notifications": "./scripts/notify_doctor/run.sh (~1 с)",
+    "game-activity": "./scripts/activity_doctor/run.sh (~10 с)",
     "performance": "./scripts/perf_doctor/run.sh (~2 с) и ./scripts/memory_doctor/run.sh",
     "security-invariants": "./scripts/security_doctor/run.sh (<1 с)",
     "messaging-protocol": "./scripts/crypto_doctor/run.sh (~40 с)",

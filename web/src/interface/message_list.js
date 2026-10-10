@@ -588,6 +588,7 @@ ZaliMixin(ZaliInterface, class {
             if (this.voice?.status === 'incoming' || this.voice?.status === 'calling') this.renderVoicePanel();
         }
         this.updateSendButtonState();
+        this.renderComposerFocusNote();
         this.syncActiveConversation({ force: true });
         this.closeMobileSidebar();
         this.syncMobileChrome();

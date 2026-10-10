@@ -104,7 +104,7 @@ ZaliMixin(ZaliInterface, class {
             return `<div class="server-member-row ${isOwner ? 'owner' : ''}">
                 <div class="server-member-info">
                     <div class="server-member-name">${this.esc(member.username)}</div>
-                    <div class="server-member-meta">${this.esc(this.serverRoleLabel(role))}${joined ? ` · ${this.esc(joined)}` : ''}</div>
+                    <div class="server-member-meta">${this.esc(this.serverRoleLabel(role))}${joined ? ` · ${this.esc(joined)}` : ''}${this.gameActivityFor(member.username) ? ` · ${this.gameActivityLineHTML(member.username, { withDuration: false })}` : ''}</div>
                 </div>
                 ${select}
                 <button class="server-member-remove" type="button" data-member-remove="${this.esc(member.username)}" ${isOwner || !canManage ? 'disabled' : ''} title="Удалить">×</button>

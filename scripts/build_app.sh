@@ -14,7 +14,7 @@ APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
 # MAJOR.MINOR{a|b|r}BUILD (r > b > a, see compareVersions in interface.js);
 # unlike apps/windows/Cargo.toml, CFBundleShortVersionString isn't SemVer-locked
 # so this can hold the display version directly.
-APP_VERSION="0.2b49"
+APP_VERSION="0.2b50"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 
@@ -53,6 +53,12 @@ EOF
 echo "🚀 Начинаем сборку автономного приложения $APP_NAME..."
 
 ensure_turn_server
+
+# 0. Веб-ассеты (web/app.js, Assets.swift, Resources/Web) — вывод bundle_web.py и в
+#    git не лежат: без этого шага свежий клон не соберётся, а старый получит
+#    протухший JS.
+echo "🌐 Сборка веб-ассетов..."
+python3 scripts/bundle_web.py
 
 # 1. Сборка Rust ядра
 echo "📦 Сборка Rust ядра..."
