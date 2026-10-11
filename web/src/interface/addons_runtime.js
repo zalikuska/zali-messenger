@@ -44,6 +44,9 @@ ZaliMixin(ZaliInterface, class {
             case 'fs.write':
                 return this.nativeSupports('addonFs');
             case 'launch':
+            case 'network.any':
+                // Повышенное: системный диалог при каждом запуске даёт та же
+                // сессия, что и запуск программ, — есть только в macOS и Windows.
                 return this.nativeSupports('addonLaunch');
             case 'process': {
                 if (!this.nativeSupports('addonProcess')) return false;
@@ -93,7 +96,7 @@ ZaliMixin(ZaliInterface, class {
         const bytes = await this.addonStoreGetArchive(id);
         // Файл перепроверяется при каждом запуске: в хранилище он мог быть
         // подменён, а права выдавались конкретному отпечатку.
-        const info = await F.inspect(bytes);
+        const info = await this.addonInspect(bytes);
         if (meta.sha256 && info.sha256 && meta.sha256 !== info.sha256) {
             throw this.addonError('tampered', 'Файл аддона изменился после установки — переустановите его');
         }
@@ -104,10 +107,25 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
+        // Отозванная оператором сборка не запускается вовсе. Ответ реестра берётся
+        // из кеша; недоступен (нет сети) — запуск не блокируем: без сети у
+        // отозванного аддона нет ни облака, ни монет, а само приложение локально.
+        if (info.signature?.digest) {
+            const registry = await this.addonRegistryLookup(id).catch(() => null);
+            if (Array.isArray(registry?.revoked) && registry.revoked.includes(info.signature.digest)) {
+                throw this.addonError('revoked', 'Эта версия аддона отозвана оператором сервера — обновите или удалите аддон');
+            }
+        }
+
         const instance = {
             id,
             manifest: info.manifest,
             sha256: info.sha256,
+            // Подпись перепроверяется на каждом запуске, как и сам файл: решение
+            // о переводах монет принимается по ней, а не по тому, что записано
+            // при установке (файл в хранилище мог быть подменён).
+            signature: info.signature,
+            iconDataUrl: meta.iconDataUrl || '',
             files: info.files,
             iframe: null,
             wrap: null,
@@ -132,6 +150,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this.expandAddon(id);
         this.renderHubAddons?.();
+        this.addonReportEvent?.(id, 'launch', info.manifest.version, info.signature?.state);
         return instance;
     }
 
@@ -330,11 +349,14 @@ ZaliMixin(ZaliInterface, class {
     }
 
     addonCsp(manifest) {
+        // `network.any` (повышенное) — любые https/wss-серверы и, для своих
+        // серверов в локальной сети, http/ws. `network` — только перечисленные хосты.
+        const any = manifest.permissions.includes('network.any');
         const hosts = (manifest.permissions.includes('network') ? manifest.network : [])
             .flatMap(host => [`https://${host}`, `wss://${host}`]);
-        const remote = hosts.length ? ` ${hosts.join(' ')}` : '';
+        const remote = any ? ' https: wss: http: ws:' : (hosts.length ? ` ${hosts.join(' ')}` : '');
         const httpsHosts = hosts.filter(h => h.startsWith('https://'));
-        const remoteMedia = httpsHosts.length ? ` ${httpsHosts.join(' ')}` : '';
+        const remoteMedia = any ? ' https:' : (httpsHosts.length ? ` ${httpsHosts.join(' ')}` : '');
         return [
             "default-src 'none'",
             "script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
@@ -581,6 +603,9 @@ ZaliMixin(ZaliInterface, class {
             network: m.network.slice(),
             platform: this.addonPlatform(),
             visible: !!instance.expanded,
+            // Подпись файла — чтобы аддон мог честно сказать пользователю, на что
+            // тот соглашается. Решает всё равно приложение, а не это поле.
+            signature: instance.signature?.state || 'none',
             theme: {
                 accent: root.getPropertyValue('--lime').trim() || '#cbff00',
                 background: root.getPropertyValue('--bg').trim() || '#090b0e',

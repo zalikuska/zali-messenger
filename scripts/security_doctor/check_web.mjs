@@ -135,4 +135,22 @@ section('HTML attribute sinks');
     process.stdout.write(`  · ${findings.length} attribute interpolations scanned across ${sourceFiles.length} files\n`);
 }
 
+section('app frames and releases');
+{
+    const indexHtml = readFileSync('web/index.html', 'utf8');
+    const updatesSrc = stripLineComments(read('web/src/interface/updates.js'));
+    record('the page limits its own frames to srcdoc/blob/data',
+        /<meta http-equiv="Content-Security-Policy" content="frame-src about: blob: data:">/.test(indexHtml),
+        'a sandboxed addon frame could otherwise navigate itself to an external URL carrying data in the query');
+    record('an update is downloaded only with an official release signature',
+        /verifyReleaseSignature\(/.test(updatesSrc) && /!status\.releaseSigned/.test(updatesSrc)
+            && /downloadUrl: releaseSigned \?/.test(updatesSrc),
+        'the download URL and its SHA-256 come from the same server reply');
+    record('the release message format matches the server and the signing tool',
+        /zali-release-sig:v1\\n\$\{platform\}\\n\$\{version\}\\n/.test(updatesSrc));
+    record('a password change republishes the vault under the new passphrase',
+        /changePassword\(\)/.test(stripLineComments(read('web/src/interface/auth.js')))
+            && /force: true/.test(stripLineComments(read('web/src/interface/auth.js'))));
+}
+
 finish('web UI');

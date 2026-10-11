@@ -80,15 +80,7 @@ async fn server_with_members(app: &TestApp, owner: &RegisteredUser, members: &[&
         .unwrap()
         .to_string();
     for member in members {
-        let add = app
-            .http
-            .post(app.url(&format!("/api/servers/{}/members", server_id)))
-            .header("Authorization", owner.auth_header())
-            .json(&json!({ "username": member, "role": "member" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(add.status(), 200, "add member {}", member);
+        common::join_by_invite(app, owner, &server_id, member, "hunter22").await;
     }
     (server_id, channel_id)
 }

@@ -977,8 +977,8 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
 
-            if (password.length < 6) {
-                const msg = 'Пароль должен быть не менее 6 символов';
+            if (password.length < 8) {
+                const msg = 'Пароль должен быть не менее 8 символов';
                 this.S.auth.error = msg;
                 if (errorBox) errorBox.textContent = msg;
                 this.addLogEntry({ type: 'WARN', msg: `Регистрация отклонена для ${username}: ${msg}`, ts: new Date().toLocaleTimeString() });
@@ -1008,6 +1008,100 @@ ZaliMixin(ZaliInterface, class {
         }
 
         return this.executeAuth(mode, username, password);
+    }
+
+    setChangePasswordStatus(text, tone = '') {
+        const el = document.getElementById('changePasswordStatus');
+        if (!el) return;
+        el.textContent = text || '';
+        el.hidden = !text;
+        el.dataset.tone = tone;
+    }
+
+    /**
+     * Смена пароля. Пароль аккаунта — это ещё и парольная фраза облачного vault
+     * (ключи переписок зашифрованы им на сервере), поэтому одной смены на сервере
+     * мало: сначала vault синхронизируется под старым паролем, затем сервер меняет
+     * пароль (и отзывает все токены), и vault публикуется заново — уже под новым.
+     * Иначе следующий вход с новым паролем не прочитал бы ни одного ключа.
+     */
+    async changePassword() {
+        if (this._changePasswordBusy) return;
+        const current = String(document.getElementById('inputCurrentPassword')?.value || '');
+        const next = String(document.getElementById('inputNewPassword')?.value || '');
+        const repeat = String(document.getElementById('inputNewPasswordRepeat')?.value || '');
+        if (!this.S.session?.token) {
+            this.setChangePasswordStatus('Сначала войдите в аккаунт.', 'error');
+            return;
+        }
+        if (!current || !next) {
+            this.setChangePasswordStatus('Введите текущий и новый пароль.', 'error');
+            return;
+        }
+        if (next !== repeat) {
+            this.setChangePasswordStatus('Новый пароль и повтор не совпадают.', 'error');
+            return;
+        }
+        if (next.length < 8) {
+            this.setChangePasswordStatus('Новый пароль должен быть не короче 8 символов.', 'error');
+            return;
+        }
+        if (next === current) {
+            this.setChangePasswordStatus('Новый пароль совпадает с текущим.', 'error');
+            return;
+        }
+        this._changePasswordBusy = true;
+        const btn = document.getElementById('changePasswordBtn');
+        if (btn) btn.disabled = true;
+        this.setChangePasswordStatus('Меняем пароль…');
+        try {
+            // 1. Свежий vault под старым паролем: ключи, которые есть только на
+            // сервере (или только здесь), не должны потеряться при перешифровании.
+            if (this.isVaultCloudSyncEnabled() && this.S.auth?.vaultPassphrase) {
+                await this.syncCloudVaultPackage({ reason: 'pre-password-change' });
+            }
+            // 2. Сервер сверяет текущий пароль, меняет его и выдаёт новый токен.
+            const res = await this.apiFetch(this.apiRoutes.auth.password, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ currentPassword: current, newPassword: next }),
+                interactive: true,
+            });
+            if (!res.ok) {
+                throw new Error((await res.text()) || 'Не удалось сменить пароль');
+            }
+            const data = await res.json();
+            this.applySession({
+                username: data.username || this.myName(),
+                token: data.token,
+                guest: false,
+            });
+            // 3. Новый пароль = новая парольная фраза: запечатать её новым токеном
+            // и опубликовать vault заново (force — старые события ему не читаются).
+            this.S.auth.vaultPassphrase = next;
+            await this.saveVaultUnlockSecret(next, data.token);
+            let republished = true;
+            if (this.isVaultCloudSyncEnabled()) {
+                republished = await this.syncCloudVaultPackage({ passphrase: next, reason: 'password-change', force: true });
+                if (!republished) this.scheduleCloudVaultSync?.(3000);
+            }
+            for (const id of ['inputCurrentPassword', 'inputNewPassword', 'inputNewPasswordRepeat']) {
+                const input = document.getElementById(id);
+                if (input) input.value = '';
+            }
+            this.addLogEntry({ type: 'SUCCESS', msg: 'Пароль изменён, остальные устройства потребуют вход заново', ts: new Date().toLocaleTimeString() });
+            this.setChangePasswordStatus(
+                republished
+                    ? 'Пароль изменён. На других устройствах потребуется войти заново.'
+                    : 'Пароль изменён, но ключи ещё не обновлены в облаке — не выходите из аккаунта, синхронизация повторится сама.',
+                republished ? 'success' : 'warn',
+            );
+        } catch (e) {
+            this.setChangePasswordStatus(String(e?.message || 'Не удалось сменить пароль'), 'error');
+        } finally {
+            this._changePasswordBusy = false;
+            if (btn) btn.disabled = false;
+        }
     }
 
     continueAsGuest() {
@@ -1219,6 +1313,9 @@ ZaliMixin(ZaliInterface, class {
     }
 
     updateAuthView() {
+        // Ссылка …/server/<код> или …/profile/<имя>, с которой открыли страницу,
+        // отрабатывается, как только есть сессия (см. deep_links.js).
+        this.scheduleDeepLinkConsume?.();
         const overlay = document.getElementById('authOverlay');
         if (overlay) {
             const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;

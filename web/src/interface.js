@@ -62,7 +62,6 @@ const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
  * @property {Array<any>} members
  * @property {Array<any>} roles
  * @property {Array<any>} channels
- * @property {Array<any>} draftRoles
  * @property {{name: string, description: string, icon: string, color: string, joinLink: string, isPublic: boolean}|null} createDraft
  * @property {string} joinLink
  * @property {string|null} selectedChannelId

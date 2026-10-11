@@ -759,7 +759,13 @@ ZaliMixin(ZaliInterface, class {
         }, Math.max(0, Number(delayMs) || 0));
     }
 
-    async syncCloudVaultPackage({ passphrase = null, reason = 'auto' } = {}) {
+    /**
+     * `force` — публиковать, даже если последние события на сервере не читаются этой
+     * парольной фразой. Нужен смене пароля на ЭТОМ устройстве: прежние события
+     * зашифрованы старым паролем, и без принудительной публикации vault остался бы
+     * нечитаемым для любого нового входа.
+     */
+    async syncCloudVaultPackage({ passphrase = null, reason = 'auto', force = false } = {}) {
         if (!this.S.session?.token) return false;
         if (!this.isVaultCloudSyncEnabled()) {
             this.trace(`syncCloudVaultPackage skipped reason=${reason} disabled=true`);
@@ -862,7 +868,7 @@ ZaliMixin(ZaliInterface, class {
                 return imported;
             }
 
-            if (undecryptableServerEvents) {
+            if (undecryptableServerEvents && !force) {
                 // Ни одно из последних SCAN_WINDOW событий не расшифровалось этой
                 // passphrase — похоже на реальную смену пароля на другом устройстве, а
                 // не на one-time-code экспорт. Публиковать поверх нельзя: локальные

@@ -1,0 +1,11 @@
+{
+  "zaliAddon": 1,
+  "id": "org.zalikus.external-sync",
+  "name": "Внешний сервер",
+  "version": "1.0.0",
+  "description": "Хранит заметку на вашем собственном сервере (по умолчанию — scripts/addon_dev_server.py).",
+  "author": "ZaliMessenger",
+  "icon": "icon.svg",
+  "entry": "index.html",
+  "permissions": ["network.any"]
+}

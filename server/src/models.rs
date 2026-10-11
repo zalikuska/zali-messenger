@@ -209,6 +209,9 @@ pub(crate) struct ServerResponse {
     pub(crate) is_public: bool,
     #[serde(rename = "myRole")]
     pub(crate) my_role: Option<String>,
+    /// Может ли зритель создавать приглашения (право «Приглашения»).
+    #[serde(rename = "canInvite")]
+    pub(crate) can_invite: bool,
     #[serde(rename = "memberCount")]
     pub(crate) member_count: i64,
     pub(crate) channels: Vec<ChannelResponse>,
@@ -350,7 +353,10 @@ pub(crate) struct ServerSettingsPayload {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ServerMemberPayload {
-    pub(crate) username: String,
+    /// Имя берётся из пути; поле оставлено ради совместимости со старыми клиентами.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) username: Option<String>,
     pub(crate) role: Option<String>,
 }
 

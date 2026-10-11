@@ -21,7 +21,6 @@
                     members: [],
                     roles: [],
                     channels: [],
-                    draftRoles: [],
                     createDraft: null,
                     joinLink: '',
                     selectedChannelId: null,

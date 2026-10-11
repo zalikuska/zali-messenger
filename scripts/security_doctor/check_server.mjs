@@ -82,7 +82,7 @@ section('login rate limiting');
 section('passwords');
 {
     record('passwords are capped at 72 bytes',
-        /payload\.password\.len\(\) > 72/.test(auth),
+        /password\.len\(\) > 72/.test(auth),
         'bcrypt truncates silently past that — two different passwords would both open the account');
     record('hashing and verification run off the async runtime',
         /spawn_blocking\(move \|\| bcrypt::hash/.test(auth)
@@ -157,6 +157,44 @@ section('release publishing');
         'never from uploads/, which holds user attachments behind per-message auth');
     record('the served filename is allowlisted',
         /is_ascii_alphanumeric\(\)|[A-Za-z0-9._-]/.test(updates));
+}
+
+section('audit 2026-10-11');
+{
+    const realtime = stripLineComments(read('server/src/realtime.rs'));
+    const servers = stripLineComments(read('server/src/servers.rs'));
+    const push = stripLineComments(read('server/src/push.rs'));
+    record('the placeholder JWT secret is refused in release builds',
+        /fn is_weak_jwt_secret/.test(lib) && /is_weak_jwt_secret\(&secret\)\s*&&\s*!cfg!\(debug_assertions\)/.test(lib),
+        '.env.example once shipped a 47-character placeholder that passed the length check');
+    record('a cookie request must carry a trusted Origin (or none)',
+        /fn cookie_origin_allowed/.test(auth) && /cookie_origin_allowed\(&parts\.headers/.test(auth),
+        'sibling subdomains are the same site: SameSite=Lax does not stop their uploads and sockets');
+    record('the cookie origin check sits before the cookie token is validated',
+        /AUTH_COOKIE_NAME[\s\S]{0,900}?cookie_origin_allowed[\s\S]{0,400}?validate_token\(token/.test(auth));
+    record('passwords follow a policy: length, not the login, not a common one',
+        /fn password_policy_error/.test(auth) && /COMMON_PASSWORDS/.test(auth)
+            && /password_policy_error\(username, &payload\.password\)/.test(auth));
+    record('changing the password needs the current one and rotates every token',
+        /async fn change_password/.test(auth) && /verify_password\(payload\.current_password/.test(auth)
+            && /token_version = token_version \+ 1/.test(rustFn(auth, 'change_password')));
+    record('IPv6 rate buckets collapse to the /64',
+        /fn rate_bucket_ip/.test(auth) && /rate_bucket_ip\(extract_client_ip/.test(auth));
+    record('invite codes are 64-bit and failed guesses are throttled per person',
+        /simple\(\)\.to_string\(\)\[\.\.16\]/.test(servers) && /invite_attempts_exhausted\(&state/.test(servers)
+            && /note_invite_miss\(&state/.test(servers));
+    record('the WebSocket caps frame size, connections per person and inbound rate',
+        /max_message_size\(WS_MAX_INBOUND_BYTES\)/.test(realtime) && /WS_MAX_CONNECTIONS_PER_USER/.test(realtime)
+            && /WS_INBOUND_MAX_PER_WINDOW/.test(realtime));
+    record('uploads, avatars and ws tickets are rate-limited per person',
+        /rate_allow\(&state, format!\("upload:/.test(messages) && /rate_allow\(&state, format!\("avatar:/.test(assets)
+            && /rate_allow\(&state, format!\("wsticket:/.test(auth));
+    record('a web push endpoint must resolve to public addresses only',
+        /endpoint_resolves_public\(&endpoint\)\.await/.test(push) && /fn is_public_ip/.test(push));
+    record('a release carries an official signature that the server checks on publish',
+        /fn release_signature_message/.test(updates) && /verify_es256\(&crate::addons::official_public_key\(\)/.test(updates));
+    record('release builds do not trust localhost origins by default',
+        /let base = "https:\/\/msgs\.zalikus\.org,zali:\/\/localhost";/.test(lib));
 }
 
 finish('server');

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Облачные заметки</title>
+<style>
+  body { margin: 0; padding: 20px; font: 15px/1.5 var(--zali-font, system-ui); color: var(--zali-text, #eee); background: var(--zali-bg, #090b0e); }
+  textarea { width: 100%; min-height: 240px; box-sizing: border-box; padding: 12px; border-radius: 12px; border: 1px solid var(--zali-border, #333); background: var(--zali-surface, #14171c); color: inherit; font: inherit; resize: vertical; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  button { padding: 8px 16px; border: 0; border-radius: 10px; background: var(--zali-accent, #cbff00); color: #050505; font-weight: 600; cursor: pointer; }
+  small { color: var(--zali-text3, #888); }
+</style>
+</head>
+<body>
+<textarea id="note" placeholder="Пишите — сохранится в облаке"></textarea>
+<div class="row"><button id="save">Сохранить</button><small id="status"></small></div>
+<script>
+(async function () {
+  const note = document.getElementById('note');
+  const status = document.getElementById('status');
+  await zali.ready;
+  try {
+    const saved = await zali.cloud.get('note');
+    if (saved) note.value = saved.text;
+    const u = await zali.cloud.usage();
+    status.textContent = `Ваши данные ${(u.mine / 1024).toFixed(1)} КБ из ${(u.mineQuota / 1048576).toFixed(0)} МБ; всего у аддона ${(u.bytes / 1048576).toFixed(2)} из ${(u.quota / 1048576).toFixed(0)} МБ`;
+  } catch (e) {
+    status.textContent = e.code === 'not_signed' ? 'Подпишите аддон — облако открыто только подписанным'
+      : e.code === 'offline' ? 'Нет связи с сервером' : e.message;
+  }
+  document.getElementById('save').addEventListener('click', async () => {
+    try {
+      await zali.cloud.set('note', { text: note.value, savedAt: Date.now() });
+      status.textContent = 'Сохранено в облаке';
+    } catch (e) {
+      status.textContent = e.code === 'quota' ? 'Не хватает места в облаке' : e.message;
+    }
+  });
+})();
+</script>
+</body>
+</html>

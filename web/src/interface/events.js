@@ -26,6 +26,10 @@ ZaliMixin(ZaliInterface, class {
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
         this.bindAddonEvents();                           // аддоны хаба и «Свернуть» в верхней полосе (после кнопок окна)
+        this.bindAddonSigningEvents();                    // вкладка «Подпись аддонов» в хабе
+        this.bindUserSuggestEvents();                     // подсказки имён в полях ввода логина
+        this.bindDeepLinkEvents();                        // ссылки …/server/<код> и …/profile/<имя>
+        this.bindSidebarSettingsEvents();                 // категории настроек слева, на месте списка чатов
     }
 
     /** Кнопки пустых состояний («Создать сервер», «Найти человека»). Вызывается из bindContactListEvents(). */
@@ -350,6 +354,20 @@ ZaliMixin(ZaliInterface, class {
                     void this.claimCoinGift(giftClaimBtn.getAttribute('data-zc-gift-claim'));
                     return;
                 }
+                const raffleJoinBtn = e.target.closest('[data-raffle-join]');
+                if (raffleJoinBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void this.joinRaffle(raffleJoinBtn.getAttribute('data-raffle-join'));
+                    return;
+                }
+                const raffleCancelBtn = e.target.closest('[data-raffle-cancel]');
+                if (raffleCancelBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.onRaffleCancelClick(raffleCancelBtn.getAttribute('data-raffle-cancel'));
+                    return;
+                }
                 const giftCancelBtn = e.target.closest('[data-zc-gift-cancel]');
                 if (giftCancelBtn) {
                     e.preventDefault();
@@ -549,6 +567,13 @@ ZaliMixin(ZaliInterface, class {
                     return;
                 }
                 this.openCoinTransferModal(this.S.current || '');
+            });
+        }
+        const coinRaffleBtn = document.getElementById('coinRaffleBtn');
+        if (coinRaffleBtn) {
+            coinRaffleBtn.addEventListener('click', () => {
+                this.closeCoinTransferModal();
+                void this.openRaffleBuilder();
             });
         }
         const zaliCoinSendBtn = document.getElementById('zaliCoinSendBtn');
@@ -880,7 +905,6 @@ ZaliMixin(ZaliInterface, class {
         const serverModalCancel = document.getElementById('serverModalCancel');
         const serverSaveBtn = document.getElementById('serverSaveBtn');
         const serverDeleteBtn = document.getElementById('serverDeleteBtn');
-        const serverMemberAddBtn = document.getElementById('serverMemberAddBtn');
         const serverJoinLinkGenerateBtn = document.getElementById('serverJoinLinkGenerateBtn');
         const serverJoinLinkCopyBtn = document.getElementById('serverJoinLinkCopyBtn');
         const serverAvatarUploadBtn = document.getElementById('serverAvatarUploadBtn');
@@ -1154,7 +1178,28 @@ ZaliMixin(ZaliInterface, class {
             serverDiscoverRefreshBtn.addEventListener('click', () => this.loadPublicServers({ silent: true }));
         }
         if (serverModalClose) serverModalClose.addEventListener('click', () => this.closeServerOverlay());
-        if (serverModalCancel) serverModalCancel.addEventListener('click', () => this.closeServerOverlay());
+        if (serverModalCancel) {
+            serverModalCancel.addEventListener('click', () => {
+                // В режиме правки это «Сбросить»: поля возвращаются к сохранённому.
+                if (this.S.serverModal.mode === 'edit') {
+                    this.setServerModalState({ error: '' });
+                    this.renderServerModal();
+                    return;
+                }
+                this.closeServerOverlay();
+            });
+        }
+        // Цвет сервера пресетами и «грязная» форма → полоса сохранения.
+        document.getElementById('serverColorSwatches')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-server-color-swatch]');
+            if (btn) this.applyServerColorSwatch(btn.getAttribute('data-server-color-swatch'));
+        });
+        const overviewPanel = document.getElementById('serverOverviewPanel');
+        if (overviewPanel) {
+            const onChange = () => this.updateServerSaveBar();
+            overviewPanel.addEventListener('input', onChange);
+            overviewPanel.addEventListener('change', onChange);
+        }
         if (serverSaveBtn) serverSaveBtn.addEventListener('click', () => this.submitServerModal());
         if (serverDeleteBtn) {
             serverDeleteBtn.addEventListener('click', async () => {
@@ -1180,37 +1225,10 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        if (serverMemberAddBtn) {
-            serverMemberAddBtn.addEventListener('click', async () => {
-                const serverId = this.S.serverModal.serverId;
-                const input = document.getElementById('serverMemberInput');
-                const roleSelect = document.getElementById('serverMemberRole');
-                const username = (input?.value || '').trim();
-                const role = roleSelect?.value || 'member';
-                if (!serverId || !username) return;
-                try {
-                    const res = await this.apiFetch(this.apiRoutes.servers.members(serverId), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ username, role }),
-                    });
-                    if (!res.ok) {
-                        throw new Error(await res.text() || 'Не удалось добавить участника');
-                    }
-                    if (input) input.value = '';
-                    const data = await res.json();
-                    this.setServerModalState({
-                        members: Array.isArray(data?.members) ? data.members : this.S.serverModal.members,
-                        error: '',
-                    });
-                    this.renderServerModal();
-                    await this.loadServers({ silent: true });
-                } catch (e) {
-                    this.setServerModalState({ error: e?.message || 'Не удалось добавить участника' });
-                    this.renderServerModal();
-                }
-            });
-        }
+        document.getElementById('serverMemberInviteBtn')?.addEventListener('click', () => {
+            const serverId = this.S.serverModal.serverId;
+            if (serverId) void this.inviteToServer(serverId);
+        });
         // Channel rows: rename and retopic in place, flip kind, delete, drag to reorder.
         this.bindServerChannelsList();
         if (serverJoinLinkGenerateBtn) {
@@ -1309,11 +1327,10 @@ ZaliMixin(ZaliInterface, class {
         if (serverRoleCreateSubmitBtn) {
             serverRoleCreateSubmitBtn.addEventListener('click', async () => {
                 try {
-                    const mode = this.S.serverModal.mode;
                     await this.createServerRole();
                     this.addLogEntry({
                         type: 'SUCCESS',
-                        msg: mode === 'create' ? 'Черновик роли добавлен' : 'Роль создана',
+                        msg: 'Роль создана',
                         ts: new Date().toLocaleTimeString(),
                     });
                 } catch (e) {
@@ -1390,6 +1407,7 @@ ZaliMixin(ZaliInterface, class {
             });
         }
         if (settingsLogoutBtn) settingsLogoutBtn.addEventListener('click', () => this.logout());
+        document.getElementById('changePasswordBtn')?.addEventListener('click', () => void this.changePassword());
         if (resetEncryptionKeysBtn) {
             const resetStatusEl = document.getElementById('resetEncryptionKeysStatus');
             const setResetStatus = (text, ok = true) => {
@@ -1686,52 +1704,28 @@ ZaliMixin(ZaliInterface, class {
 
         const serverRolesList = document.getElementById('serverRolesList');
         if (serverRolesList) {
-            serverRolesList.addEventListener('input', () => {
-                if (this.S.serverModal.mode !== 'create') return;
-                this.syncDraftServerRolesFromDom();
+            serverRolesList.addEventListener('change', (e) => {
+                const dd = e.target.closest('[data-role-select-dd]');
+                if (!dd) return;
+                this.setServerModalState({ roleSel: String(dd.value || '') });
+                this.renderServerRoles();
             });
             serverRolesList.addEventListener('click', async (e) => {
-                const draftToggleBtn = e.target.closest('[data-draft-role-toggle]');
-                if (draftToggleBtn) {
-                    if (this.S.serverModal.mode !== 'create') return;
-                    const draftId = String(draftToggleBtn.getAttribute('data-draft-role-toggle') || '').trim();
-                    if (!draftId) return;
-                    const nextRoles = this.syncDraftServerRolesFromDom().map(role => {
-                        if (String(role.draftId || '') !== draftId) return role;
-                        return {
-                            ...role,
-                            collapsed: !role.collapsed,
-                        };
-                    });
-                    this.setServerModalState({ draftRoles: nextRoles, error: '' });
-                    this.renderServerModal();
+                if (e.target.closest('[data-role-add]')) {
+                    try {
+                        await this.quickCreateServerRole();
+                    } catch (err) {
+                        this.setServerModalState({ error: err?.message || 'Не удалось создать роль' });
+                        this.renderServerModal();
+                    }
                     return;
                 }
-                const draftHead = e.target.closest('.server-role-head--draft');
-                if (draftHead) {
-                    if (this.S.serverModal.mode !== 'create') return;
-                    const card = draftHead.closest('[data-draft-role-card]');
-                    const draftId = String(card?.getAttribute('data-draft-role-card') || '').trim();
-                    if (!draftId) return;
-                    const nextRoles = this.syncDraftServerRolesFromDom().map(role => {
-                        if (String(role.draftId || '') !== draftId) return role;
-                        return {
-                            ...role,
-                            collapsed: !role.collapsed,
-                        };
-                    });
-                    this.setServerModalState({ draftRoles: nextRoles, error: '' });
-                    this.renderServerModal();
-                    return;
-                }
-                const draftDeleteBtn = e.target.closest('[data-draft-role-delete]');
-                if (draftDeleteBtn) {
-                    if (this.S.serverModal.mode !== 'create') return;
-                    const draftId = String(draftDeleteBtn.getAttribute('data-draft-role-delete') || '').trim();
-                    if (!draftId) return;
-                    const nextRoles = this.syncDraftServerRolesFromDom().filter(role => String(role.draftId || '') !== draftId);
-                    this.setServerModalState({ draftRoles: nextRoles, error: '' });
-                    this.renderServerModal();
+                const swatch = e.target.closest('[data-role-swatch]');
+                if (swatch) {
+                    const card = swatch.closest('[data-role-card]');
+                    const hidden = card?.querySelector('[data-role-color]');
+                    if (hidden) hidden.value = swatch.getAttribute('data-role-swatch');
+                    card?.querySelectorAll('[data-role-swatch]').forEach(b => b.classList.toggle('is-active', b === swatch));
                     return;
                 }
                 const saveBtn = e.target.closest('[data-role-save]');

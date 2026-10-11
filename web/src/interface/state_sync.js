@@ -117,6 +117,24 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Кто-то перевёл ZaliCoin аддону, закреплённому за вами (server/src/addons.rs).
+        if (type === 'addon_coins') {
+            this.handleAddonCoinsRealtime(payload);
+            return true;
+        }
+
+        // Розыгрыш ZaliCoin изменился: кто-то записался, итог подведён, отмена.
+        if (type === 'raffle_updated') {
+            this.handleRaffleRealtime(payload);
+            return true;
+        }
+
+        // Оператор решил заявку на официальную подпись аддона.
+        if (type === 'addon_official') {
+            this.handleAddonOfficialRealtime(payload);
+            return true;
+        }
+
         if (ZaliInterface.PROFILE_EVENT_TYPES.includes(type)) {
             // На нативе живут ДВА сокета (сообщения и голос), и сервер шлёт
             // событие в каждое соединение аккаунта. Голосовой сокет пропускает

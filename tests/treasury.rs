@@ -71,14 +71,7 @@ async fn create_server(app: &TestApp, owner: &RegisteredUser, name: &str, member
     assert_eq!(status, 201, "{}", body);
     let server_id = body["id"].as_str().unwrap().to_string();
     for member in members {
-        let (status, body) = post(
-            app,
-            owner,
-            &format!("/api/servers/{}/members", server_id),
-            json!({ "username": member, "role": "member" }),
-        )
-        .await;
-        assert_eq!(status, 200, "add member {}: {}", member, body);
+        common::join_by_invite(app, owner, &server_id, member, "hunter22").await;
     }
     server_id
 }

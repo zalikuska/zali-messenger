@@ -191,6 +191,7 @@ ZaliMixin(ZaliInterface, class {
                         <span class="hub-component-version">${this.esc(m.version)}</span>
                         ${fresh ? '<span class="hub-addon-flag is-new">Новый</span>' : ''}
                         ${elevated ? '<span class="hub-addon-flag is-elevated">Повышенные права</span>' : ''}
+                        ${meta.signature?.state === 'official' ? '<span class="hub-addon-flag is-official">Официальный</span>' : meta.signature?.state === 'self' ? `<span class="hub-addon-flag is-self" title="Самоподпись: автор @${this.esc(meta.signature.owner || '')}">Автор @${this.esc(meta.signature.owner || '')}</span>` : ''}
                         ${running ? (instance.recorder ? '<span class="hub-addon-flag is-recording">Идёт запись</span>' : '<span class="hub-addon-flag is-running">Работает</span>') : ''}
                     </div>
                     <p>${this.esc(m.description || 'Без описания')}</p>
@@ -224,7 +225,7 @@ ZaliMixin(ZaliInterface, class {
         }
         let info;
         try {
-            info = await F.inspect(new Uint8Array(await file.arrayBuffer()));
+            info = await this.addonInspect(new Uint8Array(await file.arrayBuffer()));
         } catch (error) {
             this.setAddonsStatus(`Файл не подошёл: ${error?.message || error}`, 'error');
             return;
@@ -232,7 +233,29 @@ ZaliMixin(ZaliInterface, class {
         const m = info.manifest;
         const existing = (this._addonsList || []).find(item => item.id === m.id) || null;
         const unsupported = m.permissions.filter(p => !this.addonPermissionSupported(p, m));
-        const confirmed = await this.showAddonInstallDialog(info, existing, unsupported);
+        // Кто на самом деле владелец этого id — по реестру сервера. Нет сети — это
+        // тоже сведение: диалог скажет, что автора проверить не удалось.
+        const signed = info.signature.state === 'self' || info.signature.state === 'official';
+        const registry = this.S.session?.token ? await this.addonRegistryLookup(m.id, { force: true }) : null;
+        // id закреплён за автором: чужой файл с таким id не ставится. Исключения —
+        // файл с подписью самого владельца и сборка самого владельца без подписи
+        // (его собственная отладочная версия до подписания).
+        if (registry?.registered && registry.owner !== this.myName()) {
+            const byOwner = signed && info.signature.owner === registry.owner && info.signature.kind === registry.kind;
+            if (!byOwner) {
+                const text = `id «${m.id}» закреплён за @${registry.owner}, а этот файл не подписан им. Выберите другой id в manifest.json — или попросите владельца подписать файл.`;
+                this.setAddonsStatus(text, 'error');
+                await this.confirmAction({
+                    title: 'Этот id занят',
+                    message: text,
+                    confirmLabel: 'Понятно',
+                    cancelLabel: 'Закрыть',
+                    danger: false,
+                });
+                return;
+            }
+        }
+        const confirmed = await this.showAddonInstallDialog(info, existing, unsupported, registry);
         if (!confirmed) return;
 
         this._addonInstallBusy = true;
@@ -247,10 +270,19 @@ ZaliMixin(ZaliInterface, class {
                 sha256: info.sha256,
                 size: info.size,
                 iconDataUrl: this.addonIconDataUrl(info),
+                // Для списка и сведений: сам файл при запуске проверяется заново.
+                signature: {
+                    state: info.signature.state,
+                    kind: info.signature.kind || '',
+                    owner: info.signature.owner || '',
+                    fingerprint: info.signature.fingerprint || '',
+                },
                 installedAt: existing?.installedAt || now,
                 updatedAt: now,
             };
             await this.addonStorePut(meta, info.bytes);
+            this.addonReportEvent?.(m.id, existing ? 'update' : 'install', m.version, info.signature.state);
+            if (info.signature.state === 'official') void this.addonRegisterOfficial?.(m.id);
             this._addonJustInstalled = existing ? null : m.id;
             this._addonScrollToNew = !existing;
             await this.refreshAddonsList();
@@ -323,7 +355,36 @@ ZaliMixin(ZaliInterface, class {
         return html;
     }
 
-    showAddonInstallDialog(info, existing, unsupported) {
+    /** Короткая плашка «кем подписан» для диалогов и списка. */
+    addonSignatureHtml(signature, registry = null, { signing = false } = {}) {
+        const s = signature || { state: 'none' };
+        const owner = s.owner ? `@${this.esc(s.owner)}` : '';
+        const row = (tone, title, text) => `<div class="addon-sign is-${this.esc(tone)}" role="note">
+            <strong>${this.esc(title)}</strong>${text ? `<span>${text}</span>` : ''}</div>`;
+        if (s.state === 'official') {
+            return row('official', 'Официальный аддон ZaliMessenger', `Подписан сертификатом разработчиков. Автор ${owner}.`);
+        }
+        if (s.state === 'self') {
+            let note = 'Приложение за него не ручается: с ZaliCoin он работает с предупреждением.';
+            if (registry && registry.registered && (registry.owner !== s.owner || registry.kind !== 'self')) {
+                note = `<b>В реестре сервера автор другой — @${this.esc(registry.owner)}. Не доверяйте этому файлу.</b>`;
+            } else if (registry && !registry.registered) {
+                note = 'Автора нет в реестре этого сервера — переводы недоступны.';
+            }
+            return row('self', `Самоподпись · автор ${owner}`, note);
+        }
+        if (s.state === 'unverified') {
+            return row('warn', 'Подпись не проверена', `${this.esc(s.reason || 'Нет ключа проверки')}. Аддон не сможет принимать ZaliCoin.`);
+        }
+        if (s.state === 'invalid') {
+            return row('bad', 'Подпись недействительна', `${this.esc(s.reason || 'Файл повреждён')}. Не ставьте файл, если не знаете, откуда он.`);
+        }
+        return row('none', 'Без подписи', signing
+            ? 'После подписи аддон закрепится за вашим аккаунтом и сможет принимать ZaliCoin и пользоваться облаком.'
+            : 'Не может принимать ZaliCoin и пользоваться облаком ZaliMessenger.');
+    }
+
+    showAddonInstallDialog(info, existing, unsupported, registry = null) {
         const F = window.ZaliAddonFormat;
         const m = info.manifest;
         const oldPermissions = new Set(existing?.manifest?.permissions || []);
@@ -333,6 +394,10 @@ ZaliMixin(ZaliInterface, class {
             m.author,
             this.addonSizeLabel(info.size),
         ].filter(Boolean).join(' · ');
+        // Облако и ZaliCoin открыты только подписанным аддонам: не мешаем
+        // поставить, но говорим заранее, что именно не заработает.
+        const signedState = info.signature?.state;
+        const cloudNeedsSignature = m.permissions.includes('cloud') && signedState !== 'self' && signedState !== 'official';
         const blocked = unsupported.length
             ? `<p class="addon-dialog-error" role="alert">Здесь нельзя выдать: ${this.esc(unsupported.map(p => F.permissionInfo(p)?.title || p).join(', '))}. ${unsupported.some(p => F.isElevated(p)) ? 'Такие аддоны работают в приложении для macOS и Windows.' : ''}</p>`
             : '';
@@ -350,6 +415,8 @@ ZaliMixin(ZaliInterface, class {
                 ${this.addonPermissionsHtml(m, { newSet, unsupported })}
             </section>
             ${blocked}
+            ${cloudNeedsSignature ? '<p class="addon-dialog-error" role="alert">Аддон просит облако ZaliMessenger, но не подписан: облако ему откроется только после подписи автора.</p>' : ''}
+            ${this.addonSignatureHtml(info.signature, registry)}
             <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(info.sha256))}</code></p>
             <div class="coin-transfer-actions">
                 <button class="btn-flat" type="button" data-dialog-action="cancel">Отмена</button>
@@ -371,6 +438,29 @@ ZaliMixin(ZaliInterface, class {
     async showAddonDetailsDialog(meta) {
         const m = meta.manifest;
         const usage = await this.addonDataUsage(meta.id);
+        // Облако ZaliMessenger (разрешение `cloud`): сколько аддон хранит на сервере.
+        let cloud = null;
+        let audit = null;
+        if (m.permissions.includes('cloud') && this.S.session?.token) {
+            try {
+                const base = `/api/addons/${encodeURIComponent(meta.id)}/cloud`;
+                const res = await this.apiFetch(base, { interactive: false });
+                if (res.ok) {
+                    cloud = await res.json();
+                    const log = await this.apiFetch(`${base}/audit`, { interactive: false });
+                    if (log.ok) audit = await log.json();
+                }
+            } catch (error) { /* нет связи — строка просто не показывается */ }
+        }
+        const cloudLine = cloud
+            ? `Облако ZaliMessenger: занято ${this.addonSizeLabel(Number(cloud.bytes) || 0)} из ${this.addonSizeLabel(Number(cloud.quota) || 0)} у всех пользователей аддона; ваши данные — ${this.addonSizeLabel(Number(cloud.mine) || 0)}`
+            : '';
+        // Журнал чтения: автор не может собирать данные незаметно.
+        const reads = Number(audit?.reads) || 0;
+        const listings = Number(audit?.listings) || 0;
+        const auditLine = audit && (reads || listings)
+            ? `Автор аддона читал ваши данные: ${reads} раз(а), просматривал список данных: ${listings} раз(а)${audit.lastAt ? `; последний раз ${new Date(Number(audit.lastAt) * 1000).toLocaleString('ru-RU')}` : ''}`
+            : (audit ? 'Автор аддона ваши данные пока не читал' : '');
         const dataLine = usage
             ? (usage.files ? `Данные аддона: ${this.addonSizeLabel(usage.bytes)} (${usage.files} ${this.addonFilesWord(usage.files)})` : 'Данных аддон пока не сохранил')
             : '';
@@ -389,15 +479,33 @@ ZaliMixin(ZaliInterface, class {
                 <h3>Разрешения</h3>
                 ${this.addonPermissionsHtml(m)}
             </section>
-            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}${dataLine ? `<br>${this.esc(dataLine)}` : ''}</p>
+            ${meta.signature ? this.addonSignatureHtml(meta.signature, null) : ''}
+            <p class="addon-dialog-fp">Отпечаток SHA-256: <code>${this.esc(this.addonFingerprintLabel(meta.sha256))}</code>${installed ? `<br>Установлен: ${this.esc(installed)}` : ''}${dataLine ? `<br>${this.esc(dataLine)}` : ''}${cloudLine ? `<br>${this.esc(cloudLine)}` : ''}${auditLine ? `<br>${this.esc(auditLine)}` : ''}</p>
             <div class="coin-transfer-actions addon-dialog-actions">
                 <span class="addon-dialog-danger-group">
                     <button class="btn-flat addon-dialog-danger" type="button" data-dialog-action="remove">Удалить аддон</button>
                     ${usage?.files ? '<button class="btn-flat" type="button" data-dialog-action="clear">Очистить данные</button>' : ''}
+                    ${cloud?.keys ? '<button class="btn-flat" type="button" data-dialog-action="clear-cloud">Удалить мои данные из облака</button>' : ''}
                 </span>
                 <button class="auth-btn primary" type="button" data-dialog-action="cancel">Закрыть</button>
             </div>`;
         const action = await this.openAddonDialog(html);
+        if (action === 'clear-cloud') {
+            const sure = await this.confirmAction({
+                title: `Удалить ваши данные «${m.name}» из облака?`,
+                message: 'Всё, что аддон сохранил о вас на серверах ZaliMessenger, будет стёрто — на всех устройствах и у автора аддона. Данные других пользователей и общая область не затрагиваются. Сам аддон останется установленным.',
+                confirmLabel: 'Удалить мои данные',
+            });
+            if (!sure) return;
+            try {
+                const res = await this.apiFetch(`/api/addons/${encodeURIComponent(meta.id)}/cloud`, { method: 'DELETE', interactive: true });
+                if (!res.ok) throw new Error(`сервер ответил ${res.status}`);
+                this.setAddonsStatus(`Ваши данные «${m.name}» удалены из облака.`, 'success');
+            } catch (error) {
+                this.setAddonsStatus(`Не удалось удалить данные «${m.name}» из облака: ${error?.message || error}`, 'error');
+            }
+            return;
+        }
         if (action === 'clear') {
             const sure = await this.confirmAction({
                 title: `Очистить данные «${m.name}»?`,
@@ -426,6 +534,7 @@ ZaliMixin(ZaliInterface, class {
         try {
             this.stopAddon(meta.id);
             await this.addonStoreRemove(meta.id);
+            this.addonReportEvent?.(meta.id, 'remove', m.version, meta.signature?.state);
             await this.refreshAddonsList();
             this.setAddonsStatus(`«${m.name}» удалён.`, 'success');
         } catch (error) {
@@ -439,14 +548,19 @@ ZaliMixin(ZaliInterface, class {
      * @returns {Promise<string>} действие нажатой кнопки или 'cancel'
      */
     openAddonDialog(innerHtml) {
-        const host = document.querySelector('.main') || document.body;
+        // Пока аддон развёрнут, его сцена лежит поверх .main (z-index 650): окно,
+        // которое аддон сам вызвал (перевод ZaliCoin), должно быть над ней,
+        // иначе человек не увидит, что ему предлагают подтвердить.
+        const stage = document.getElementById('addonStage');
+        const overStage = !!(stage && !stage.hidden && stage.parentElement);
+        const host = overStage ? stage.parentElement : (document.querySelector('.main') || document.body);
         if (this._addonDialogDismiss) this._addonDialogDismiss('cancel');
         return new Promise((resolve) => {
             const previousFocus = document.activeElement;
             const overlay = document.createElement('div');
-            overlay.className = 'coin-transfer-modal addon-dialog';
+            overlay.className = `coin-transfer-modal addon-dialog${overStage ? ' is-over-stage' : ''}`;
             overlay.innerHTML = `<div class="coin-transfer-box addon-dialog-box" role="dialog" aria-modal="true" aria-labelledby="addonDialogTitle">${innerHtml}</div>`;
-            const buttons = () => Array.from(overlay.querySelectorAll('button:not([disabled])'));
+            const buttons = () => Array.from(overlay.querySelectorAll('button:not([disabled]), input:not([disabled])'));
             const finish = (action) => {
                 if (this._addonDialogDismiss !== finish) return;
                 this._addonDialogDismiss = null;

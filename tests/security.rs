@@ -347,3 +347,196 @@ async fn release_publishing_rejects_unauthorized_callers() {
         );
     }
 }
+
+// ── Аудит 2026-10-11 ────────────────────────────────────────────────────────
+
+/// Cookie уходит браузером и со страниц «соседних» поддоменов того же сайта.
+/// Запрос с cookie и чужим `Origin` — не от нашего клиента: ни multipart-загрузки,
+/// ни WS-апгрейда от имени человека такая страница сделать не должна.
+#[tokio::test]
+async fn cookie_requests_from_untrusted_origins_are_refused() {
+    let app = spawn_app().await;
+    register_user(&app, "cookieuser", "correct horse battery").await;
+    let login = app
+        .http
+        .post(app.url("/api/auth/login"))
+        .json(&serde_json::json!({ "username": "cookieuser", "password": "correct horse battery" }))
+        .send()
+        .await
+        .unwrap();
+    let set_cookie = login
+        .headers()
+        .get("set-cookie")
+        .expect("login sets the auth cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let cookie = set_cookie.split(';').next().unwrap().to_string();
+
+    let status_with = |origin: Option<&'static str>| {
+        let app = &app;
+        let cookie = cookie.clone();
+        async move {
+            let mut request = app.http.get(app.url("/api/auth/me")).header("Cookie", cookie);
+            if let Some(origin) = origin {
+                request = request.header("Origin", origin);
+            }
+            request.send().await.unwrap().status().as_u16()
+        }
+    };
+
+    assert_eq!(status_with(None).await, 200, "no Origin: same-origin or native client");
+    assert_eq!(status_with(Some("https://msgs.zalikus.org")).await, 200, "own origin");
+    assert_eq!(status_with(Some("https://videl.zalikus.org")).await, 403, "sibling subdomain");
+    assert_eq!(status_with(Some("https://evil.example")).await, 403, "foreign site");
+    assert_eq!(status_with(Some("null")).await, 403, "sandboxed document");
+}
+
+#[tokio::test]
+async fn bearer_requests_do_not_depend_on_origin() {
+    let app = spawn_app().await;
+    let user = register_user(&app, "beareruser", "correct horse battery").await;
+    let resp = app
+        .http
+        .get(app.url("/api/auth/me"))
+        .header("Authorization", user.auth_header())
+        .header("Origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    // CORS не даст чужой странице прочитать ответ; а токен она подставить не может.
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn weak_passwords_are_refused_at_registration() {
+    let app = spawn_app().await;
+    for (username, password) in [
+        ("weakuser1", "short7!"),
+        ("weakuser2", "password123"),
+        ("weakuser3", "12345678"),
+        ("weakuser4", "weakuser4"),
+    ] {
+        let resp = app
+            .http
+            .post(app.url("/api/auth/register"))
+            .json(&serde_json::json!({ "username": username, "password": password }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "{password:?} must be refused");
+    }
+}
+
+#[tokio::test]
+async fn changing_the_password_rotates_every_token() {
+    let app = spawn_app().await;
+    let user = register_user(&app, "pwchanger", "correct horse battery").await;
+
+    let wrong = app
+        .http
+        .post(app.url("/api/auth/password"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({ "currentPassword": "not my password", "newPassword": "a brand new passphrase" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), 403, "wrong current password");
+
+    let weak = app
+        .http
+        .post(app.url("/api/auth/password"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({ "currentPassword": "correct horse battery", "newPassword": "password1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(weak.status(), 400, "weak new password");
+
+    let changed = app
+        .http
+        .post(app.url("/api/auth/password"))
+        .header("Authorization", user.auth_header())
+        .json(&serde_json::json!({ "currentPassword": "correct horse battery", "newPassword": "a brand new passphrase" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), 200);
+    let body: serde_json::Value = changed.json().await.unwrap();
+    let fresh_token = body["token"].as_str().expect("fresh token").to_string();
+
+    let old = app
+        .http
+        .get(app.url("/api/auth/me"))
+        .header("Authorization", user.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old.status(), 401, "the previous token must stop working");
+    let fresh = app
+        .http
+        .get(app.url("/api/auth/me"))
+        .header("Authorization", format!("Bearer {fresh_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fresh.status(), 200);
+
+    for (password, expected) in [("correct horse battery", 401), ("a brand new passphrase", 200)] {
+        let login = app
+            .http
+            .post(app.url("/api/auth/login"))
+            .json(&serde_json::json!({ "username": "pwchanger", "password": password }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(login.status(), expected, "login with {password:?}");
+    }
+}
+
+#[tokio::test]
+async fn invite_codes_are_long_and_guessing_them_is_throttled() {
+    let app = spawn_app().await;
+    let owner = register_user(&app, "inviteowner", "correct horse battery").await;
+    let guesser = register_user(&app, "inviteguesser", "correct horse battery").await;
+    let server: serde_json::Value = app
+        .http
+        .post(app.url("/api/servers"))
+        .header("Authorization", owner.auth_header())
+        .json(&serde_json::json!({ "name": "Closed", "is_public": false }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let server_id = server["id"].as_str().expect("server id");
+    let invite: serde_json::Value = app
+        .http
+        .post(app.url(&format!("/api/servers/{server_id}/invites")))
+        .header("Authorization", owner.auth_header())
+        .json(&serde_json::json!({ "max_uses": 0 }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(invite["code"].as_str().unwrap().len(), 16, "64-bit codes");
+
+    let mut statuses = Vec::new();
+    for i in 0..14 {
+        let code = format!("{:016x}", i);
+        let resp = app
+            .http
+            .post(app.url(&format!("/api/invites/{code}/join")))
+            .header("Authorization", guesser.auth_header())
+            .json(&serde_json::json!({ "code": code }))
+            .send()
+            .await
+            .unwrap();
+        statuses.push(resp.status().as_u16());
+    }
+    assert!(statuses.contains(&404), "early guesses are plain misses: {statuses:?}");
+    assert_eq!(*statuses.last().unwrap(), 429, "the guesser is throttled: {statuses:?}");
+}

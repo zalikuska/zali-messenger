@@ -5052,10 +5052,6 @@ body[data-nav-mode="servers"] .contacts {
     align-items: center;
 }
 
-.server-role-head--draft {
-    cursor: pointer;
-}
-
 .server-role-chip {
     width: 16px;
     height: 16px;
@@ -5089,10 +5085,6 @@ body[data-nav-mode="servers"] .contacts {
 .server-role-body {
     display: grid;
     gap: 10px;
-}
-
-.server-role-card.draft-role.collapsed .server-role-body {
-    display: none;
 }
 
 .server-role-toggle {
@@ -8560,29 +8552,20 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
     align-items: stretch;
     gap: 2px;
     height: 24px;
-    border-radius: 999px;
-    overflow: hidden;
-    background: var(--zc-series-unassigned);
 }
 
+/* Доли делят ширину пропорционально (flex-grow задан в процентах из JS), а
+   не заданы жёсткой шириной: иначе мелкие доли с min-width и зазорами
+   выталкивали последний сегмент за край полосы, и тот обрезался. У каждого
+   сегмента свои скруглённые концы — края одинаковые с обеих сторон. */
 .zc-segment {
-    flex-grow: 0;
-    flex-shrink: 0;
-    min-width: 3px;
+    flex: 1 1 0;
+    min-width: 6px;
     border: none;
+    border-radius: 8px;
     padding: 0;
     cursor: pointer;
     transition: filter .15s var(--ease-out), transform .15s var(--ease-out);
-}
-
-.zc-segment:first-child {
-    border-top-left-radius: 999px;
-    border-bottom-left-radius: 999px;
-}
-
-.zc-segment:last-child {
-    border-top-right-radius: 999px;
-    border-bottom-right-radius: 999px;
 }
 
 .zc-segment:hover,
@@ -12581,9 +12564,26 @@ body[data-design-mode="focus"] .settings-body {
     padding: 8px 24px 24px;
 }
 
+/* Классический и плоский режимы: тот же приём — категория на всю панель. */
+body:not([data-design-mode="focus"]) #viewSettings .settings-shell {
+    max-width: none;
+}
+
+/* На всю ширину панели: карточки категории раскладываются колонками
+   (≥ 460 px каждая), широкие — тема и журнал — занимают ряд целиком. */
 body[data-design-mode="focus"] .settings-shell {
-    max-width: 720px;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr));
+    align-items: start;
+    max-width: none;
+    gap: 12px;
+}
+
+body[data-design-mode="focus"] .settings-shell > .settings-group-title,
+body[data-design-mode="focus"] .settings-shell [data-settings-section="theme"],
+body[data-design-mode="focus"] .settings-shell [data-settings-section="voice-trace"],
+body[data-design-mode="focus"] .settings-shell .settings-card--logs {
+    grid-column: 1 / -1;
 }
 
 /* Двухколоночная сетка распадается: её карточки становятся соседями
@@ -14136,9 +14136,11 @@ body[data-design-mode="focus"] .auth-showcase {
     margin: calc(var(--titlebar-h, 38px) + 4px) 0 16px 16px;
     padding: clamp(28px, 3.4vw, 48px);
     overflow: hidden;
-    border: 1px solid var(--f-hairline);
+    /* Без своей рамки и заливки: витрина стоит на том же фоне, что и форма, а не
+       выделяется слева отдельной плашкой другого цвета. */
+    border: 0;
     border-radius: 28px;
-    background: rgba(255,255,255,.028);
+    background: none;
     animation: auth-pop .5s cubic-bezier(.2,.9,.18,1) both;
 }
 
@@ -14346,7 +14348,7 @@ body[data-design-mode="focus"] .auth-actions {
     margin-top: 6px;
 }
 
-body[data-design-mode="focus"] .auth-btn.primary {
+body[data-design-mode="focus"] .auth-card .auth-btn.primary {
     min-height: 56px;
     border-radius: 14px;
     font-size: 16px;
@@ -14623,6 +14625,8 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 
 .confirm-dialog-text {
     margin: 0;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
     color: var(--text2);
     font-size: 14px;
     line-height: 1.5;
@@ -15570,6 +15574,12 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     overflow-y: auto;
 }
 
+/* Каркас — flex-колонка с прокруткой: без этого на низком экране блоки
+   (график, списки) сжимаются вместо того, чтобы прокручиваться. */
+.addon-dialog-box > * {
+    flex-shrink: 0;
+}
+
 .addon-dialog-head {
     display: flex;
     align-items: center;
@@ -15715,7 +15725,11 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 }
 
 .addon-dialog .auth-btn[disabled] {
-    opacity: .45;
+    /* Серым, а не прозрачным лаймом: тусклый лайм читается грязно-оливковым. */
+    border-color: transparent;
+    background: rgba(255,255,255,.08);
+    color: var(--text3);
+    opacity: 1;
     cursor: not-allowed;
     box-shadow: none;
 }
@@ -15848,6 +15862,2858 @@ body[data-design-mode] .hub-addons .hub-addon-more {
 }
 
 
+/* Окно, вызванное развёрнутым аддоном, — над его сценой (.addon-stage, z-index 650). */
+.coin-transfer-modal.is-over-stage {
+    top: var(--titlebar-h);
+    z-index: 700;
+}
+
+/* ============================================================
+   Подпись аддонов и ZaliCoin аддонов — addons_signing.js, addons_coins.js.
+   Языком «Фокуса»: поверхности — тоном, без рамок; акцент (сплошной лайм) —
+   только «официальное», главное действие и «сколько можно вывести».
+   Кнопки компактные (34–36px): режимы дизайна задают .auth-btn.primary
+   высоту экрана входа, поэтому ниже она переопределена явно.
+   ============================================================ */
+.hub-tabs {
+    display: flex;
+    flex: none;
+    gap: 2px;
+    padding: 3px;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+}
+
+.hub-tab {
+    flex: none;
+    min-height: 30px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.hub-tab:hover {
+    color: var(--text);
+}
+
+.hub-tab.is-active {
+    background: rgba(255,255,255,.1);
+    color: var(--text);
+}
+
+.hub-pane {
+    display: grid;
+    flex: none;
+    gap: 14px;
+}
+
+.hub-pane[hidden] {
+    display: none;
+}
+
+#hubSigningBody {
+    display: grid;
+    gap: 14px;
+}
+
+#hubSigning.is-dropping {
+    outline: 2px dashed var(--lime);
+    outline-offset: 4px;
+    border-radius: 16px;
+}
+
+/* Плашки и метки подписи. */
+.addon-chip {
+    flex: none;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.07);
+    color: var(--text2);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+
+.addon-chip.is-official {
+    background: var(--lime);
+    color: #050505;
+}
+
+.addon-chip.is-self,
+.addon-chip.is-warn {
+    color: #ffcc66;
+}
+
+.addon-chip.is-bad {
+    background: rgba(255, 77, 109, .14);
+    color: #ff7a93;
+}
+
+.addon-sign {
+    display: grid;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.04);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-sign strong {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.addon-sign span {
+    color: var(--text2);
+    overflow-wrap: anywhere;
+}
+
+.addon-sign.is-official strong {
+    color: var(--lime);
+}
+
+.addon-sign.is-self strong,
+.addon-sign.is-warn strong {
+    color: #ffcc66;
+}
+
+.addon-sign.is-bad {
+    background: rgba(255, 77, 109, .08);
+}
+
+.addon-sign.is-bad strong {
+    color: #ff7a93;
+}
+
+/* Вкладка «Подпись аддонов». */
+.addon-sign-intro {
+    margin: 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.addon-sign-drop {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 14px;
+    padding: 12px 14px;
+    border: 1px dashed rgba(255,255,255,.14);
+    border-radius: 12px;
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.addon-sign-drop b {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.addon-sign-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+}
+
+.addon-sign-card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.addon-sign-card-head .hub-addon-icon,
+.addon-mine .hub-addon-icon {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 15px;
+}
+
+.addon-sign-card-text {
+    display: grid;
+    flex: 1;
+    gap: 2px;
+    min-width: 0;
+}
+
+.addon-sign-card-text strong {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.addon-sign-card-text span {
+    color: var(--text);
+    opacity: .55;
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.addon-sign-card-text code {
+    font-size: 11px;
+}
+
+.addon-sign-hint {
+    margin: 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-sign-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.addon-mine-list {
+    display: grid;
+    gap: 8px;
+}
+
+.addon-mine {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+}
+
+.addon-mine-main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.addon-mine-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.addon-mine-title strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.addon-mine-stats,
+.addon-mine-request {
+    margin: 0;
+    color: var(--text);
+    opacity: .55;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.addon-mine-request {
+    color: var(--text2);
+    opacity: 1;
+}
+
+/* Окно управления: счётчики, график, казна. */
+.addon-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.addon-stats > div {
+    display: grid;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.04);
+}
+
+.addon-stats b {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.addon-stats span {
+    color: var(--text);
+    opacity: .5;
+    font-size: 11px;
+    line-height: 1.3;
+}
+
+.addon-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 40px;
+}
+
+.addon-bar {
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
+    align-items: flex-end;
+    height: 100%;
+    min-width: 3px;
+    outline: none;
+}
+
+.addon-bar:hover i,
+.addon-bar:focus-visible i {
+    background: var(--lime);
+    filter: brightness(1.15);
+}
+
+.addon-bar.is-empty:hover i,
+.addon-bar.is-empty:focus-visible i {
+    background: rgba(255,255,255,.3);
+    filter: none;
+}
+
+/* Подсказка дня — под столбиком, в стиле всплывающих меню (как заряды
+   карточек ZaliCoin). Крайние прижимаются к краю окна. */
+.addon-bar::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    z-index: 5;
+    padding: 5px 9px;
+    border: 1px solid var(--menu-border);
+    border-radius: 9px;
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    -webkit-backdrop-filter: var(--menu-blur);
+    backdrop-filter: var(--menu-blur);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -3px);
+    transition: opacity .14s var(--ease-out), transform .14s var(--ease-out);
+}
+
+.addon-bar:hover::after,
+.addon-bar:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.addon-bar:first-child::after {
+    left: 0;
+    transform: translate(0, -3px);
+}
+
+.addon-bar:last-child::after {
+    left: auto;
+    right: 0;
+    transform: translate(0, -3px);
+}
+
+.addon-bar:first-child:hover::after,
+.addon-bar:first-child:focus-visible::after,
+.addon-bar:last-child:hover::after,
+.addon-bar:last-child:focus-visible::after {
+    transform: translate(0, 0);
+}
+
+.addon-bar i {
+    display: block;
+    width: 100%;
+    border-radius: 2px;
+    background: var(--lime);
+}
+
+.addon-bar.is-empty i {
+    background: rgba(255,255,255,.12);
+}
+
+.addon-bars-caption {
+    margin: -6px 0 0;
+    color: var(--text);
+    opacity: .5;
+    font-size: 11px;
+}
+
+.addon-treasury {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+}
+
+.addon-treasury-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.addon-treasury-head b {
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.addon-treasury-head span,
+.addon-treasury-note {
+    color: var(--text);
+    opacity: .5;
+    font-size: 12px;
+}
+
+.addon-treasury-note {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.addon-treasury-line {
+    margin: 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.addon-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--lime);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.addon-link:hover {
+    text-decoration: underline;
+}
+
+.addon-withdraw-row {
+    display: flex;
+    gap: 8px;
+}
+
+.addon-withdraw-row .settings-input {
+    flex: 1;
+    min-width: 0;
+    height: 36px;
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 13px;
+}
+
+.addon-manage-status {
+    margin: 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.addon-manage-status[hidden] {
+    display: none;
+}
+
+.addon-manage-status.is-error {
+    color: #ff7a93;
+}
+
+.addon-manage-status.is-success {
+    color: var(--lime);
+}
+
+.addon-ledger summary {
+    padding: 4px 0;
+    color: var(--text2);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.addon-ledger ul {
+    display: grid;
+    max-height: 170px;
+    margin: 4px 0 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.addon-ledger li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 10px;
+    padding: 7px 0;
+    border-top: 1px solid rgba(255,255,255,.06);
+    font-size: 12px;
+}
+
+.addon-ledger-who {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.addon-ledger li b {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.addon-ledger time {
+    margin-left: auto;
+    color: var(--text);
+    opacity: .5;
+}
+
+.addon-ledger li em {
+    flex-basis: 100%;
+    color: var(--text2);
+    font-style: normal;
+    overflow-wrap: anywhere;
+}
+
+.addon-request-note {
+    width: 100%;
+    min-height: 76px;
+    padding: 10px 12px;
+    resize: vertical;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+/* Окно перевода ZaliCoin аддону. */
+.addon-coin-art {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text);
+}
+
+.addon-coin-coin svg {
+    display: block;
+    width: 52px;
+    height: 52px;
+}
+
+.addon-coin-flow {
+    display: block;
+    width: 64px;
+    height: 14px;
+    opacity: .5;
+}
+
+.addon-coin-target .hub-addon-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+}
+
+.addon-coin-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: center;
+}
+
+.addon-coin-sub {
+    margin: -6px 0 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.4;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+.addon-coin-note-text {
+    margin: 0;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+.addon-coin-note {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.04);
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.addon-coin-note p {
+    margin: 0;
+}
+
+.addon-coin-note strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.addon-coin-note.is-warning {
+    background: rgba(255, 77, 109, .08);
+}
+
+.addon-coin-note.is-warning strong {
+    color: #ff7a93;
+}
+
+.addon-coin-ack {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.addon-coin-ack input {
+    flex: none;
+    accent-color: var(--lime);
+}
+
+/* Компактные кнопки: .auth-btn.primary в режимах дизайна — размер экрана входа. */
+body[data-design-mode] #hubSigning .auth-btn,
+body[data-design-mode] #hubSigning .btn-flat {
+    position: relative;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: none;
+}
+
+body[data-design-mode] .addon-dialog .auth-btn,
+body[data-design-mode] .addon-dialog .btn-flat {
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: none;
+}
+
+@media (max-width: 760px) {
+    .addon-mine {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .addon-mine > .btn-flat {
+        grid-column: 1 / -1;
+        justify-self: end;
+    }
+
+    body[data-design-mode] #hubSigning .auth-btn,
+    body[data-design-mode] #hubSigning .btn-flat,
+    body[data-design-mode] .addon-dialog .auth-btn,
+    body[data-design-mode] .addon-dialog .btn-flat {
+        min-height: 40px;
+    }
+
+    .addon-stats {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+/* ============================================================
+   Розыгрыши ZaliCoin — web/src/interface/raffles.js.
+   Поверхности тоном, без свечения и рамок; лайм — сплошной и только там,
+   где он что-то значит: метка «Розыгрыш», полоска отсчёта, главная кнопка,
+   выбранный срок. Полупрозрачного лайма нет (читается оливковой мутью).
+   ============================================================ */
+.zc-raffle-link {
+    margin-right: auto;
+}
+
+.zc-card.zc-card--raffle {
+    width: 288px;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 20px;
+    background: rgba(255,255,255,.05);
+    box-shadow: none;
+}
+
+/* Шапка. */
+.rf-hero {
+    position: relative;
+    display: grid;
+    gap: 10px;
+    padding: 16px 16px 14px;
+    overflow: hidden;
+    background: rgba(255,255,255,.07);
+    color: var(--text);
+}
+
+.rf-confetti {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 150px;
+    height: 112px;
+    color: rgba(255,255,255,.07);
+    pointer-events: none;
+}
+
+.rf-hero-top {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+/* Акцент в шапке — только метка: сплошной лайм с тёмным текстом. */
+.rf-kicker {
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--lime);
+    color: #050505;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+
+.rf-hero.is-muted .rf-kicker {
+    background: rgba(255,255,255,.1);
+    color: var(--text);
+}
+
+.rf-time {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: .5;
+    font-variant-numeric: tabular-nums;
+}
+
+.rf-name {
+    position: relative;
+    max-width: 88%;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -.01em;
+    overflow-wrap: anywhere;
+}
+
+.rf-clock {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.rf-clock-ico svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+
+.rf-clock-ico {
+    color: var(--lime);
+}
+
+.rf-left {
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.rf-place {
+    color: var(--lime);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.rf-people {
+    margin-left: auto;
+    opacity: .7;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: right;
+}
+
+.rf-bar {
+    position: relative;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255,255,255,.1);
+}
+
+.rf-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--lime);
+    transition: width .9s linear;
+}
+
+/* Тело. */
+.rf-body {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px 14px;
+}
+
+.rf-body:empty {
+    display: none;
+}
+
+.rf-tiers {
+    display: grid;
+    gap: 6px;
+}
+
+.rf-tier {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.rf-tier-places {
+    flex: none;
+    min-width: 52px;
+    padding: 5px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.rf-tier-prize {
+    min-width: 0;
+    flex: 1;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.rf-tier-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    color: var(--text);
+    opacity: .6;
+}
+
+.rf-tier-icon .zc-card-coin {
+    width: 24px;
+    height: 24px;
+    background: none;
+    color: inherit;
+}
+
+.rf-tier-icon svg,
+.rf-gift svg {
+    width: 20px;
+    height: 20px;
+}
+
+.rf-gift {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+}
+
+.rf-secret {
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.rf-code {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.07);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+.rf-winners {
+    display: grid;
+    gap: 6px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,.08);
+}
+
+.rf-winner {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    font-size: 13px;
+}
+
+.rf-winner-place {
+    flex: none;
+    min-width: 20px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: var(--lime);
+}
+
+.rf-winner-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rf-winner-prize {
+    flex: none;
+    opacity: .65;
+    font-size: 12px;
+}
+
+.rf-more {
+    font-size: 12px;
+    opacity: .5;
+}
+
+.rf-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 42px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .12s var(--ease-out), filter .15s var(--ease-out), background .15s var(--ease-out);
+}
+
+.rf-btn:not(:disabled):active {
+    transform: scale(.97);
+}
+
+.rf-btn.is-primary {
+    background: var(--lime);
+    color: #050505;
+}
+
+.rf-btn.is-primary:hover {
+    filter: brightness(1.07);
+}
+
+.rf-btn.is-done:disabled {
+    background: rgba(var(--accent-rgb), .0);
+    box-shadow: inset 0 0 0 2px var(--lime);
+    color: var(--lime);
+}
+
+.rf-btn.is-quiet {
+    min-height: 38px;
+    background: transparent;
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.rf-btn.is-quiet:not(:disabled):hover {
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+}
+
+.rf-btn.is-danger {
+    min-height: 38px;
+    background: rgba(255,77,109,.14);
+    color: #ff7a93;
+    font-size: 13px;
+}
+
+.rf-btn:disabled {
+    cursor: default;
+}
+
+.rf-btn .zc-card-check {
+    width: 16px;
+    height: 16px;
+}
+
+.rf-note {
+    font-size: 12px;
+    line-height: 1.35;
+    opacity: .6;
+    text-align: center;
+}
+
+.rf-note.is-error {
+    color: #ff7a93;
+    opacity: 1;
+}
+
+/* Конструктор. */
+.raffle-box {
+    --rf-ctl: 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: min(100%, 420px);
+    max-height: calc(100% - 24px);
+    padding: 22px;
+    overflow-y: auto;
+    border-radius: 22px;
+    background:
+        linear-gradient(rgba(255,255,255,.05), rgba(255,255,255,.05)),
+        var(--bg);
+    box-shadow: 0 24px 64px rgba(0,0,0,.45);
+}
+
+.raffle-box > * {
+    flex-shrink: 0;
+}
+
+.rf-modal-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.rf-modal-badge {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 16px;
+    background: var(--lime);
+    color: #050505;
+}
+
+.rf-modal-badge svg {
+    width: 26px;
+    height: 26px;
+}
+
+.rf-modal-titles {
+    min-width: 0;
+    flex: 1;
+}
+
+.rf-modal-head h2 {
+    margin: 0;
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    line-height: 1.2;
+}
+
+.rf-modal-sub {
+    margin: 2px 0 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.raffle-box .settings-input {
+    width: 100%;
+    height: var(--rf-ctl);
+    min-height: var(--rf-ctl);
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.rf-section {
+    display: grid;
+    gap: 10px;
+}
+
+.rf-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--lime);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.rf-section-aside {
+    color: var(--text);
+    opacity: .45;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.rf-chips {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
+}
+
+@media (max-width: 460px) {
+    .rf-chips {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+.rf-chip {
+    min-height: var(--rf-ctl);
+    padding: 0 4px;
+    white-space: nowrap;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(255,255,255,.07);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out), transform .12s var(--ease-out);
+}
+
+.rf-chip:hover {
+    background: rgba(255,255,255,.12);
+}
+
+.rf-chip:active {
+    transform: scale(.97);
+}
+
+.rf-chip.is-active {
+    background: var(--lime);
+    color: #050505;
+}
+
+.rf-rows {
+    display: grid;
+    gap: 10px;
+}
+
+/* Категория приза — строка, которую можно перетащить (как канал в настройках
+   сервера); диапазон мест слева пересчитывается по порядку. */
+.rf-rows.is-dragging {
+    cursor: grabbing;
+}
+
+.rf-rows.is-dragging .rf-cat:not(.dragging) {
+    transition: transform .18s var(--ease-out);
+}
+
+.rf-cat {
+    position: relative;
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px 8px 10px 6px;
+    border-radius: 16px;
+    background: rgba(255,255,255,.05);
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.rf-cat.dragging {
+    z-index: 2;
+    cursor: grabbing;
+    background: #1d2025;
+    box-shadow: 0 16px 34px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.14);
+}
+
+.rf-grip {
+    display: grid;
+    place-items: center;
+    align-self: start;
+    height: var(--rf-ctl);
+    color: var(--text3);
+}
+
+.rf-grip svg {
+    width: 16px;
+    height: 16px;
+}
+
+.rf-cat-main {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.rf-cat-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.rf-cat-places {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 76px;
+    height: var(--rf-ctl);
+    border-radius: 12px;
+    background: rgba(255,255,255,.1);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.rf-cat-fields {
+    display: flex;
+    gap: 8px;
+}
+
+/* Один переключатель вида приза — как кнопка «текстовый/голосовой» у канала в
+   настройках сервера: нажатие меняет значок монеты на подарок и обратно. */
+.rf-kind-toggle {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: var(--rf-ctl);
+    height: var(--rf-ctl);
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(255,255,255,.08);
+    color: var(--lime);
+    cursor: pointer;
+    transition: transform .14s var(--ease-out), background .16s var(--ease-out);
+}
+
+.rf-kind-toggle:hover {
+    background: rgba(255,255,255,.13);
+    transform: scale(1.05);
+}
+
+.rf-kind-toggle:active {
+    transform: scale(.96);
+}
+
+.rf-kind-toggle svg {
+    width: 22px;
+    height: 22px;
+}
+
+.rf-kind-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.raffle-box .rf-count {
+    flex: none;
+    width: 76px;
+    padding: 0 6px;
+    text-align: center;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Подсказка под категорией — только когда есть что исправить. */
+.rf-cat .rf-hint:not(.is-error) {
+    display: none;
+}
+
+.rf-cat .settings-input {
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.rf-cat .rf-chip,
+.rf-cat .rf-del {
+    cursor: pointer;
+}
+
+.rf-hint {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 4px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.rf-hint > span {
+    opacity: .6;
+}
+
+.rf-hint.is-error > span {
+    color: #ff7a93;
+    opacity: 1;
+}
+
+.rf-link {
+    flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--lime);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.rf-link:hover {
+    text-decoration: underline;
+}
+
+.rf-add {
+    justify-self: start;
+}
+
+.rf-add[hidden] {
+    display: none;
+}
+
+.rf-del {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: var(--rf-ctl);
+    height: var(--rf-ctl);
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text3);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color .16s var(--ease-out), background .16s var(--ease-out);
+}
+
+.rf-del svg,
+.rf-del-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.rf-del:hover {
+    background: rgba(255, 77, 109, .14);
+    color: #ff7a93;
+}
+
+.rf-total {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.rf-total b {
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.rf-total.is-coins b {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.rf-total.is-error b {
+    color: #ff7a93;
+}
+
+.rf-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+body[data-design-mode] .raffle-box .rf-actions .auth-btn,
+body[data-design-mode] .raffle-box .rf-actions .btn-flat {
+    position: relative;
+    min-height: var(--rf-ctl);
+    padding: 0 20px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
+}
+
+body[data-design-mode] .raffle-box .rf-actions .auth-btn.primary {
+    flex: 1;
+}
+
+body[data-design-mode] .raffle-box .rf-actions .auth-btn[disabled] {
+    background: rgba(255,255,255,.08);
+    color: var(--text3);
+    box-shadow: none;
+    opacity: 1;
+    cursor: not-allowed;
+}
+
+/* ============================================================
+   FOCUS: модалки и экраны, которых не было в основном блоке «Фокуса» —
+   настройки сервера, казна, перевод, профиль, обрезка аватара.
+   Те же правила: тон вместо рамок и теней, без градиентов и КАПСА,
+   веса 600/700, кнопки по высоте поля, лайм — сплошной и по смыслу.
+   ============================================================ */
+
+/* Общие окна поверх .main. */
+body[data-design-mode="focus"] .coin-transfer-box,
+body[data-design-mode="focus"] .avatar-crop-modal {
+    border: 0;
+    background:
+        linear-gradient(rgba(255,255,255,.05), rgba(255,255,255,.05)),
+        var(--bg);
+    box-shadow: 0 24px 64px rgba(0,0,0,.45);
+}
+
+body[data-design-mode="focus"] .coin-transfer-box .auth-btn,
+body[data-design-mode="focus"] .coin-transfer-box .btn-flat,
+body[data-design-mode="focus"] .avatar-crop-modal .auth-btn,
+body[data-design-mode="focus"] .avatar-crop-modal .btn-flat {
+    min-height: 40px;
+    padding: 0 18px;
+    border-radius: var(--f-radius);
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .coin-transfer-box .auth-btn.primary,
+body[data-design-mode="focus"] .avatar-crop-modal .auth-btn.primary {
+    min-height: 40px;
+    font-size: 14px;
+}
+
+body[data-design-mode="focus"] .coin-transfer-box .btn-flat,
+body[data-design-mode="focus"] .avatar-crop-modal .btn-flat {
+    border: 0;
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .coin-transfer-box .btn-flat:hover,
+body[data-design-mode="focus"] .avatar-crop-modal .btn-flat:hover {
+    background: var(--f-fill-hover);
+}
+
+body[data-design-mode="focus"] .coin-transfer-head h2 {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .coin-transfer-field {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+body[data-design-mode="focus"] .zc-send .coin-transfer-field input,
+body[data-design-mode="focus"] .coin-transfer-field input,
+body[data-design-mode="focus"] .coin-transfer-field select {
+    border-color: transparent;
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .zc-send .coin-transfer-field input:focus,
+body[data-design-mode="focus"] .coin-transfer-field input:focus,
+body[data-design-mode="focus"] .coin-transfer-field select:focus {
+    border-color: var(--f-ring-border);
+    box-shadow: var(--f-ring);
+}
+
+body[data-design-mode="focus"] .zc-amount-box {
+    border-color: transparent;
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .zc-amount-box:focus-within {
+    border-color: var(--f-ring-border);
+    box-shadow: var(--f-ring);
+}
+
+body[data-design-mode="focus"] .zc-amount-max {
+    border-color: transparent;
+    background: var(--f-fill-strong);
+}
+
+body[data-design-mode="focus"] .coin-gift-summary {
+    border-color: transparent;
+    background: var(--f-surface);
+}
+
+body[data-design-mode="focus"] .coin-gift-summary.is-error {
+    border-color: transparent;
+    background: rgba(255,77,109,.1);
+}
+
+body[data-design-mode="focus"] .treasury-tabs,
+body[data-design-mode="focus"] .treasury-seg {
+    border-color: transparent;
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .treasury-tab.is-active,
+body[data-design-mode="focus"] .treasury-seg button.is-active {
+    background: var(--f-fill-strong);
+}
+body[data-design-mode="focus"] .avatar-crop-close {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .avatar-crop-close:hover {
+    background: var(--f-fill-hover);
+    color: var(--text);
+}
+
+
+/* ── Профиль ─────────────────────────────────────────────────────────── */
+
+body[data-design-mode="focus"] .profile-modal {
+    background: var(--bg);
+}
+
+body[data-design-mode="focus"] .profile-close {
+    border: 0;
+    border-radius: var(--f-radius);
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .profile-close:hover {
+    background: var(--f-fill-hover);
+}
+
+body[data-design-mode="focus"] .profile-head-ava {
+    border: 0;
+    border-radius: 24px;
+    background: var(--f-fill-strong);
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .profile-name {
+    font-size: 22px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .profile-counter strong {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .profile-link-chip,
+body[data-design-mode="focus"] .profile-policy-chip,
+body[data-design-mode="focus"] .autograph-legend li {
+    border: 0;
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .profile-link-chip:hover {
+    background: var(--f-fill-hover);
+}
+
+body[data-design-mode="focus"] .profile-modal .auth-btn,
+body[data-design-mode="focus"] .profile-modal .btn-flat {
+    min-height: var(--f-ctl);
+    padding: 0 14px;
+    border-radius: var(--f-radius);
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .profile-modal .btn-flat {
+    border: 0;
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .profile-modal .btn-flat:hover {
+    background: var(--f-fill-hover);
+}
+
+body[data-design-mode="focus"] .profile-follow-btn.following {
+    border: 0;
+    background: var(--f-fill-strong);
+    color: var(--text);
+}
+
+body[data-design-mode="focus"] .profile-tabs {
+    gap: 2px;
+    width: fit-content;
+    padding: 3px;
+    border-bottom: 0;
+    border-radius: 12px;
+    background: var(--f-surface);
+}
+
+body[data-design-mode="focus"] .profile-tab {
+    padding: 7px 14px;
+    border-radius: 9px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .profile-tab.active {
+    background: var(--f-fill-strong);
+    color: var(--text);
+}
+
+body[data-design-mode="focus"] .profile-editor-section,
+body[data-design-mode="focus"] .moderation-card,
+body[data-design-mode="focus"] .profile-person,
+body[data-design-mode="focus"] .profile-comment-body {
+    border: 0;
+    border-radius: 14px;
+    background: var(--f-surface);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .profile-editor-kicker {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text2);
+}
+
+body[data-design-mode="focus"] .profile-field input[type="text"],
+body[data-design-mode="focus"] .profile-field input[type="url"],
+body[data-design-mode="focus"] .profile-field textarea,
+body[data-design-mode="focus"] .profile-comment-composer textarea,
+body[data-design-mode="focus"] .profile-invite input,
+body[data-design-mode="focus"] .profile-link-row input {
+    border-color: transparent;
+    background: var(--f-fill);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .profile-field input:focus,
+body[data-design-mode="focus"] .profile-field textarea:focus,
+body[data-design-mode="focus"] .profile-comment-composer textarea:focus,
+body[data-design-mode="focus"] .profile-invite input:focus,
+body[data-design-mode="focus"] .profile-link-row input:focus {
+    border-color: var(--f-ring-border);
+    box-shadow: var(--f-ring);
+}
+
+body[data-design-mode="focus"] .profile-audience-btn {
+    border: 0;
+    background: var(--f-fill);
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .profile-audience-btn.active {
+    background: var(--lime);
+    color: var(--f-on-accent);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .autograph-wall {
+    border: 0;
+    border-radius: 14px;
+    background: var(--f-surface);
+}
+
+body[data-design-mode="focus"] .autograph-wall.drawing {
+    box-shadow: var(--f-ring);
+}
+
+body[data-design-mode="focus"] .autograph-wall-svg {
+    color: rgba(255,255,255,.07);
+}
+
+
+
+/* ── Карточки ZaliCoin в ленте (подарок, перевод) ────────────────────── */
+
+body[data-design-mode="focus"] .zc-card:not(.zc-card--raffle) {
+    border: 0;
+    border-radius: 16px;
+    background: rgba(255,255,255,.05);
+    box-shadow: none;
+}
+
+body[data-design-mode="focus"] .zc-card.is-cancelled,
+body[data-design-mode="focus"] .zc-card.is-missing {
+    background: rgba(255,255,255,.03);
+}
+
+body[data-design-mode="focus"] .zc-card-coin {
+    background: var(--f-fill);
+    color: var(--lime);
+}
+
+body[data-design-mode="focus"] .zc-card-title {
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .zc-card-value {
+    font-weight: 700;
+    letter-spacing: -.02em;
+}
+
+body[data-design-mode="focus"] .zc-card-unit {
+    color: var(--lime);
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+body[data-design-mode="focus"] .zc-card-btn {
+    height: 40px;
+    border: 0;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+body[data-design-mode="focus"] .zc-card-btn:disabled {
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .zc-card-btn.is-ghost {
+    background: var(--f-fill);
+}
+
+body[data-design-mode="focus"] .zc-card-btn.is-confirm {
+    background: rgba(255,77,109,.14);
+}
+
+body[data-design-mode="focus"] .zc-card-btn.is-done:disabled {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--lime);
+    color: var(--lime);
+}
+
+body[data-design-mode="focus"] .zc-card-status {
+    border-top-color: rgba(255,255,255,.08);
+}
+
+/* ============================================================
+   НАСТРОЙКИ СЕРВЕРА — перестроенное окно (разметка в index.html #serverModal,
+   логика — web/src/interface/server_modal.js).
+   Шапка с сервером → слева навигация иконками → справа страница из групп.
+   «Обзор» сохраняется кнопкой, которая появляется только при правках;
+   каналы, роли и участники сохраняются сразу. Роли — список слева и права
+   выбранной справа. Одна шкала: поле 44px, плитка 12–16px, текст 12–15px.
+   ============================================================ */
+.server-modal {
+    --sm-surface: rgba(255,255,255,.04);
+    --sm-fill: rgba(255,255,255,.07);
+    --sm-fill-hover: rgba(255,255,255,.11);
+    --sm-hair: rgba(255,255,255,.07);
+    --sm-ctl: 44px;
+    gap: 0;
+    padding: 0;
+    background: var(--bg);
+    box-shadow: none;
+}
+
+.server-modal::before {
+    display: none;
+}
+
+.sm-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: none;
+    padding: 18px 24px 14px;
+}
+
+.sm-avatar {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+    background: var(--lime);
+    color: #050505;
+    font-size: 19px;
+    font-weight: 800;
+    overflow: hidden;
+}
+
+.sm-head-copy {
+    min-width: 0;
+    flex: 1;
+}
+
+.sm-head-copy h2 {
+    margin: 0;
+    color: var(--text);
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sm-head-copy p {
+    margin: 2px 0 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.server-modal-close {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--sm-fill);
+    box-shadow: none;
+    font-size: 20px;
+}
+
+.server-modal-close:hover {
+    transform: none;
+    background: var(--sm-fill-hover);
+}
+
+.server-modal-shell {
+    grid-template-columns: 208px minmax(0, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--sm-hair);
+}
+
+.server-modal-sidebar {
+    gap: 0;
+    padding: 14px 10px 14px 16px;
+    border: 0;
+    border-right: 1px solid var(--sm-hair);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.server-modal-nav {
+    gap: 2px;
+}
+
+.server-modal-nav-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 42px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text2);
+}
+
+.server-modal-nav-btn:hover {
+    transform: none;
+    background: var(--sm-surface);
+    color: var(--text);
+}
+
+.server-modal-nav-btn.active {
+    border: 0;
+    background: var(--sm-fill);
+    box-shadow: none;
+    color: var(--text);
+}
+
+.sm-nav-ico {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    color: var(--text3);
+}
+
+.sm-nav-ico svg {
+    width: 18px;
+    height: 18px;
+}
+
+.server-modal-nav-btn.active .sm-nav-ico {
+    color: var(--lime);
+}
+
+.server-modal-nav-label {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.server-modal-body {
+    padding: 0 0 0 24px;
+}
+
+.server-modal-grid {
+    padding: 18px 24px 24px 0;
+    gap: 0;
+}
+
+/* Страница раздела: колонка групп, не шире читаемой строки. */
+.sm-page,
+.server-modal-card.sm-page {
+    width: 100%;
+    max-width: none;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    overflow: visible;
+}
+
+.sm-page::before {
+    display: none;
+}
+
+.sm-group {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: var(--sm-surface);
+}
+
+/* «Обзор» на широком экране — две колонки групп; оформление и опасная
+   зона — на всю ширину. */
+#serverBasicsCard.sm-page {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+    align-items: start;
+    gap: 12px;
+}
+
+#serverBasicsCard .server-assets,
+#serverBasicsCard .sm-danger {
+    grid-column: 1 / -1;
+}
+
+.sm-group-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.sm-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 2px;
+}
+
+.sm-count {
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--sm-fill);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.sm-row {
+    display: flex;
+    gap: 12px;
+}
+
+.sm-field {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.sm-field > span {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.sm-field--grow {
+    flex: 1;
+}
+
+.sm-field--icon {
+    flex: none;
+    width: 84px;
+}
+
+.server-modal .settings-input,
+.server-modal .settings-textarea {
+    width: 100%;
+    min-height: var(--sm-ctl);
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.server-modal .settings-textarea {
+    padding: 12px 14px;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.sm-icon-input {
+    text-align: center;
+    font-size: 20px;
+}
+
+.sm-note {
+    margin: 0;
+    padding: 0 2px;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+/* Переключатель вместо квадратного чекбокса. */
+.sm-switch,
+.server-modal .server-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--sm-fill);
+}
+
+.server-modal input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    flex: none;
+    width: 42px;
+    height: 24px;
+    margin: 0;
+    border-radius: 999px;
+    background: rgba(255,255,255,.16);
+    cursor: pointer;
+    transition: background .16s var(--ease-out);
+}
+
+.server-modal input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform .16s var(--ease-out), background .16s var(--ease-out);
+}
+
+.server-modal input[type="checkbox"]:checked {
+    background: var(--lime);
+}
+
+.server-modal input[type="checkbox"]:checked::after {
+    transform: translateX(18px);
+    background: #050505;
+}
+
+.server-modal input[type="checkbox"]:disabled {
+    opacity: .45;
+    cursor: default;
+}
+
+.server-modal .server-toggle strong,
+.sm-switch strong {
+    display: block;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.server-modal .server-toggle small,
+.sm-switch small {
+    display: block;
+    margin-top: 2px;
+    color: var(--text2);
+    font-size: 12px;
+}
+
+/* Цвет: пресеты кружками, колесо — по кнопке. */
+.sm-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.sm-swatch {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--sw, #cbff00);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+    cursor: pointer;
+    transition: transform .12s var(--ease-out), box-shadow .12s var(--ease-out);
+}
+
+.sm-swatch:hover {
+    transform: scale(1.1);
+}
+
+.sm-swatch.is-active {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+}
+
+.server-modal .color-picker {
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+}
+
+.server-modal .color-picker-head {
+    padding: 0;
+}
+
+.server-modal .color-picker-sub {
+    display: none;
+}
+
+.server-modal .color-picker-title {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Оформление: аватар и баннер — две карточки рядом. */
+.sm-assets {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.server-modal .server-asset-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    justify-items: start;
+    padding: 14px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--sm-fill);
+    box-shadow: none;
+}
+
+.server-modal .server-avatar-preview {
+    width: 72px;
+    height: 72px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--lime);
+    font-size: 24px;
+    font-weight: 800;
+}
+
+.server-modal .server-banner-preview {
+    width: 100%;
+    min-height: 72px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--sm-fill-hover);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: var(--text2);
+}
+
+.server-modal .server-asset-copy {
+    width: 100%;
+    gap: 6px;
+}
+
+.server-modal .server-asset-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.server-modal .server-asset-sub {
+    font-size: 12px;
+}
+
+.server-modal .server-asset-actions {
+    gap: 8px;
+}
+
+.server-modal .server-link-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.sm-danger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: rgba(255,77,109,.07);
+}
+
+.sm-danger[hidden] {
+    display: none;
+}
+
+.sm-danger-copy {
+    display: grid;
+    gap: 2px;
+}
+
+.sm-danger-copy strong {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.sm-danger-copy span {
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.server-modal .server-delete-btn {
+    flex: none;
+    background: rgba(255,77,109,.14);
+    color: #ff7a93;
+}
+
+.server-modal .server-delete-btn:hover:not(:disabled) {
+    background: rgba(255,77,109,.22);
+}
+
+/* Добавление: одна строка. */
+.sm-addrow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 156px auto;
+    gap: 8px;
+}
+
+.server-modal .server-member-add {
+    grid-template-columns: minmax(0, 1fr) 156px auto;
+}
+
+/* Каналы. */
+.server-modal .server-channels-list,
+.server-modal .server-members-list,
+.server-modal .server-roles-list {
+    gap: 8px;
+    min-height: 0;
+    padding-right: 0;
+    overflow: visible;
+}
+
+.server-modal .server-channel-row {
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    gap: 12px;
+    min-height: 58px;
+    padding: 8px 10px 8px 10px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--sm-surface);
+    box-shadow: none;
+}
+
+.server-modal .server-channel-row:hover {
+    background: var(--sm-fill);
+}
+
+.server-modal .server-channel-row.dragging {
+    background: #23262c;
+    box-shadow: 0 16px 34px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.14);
+}
+
+.server-modal .server-channel-row-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.server-modal .server-channel-row-topic {
+    font-size: 12px;
+}
+
+.server-modal .server-channel-kind-toggle {
+    width: 40px;
+    height: 40px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--sm-fill);
+    color: var(--lime);
+}
+
+.server-modal .server-channel-row-delete {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+}
+
+.server-modal .server-channel-row-delete:hover {
+    background: rgba(255,77,109,.14);
+    color: #ff7a93;
+}
+
+/* Роли: выбор роли — выпадающий список над параметрами выбранной. */
+.sm-roles-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+}
+
+.sm-role-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sm-role-bar .sm-role-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    font-weight: 600;
+}
+
+.sm-role-add {
+    flex: none;
+    min-height: 40px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--sm-fill);
+    color: var(--lime);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sm-role-add:hover {
+    background: var(--sm-surface);
+}
+
+.server-modal .server-role-chip {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: none;
+}
+
+.sm-role-detail {
+    display: grid;
+    gap: 16px;
+    padding: 18px;
+    border: 0;
+    border-radius: 16px;
+    background: var(--sm-surface);
+    box-shadow: none;
+    content-visibility: visible;
+}
+
+.sm-role-detail.is-empty {
+    padding: 22px;
+}
+
+.sm-perms {
+    display: grid;
+    gap: 16px;
+}
+
+.server-modal .server-perm-group {
+    gap: 6px;
+}
+
+.server-modal .server-perm-group-title {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.server-modal .server-perm-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: 4px;
+}
+
+.server-modal .server-perm-row {
+    padding: 10px 12px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--sm-fill);
+}
+
+.server-modal .server-perm-row--stacked strong {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.server-modal .server-perm-row--stacked small {
+    font-size: 12px;
+    color: var(--text2);
+}
+
+.sm-role-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+/* Участники. */
+.server-modal .server-member-row {
+    grid-template-columns: 38px minmax(0, 1fr) 156px 40px;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--sm-surface);
+}
+
+.server-modal .server-member-row.owner {
+    background: var(--sm-fill);
+}
+
+.sm-member-ava {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--sm-fill-hover);
+    color: var(--lime);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.server-modal .server-member-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.server-modal .server-member-meta {
+    font-size: 12px;
+}
+
+.server-modal .server-member-remove {
+    width: 40px;
+    height: 40px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text3);
+    font-size: 18px;
+}
+
+.server-modal .server-member-remove:hover:not(:disabled) {
+    background: rgba(255,77,109,.14);
+    color: #ff7a93;
+}
+
+/* Полоса сохранения «Обзора» — внизу, только когда есть правки. */
+.server-modal-actions {
+    position: sticky;
+    bottom: 0;
+    flex: none;
+    gap: 16px;
+    margin: 0 24px 0 0;
+    padding: 12px 0 16px;
+    background: var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-top: 1px solid var(--sm-hair);
+}
+
+.server-modal-actions[hidden] {
+    display: none;
+}
+
+.server-modal-actions .server-modal-error {
+    flex: 1;
+    min-height: 0;
+    font-size: 13px;
+}
+
+.server-modal .auth-btn,
+.server-modal .btn-flat {
+    min-height: var(--sm-ctl);
+    padding: 0 18px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: none;
+}
+
+.server-modal .btn-flat {
+    border: 0;
+    background: var(--sm-fill);
+}
+
+.server-modal .btn-flat:hover:not(:disabled) {
+    background: var(--sm-fill-hover);
+}
+
+.server-modal .auth-btn.primary {
+    background: var(--lime);
+    color: #050505;
+}
+
+.server-modal .auth-btn.primary:disabled {
+    background: var(--sm-fill);
+    color: var(--text3);
+    opacity: 1;
+}
+
+/* Поиск публичных серверов — тем же языком. */
+.server-modal .server-discover-row {
+    border: 0;
+    border-radius: 14px;
+    background: var(--sm-surface);
+}
+
+/* «Создать сервер» — без боковой панели, поля на всю карточку. */
+.server-create-simple .sm-edit-only {
+    display: none;
+}
+
+.server-create-simple .server-modal-shell {
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 0;
+}
+
+.server-create-simple .server-modal-body {
+    padding-left: 24px;
+}
+
+@media (max-width: 760px) {
+    .sm-head {
+        padding: 12px 14px 10px;
+    }
+
+    .server-modal-shell {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .server-modal-sidebar {
+        padding: 8px 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--sm-hair);
+    }
+
+    .server-modal-nav {
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+    }
+
+    .server-modal-nav-btn {
+        flex: none;
+        min-height: 40px;
+    }
+
+    .server-modal-body {
+        padding: 0 14px;
+    }
+
+    .server-modal-grid {
+        padding: 14px 0 20px;
+    }
+
+    .server-modal-actions {
+        margin-right: 0;
+    }
+
+    .sm-assets {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sm-addrow,
+    .server-modal .server-member-add {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .sm-addrow .auth-btn {
+        grid-column: 1 / -1;
+    }
+
+    .server-modal .server-member-row {
+        grid-template-columns: 38px minmax(0, 1fr) 40px;
+    }
+
+    .server-modal .server-member-row .server-member-role {
+        grid-column: 2 / 3;
+    }
+}
+
+/* ============================================================
+   Категории настроек в левой панели — sidebar_settings.js.
+   Пока открыты настройки (приложения или сервера), вместо списка диалогов
+   слева — категории; справа остаётся только выбранная.
+   ============================================================ */
+.sidebar-settings {
+    display: none;
+}
+
+body[data-sidebar-panel] .sidebar-settings:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-height: 0;
+    padding: 6px 12px 10px;
+    overflow-y: auto;
+}
+
+body[data-sidebar-panel] .search-wrap,
+body[data-sidebar-panel] .contact-status,
+body[data-sidebar-panel] .contacts-suggest-wrap,
+body[data-sidebar-panel] .sidebar .nav-label,
+body[data-sidebar-panel] .sidebar .contacts,
+body[data-sidebar-panel] .server-rail--sidebar,
+body[data-sidebar-panel] .sidebar .mode-switch {
+    display: none;
+}
+
+.sidebar-settings-head {
+    display: grid;
+    gap: 2px;
+    padding: 8px 8px 10px;
+}
+
+.sidebar-settings-caption {
+    color: var(--text3);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.sidebar-settings-title {
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.sidebar-settings-nav {
+    display: grid;
+    gap: 2px;
+}
+
+.sidebar-settings-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 42px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .14s var(--ease-out), color .14s var(--ease-out);
+}
+
+.sidebar-settings-item:hover {
+    background: rgba(255,255,255,.05);
+    color: var(--text);
+}
+
+.sidebar-settings-item.is-active {
+    background: rgba(255,255,255,.09);
+    color: var(--text);
+}
+
+.sidebar-settings-ico {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    color: var(--text3);
+}
+
+.sidebar-settings-ico svg {
+    width: 18px;
+    height: 18px;
+}
+
+.sidebar-settings-item.is-active .sidebar-settings-ico {
+    color: var(--lime);
+}
+
+.sidebar-settings-label {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.sidebar-settings-foot {
+    margin-top: auto;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sidebar-settings-foot:hover {
+    background: rgba(255,255,255,.1);
+}
+
+/* Показывается одна категория: карточки остальных скрыты (атрибуты ставит
+   applySettingsCategory()); заголовки групп при этом лишние. */
+#viewSettings[data-settings-cat] [data-settings-section]:not([data-settings-cat]) {
+    display: block;
+}
+
+#viewSettings[data-settings-cat="profile"] [data-settings-section]:not([data-settings-cat="profile"]),
+#viewSettings[data-settings-cat="appearance"] [data-settings-section]:not([data-settings-cat="appearance"]),
+#viewSettings[data-settings-cat="sound"] [data-settings-section]:not([data-settings-cat="sound"]),
+#viewSettings[data-settings-cat="account"] [data-settings-section]:not([data-settings-cat="account"]),
+#viewSettings[data-settings-cat="app"] [data-settings-section]:not([data-settings-cat="app"]),
+#viewSettings[data-settings-cat="dev"] [data-settings-section]:not([data-settings-cat="dev"]) {
+    display: none !important;
+}
+
+#viewSettings[data-settings-cat] .settings-group-title {
+    display: none !important;
+}
+
+/* Полоса категорий внутри экрана — только телефон: левой панели там нет. */
+.settings-cats {
+    display: none;
+}
+
+@media (max-width: 760px) {
+    .settings-cats {
+        display: flex;
+        gap: 6px;
+        padding: 6px 14px 10px;
+        overflow-x: auto;
+    }
+
+    .settings-cat {
+        flex: none;
+        min-height: 36px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(255,255,255,.07);
+        color: var(--text2);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+        cursor: pointer;
+    }
+
+    .settings-cat.is-active {
+        background: var(--lime);
+        color: #050505;
+    }
+}
+
+/* Настройки сервера: своя навигация окна больше не нужна — она слева. */
+@media (min-width: 761px) {
+    body[data-sidebar-panel="server"] .server-modal-sidebar {
+        display: none;
+    }
+
+    body[data-sidebar-panel="server"] .server-modal-shell {
+        grid-template-columns: minmax(0, 1fr);
+        border-top: 1px solid var(--sm-hair, rgba(255,255,255,.07));
+    }
+}
+
 /* ============================================================
    Игровой статус («Играет в …») — web/src/interface/game_activity.js
    Акцент — сплошной --lime: полупрозрачные оттенки читаются грязно-оливковыми.
@@ -15905,3 +18771,401 @@ body[data-design-mode] .hub-addons .hub-addon-more {
     .composer-focus-note { flex-wrap: wrap; }
     .composer-focus-btn { margin-left: auto; }
 }
+
+/* Выбор людей для режима «в игре» из контактов — game_focus.js */
+.game-focus-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 232px;
+    margin: 6px 0;
+    padding: 4px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.03);
+}
+.game-focus-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.game-focus-pick:hover,
+.game-focus-pick:focus-visible { outline: none; background: rgba(255,255,255,.07); }
+.game-focus-pick.selected { background: rgba(255,255,255,.08); }
+.game-focus-pick .ava {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    overflow: hidden;
+    border-radius: 50%;
+}
+.game-focus-pick .ava .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.game-focus-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-focus-pick-mark {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text3);
+    color: #0b0b0b;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 19px;
+    text-align: center;
+}
+.game-focus-pick.selected .game-focus-pick-mark { border-color: var(--lime); background: var(--lime); }
+.game-focus-pick-empty { padding: 10px; color: var(--text2); font-size: 12.5px; }
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   DESIGN MODE: FOCUS GLOW («Фокус со свечением»)
+   «Фокус» + флаг data-design-glow="on" (applyDesignMode, prefs.js). Всё, что
+   касается иерархии и поверхностей, берётся из блока «Фокус» выше; здесь —
+   только свет. Правила:
+   1. Свечение — ореолом вокруг СПЛОШНЫХ акцентов (отправить, «моё», новое,
+      выбранное). Полупрозрачных лаймовых заливок по-прежнему нет: подложка
+      превращается в оливковую муть, ореол — нет.
+   2. Цвет выводится из --accent-rgb, а не прибит к лайму: схемы работают.
+   3. Фоновый свет — рассеянный и асимметричный (верх слева, низ справа), без
+      сетки и без стекла на панелях.
+   ════════════════════════════════════════════════════════════════════════ */
+
+body[data-design-mode="focus"][data-design-glow="on"] {
+    --g-halo: 0 0 16px rgba(var(--accent-rgb), .42);
+    --g-halo-soft: 0 0 12px rgba(var(--accent-rgb), .26);
+    --g-halo-strong: 0 0 24px rgba(var(--accent-rgb), .55);
+}
+
+/* Рассеянный свет на холсте. */
+body[data-design-mode="focus"][data-design-glow="on"] .app {
+    background:
+        radial-gradient(circle at 12% 6%, rgba(var(--accent-rgb), .13), transparent 26%),
+        radial-gradient(circle at 90% 96%, rgba(var(--accent-rgb), .09), transparent 28%),
+        var(--bg);
+}
+
+/* Ореол вокруг сплошных акцентов. */
+body[data-design-mode="focus"][data-design-glow="on"] .send-btn:not(:disabled) {
+    box-shadow: var(--g-halo);
+}
+body[data-design-mode="focus"][data-design-glow="on"] .send-btn:not(:disabled):hover {
+    box-shadow: var(--g-halo-strong);
+}
+body[data-design-mode="focus"][data-design-glow="on"] .out .bubble:not(.media-card) {
+    box-shadow: var(--g-halo-soft);
+}
+body[data-design-mode="focus"][data-design-glow="on"] .badge,
+body[data-design-mode="focus"][data-design-glow="on"] .hub-segment-badge {
+    box-shadow: var(--g-halo-soft);
+}
+/* Свечение переключателя разделов — на индикаторе, а не на активной кнопке:
+   кнопка получает класс мгновенно, а индикатор переезжает на неё ~.6 с, и
+   ореол на кнопке на это время светил пустому месту. Ореол на индикаторе
+   едет вместе с ним. */
+body[data-design-mode="focus"][data-design-glow="on"] .hub-segment-indicator {
+    box-shadow: var(--g-halo-soft);
+}
+body[data-design-mode="focus"][data-design-glow="on"] .server-rail-item.active .server-rail-avatar,
+body[data-design-mode="focus"][data-design-glow="on"] .contact.active .ava {
+    box-shadow: var(--g-halo-soft);
+}
+body[data-design-mode="focus"][data-design-glow="on"] .ws-pill.on .ws-dot {
+    box-shadow: 0 0 8px rgba(var(--accent-rgb), .8);
+}
+body[data-design-mode="focus"][data-design-glow="on"] .composer-focus-icon,
+body[data-design-mode="focus"][data-design-glow="on"] .game-activity-line {
+    text-shadow: 0 0 10px rgba(var(--accent-rgb), .35);
+}
+
+/* Экран входа: оверлей в «Фокусе» сплошной, поэтому свет кладётся на него. */
+body[data-design-mode="focus"][data-design-glow="on"] .auth-overlay {
+    background:
+        radial-gradient(circle at 18% 14%, rgba(var(--accent-rgb), .14), transparent 30%),
+        radial-gradient(circle at 82% 92%, rgba(var(--accent-rgb), .08), transparent 30%),
+        var(--bg);
+}
+body[data-design-mode="focus"][data-design-glow="on"] #authLoginBtn {
+    box-shadow: var(--g-halo);
+}
+
+/* Превью в настройках оформления. */
+.design-mode-preview--focus-glow {
+    background:
+        radial-gradient(circle at 12% 0%, rgba(var(--accent-rgb), .22), transparent 55%),
+        #0c0e12;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+}
+.design-mode-preview--focus-glow .design-mode-preview-bar {
+    background: rgba(255,255,255,.08);
+}
+.design-mode-preview--focus-glow .design-mode-preview-row--accent {
+    background: rgb(var(--accent-rgb));
+    box-shadow: 0 0 10px rgba(var(--accent-rgb), .6);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   Стилизованные выпадающие списки — web/src/modules/ui_select.js
+   Системный <select> скрыт (остаётся источником значения), вместо него кнопка с
+   классами самого поля и своё меню в <body>. Меню берёт токены контекстных меню
+   приложения (--menu-*), поэтому выглядит как они во всех оформлениях.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.zs-native { display: none !important; }
+
+/* :where() — нулевая специфичность: рамка, отступы и размеры приходят из
+   перенесённых классов поля (.settings-input и т. п.), а здесь только основа. */
+:where(.zs-btn) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: var(--control-h);
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+:where(.zs-btn):focus-visible {
+    outline: none;
+    border-color: var(--lime);
+    box-shadow: 0 0 0 3px var(--lime-dim);
+}
+.zs-btn:disabled { opacity: .5; cursor: default; }
+.zs-btn.is-placeholder .zs-text { color: var(--text2); }
+.zs-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zs-chevron {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin: -3px 2px 0 0;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    opacity: .65;
+    transform: rotate(45deg);
+    transition: transform .16s var(--ease-out, ease-out);
+}
+.zs-btn[aria-expanded="true"] .zs-chevron { margin-top: 3px; transform: rotate(-135deg); }
+.zs-btn[aria-expanded="true"] { border-color: var(--lime); }
+
+/* Компактные поля (роль участника в строке списка) не растягиваются. */
+.server-member-role.zs-btn { width: 100%; }
+.coin-transfer-field .zs-btn {
+    height: var(--control-h);
+    padding: 0 12px;
+    border-radius: 11px;
+    font-size: 14px;
+}
+
+.zs-menu {
+    position: fixed;
+    z-index: 10000;
+    box-sizing: border-box;
+    max-width: min(420px, calc(100vw - 16px));
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--menu-border, var(--border));
+    border-radius: var(--menu-radius, 14px);
+    /* Сплошной фон, а не полупрозрачный --menu-bg с размытием: список поверх
+       текста обязан читаться и там, где backdrop-filter не рисуется. Цвет
+       выводится из --bg схемы. */
+    background: #14171c;
+    background: color-mix(in srgb, var(--bg) 90%, #fff 10%);
+    box-shadow: var(--menu-shadow, 0 18px 48px rgba(0,0,0,.5));
+    transform-origin: top left;
+    animation: menu-pop .15s var(--ease-out, ease-out) both;
+    outline: none;
+}
+.zs-menu.is-above { transform-origin: bottom left; }
+.zs-opt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 9px;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.3;
+    cursor: pointer;
+    user-select: none;
+}
+.zs-opt.is-active { background: var(--menu-hover, rgba(255,255,255,.07)); }
+.zs-opt.is-selected .zs-opt-text { font-weight: 700; }
+.zs-opt.is-disabled { opacity: .45; cursor: default; }
+.zs-opt-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zs-hint {
+    margin-left: 8px;
+    color: var(--text3);
+    font-size: .88em;
+    font-weight: 500;
+}
+.zs-opt-mark { flex: none; width: 16px; color: var(--lime); font-weight: 800; text-align: right; }
+.zs-group {
+    padding: 8px 10px 4px;
+    color: var(--text2);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Полосы прокрутки: в «Фокусе» и «Плоском» ползунок был белым с прозрачностью
+   .12–.14 на тёмном — на глаз его не существовало, а у списков и карточек
+   настроек не было понятно, что они прокручиваются. Современные движки к тому же
+   отдают приоритет `scrollbar-color` над ::-webkit-scrollbar, поэтому задаются
+   оба. Значения — один набор переменных на все оформления, кроме классического
+   (там ползунок акцентный и так виден).
+   ════════════════════════════════════════════════════════════════════════ */
+
+body[data-design-mode="focus"],
+body[data-experimental-design="on"] {
+    --sb-thumb: rgba(255,255,255,.34);
+    --sb-thumb-hover: rgba(255,255,255,.55);
+    --sb-track: rgba(255,255,255,.05);
+    scrollbar-color: var(--sb-thumb) var(--sb-track);
+}
+
+body[data-design-mode="focus"] ::-webkit-scrollbar,
+body[data-experimental-design="on"] ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+body[data-design-mode="focus"] ::-webkit-scrollbar-track,
+body[data-experimental-design="on"] ::-webkit-scrollbar-track {
+    background: var(--sb-track);
+}
+body[data-design-mode="focus"] ::-webkit-scrollbar-thumb,
+body[data-experimental-design="on"] ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--sb-thumb);
+    background-clip: padding-box;
+}
+body[data-design-mode="focus"] ::-webkit-scrollbar-thumb:hover,
+body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
+    background: var(--sb-thumb-hover);
+    background-clip: padding-box;
+}
+body[data-design-mode="focus"] ::-webkit-scrollbar-thumb:active,
+body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:active {
+    background: rgba(255,255,255,.7);
+    background-clip: padding-box;
+}
+
+/* Участники: добавление только через приглашение. */
+.sm-invite-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.sm-invite-row .sm-note {
+    margin: 0;
+    min-width: 0;
+}
+
+.sm-invite-row .auth-btn {
+    flex: none;
+}
+
+@media (max-width: 560px) {
+    .sm-invite-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+/* Подсказки имён под полем ввода логина (web/src/interface/user_suggest.js). */
+.us-menu {
+    position: fixed;
+    z-index: 10001;
+    box-sizing: border-box;
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--menu-border, var(--border));
+    border-radius: var(--menu-radius, 14px);
+    background: #14171c;
+    background: color-mix(in srgb, var(--bg) 90%, #fff 10%);
+    box-shadow: var(--menu-shadow, 0 18px 48px rgba(0,0,0,.5));
+}
+
+.us-opt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 9px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.us-opt:hover,
+.us-opt.is-active {
+    background: var(--menu-hover, rgba(255,255,255,.07));
+}
+
+.us-ava {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--lime);
+    color: #050505;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.us-ava img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.us-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.us-reason {
+    flex: none;
+    color: var(--text3);
+    font-size: 12px;
+}
+
+
+/* Смена пароля в «Сеансе» */
+.change-password { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.change-password .settings-help { margin: 0; }
+.change-password #changePasswordStatus[data-tone="error"] { color: var(--red, #ff4d6d); }
+.change-password #changePasswordStatus[data-tone="success"] { color: var(--lime, #cbff00); }
+.change-password #changePasswordStatus[data-tone="warn"] { color: var(--text2, rgba(255,255,255,.65)); }

@@ -638,6 +638,7 @@ ZaliMixin(ZaliInterface, class {
         this.syncMobileChrome();
         // Whether the call strip shows depends on which tab is on screen.
         this.renderVoiceCallStrip();
+        this.syncSidebarPanel?.();
     }
 
     openSettingsView() {
@@ -676,6 +677,7 @@ ZaliMixin(ZaliInterface, class {
         this.syncMobileChrome();
         // Whether the call strip shows depends on which tab is on screen.
         this.renderVoiceCallStrip();
+        this.syncSidebarPanel?.();
     }
 
     openHubView() {
@@ -699,6 +701,7 @@ ZaliMixin(ZaliInterface, class {
         this.syncMobileChrome();
         // Whether the call strip shows depends on which tab is on screen.
         this.renderVoiceCallStrip();
+        this.syncSidebarPanel?.();
     }
 
     openZaliCoinView() {
@@ -722,5 +725,6 @@ ZaliMixin(ZaliInterface, class {
         // Whether the call strip shows depends on which tab is on screen.
         this.renderVoiceCallStrip();
         this.refreshZaliCoinView();
+        this.syncSidebarPanel?.();
     }
 });

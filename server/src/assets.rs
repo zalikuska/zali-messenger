@@ -489,6 +489,9 @@ pub(crate) async fn upload_avatar(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if !crate::rate_allow(&state, format!("avatar:{}", username.to_lowercase()), 20) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     let mut file_data: Vec<u8> = Vec::new();
     let mut mime_type = String::new();
 

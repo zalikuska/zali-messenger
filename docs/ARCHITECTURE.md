@@ -126,6 +126,23 @@ The "Подключено"/connected badge is driven exclusively by real socket
 state (connect/disconnect events), not by "did we set a session" — it used to
 be forced `true` on login regardless of whether a socket existed at all.
 
+## 5a. Links to a server and a profile
+
+One public format, built by `web/src/interface/deep_links.js` and `server/src/servers.rs`
+(`server_link`, `link_token`):
+
+- `https://msg.zalikus.org/server/<token>` — `<token>` is an invite code (any server) or
+  the id of a public server. Joining by id is refused for private servers (403);
+  an invite is the only way into those.
+- `https://msg.zalikus.org/profile/<username>` — opens that person's profile.
+
+The base is `ZALI_PUBLIC_WEB_URL` on the server (default above); the client keeps the
+same constant. Old `zali://server/<id>` and `zali://invite/<code>` are still accepted
+on input but never produced. There is no way to add a member directly: managers can
+only change a member's role or remove them, people come in by invite or public link.
+The standalone web host must serve `index.html` for `/server/*` and `/profile/*`
+(`index.html` sets `<base href="/">` for such paths so assets still load).
+
 ## 6. Known risk areas / where bugs cluster
 
 - **`web/src/interface.js` (~13,800 lines) and `server/src/main.rs` (~8,000 lines,

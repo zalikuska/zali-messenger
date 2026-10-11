@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
-pub(crate) const ELEVATED_PERMISSIONS: [&str; 4] = ["fs.read", "fs.write", "launch", "process"];
+pub(crate) const ELEVATED_PERMISSIONS: [&str; 5] = ["network.any", "fs.read", "fs.write", "launch", "process"];
 const MAX_FS_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_LIST_ENTRIES: usize = 5_000;
 const MAX_BACKEND_LINE: usize = 1024 * 1024;
@@ -153,6 +153,7 @@ fn permission_titles(permissions: &[String]) -> String {
     permissions
         .iter()
         .map(|p| match p.as_str() {
+            "network.any" => "• обращаться к любым серверам в интернете и передавать им данные аддона",
             "fs.read" => "• читать любые файлы и папки компьютера",
             "fs.write" => "• создавать, менять и удалять любые файлы компьютера",
             "launch" => "• открывать файлы и запускать программы",

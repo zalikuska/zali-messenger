@@ -37,10 +37,10 @@ CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
 
 # Порядок — порядок каталога PERMISSIONS в addon_format.js.
 PERMISSIONS = [
-    "cache", "notifications", "clipboard", "files", "microphone", "network",
-    "fs.read", "fs.write", "launch", "process",
+    "cache", "notifications", "clipboard", "files", "microphone", "network", "cloud", "coins",
+    "network.any", "fs.read", "fs.write", "launch", "process",
 ]
-ELEVATED = {"fs.read", "fs.write", "launch", "process"}
+ELEVATED = {"network.any", "fs.read", "fs.write", "launch", "process"}
 BACKEND_PLATFORMS = ["macos-arm64", "macos-x64", "windows-x64", "windows-arm64"]
 ICON_EXTS = {"png", "svg", "webp", "jpg", "jpeg"}
 

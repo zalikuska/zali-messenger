@@ -1,0 +1,11 @@
+{
+  "zaliAddon": 1,
+  "id": "org.zalikus.cloud-notes",
+  "name": "Облачные заметки",
+  "version": "1.0.0",
+  "description": "Заметка в облаке ZaliMessenger. Облако открыто только подписанным аддонам: сначала подпишите файл (хаб → Подпись).",
+  "author": "ZaliMessenger",
+  "icon": "icon.svg",
+  "entry": "index.html",
+  "permissions": ["cloud"]
+}

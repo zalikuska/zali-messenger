@@ -15,7 +15,10 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
 
@@ -228,18 +231,41 @@ pub(crate) async fn send_json_to_user(
     }
 }
 
+/// Входящий кадр от клиента: сигналинг и события присутствия — килобайты.
+const WS_MAX_INBOUND_BYTES: usize = 256 * 1024;
+const WS_MAX_CONNECTIONS_PER_USER: usize = 24;
+/// Входящих событий за окно на соединение; сверх — отбрасываются. ICE-кандидаты
+/// звонка приходят пачками по несколько десятков, поэтому порог с запасом.
+const WS_INBOUND_WINDOW: Duration = Duration::from_secs(10);
+const WS_INBOUND_MAX_PER_WINDOW: u32 = 400;
+
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     AuthenticatedUser(username): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    // Предел соединений на человека: нормальному пользователю хватает пары
+    // вкладок и устройств, остальное — утечка либо попытка занять память.
+    let open_connections = state
+        .user_connections
+        .get(&username)
+        .map(|conns| conns.iter().filter(|c| !c.is_closed()).count())
+        .unwrap_or(0);
+    if open_connections >= WS_MAX_CONNECTIONS_PER_USER {
+        warn!("WS upgrade refused: too many connections username={} open={}", username, open_connections);
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     info!(
         "WS upgrade accepted username={} active_ws={} voice_rooms={}",
         username,
         state.user_connections.len(),
         state.voice_rooms.len()
     );
-    ws.on_upgrade(move |socket| handle_socket(socket, state, username))
+    // Клиент шлёт сюда только небольшие JSON-события (сигналинг, присутствие);
+    // по умолчанию библиотека принимает кадры до 16 МиБ и сообщения до 64 МиБ.
+    ws.max_message_size(WS_MAX_INBOUND_BYTES)
+        .max_frame_size(WS_MAX_INBOUND_BYTES)
+        .on_upgrade(move |socket| handle_socket(socket, state, username))
 }
 
 pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, username: String) {
@@ -278,6 +304,8 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
     // Ping (a tokio-tungstenite read half queues Pong replies and never flushes them
     // unless the write half is polled). Dead connections are detected by the send
     // failing instead, which is what the `rx.recv()` arm below already does.
+    let mut inbound_window_start = Instant::now();
+    let mut inbound_in_window: u32 = 0;
     let mut keepalive = tokio::time::interval(Duration::from_secs(20));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // interval()'s first tick resolves immediately — consume it so a freshly opened
@@ -305,6 +333,20 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                     crate::note_connection_inbound(&state, presence_id);
                 }
                 match result {
+                    Some(Ok(WsMessage::Text(_))) if {
+                        // Скользящее окно на соединение: заливка событиями не должна
+                        // гонять сервер по обработчикам и по базе.
+                        if inbound_window_start.elapsed() >= WS_INBOUND_WINDOW {
+                            inbound_window_start = Instant::now();
+                            inbound_in_window = 0;
+                        }
+                        inbound_in_window = inbound_in_window.saturating_add(1);
+                        inbound_in_window > WS_INBOUND_MAX_PER_WINDOW
+                    } => {
+                        if inbound_in_window == WS_INBOUND_MAX_PER_WINDOW + 1 {
+                            warn!("WS inbound flood, frames dropped username={}", username);
+                        }
+                    }
                     Some(Ok(WsMessage::Text(text))) => {
                         trace!("WS inbound username={} text_bytes={}", username, text.len());
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {

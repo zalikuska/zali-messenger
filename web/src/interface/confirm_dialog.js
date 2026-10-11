@@ -13,7 +13,11 @@ ZaliMixin(ZaliInterface, class {
      * @returns {Promise<boolean>} true, если пользователь подтвердил.
      */
     confirmAction({ title, message = '', confirmLabel = 'Подтвердить', cancelLabel = 'Отмена', danger = true } = {}) {
-        const host = document.querySelector('.main') || document.body;
+        // Развёрнутый аддон перекрывает .main (см. openAddonDialog): подтверждение,
+        // которое он вызвал, показывается над его сценой.
+        const stage = document.getElementById('addonStage');
+        const overStage = !!(stage && !stage.hidden && stage.parentElement);
+        const host = overStage ? stage.parentElement : (document.querySelector('.main') || document.body);
         if (!host) return Promise.resolve(false);
         // Один диалог за раз: повторный вызов закрывает предыдущий как «Отмена».
         if (this._confirmDialogDismiss) this._confirmDialogDismiss(false);
@@ -21,7 +25,7 @@ ZaliMixin(ZaliInterface, class {
         return new Promise((resolve) => {
             const previousFocus = document.activeElement;
             const overlay = document.createElement('div');
-            overlay.className = 'coin-transfer-modal confirm-dialog';
+            overlay.className = `coin-transfer-modal confirm-dialog${overStage ? ' is-over-stage' : ''}`;
             overlay.innerHTML = `
                 <div class="coin-transfer-box confirm-dialog-box" role="alertdialog" aria-modal="true"
                      aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogText">

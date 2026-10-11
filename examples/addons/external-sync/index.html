@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Внешний сервер</title>
+<style>
+  body { margin: 0; padding: 20px; font: 15px/1.5 var(--zali-font, system-ui); color: var(--zali-text, #eee); background: var(--zali-bg, #090b0e); }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--zali-border, #333); background: var(--zali-surface, #14171c); color: inherit; font: inherit; margin-bottom: 10px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  button { padding: 8px 16px; border: 0; border-radius: 10px; background: var(--zali-accent, #cbff00); color: #050505; font-weight: 600; cursor: pointer; }
+  small { color: var(--zali-text3, #888); }
+</style>
+</head>
+<body>
+<label><small>Адрес сервера (адрес вводит человек, поэтому нужен network.any)</small>
+<input id="server" value="http://127.0.0.1:8787"></label>
+<textarea id="note" rows="8" placeholder="Заметка"></textarea>
+<div class="row"><button id="load">Загрузить</button><button id="save">Сохранить</button><small id="status"></small></div>
+<script>
+(async function () {
+  await zali.ready;
+  const $ = (id) => document.getElementById(id);
+  // Адрес сервера — настройка устройства: хватает локального zali.storage.
+  try { const s = await zali.storage.get('server'); if (s) $('server').value = s; } catch (e) {}
+  const url = () => $('server').value.replace(/\/+$/, '') + '/kv/note';
+  $('load').addEventListener('click', async () => {
+    try {
+      const r = await fetch(url());
+      $('status').textContent = r.status === 404 ? 'Пока пусто' : 'Загружено';
+      if (r.ok) $('note').value = (await r.json()).value;
+    } catch (e) { $('status').textContent = 'Сервер недоступен'; }
+  });
+  $('save').addEventListener('click', async () => {
+    try {
+      const r = await fetch(url(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: $('note').value }) });
+      $('status').textContent = r.ok ? 'Сохранено на сервере' : `Ответ ${r.status}`;
+      if (r.ok) await zali.storage.set('server', $('server').value);
+    } catch (e) { $('status').textContent = 'Сервер недоступен'; }
+  });
+})();
+</script>
+</body>
+</html>

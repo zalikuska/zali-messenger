@@ -18,6 +18,62 @@ use tokio::fs;
 use tracing::error;
 use uuid::Uuid;
 
+/// Базовый адрес публичных ссылок (`…/server/<код>`, `…/profile/<имя>`): веб-клиент,
+/// который открывает ссылку. Для своего деплоя — `ZALI_PUBLIC_WEB_URL`.
+pub(crate) fn public_link_base() -> String {
+    std::env::var("ZALI_PUBLIC_WEB_URL")
+        .ok()
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| v.starts_with("https://") || v.starts_with("http://"))
+        .unwrap_or_else(|| "https://msg.zalikus.org".to_string())
+}
+
+/// Ссылка на сервер/приглашение: `<base>/server/<token>`.
+pub(crate) fn server_link(token: &str) -> String {
+    format!("{}/server/{}", public_link_base(), token)
+}
+
+/// Достаёт токен (id сервера, код приглашения или своя ссылка) из любой формы:
+/// `https://…/server/<t>`, `zali://server/<t>`, `zali://invite/<t>`, `server/<t>`, `<t>`.
+pub(crate) fn link_token(raw: &str) -> String {
+    let mut value = raw.trim();
+    if let Some(pos) = value.find(['?', '#']) {
+        value = &value[..pos];
+    }
+    let value = value.trim_end_matches('/');
+    for marker in ["/server/", "/invite/", "zali://server/", "zali://invite/"] {
+        if let Some(pos) = value.rfind(marker) {
+            return value[pos + marker.len()..].trim().to_string();
+        }
+    }
+    for prefix in ["server/", "invite/"] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            return rest.trim().to_string();
+        }
+    }
+    value.to_string()
+}
+
+/// Своя ссылка сервера — только его собственный id: ссылка вида `…/server/<чужой id>`
+/// в `join_link` перехватывала бы вступающих по ссылке на другой сервер.
+fn join_link_is_foreign(link: &str, server_id: &str) -> bool {
+    (link.starts_with("zali://server/") || link.starts_with(&format!("{}/server/", public_link_base())))
+        && link != format!("zali://server/{}", server_id)
+        && link != server_link(server_id)
+}
+
+/// Ссылка, которую видит клиент: стандартная ссылка сервера всегда в актуальном
+/// `https://…/server/<id>`; своя (заданная владельцем) отдаётся как есть.
+fn display_join_link(stored: String, server_id: &str) -> String {
+    if stored == format!("zali://server/{}", server_id)
+        || stored.starts_with(&format!("{}/server/", public_link_base()))
+            && link_token(&stored) == server_id
+    {
+        return server_link(server_id);
+    }
+    stored
+}
+
 pub(crate) async fn get_server_accessibility(
     pool: &SqlitePool,
     server_id: &str,
@@ -45,16 +101,21 @@ pub(crate) async fn build_server_response(
     };
     let my_role = get_server_member_role(pool, &server.id, viewer).await?;
     let member_count = get_server_member_count(pool, &server.id).await.unwrap_or(0);
+    let can_invite = can_invite_to_server(pool, &server.id, viewer)
+        .await
+        .unwrap_or(false);
+    let join_link = display_join_link(server.join_link.clone(), &server.id);
     Ok(ServerResponse {
         id: server.id,
         name: server.name,
         description: server.description,
         icon: server.icon,
         color: server.color,
-        join_link: server.join_link,
+        join_link,
         owner: server.owner,
         is_public: server.is_public != 0,
         my_role,
+        can_invite,
         member_count,
         channels,
     })
@@ -140,8 +201,11 @@ pub(crate) async fn build_server_responses_batch(
 
     let mut server_permissions: HashMap<String, HashMap<String, (bool, bool, bool)>> =
         HashMap::new();
+    // Роли с правом «Приглашения»: (server_id, role_id).
+    let mut invite_roles: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     let mut server_perm_builder = QueryBuilder::<Sqlite>::new(
-        "SELECT server_id, role_id, can_view, can_send, can_manage FROM server_roles WHERE server_id IN (",
+        "SELECT server_id, role_id, can_view, can_send, can_manage, can_invite FROM server_roles WHERE server_id IN (",
     );
     {
         let mut separated = server_perm_builder.separated(", ");
@@ -156,6 +220,10 @@ pub(crate) async fn build_server_responses_batch(
         let can_view: i64 = row.get("can_view");
         let can_send: i64 = row.get("can_send");
         let can_manage: i64 = row.get("can_manage");
+        let can_invite: i64 = row.get("can_invite");
+        if can_invite != 0 || can_manage != 0 {
+            invite_roles.insert((server_id.clone(), role_id.clone()));
+        }
         server_permissions
             .entry(server_id)
             .or_default()
@@ -217,6 +285,12 @@ pub(crate) async fn build_server_responses_batch(
                 })
                 .map(|perms| perms.2)
                 .unwrap_or(false);
+        let can_invite = server.owner == viewer
+            || can_manage
+            || my_role
+                .as_deref()
+                .map(|role| invite_roles.contains(&(server_id.clone(), role.to_string())))
+                .unwrap_or(false);
         let all_channels = channels_by_server.remove(&server_id).unwrap_or_default();
         let channels =
             if can_manage || server.owner == viewer || (my_role.is_none() && server.is_public != 0)
@@ -253,10 +327,11 @@ pub(crate) async fn build_server_responses_batch(
             description: server.description,
             icon: server.icon,
             color: server.color,
-            join_link: server.join_link,
+            join_link: display_join_link(server.join_link, &server_id),
             owner: server.owner,
             is_public: server.is_public != 0,
             my_role,
+            can_invite,
             member_count: member_counts.get(&server_id).copied().unwrap_or(0),
             channels,
         });
@@ -306,7 +381,9 @@ pub(crate) async fn create_server_invite_record(
     max_uses: i64,
     expires_hours: Option<i64>,
 ) -> Result<ServerInviteRecord, sqlx::Error> {
-    let code = Uuid::new_v4().simple().to_string()[..8].to_lowercase();
+    // 64 бита: 32 бита перебирались бы за часы на одном аккаунте. Принимаются и
+    // прежние 8-символьные коды — длина нигде не проверяется.
+    let code = Uuid::new_v4().simple().to_string()[..16].to_lowercase();
     let expires_at = expires_hours
         .filter(|hours| *hours > 0)
         .map(|hours| Utc::now() + chrono::Duration::hours(hours));
@@ -489,6 +566,29 @@ pub(crate) async fn can_manage_server(
     Ok(false)
 }
 
+/// Право «Приглашения»: владелец, админ, любая роль с «Управлением» и любая
+/// роль с флагом `can_invite` (у встроенного «Участника» он включён по умолчанию).
+pub(crate) async fn can_invite_to_server(
+    pool: &SqlitePool,
+    server_id: &str,
+    username: &str,
+) -> Result<bool, sqlx::Error> {
+    if can_manage_server(pool, server_id, username).await? {
+        return Ok(true);
+    }
+    let Some(role) = get_server_member_role(pool, server_id, username).await? else {
+        return Ok(false);
+    };
+    let flag: Option<i64> = sqlx::query_scalar(
+        "SELECT can_invite FROM server_roles WHERE server_id = ? AND role_id = ? LIMIT 1",
+    )
+    .bind(server_id)
+    .bind(role)
+    .fetch_optional(pool)
+    .await?;
+    Ok(flag.unwrap_or(0) != 0)
+}
+
 pub(crate) async fn get_servers(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
@@ -618,7 +718,8 @@ pub(crate) async fn create_server(
             )
                 .into_response();
         }
-        if link.starts_with("zali://server/") && *link != format!("zali://server/{}", server_id) {
+        let foreign = join_link_is_foreign(link, &server_id);
+        if foreign {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Недопустимый формат join_link"})),
@@ -638,7 +739,7 @@ pub(crate) async fn create_server(
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| format!("zali://server/{}", server_id)),
+            .unwrap_or_else(|| server_link(&server_id)),
         owner: owner.clone(),
         is_public: if is_public.unwrap_or(true) { 1 } else { 0 },
         created_at: Utc::now(),
@@ -777,6 +878,21 @@ pub(crate) async fn update_server(
         .filter(|v| !v.is_empty())
         .map(str::to_string)
         .unwrap_or(server.join_link);
+    // Проверяется только присланное: уже сохранённое значение не должно
+    // блокировать правку остальных настроек.
+    let link_rejected = payload
+        .join_link
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map_or(false, |link| link.len() > 128 || join_link_is_foreign(link, &server_id));
+    if link_rejected {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Недопустимый формат join_link"})),
+        )
+            .into_response();
+    }
     let next_public = if let Some(is_public) = payload.is_public {
         if is_public {
             1
@@ -868,72 +984,6 @@ pub(crate) async fn get_server_members(
         Ok(members) => Json(serde_json::json!({ "members": members })).into_response(),
         Err(e) => {
             error!("Ошибка загрузки участников сервера {}: {}", server_id, e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-pub(crate) async fn add_server_member(
-    AxumPath(server_id): AxumPath<String>,
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    AuthenticatedUser(auth_user): AuthenticatedUser,
-    Json(payload): Json<ServerMemberPayload>,
-) -> impl IntoResponse {
-    if !can_manage_server(&state.db, &server_id, &auth_user)
-        .await
-        .unwrap_or(false)
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-
-    let server = match get_server_accessibility(&state.db, &server_id).await {
-        Ok(Some(server)) => server,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            error!("Ошибка поиска сервера {}: {}", server_id, e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let username = payload.username.trim();
-    if username.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Имя участника не может быть пустым",
-        )
-            .into_response();
-    }
-    if username == server.owner {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Владелец уже является участником сервера",
-        )
-            .into_response();
-    }
-
-    let role = match resolve_member_role_input(&state.db, &server_id, payload.role.as_deref()).await
-    {
-        Ok(role) => role,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Неизвестная роль").into_response(),
-    };
-    if role == "owner" {
-        return (StatusCode::BAD_REQUEST, "Нельзя назначить роль владельца").into_response();
-    }
-    if let Err(e) = upsert_server_member(&state.db, &server_id, username, &role).await {
-        error!(
-            "Ошибка добавления участника {} в сервер {}: {}",
-            username, server_id, e
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
-    match load_server_members(&state.db, &server_id).await {
-        Ok(members) => Json(serde_json::json!({ "members": members })).into_response(),
-        Err(e) => {
-            error!(
-                "Ошибка перечитывания участников сервера {}: {}",
-                server_id, e
-            );
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -1240,7 +1290,7 @@ pub(crate) async fn get_server_invites(
     let invites: Vec<ServerInviteResponse> = rows
         .into_iter()
         .map(|row| ServerInviteResponse {
-            url: format!("zali://invite/{}", row.code),
+            url: server_link(&row.code),
             serverId: row.server_id,
             createdBy: row.created_by,
             code: row.code,
@@ -1259,7 +1309,7 @@ pub(crate) async fn create_server_invite(
     AuthenticatedUser(auth_user): AuthenticatedUser,
     Json(payload): Json<InvitePayload>,
 ) -> impl IntoResponse {
-    if !can_manage_server(&state.db, &server_id, &auth_user)
+    if !can_invite_to_server(&state.db, &server_id, &auth_user)
         .await
         .unwrap_or(false)
     {
@@ -1276,7 +1326,7 @@ pub(crate) async fn create_server_invite(
     .await
     {
         Ok(invite) => Json(ServerInviteResponse {
-            url: format!("zali://invite/{}", invite.code),
+            url: server_link(&invite.code),
             serverId: invite.server_id,
             createdBy: invite.created_by,
             code: invite.code,
@@ -1293,6 +1343,28 @@ pub(crate) async fn create_server_invite(
     }
 }
 
+/// Счётчик неудачных вступлений по коду/ссылке на пользователя: перебор кодов
+/// приглашений упирается в него, а не в скорость сети. Окно и порог — те же, что
+/// у входа (`RATE_LIMIT_*`).
+fn invite_attempts_exhausted(state: &AppState, username: &str) -> bool {
+    let window = std::time::Duration::from_secs(state.config.rate_limit_window_secs);
+    let now = std::time::Instant::now();
+    let mut attempts = state
+        .login_attempts
+        .entry(format!("invite-miss:{}", username.to_lowercase()))
+        .or_default();
+    attempts.retain(|t| now.duration_since(*t) < window);
+    attempts.len() >= state.config.rate_limit_max_attempts
+}
+
+fn note_invite_miss(state: &AppState, username: &str) {
+    state
+        .login_attempts
+        .entry(format!("invite-miss:{}", username.to_lowercase()))
+        .or_default()
+        .push_back(std::time::Instant::now());
+}
+
 pub(crate) async fn join_server_invite(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(auth_user): AuthenticatedUser,
@@ -1301,6 +1373,9 @@ pub(crate) async fn join_server_invite(
     let code = payload.code.trim();
     if code.is_empty() {
         return (StatusCode::BAD_REQUEST, "Код приглашения обязателен").into_response();
+    }
+    if invite_attempts_exhausted(&state, &auth_user) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много неверных кодов. Повторите через минуту.").into_response();
     }
 
     let mut tx = match state.db.begin().await {
@@ -1325,6 +1400,7 @@ pub(crate) async fn join_server_invite(
         Ok(Some(invite)) => invite,
         Ok(None) => {
             let _ = tx.rollback().await;
+            note_invite_miss(&state, &auth_user);
             return StatusCode::NOT_FOUND.into_response();
         }
         Err(e) => {
@@ -1338,6 +1414,28 @@ pub(crate) async fn join_server_invite(
         if expires_at < Utc::now() {
             let _ = tx.rollback().await;
             return (StatusCode::GONE, "Срок действия инвайта истёк").into_response();
+        }
+    }
+
+    // Уже участник: приглашение не расходуется (ссылки кликают и те, кто уже внутри).
+    match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM server_members WHERE server_id = ? AND username = ?",
+    )
+    .bind(&invite.server_id)
+    .bind(&auth_user)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(0) => {}
+        Ok(_) => {
+            let _ = tx.rollback().await;
+            return Json(serde_json::json!({ "serverId": invite.server_id, "joined": true }))
+                .into_response();
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            error!("Ошибка проверки членства по инвайту {}: {}", code, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
 
@@ -1404,24 +1502,31 @@ pub(crate) async fn join_server_link(
         return (StatusCode::BAD_REQUEST, "Ссылка сервера обязательна").into_response();
     }
 
-    let _normalized = raw
-        .strip_prefix("zali://server/")
-        .or_else(|| raw.strip_prefix("server/"))
-        .unwrap_or(raw)
-        .trim()
-        .to_string();
-
+    // Ссылка приходит в любом виде (`https://…/server/<id>`, `zali://server/<id>`,
+    // свой код): сверяем и с сохранённой ссылкой как есть, и по id из неё.
+    if invite_attempts_exhausted(&state, &auth_user) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много неверных ссылок. Повторите через минуту.").into_response();
+    }
+    let token = link_token(raw);
     let server = match sqlx::query_as::<_, ServerRecord>(
         "SELECT id, name, description, icon, color, join_link, owner, is_public, created_at
          FROM servers
-         WHERE join_link = ? LIMIT 1",
+         WHERE join_link IN (?, ?, ?) OR id = ?
+         ORDER BY (id = ?) DESC LIMIT 1",
     )
     .bind(raw)
+    .bind(format!("zali://server/{}", token))
+    .bind(server_link(&token))
+    .bind(&token)
+    .bind(&token)
     .fetch_optional(&state.db)
     .await
     {
         Ok(Some(server)) => server,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            note_invite_miss(&state, &auth_user);
+            return StatusCode::NOT_FOUND.into_response();
+        }
         Err(e) => {
             error!("Ошибка поиска сервера по ссылке {}: {}", raw, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();

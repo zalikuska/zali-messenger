@@ -225,6 +225,60 @@
                     });
                 },
             },
+            // Облако ZaliMessenger (разрешение `cloud`, только подписанным аддонам):
+            // 10 МБ на аддон у всех пользователей вместе — для синхронизации и сбора
+            // данных. Личная область человека (до 1 МБ, её читает автор),
+            // общая `shared` (читают все, пишет автор), сбор `collect` (автору).
+            // docs/ADDONS.md §11.
+            cloud: (function () {
+                function area(scope) {
+                    return {
+                        get: function (key) { return call('cloud.get', { key: String(key), scope: scope }); },
+                        set: function (key, value) {
+                            try {
+                                // Значение обязано сериализоваться в JSON до отправки.
+                                JSON.stringify(value === undefined ? null : value);
+                            } catch (e) {
+                                return Promise.reject(ZaliAddonError('bad_params', 'Значение не сериализуется в JSON'));
+                            }
+                            return call('cloud.set', { key: String(key), value: value === undefined ? null : value, scope: scope });
+                        },
+                        getBytes: function (key) { return call('cloud.getBytes', { key: String(key), scope: scope }).then(asBytes); },
+                        setBytes: function (key, data) { return withBytes('cloud.setBytes', { key: String(key), scope: scope }, data); },
+                        remove: function (key) { return call('cloud.remove', { key: String(key), scope: scope }); },
+                        keys: function () { return call('cloud.keys', { scope: scope }); },
+                        clear: function () { return call('cloud.clear', { scope: scope }); },
+                    };
+                }
+                var own = area('user');
+                own.usage = function () { return call('cloud.usage'); };
+                own.shared = Object.freeze(area('shared'));
+                own.collect = Object.freeze({
+                    list: function (options) {
+                        var o = options || {};
+                        return call('cloud.collect.list', { offset: Number(o.offset || 0), limit: Number(o.limit || 100) });
+                    },
+                    get: function (user, key) { return call('cloud.collect.get', { user: String(user), key: String(key) }); },
+                    getBytes: function (user, key) {
+                        return call('cloud.collect.getBytes', { user: String(user), key: String(key) }).then(asBytes);
+                    },
+                });
+                return own;
+            })(),
+            // ZaliCoin (разрешение `coins`). Аддон только просит: сумму подтверждает
+            // человек в окне приложения, баланс аддона держит сервер. Без подписи
+            // перевод недоступен. docs/ADDONS.md §10.
+            coins: {
+                balance: function () { return call('coins.balance'); },
+                treasury: function () { return call('coins.treasury'); },
+                deposit: function (options) {
+                    var o = options || {};
+                    return call('coins.deposit', { amount: Number(o.amount), note: String(o.note == null ? '' : o.note) });
+                },
+                withdraw: function (options) {
+                    return call('coins.withdraw', { amount: Number((options || {}).amount) });
+                },
+            },
             backend: {
                 send: function (message) { return call('backend.send', { message: message }); },
                 restart: function () { return call('backend.restart'); },
@@ -232,7 +286,7 @@
             },
         };
 
-        ['ui', 'storage', 'assets', 'cache', 'clipboard', 'files', 'mic', 'fs', 'system', 'backend'].forEach(function (k) {
+        ['ui', 'storage', 'assets', 'cache', 'cloud', 'clipboard', 'files', 'mic', 'fs', 'system', 'coins', 'backend'].forEach(function (k) {
             Object.freeze(zali[k]);
         });
         Object.defineProperty(window, 'zali', { value: Object.freeze(zali), enumerable: true });

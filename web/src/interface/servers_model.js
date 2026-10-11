@@ -75,6 +75,7 @@ ZaliMixin(ZaliInterface, class {
             ...server,
             channels: Array.isArray(server.channels) && server.channels.length ? server.channels.map(channel => ({ ...channel })) : [],
             myRole: server.myRole || server.my_role || null,
+            canInvite: !!(server.canInvite ?? server.can_invite),
             memberCount: Number(server.memberCount || server.member_count || 0) || 0,
             joinLink: server.joinLink || server.join_link || '',
         })).map(server => this.ensureServerChannels(server)).filter(Boolean) : [];
@@ -109,10 +110,6 @@ ZaliMixin(ZaliInterface, class {
         return Array.isArray(this.S.serverModal.roles) ? this.S.serverModal.roles : [];
     }
 
-    draftServerRoleList() {
-        return Array.isArray(this.S.serverModal.draftRoles) ? this.S.serverModal.draftRoles : [];
-    }
-
     serverRolePermissionDefs() {
         return [
             { key: 'can_view', label: 'Чтение каналов', hint: 'Видеть список и историю сообщений', group: 'Доступ', defaultCreate: true },
@@ -121,10 +118,10 @@ ZaliMixin(ZaliInterface, class {
             { key: 'can_attach', label: 'Файлы', hint: 'Прикреплять изображения и файлы', group: 'Доступ', defaultCreate: true },
             { key: 'can_embed', label: 'Ссылки и медиа', hint: 'Встраивать превью ссылок', group: 'Доступ', defaultCreate: true },
             { key: 'can_voice', label: 'Голосовые каналы', hint: 'Входить и говорить в voice', group: 'Доступ', defaultCreate: true },
+            { key: 'can_invite', label: 'Приглашения', hint: 'Звать людей на сервер по ссылке', group: 'Доступ', defaultCreate: true },
             { key: 'can_manage', label: 'Управление сервером', hint: 'Общие админские действия', group: 'Управление', defaultCreate: false },
             { key: 'can_manage_channels', label: 'Каналы', hint: 'Создавать и менять каналы', group: 'Управление', defaultCreate: false },
             { key: 'can_manage_roles', label: 'Роли', hint: 'Создавать и менять роли', group: 'Управление', defaultCreate: false },
-            { key: 'can_invite', label: 'Приглашения', hint: 'Генерировать инвайты', group: 'Управление', defaultCreate: true },
             { key: 'can_pin', label: 'Закреплять', hint: 'Закреплять важные сообщения', group: 'Управление', defaultCreate: false },
             { key: 'can_mention', label: '@everyone', hint: 'Упоминать всех участников', group: 'Управление', defaultCreate: false },
             { key: 'can_kick', label: 'Исключать', hint: 'Кикать участников из сервера', group: 'Управление', defaultCreate: false },
@@ -205,29 +202,8 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
-    syncDraftServerRolesFromDom() {
-        if (this.S.serverModal.mode !== 'create') return this.draftServerRoleList();
-        const cards = Array.from(document.querySelectorAll('[data-draft-role-card]'));
-        const roles = cards.map(card => {
-            const draftId = String(card.getAttribute('data-draft-role-card') || '').trim();
-            const permissions = {};
-            this.serverRolePermissionDefs().forEach(def => {
-                permissions[def.key] = !!card.querySelector(`[data-draft-role-perm="${CSS.escape(def.key)}"]`)?.checked;
-            });
-            return {
-                draftId,
-                collapsed: String(card.getAttribute('data-draft-role-collapsed') || '1') !== '0',
-                name: String(card.querySelector('[data-draft-role-name]')?.value || '').trim(),
-                color: this.normalizeColorValue(card.querySelector('[data-draft-role-color]')?.value || '#cbff00'),
-                ...permissions,
-            };
-        }).filter(role => role.draftId);
-        this.setServerModalState({ draftRoles: roles });
-        return roles;
-    }
-
     serverRoleOptionsHtml(selected = 'member') {
-        const roles = [...this.serverRoleList(), ...this.draftServerRoleList()];
+        const roles = this.serverRoleList();
         const options = [
             { roleId: 'member', name: 'Участник' },
             { roleId: 'admin', name: 'Админ' },

@@ -471,7 +471,7 @@ pub(crate) async fn ensure_default_server_roles(
             0_i64,
             0_i64,
             0_i64,
-            0_i64,
+            1_i64, // can_invite: «Приглашения» — базовое право участника
             1_i64,
             1_i64,
             1_i64,

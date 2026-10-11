@@ -81,7 +81,6 @@
     "web/src/interface/voice_ui.js|id|id",
     "web/src/interface/zalicoin.js|data-zc-pct|pct.toFixed(2)",
     "web/src/interface/zalicoin.js|data-zc-value|seg.value",
-    "web/src/interface/zalicoin.js|style|pct",
     "web/src/interface/zalicoin.js|style|seg.color"
   ]
 }

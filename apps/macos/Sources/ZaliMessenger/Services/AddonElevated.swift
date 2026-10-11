@@ -16,7 +16,7 @@ import AppKit
 /// Всё, кроме чтения вывода бэкенда, выполняется в `AddonStore.queue`, поэтому
 /// словарь сессий ничем больше не защищён.
 enum AddonElevated {
-    static let elevatedPermissions = ["fs.read", "fs.write", "launch", "process"]
+    static let elevatedPermissions = ["network.any", "fs.read", "fs.write", "launch", "process"]
     static let maxFsBytes = 32 * 1024 * 1024
     static let maxListEntries = 5_000
     static let maxBackendLine = 1024 * 1024
@@ -111,6 +111,7 @@ enum AddonElevated {
     private static func permissionLines(_ permissions: [String]) -> String {
         permissions.compactMap { p -> String? in
             switch p {
+            case "network.any": return "• обращаться к любым серверам в интернете и передавать им данные аддона"
             case "fs.read": return "• читать любые файлы и папки компьютера"
             case "fs.write": return "• создавать, менять и удалять любые файлы компьютера"
             case "launch": return "• открывать файлы и запускать программы"

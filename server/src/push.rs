@@ -436,6 +436,63 @@ pub(crate) fn is_acceptable_push_endpoint(endpoint: &str) -> bool {
         && !host.ends_with(".lan")
 }
 
+/// Публичный ли адрес: не частный, не loopback, не link-local, не CGNAT, не
+/// документационный и не multicast.
+pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xc0) == 64)
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 198 && (o[1] & 0xfe) == 18)
+                || o[0] >= 240)
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_public_ip(std::net::IpAddr::V4(mapped));
+            }
+            let first = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80)
+        }
+    }
+}
+
+/// Имя endpoint'а резолвится только в публичные адреса. Проверка по имени одна
+/// не спасает: домен злоумышленника может указывать на внутренний адрес :443.
+/// Окно между проверкой и соединением остаётся, поэтому это второй слой, а не
+/// замена `is_acceptable_push_endpoint`.
+async fn endpoint_resolves_public(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let Ok(addrs) = tokio::net::lookup_host((host, 443)).await else {
+        return false;
+    };
+    let mut any = false;
+    for addr in addrs {
+        any = true;
+        if !is_public_ip(addr.ip()) {
+            return false;
+        }
+    }
+    any
+}
+
 /// Every push channel of `username`: Web Push subscriptions of their browsers and FCM
 /// tokens of their Android devices. Each decides per device on its own.
 pub(crate) async fn send_push(state: &Arc<AppState>, username: &str, notification: &PushNotification) {
@@ -484,6 +541,10 @@ pub(crate) async fn send_web_push(
     {
         if !is_acceptable_push_endpoint(&endpoint) {
             warn!("Push endpoint отклонён (не публичный https) id={}", id);
+            continue;
+        }
+        if !endpoint_resolves_public(&endpoint).await {
+            warn!("Push endpoint отклонён (резолвится во внутренний адрес или не резолвится) id={}", id);
             continue;
         }
         let subscription_info = SubscriptionInfo {
@@ -564,6 +625,16 @@ mod tests {
     use crate::{build_app_state, Config};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn internal_addresses_are_not_public() {
+        for ip in ["127.0.0.1", "10.1.2.3", "192.168.0.5", "172.16.9.9", "169.254.1.1", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "198.18.0.1"] {
+            assert!(!is_public_ip(ip.parse().unwrap()), "{ip} must not be public");
+        }
+        for ip in ["8.8.8.8", "142.250.74.14", "2606:4700:4700::1111"] {
+            assert!(is_public_ip(ip.parse().unwrap()), "{ip} must be public");
+        }
+    }
 
     async fn test_state() -> Arc<AppState> {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);

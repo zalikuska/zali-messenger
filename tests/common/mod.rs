@@ -160,3 +160,47 @@ pub fn fake_zali_bytes() -> Vec<u8> {
     bytes.extend_from_slice(&[1u8; 32]);
     bytes
 }
+
+/// Участник попадает на сервер только по приглашению (прямого добавления нет):
+/// владелец выпускает код, `username` входит по нему. Роль потом меняется PATCH'ем.
+#[allow(dead_code)]
+pub async fn join_by_invite(
+    app: &TestApp,
+    owner: &RegisteredUser,
+    server_id: &str,
+    username: &str,
+    password: &str,
+) {
+    let invite: serde_json::Value = app
+        .http
+        .post(app.url(&format!("/api/servers/{server_id}/invites")))
+        .header("Authorization", owner.auth_header())
+        .json(&serde_json::json!({ "max_uses": 0 }))
+        .send()
+        .await
+        .expect("create invite")
+        .json()
+        .await
+        .expect("invite json");
+    let code = invite["code"].as_str().expect("invite code").to_string();
+    let login: serde_json::Value = app
+        .http
+        .post(app.url("/api/auth/login"))
+        .json(&serde_json::json!({ "username": username, "password": password }))
+        .send()
+        .await
+        .expect("login request")
+        .json()
+        .await
+        .expect("login json");
+    let token = login["token"].as_str().expect("login token");
+    let join = app
+        .http
+        .post(app.url(&format!("/api/invites/{code}/join")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "code": code }))
+        .send()
+        .await
+        .expect("join request");
+    assert_eq!(join.status(), 200, "{username} joins {server_id} by invite");
+}

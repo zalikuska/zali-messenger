@@ -89,6 +89,16 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
                     .split(';')
                     .find_map(|part| part.trim().strip_prefix(&format!("{}=", AUTH_COOKIE_NAME)))
                 {
+                    // Cookie уходит браузером и со страниц «своего» сайта (соседние
+                    // поддомены того же домена): SameSite=Lax их не отсекает. Без
+                    // этой проверки такая страница слала бы от имени человека
+                    // multipart-загрузки (простой content-type, без preflight) и
+                    // открывала WebSocket с его cookie. Bearer-заголовок страница
+                    // чужого происхождения подставить не может, его не трогаем.
+                    if !cookie_origin_allowed(&parts.headers, &state.config.allowed_origins) {
+                        warn!("Cookie-запрос с недоверенным Origin отклонён");
+                        return Err((StatusCode::FORBIDDEN, "Origin not allowed"));
+                    }
                     match validate_token(token, state).await {
                         Ok(username) => return Ok(AuthenticatedUser(username)),
                         Err(_) => {
@@ -137,6 +147,73 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
 
         Err((StatusCode::UNAUTHORIZED, "Authentication required"))
     }
+}
+
+/// Запрос с cookie допускается без `Origin` (не браузерный клиент или запрос того
+/// же происхождения) либо с `Origin` из `ALLOWED_ORIGINS`.
+pub(crate) fn cookie_origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
+    match headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) {
+        Some(origin) => allowed.iter().any(|candidate| candidate == origin.trim()),
+        None => !headers.contains_key(header::ORIGIN),
+    }
+}
+
+/// Скользящее окно (то же, что у входа, `RATE_LIMIT_WINDOW_SECS`): `false`, если
+/// ключ уже исчерпал `max` обращений. Ключи с префиксом не пересекаются со
+/// счётчиками входа.
+pub(crate) fn rate_allow(state: &AppState, key: String, max: usize) -> bool {
+    let window = Duration::from_secs(state.config.rate_limit_window_secs);
+    let now = Instant::now();
+    let mut attempts = state.login_attempts.entry(key).or_default();
+    attempts.retain(|t| now.duration_since(*t) < window);
+    if attempts.len() >= max {
+        return false;
+    }
+    attempts.push_back(now);
+    true
+}
+
+/// Адрес для счётчиков частоты: IPv6 сводится к своей /64. Один человек обычно
+/// владеет всей подсетью, и смена младших 64 бит иначе давала бы ему новый
+/// «адрес» на каждый запрос.
+pub(crate) fn rate_bucket_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V4(_) => ip,
+        std::net::IpAddr::V6(v6) => {
+            let mut segments = v6.segments();
+            for part in segments.iter_mut().skip(4) {
+                *part = 0;
+            }
+            std::net::IpAddr::V6(std::net::Ipv6Addr::from(segments))
+        }
+    }
+}
+
+const COMMON_PASSWORDS: &[&str] = &[
+    "12345678", "123456789", "1234567890", "11111111", "00000000", "87654321", "password",
+    "password1", "password12", "password123", "passw0rd", "qwerty123", "qwertyui", "qwertyuiop",
+    "1q2w3e4r", "1q2w3e4r5t", "iloveyou", "abc12345", "abcd1234", "zaq12wsx", "letmein1",
+    "welcome1", "admin123", "monkey123", "dragon123", "football1", "q1w2e3r4", "123qweasd",
+    "qazwsxedc", "666666666", "zalimessenger",
+];
+
+/// Политика пароля при регистрации и смене: от 8 символов, до 72 байт (предел
+/// bcrypt), не логин и не из списка самых частых.
+pub(crate) fn password_policy_error(username: &str, password: &str) -> Option<&'static str> {
+    if password.chars().count() < 8 {
+        return Some("Пароль должен быть не менее 8 символов");
+    }
+    if password.len() > 72 {
+        return Some("Пароль не должен превышать 72 байта");
+    }
+    let lower = password.to_lowercase();
+    if lower == username.trim().to_lowercase() {
+        return Some("Пароль не должен совпадать с логином");
+    }
+    if COMMON_PASSWORDS.contains(&lower.as_str()) {
+        return Some("Этот пароль слишком распространён — выберите другой");
+    }
+    None
 }
 
 pub(crate) async fn me(
@@ -322,6 +399,9 @@ pub(crate) async fn create_ws_ticket(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(username): AuthenticatedUser,
 ) -> impl IntoResponse {
+    if !rate_allow(&state, format!("wsticket:{}", username.to_lowercase()), 60) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     match issue_ws_ticket(&state, &username).await {
         Ok(response) => Json(response).into_response(),
         Err(status) => status.into_response(),
@@ -392,7 +472,7 @@ pub(crate) async fn register(
     Json(payload): Json<AuthPayload>,
 ) -> impl IntoResponse {
     // --- Rate limiting by IP ---
-    let client_ip = extract_client_ip(remote_addr, &headers);
+    let client_ip = rate_bucket_ip(extract_client_ip(remote_addr, &headers));
     let reg_rate_key = format!("reg:{}", client_ip);
     let window = Duration::from_secs(state.config.rate_limit_window_secs);
     let max_attempts = state.config.rate_limit_max_attempts;
@@ -453,24 +533,9 @@ pub(crate) async fn register(
             .into_response();
     }
 
-    if payload.password.len() < 6 {
-        warn!(
-            "Регистрация отклонена: username '{}' использует слишком короткий пароль",
-            username
-        );
-        return (
-            StatusCode::BAD_REQUEST,
-            "Пароль должен быть не менее 6 символов",
-        )
-            .into_response();
-    }
-
-    if payload.password.len() > 72 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Пароль не должен превышать 72 символа"})),
-        )
-            .into_response();
+    if let Some(reason) = password_policy_error(username, &payload.password) {
+        warn!("Регистрация отклонена: username '{}' — пароль не прошёл политику", username);
+        return (StatusCode::BAD_REQUEST, reason).into_response();
     }
 
     // `users.username` is a case-sensitive PRIMARY KEY, so `Pivovarca` and
@@ -549,7 +614,7 @@ pub(crate) async fn login(
     Json(payload): Json<AuthPayload>,
 ) -> impl IntoResponse {
     // --- Rate limiting ---
-    let client_ip = extract_client_ip(remote_addr, &headers);
+    let client_ip = rate_bucket_ip(extract_client_ip(remote_addr, &headers));
     let rate_key = login_rate_key(client_ip, &payload.username);
     let window = Duration::from_secs(state.config.rate_limit_window_secs);
     let max_attempts = state.config.rate_limit_max_attempts;
@@ -688,6 +753,119 @@ pub(crate) async fn login(
         }
         Err(e) => {
             error!("Ошибка чтения пользователя при логине: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct ChangePasswordPayload {
+    #[serde(rename = "currentPassword")]
+    current_password: String,
+    #[serde(rename = "newPassword")]
+    new_password: String,
+}
+
+/// `POST /api/auth/password` — смена пароля вошедшим.
+///
+/// Требует текущий пароль (украденный токен сам по себе пароль не меняет) и
+/// повышает `token_version`: все прежние токены, на всех устройствах, перестают
+/// действовать, а этому клиенту возвращается свежий. Ограничение частоты — то же
+/// окно, что у входа, по ключу аккаунта.
+///
+/// Сервер не знает парольной фразы облачного vault (она же пароль) и не
+/// перешифровывает его: клиент после ответа сам публикует vault под новым
+/// паролем (web/src/interface/auth.js → `changePassword`).
+pub(crate) async fn change_password(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(username): AuthenticatedUser,
+    Json(payload): Json<ChangePasswordPayload>,
+) -> impl IntoResponse {
+    let window = Duration::from_secs(state.config.rate_limit_window_secs);
+    let max_attempts = state.config.rate_limit_max_attempts;
+    let now = Instant::now();
+    {
+        let mut attempts = state
+            .login_attempts
+            .entry(format!("pwchange:{}", username.to_lowercase()))
+            .or_default();
+        attempts.retain(|t| now.duration_since(*t) < window);
+        if attempts.len() >= max_attempts {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Слишком много попыток. Повторите через {} секунд.",
+                    state.config.rate_limit_window_secs
+                ),
+            )
+                .into_response();
+        }
+        attempts.push_back(now);
+    }
+
+    if let Some(reason) = password_policy_error(&username, &payload.new_password) {
+        return (StatusCode::BAD_REQUEST, reason).into_response();
+    }
+    if payload.new_password == payload.current_password {
+        return (StatusCode::BAD_REQUEST, "Новый пароль совпадает с текущим").into_response();
+    }
+
+    let row = sqlx::query("SELECT password_hash, cloud_vault_sync_enabled FROM users WHERE username = ?")
+        .bind(&username)
+        .fetch_optional(&state.db)
+        .await;
+    let (hash, cloud_vault_sync_enabled) = match row {
+        Ok(Some(row)) => (
+            row.get::<String, _>("password_hash"),
+            row.get::<i64, _>("cloud_vault_sync_enabled") != 0,
+        ),
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(e) => {
+            error!("Смена пароля: ошибка чтения {}: {}", username, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match verify_password(payload.current_password.clone(), hash).await {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!("Смена пароля: неверный текущий пароль у '{}'", username);
+            return (StatusCode::FORBIDDEN, "Неверный текущий пароль").into_response();
+        }
+        Err(e) => {
+            error!("Смена пароля: ошибка проверки: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    let new_hash = match hash_password(payload.new_password.clone()).await {
+        Ok(hash) => hash,
+        Err(e) => {
+            error!("Смена пароля: ошибка хэширования: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let new_version: Result<i64, sqlx::Error> = sqlx::query_scalar(
+        "UPDATE users SET password_hash = ?, token_version = token_version + 1
+         WHERE username = ? RETURNING token_version",
+    )
+    .bind(&new_hash)
+    .bind(&username)
+    .fetch_one(&state.db)
+    .await;
+    let new_version = match new_version {
+        Ok(version) => version,
+        Err(e) => {
+            error!("Смена пароля: ошибка записи {}: {}", username, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    // Подписки на пуши и билеты WS прежних сеансов больше не нужны.
+    state.ws_tickets.retain(|_, record| record.username != username);
+    info!("Пароль изменён: {}", username);
+    match issue_auth_response(username, new_version, cloud_vault_sync_enabled, &state.config.jwt_secret) {
+        Ok(auth) => auth_response_with_cookie_and_secure(StatusCode::OK, auth, state.config.auth_cookie_secure),
+        Err(e) => {
+            error!("Смена пароля: ошибка выпуска токена: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

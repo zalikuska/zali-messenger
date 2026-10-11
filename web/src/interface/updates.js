@@ -109,6 +109,21 @@ ZaliMixin(ZaliInterface, class {
     // published well after this date) are compared normally regardless.
     static VERSION_SCHEME_MIGRATION_CUTOFF_UNIX = 1785542400; // 2026-08-01T00:00:00Z
 
+    /**
+     * Подпись релиза. `/api/version` отдаёт ссылку и SHA-256 одним ответом, и
+     * скомпрометированный сервер подменил бы оба: без независимой подписи
+     * апдейтер раздавал бы чужой бинарник всем клиентам. Поэтому клиент требует
+     * подпись официального ключа (публичная часть вшита в приложение) над
+     * платформой, версией, SHA-256 и ссылкой — формат `release_signature_message`
+     * в server/src/updates.rs и scripts/release_sign.py.
+     */
+    async verifyReleaseSignature({ platform, version, sha256, downloadUrl, signature }) {
+        const sig = String(signature || '').trim();
+        if (!sig || !downloadUrl || !sha256 || !version) return false;
+        const message = `zali-release-sig:v1\n${platform}\n${version}\n${String(sha256).trim().toLowerCase()}\n${downloadUrl}`;
+        return window.ZaliAddonFormat.verifyOfficialMessage(message, sig);
+    }
+
     // Возвращает true, только если сервер дал определённый ответ о версии.
     // Любой сбой по-прежнему глотается молча — ручной проверке из настроек
     // (checkForAppUpdateFromSettings) нужно отличить его от «версия последняя».
@@ -140,17 +155,32 @@ ZaliMixin(ZaliInterface, class {
             // reopening the modal on every login.
             const attempts = this.loadUpdateInstallAttempts();
             const installKeepsFailing = attempts.version === latestVersion && attempts.count >= 2;
+            const releaseSigned = await this.verifyReleaseSignature({
+                platform,
+                version: latestVersion,
+                sha256: String(data?.sha256 || ''),
+                downloadUrl: String(data?.downloadUrl || ''),
+                signature: data?.signature,
+            });
+            if (!releaseSigned) {
+                this.trace(`checkForAppUpdate unsigned release version=${latestVersion}`);
+            }
             this.S.updateStatus = {
                 available: true,
                 version: latestVersion,
                 notes: String(data?.notes || ''),
-                downloadUrl: String(data?.downloadUrl || ''),
+                // Без подписи ссылка не выдаётся вовсе: acceptAppUpdate нечего качать.
+                downloadUrl: releaseSigned ? String(data?.downloadUrl || '') : '',
                 sha256: String(data?.sha256 || ''),
+                signature: String(data?.signature || ''),
+                releaseSigned,
                 mandatory: !!data?.mandatory,
                 downloading: false,
                 progress: 0,
                 readyToInstall: false,
-                error: installKeepsFailing
+                error: !releaseSigned
+                    ? `Обновление ${latestVersion} не подписано разработчиками, поэтому не будет установлено автоматически. Дождитесь исправленной сборки или скачайте приложение заново с официального сайта.`
+                    : installKeepsFailing
                     ? `Обновление ${latestVersion} уже устанавливалось, но версия не сменилась. Установите его вручную (на Windows — запустите приложение от имени администратора либо скачайте .exe по ссылке ниже).`
                     : '',
             };
@@ -234,7 +264,21 @@ ZaliMixin(ZaliInterface, class {
             this.requestNativeAction({ type: NativeMessageTypes.INSTALL_UPDATE_REQUEST }, 5000).catch(() => {});
             return;
         }
-        if (status.downloading || !status.downloadUrl) return;
+        if (status.downloading || !status.downloadUrl || !status.releaseSigned) return;
+        // Подпись перепроверяется перед самой загрузкой: состояние окна могли
+        // изменить между проверкой версии и нажатием «Обновить».
+        const stillSigned = await this.verifyReleaseSignature({
+            platform: String(window.__ZALI_NATIVE_PLATFORM || '').trim(),
+            version: status.version,
+            sha256: status.sha256,
+            downloadUrl: status.downloadUrl,
+            signature: status.signature,
+        });
+        if (!stillSigned) {
+            this.S.updateStatus = { ...status, downloadUrl: '', releaseSigned: false, error: 'Подпись обновления не сходится — загрузка отменена.' };
+            this.renderUpdateModal();
+            return;
+        }
         this.S.updateStatus = { ...status, downloading: true, progress: 0, error: '' };
         this.renderUpdateModal();
         this.renderHub();

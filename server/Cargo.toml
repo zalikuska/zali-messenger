@@ -46,6 +46,10 @@ name = "coin_gifts"
 path = "../tests/coin_gifts.rs"
 
 [[test]]
+name = "raffles"
+path = "../tests/raffles.rs"
+
+[[test]]
 name = "treasury"
 path = "../tests/treasury.rs"
 
@@ -68,7 +72,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 jsonwebtoken = "9.0"
@@ -111,7 +115,7 @@ zali_sdk = { path = "../sdk/Rust" }
 # Lets the hash-chain tests tamper with stored rows behind the server's back —
 # the only way to prove the chain actually *detects* tampering rather than
 # merely agreeing with itself.
-sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 tokio-tungstenite = "0.23"
 futures-util = "0.3"
 
@@ -122,3 +126,11 @@ path = "../tests/activity.rs"
 [[test]]
 name = "focus"
 path = "../tests/focus.rs"
+
+[[test]]
+name = "addons"
+path = "../tests/addons.rs"
+
+[[test]]
+name = "addon_cloud"
+path = "../tests/addon_cloud.rs"

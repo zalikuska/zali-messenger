@@ -53,9 +53,11 @@ function makeClient({ username = 'me', current = null, supports = { voice: true,
         playMessageChime: () => { chimes.push(Date.now()); },
         showBrowserNotification: (n) => { browserShown.push(n); },
         coinCardSummary: () => '',
+        renderAvatarHTML: (name) => `<i>${name}</i>`,
         apiFetch: async (path, options = {}) => {
             requests.push({ path, ...options });
             const body = options.body ? JSON.parse(options.body) : null;
+            if (path === '/api/friends') return { ok: true, status: 200, json: async () => ({ friends: api._friendsResponse || [] }) };
             if (path === '/api/game-focus') {
                 if (api._failSave && options.method === 'PUT') return { ok: false, status: 400, json: async () => ({}) };
                 return { ok: true, status: 200, json: async () => body || api._serverFocus || {} };
@@ -242,6 +244,30 @@ console.log('\n──────── настройки и определен
     api._serverFocus = { mode: 'defer', audience: 'except', games: ['Hades'], people: ['eve'] };
     await api.loadGameFocusSettings();
     check('настройки с сервера подтягиваются', api.gameFocusSettings().audience === 'except' && api.gameFocusSettings().people[0] === 'eve');
+}
+
+console.log('\n──────── выбор людей из списка контактов');
+{
+    const { api, element } = makeClient();
+    api._gameFocus = api.normalizeGameFocus({ mode: 'defer', audience: 'only', people: ['bob'] });
+    api.S.contacts = ['zed', 'alice', 'bob', 'me'];
+    api._gameFocusFriends = ['carol', 'alice'];
+    api._gameFocusFriendsLoaded = true; // список друзей уже подгружен — сеть не нужна
+    check('кандидаты — контакты и друзья без дублей и без меня',
+        JSON.stringify(api.gameFocusCandidates()) === JSON.stringify(['alice', 'bob', 'carol', 'zed']), JSON.stringify(api.gameFocusCandidates()));
+    api.renderGameFocusPicker();
+    const html = element('gameFocusPicker').innerHTML;
+    check('в списке все кандидаты', ['alice', 'bob', 'carol', 'zed'].every(n => html.includes(`data-game-focus-pick="${n}"`)));
+    check('выбранный отмечен', /selected" role="option" aria-selected="true" data-game-focus-pick="bob"/.test(html), html.slice(0, 200));
+    await api.toggleGameFocusPerson('carol');
+    check('клик по строке добавляет человека', api.gameFocusSettings().people.includes('carol'));
+    await api.toggleGameFocusPerson('bob');
+    check('повторный клик убирает', !api.gameFocusSettings().people.includes('bob') && api.gameFocusSettings().people.join() === 'carol');
+    check('отметка в списке обновилась', /selected" role="option" aria-selected="true" data-game-focus-pick="carol"/.test(element('gameFocusPicker').innerHTML));
+    api.S.contacts = [];
+    api._gameFocusFriends = [];
+    api.renderGameFocusPicker();
+    check('без контактов — подсказка про ручной ввод', /введите логин/.test(element('gameFocusPicker').innerHTML));
 }
 
 console.log('');

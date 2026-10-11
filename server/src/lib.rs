@@ -65,6 +65,10 @@ pub(crate) use push::*;
 mod activity;
 // Режим «в игре»: откладывание уведомлений о сообщениях. Тоже без glob-реэкспорта.
 mod focus;
+// Подпись аддонов, реестр авторов и казна аддонов (ZaliCoin).
+mod addon_cloud;
+mod addons;
+mod raffles;
 mod fcm;
 pub(crate) use fcm::*;
 mod coins;
@@ -171,6 +175,12 @@ impl Config {
     pub fn from_env() -> Self {
         let jwt_secret = std::env::var("JWT_SECRET").ok();
         let jwt_secret = match jwt_secret {
+            // Заглушка из `.env.example` длиной 47 символов проходила бы проверку
+            // длины: деплой, скопировавший пример как есть, подписывал бы токены
+            // публично известным ключом.
+            Some(secret) if secret.trim().len() >= 32 && is_weak_jwt_secret(&secret) && !cfg!(debug_assertions) => {
+                panic!("JWT_SECRET — заглушка или слишком предсказуемая строка: задайте случайный секрет (openssl rand -hex 32)");
+            }
             Some(secret) if secret.trim().len() >= 32 => secret,
             Some(secret) if cfg!(debug_assertions) => {
                 warn!(
@@ -200,10 +210,13 @@ impl Config {
                 // Gated on debug_assertions (same pattern as the JWT dev-default above) so a
                 // release binary — what actually runs in production — never falls back to
                 // accepting these dev-only ports even if ALLOWED_ORIGINS is left unset there.
-                let base = "https://msgs.zalikus.org,http://localhost:3000,http://localhost,http://127.0.0.1:3000,http://127.0.0.1,zali://localhost";
+                // Релизный бинарник без ALLOWED_ORIGINS не доверяет ни одному
+                // localhost: любая локальная веб-страница иначе читала бы API
+                // с учётными данными пользователя.
+                let base = "https://msgs.zalikus.org,zali://localhost";
                 if cfg!(debug_assertions) {
                     format!(
-                        "{base},http://localhost:8090,http://localhost:8092,http://127.0.0.1:8090,http://127.0.0.1:8092"
+                        "{base},http://localhost:3000,http://localhost,http://127.0.0.1:3000,http://127.0.0.1,http://localhost:8090,http://localhost:8092,http://127.0.0.1:8090,http://127.0.0.1:8092"
                     )
                 } else {
                     base.to_string()
@@ -348,6 +361,17 @@ impl Config {
             turn_credential_ttl_secs,
         }
     }
+}
+
+/// Секрет, который нельзя держать в релизе: заглушка из примера или строка из
+/// нескольких повторяющихся символов.
+pub(crate) fn is_weak_jwt_secret(secret: &str) -> bool {
+    let value = secret.trim().to_lowercase();
+    if value.contains("change_me") || value.contains("changeme") || value.contains("zali_secret") {
+        return true;
+    }
+    let distinct: std::collections::HashSet<char> = value.chars().collect();
+    distinct.len() < 10
 }
 
 /// Parses `ALLOWED_ORIGINS` and drops the entries that must never be in it.
@@ -501,6 +525,9 @@ pub struct AppState {
     // Сообщения, уведомление о которых отложено или ушло тихо (focus.rs), по id
     // сообщения. Живёт в памяти: теряется только отсрочка пуша, не сообщения.
     focus_pending: focus::PendingMap,
+    // Закрытый ключ «свободной» подписи аддонов (addons.rs). Живёт в data_dir и
+    // не покидает сервер: клиентам отдаётся только публичная часть.
+    addon_signer: addons::AddonSigner,
     voice_rooms: DashMap<String, VoiceRoom>,
     user_voice_rooms: DashMap<String, String>,
     // Voice rooms (DM: room id; channel: room id + username) that were ended by an
@@ -519,6 +546,9 @@ pub struct AppState {
     key_envelope_notified_at: DashMap<String, Instant>,
     // Rate limiting: username/IP → timestamps of recent login attempts
     login_attempts: DashMap<String, VecDeque<Instant>>,
+    // Связи пользователя для подсказок имён (contacts.rs): считаются агрегатами по
+    // messages/friend_links, а подсказки просят на каждый ввод — держим секунд десять.
+    suggest_relations: DashMap<String, (Instant, Arc<std::collections::HashMap<String, contacts::Relation>>)>,
     // Throttles the full-map sweep in login() to once per rate-limit window instead
     // of on every request — see the comment at its call site for why.
     login_attempts_last_swept: std::sync::Mutex<Instant>,
@@ -1137,6 +1167,33 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
             .ok();
     }
 
+    // «Приглашения» стали базовым правом: у встроенной роли «Участник» оно
+    // включено по умолчанию, а сервер наконец его проверяет. Раньше флаг не
+    // читался нигде, так что у всех существующих серверов он 0 — один раз
+    // (по маркеру) включаем его у «Участника», дальше настройки владельца
+    // не перетираются.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS schema_flags (name TEXT PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    let marker = sqlx::query("INSERT OR IGNORE INTO schema_flags (name) VALUES ('member_can_invite_default')")
+        .execute(&pool)
+        .await;
+    if matches!(marker, Ok(ref r) if r.rows_affected() == 1) {
+        // Только публичные серверы: туда и так входят все, а на закрытых право
+        // «Приглашения» у участника могло быть выключено владельцем сознательно.
+        sqlx::query(
+            "UPDATE server_roles SET can_invite = 1
+             WHERE role_id = 'member'
+               AND server_id IN (SELECT id FROM servers WHERE is_public != 0)",
+        )
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS server_invites (
             code TEXT PRIMARY KEY,
@@ -1411,6 +1468,12 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы app_releases");
+    // Подпись релиза офлайн-ключом разработчиков (updates.rs): сумма и ссылка без
+    // неё приходят из одного и того же ответа, и сервер сам себе не свидетель.
+    sqlx::query("ALTER TABLE app_releases ADD COLUMN signature TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await
+        .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS coin_balances (
@@ -1593,6 +1656,211 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .ok();
 
     // Дружба хранится ОДНОЙ строкой на пару, в лексикографическом порядке.
+    // ---- Аддоны (addons.rs) ----
+    // Реестр: за кем закреплён id аддона и каким ключом он подписан.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_registry (
+            addon_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            public_key TEXT NOT NULL,
+            key_fp TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            claimed_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_registry");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_registry_owner ON addon_registry (owner)")
+        .execute(&pool)
+        .await
+        .ok();
+    // Облако аддонов (addon_cloud.rs): один пул 10 МБ на аддон; область —
+    // `shared` или `u:<имя>`. Прежняя таблица addon_cloud_data (по аккаунтам) не
+    // выходила за разработку — стираем её, чтобы не путать.
+    sqlx::query("DROP TABLE IF EXISTS addon_cloud_data").execute(&pool).await.ok();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_cloud (
+            addon_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            key TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            value BLOB NOT NULL,
+            size INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (addon_id, scope, key)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_cloud");
+    // Журнал чтения личных данных автором и отозванные сборки (addon_cloud.rs).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_cloud_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            addon_id TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            subject TEXT,
+            key TEXT NOT NULL,
+            action TEXT NOT NULL,
+            at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_cloud_audit");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_cloud_audit_addon ON addon_cloud_audit (addon_id, subject)")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_revocations (
+            addon_id TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            revoked_at INTEGER NOT NULL,
+            PRIMARY KEY (addon_id, digest)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_revocations");
+    // Казна аддона — отдельная таблица, как и у серверов: id аддона не должен
+    // делить пространство имён с логинами в coin_balances.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_treasuries (
+            addon_id TEXT PRIMARY KEY,
+            balance INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_treasuries");
+    // Журнал взносов и выводов. «Доступно к выводу» считается из него:
+    // взносы старше срока удержания минус уже выведенное.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_coin_ops (
+            id TEXT PRIMARY KEY,
+            addon_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            username TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            idempotency_key TEXT NOT NULL,
+            created_ms INTEGER NOT NULL,
+            UNIQUE(username, kind, idempotency_key)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_coin_ops");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_coin_ops_addon ON addon_coin_ops (addon_id, kind, created_ms)")
+        .execute(&pool)
+        .await
+        .ok();
+    // Розыгрыши ZaliCoin (raffles.rs): сам розыгрыш, диапазоны призов и участники.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS raffles (
+            id TEXT PRIMARY KEY,
+            creator TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            ends_at INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            escrow INTEGER NOT NULL DEFAULT 0,
+            refunded INTEGER NOT NULL DEFAULT 0,
+            idempotency_key TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            drawn_at INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(creator, idempotency_key)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы raffles");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_raffles_due ON raffles (status, ends_at)")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS raffle_prizes (
+            raffle_id TEXT NOT NULL,
+            from_place INTEGER NOT NULL,
+            to_place INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            amount INTEGER NOT NULL DEFAULT 0,
+            label TEXT NOT NULL,
+            secret TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (raffle_id, from_place)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы raffle_prizes");
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS raffle_entries (
+            raffle_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            joined_at INTEGER NOT NULL,
+            place INTEGER NOT NULL DEFAULT 0,
+            prize_label TEXT NOT NULL DEFAULT '',
+            prize_secret TEXT NOT NULL DEFAULT '',
+            prize_amount INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (raffle_id, username)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы raffle_entries");
+    // Заявки на официальную подпись: одна на сборку (id + отпечаток), решает
+    // оператор вручную. Одобрение относится к ровно этой сборке.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_official_requests (
+            addon_id TEXT NOT NULL,
+            version TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            decision_note TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            decided_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (addon_id, digest)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_official_requests");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_official_requests_owner ON addon_official_requests (owner, status)")
+        .execute(&pool)
+        .await
+        .ok();
+    // Установки, запуски и выданные подписи. Статистика автора считается отсюда.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            addon_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            version TEXT NOT NULL DEFAULT '',
+            at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_events");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_events_addon ON addon_events (addon_id, kind, at)")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_events_user ON addon_events (username, kind, at)")
+        .execute(&pool)
+        .await
+        .ok();
+
     // Режим «в игре» (focus.rs): одна строка на аккаунт. `games` и `people` — JSON-
     // массивы строк; пустой `games` означает «в любой игре».
     sqlx::query(
@@ -1764,6 +2032,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     .ok();
 
     init_server_metrics();
+    let addon_signer = addons::AddonSigner::load_or_create(&data_dir);
     Arc::new(AppState {
         db: pool,
         data_dir,
@@ -1772,12 +2041,14 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         user_connections: DashMap::new(),
         push_presence: DashMap::new(),
         focus_pending: DashMap::new(),
+        addon_signer,
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
         ended_voice_rooms: DashMap::new(),
         ws_tickets: DashMap::new(),
         key_envelope_notified_at: DashMap::new(),
         login_attempts: DashMap::new(),
+        suggest_relations: DashMap::new(),
         login_attempts_last_swept: std::sync::Mutex::new(Instant::now()),
         config,
     })
@@ -1810,6 +2081,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             // log entry at all) — native shells were unaffected since they bypass
             // fetch() via the native HTTP bridge.
             HeaderName::from_static("x-request-id"),
+            // Отпечаток запущенной сборки аддона (облако, вклады в казну): без
+            // него в списке браузерный preflight молча рвал бы каждый такой запрос.
+            HeaderName::from_static("x-zali-addon-digest"),
         ])
         .allow_methods([
             Method::GET,
@@ -1826,8 +2100,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/ws-ticket", post(create_ws_ticket))
         .route("/api/auth/logout", post(logout))
+        .route("/api/auth/password", post(change_password))
         .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/users", get(get_users))
+        .route("/api/users/suggest", get(suggest_users))
         .route("/api/users/:username/devices", get(get_user_public_devices))
         .route("/api/avatar/:username", get(get_avatar))
         .route("/api/avatar", post(upload_avatar).delete(delete_avatar))
@@ -1862,7 +2138,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/servers/:server_id/members",
-            get(get_server_members).post(add_server_member),
+            get(get_server_members),
         )
         .route(
             "/api/servers/:server_id/members/:username",
@@ -2005,6 +2281,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/coins/gifts/mine", get(get_my_active_coin_gifts))
         .route("/api/coins/gifts/:gift_id/claim", post(claim_coin_gift))
         .route("/api/coins/gifts/:gift_id/cancel", post(cancel_coin_gift))
+        .route("/api/raffles", get(raffles::lookup_raffles).post(raffles::create_raffle))
+        .route("/api/raffles/mine", get(raffles::my_raffles))
+        .route("/api/raffles/:id/join", post(raffles::join_raffle))
+        .route("/api/raffles/:id/cancel", post(raffles::cancel_raffle))
         .route("/api/coins/treasuries/managed", get(get_managed_treasuries))
         .route("/api/coins/server-payouts", get(get_my_server_payouts))
         .route("/api/servers/:server_id/treasury", get(get_server_treasury))
@@ -2016,6 +2296,36 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(focus::get_settings).put(focus::put_settings),
         )
         .route("/api/message/:id/notify-now", post(focus::notify_now))
+        .route("/api/addons/signing-key", get(addons::get_signing_keys))
+        .route("/api/addons/sign", post(addons::sign_addon))
+        .route("/api/addons/register-official", post(addons::register_official))
+        .route("/api/addons/mine", get(addons::list_mine))
+        .route("/api/addons/:id", get(addons::get_registry))
+        .route("/api/addons/:id/deposit", post(addons::deposit))
+        .route("/api/addons/:id/withdraw", post(addons::withdraw))
+        .route("/api/addons/:id/payout", post(addons::payout))
+        .route("/api/addons/:id/official-request", post(addons::request_official))
+        .route("/api/admin/addons/requests", get(addons::admin_list_requests))
+        .route("/api/admin/addons/requests/decide", post(addons::admin_decide_request))
+        .route("/api/admin/addons/revoke", post(addons::admin_revoke_build))
+        .route("/api/addons/:id/manage", get(addons::manage_addon))
+        .route("/api/addons/:id/unbind", post(addons::unbind_addon))
+        // Значение — base64 внутри JSON: до ~14 МБ на тело при потолке 10 МиБ данных.
+        .route(
+            "/api/addons/:id/cloud",
+            get(addon_cloud::list_cloud).delete(addon_cloud::clear_cloud),
+        )
+        .route("/api/addons/:id/cloud/audit", get(addon_cloud::my_audit))
+        .route("/api/addons/:id/cloud/collect", get(addon_cloud::collect_list))
+        .route("/api/addons/:id/cloud/collect/item", get(addon_cloud::collect_item))
+        .route(
+            "/api/addons/:id/cloud/item",
+            get(addon_cloud::get_cloud_item)
+                .put(addon_cloud::put_cloud_item)
+                .delete(addon_cloud::delete_cloud_item)
+                .layer(DefaultBodyLimit::max(14 * 1024 * 1024 + 4096)),
+        )
+        .route("/api/addons/:id/events", post(addons::record_event))
         .route("/api/version", get(get_latest_version).post(publish_version))
         .route("/api/announcement", post(publish_announcement))
         .route("/health", get(health_check))
@@ -2104,6 +2414,19 @@ pub async fn run() {
         });
     }
 
+    // Итоги розыгрышей подводятся не по запросу клиента, а по часам: карточка
+    // должна «выстрелить» вовремя, даже если никто не смотрит на неё.
+    {
+        let raffle_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                raffles::sweep_due(&raffle_state).await;
+            }
+        });
+    }
+
     let app = build_router(Arc::clone(&state));
 
     let addr: SocketAddr = std::env::var("BIND_ADDR")
@@ -2124,7 +2447,15 @@ pub async fn run() {
 
 #[cfg(test)]
 mod config_tests {
-    use super::sanitize_allowed_origins;
+    use super::{is_weak_jwt_secret, sanitize_allowed_origins};
+
+    #[test]
+    fn placeholder_and_repetitive_secrets_are_weak() {
+        assert!(is_weak_jwt_secret("CHANGE_ME_IN_PRODUCTION_ZALI_SECRET_KEY_MIN32CH"));
+        assert!(is_weak_jwt_secret("changeme-changeme-changeme-changeme-0000"));
+        assert!(is_weak_jwt_secret("abababababababababababababababababababab"));
+        assert!(!is_weak_jwt_secret("9f2c4b7e1a60d3558ce2b41f07a9d6c3e8b5f0214a7d9c6e3b8a1f5d204c97e6"));
+    }
 
     #[test]
     fn null_origin_is_dropped() {

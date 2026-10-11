@@ -29,7 +29,7 @@ function loadSdkSource() {
 }
 
 function loadFormat() {
-    const sandbox = { window: {}, TextEncoder, TextDecoder, crypto: webcrypto };
+    const sandbox = { window: {}, TextEncoder, TextDecoder, crypto: webcrypto, atob, btoa };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
     vm.runInContext(readFileSync(FORMAT_PATH, 'utf8'), sandbox, { filename: FORMAT_PATH });
@@ -155,7 +155,12 @@ section('format: manifest is a closed contract');
     ])));
     await expectReject('id with path characters', () => F.inspect(F.build(baseEntries({ id: '../x' }))));
     const elevated = Object.keys(F.PERMISSIONS).filter(key => F.isElevated(key)).sort().join(',');
-    record('elevated permissions are exactly fs.read, fs.write, launch, process', elevated === 'fs.read,fs.write,launch,process', elevated);
+    record('elevated permissions are exactly fs.read, fs.write, launch, network.any, process', elevated === 'fs.read,fs.write,launch,network.any,process', elevated);
+    // network.any needs no host list; plain «network» still must name its hosts.
+    record('network.any needs no host list',
+        !(await rejects(() => F.inspect(F.build(baseEntries({ permissions: ['network.any'] }))))));
+    record('network without hosts is still refused',
+        !!(await rejects(() => F.inspect(F.build(baseEntries({ permissions: ['network'] }))))));
 }
 
 section('sandbox (web/src/interface/addons_runtime.js)');
@@ -290,6 +295,260 @@ section('packer and example addons');
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+}
+
+// ---- подписи и ZaliCoin аддонов ----------------------------------------------
+//
+// Аддон — чужой код, а ZaliCoin — деньги. Что стоит между ними:
+//   1. подпись проверяется настоящим модулем на настоящей криптографии: любая
+//      правка файла после подписания, чужой ключ или переставленная метка
+//      («самоподпись» → «официальная») ломают её;
+//   2. «официальной» считается только подпись ключом, зашитым в приложение и
+//      в сервер, и тот же ключ в обоих местах и в инструменте на Python;
+//   3. деньги доходят до аддона только если файл подписан И запись об авторе в
+//      реестре сервера с подписью сходится — подпись в файле одна не пускает.
+
+const subtle = webcrypto.subtle;
+const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+
+async function signedFile(bytes, { kind = 'self', owner = 'author', key, id, version, publicKey = null } = {}) {
+    const { files, manifest: m } = (() => {
+        const parsed = F.parseContainer(bytes);
+        return { files: parsed.files, manifest: F.parseManifest(parsed.files) };
+    })();
+    const digest = await F.contentDigest(files);
+    const signedAt = 1_700_000_000_000;
+    const message = F.signatureMessage(kind, id ?? m.id, version ?? m.version, owner, digest, signedAt);
+    const signature = new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key.privateKey, enc.encode(message)));
+    const pub = publicKey ?? b64(new Uint8Array(await subtle.exportKey('raw', key.publicKey)));
+    return {
+        publicKey: pub,
+        bytes: F.withSignature(bytes, {
+            zaliSignature: 1, kind, alg: 'ES256', publicKey: pub,
+            id: id ?? m.id, version: version ?? m.version, owner, digest, signedAt, signature: b64(signature),
+        }),
+    };
+}
+
+section('signatures: verified by the real module on real ECDSA');
+{
+    const serverKey = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const otherKey = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const plain = F.build(baseEntries({ permissions: ['coins'] }), { id: 'org.example.test' });
+    const good = await signedFile(plain, { key: serverKey });
+    const keys = { selfPublicKey: good.publicKey };
+
+    const state = async (bytes, k = keys) => (await F.inspect(bytes, k)).signature.state;
+    const reason = async (bytes, k = keys) => (await F.inspect(bytes, k)).signature.reason || '';
+
+    record('an unsigned file is "none"', await state(plain) === 'none');
+    const info = await F.inspect(good.bytes, keys);
+    record('a file signed with the server key verifies as "self", with its author',
+        info.signature.state === 'self' && info.signature.owner === 'author' && /^[0-9a-f]{64}$/.test(info.signature.fingerprint));
+    record('without the server key a self-signature is only "unverified"', await state(good.bytes, {}) === 'unverified');
+    record('a self-signature by another server\'s key is "unverified", never "self"',
+        await state(good.bytes, { selfPublicKey: b64(new Uint8Array(await subtle.exportKey('raw', otherKey.publicKey))) }) === 'unverified');
+
+    // Правка после подписания.
+    const tamperedEntries = [...F.parseContainer(good.bytes).files].map(([name, data]) => [name, name === 'index.html' ? '<!doctype html><p>changed</p>' : data]);
+    const tampered = F.build(tamperedEntries, { id: 'org.example.test' });
+    record('editing a file after signing makes the signature "invalid"', await state(tampered) === 'invalid', await reason(tampered));
+    const extraEntries = [...F.parseContainer(good.bytes).files, ['extra.js', enc.encode('x')]].map(([n, d]) => [n, d]);
+    record('adding a file after signing makes it "invalid"', await state(F.build(extraEntries, { id: 'org.example.test' })) === 'invalid');
+
+    // Подпись, перенесённая на другой аддон или версию.
+    const moved = await signedFile(plain, { key: serverKey, id: 'org.example.other' });
+    record('a signature issued for another addon id is "invalid"', await state(moved.bytes) === 'invalid', await reason(moved.bytes));
+    const versioned = await signedFile(plain, { key: serverKey, version: '9.9.9' });
+    record('a signature issued for another version is "invalid"', await state(versioned.bytes) === 'invalid', await reason(versioned.bytes));
+
+    // Подмена вида подписи.
+    const sigFile = JSON.parse(new TextDecoder().decode(F.parseContainer(good.bytes).files.get('zali-signature.json')));
+    const flipped = F.withSignature(plain, { ...sigFile, kind: 'official' });
+    record('relabelling a self-signature as official is "invalid"', await state(flipped) === 'invalid', await reason(flipped));
+    const fakeOfficial = await signedFile(plain, { key: serverKey, kind: 'official' });
+    record('an "official" signature made with any other key is "invalid"',
+        await state(fakeOfficial.bytes) === 'invalid', await reason(fakeOfficial.bytes));
+    record('a signature that claims the official public key but is signed by another is "invalid"',
+        await state((await signedFile(plain, { key: serverKey, kind: 'official', publicKey: F.OFFICIAL_PUBLIC_KEY })).bytes) === 'invalid');
+
+    // Мусор в файле подписи не роняет разбор.
+    const junk = F.build([...F.parseContainer(plain).files, ['zali-signature.json', enc.encode('{nope')]].map(([n, d]) => [n, d]), { id: 'org.example.test' });
+    record('a corrupt signature file is "invalid", not an exception', await state(junk) === 'invalid');
+    const bare = F.build([...F.parseContainer(plain).files, ['zali-signature.json', enc.encode('{"zaliSignature":1}')]].map(([n, d]) => [n, d]), { id: 'org.example.test' });
+    record('a signature missing its fields is "invalid"', await state(bare) === 'invalid');
+
+    // Отпечаток не зависит от самой подписи — иначе её нельзя было бы проверить.
+    const a = await F.contentDigest(F.parseContainer(plain).files);
+    const b = await F.contentDigest(F.parseContainer(good.bytes).files);
+    record('the content digest ignores the signature file', a === b);
+    const resigned = F.withSignature(good.bytes, sigFile);
+    record('re-signing replaces the old signature instead of stacking another',
+        [...F.parseContainer(resigned).files.keys()].filter(n => n === 'zali-signature.json').length === 1);
+}
+
+section('signatures: same bytes in the app, the server tool and the Python tool');
+{
+    const dir = mkdtempSync(join(tmpdir(), 'zali-sign-'));
+    try {
+        const plain = F.build(baseEntries({ permissions: ['coins'] }), { id: 'org.example.test' });
+        const file = join(dir, 'a.zali');
+        writeFileSync(file, plain);
+        const jsDigest = await F.contentDigest(F.parseContainer(plain).files);
+        let pyDigest = '';
+        try {
+            pyDigest = execFileSync('python3', ['-I', 'scripts/addon_sign.py', 'digest', file], { stdio: 'pipe' }).toString().trim();
+        } catch (e) {
+            record('addon_sign.py digest runs', false, String(e.stderr || e.message).trim().slice(0, 200));
+        }
+        record('addon_sign.py computes the same content digest as the app', pyDigest === jsDigest, `${pyDigest.slice(0, 16)} vs ${jsDigest.slice(0, 16)}`);
+
+        const serverKey = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+        const signed = await signedFile(plain, { key: serverKey });
+        const signedPath = join(dir, 'signed.zali');
+        writeFileSync(signedPath, signed.bytes);
+        let pyState = '';
+        try {
+            pyState = execFileSync('python3', ['-I', 'scripts/addon_sign.py', 'verify', signedPath, '--self-key', signed.publicKey], { stdio: 'pipe' }).toString();
+        } catch (e) {
+            pyState = String(e.stdout || '') + String(e.stderr || '');
+        }
+        record('addon_sign.py verifies a signature the app made', /подпись — self/.test(pyState), pyState.trim().split('\n')[0]);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+
+    const serverSrc = read('server/src/addons.rs');
+    const pySrc = read('scripts/addon_sign.py');
+    const pyKey = (pySrc.match(/OFFICIAL_PUBLIC_KEY = "([^"]+)"/) || [])[1];
+    const rsKey = (serverSrc.match(/OFFICIAL_PUBLIC_KEY_B64: &str =\s*"([^"]+)"/) || [])[1];
+    record('the official public key is the same in the app, the server and the Python tool',
+        !!rsKey && F.OFFICIAL_PUBLIC_KEY === rsKey && F.OFFICIAL_PUBLIC_KEY === pyKey, `${F.OFFICIAL_PUBLIC_KEY.slice(0, 12)}… / ${String(rsKey).slice(0, 12)}… / ${String(pyKey).slice(0, 12)}…`);
+    record('addon_sign.py can only make official signatures (self ones are server-side)', !/choices=\[[^\]]*"self"/.test(pySrc));
+}
+
+section('ZaliCoin for addons (web/src/interface/addons_coins.js)');
+{
+    const coins = read('web/src/interface/addons_coins.js');
+    const perms = read('web/src/interface/addons_permissions.js');
+    const code = stripLineComments(coins);
+    const rpcRows = [...code.matchAll(/'coins\.([a-z]+)': \{ permission: '([a-z.]+)'/g)];
+    record('all four coins.* methods exist and each needs the "coins" permission',
+        rpcRows.length === 4 && rpcRows.every(r => r[2] === 'coins'), rpcRows.map(r => `${r[1]}:${r[2]}`).join(', '));
+    record('the coins RPC table is merged into the dispatcher', /addonCoinsRpcMethods\?\.\(\)/.test(perms));
+    record('"coins" is a normal permission with a user-facing title',
+        F.PERMISSIONS.coins && !F.isElevated('coins') && F.PERMISSIONS.coins.title === 'ZaliCoin');
+
+    const deposit = (code.match(/async addonCoinsDeposit[\s\S]*?\n    \}\n/) || [''])[0];
+    record('a deposit needs the addon on screen', /addonRequireVisible\(/.test(deposit));
+    record('a deposit is refused for an untrusted addon before the dialog', /addonCoinsTrust\([\s\S]{0,200}?!trust\.ok[\s\S]{0,600}?showAddonDepositDialog/.test(deposit));
+    record('a deposit is rate-limited', /addonCoinsRateLimit\(/.test(deposit));
+    record('the amount is clamped by the person\'s own balance before the dialog', /amount > balance[\s\S]{0,300}?showAddonDepositDialog/.test(deposit));
+    record('money moves only after the person confirms in the dialog',
+        /showAddonDepositDialog[\s\S]{0,300}?if \(!confirmed\) throw[\s\S]{0,300}?\/deposit/.test(deposit));
+    record('every deposit carries an idempotency key', /idempotencyKey: this\.zaliCoinNewIdempotencyKey\(\)/.test(deposit));
+
+    const trust = (code.match(/async addonSignedTrust[\s\S]*?\n    \}\n/) || [''])[0];
+    record('trust needs the registry to agree with the file on author and kind',
+        /registry\.kind !== signature\.kind \|\| registry\.owner !== signature\.owner/.test(trust));
+    record('trust needs the registry key to match the file\'s key', /registry\.keyFingerprint[\s\S]{0,120}?signature\.fingerprint/.test(trust));
+    record('"none", "invalid" and "unverified" signatures never get as far as the registry',
+        /state === 'none'[\s\S]{0,700}?state === 'invalid'[\s\S]{0,300}?state === 'unverified'[\s\S]{0,400}?addonRegistryLookup/.test(trust));
+
+    const dialog = (code.match(/\n    showAddonDepositDialog\(\{[\s\S]*?\n    \}\n/) || [''])[0];
+    record('an unsigned-by-ZaliMessenger addon gets the strong warning and an explicit acknowledgement',
+        /is-warning[\s\S]{0,900}?data-coin-ack/.test(dialog) && /disabled data-needs-ack/.test(dialog));
+    record('the official addon gets only the notice, without the acknowledgement',
+        /trust\.official\s*\?[\s\S]{0,400}?is-official/.test(dialog) && /trust\.official \? '' : ' disabled data-needs-ack'/.test(dialog));
+    record('the dialog escapes the addon\'s name, owner and note',
+        /this\.esc\(m\.name\)/.test(dialog) && /this\.esc\(trust\.owner\)/.test(dialog) && /this\.esc\(note\)/.test(dialog));
+
+    const withdraw = (code.match(/async addonCoinsWithdraw[\s\S]*?\n    \}\n/) || [''])[0];
+    record('a person\'s withdrawal needs the addon on screen and a trusted signature',
+        /addonRequireVisible\(/.test(withdraw) && /addonCoinsTrust\(/.test(withdraw) && /addonCoinsRateLimit\(/.test(withdraw));
+    record('a person\'s withdrawal goes through /payout, never the developer\'s /withdraw',
+        /\/payout`/.test(withdraw) && !/\/withdraw`/.test(withdraw));
+    const dev = (code.match(/async addonWithdrawRequest[\s\S]*?\n    \}\n/) || [''])[0];
+    record('the developer\'s withdrawal (week hold) is a separate path used by the management window only',
+        /\/withdraw`/.test(dev) && !/addonWithdrawRequest\(/.test(withdraw));
+}
+
+section('cloud storage and external servers (addons_cloud.js, addonCsp)');
+{
+    const cloud = stripLineComments(read('web/src/interface/addons_cloud.js'));
+    const perms = read('web/src/interface/addons_permissions.js');
+    const rows = [...cloud.matchAll(/'cloud\.([A-Za-z.]+)': \{ permission: '([a-z.]+)'/g)];
+    record('all eleven cloud.* methods exist and each needs the "cloud" permission',
+        rows.length === 11 && rows.every(r => r[2] === 'cloud'), rows.map(r => `${r[1]}:${r[2]}`).join(', '));
+    record('the cloud RPC table is merged into the dispatcher', /addonCloudRpcMethods\?\.\(\)/.test(perms));
+    record('"cloud" is a normal permission, "network.any" an elevated one',
+        F.PERMISSIONS.cloud && !F.isElevated('cloud') && F.isElevated('network.any'));
+    const server = stripLineComments(read('server/src/addon_cloud.rs'));
+    record('the pool is 10 MB per addon and a person\'s share 1 MB, on the client and the server',
+        F.LIMITS.cloudBytes === 10 * 1024 * 1024 && F.LIMITS.cloudUserBytes === 1024 * 1024
+        && /ADDON_CLOUD_QUOTA_BYTES: i64 = 10 \* 1024 \* 1024/.test(server)
+        && /ADDON_CLOUD_USER_BYTES: i64 = 1024 \* 1024/.test(server));
+    record('the cloud path is always the addon\'s own id, never a parameter',
+        /\/api\/addons\/\$\{encodeURIComponent\(instance\.id\)\}\/cloud/.test(cloud) && !/params\??\.(id|addonId)/.test(cloud));
+    record('every cloud call needs a verified signature before the network',
+        /await this\.addonCloudRequireSigned\(instance\)[\s\S]{0,120}?addonCloudRateLimit/.test(cloud)
+        && /addonSignedTrust\(instance, \{ what:/.test(cloud));
+    record('cloud calls are rate-limited and refuse a signed-out account',
+        /addonCloudRateLimit\(instance\)/.test(cloud) && /!this\.S\.session\?\.token/.test(cloud));
+    record('the server refuses an addon that is not in the author registry',
+        /async fn registered_owner[\s\S]{0,400}?FROM addon_registry[\s\S]{0,500}?"not_signed"/.test(server));
+    record('only the registry owner writes to the shared area and reads other people\'s data',
+        /scope == Scope::Shared \{\s*if let Err\(resp\) = require_owner/.test(server)
+        && (server.match(/require_owner\(&owner, &username/g) || []).length >= 5);
+    record('a person\'s personal area is keyed by their own name, never a parameter',
+        /scope_column\(scope, &username\)/.test(server) && !/query\.user[\s\S]{0,80}?scope_column\(Scope::User, &username/.test(server));
+    record('the quota is enforced inside an immediate transaction on the server',
+        /run_immediate_tx[\s\S]{0,2500}?ADDON_CLOUD_QUOTA_BYTES[\s\S]{0,300}?ADDON_CLOUD_USER_BYTES/.test(server));
+
+    const coinsSrc = stripLineComments(read('web/src/interface/addons_coins.js'));
+    const serverAddons = stripLineComments(read('server/src/addons.rs'));
+    record('the running build\'s digest rides on cloud and deposit requests',
+        /addonDigestOptions\(instance, options\)/.test(cloud)
+        && /addonCoinsApi\([\s\S]{0,300}?addonDigestOptions\(instance, options\)/.test(coinsSrc)
+        && /\}, instance\);\s*this\.scheduleZaliCoinRefresh/.test(coinsSrc));
+    record('a revoked build is refused by the trust check',
+        /registry\.revoked\.includes\(signature\.digest\)[\s\S]{0,200}?'revoked'/.test(coinsSrc));
+    record('a revoked build is not launched',
+        /registry\.revoked\.includes\(info\.signature\.digest\)[\s\S]{0,200}?'revoked'/.test(stripLineComments(read(RUNTIME_PATH))));
+    record('revoking a build needs the operator token and is not open to people',
+        /async fn admin_revoke_build[\s\S]{0,400}?operator_authorized\(&state, &headers\)/.test(serverAddons));
+    record('a deposit into a revoked build is refused but a person can always take their coins back',
+        /async fn deposit[\s\S]{0,900}?digest_revoked/.test(serverAddons)
+        && !/async fn payout[\s\S]{0,900}?digest_revoked/.test(serverAddons)
+        && !/async fn withdraw[\s\S]{0,900}?digest_revoked/.test(serverAddons));
+    record('the author\'s reads of people\'s data are written to the audit log',
+        /audit\(&state, &addon_id, &username, None, "\*", "list"\)/.test(server)
+        && /audit\(&state, &addon_id, &username, Some\(&user\), &key, "read"\)/.test(server));
+    record('collecting is rate-limited per author',
+        (server.match(/within_rate\(format!\("c:/g) || []).length === 2 && /within_rate\(format!\("w:/.test(server));
+    record('a change of the registry owner wipes the cloud',
+        /previous_owner[\s\S]{0,1500}?wipe_addon\(&mut \*conn, &tx_id\)/.test(serverAddons));
+
+    record('unbinding an id is owner-only, refuses a non-empty treasury and official ids',
+        /async fn unbind_addon[\s\S]{0,1800}?row\.owner != tx_user[\s\S]{0,200}?NotOwner[\s\S]{0,200}?row\.kind == "official"[\s\S]{0,200}?Official[\s\S]{0,600}?balance > 0[\s\S]{0,100}?Funds/.test(serverAddons));
+    record('an unbound id starts clean: ledger and stats are archived and the cloud is wiped',
+        /#unbound-/.test(serverAddons) && /"addon_coin_ops", "addon_events", "addon_official_requests"/.test(serverAddons)
+        && /DELETE FROM addon_registry[\s\S]{0,300}?wipe_addon\(&mut \*conn, &tx_addon\)[\s\S]{0,100}?Ok\(UnbindOutcome::Done\)/.test(serverAddons));
+    const uiSrc = stripLineComments(read('web/src/interface/addons_ui.js'));
+    record('a file whose id is pinned to another author is not installed',
+        /registry\?\.registered && registry\.owner !== this\.myName\(\)[\s\S]{0,500}?!byOwner[\s\S]{0,700}?return;/.test(uiSrc));
+
+    const runtime = stripLineComments(read(RUNTIME_PATH));
+    const csp = (runtime.match(/addonCsp\(manifest\) \{[\s\S]*?\n    \}\n/) || [''])[0];
+    record('the open connect-src is reachable only through "network.any"',
+        /permissions\.includes\('network\.any'\)/.test(csp) && /const remote = any \?/.test(csp));
+    record('without it the policy still lists only the declared hosts',
+        /\(manifest\.permissions\.includes\('network'\) \? manifest\.network : \[\]\)/.test(csp));
+    record('"network.any" is unavailable where there is no elevated session (browser, Android)',
+        /case 'network\.any':[\s\S]{0,200}?nativeSupports\('addonLaunch'\)/.test(runtime));
+    record('every elevated permission is known to both native shells',
+        read('apps/windows/src/native/addon_elevated.rs').includes('"network.any"')
+        && read('apps/macos/Sources/ZaliMessenger/Services/AddonElevated.swift').includes('"network.any"'));
 }
 
 finish('addons');

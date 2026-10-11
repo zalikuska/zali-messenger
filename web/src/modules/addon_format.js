@@ -21,9 +21,14 @@
         fileBytes: 32 * 1024 * 1024,
         entries: 2000,
         manifestBytes: 64 * 1024,
+        signatureBytes: 16 * 1024,
         pathBytes: 255,
         storageBytes: 1024 * 1024,
         cacheBytes: 256 * 1024 * 1024,
+        // Облако ZaliMessenger (server/src/addon_cloud.rs): пул аддона у всех
+        // пользователей вместе и доля одного человека в нём.
+        cloudBytes: 10 * 1024 * 1024,
+        cloudUserBytes: 1024 * 1024,
         networkHosts: 16,
         backendArgs: 32,
     });
@@ -33,6 +38,15 @@
     const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/;
     const HOST_RE = /^(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:\d{1,5})?$/;
     const CONTROL_RE = /[\u0000-\u001f\u007f]/;
+
+    // Файл подписи внутри контейнера и ключ официальной подписи. Приватная часть
+    // ключа лежит вне репозитория (ops/keys/) и есть только у закрытого инструмента
+    // разработчиков; тот же публичный ключ зашит в server/src/addons.rs.
+    const SIGNATURE_PATH = 'zali-signature.json';
+    const OFFICIAL_PUBLIC_KEY = 'BDUcWsKrt/KoOeUnExrEScgAqUD3JEPCDLS5OqWmER0pm+FXwhzClXxkEh0KG4WdLkm9czOJXgXSuMuYlOcrMWw=';
+    const SIGNATURE_VERSION = 1;
+    // Сколько суток взнос лежит в казне аддона, прежде чем автор сможет его вывести.
+    const COIN_HOLD_DAYS = 7;
 
     // Ключи платформ в manifest.backend.commands. Оболочка выбирает свой.
     const BACKEND_PLATFORMS = Object.freeze(['macos-arm64', 'macos-x64', 'windows-x64', 'windows-arm64']);
@@ -49,6 +63,9 @@
         files: { level: 'normal', title: 'Сохранение файлов', description: 'Сохранять файлы на компьютер через загрузки.' },
         microphone: { level: 'normal', title: 'Микрофон', description: 'Записывать звук с микрофона, пока аддон открыт.' },
         network: { level: 'normal', title: 'Интернет', description: 'Обмениваться данными с сайтами из списка.' },
+        cloud: { level: 'normal', title: 'Облако ZaliMessenger', description: 'Хранить данные аддона на серверах ZaliMessenger (до 10 МБ на весь аддон) для синхронизации между устройствами и людьми. Автор аддона может прочитать то, что аддон сохранит о вас. Только для подписанных аддонов.' },
+        coins: { level: 'normal', title: 'ZaliCoin', description: 'Видеть ваш баланс, предлагать перевести монеты на баланс аддона (каждый перевод — только после вашего подтверждения) и возвращать вам ваши монеты.' },
+        'network.any': { level: 'elevated', title: 'Любые серверы в интернете', description: 'Обращаться к любым серверам, в том числе к тем, адрес которых вы укажете сами, и передавать им данные аддона.' },
         'fs.read': { level: 'elevated', title: 'Чтение файлов на всём диске', description: 'Читать любые файлы и папки компьютера.' },
         'fs.write': { level: 'elevated', title: 'Запись файлов на всём диске', description: 'Создавать, менять и удалять любые файлы компьютера.' },
         launch: { level: 'elevated', title: 'Запуск программ', description: 'Открывать файлы и запускать программы компьютера.' },
@@ -300,6 +317,8 @@
         }
         if (network.length && !permissions.includes('network')) fail('Манифест: network указан без разрешения «network».');
         if (permissions.includes('network') && !network.length) fail('Манифест: разрешение «network» без списка хостов в network.');
+        // «network.any» снимает потребность в списке: аддон ходит на любые серверы.
+        // Лишний список рядом с ним не ошибка, но смысла не имеет.
 
         let backend = null;
         if (data.backend !== undefined && data.backend !== null) {
@@ -348,12 +367,13 @@
      * Полная проверка файла перед установкой.
      * @param {ArrayBuffer|Uint8Array} input
      */
-    async function inspect(input) {
+    async function inspect(input, keys = {}) {
         const bytes = toBytes(input);
         const { files } = parseContainer(bytes);
         const manifest = parseManifest(files);
         const sha256 = await sha256Hex(bytes);
-        return { bytes, files, manifest, sha256, size: bytes.length };
+        const signature = await verifySignature(files, manifest, keys);
+        return { bytes, files, manifest, sha256, size: bytes.length, signature };
     }
 
     /**
@@ -391,6 +411,188 @@
         return out;
     }
 
+    // ---- Подпись ----
+    //
+    // Файл подписи — обычная запись контейнера `zali-signature.json`:
+    //   {zaliSignature:1, kind:'self'|'official', alg:'ES256', publicKey, id,
+    //    version, owner, digest, signedAt, signature}
+    // `digest` — отпечаток содержимого (все записи, кроме самой подписи), так что
+    // подписанный файл меняется только добавлением подписи. Подписывается
+    // сообщение `signatureMessage(...)` — его же собирают сервер (addons.rs) и
+    // инструмент подписи (scripts/addon_sign.py). ES256 — «сырая» подпись r‖s.
+
+    const hexOf = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+
+    function bytesFromBase64(value) {
+        const binary = atob(String(value || ''));
+        const out = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+        return out;
+    }
+
+    function signatureMessage(kind, id, version, owner, digest, signedAt) {
+        return `zali-addon-sig:v1\n${kind}\n${id}\n${version}\n${owner}\n${digest}\n${signedAt}`;
+    }
+
+    /**
+     * Отпечаток содержимого: SHA-256 от `zali-addon-content:v1\n` и записей,
+     * отсортированных по пути, — по каждой u32be(len path) · path · u64be(len
+     * data) · data. Файл подписи в него не входит.
+     * @param {Map<string, Uint8Array>} files
+     */
+    async function contentDigest(files) {
+        const names = Array.from(files.keys()).filter((name) => name !== SIGNATURE_PATH).sort();
+        const header = utf8Encoder.encode('zali-addon-content:v1\n');
+        const parts = [header];
+        let total = header.length;
+        for (const name of names) {
+            const nameBytes = utf8Encoder.encode(name);
+            const data = files.get(name);
+            const head = new Uint8Array(4 + nameBytes.length + 8);
+            const view = new DataView(head.buffer);
+            view.setUint32(0, nameBytes.length, false);
+            head.set(nameBytes, 4);
+            view.setUint32(4 + nameBytes.length, 0, false);
+            view.setUint32(8 + nameBytes.length, data.length, false);
+            parts.push(head, data);
+            total += head.length + data.length;
+        }
+        const all = new Uint8Array(total);
+        let offset = 0;
+        for (const part of parts) { all.set(part, offset); offset += part.length; }
+        return await sha256Hex(all);
+    }
+
+    async function fingerprintOfKey(publicKeyBase64) {
+        try {
+            return await sha256Hex(bytesFromBase64(publicKeyBase64));
+        } catch (e) {
+            return '';
+        }
+    }
+
+    /** Разбор файла подписи без проверки подлинности. null — подписи нет. */
+    function readSignature(files) {
+        const raw = files.get(SIGNATURE_PATH);
+        if (!raw) return null;
+        if (raw.length > LIMITS.signatureBytes) fail('zali-signature.json больше 16 КБ.');
+        let data;
+        try {
+            data = JSON.parse(decodeUtf8(raw, SIGNATURE_PATH));
+        } catch (e) {
+            if (e instanceof AddonFormatError) throw e;
+            fail('zali-signature.json — не JSON.');
+        }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) fail('zali-signature.json должен быть объектом.');
+        return data;
+    }
+
+    /**
+     * Проверяет подпись файла.
+     *
+     * Состояния:
+     *  - `none`       — подписи нет;
+     *  - `official`   — подписано ключом разработчиков ZaliMessenger;
+     *  - `self`       — подписано серверным ключом «свободной» подписи: автор
+     *                   известен, но это не поручительство за аддон;
+     *  - `unverified` — похоже на самоподпись, но ключа сервера у нас нет или он
+     *                   чужой (файл подписан другим сервером);
+     *  - `invalid`    — подпись есть, но не сходится: файл изменили после
+     *                   подписания, или подпись повреждена.
+     *
+     * @param {Map<string, Uint8Array>} files
+     * @param {{id: string, version: string}} manifest
+     * @param {{selfPublicKey?: string}} [keys]
+     */
+    async function verifySignature(files, manifest, keys = {}) {
+        let sig;
+        try {
+            sig = readSignature(files);
+        } catch (error) {
+            return { state: 'invalid', reason: error.message };
+        }
+        if (!sig) return { state: 'none' };
+        const invalid = (reason) => ({ state: 'invalid', reason, kind: String(sig.kind || ''), owner: String(sig.owner || '') });
+        if (sig.zaliSignature !== SIGNATURE_VERSION) return invalid('неизвестная версия подписи');
+        if (sig.alg !== 'ES256') return invalid('неизвестный алгоритм подписи');
+        const kind = String(sig.kind || '');
+        if (kind !== 'self' && kind !== 'official') return invalid('неизвестный вид подписи');
+        if (sig.id !== manifest.id) return invalid('подпись выдана другому аддону');
+        if (sig.version !== manifest.version) return invalid('подпись выдана для другой версии');
+        const owner = String(sig.owner || '');
+        if (!owner || owner.length > 64) return invalid('в подписи нет автора');
+        const digest = await contentDigest(files);
+        if (sig.digest !== digest) return invalid('файл изменён после подписания');
+
+        let publicKeyBytes;
+        let signatureBytes;
+        try {
+            publicKeyBytes = bytesFromBase64(sig.publicKey);
+            signatureBytes = bytesFromBase64(sig.signature);
+        } catch (e) {
+            return invalid('подпись повреждена');
+        }
+        const fingerprint = await sha256Hex(publicKeyBytes);
+
+        if (kind === 'official') {
+            if (sig.publicKey !== OFFICIAL_PUBLIC_KEY) return invalid('подпись сделана не официальным ключом');
+        } else if (!keys.selfPublicKey || sig.publicKey !== keys.selfPublicKey) {
+            return { state: 'unverified', kind, owner, fingerprint, signedAt: Number(sig.signedAt) || 0, reason: keys.selfPublicKey ? 'файл подписан ключом другого сервера' : 'ключ проверки подписей недоступен' };
+        }
+        const subtle = globalThis.crypto?.subtle;
+        if (!subtle) return { state: 'unverified', kind, owner, fingerprint, reason: 'проверка подписей недоступна в этом окружении' };
+        let ok = false;
+        try {
+            const key = await subtle.importKey('raw', publicKeyBytes, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+            const message = utf8Encoder.encode(signatureMessage(kind, sig.id, sig.version, owner, digest, sig.signedAt));
+            ok = await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, message);
+        } catch (e) {
+            ok = false;
+        }
+        if (!ok) return invalid('подпись не сходится');
+        return { state: kind, kind, owner, fingerprint, signedAt: Number(sig.signedAt) || 0, digest };
+    }
+
+    /**
+     * Подпись произвольного сообщения официальным ключом разработчиков (ES256,
+     * r‖s в base64). Так проверяется подпись релиза приложения (updates.js):
+     * ключ тот же, что у официальных аддонов, а сообщения не пересекаются — у
+     * каждого свой префикс (`zali-addon-sig:v1` / `zali-release-sig:v1`).
+     * `publicKey` нужен только тестам.
+     * @param {string} message
+     * @param {string} signatureBase64
+     * @param {string} [publicKey]
+     * @returns {Promise<boolean>}
+     */
+    async function verifyOfficialMessage(message, signatureBase64, publicKey = OFFICIAL_PUBLIC_KEY) {
+        const subtle = globalThis.crypto?.subtle;
+        if (!subtle) return false;
+        try {
+            const signatureBytes = bytesFromBase64(signatureBase64);
+            if (signatureBytes.length !== 64) return false;
+            const key = await subtle.importKey('raw', bytesFromBase64(publicKey), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+            return !!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, utf8Encoder.encode(String(message))));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Возвращает файл аддона с (новой) подписью. Остальные записи — как были, так
+     * что отпечаток содержимого не меняется.
+     * @param {ArrayBuffer|Uint8Array} input
+     * @param {object} signature
+     */
+    function withSignature(input, signature) {
+        const { headerId, files } = parseContainer(input);
+        const entries = [];
+        for (const [name, data] of files) {
+            if (name !== SIGNATURE_PATH) entries.push([name, data]);
+        }
+        entries.push([SIGNATURE_PATH, JSON.stringify(signature)]);
+        return build(entries, { id: headerId });
+    }
+
     const permissionInfo = (id) => PERMISSIONS[id] || null;
     const isElevated = (id) => PERMISSIONS[id]?.level === 'elevated';
 
@@ -399,6 +601,9 @@
         FORMAT_VERSION,
         MANIFEST_PATH,
         LIMITS,
+        SIGNATURE_PATH,
+        OFFICIAL_PUBLIC_KEY,
+        COIN_HOLD_DAYS,
         PERMISSIONS,
         BACKEND_PLATFORMS,
         AddonFormatError,
@@ -410,6 +615,13 @@
         inspect,
         build,
         sha256Hex,
+        contentDigest,
+        fingerprintOfKey,
+        signatureMessage,
+        readSignature,
+        verifySignature,
+        verifyOfficialMessage,
+        withSignature,
         permissionInfo,
         isElevated,
     });

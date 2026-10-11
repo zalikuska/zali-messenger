@@ -57,6 +57,8 @@ ZaliMixin(ZaliInterface, class {
             this.S.zaliCoinHolders = Array.isArray(data.holders) ? data.holders : [];
             this.S.zaliCoinHeldTotal = Number(data.held) || 0;
             this.S.zaliCoinTreasuriesTotal = Number(data.treasuries) || 0;
+            // Казны аддонов (server/src/addons.rs) — отдельный держатель монет.
+            this.S.zaliCoinAddonTreasuriesTotal = Number(data.addonTreasuries) || 0;
         } catch (e) {
             this.trace(`loadZaliCoinDistribution error=${e}`);
         }
@@ -97,6 +99,12 @@ ZaliMixin(ZaliInterface, class {
         return `var(--zc-series-${slot})`;
     }
 
+    // Малая доля не округляется до «0.0»: это читается как «ничего», хотя монеты есть.
+    zaliCoinPctLabel(pct) {
+        if (pct > 0 && pct < 0.1) return '<0.1';
+        return pct.toFixed(1);
+    }
+
     renderZaliCoinView() {
         const view = document.getElementById('viewZaliCoin');
         if (!view) return;
@@ -105,6 +113,7 @@ ZaliMixin(ZaliInterface, class {
         const holders = Array.isArray(this.S.zaliCoinHolders) ? this.S.zaliCoinHolders : [];
         const heldTotal = Math.max(0, Number(this.S.zaliCoinHeldTotal) || 0);
         const treasuriesTotal = Math.max(0, Number(this.S.zaliCoinTreasuriesTotal) || 0);
+        const addonTreasuriesTotal = Math.max(0, Number(this.S.zaliCoinAddonTreasuriesTotal) || 0);
         const me = this.myName();
 
         const balanceValue = document.getElementById('zaliCoinBalanceValue');
@@ -139,7 +148,7 @@ ZaliMixin(ZaliInterface, class {
         const restTotal = rest.reduce((sum, h) => sum + (Number(h.balance) || 0), 0);
         // Удержанное — не чей-то баланс, но и не «ничьё»: без него эти монеты
         // попадали бы в «Не распределено», хотя у них есть хозяин и назначение.
-        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal + treasuriesTotal;
+        const accounted = top.reduce((sum, h) => sum + (Number(h.balance) || 0), 0) + restTotal + heldTotal + treasuriesTotal + addonTreasuriesTotal;
         const unassigned = Math.max(0, totalSupply - accounted);
 
         const segments = top.map((holder, index) => ({
@@ -158,6 +167,9 @@ ZaliMixin(ZaliInterface, class {
         if (treasuriesTotal > 0) {
             segments.push({ label: 'Казны серверов', value: treasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)' });
         }
+        if (addonTreasuriesTotal > 0) {
+            segments.push({ label: 'Казны аддонов', value: addonTreasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)' });
+        }
         if (unassigned > 0) {
             segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)' });
         }
@@ -167,8 +179,8 @@ ZaliMixin(ZaliInterface, class {
             bar.innerHTML = segments.map(seg => {
                 const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
                 if (pct <= 0) return '';
-                const title = `${seg.label}: ${seg.value.toLocaleString('ru-RU')} ZC (${pct.toFixed(1)}%)`;
-                return `<button type="button" class="zc-segment${seg.isMe ? ' zc-segment--me' : ''}" style="flex-basis:${pct}%;background:${seg.color}" title="${this.esc(title)}" data-zc-label="${this.esc(seg.label)}" data-zc-value="${seg.value}" data-zc-pct="${pct.toFixed(2)}"></button>`;
+                const title = `${seg.label}: ${seg.value.toLocaleString('ru-RU')} ZC (${this.zaliCoinPctLabel(pct)}%)`;
+                return `<button type="button" class="zc-segment${seg.isMe ? ' zc-segment--me' : ''}" style="flex-grow:${Number(pct.toFixed(4))};background:${seg.color}" title="${this.esc(title)}" data-zc-label="${this.esc(seg.label)}" data-zc-value="${seg.value}" data-zc-pct="${pct.toFixed(2)}"></button>`;
             }).join('');
         }
 
@@ -179,7 +191,7 @@ ZaliMixin(ZaliInterface, class {
                 return `<div class="zc-legend-item${seg.isMe ? ' is-me' : ''}">
                     <span class="zc-legend-swatch" style="background:${seg.color}"></span>
                     <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? '<span class="zc-legend-me">вы</span>' : ''}</span>
-                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} ZC<span class="zc-legend-pct">${pct.toFixed(1)}%</span></span>
+                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} ZC<span class="zc-legend-pct">${this.zaliCoinPctLabel(pct)}%</span></span>
                 </div>`;
             }).join('') || '<div class="zc-legend-empty">Пока никто не держит ZaliCoin</div>';
         }
@@ -327,7 +339,6 @@ ZaliMixin(ZaliInterface, class {
         const target = document.getElementById('coinGiftTarget');
         const recipientField = document.getElementById('coinTransferRecipientField');
         const recipientInput = document.getElementById('coinTransferRecipientInput');
-        const contacts = document.getElementById('coinTransferContacts');
         const amountLabel = document.getElementById('coinTransferAmountLabel');
         const amountInput = document.getElementById('coinTransferAmountInput');
         const claimsField = document.getElementById('coinGiftClaimsField');
@@ -348,16 +359,11 @@ ZaliMixin(ZaliInterface, class {
             recipientInput.readOnly = !!recipient;
             recipientInput.classList.toggle('is-locked', !!recipient);
         }
-        if (contacts) {
-            const me = this.myName();
-            contacts.innerHTML = recipient ? '' : (this.S.contacts || [])
-                .filter(name => name && name !== me)
-                .map(name => `<option value="${this.esc(name)}"></option>`)
-                .join('');
-        }
         if (amountLabel) amountLabel.textContent = isGift ? 'Сумма каждому' : 'Сумма';
         if (amountInput) amountInput.value = '';
         if (claimsField) claimsField.hidden = !isGift;
+        const raffleBtn = document.getElementById('coinRaffleBtn');
+        if (raffleBtn) raffleBtn.hidden = !isGift;
         if (claimsInput) {
             claimsInput.value = '1';
             claimsInput.max = String(ZaliInterface.COIN_GIFT_MAX_CLAIMS);
@@ -718,6 +724,7 @@ ZaliMixin(ZaliInterface, class {
     parseCoinCard(text) {
         const value = String(text || '').trim();
         if (!value) return null;
+        if (value.startsWith('🎲')) return this.parseRaffleCard(value);
         if (value.startsWith('🎁')) {
             const match = value.match(/^🎁[^\n]*?(\d+)\s+ZC\s+×\s+(\d+)\n\[zc-gift:([A-Za-z0-9-]{8,64})\]$/u);
             if (match) return { kind: 'gift', amount: Number(match[1]), claims: Number(match[2]), id: match[3] };
@@ -734,6 +741,7 @@ ZaliMixin(ZaliInterface, class {
     coinCardSummary(text) {
         const card = this.parseCoinCard(text);
         if (!card) return '';
+        if (card.kind === 'raffle') return `🎲 Розыгрыш · ${card.title}`;
         return card.kind === 'gift'
             ? `🎁 ZaliCoin-карточка · ${this.formatCoinAmount(card.amount)} ZC`
             : `💸 Перевод · ${this.formatCoinAmount(card.amount)} ZC`;
@@ -742,6 +750,7 @@ ZaliMixin(ZaliInterface, class {
     renderCoinCard(card, msg) {
         const time = msg?.timestamp ? this.fmtTime(msg.timestamp) : '';
         const sender = String(msg?.sender || '').trim();
+        if (card.kind === 'raffle') return this.renderRaffleCard(card, msg);
         if (card.kind === 'gift') {
             // Лента всегда рисует текущую переписку, так что при отсутствии полей в
             // самом сообщении канал берётся из неё. В личке канала нет вовсе.

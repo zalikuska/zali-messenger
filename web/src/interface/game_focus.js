@@ -106,6 +106,7 @@ ZaliMixin(ZaliInterface, class {
     renderGameFocusSettings() {
         const card = document.getElementById('gameFocusSettingsCard');
         if (!card) return;
+        void this.loadGameFocusFriends();
         const s = this.gameFocusSettings();
         const set = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
         set('inputGameFocusMode', el => { el.value = s.mode; });
@@ -119,6 +120,7 @@ ZaliMixin(ZaliInterface, class {
             ? items.map(item => `<button type="button" class="btn-flat game-focus-chip" ${attr}="${this.esc(item)}" title="Убрать">${this.esc(item)} ×</button>`).join(' ')
             : '';
         set('gameFocusGamesList', el => this.setHTMLIfChanged(el, chips(s.games, 'data-game-focus-game')));
+        this.renderGameFocusPicker();
         set('gameFocusPeopleList', el => this.setHTMLIfChanged(el, chips(s.people, 'data-game-focus-person')));
         set('gameFocusGamesHint', el => {
             el.textContent = s.games.length
@@ -157,8 +159,65 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
+    // Кого можно выбрать: контакты и друзья (друзья подгружаются один раз).
+    gameFocusCandidates() {
+        const me = this.myName?.() || '';
+        const names = new Set([...(this.S.contacts || []), ...(this._gameFocusFriends || [])]);
+        names.delete(me);
+        return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b, 'ru', { sensitivity: 'base' }));
+    }
+
+    async loadGameFocusFriends() {
+        if (this._gameFocusFriendsLoaded || !this.S.session?.token) return;
+        this._gameFocusFriendsLoaded = true;
+        try {
+            const res = await this.apiFetch('/api/friends');
+            if (!res.ok) return;
+            const body = await res.json();
+            this._gameFocusFriends = Array.isArray(body?.friends) ? body.friends.map(String) : [];
+            this.renderGameFocusPicker();
+        } catch (e) {
+            this._gameFocusFriendsLoaded = false;
+        }
+    }
+
+    // Список контактов с отметками: клик по строке добавляет человека или убирает.
+    renderGameFocusPicker() {
+        const box = document.getElementById('gameFocusPicker');
+        if (!box) return;
+        const selected = new Set(this.gameFocusSettings().people);
+        const filter = String(document.getElementById('inputGameFocusPersonFilter')?.value || '').trim().toLowerCase();
+        const candidates = this.gameFocusCandidates().filter(name => !filter || name.toLowerCase().includes(filter));
+        if (!candidates.length) {
+            const empty = filter ? 'Никого не найдено' : 'Контактов пока нет — введите логин ниже';
+            this.setHTMLIfChanged(box, `<div class="game-focus-pick-empty">${this.esc(empty)}</div>`);
+            return;
+        }
+        this.setHTMLIfChanged(box, candidates.map(name => {
+            const on = selected.has(name);
+            return `<button type="button" class="game-focus-pick${on ? ' selected' : ''}" role="option" aria-selected="${this.esc(String(on))}" data-game-focus-pick="${this.esc(name)}">
+                <span class="ava">${this.renderAvatarHTML(name, 'avatar-img', name)}</span>
+                <span class="game-focus-pick-name">${this.esc(name)}</span>
+                <span class="game-focus-pick-mark" aria-hidden="true">${on ? '✓' : ''}</span>
+            </button>`;
+        }).join(''));
+    }
+
+    toggleGameFocusPerson(name) {
+        const person = String(name || '').trim();
+        if (!person) return;
+        const people = this.gameFocusSettings().people;
+        const next = people.includes(person) ? people.filter(p => p !== person) : [...people, person];
+        return this.saveGameFocusSettings({ people: next });
+    }
+
     bindGameFocusSettings() {
         const byId = (id) => document.getElementById(id);
+        byId('gameFocusPicker')?.addEventListener('click', (event) => {
+            const row = event.target.closest?.('[data-game-focus-pick]');
+            if (row) void this.toggleGameFocusPerson(row.getAttribute('data-game-focus-pick'));
+        });
+        byId('inputGameFocusPersonFilter')?.addEventListener('input', () => this.renderGameFocusPicker());
         byId('inputGameFocusMode')?.addEventListener('change', (event) => {
             void this.saveGameFocusSettings({ mode: event.target.value });
         });

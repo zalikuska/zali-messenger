@@ -679,6 +679,11 @@ pub(crate) async fn upload_message_with_context(
     server_id_override: Option<String>,
     channel_id_override: Option<String>,
 ) -> impl IntoResponse {
+    // Потолок отправки на человека: пять сообщений в секунду в среднем — с запасом
+    // для живого чата и слишком мало, чтобы заливать диск одним аккаунтом.
+    if !crate::rate_allow(&state, format!("upload:{}", auth_user.to_lowercase()), 300) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     info!(
         "UPLOAD start auth_user={} server_override={:?} channel_override={:?}",
         auth_user,

@@ -37,6 +37,10 @@ pub(crate) struct ReleaseResponse {
     mandatory: bool,
     #[serde(rename = "publishedAt")]
     published_at: i64,
+    /// ES256 (r‖s, base64) официального ключа разработчиков над
+    /// `release_signature_message`; пусто у релиза, опубликованного без подписи.
+    /// Клиент без валидной подписи обновление не скачивает.
+    signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +54,20 @@ pub(crate) struct PublishReleaseRequest {
     sha256: String,
     #[serde(default)]
     mandatory: bool,
+    #[serde(default)]
+    signature: String,
+}
+
+/// Сообщение, которое подписывается: платформа, версия, SHA-256 и ссылка.
+/// Подмена любого из полей на сервере делает подпись недействительной. Формат
+/// держат вместе: сюда, `scripts/release_sign.py` и `web/src/interface/updates.js`.
+pub(crate) fn release_signature_message(
+    platform: &str,
+    version: &str,
+    sha256: &str,
+    download_url: &str,
+) -> String {
+    format!("zali-release-sig:v1\n{platform}\n{version}\n{sha256}\n{download_url}")
 }
 
 fn is_supported_platform(platform: &str) -> bool {
@@ -133,7 +151,7 @@ pub(crate) async fn get_latest_version(
     }
 
     let row = sqlx::query(
-        "SELECT platform, version, notes, download_url, sha256, mandatory, published_at
+        "SELECT platform, version, notes, download_url, sha256, mandatory, published_at, signature
          FROM app_releases WHERE platform = ?",
     )
     .bind(&platform)
@@ -149,6 +167,7 @@ pub(crate) async fn get_latest_version(
             sha256: row.get("sha256"),
             mandatory: row.get::<i64, _>("mandatory") != 0,
             published_at: row.get("published_at"),
+            signature: row.get("signature"),
         })
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -181,17 +200,35 @@ pub(crate) async fn publish_version(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
+    // Подпись, если приложена, проверяется сразу: опечатка в ссылке или не тот ключ
+    // иначе всплыли бы только тем, что клиенты перестали бы обновляться.
+    let signature = body.signature.trim().to_string();
+    if !signature.is_empty() {
+        use base64::Engine as _;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&signature)
+            .unwrap_or_default();
+        let message = release_signature_message(&platform, &version, &sha256, &download_url);
+        if !crate::addons::verify_es256(&crate::addons::official_public_key(), message.as_bytes(), &raw) {
+            warn!("Подпись релиза не сходится platform={} version={}", platform, version);
+            return (StatusCode::BAD_REQUEST, "Подпись релиза не сходится с официальным ключом").into_response();
+        }
+    } else {
+        warn!("Релиз опубликован БЕЗ подписи platform={} version={}: клиенты не станут его скачивать", platform, version);
+    }
+
     let published_at = chrono::Utc::now().timestamp();
     let result = sqlx::query(
-        "INSERT INTO app_releases (platform, version, notes, download_url, sha256, mandatory, published_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO app_releases (platform, version, notes, download_url, sha256, mandatory, published_at, signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(platform) DO UPDATE SET
             version = excluded.version,
             notes = excluded.notes,
             download_url = excluded.download_url,
             sha256 = excluded.sha256,
             mandatory = excluded.mandatory,
-            published_at = excluded.published_at",
+            published_at = excluded.published_at,
+            signature = excluded.signature",
     )
     .bind(&platform)
     .bind(&version)
@@ -200,6 +237,7 @@ pub(crate) async fn publish_version(
     .bind(&sha256)
     .bind(body.mandatory as i64)
     .bind(published_at)
+    .bind(&signature)
     .execute(&state.db)
     .await;
 

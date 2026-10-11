@@ -14,7 +14,10 @@ ZaliMixin(ZaliInterface, class {
         const overlay = document.getElementById('serverOverlay');
         if (overlay) {
             overlay.hidden = false;
-            requestAnimationFrame(() => overlay.classList.add('visible'));
+            requestAnimationFrame(() => {
+                overlay.classList.add('visible');
+                this.syncSidebarPanel?.({ force: true });
+            });
         }
     }
 
@@ -22,6 +25,7 @@ ZaliMixin(ZaliInterface, class {
         const overlay = document.getElementById('serverOverlay');
         if (overlay) {
             overlay.classList.remove('visible');
+            this.syncSidebarPanel?.({ force: true });
             setTimeout(() => {
                 overlay.hidden = true;
             }, 180);
@@ -102,6 +106,7 @@ ZaliMixin(ZaliInterface, class {
                 </select>
             `;
             return `<div class="server-member-row ${isOwner ? 'owner' : ''}">
+                <span class="sm-member-ava" aria-hidden="true">${this.esc(String(member.username || '?').trim().charAt(0).toUpperCase() || '?')}</span>
                 <div class="server-member-info">
                     <div class="server-member-name">${this.esc(member.username)}</div>
                     <div class="server-member-meta">${this.esc(this.serverRoleLabel(role))}${joined ? ` · ${this.esc(joined)}` : ''}${this.gameActivityFor(member.username) ? ` · ${this.gameActivityLineHTML(member.username, { withDuration: false })}` : ''}</div>
@@ -247,6 +252,13 @@ ZaliMixin(ZaliInterface, class {
                 btn.classList.toggle('active', visible && section === activeSection);
             });
         }
+        const headAvatar = document.getElementById('serverModalAvatar');
+        if (headAvatar) {
+            const headName = isEdit ? (current?.name || server?.name || '') : '';
+            const headIcon = isEdit ? String(current?.icon || '').trim() : '';
+            headAvatar.textContent = headIcon || (headName ? headName.trim().charAt(0).toUpperCase() : (isDiscover ? '⌕' : '+'));
+            headAvatar.style.background = isEdit ? (this.safeCssColor(current?.color) || '') : '';
+        }
         if (sidebarTitle) sidebarTitle.textContent = isEdit ? (current?.name || server?.name || 'Настройки сервера') : isDiscover ? 'Поиск серверов' : 'Создание сервера';
         if (sidebarHint) sidebarHint.textContent = isEdit
             ? (activeSection === 'overview'
@@ -261,15 +273,9 @@ ZaliMixin(ZaliInterface, class {
                 : activeSection === 'roles'
                     ? 'Соберите роли до создания сервера.'
                     : 'Имя, оформление и базовая конфигурация.';
-        if (title) title.textContent = isEdit ? 'Настройки сервера' : isDiscover ? 'Публичные серверы' : 'Создать сервер';
+        if (title) title.textContent = isEdit ? (current?.name || server?.name || 'Настройки сервера') : isDiscover ? 'Публичные серверы' : 'Новый сервер';
         if (hint) hint.textContent = isEdit
-            ? (activeSection === 'overview'
-                ? 'Переименуйте сервер, измените оформление и код входа.'
-                : activeSection === 'channels'
-                    ? 'Управляйте каналами сервера.'
-                : activeSection === 'roles'
-                    ? 'Управляйте ролями и правами доступа.'
-                    : 'Добавляйте участников и назначайте им роли.')
+            ? this.serverModalSummaryLine(current || server)
             : isDiscover
                 ? 'Выберите публичный сервер и войдите в него через меню без автодобавления в список.'
             : activeSection === 'roles'
@@ -279,11 +285,15 @@ ZaliMixin(ZaliInterface, class {
         if (modeNote) modeNote.textContent = isEdit ? 'edit' : isDiscover ? 'browse' : 'create';
         if (saveBtn) {
             saveBtn.hidden = isDiscover;
-            saveBtn.textContent = this.S.serverModal.saving ? 'Сохранение...' : (isEdit ? 'Сохранить' : 'Создать');
+            saveBtn.textContent = this.S.serverModal.saving ? 'Сохранение…' : (isEdit ? 'Сохранить' : 'Создать');
             saveBtn.disabled = !!this.S.serverModal.saving || !!this.S.serverModal.loading;
         }
-        if (deleteBtn) deleteBtn.hidden = !isEdit || !canManage || this.normalizeMemberRole(current?.myRole || current?.my_role || '') !== 'owner';
-        if (serverModalCancel) serverModalCancel.textContent = isDiscover ? 'Закрыть' : 'Отмена';
+        if (deleteBtn) {
+            deleteBtn.hidden = !isEdit || !canManage || this.normalizeMemberRole(current?.myRole || current?.my_role || '') !== 'owner';
+            const danger = document.getElementById('serverDangerZone');
+            if (danger) danger.hidden = deleteBtn.hidden;
+        }
+        if (serverModalCancel) serverModalCancel.textContent = isEdit ? 'Сбросить' : 'Отмена';
         if (nameInput) nameInput.value = isEdit ? (current?.name || '') : (createDraftView?.name || '');
         if (descInput) descInput.value = isEdit ? (current?.description || '') : (createDraftView?.description || '');
         if (iconInput) iconInput.value = isEdit ? (current?.icon || '') : (createDraftView?.icon || '');
@@ -291,6 +301,9 @@ ZaliMixin(ZaliInterface, class {
         if (colorInput) colorInput.value = normalizedColor;
         const colorHexInput = document.getElementById('serverColorHexInput');
         if (colorHexInput) colorHexInput.value = normalizedColor;
+        document.querySelectorAll('[data-server-color-swatch]').forEach(btn => {
+            btn.classList.toggle('is-active', btn.getAttribute('data-server-color-swatch') === normalizedColor);
+        });
         const serverColorPickerPreview = document.querySelector('[data-color-picker-key="server-basics"] .color-picker-preview');
         if (serverColorPickerPreview) serverColorPickerPreview.style.background = normalizedColor;
         this.applyColorWheelValue({
@@ -336,10 +349,6 @@ ZaliMixin(ZaliInterface, class {
         if (serverMembersList) {
             serverMembersList.classList.toggle('is-loading', !!this.S.serverModal.loading);
         }
-        const roleSelect = document.getElementById('serverMemberRole');
-        if (roleSelect) {
-            roleSelect.innerHTML = this.serverRoleOptionsHtml(roleSelect.value || 'member');
-        }
         if (serverRoleColorInput) {
             const roleColor = this.normalizeColorValue(serverRoleColorInput.value || '#cbff00');
             serverRoleColorInput.value = roleColor;
@@ -362,7 +371,9 @@ ZaliMixin(ZaliInterface, class {
                 });
             }
         }
-        const channelCreateOpen = !!this.S.serverModal.channelCreateOpen;
+        // Форма нового канала — одна строка, всегда на виду: прятать её за кнопкой
+        // «Новый канал» значило лишний клик на самое частое действие раздела.
+        const channelCreateOpen = true;
         if (serverChannelCreate) serverChannelCreate.classList.toggle('is-collapsed', !channelCreateOpen);
         if (serverChannelCreateBody) serverChannelCreateBody.hidden = !channelCreateOpen;
         if (serverChannelCreateToggleBtn) serverChannelCreateToggleBtn.textContent = channelCreateOpen ? 'Свернуть' : 'Новый канал';
@@ -375,9 +386,7 @@ ZaliMixin(ZaliInterface, class {
             const open = this.serverModalColorPickerState('server-basics');
             serverColorPicker.classList.toggle('is-collapsed', !open);
             const toggle = serverColorPicker.querySelector('[data-color-picker-toggle="server-basics"]');
-            if (toggle) toggle.textContent = open ? 'Свернуть' : 'Развернуть';
-            // The markup is static in index.html, so the sub line has to be kept in
-            // step here too — it read «Свернуто по умолчанию» with the wheel open.
+            if (toggle) toggle.textContent = open ? 'Скрыть' : 'Выбрать';
             const sub = serverColorPicker.querySelector('.color-picker-sub');
             if (sub) sub.textContent = open ? 'Колесо открыто' : 'Свернуто по умолчанию';
         }
@@ -398,6 +407,71 @@ ZaliMixin(ZaliInterface, class {
             this.resetServerAssetPreview();
             if (!isDiscover) this.applyServerCreateAssetPreview();
         }
+        this.updateServerSaveBar();
+        this.syncSidebarPanel?.();
+    }
+
+    /** «12 участников · 5 каналов» под названием сервера. */
+    serverModalSummaryLine(server) {
+        const members = Array.isArray(this.S.serverModal.members) && this.S.serverModal.members.length
+            ? this.S.serverModal.members.length
+            : Number(server?.memberCount ?? server?.member_count ?? 0);
+        const channels = Array.isArray(server?.channels) ? server.channels.length : 0;
+        const plural = (n, f) => this.coinPlural ? this.coinPlural(n, f) : f[2];
+        const parts = [];
+        if (members) parts.push(`${members} ${plural(members, ['участник', 'участника', 'участников'])}`);
+        if (channels) parts.push(`${channels} ${plural(channels, ['канал', 'канала', 'каналов'])}`);
+        return parts.join(' · ') || 'Настройки сервера';
+    }
+
+    /** Есть ли в форме «Обзор» несохранённые правки (только режим правки). */
+    serverModalDirty() {
+        if (this.S.serverModal.mode !== 'edit') return false;
+        const current = (this.S.servers || []).find(s => s.id === this.S.serverModal.serverId);
+        if (!current) return false;
+        const val = (id) => String(document.getElementById(id)?.value ?? '');
+        const color = this.normalizeColorValue(val('serverColorInput') || '#cbff00');
+        return val('serverNameInput').trim() !== String(current.name || '').trim()
+            || val('serverDescriptionInput').trim() !== String(current.description || '').trim()
+            || val('serverIconInput').trim() !== String(current.icon || '').trim()
+            || color !== this.normalizeColorValue(current.color || '#cbff00')
+            || !!document.getElementById('serverPublicInput')?.checked !== !!current.is_public;
+    }
+
+    /**
+     * Полоса «Сохранить / Сбросить»: в режиме правки появляется только на
+     * «Обзоре» и только когда что-то изменено — каналы, роли и участники
+     * сохраняются сразу, и общая кнопка внизу сбивала с толку на всех вкладках.
+     */
+    updateServerSaveBar() {
+        const bar = document.getElementById('serverModalActions');
+        if (!bar) return;
+        const mode = this.S.serverModal.mode;
+        const section = this.serverModalActiveSection(mode);
+        const error = String(this.S.serverModal.error || '').trim();
+        let visible;
+        if (mode === 'discover') visible = !!error;
+        else if (mode === 'edit') visible = (section === 'overview' && this.serverModalDirty()) || !!error;
+        else visible = true;
+        bar.hidden = !visible;
+        const saveBtn = document.getElementById('serverSaveBtn');
+        if (saveBtn && mode === 'edit') saveBtn.disabled = !!this.S.serverModal.saving || !this.serverModalDirty();
+    }
+
+    /** Предустановленный цвет сервера: то же, что движение колеса. */
+    applyServerColorSwatch(hex) {
+        const value = this.normalizeColorValue(hex || '#cbff00');
+        const hidden = document.getElementById('serverColorInput');
+        const hexInput = document.getElementById('serverColorHexInput');
+        this.applyColorWheelValue({ wheel: document.getElementById('serverColorWheel'), hidden, hexInput, value });
+        if (hidden) hidden.value = value;
+        if (hexInput) hexInput.value = value;
+        const preview = document.querySelector('[data-color-picker-key="server-basics"] .color-picker-preview');
+        if (preview) preview.style.background = value;
+        document.querySelectorAll('[data-server-color-swatch]').forEach(btn => {
+            btn.classList.toggle('is-active', btn.getAttribute('data-server-color-swatch') === value);
+        });
+        this.updateServerSaveBar();
     }
 
     // Файлы, выбранные при создании сервера. Держатся вне S: File не
@@ -570,132 +644,82 @@ ZaliMixin(ZaliInterface, class {
         const list = document.getElementById('serverRolesList');
         const count = document.getElementById('serverRolesCount');
         const isEdit = this.S.serverModal.mode === 'edit';
-        const roles = isEdit ? this.serverRoleList() : this.draftServerRoleList();
+        const roles = isEdit ? this.serverRoleList() : [];
         if (count) count.textContent = String(roles.length || 0);
         if (!list) return;
-        if (roles.length === 0) {
+        if (!isEdit) {
             list.innerHTML = `<div class="empty-state">
-                <div class="empty-ttl">${isEdit ? 'Ролей нет' : 'Черновики ролей'}</div>
-                <div class="empty-sub">${isEdit ? 'Создайте первую роль' : 'Добавьте роли перед созданием сервера'}</div>
+                <div class="empty-ttl">Роли — после создания</div>
+                <div class="empty-sub">Создайте сервер, и здесь можно будет настроить права.</div>
             </div>`;
             return;
         }
-        const renderColorPicker = ({ pickerKey, wheelId, colorId, hexId, currentColor, isRoleCard = false }) => {
-            const open = this.serverModalColorPickerState(pickerKey);
-            return `<div class="color-picker color-picker--compact color-picker--collapsible ${open ? '' : 'is-collapsed'}" data-color-picker-key="${this.esc(pickerKey)}">
-                <div class="color-picker-head">
-                    <div class="color-picker-summary">
-                        <span class="color-picker-preview" style="background:${this.safeCssColor(currentColor) || 'transparent'}"></span>
-                        <div class="color-picker-copy">
-                            <div class="color-picker-title">RGB</div>
-                            <div class="color-picker-sub">${open ? 'Колесо открыто' : 'Свернуто по умолчанию'}</div>
-                        </div>
-                    </div>
-                    <button class="btn-flat color-picker-toggle" type="button" data-color-picker-toggle="${this.esc(pickerKey)}">${open ? 'Свернуть' : 'Развернуть'}</button>
-                </div>
-                <div class="color-picker-body">
-                    <div class="color-wheel ${isRoleCard ? 'color-wheel--tiny' : 'color-wheel--small'}" id="${this.esc(wheelId)}" tabindex="0" aria-label="Цвет роли">
-                        <div class="color-wheel-thumb"></div>
-                        <div class="color-wheel-center">${isRoleCard ? '' : 'RGB'}</div>
-                    </div>
-                    <div class="color-picker-side">
-                        <input type="hidden" ${isRoleCard ? `data-role-color="${this.esc(pickerKey)}"` : `data-draft-role-color="${this.esc(pickerKey)}"`} id="${this.esc(colorId)}" value="${this.esc(currentColor)}">
-                        <input class="settings-input color-hex-input" type="text" id="${this.esc(hexId)}" maxlength="7" value="${this.esc(currentColor)}" aria-label="HEX цвет роли">
-                    </div>
-                </div>
+        if (roles.length === 0) {
+            list.innerHTML = `<div class="sm-roles-layout">
+                <div class="sm-role-bar"><button class="sm-role-add" type="button" data-role-add>＋ Новая роль</button></div>
+                <div class="sm-role-detail is-empty"><p class="sm-note">Ролей пока нет. Создайте первую — например «Модератор».</p></div>
             </div>`;
-        };
-        list.innerHTML = roles.map(role => {
-            if (!isEdit) {
-                const draftId = String(role.draftId || '').trim();
-                const safeDraftId = draftId.replace(/[^a-z0-9_-]/gi, '_');
-                const wheelId = `draftRoleColorWheel-${safeDraftId}`;
-                const colorId = `draftRoleColorInput-${safeDraftId}`;
-                const hexId = `draftRoleColorHexInput-${safeDraftId}`;
-                const currentColor = this.normalizeColorValue(role.color || '#cbff00');
-                const collapsed = role.collapsed !== false;
-                const draftPermCount = this.serverRolePermissionsCount(role);
-                return `<div class="server-role-card draft-role ${collapsed ? 'collapsed' : ''}" data-draft-role-card="${this.esc(draftId)}" data-draft-role-collapsed="${collapsed ? '1' : '0'}">
-                    <div class="server-role-head server-role-head--draft">
-                        <span class="server-role-chip" style="background:${this.safeCssColor(currentColor) || 'transparent'}"></span>
-                        <div>
-                            <div class="server-role-name">${this.esc(role.name || 'Новая роль')}</div>
-                            <div class="server-role-meta">черновик</div>
-                        </div>
-                        <button class="btn-flat server-role-toggle" type="button" data-draft-role-toggle="${this.esc(draftId)}">${collapsed ? 'Развернуть' : 'Свернуть'}</button>
-                    </div>
-                    <div class="server-role-body">
-                        <div class="server-role-meta server-role-summary">Права: ${draftPermCount}/${this.serverRolePermissionDefs().length}</div>
-                        <div class="server-role-controls">
-                        <input class="settings-input" data-draft-role-name="${this.esc(draftId)}" value="${this.esc(role.name || '')}" placeholder="Название роли">
-                        ${renderColorPicker({ pickerKey: draftId, wheelId, colorId, hexId, currentColor, isRoleCard: false })}
-                        ${this.serverRolePermissionsHtml(role, draftId, 'data-draft-role-perm')}
-                        <div class="server-role-actions">
-                            <button class="btn-flat" type="button" data-draft-role-delete="${this.esc(draftId)}">Удалить</button>
-                        </div>
-                        </div>
-                    </div>
-                </div>`;
-            }
-            const locked = role.roleId === 'member' || role.roleId === 'admin';
-            const safeRoleId = String(role.roleId || '').replace(/[^a-z0-9_-]/gi, '_');
-            const wheelId = `roleColorWheel-${safeRoleId}`;
-            const colorId = `roleColorInput-${safeRoleId}`;
-            const hexId = `roleColorHexInput-${safeRoleId}`;
-            const currentColor = this.normalizeColorValue(role.color || '#cbff00');
-            const rolePermCount = this.serverRolePermissionsCount(role);
-            const colorPickerKey = role.roleId || safeRoleId;
-            const options = `
-                <div class="server-role-controls">
-                    <input class="settings-input" data-role-name="${this.esc(role.roleId)}" value="${this.esc(role.name || '')}">
-                    ${renderColorPicker({ pickerKey: colorPickerKey, wheelId, colorId, hexId, currentColor, isRoleCard: true })}
-                    <div class="server-role-actions">
-                        <button class="btn-flat" type="button" data-role-save="${this.esc(role.roleId)}">Сохранить</button>
-                        <button class="btn-flat" type="button" data-role-delete="${this.esc(role.roleId)}" ${locked ? 'disabled' : ''}>Удалить</button>
-                    </div>
-                </div>
-            `;
-            return `<div class="server-role-card ${locked ? 'owner-role' : ''}" data-role-card="${this.esc(role.roleId)}">
-                <div class="server-role-head">
-                    <span class="server-role-chip" style="background:${this.safeCssColor(role.color) || '#cbff00'}"></span>
-                    <div>
-                        <div class="server-role-name">${this.esc(role.name || role.roleId)}</div>
-                        <div class="server-role-meta">${this.esc(role.roleId)}</div>
-                    </div>
-                    <span class="server-role-meta">${locked ? 'системная' : 'роль'}</span>
-                </div>
-                <div class="server-role-meta server-role-summary">Права: ${rolePermCount}/${this.serverRolePermissionDefs().length}</div>
-                ${this.serverRolePermissionsHtml(role, role.roleId, 'data-role-perm')}
-                ${options}
-            </div>`;
+            return;
+        }
+        const total = this.serverRolePermissionDefs().length;
+        let selected = String(this.S.serverModal.roleSel || '');
+        if (!roles.some(r => String(r.roleId) === selected)) selected = String(roles[0].roleId);
+        this.S.serverModal.roleSel = selected;
+        const role = roles.find(r => String(r.roleId) === selected);
+        const locked = role.roleId === 'member' || role.roleId === 'admin';
+        const color = this.normalizeColorValue(role.color || '#cbff00');
+        const swatches = ['#cbff00', '#3ddc97', '#38bdf8', '#818cf8', '#c084fc', '#f472b6', '#fb7185', '#fb923c', '#facc15', '#94a3b8'];
+        const options = roles.map((r) => {
+            const hint = `${Number(this.serverRolePermissionsCount(r))} из ${Number(total)} прав`;
+            return `<option value="${this.esc(r.roleId)}" data-hint="${this.esc(hint)}"${String(r.roleId) === selected ? ' selected' : ''}>${this.esc(r.name || r.roleId)}</option>`;
         }).join('');
-        requestAnimationFrame(() => {
-            roles.forEach(role => {
-                if (!isEdit) {
-                    const draftId = String(role.draftId || '').trim();
-                const safeDraftId = draftId.replace(/[^a-z0-9_-]/gi, '_');
-                this.colorWheelBindings.delete(`draftRoleColorWheel-${safeDraftId}`);
-                this.bindColorWheel({
-                    wheelId: `draftRoleColorWheel-${safeDraftId}`,
-                    hiddenId: `draftRoleColorInput-${safeDraftId}`,
-                    hexId: `draftRoleColorHexInput-${safeDraftId}`,
-                    initialValue: this.normalizeColorValue(role.color || '#cbff00'),
-                });
-                return;
-            }
-            const safeRoleId = String(role.roleId || '').replace(/[^a-z0-9_-]/gi, '_');
-            const wheelId = `roleColorWheel-${safeRoleId}`;
-            const colorId = `roleColorInput-${safeRoleId}`;
-            const hexId = `roleColorHexInput-${safeRoleId}`;
-            this.colorWheelBindings.delete(wheelId);
-            this.bindColorWheel({
-                wheelId,
-                hiddenId: colorId,
-                hexId,
-                initialValue: this.normalizeColorValue(role.color || '#cbff00'),
-            });
-            });
+        list.innerHTML = `<div class="sm-roles-layout">
+            <div class="sm-role-bar">
+                <span class="server-role-chip" style="background:${this.safeCssColor(role.color) || '#cbff00'}"></span>
+                <select class="settings-input sm-role-select" data-role-select-dd aria-label="Роль">${options}</select>
+                <button class="sm-role-add" type="button" data-role-add>＋ Новая роль</button>
+            </div>
+            <div class="sm-role-detail server-role-card${locked ? ' owner-role' : ''}" data-role-card="${this.esc(role.roleId)}">
+                <div class="sm-role-top">
+                    <label class="sm-field sm-field--grow">
+                        <span>Название роли</span>
+                        <input class="settings-input" data-role-name="${this.esc(role.roleId)}" value="${this.esc(role.name || '')}" maxlength="64"${locked ? ' readonly' : ''}>
+                    </label>
+                </div>
+                <div class="sm-field">
+                    <span>Цвет</span>
+                    <input type="hidden" data-role-color="${this.esc(role.roleId)}" value="${this.esc(color)}">
+                    <div class="sm-swatches" role="group" aria-label="Цвет роли">
+                        ${swatches.map(c => `<button type="button" class="sm-swatch${c === color ? ' is-active' : ''}" data-role-swatch="${this.esc(c)}" style="--sw:${this.esc(c)}" aria-label="Цвет ${this.esc(c)}"></button>`).join('')}
+                    </div>
+                </div>
+                <div class="sm-perms">${this.serverRolePermissionsHtml(role, role.roleId, 'data-role-perm')}</div>
+                <div class="sm-role-actions">
+                    <button class="btn-flat server-delete-btn" type="button" data-role-delete="${this.esc(role.roleId)}"${locked ? ' disabled' : ''}>Удалить роль</button>
+                    <button class="auth-btn primary" type="button" data-role-save="${this.esc(role.roleId)}">Сохранить роль</button>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    /** «Новая роль»: создаётся сразу с обычными правами и открывается на правку. */
+    async quickCreateServerRole() {
+        const serverId = this.S.serverModal.serverId;
+        if (!serverId || this.S.serverModal.mode !== 'edit') return;
+        const payload = { name: 'Новая роль', color: '#cbff00', ...this.serverRoleCreateDefaults() };
+        const res = await this.apiFetch(this.apiRoutes.servers.roles(serverId), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
         });
+        if (!res.ok) throw new Error(await res.text() || 'Не удалось создать роль');
+        const role = await res.json();
+        const roles = [role, ...(this.S.serverModal.roles || [])].sort((a, b) => Number(a.position || 0) - Number(b.position || 0));
+        this.setServerModalState({ roles, roleSel: String(role.roleId || ''), error: '' });
+        this.renderServerModal();
+        const input = document.querySelector(`[data-role-name="${CSS.escape(String(role.roleId || ''))}"]`);
+        if (input) { input.focus(); input.select(); }
+        await this.loadServers({ silent: true });
     }
 
     renderServerChannels({ force = false } = {}) {
@@ -778,7 +802,6 @@ ZaliMixin(ZaliInterface, class {
             members: nextMode === 'edit' ? (server?.members || []) : [],
             roles: [],
             channels: nextMode === 'edit' ? (server?.channels || []) : [],
-            draftRoles: [],
             createDraft: nextMode === 'edit' ? null : this.serverCreateDraftDefaults(),
             joinLink: nextMode === 'edit' ? (server?.joinLink || server?.join_link || '') : '',
             selectedChannelId,
@@ -826,7 +849,6 @@ ZaliMixin(ZaliInterface, class {
             members: [],
             roles: [],
             channels: [],
-            draftRoles: [],
             createDraft: null,
             joinLink: '',
             selectedChannelId: null,
@@ -912,19 +934,6 @@ ZaliMixin(ZaliInterface, class {
             join_link: (payloadSource ? payloadSource.joinLink : (joinLinkInput?.value || '')).trim(),
             is_public: payloadSource ? !!payloadSource.isPublic : !!publicInput?.checked,
         };
-        if (mode !== 'edit') {
-            payload.roles = this.syncDraftServerRolesFromDom().map(role => {
-                const rolePayload = {
-                    name: role.name,
-                    color: role.color,
-                };
-                this.serverRolePermissionDefs().forEach(def => {
-                    rolePayload[def.key] = !!role[def.key];
-                });
-                return rolePayload;
-            });
-        }
-
         if (!payload.name) {
             this.setServerModalState({ error: 'Введите название сервера' });
             this.renderServerModal();
@@ -1053,8 +1062,8 @@ ZaliMixin(ZaliInterface, class {
             ? this.currentServer()
             : null;
         const fallback = mode === 'edit' && server?.id
-            ? `zali://server/${server.id}`
-            : `zali://server/${(document.getElementById('serverNameInput')?.value || 'server').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            ? this.serverLink(server.id)
+            : this.serverLink((document.getElementById('serverNameInput')?.value || 'server').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'));
         if (mode === 'edit') {
             this.setServerModalState({ joinLink: fallback, error: '' });
         } else {
@@ -1072,53 +1081,17 @@ ZaliMixin(ZaliInterface, class {
         return fallback;
     }
 
+    /** «Войти по коду»: ссылка любого вида (…/server/<код>, zali://…) или голый код. */
     async joinServerByLink(link) {
         const raw = String(link || '').trim();
         if (!raw) return;
-        const inviteMatch = raw.match(/(?:zali:\/\/invite\/|invite\/)?([a-z0-9]{4,64})/i);
-        if (inviteMatch && /invite/i.test(raw)) {
-            const inviteCode = inviteMatch[1].toLowerCase();
-            try {
-                const res = await this.apiFetch(this.apiRoutes.invites.join(inviteCode), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: inviteCode }),
-                });
-                if (!res.ok) {
-                    throw new Error(await res.text() || 'Не удалось войти по ссылке');
-                }
-                const data = await res.json();
-                await this.loadServers({ silent: true });
-                this.closeServerOverlay();
-                if (data?.serverId) {
-                    this.setActiveServer(data.serverId, { persist: true });
-                }
-                this.addLogEntry({ type: 'SUCCESS', msg: `Вход по ссылке успешен: ${inviteCode}`, ts: new Date().toLocaleTimeString() });
-            } catch (e) {
-                this.addLogEntry({ type: 'ERROR', msg: e?.message || 'Не удалось войти по ссылке', ts: new Date().toLocaleTimeString() });
-            }
+        const parsed = this.parseZaliLink(raw);
+        if (parsed?.kind === 'profile') {
+            await this.openZaliLink(parsed);
             return;
         }
-
-        try {
-            const res = await this.apiFetch(this.apiRoutes.servers.join, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ link: raw }),
-            });
-            if (!res.ok) {
-                throw new Error(await res.text() || 'Не удалось войти по ссылке');
-            }
-            const data = await res.json();
-            await this.loadServers({ silent: true });
-            this.closeServerOverlay();
-            if (data?.serverId) {
-                this.setActiveServer(data.serverId, { persist: true });
-            }
-            this.addLogEntry({ type: 'SUCCESS', msg: `Вход по ссылке успешен`, ts: new Date().toLocaleTimeString() });
-        } catch (e) {
-            this.addLogEntry({ type: 'ERROR', msg: e?.message || 'Не удалось войти по ссылке', ts: new Date().toLocaleTimeString() });
-        }
+        // Человек сам ввёл код — отдельное подтверждение не нужно.
+        await this.joinServerFromLink(parsed ? parsed.token : raw, { confirm: false });
     }
 
     openJoinCodeModal() {
@@ -1202,26 +1175,6 @@ ZaliMixin(ZaliInterface, class {
         const payload = this.rolePayloadFromCreateForm();
         if (!payload.name) {
             this.setServerModalState({ error: 'Введите название роли' });
-            this.renderServerModal();
-            return;
-        }
-        if (this.S.serverModal.mode === 'create') {
-            const draftRoles = this.syncDraftServerRolesFromDom();
-            const draftPermissions = {};
-            this.serverRolePermissionDefs().forEach(def => {
-                draftPermissions[def.key] = !!payload[def.key];
-            });
-            draftRoles.push({
-                draftId: `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-                collapsed: true,
-                name: payload.name,
-                color: payload.color,
-                ...draftPermissions,
-            });
-            this.setServerModalState({ draftRoles, error: '' });
-            const nameInput = document.getElementById('serverRoleNameInput');
-            if (nameInput) nameInput.value = '';
-            this.applyServerRoleCreateDefaults();
             this.renderServerModal();
             return;
         }

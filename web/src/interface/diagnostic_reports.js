@@ -84,7 +84,7 @@ ZaliMixin(ZaliInterface, class {
             reportedAt: new Date().toISOString(),
             userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
             deviceId: this.currentDeviceId?.() || '',
-            designMode: document.body?.dataset?.designMode || '',
+            designMode: (document.body?.dataset?.designGlow === 'on' ? 'focus-glow' : document.body?.dataset?.designMode) || '',
             online: typeof navigator !== 'undefined' ? navigator.onLine : null,
             visible: !document.hidden,
             uptimeSec: Math.round((typeof performance !== 'undefined' ? performance.now() : 0) / 1000),

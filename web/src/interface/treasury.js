@@ -120,7 +120,11 @@ ZaliMixin(ZaliInterface, class {
         const t = this._treasury;
         if (!t) return;
         const data = t.data;
-        const canManage = !!data?.canManage;
+        // Права приходят вместе с казной. Пока данных нет (нет сети, сервер не
+        // ответил), владелец и админ всё равно видят «Выплатить»: роль известна
+        // из списка серверов, а отказ скажет сама выплата.
+        const knownServer = (this.S.servers || []).find(item => item.id === t.serverId);
+        const canManage = data ? !!data.canManage : this.canManageServer(knownServer);
         if (!canManage && t.tab === 'payout') t.tab = 'deposit';
 
         const name = document.getElementById('treasuryServerName');
@@ -179,16 +183,6 @@ ZaliMixin(ZaliInterface, class {
         const amountLabel = document.getElementById('treasuryPayoutAmountLabel');
         if (amountLabel) amountLabel.textContent = t.target === 'role' ? 'Сумма каждому (ZC)' : 'Сумма (ZC)';
 
-        const datalist = document.getElementById('treasuryMembersList');
-        if (datalist) {
-            const html = (Array.isArray(data.members) ? data.members : [])
-                .map(username => `<option value="${this.esc(username)}"></option>`)
-                .join('');
-            if (datalist.__treasuryHtml !== html) {
-                datalist.innerHTML = html;
-                datalist.__treasuryHtml = html;
-            }
-        }
         const otherServers = (this.S.servers || []).filter(server => server && server.id !== t.serverId);
         const serverOptions = otherServers.length
             ? otherServers.map(server => `<option value="${this.esc(server.id)}">${this.esc(server.name || 'Сервер')}</option>`).join('')

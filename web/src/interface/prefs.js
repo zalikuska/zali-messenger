@@ -38,32 +38,51 @@ ZaliMixin(ZaliInterface, class {
     }
 
     designModeCatalog() {
+        // Порядок = порядок в настройках: сначала «Фокус» (он же по умолчанию) и его
+        // вариант со свечением, затем прежние оформления.
         return [
-            { id: 'classic', label: 'Классический', note: 'По умолчанию', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
-            { id: 'flat', label: 'Плоский', note: '', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
             // «Фокус» — не очередная перекраска, а другая иерархия: акцент
             // остаётся только у «моего» (исходящие, мой аватар), «нового»
             // (непрочитанное) и главного действия (отправить), служебное
             // прячется до наведения или до проблемы. Слой CSS — в конце
             // web/style.css, раздел «DESIGN MODE: FOCUS».
-            { id: 'focus', label: 'Фокус', note: '', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
+            { id: 'focus', label: 'Фокус', note: 'По умолчанию', hint: 'Спокойные поверхности и ясная иерархия: акцент только там, где он что-то значит.' },
+            // Тот же «Фокус» (вся иерархия и поверхности общие) плюс мягкое свечение:
+            // ореол вокруг сплошных акцентов и рассеянный свет на фоне. Технически —
+            // data-design-mode="focus" с добавкой data-design-glow="on", поэтому
+            // каждое правило «Фокуса» работает и здесь без копий; слой свечения — в
+            // конце web/style.css, раздел «DESIGN MODE: FOCUS GLOW».
+            { id: 'focus-glow', label: 'Фокус со свечением', note: '', hint: 'Тот же «Фокус», но акценты светятся мягким ореолом, а фон — рассеянным светом.' },
+            { id: 'classic', label: 'Классический', note: '', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
+            { id: 'flat', label: 'Плоский', note: '', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
         ];
+    }
+
+    // Оформление по умолчанию — «Фокус». Меняется только здесь: им пользуется всё,
+    // что не нашло выбора пользователя (нет ключа, мусор в ключе, нет localStorage).
+    // Тот, кто выбирал сам, остаётся на своём: выбор лежит в `zali_design_mode_v1`.
+    defaultDesignMode() {
+        return 'focus';
     }
 
     normalizeDesignMode(value) {
         const id = String(value || '').trim().toLowerCase();
-        return this.designModeCatalog().some(m => m.id === id) ? id : 'classic';
+        return this.designModeCatalog().some(m => m.id === id) ? id : this.defaultDesignMode();
     }
 
     loadDesignMode() {
         try {
             const stored = localStorage.getItem(this.designModeStorageKey());
             if (stored) return this.normalizeDesignMode(stored);
-            // Миграция с одиночного чекбокса: включённый плоский режим —
-            // это ровно режим 'flat', всё остальное — 'classic'.
-            return localStorage.getItem(this.experimentalDesignStorageKey()) === '1' ? 'flat' : 'classic';
+            // Миграция с одиночного чекбокса «плоский режим»: он хранил явный выбор
+            // — '1' это 'flat', '0' — возврат на классический. Нет ключа вовсе —
+            // выбора не было, действует оформление по умолчанию.
+            const legacy = localStorage.getItem(this.experimentalDesignStorageKey());
+            if (legacy === '1') return 'flat';
+            if (legacy === '0') return 'classic';
+            return this.defaultDesignMode();
         } catch (e) {
-            return 'classic';
+            return this.defaultDesignMode();
         }
     }
 
@@ -82,7 +101,11 @@ ZaliMixin(ZaliInterface, class {
         this.experimentalDesign = this.designMode === 'flat';
         const body = document.body;
         if (body) {
-            body.setAttribute('data-design-mode', this.designMode);
+            // «Фокус со свечением» — это «Фокус» + флаг свечения, а не отдельная
+            // ветка CSS: так не копируются сотни правил.
+            const glow = this.designMode === 'focus-glow';
+            body.setAttribute('data-design-mode', glow ? 'focus' : this.designMode);
+            body.setAttribute('data-design-glow', glow ? 'on' : 'off');
             body.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
         }
         // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
@@ -612,7 +635,7 @@ ZaliMixin(ZaliInterface, class {
         const nav = document.getElementById('hubSegmentNav');
         if (!nav) return;
         const catalog = new Map(this.hubSegmentCatalog().map(item => [item.id, item]));
-        const active = this.activeHubSegmentId();
+        const wanted = this.activeHubSegmentId();
         const items = this.normalizeUiV2Segments(this.uiV2Segments)
             .map(id => catalog.get(id))
             .filter(Boolean);
@@ -622,9 +645,17 @@ ZaliMixin(ZaliInterface, class {
             && nav.querySelector('.hub-segment-indicator')
             && nav.querySelectorAll('.hub-segment-btn').length === items.length;
         if (hasStableButtons) {
-            this.updateHubSegmentNavActive(active);
+            // Нет кнопки у открытого экрана (Настройки) — выделенным остаётся прежний
+            // раздел, см. resolveHubSegmentActive.
+            this.updateHubSegmentNavActive(wanted);
             this.syncHubSegmentBadges();
             return;
+        }
+        // Первая отрисовка: прежнего раздела нет, берём по режиму навигации.
+        let active = wanted;
+        if (!items.some(item => item.id === active)) {
+            const fallback = this.S.navMode === 'servers' ? 'servers' : 'dm';
+            active = items.some(item => item.id === fallback) ? fallback : (items[0]?.id || active);
         }
         nav.innerHTML = '<span class="hub-segment-indicator" aria-hidden="true"></span>' + items.map(item => `
             <button class="hub-segment-btn ${active === item.id ? 'active' : ''}" type="button" data-hub-segment="${this.esc(item.id)}" title="${this.esc(item.label)} · ${this.esc(item.description)}" aria-label="${this.esc(item.label)}" aria-pressed="${active === item.id ? 'true' : 'false'}">
@@ -677,9 +708,26 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
+    // Раздел, который выделяет панель, когда открыт экран без своей кнопки в ней
+    // (Настройки — в панели только чаты, сервера, ZaliCoin и Хаб). Раньше `active`
+    // оставался 'settings', ни одна кнопка не получала `.active`, а лаймовый
+    // индикатор стоял под прежней: все иконки белые, и на плашке в том числе.
+    // Теперь выделенным остаётся последний раздел, на котором стоит плашка, —
+    // иконка под ней чёрная. Нет прежнего — раздел по режиму навигации.
+    resolveHubSegmentActive(nav, active) {
+        const ids = Array.from(nav.querySelectorAll('.hub-segment-btn[data-hub-segment]'))
+            .map(btn => String(btn.getAttribute('data-hub-segment') || ''));
+        if (ids.includes(active)) return active;
+        const current = nav.querySelector('.hub-segment-btn.active');
+        if (current) return String(current.getAttribute('data-hub-segment') || '');
+        const fallback = this.S.navMode === 'servers' ? 'servers' : 'dm';
+        return ids.includes(fallback) ? fallback : (ids[0] || active);
+    }
+
     updateHubSegmentNavActive(active) {
         const nav = document.getElementById('hubSegmentNav');
         if (!nav) return;
+        active = this.resolveHubSegmentActive(nav, active);
         const previousActive = nav.querySelector('.hub-segment-btn.active');
         // Активный сегмент не сменился (переход между личками, входящее
         // сообщение): кнопки трогать незачем. Сверка индикатора с положением

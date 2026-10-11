@@ -78,6 +78,10 @@ pub(crate) struct CoinDistributionResponse {
     /// Сумма всех казн серверов (treasury.rs). Одной строкой, без разбивки: имена
     /// чужих приватных серверов в общую статистику не выносим.
     treasuries: i64,
+    /// Сумма казн аддонов (addons.rs): ещё один держатель монет, без него
+    /// эмиссия в статистике не сходилась бы на сумму взносов в аддоны.
+    #[serde(rename = "addonTreasuries")]
+    addon_treasuries: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,15 +113,18 @@ async fn load_balance(pool: &SqlitePool, username: &str) -> i64 {
         .unwrap_or(0)
 }
 
-async fn load_held_by(pool: &SqlitePool, username: &str) -> i64 {
-    sqlx::query_scalar(
+/// «На удержании» у человека: заряды его карточек и призы его активных
+/// розыгрышей (raffles.rs).
+pub(crate) async fn load_held_by(pool: &SqlitePool, username: &str) -> i64 {
+    let gifts: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount * (total_claims - claimed_count)), 0)
          FROM coin_gifts WHERE sender = ? AND status = 'active'",
     )
     .bind(username)
     .fetch_one(pool)
     .await
-    .unwrap_or(0)
+    .unwrap_or(0);
+    gifts + crate::raffles::held_by(pool, username).await
 }
 
 pub(crate) async fn get_coin_balance(
@@ -138,18 +145,25 @@ pub(crate) async fn get_coin_distribution(
     )
     .fetch_all(&state.db)
     .await;
-    let held = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(amount * (total_claims - claimed_count)), 0)
-         FROM coin_gifts WHERE status = 'active'",
-    )
-    .fetch_one(&state.db)
+    // Карточки-подарки и призы активных розыгрышей — обе «на удержании».
+    let held = async {
+        let gifts = sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(SUM(amount * (total_claims - claimed_count)), 0)
+             FROM coin_gifts WHERE status = 'active'",
+        )
+        .fetch_one(&state.db)
+        .await?;
+        Ok::<i64, sqlx::Error>(gifts + crate::raffles::held_total(&state.db).await?)
+    }
     .await;
     let treasuries = sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(balance), 0) FROM server_treasuries")
         .fetch_one(&state.db)
         .await;
 
-    match (rows, held, treasuries) {
-        (Ok(rows), Ok(held), Ok(treasuries)) => Json(CoinDistributionResponse {
+    let addon_treasuries = crate::addons::total_addon_treasuries(&state.db).await;
+
+    match (rows, held, treasuries, addon_treasuries) {
+        (Ok(rows), Ok(held), Ok(treasuries), Ok(addon_treasuries)) => Json(CoinDistributionResponse {
             total_supply: ZALICOIN_TOTAL_SUPPLY,
             holders: rows
                 .into_iter()
@@ -157,9 +171,10 @@ pub(crate) async fn get_coin_distribution(
                 .collect(),
             held,
             treasuries,
+            addon_treasuries,
         })
         .into_response(),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+        (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => {
             error!("Ошибка чтения распределения ZaliCoin: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }

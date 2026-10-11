@@ -92,6 +92,50 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    /**
+     * «Пригласить»: создаёт приглашение на 7 дней и показывает ссылку с кодом.
+     * Право проверяет сервер (can_invite); клиент лишь не предлагает кнопку тем,
+     * у кого его нет.
+     */
+    async inviteToServer(serverId) {
+        const server = (this.S.servers || []).find(s => s.id === serverId);
+        if (!server) return;
+        let invite = null;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.servers.invites(serverId), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ max_uses: 0, expires_hours: 168 }),
+            });
+            if (!res.ok) throw new Error(res.status === 403 ? 'У вас нет права приглашать на этот сервер' : (await res.text() || 'Не удалось создать приглашение'));
+            invite = await res.json();
+        } catch (err) {
+            await this.confirmAction({
+                title: 'Приглашение не создано',
+                message: String(err?.message || 'Не удалось создать приглашение'),
+                confirmLabel: 'Понятно',
+                cancelLabel: 'Закрыть',
+                danger: false,
+            });
+            return;
+        }
+        const url = String(invite?.url || '');
+        const copy = await this.confirmAction({
+            title: `Приглашение на «${String(server.name || 'сервер')}»`,
+            message: `${url}\nКод: ${String(invite?.code || '')} · действует 7 дней`,
+            confirmLabel: 'Скопировать ссылку',
+            cancelLabel: 'Закрыть',
+            danger: false,
+        });
+        if (!copy || !url) return;
+        try {
+            await navigator.clipboard.writeText(url);
+            this.addLogEntry({ type: 'SUCCESS', msg: 'Ссылка-приглашение скопирована', ts: new Date().toLocaleTimeString() });
+        } catch (e) {
+            this.addLogEntry({ type: 'WARN', msg: 'Не удалось скопировать приглашение', ts: new Date().toLocaleTimeString() });
+        }
+    }
+
     closeServerRailContextMenu() {
         const existing = document.getElementById('serverRailContextMenu');
         if (existing) existing.remove();
@@ -126,6 +170,10 @@ ZaliMixin(ZaliInterface, class {
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="treasury">
                 ${this.uiIcon('coin')}<span>Казна</span>
             </button>
+            ${server.canInvite || canManage ? `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="invite">
+                ${this.uiIcon('user-plus')}<span>Пригласить</span>
+            </button>` : ''}
             ${canManage ? `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="settings">
                 ${this.uiIcon('gear')}<span>Настройки сервера</span>
@@ -154,6 +202,10 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="treasury"]')?.addEventListener('click', () => {
             this.closeServerRailContextMenu();
             this.openTreasuryModal(sid);
+        });
+        menu.querySelector('[data-action="invite"]')?.addEventListener('click', () => {
+            this.closeServerRailContextMenu();
+            this.inviteToServer(sid);
         });
         menu.querySelector('[data-action="settings"]')?.addEventListener('click', () => {
             this.closeServerRailContextMenu();

@@ -161,7 +161,8 @@ ZaliMixin(ZaliInterface, class {
                     <button class="btn-flat" type="button" data-profile-action="cancel-edit">Отмена</button>
                 `;
             }
-            return `<button class="auth-btn primary" type="button" data-profile-action="edit">Редактировать профиль</button>`;
+            return `<button class="btn-flat" type="button" data-profile-action="copy-link" title="Ссылка на ваш профиль">Скопировать ссылку</button>
+                <button class="auth-btn primary" type="button" data-profile-action="edit">Редактировать профиль</button>`;
         }
 
         const followLabel = data.isFollowing ? 'Вы отслеживаете' : 'Отслеживать';
@@ -187,6 +188,7 @@ ZaliMixin(ZaliInterface, class {
         return `
             <button class="btn-flat profile-follow-btn${data.isFollowing ? ' following' : ''}" type="button" data-profile-action="toggle-follow"${busy === 'follow' ? ' disabled' : ''}>${this.esc(followLabel)}</button>
             ${friendButton}
+            <button class="btn-flat" type="button" data-profile-action="copy-link" title="Скопировать ссылку на профиль">Скопировать ссылку</button>
             <button class="auth-btn primary" type="button" data-profile-action="message">Написать</button>
         `;
     }
@@ -465,7 +467,7 @@ ZaliMixin(ZaliInterface, class {
             <section class="profile-friends-block">
                 <h3>Пригласить в друзья</h3>
                 <div class="profile-invite">
-                    <input type="text" placeholder="Имя пользователя" data-profile-field="inviteDraft" value="${this.esc(state.inviteDraft || '')}" autocomplete="off">
+                    <input type="text" placeholder="Имя пользователя" data-profile-field="inviteDraft" value="${this.esc(state.inviteDraft || '')}" autocomplete="off" data-user-suggest>
                     <button class="auth-btn primary" type="button" data-profile-action="send-invite">Отправить</button>
                 </div>
                 ${state.inviteStatus ? `<p class="profile-help">${this.esc(state.inviteStatus)}</p>` : ''}
@@ -645,6 +647,20 @@ ZaliMixin(ZaliInterface, class {
         this.updateProfileDraft(field, target.value);
     }
 
+    /** Копирует ссылку …/profile/<имя>; на кнопке на секунду появляется «Скопировано». */
+    async copyProfileLink(button) {
+        const username = this.ensureProfileState().username;
+        if (!username) return;
+        const label = button ? button.textContent : '';
+        try {
+            await navigator.clipboard.writeText(this.profileLink(username));
+            if (button) button.textContent = 'Скопировано';
+        } catch (e) {
+            if (button) button.textContent = 'Не удалось скопировать';
+        }
+        if (button) setTimeout(() => { if (button.isConnected) button.textContent = label; }, 1600);
+    }
+
     handleProfileAction(action, element) {
         const state = this.ensureProfileState();
         const requestId = element?.getAttribute('data-request-id') || '';
@@ -652,6 +668,7 @@ ZaliMixin(ZaliInterface, class {
 
         switch (action) {
             case 'edit': this.startProfileEditing(); break;
+            case 'copy-link': void this.copyProfileLink(element); break;
             // Выбор файла живёт в bindSettingsEvents (там же, где кроппер и
             // загрузка); здесь мы только зовём его, чтобы не заводить второй
             // конвейер обработки картинки.

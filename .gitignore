@@ -17,6 +17,9 @@ graphify-out/
 .env
 *.env.local
 zali_messenger.db
+# Серверный ключ «свободной» подписи аддонов (server/src/addons.rs): лежит в data dir, который локально — корень репозитория
+addon_signing_key.pem
+addon_official_key.pem
 *.db-shm
 *.db-wal
 uploads/
@@ -76,3 +79,7 @@ ops/
 # Папка нужна SwiftPM (Package.swift: .copy("Resources/Web")) ещё до первой сборки
 # бандла, поэтому в git лежит только заглушка.
 !/apps/macos/Sources/ZaliMessenger/Resources/Web/.gitkeep
+
+# Python bytecode инструментов scripts/
+__pycache__/
+*.pyc
