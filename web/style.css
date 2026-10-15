@@ -450,7 +450,12 @@ button {
     width: min(100vw - 24px, 460px);
     padding: 6px;
     border: 1px solid rgba(255,255,255,.14);
-    border-radius: 30px;
+    /* Как у iOS-таббара: скругление больше половины высоты — торцы полностью круглые. */
+    border-radius: 999px;
+    /* Горизонтальное перетаскивание капсулы — не прокрутка страницы и не выделение текста. */
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
     background:
         linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)),
         rgba(14,16,20,.55);
@@ -521,14 +526,61 @@ button {
     transform: scale(.94);
 }
 
-.mobile-dock-btn.active {
-    color: #05210b;
-    background:
-        radial-gradient(circle at 30% 18%, rgba(255,255,255,.4), transparent 42%),
-        linear-gradient(180deg, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), .82));
+/* Капсула под активным пунктом. Двигает её JS (syncMobileDockThumb / setupMobileDockDrag):
+   позиция — переменная --tx, масштаб при перетаскивании — --ts. */
+.mobile-dock-thumb {
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    left: 0;
+    width: 0;
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), .82));
     box-shadow:
         0 8px 20px rgba(var(--accent-rgb), .34),
         inset 0 1px 0 rgba(255,255,255,.4);
+    transform: translate3d(var(--tx, 6px), 0, 0);
+    scale: var(--ts, 1);
+    pointer-events: none;
+    overflow: hidden;
+    /* Над кнопками: капсула закрывает их светлые подписи, тёмные рисует копия внутри. */
+    z-index: 1;
+    transition:
+        transform .36s cubic-bezier(.2,.9,.25,1.06),
+        width .36s cubic-bezier(.2,.9,.25,1.06),
+        scale .22s ease-out;
+}
+
+/* Тёмные подписи внутри капсулы (см. setupMobileDockDrag): ряд кнопок в натуральную величину,
+   сдвинутый на -tx, чтобы совпадать с доком; обрезается по капсуле. */
+.mobile-dock-ink {
+    position: absolute;
+    top: var(--ink-y, 0px);
+    left: calc(var(--ink-x, 0px) - var(--tx, 0px));
+    width: var(--ink-w, 0px);
+    height: var(--ink-h, 100%);
+    display: flex;
+    align-items: stretch;
+    color: var(--dock-ink, #05210b);
+    pointer-events: none;
+}
+
+/* Три класса: «Фокус» красит .mobile-dock-btn своим цветом (0,2,1) и иначе делал бы
+   подписи в капсуле светло-серыми на лайме. */
+.mobile-dock .mobile-dock-ink .mobile-dock-btn.mobile-dock-ink-item {
+    flex: 1 1 0;
+    min-width: 0;
+    color: inherit;
+    background: transparent;
+}
+
+/* Во время пальца/мыши капсула едет без задержки за указателем. */
+.mobile-dock.is-dragging .mobile-dock-thumb {
+    transition: scale .18s ease-out;
+}
+
+.mobile-dock-btn.is-target {
+    color: var(--text);
 }
 
 .mobile-dock-btn.active svg {
@@ -2789,9 +2841,11 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-panel.has-stage .voice-call-expanded-grid {
     flex: 0 0 auto;
-    height: 112px;
-    overflow-x: auto;
-    overflow-y: hidden;
+    height: auto;
+    min-width: 0;
+    /* Not visible: an overflowing strip must scroll inside itself, not widen the
+       whole call panel past its column. */
+    overflow: hidden;
 }
 
 .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles,
@@ -2802,14 +2856,83 @@ body[data-nav-mode="servers"] .contacts {
     grid-auto-columns: 176px;
     grid-auto-rows: auto;
     justify-content: start;
-    height: 100%;
+    height: 112px;
     min-height: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
 }
 
 .voice-panel.has-stage .voice-tile-avatar {
     width: 48px;
     height: 48px;
     font-size: 16px;
+}
+
+/* Tiles + overflow circles. The wrapper only matters in the expanded call, where
+   the tiles take the free height and the circles sit under them; the ringing card
+   keeps its plain auto-fit grid. */
+.voice-call-expanded-grid .voice-tiles-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    min-height: 0;
+}
+
+.voice-call-expanded-grid .voice-tiles-wrap > .voice-tiles {
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+/* Under a screen share the tiles are a fixed one-row strip, not the free height. */
+.voice-panel.has-stage .voice-call-expanded-grid .voice-tiles-wrap {
+    height: auto;
+}
+
+.voice-panel.has-stage .voice-call-expanded-grid .voice-tiles-wrap > .voice-tiles {
+    flex: 0 0 112px;
+}
+
+.voice-overflow {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    max-height: 96px;
+    overflow-y: auto;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.07);
+}
+
+.voice-overflow-label {
+    margin-right: 4px;
+    font-size: 11px;
+    color: var(--text2);
+}
+
+.voice-dot {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: rgba(255,255,255,.06);
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow .12s var(--ease-out);
+}
+
+.voice-dot .avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.voice-dot.speaking {
+    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .9);
 }
 
 /* A share must not fall back to the half-screen cap of the embedded card. */
@@ -9828,6 +9951,32 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         --m-glass: none;
     }
 
+    /* Оболочка Android (класс ставит NativeBridge.documentStartScript): без
+       размытия вовсе, а не только на время жеста. Живой разбор DOM на телефоне
+       показал на экране списка ТРИ вложенных backdrop-filter — полноэкранный
+       .sidebar blur(8px) поверх собственного непрозрачного фона (размывать там
+       нечего: он перекрывает всё под собой), плюс .sidebar-head и .search-wrap
+       blur(12px) — и ещё два у шапки и поля ввода чата. Фильтр пересчитывается
+       при каждом изменении того, что за ним, то есть на каждом кадре прокрутки,
+       а WebView на среднем GPU делает это на CPU/через дорогой промежуточный
+       слой. Шапки и так были на 86–92% непрозрачными — делаем их сплошными, и
+       прокручиваемое под ними просто обрезается. iOS/Windows/macOS не трогаем:
+       там стекло дешёвое, и оно часть дизайна. */
+    :root.is-android-shell {
+        --m-glass: none;
+    }
+
+    html.is-android-shell .sidebar {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+
+    html.is-android-shell body .sidebar-head,
+    html.is-android-shell body #viewChat .chat-hdr,
+    html.is-android-shell body #viewChat .input-area {
+        background: var(--bg);
+    }
+
     /* ── Kill desktop chrome: the global titlebar is replaced by per-screen
        app-bars (list = .sidebar-head, chat = .chat-hdr). ─────────────────── */
     .titlebar { display: none !important; }
@@ -13058,7 +13207,7 @@ body[data-design-mode="focus"] .auth-card::before {
        пункт на плоской лаймовой плашке, без бликов и свечения. */
     body[data-design-mode="focus"] .mobile-dock {
         border: 1px solid var(--f-hairline);
-        border-radius: 22px;
+        border-radius: 999px;
         background: color-mix(in srgb, var(--bg) 82%, transparent);
         box-shadow: 0 12px 32px rgba(0,0,0,.4);
     }
@@ -13069,10 +13218,13 @@ body[data-design-mode="focus"] .auth-card::before {
         font-weight: 600;
     }
 
-    body[data-design-mode="focus"] .mobile-dock-btn.active {
+    body[data-design-mode="focus"] .mobile-dock-thumb {
         background: rgb(var(--accent-rgb));
-        color: var(--f-on-accent);
         box-shadow: none;
+    }
+
+    body[data-design-mode="focus"] .mobile-dock {
+        --dock-ink: var(--f-on-accent);
     }
 
     body[data-design-mode="focus"] .settings-body {
@@ -13083,6 +13235,19 @@ body[data-design-mode="focus"] .auth-card::before {
     body[data-design-mode="focus"] #viewZaliCoin {
         padding-left: 14px;
         padding-right: 14px;
+    }
+
+    /* Чат на телефоне — карточка, которая едет поверх списка (push-навигация),
+       а список всё время жеста стоит под ней на Y=0. Десктопное правило «Виды
+       внутри панели» делает #viewChat прозрачным — там фон даёт .main, — но на
+       телефоне .main прозрачен, и чату нечем перекрыть список: он целиком
+       просвечивал сквозь переписку при свайпе назад, а при отмене жеста и
+       парковке (translateY за .12s) «улетал» вниз прямо поверх чата.
+       Цвет тот же, что у body/.app/.sidebar (var(--bg)), поэтому визуально
+       ничего не меняется — пропадает только просвет. Селектор повторяет
+       десктопное правило (1,1,1), а блок идёт после него. */
+    body[data-design-mode="focus"] #viewChat {
+        background: var(--bg);
     }
 }
 
@@ -13974,6 +14139,9 @@ body[data-design-mode="focus"] .voice-tile-mic {
 :root {
     --decor-zalicoin: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22coin%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2222%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216.5%22/%3E%3Cpath d=%22M25.5 24.5h13l-13 15h13%22/%3E%3C/g%3E%3Cg id=%22coin3d%22%3E%3Cellipse cx=%2232%22 cy=%2225%22 rx=%2222%22 ry=%2210%22/%3E%3Cpath d=%22M10 25v9c0 5.5 9.85 10 22 10s22-4.5 22-10v-9%22/%3E%3Cpath d=%22M26.5 21.5h11l-11 7h11%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22phone%22%3E%3Crect x=%2218%22 y=%226%22 width=%2228%22 height=%2252%22 rx=%226%22/%3E%3Cpath d=%22M28 11.5h8%22/%3E%3Ccircle cx=%2232%22 cy=%2231%22 r=%227%22/%3E%3Cpath d=%22M29 28.5h6l-6 5h6%22/%3E%3Cpath d=%22M24 46h16%22 opacity=%22.6%22/%3E%3C/g%3E%3Cg id=%22piggy%22%3E%3Cpath d=%22M12 34c0-9.6 9.4-16.5 21.5-16.5 7.5 0 13.5 2.6 16.9 7l5.1-1.2c1.4-.3 2.7.7 2.7 2.1v7.4c0 1.2-1 2.2-2.2 2.2h-4.2c-1.6 3.4-4.3 6.1-7.8 7.9l.9 5.6c.2 1.2-.7 2.3-1.9 2.3h-4.2c-.9 0-1.7-.6-1.9-1.5l-.7-3.5c-1.6.3-3.3.4-5 .4s-3.4-.1-5-.4l-.7 3.5c-.2.9-1 1.5-1.9 1.5h-4.2c-1.2 0-2.1-1.1-1.9-2.3l1-5.9C14.6 44.4 12 39.6 12 34z%22/%3E%3Cpath d=%22M42.5 19.2l1.6-6.3c.2-.9 1.3-1.2 2-.6l4.6 4.9%22/%3E%3Cpath d=%22M27 22.5h9%22/%3E%3Cpath d=%22M12.6 31.6c-3.3.3-5.4-1.6-4.9-3.7.4-1.6 2.4-2.1 3.4-.9%22/%3E%3Cpath d=%22M53.2 26.6v4.2%22/%3E%3Ccircle class=%22f%22 cx=%2246.6%22 cy=%2227.2%22 r=%221.7%22/%3E%3C/g%3E%3Cg id=%22plus%22%3E%3Cpath d=%22M32 22v20M22 32h20%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22stack%22%3E%3Cellipse cx=%2232%22 cy=%2218%22 rx=%2219%22 ry=%227%22/%3E%3Cpath d=%22M13 18v6c0 3.9 8.5 7 19 7s19-3.1 19-7v-6%22/%3E%3Cpath d=%22M13 24v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3Cpath d=%22M13 31v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3Cpath d=%22M13 38v7c0 3.9 8.5 7 19 7s19-3.1 19-7v-7%22/%3E%3C/g%3E%3Cg id=%22s-coin%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2222%22/%3E%3C/g%3E%3Cg id=%22s-coin3d%22%3E%3Cpath d=%22M10 25c0-5.5 9.85-10 22-10s22 4.5 22 10v9c0 5.5-9.85 10-22 10S10 39.5 10 34z%22/%3E%3C/g%3E%3Cg id=%22s-phone%22%3E%3Crect x=%2218%22 y=%226%22 width=%2228%22 height=%2252%22 rx=%226%22/%3E%3C/g%3E%3Cg id=%22s-piggy%22%3E%3Cpath d=%22M12 34c0-9.6 9.4-16.5 21.5-16.5 7.5 0 13.5 2.6 16.9 7l5.1-1.2c1.4-.3 2.7.7 2.7 2.1v7.4c0 1.2-1 2.2-2.2 2.2h-4.2c-1.6 3.4-4.3 6.1-7.8 7.9l.9 5.6c.2 1.2-.7 2.3-1.9 2.3h-4.2c-.9 0-1.7-.6-1.9-1.5l-.7-3.5c-1.6.3-3.3.4-5 .4s-3.4-.1-5-.4l-.7 3.5c-.2.9-1 1.5-1.9 1.5h-4.2c-1.2 0-2.1-1.1-1.9-2.3l1-5.9C14.6 44.4 12 39.6 12 34z%22/%3E%3Cpath d=%22M42.5 19.2l1.6-6.3c.2-.9 1.3-1.2 2-.6l4.6 4.9z%22/%3E%3C/g%3E%3Cg id=%22s-stack%22%3E%3Cpath d=%22M13 18c0-3.9 8.5-7 19-7s19 3.1 19 7v27c0 3.9-8.5 7-19 7s-19-3.1-19-7z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m8%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m9%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m10%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M295.6 240.5C268.1 248.7 213.7 235.0 179.5 228.1C145.2 221.1 109.6 213.2 89.9 198.6C70.3 184.0 61.2 160.3 61.7 140.5C62.2 120.7 70.8 95.7 92.9 79.7C114.9 63.7 160.5 45.0 194.2 44.4C227.9 43.7 266.3 63.2 295.1 75.8C324.0 88.4 358.9 102.9 367.2 120.1C375.4 137.3 356.5 158.7 344.6 178.8C332.6 198.9 323.1 232.3 295.6 240.5Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Ccircle cx=%22318%22 cy=%2262%22 r=%2240%22 fill=%22%23000%22 fill-opacity=%22.18%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cpath d=%22M84 70C120 6 236 -4 292 40C334 74 304 120 252 120%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(252 120) rotate(172)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23phone%22 transform=%22translate(64 100) rotate(-14) scale(1.3) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin3d%22 transform=%22translate(176 44) rotate(-24) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cpath d=%22M154.1 61.6L144.9 65.0 M152.0 56.0L137.9 61.1 M149.9 50.4L140.8 53.7%22 opacity=%220.5%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23stack%22 transform=%22translate(150 196) rotate(-6) scale(1.05) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23piggy%22 transform=%22translate(236 162) rotate(-7) scale(2.45) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m8)%22%3E%3Cuse href=%22%23s-coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin3d%22 transform=%22translate(231 124) rotate(83) scale(0.4) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m9)%22%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin%22 transform=%22translate(310 64) rotate(16) scale(1.18) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m10)%22%3E%3Cpath d=%22M277.5 49.4L268.0 45.0 M280.0 44.0L265.5 37.2 M282.5 38.6L273.1 34.2%22 opacity=%220.5%22/%3E%3C/g%3E%3Cuse href=%22%23s-coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23coin%22 transform=%22translate(340 198) rotate(-22) scale(0.62) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(40 34) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(376 112) rotate(0) scale(0.34) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(200 236) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(262 18) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(22 160) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(104 150) rotate(0) scale(0.48) translate(-32 -32)%22 opacity=%220.55%22/%3E%3Cuse href=%22%23plus%22 transform=%22translate(372 240) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.5%22/%3E%3C/svg%3E");
     --decor-hub: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bell%22%3E%3Cpath d=%22M32 11.5a3.6 3.6 0 0 1 3.6 3.6v1.6c6.2 1.6 10.6 7.2 10.6 13.8v8.3l4.3 6.2h-37l4.3-6.2v-8.3c0-6.6 4.4-12.2 10.6-13.8v-1.6a3.6 3.6 0 0 1 3.6-3.6z%22/%3E%3Cpath d=%22M26.8 49.8a5.2 5.2 0 0 0 10.4 0%22/%3E%3C/g%3E%3Cg id=%22box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3Cpath d=%22M11 19.7l21 10.2 21-10.2M32 29.9v24.6M21.5 14.6l21 10.2%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22planet%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2212.5%22/%3E%3Cpath d=%22M43.3 26.2c7.4-3.2 12.6-3.8 13.5-1.9 1.4 3-9.2 10.2-23.7 16.1S9.7 49.6 8.3 46.6c-.9-1.9 2.8-5.6 9.5-9.8%22/%3E%3C/g%3E%3Cg id=%22plus%22%3E%3Cpath d=%22M32 22v20M22 32h20%22/%3E%3C/g%3E%3Cg id=%22puzzle%22%3E%3Cpath d=%22M14 20h9.5a4.5 4.5 0 1 1 9 0H42v9.5a4.5 4.5 0 1 1 0 9V48H32.5a4.5 4.5 0 1 0-9 0H14v-9.5a4.5 4.5 0 1 0 0-9z%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22rocket%22%3E%3Cpath d=%22M32 7.5c8.4 6 12.6 15 12.6 25.3L40.4 45H23.6l-4.2-12.2C19.4 22.5 23.6 13.5 32 7.5z%22/%3E%3Ccircle cx=%2232%22 cy=%2225%22 r=%225%22/%3E%3Cpath d=%22M19.8 33.5l-6.5 8.8 8.2 2M44.2 33.5l6.5 8.8-8.2 2%22/%3E%3Cpath d=%22M27.5 49.5c0 4.8 4.5 8 4.5 8s4.5-3.2 4.5-8%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22star%22%3E%3Cpath d=%22M32.00 13.00 L37.00 26.12 L51.02 26.82 L40.08 35.63 L43.76 49.18 L32.00 41.50 L20.24 49.18 L23.92 35.63 L12.98 26.82 L27.00 26.12Z%22/%3E%3C/g%3E%3Cg id=%22s-bell%22%3E%3Cpath d=%22M32 11.5a3.6 3.6 0 0 1 3.6 3.6v1.6c6.2 1.6 10.6 7.2 10.6 13.8v8.3l4.3 6.2h-37l4.3-6.2v-8.3c0-6.6 4.4-12.2 10.6-13.8v-1.6a3.6 3.6 0 0 1 3.6-3.6z%22/%3E%3C/g%3E%3Cg id=%22s-box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3C/g%3E%3Cg id=%22s-planet%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2212.5%22/%3E%3C/g%3E%3Cg id=%22s-puzzle%22%3E%3Cpath d=%22M14 20h9.5a4.5 4.5 0 1 1 9 0H42v9.5a4.5 4.5 0 1 1 0 9V48H32.5a4.5 4.5 0 1 0-9 0H14v-9.5a4.5 4.5 0 1 0 0-9z%22/%3E%3C/g%3E%3Cg id=%22s-rocket%22%3E%3Cpath d=%22M32 7.5c8.4 6 12.6 15 12.6 25.3L40.4 45H23.6l-4.2-12.2C19.4 22.5 23.6 13.5 32 7.5z%22/%3E%3C/g%3E%3Cg id=%22s-star%22%3E%3Cpath d=%22M32.00 13.00 L37.00 26.12 L51.02 26.82 L40.08 35.63 L43.76 49.18 L32.00 41.50 L20.24 49.18 L23.92 35.63 L12.98 26.82 L27.00 26.12Z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m8%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22440%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M75.5 195.6C59.3 177.7 49.4 157.7 50.4 136.9C51.4 116.0 57.2 83.7 81.4 70.5C105.6 57.4 158.9 57.4 195.7 57.9C232.4 58.4 279.5 60.7 302.1 73.3C324.7 86.0 323.8 113.4 331.1 134.0C338.4 154.6 357.7 179.1 345.9 196.9C334.2 214.7 293.6 232.9 260.4 240.8C227.3 248.7 178.1 251.9 147.2 244.4C116.4 236.9 91.6 213.5 75.5 195.6Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23planet%22 transform=%22translate(300 80) rotate(-18) scale(1.95) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cellipse cx=%22206%22 cy=%22146%22 rx=%22158%22 ry=%2254%22 transform=%22rotate(-20 206 146)%22 stroke-dasharray=%220.1 7%22 opacity=%22.7%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Ccircle cx=%22120%22 cy=%22180%22 r=%229%22 opacity=%22.45%22/%3E%3Ccircle cx=%22104%22 cy=%22166%22 r=%226%22 opacity=%22.4%22/%3E%3Ccircle cx=%22136%22 cy=%22190%22 r=%225%22 opacity=%22.35%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23rocket%22 transform=%22translate(176 120) rotate(50) scale(1.75) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23puzzle%22 transform=%22translate(52 122) rotate(-22) scale(0.8) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(84 196) rotate(-10) scale(1.1) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(130 222) rotate(12) scale(0.7) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m8)%22%3E%3Cuse href=%22%23s-bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23bell%22 transform=%22translate(334 198) rotate(16) scale(0.86) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23star%22 transform=%22translate(250 220) rotate(12) scale(0.6) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(232 24) rotate(0) scale(0.44) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(380 140) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(22 62) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(160 30) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(376 30) rotate(0) scale(0.46) translate(-32 -32)%22 opacity=%220.55%22/%3E%3Cuse href=%22%23plus%22 transform=%22translate(22 210) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.5%22/%3E%3C/svg%3E");
+    --decor-hub-settings: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 100%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22gear%22%3E%3Cpath d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%226.5%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-gear%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3C/g%3E%3Cg id=%22s-gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22200%22 height=%22140%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22200%22 height=%22140%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(108 66) rotate(-8) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(60 50) rotate(8) scale(1.22) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear%22 transform=%22translate(60 50) rotate(8) scale(1.22) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(108 66) rotate(-8) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear6%22 transform=%22translate(108 66) rotate(-8) scale(0.78) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(140 20) rotate(0) scale(0.26) translate(-32 -32)%22 opacity=%220.7%22/%3E%3C/svg%3E");
+    --decor-hub-addons: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 100%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3Cpath d=%22M11 19.7l21 10.2 21-10.2M32 29.9v24.6M21.5 14.6l21 10.2%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-box%22%3E%3Cpath d=%22M32 9.5l21 10.2v24.6L32 54.5 11 44.3V19.7z%22/%3E%3C/g%3E%3C/defs%3E%3Cuse href=%22%23s-box%22 transform=%22translate(80 50) rotate(6) scale(1.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23box%22 transform=%22translate(80 50) rotate(6) scale(1.5) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(134 18) rotate(0) scale(0.26) translate(-32 -32)%22 opacity=%220.7%22/%3E%3C/svg%3E");
+    --decor-hub-coins: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 100%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22wallet%22%3E%3Cpath d=%22M11 21.5h37a5 5 0 0 1 5 5v19a5 5 0 0 1-5 5H16a5 5 0 0 1-5-5z%22/%3E%3Cpath d=%22M11 21.5l27.2-8.4c2.1-.6 4.3.9 4.3 3.1v5.3%22/%3E%3Cpath d=%22M53 30.5H42.5a5 5 0 0 0 0 10H53%22/%3E%3Ccircle class=%22f%22 cx=%2243.5%22 cy=%2235.5%22 r=%221.9%22/%3E%3C/g%3E%3C/defs%3E%3Cuse href=%22%23wallet%22 transform=%22translate(80 52) rotate(-6) scale(1.4) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(134 20) rotate(0) scale(0.26) translate(-32 -32)%22 opacity=%220.7%22/%3E%3C/svg%3E");
     --decor-chat: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 210%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3Cpath d=%22M21 28v-6.5a11 11 0 0 1 22 0V28%22/%3E%3Ccircle cx=%2232%22 cy=%2239%22 r=%223.2%22/%3E%3Cpath d=%22M32 42.2v4.3%22/%3E%3C/g%3E%3Cg id=%22person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18%22/%3E%3C/g%3E%3Cg id=%22plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3Cpath d=%22M24 37l31-25.5M31.5 41l-7.5-4%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-bubble2%22%3E%3Cpath d=%22M32 12c12.2 0 22 8.3 22 18.5S44.2 49 32 49c-2.7 0-5.3-.4-7.7-1.2L13 53l3.3-9.6C12.4 40.2 10 35.6 10 30.5 10 20.3 19.8 12 32 12z%22/%3E%3C/g%3E%3Cg id=%22s-heart%22%3E%3Cpath d=%22M32 51S11.5 39.2 11.5 24.8c0-6.9 5.1-11.3 10.6-11.3 4.4 0 7.9 2.4 9.9 6.2 2-3.8 5.5-6.2 9.9-6.2 5.5 0 10.6 4.4 10.6 11.3C52.5 39.2 32 51 32 51z%22/%3E%3C/g%3E%3Cg id=%22s-lock%22%3E%3Crect x=%2214%22 y=%2228%22 width=%2236%22 height=%2225%22 rx=%225%22/%3E%3C/g%3E%3Cg id=%22s-person%22%3E%3Ccircle cx=%2232%22 cy=%2221%22 r=%2210%22/%3E%3Cpath d=%22M13 53c0-10.6 8.5-18 19-18s19 7.4 19 18z%22/%3E%3C/g%3E%3Cg id=%22s-plane%22%3E%3Cpath d=%22M8.5 30.5L55 11.5 45 52 31.5 41l-7.5 9V37z%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m6%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m7%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22250%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.1 46.4C124.5 34.3 164.7 18.6 192.7 20.8C220.7 23.0 247.0 45.9 268.1 59.5C289.2 73.2 313.8 86.3 319.3 102.5C324.7 118.8 316.3 141.3 300.9 156.8C285.5 172.3 256.5 189.6 227.1 195.6C197.7 201.7 150.1 201.7 124.6 193.2C99.2 184.6 87.3 161.1 74.3 144.5C61.3 127.8 42.4 109.5 46.7 93.1C51.0 76.8 75.8 58.4 100.1 46.4Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cpath d=%22M152 30C176 -2 222 0 224 26C226 50 192 52 196 30C200 8 252 4 290 44%22 stroke-dasharray=%220.1 7%22 opacity=%220.8%22/%3E%3Cpath d=%22M-6 -5L0 0L-6 5%22 transform=%22translate(290 44) rotate(48)%22 opacity=%220.8%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(48 66) rotate(-6) scale(0.78) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(132 98) rotate(-8) scale(1.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23s-bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble2%22 transform=%22translate(244 124) rotate(8) scale(1.6) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3Cuse href=%22%23heart%22 transform=%22translate(244 122) rotate(0) scale(0.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m6)%22%3E%3Cuse href=%22%23s-lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23lock%22 transform=%22translate(86 150) rotate(-10) scale(0.64) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m7)%22%3E%3Cuse href=%22%23s-plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.22%22 stroke=%22none%22/%3E%3Cuse href=%22%23plane%22 transform=%22translate(306 58) rotate(-18) scale(0.92) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23person%22 transform=%22translate(322 176) rotate(6) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(30 150) rotate(0) scale(0.4) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(186 196) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(344 110) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(76 22) rotate(0) scale(0.42) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
     --decor-contacts: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 260 150%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22badge-plus%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216%22/%3E%3Cpath d=%22M32 24.5v15M24.5 32h15%22/%3E%3C/g%3E%3Cg id=%22bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3Ccircle class=%22f%22 cx=%2222.5%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2229%22 r=%222.6%22/%3E%3Ccircle class=%22f%22 cx=%2241.5%22 cy=%2229%22 r=%222.6%22/%3E%3C/g%3E%3Cg id=%22card%22%3E%3Crect x=%226%22 y=%2214%22 width=%2252%22 height=%2236%22 rx=%226%22/%3E%3Ccircle cx=%2220%22 cy=%2228%22 r=%225.5%22/%3E%3Cpath d=%22M11.5 42c1.4-3.8 4.6-5.8 8.5-5.8s7.1 2 8.5 5.8M35 27h15M35 34h10%22/%3E%3C/g%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22search%22%3E%3Ccircle cx=%2227%22 cy=%2227%22 r=%2214%22/%3E%3Cpath d=%22M37.5 37.5L52 52%22/%3E%3Cpath d=%22M20 22a8 8 0 0 1 6-5%22 opacity=%22.6%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22s-badge-plus%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2216%22/%3E%3C/g%3E%3Cg id=%22s-bubble%22%3E%3Cpath d=%22M14 14h36a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-10.5 8.5V44H14a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z%22/%3E%3C/g%3E%3Cg id=%22s-card%22%3E%3Crect x=%226%22 y=%2214%22 width=%2252%22 height=%2236%22 rx=%226%22/%3E%3C/g%3E%3Cg id=%22s-search%22%3E%3Ccircle cx=%2227%22 cy=%2227%22 r=%2214%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22300%22 height=%22190%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M100.3 135.8C81.1 131.6 70.6 116.7 57.3 106.4C44.0 96.1 20.4 84.9 20.5 73.8C20.6 62.7 41.1 49.2 58.0 39.8C74.9 30.5 100.3 18.3 121.9 17.8C143.6 17.4 171.1 28.9 187.8 37.1C204.6 45.4 216.2 56.3 222.3 67.6C228.5 78.9 233.1 94.2 224.8 104.9C216.6 115.6 193.5 126.5 172.7 131.6C151.9 136.8 119.5 140.0 100.3 135.8Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23card%22 transform=%22translate(118 84) rotate(-6) scale(1.65) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.24%22 stroke=%22none%22/%3E%3Cuse href=%22%23badge-plus%22 transform=%22translate(66 38) rotate(0) scale(0.9) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.16%22 stroke=%22none%22/%3E%3Cuse href=%22%23search%22 transform=%22translate(196 54) rotate(8) scale(1.05) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23bubble%22 transform=%22translate(210 120) rotate(8) scale(0.7) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(26 110) rotate(0) scale(0.34) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(150 18) rotate(0) scale(0.28) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(244 28) rotate(0) scale(0.28) translate(-32 -32)%22 opacity=%220.7%22/%3E%3C/svg%3E");
     --decor-settings: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 360 260%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cstyle%3E%2A%7Bvector-effect:non-scaling-stroke%7D.f%7Bfill:%23000%3Bstroke:none%7D%3C/style%3E%3Cdefs%3E%3Cg id=%22dot%22%3E%3Ccircle class=%22f%22 cx=%2232%22 cy=%2232%22 r=%225%22/%3E%3C/g%3E%3Cg id=%22gear%22%3E%3Cpath d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%226.5%22/%3E%3C/g%3E%3Cg id=%22palette%22%3E%3Cpath d=%22M32 10.5c-12.4 0-22 9.1-22 20.9C10 43 18.4 53 29 53c2.7 0 4-1.7 4-3.7 0-2.6-2.1-3.4-2.1-5.7 0-2.6 2.1-4.2 4.7-4.2H41c7.1 0 12-4.4 12-10.6 0-10.6-9.4-18.3-21-18.3z%22/%3E%3Ccircle class=%22f%22 cx=%2221.5%22 cy=%2231%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2226%22 cy=%2221.5%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2236.5%22 cy=%2219.5%22 r=%222.8%22/%3E%3Ccircle class=%22f%22 cx=%2244.5%22 cy=%2226.5%22 r=%222.8%22/%3E%3C/g%3E%3Cg id=%22ring%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%227%22/%3E%3C/g%3E%3Cg id=%22sliders%22%3E%3Cpath d=%22M18 11v42M32 11v42M46 11v42%22/%3E%3Crect x=%2213%22 y=%2217%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3Crect x=%2227%22 y=%2236%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3Crect x=%2241%22 y=%2225%22 width=%2210%22 height=%227%22 rx=%223.5%22/%3E%3C/g%3E%3Cg id=%22sparkle%22%3E%3Cpath class=%22f%22 d=%22M32 12c1.6 10.4 4.7 13.5 15 15-10.3 1.5-13.4 4.6-15 15-1.6-10.4-4.7-13.5-15-15 10.3-1.5 13.4-4.6 15-15z%22/%3E%3C/g%3E%3Cg id=%22toggle%22%3E%3Crect x=%228%22 y=%2222%22 width=%2248%22 height=%2220%22 rx=%2210%22/%3E%3Ccircle class=%22f%22 cx=%2246%22 cy=%2232%22 r=%226%22/%3E%3C/g%3E%3Cg id=%22window%22%3E%3Crect x=%226%22 y=%2212%22 width=%2252%22 height=%2240%22 rx=%225%22/%3E%3Cpath d=%22M6 20h52%22/%3E%3Ccircle class=%22f%22 cx=%2211%22 cy=%2216%22 r=%221.3%22/%3E%3Ccircle class=%22f%22 cx=%2215.5%22 cy=%2216%22 r=%221.3%22/%3E%3Ccircle class=%22f%22 cx=%2220%22 cy=%2216%22 r=%221.3%22/%3E%3Cpath d=%22M13 28h24M13 34h32M13 40h18%22 opacity=%22.7%22/%3E%3Crect x=%2236%22 y=%2239%22 width=%2215%22 height=%227%22 rx=%223.5%22 opacity=%22.7%22/%3E%3C/g%3E%3Cg id=%22s-gear%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M47.81 25.74 L53.50 27.34 L53.50 36.66 L47.81 38.26 L47.60 38.75 L50.50 43.90 L43.90 50.50 L38.75 47.60 L38.26 47.81 L36.66 53.50 L27.34 53.50 L25.74 47.81 L25.25 47.60 L20.10 50.50 L13.50 43.90 L16.40 38.75 L16.19 38.26 L10.50 36.66 L10.50 27.34 L16.19 25.74 L16.40 25.25 L13.50 20.10 L20.10 13.50 L25.25 16.40 L25.74 16.19 L27.34 10.50 L36.66 10.50 L38.26 16.19 L38.75 16.40 L43.90 13.50 L50.50 20.10 L47.60 25.25Z%22/%3E%3C/g%3E%3Cg id=%22s-gear6%22%3E%3Cpath d=%22M46.46 24.05 L53.11 25.82 L53.11 38.18 L46.46 39.95 L46.11 40.55 L47.91 47.19 L37.20 53.38 L32.35 48.50 L31.65 48.50 L26.80 53.38 L16.09 47.19 L17.89 40.55 L17.54 39.95 L10.89 38.18 L10.89 25.82 L17.54 24.05 L17.89 23.45 L16.09 16.81 L26.80 10.62 L31.65 15.50 L32.35 15.50 L37.20 10.62 L47.91 16.81 L46.11 23.45Z%22/%3E%3C/g%3E%3Cg id=%22s-palette%22%3E%3Cpath d=%22M32 10.5c-12.4 0-22 9.1-22 20.9C10 43 18.4 53 29 53c2.7 0 4-1.7 4-3.7 0-2.6-2.1-3.4-2.1-5.7 0-2.6 2.1-4.2 4.7-4.2H41c7.1 0 12-4.4 12-10.6 0-10.6-9.4-18.3-21-18.3z%22/%3E%3C/g%3E%3Cg id=%22s-toggle%22%3E%3Crect x=%228%22 y=%2222%22 width=%2248%22 height=%2220%22 rx=%2210%22/%3E%3C/g%3E%3Cg id=%22s-window%22%3E%3Crect x=%226%22 y=%2212%22 width=%2252%22 height=%2240%22 rx=%225%22/%3E%3C/g%3E%3Cmask id=%22m0%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m1%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m2%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m3%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m4%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3Cmask id=%22m5%22 maskUnits=%22userSpaceOnUse%22 x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22%3E%3Crect x=%22-20%22 y=%22-20%22 width=%22400%22 height=%22300%22 fill=%22%23fff%22 stroke=%22none%22/%3E%3Cg fill=%22%23000%22 stroke=%22%23000%22%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 stroke=%22%23000%22 stroke-width=%227%22/%3E%3C/g%3E%3C/mask%3E%3C/defs%3E%3Cg mask=%22url(%23m0)%22%3E%3Cpath d=%22M198.4 44.0C231.2 46.9 272.1 56.5 291.1 71.5C310.1 86.4 307.7 111.6 312.3 133.5C316.9 155.5 333.8 185.9 318.7 203.0C303.6 220.0 255.7 230.4 221.7 235.8C187.6 241.2 141.2 245.0 114.3 235.1C87.3 225.3 70.7 196.8 59.8 176.8C49.0 156.9 43.6 135.9 49.4 115.5C55.1 95.0 69.4 66.3 94.2 54.4C119.1 42.5 165.6 41.2 198.4 44.0Z%22 fill=%22%23000%22 fill-opacity=%220.3%22 stroke=%22none%22/%3E%3C/g%3E%3Cg mask=%22url(%23m1)%22%3E%3Cuse href=%22%23s-gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear%22 transform=%22translate(262 86) rotate(12) scale(2.2) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m2)%22%3E%3Cuse href=%22%23s-window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.14%22 stroke=%22none%22/%3E%3Cuse href=%22%23window%22 transform=%22translate(150 140) rotate(-6) scale(2.5) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m3)%22%3E%3Cuse href=%22%23s-gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.18%22 stroke=%22none%22/%3E%3Cuse href=%22%23gear6%22 transform=%22translate(318 156) rotate(-10) scale(1.0) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m4)%22%3E%3Cuse href=%22%23sliders%22 transform=%22translate(296 214) rotate(8) scale(0.95) translate(-32 -32)%22/%3E%3C/g%3E%3Cg mask=%22url(%23m5)%22%3E%3Cuse href=%22%23s-palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23palette%22 transform=%22translate(66 202) rotate(-14) scale(1.1) translate(-32 -32)%22/%3E%3C/g%3E%3Cuse href=%22%23s-toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22 fill=%22%23000%22 fill-opacity=%220.2%22 stroke=%22none%22/%3E%3Cuse href=%22%23toggle%22 transform=%22translate(66 72) rotate(-10) scale(0.9) translate(-32 -32)%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(34 128) rotate(0) scale(0.38) translate(-32 -32)%22 opacity=%220.8%22/%3E%3Cuse href=%22%23sparkle%22 transform=%22translate(200 22) rotate(0) scale(0.32) translate(-32 -32)%22 opacity=%220.7%22/%3E%3Cuse href=%22%23dot%22 transform=%22translate(340 32) rotate(0) scale(0.3) translate(-32 -32)%22 opacity=%220.6%22/%3E%3Cuse href=%22%23ring%22 transform=%22translate(200 240) rotate(0) scale(0.44) translate(-32 -32)%22 opacity=%220.55%22/%3E%3C/svg%3E");
@@ -14063,6 +14231,20 @@ body[data-design-mode="focus"] .contacts-empty-art {
     --decor-opacity: .22;
     width: min(200px, 90%);
     aspect-ratio: 240 / 120;
+}
+
+/* Тумблер «Иллюстрации» (Настройки → Оформление, prefs.js: applyDecorArt).
+   Рисунки — `mask` с вложенным SVG (девять <mask>, <use>, non-scaling-stroke,
+   пунктир), и WebView растеризует такую маску через дорогие промежуточные слои на
+   каждом кадре перехода. Замер на телефоне (gfxinfo, Хаб ↔ ZaliCoin ×4): с рисунком
+   74–85% рывков, p50 кадра 36 мс; без него 4–7%, p50 24 мс. Отдельный композитный
+   слой (will-change) давал только 32%. По умолчанию на Android-оболочке выключено,
+   на остальных включено — пользователь переключает сам. */
+body[data-decor-art="off"] #viewHub .hub-hero::after,
+body[data-decor-art="off"] #viewZaliCoin .zc-view::after,
+body[data-decor-art="off"] .empty-art,
+body[data-decor-art="off"] .contacts-empty-art {
+    display: none !important;
 }
 
 /* Настройки: только в правом поле широкого окна — колонка настроек 720px
@@ -14773,7 +14955,13 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     .server-modal-close,
     .tb-announce-close,
     .settings-chip,
-    .avatar-crop-close {
+    .avatar-crop-close,
+    /* .btn-flat тоже получает ::after-зону (список ниже), но position у неё не
+       было: без него зона растягивалась на всего позиционированного предка
+       (`width: max(100%, 44px)`). Каждая из ~30 кнопок перекрывала весь экран
+       и перехватывала любое касание: тап по категории настроек попадал в
+       «Назад» и выкидывал на основной экран. */
+    .btn-flat {
         position: relative;
     }
 
@@ -15875,40 +16063,9 @@ body[data-design-mode] .hub-addons .hub-addon-more {
    Кнопки компактные (34–36px): режимы дизайна задают .auth-btn.primary
    высоту экрана входа, поэтому ниже она переопределена явно.
    ============================================================ */
-.hub-tabs {
-    display: flex;
-    flex: none;
-    gap: 2px;
-    padding: 3px;
-    width: fit-content;
-    max-width: 100%;
-    overflow-x: auto;
-    border-radius: 12px;
-    background: rgba(255,255,255,.04);
-}
 
-.hub-tab {
-    flex: none;
-    min-height: 30px;
-    padding: 0 14px;
-    border: 0;
-    border-radius: 9px;
-    background: transparent;
-    color: var(--text2);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-}
 
-.hub-tab:hover {
-    color: var(--text);
-}
 
-.hub-tab.is-active {
-    background: rgba(255,255,255,.1);
-    color: var(--text);
-}
 
 .hub-pane {
     display: grid;
@@ -18674,11 +18831,53 @@ body[data-sidebar-panel] .sidebar .mode-switch {
 }
 
 @media (max-width: 760px) {
+    /* Три строки: шапка, полоса категорий, тело. Прежние правила (`auto 1fr`, в
+       «Фокусе» `auto minmax(0,1fr)`) писались, когда детей было двое: полоса
+       категорий оказывалась во второй, 1fr-строке и схлопывалась в 0, а тело
+       уезжало в неявную третью и ложилось поверх неё — на экране от категорий
+       оставался только горизонтальный скроллбар над первой карточкой.
+       Селектор — (1,1,1), как у правила «Фокуса» выше по файлу; блок идёт после
+       него, поэтому выигрывает в любом режиме оформления. */
+    body #viewSettings.view {
+        grid-template-rows: auto auto minmax(0, 1fr);
+    }
+
+    /* Шапка — одной строкой, «Назад» слева, как у шапки чата. Столбик
+       (заголовок над кнопкой по центру) выглядел как ошибка вёрстки. */
+    body #viewSettings .settings-topbar {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 12px;
+    }
+
+    body #viewSettings #closeSettings {
+        order: -1;
+        flex: none;
+    }
+
     .settings-cats {
         display: flex;
         gap: 6px;
         padding: 6px 14px 10px;
         overflow-x: auto;
+        overflow-y: hidden;
+    }
+
+    /* Скроллбары на тач-экране лишние: у полосы категорий он рисовался поверх
+       карточки, а у тела — с белым «уголком» на стыке. Как у .contacts/.msgs
+       выше по файлу. `scrollbar-width` перебивает ::-webkit-scrollbar в новых
+       WebView, псевдоэлемент — страховка для старых. */
+    .settings-cats,
+    .settings-body {
+        scrollbar-width: none;
+    }
+
+    body .settings-cats::-webkit-scrollbar,
+    body .settings-body::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+        display: none;
     }
 
     .settings-cat {
@@ -19169,3 +19368,1656 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:active {
 .change-password #changePasswordStatus[data-tone="error"] { color: var(--red, #ff4d6d); }
 .change-password #changePasswordStatus[data-tone="success"] { color: var(--lime, #cbff00); }
 .change-password #changePasswordStatus[data-tone="warn"] { color: var(--text2, rgba(255,255,255,.65)); }
+
+/* ── Сетка звонка: 16 плиток 16:9 (все режимы дизайна) ───────────────────
+   Лежит ПОСЛЕ блока «Фокус», который задаёт свои колонки, max-width и аватар:
+   `body` + :not(.has-stage) дают специфичность выше его правил, поэтому
+   fitVoiceTiles() (JS) решает число колонок и ширину, а режим дизайна — только
+   цвета. Плитка держит 16:9, лишнее место остаётся пустым. */
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tiles {
+    grid-template-columns: repeat(var(--vt-cols, 2), var(--vt-w, 260px));
+    grid-auto-rows: auto;
+    justify-content: center;
+    align-content: center;
+    gap: 10px;
+    max-width: none;
+    margin: 0;
+    height: auto;
+}
+
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile {
+    aspect-ratio: 16 / 9;
+    min-width: 0;
+    min-height: 0;
+    gap: 6px;
+}
+
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile-avatar {
+    width: var(--vt-av, 68px);
+    height: var(--vt-av, 68px);
+    font-size: calc(var(--vt-av, 68px) * 0.34);
+}
+
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile-avatar .avatar-fallback {
+    font-size: calc(var(--vt-av, 68px) * 0.4);
+}
+
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-level-ring {
+    inset: -5px;
+}
+
+body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile-name {
+    font-size: 12px;
+}
+
+/* Под показом экрана полоса плиток маленькая; без этого правило «Фокуса» с большим
+   аватаром (стоит позже его же правила для .has-stage) раздувало первую плитку. */
+body .voice-panel.has-stage .voice-call-expanded-grid .voice-tile-avatar {
+    width: 48px;
+    height: 48px;
+    font-size: 16px;
+}
+
+body .voice-panel.has-stage .voice-call-expanded-grid .voice-tile-avatar .avatar-fallback {
+    font-size: 18px;
+}
+
+body .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles-wrap {
+    min-width: 0;
+}
+
+/* Полоса плиток под показом экрана прокручивается внутри себя и не участвует в
+   подборе ширины панели: иначе 8 плиток по 176 px раздували колонку до 900 px. */
+body .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles {
+    contain: inline-size;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+}
+
+/* ── Выбор камеры и источника демонстрации (voice_devices.js) ─────────────
+   Язык «Фокуса», но без привязки к режиму: токены --vp-* берут значения у
+   --f-* и падают на те же числа в classic/flat. Плоские заливки вместо рамок и
+   теней, акцент только сплошным лаймом (точка радио, иконка выбранной
+   категории, главная кнопка) — никаких полупрозрачных лаймовых плашек. */
+.voice-picker-overlay {
+    --vp-surface: var(--f-surface, rgba(255,255,255,.032));
+    --vp-fill: var(--f-fill, rgba(255,255,255,.065));
+    --vp-fill-hover: var(--f-fill-hover, rgba(255,255,255,.095));
+    --vp-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    --vp-radius: var(--f-radius, 10px);
+    --vp-radius-l: var(--f-radius-l, 16px);
+    --vp-ctl: var(--f-ctl, 36px);
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, .6);
+}
+
+.voice-picker {
+    width: min(460px, 100%);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    border-radius: var(--vp-radius-l);
+    background:
+        linear-gradient(var(--vp-surface), var(--vp-surface)),
+        var(--bg);
+    color: var(--text);
+}
+
+.voice-picker-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.voice-picker-title {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.voice-picker-close {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--vp-radius);
+    background: var(--vp-fill);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.voice-picker-close:hover {
+    background: var(--vp-fill-hover);
+}
+
+.voice-picker-close svg {
+    width: 14px;
+    height: 14px;
+}
+
+.voice-picker-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.voice-picker-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.voice-picker-btn {
+    min-height: var(--vp-ctl);
+    padding: 0 16px;
+    border: 0;
+    border-radius: var(--vp-radius);
+    background: var(--vp-fill);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.voice-picker-btn:hover {
+    background: var(--vp-fill-hover);
+}
+
+.voice-picker-btn.is-primary {
+    background: rgb(var(--accent-rgb));
+    color: #050505;
+}
+
+.voice-picker-btn.is-primary:hover {
+    background: rgb(var(--accent-rgb));
+    filter: brightness(1.06);
+}
+
+.voice-picker-btn:disabled {
+    opacity: .45;
+    cursor: default;
+}
+
+.voice-picker-btn:focus-visible,
+.voice-picker-close:focus-visible,
+.voice-picker-row:focus-visible,
+.voice-picker-cat:focus-visible,
+.voice-picker-seg-btn:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.voice-picker-preview {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+    display: grid;
+    place-items: center;
+}
+
+.voice-picker-preview video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+}
+
+.voice-picker-hint {
+    position: relative;
+    padding: 0 20px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text);
+    opacity: .6;
+}
+
+.voice-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.voice-picker-empty {
+    padding: 12px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text);
+    opacity: .6;
+}
+
+.voice-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: var(--vp-radius);
+    background: var(--vp-surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.voice-picker-row:hover {
+    background: var(--vp-fill);
+}
+
+.voice-picker-row.is-selected {
+    background: var(--vp-fill-strong);
+    font-weight: 600;
+}
+
+.voice-picker-radio {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .28);
+}
+
+.voice-picker-row.is-selected .voice-picker-radio {
+    background: rgb(var(--accent-rgb));
+    box-shadow: inset 0 0 0 4px var(--vp-fill-strong), 0 0 0 2px rgb(var(--accent-rgb));
+}
+
+.voice-picker-row-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.voice-picker-cats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+}
+
+.voice-picker-cat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 18px 10px 14px;
+    border: 0;
+    border-radius: var(--vp-radius-l);
+    background: var(--vp-surface);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+
+.voice-picker-cat:hover {
+    background: var(--vp-fill);
+}
+
+.voice-picker-cat.is-selected {
+    background: var(--vp-fill-strong);
+}
+
+.voice-picker-cat-icon {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    background: var(--vp-fill);
+    color: var(--text);
+}
+
+.voice-picker-cat.is-selected .voice-picker-cat-icon {
+    background: var(--vp-fill-strong);
+    color: rgb(var(--accent-rgb));
+}
+
+.voice-picker-cat-icon .call-ctrl-icon {
+    width: 26px;
+    height: 26px;
+}
+
+.voice-picker-cat-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.voice-picker-cat-note {
+    font-size: 12px;
+    text-align: center;
+    color: var(--text);
+    opacity: .55;
+}
+
+.voice-picker-field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.voice-picker-label {
+    font-size: 13px;
+    color: var(--text);
+    opacity: .6;
+}
+
+.voice-picker-seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 12px;
+    background: var(--vp-surface);
+}
+
+.voice-picker-seg-btn {
+    min-width: 52px;
+    padding: 6px 12px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text);
+    opacity: .6;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.voice-picker-seg-btn:hover {
+    opacity: .9;
+}
+
+.voice-picker-seg-btn.is-selected {
+    background: var(--vp-fill-strong);
+    opacity: 1;
+}
+
+.voice-picker-note {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text);
+    opacity: .55;
+}
+
+@media (max-width: 560px) {
+    .voice-picker-overlay {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    .voice-picker {
+        width: 100%;
+        max-height: 88vh;
+        border-radius: var(--vp-radius-l) var(--vp-radius-l) 0 0;
+        padding-bottom: calc(20px + var(--m-safe-bottom, 0px));
+    }
+}
+
+/* Выбор камеры — маленький «хвостик» на самой кнопке камеры, а не отдельный
+   кружок в ряду: ряд кнопок остаётся ровным. */
+.call-ctrl-split {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+
+.call-ctrl-caret {
+    position: absolute;
+    right: -4px;
+    top: -4px;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--f-fill-strong, rgba(255,255,255,.14));
+    color: var(--text);
+    cursor: pointer;
+}
+
+.call-ctrl-caret:hover {
+    background: var(--f-fill-hover, rgba(255,255,255,.2));
+}
+
+.call-ctrl-caret .call-ctrl-icon {
+    width: 12px;
+    height: 12px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ЭКРАН ОШИБКИ ВХОДА (#authOverlay.is-error)
+   Тот же оверлей и та же сетка «витрина слева / карточка справа», но другая
+   иллюстрация (рваный кабель между сервером и розеткой) и другое наполнение:
+   сообщение об ошибке, «Повторить попытку» и, внизу колонки, поле с адресом
+   сервера авторизации. Разметка — index.html (.auth-fail, .auth-art--error),
+   логика — auth.js (showAuthFailure / retryAuthFailure).
+   Красный — только у самой проблемы (точка у сообщения, лампа на полке,
+   значок); лайм — сплошной.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.auth-fail {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.auth-fail[hidden] {
+    display: none !important;
+}
+
+.auth-overlay.is-error .auth-fail:not([hidden]) {
+    display: flex;
+}
+
+/* Вход исчезает целиком — форма, заголовок, бренд, подсказка про ключи. */
+.auth-overlay.is-error .auth-card > :not(.auth-fail) {
+    display: none !important;
+}
+
+.auth-overlay .auth-art--error,
+.auth-overlay.is-error .auth-art--login {
+    display: none;
+}
+
+body[data-design-mode="focus"] .auth-overlay.is-error .auth-art--error {
+    display: block;
+}
+
+.auth-overlay.visible .auth-fail > * {
+    animation: auth-field-in .42s cubic-bezier(.2,.8,.2,1) both;
+}
+
+.auth-overlay.visible .auth-fail > *:nth-child(1) { animation-delay: .04s; }
+.auth-overlay.visible .auth-fail > *:nth-child(2) { animation-delay: .08s; }
+.auth-overlay.visible .auth-fail > *:nth-child(3) { animation-delay: .12s; }
+.auth-overlay.visible .auth-fail > *:nth-child(4) { animation-delay: .16s; }
+.auth-overlay.visible .auth-fail > *:nth-child(5) { animation-delay: .2s; }
+.auth-overlay.visible .auth-fail > *:nth-child(6) { animation-delay: .24s; }
+
+.auth-fail-msg {
+    display: grid;
+    gap: 6px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--f-fill, rgba(255,255,255,.06));
+}
+
+.auth-fail-msg-text {
+    position: relative;
+    padding-left: 18px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.auth-fail-msg-text::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: .5em;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+}
+
+.auth-fail-msg-detail {
+    padding-left: 18px;
+    color: var(--text);
+    opacity: .55;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.auth-fail-msg-detail[hidden] {
+    display: none;
+}
+
+.auth-fail-footer {
+    display: grid;
+    grid-template-columns: 1fr;
+}
+
+.auth-fail-footer .auth-link[hidden] {
+    display: none;
+}
+
+/* Сервер авторизации — внизу колонки, как строка адреса на экране входа. */
+.auth-fail-server {
+    display: grid;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.auth-fail-server-label {
+    color: var(--text);
+    opacity: .5;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.auth-fail-server-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.auth-fail-server-row .auth-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.auth-overlay .auth-card .auth-fail .auth-fail-server-note {
+    min-height: 16px;
+    margin: 0;
+    color: var(--text);
+    opacity: .5;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.auth-overlay .auth-card .auth-fail .auth-fail-server-note.is-error {
+    color: var(--red);
+    opacity: 1;
+}
+
+body[data-design-mode="focus"] .auth-fail-footer {
+    grid-template-columns: 1fr;
+}
+
+body[data-design-mode="focus"] .auth-fail-msg {
+    border-radius: var(--f-radius-l);
+}
+
+body[data-design-mode="focus"] .auth-fail-server {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 24px;
+    width: min(clamp(400px, 34vw, 500px), calc(100% - 56px));
+    margin: 0 auto;
+}
+
+body[data-design-mode="focus"] .auth-fail-server .auth-input {
+    height: 44px;
+    min-height: 44px;
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+}
+
+body[data-design-mode="focus"] .auth-fail-server .auth-btn {
+    min-height: 44px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+body[data-design-mode="focus"] .auth-card .auth-fail .auth-actions {
+    margin-top: 6px;
+}
+
+/* Порядок в колонке: сообщение → «Повторить» → «Вернуться» → сервер. */
+body[data-design-mode="focus"] .auth-fail-server {
+    order: 4;
+}
+
+/* Узкое окно: как и у входа, иллюстрации нет — остаётся бренд над формой. */
+@media (max-width: 980px) {
+    body[data-design-mode="focus"] .auth-overlay.is-error .auth-art--error {
+        display: none;
+    }
+}
+
+@media (max-width: 760px) {
+    body[data-design-mode="focus"] .auth-fail-server {
+        position: static;
+        width: auto;
+        margin-top: 16px;
+    }
+}
+/* Иллюстрация ошибки (расширяет .auth-art из блока входа). Сервер и телефон
+   чуть наклонены в разные стороны, как окно на экране входа. */
+.auth-art .aa-warn { fill: var(--red); }
+
+.auth-art .aa-ring--warn { stroke: var(--red); }
+
+.auth-art .aa-tilt-l {
+    transform: rotate(-3deg);
+    transform-origin: 142px 213px;
+}
+
+.auth-art .aa-tilt-r {
+    transform: rotate(2.5deg);
+    transform-origin: 456px 231px;
+}
+
+.auth-art .aa-shelf--warn {
+    stroke: var(--red);
+    stroke-width: 2;
+}
+
+.auth-art .aa-prongs-off {
+    fill: none;
+    stroke: var(--red);
+    stroke-width: 3;
+    stroke-linecap: round;
+    opacity: .75;
+}
+
+.auth-art .aa-pending {
+    fill: none;
+    stroke: var(--lime);
+    stroke-width: 2;
+    stroke-dasharray: 5 5;
+    stroke-linecap: round;
+    animation: auth-art-dash 3s linear infinite;
+}
+
+.auth-art .aa-pending--late {
+    opacity: .55;
+}
+
+.auth-art .aa-clock {
+    fill: none;
+    stroke: var(--lime);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.auth-art .aa-cable {
+    fill: none;
+    stroke: rgba(255,255,255,.3);
+    stroke-width: 7;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-plug {
+    fill: #24262b;
+    stroke: rgba(255,255,255,.3);
+    stroke-width: 2;
+}
+
+.auth-art .aa-prong {
+    fill: none;
+    stroke: rgba(255,255,255,.55);
+    stroke-width: 4;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-hole {
+    fill: rgba(5,5,5,.75);
+}
+
+.auth-art .aa-swing {
+    transform-origin: 388px 230px;
+    animation: auth-art-swing 3.4s ease-in-out infinite alternate;
+}
+
+.auth-art .aa-bolt {
+    fill: none;
+    stroke: var(--lime);
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    animation: auth-art-typing 1.4s ease-in-out infinite;
+}
+
+.auth-art .aa-break {
+    fill: none;
+    stroke: var(--lime);
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    animation: auth-art-typing 1.4s ease-in-out .3s infinite;
+}
+
+.auth-art .aa-led {
+    animation: auth-art-typing 1.2s ease-in-out infinite;
+}
+
+@keyframes auth-art-dash {
+    to { stroke-dashoffset: -20; }
+}
+
+@keyframes auth-art-swing {
+    from { transform: rotate(-2.5deg); }
+    to { transform: rotate(3deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .auth-art .aa-break,
+    .auth-art .aa-bolt,
+    .auth-art .aa-led,
+    .auth-art .aa-pending,
+    .auth-art .aa-swing {
+        animation: none;
+    }
+
+    .auth-overlay.visible .auth-fail > * {
+        animation: none;
+    }
+}
+/* ════════════════════════════════════════════════════════════════════════
+   ХАБ: быстрые переходы (#hubGrid → .hub-action)
+   Три крупные кнопки во всю ширину, друг под другом: название и подпись слева,
+   рисунок справа, круглая стрелка в самом краю. Язык «Фокуса»: плоские
+   заливки; лайм — сплошной, только на рисунке и на стрелке при наведении.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.hub-actions {
+    --ha-surface: var(--f-surface, rgba(255,255,255,.04));
+    --ha-fill: var(--f-fill, rgba(255,255,255,.065));
+    --ha-fill-hover: var(--f-fill-hover, rgba(255,255,255,.095));
+    --ha-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+}
+
+.hub-action {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 16px;
+    min-height: 92px;
+    padding: 0 18px 0 26px;
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--ha-fill);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .15s var(--ease-out);
+}
+
+.hub-action:hover {
+    background: var(--ha-fill-hover);
+}
+
+.hub-action:focus-visible,
+.hub-update:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.hub-action-text {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.hub-action-text strong {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    line-height: 1.15;
+}
+
+.hub-action-text span {
+    max-width: 46ch;
+    color: var(--text);
+    opacity: .6;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.hub-action-go {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 32px;
+    color: var(--text);
+    opacity: .5;
+    transition: color .15s var(--ease-out), opacity .15s var(--ease-out), transform .15s var(--ease-out);
+}
+
+.hub-action-go svg {
+    width: 22px;
+    height: 22px;
+    stroke-width: 2.6;
+}
+
+.hub-action:hover .hub-action-go,
+.hub-action:focus-visible .hub-action-go {
+    color: rgb(var(--accent-rgb));
+    opacity: 1;
+    transform: translateX(3px);
+}
+
+/* Маленькая картинка кнопки — сцена scripts/build_decor.py (--decor-hub-settings /
+   -addons / -coins): одноцветная маска, как у больших иллюстраций экранов, и
+   так же прячется тумблером «Иллюстрации». Только в оформлении «Фокус». */
+.hub-action-art {
+    display: none;
+}
+
+body[data-design-mode="focus"] .hub-action-art {
+    display: block;
+    flex: none;
+    width: 128px;
+    height: 80px;
+    margin-right: -14px;
+    background: #fff;
+    opacity: .3;
+    -webkit-mask: var(--decor) center / contain no-repeat;
+    mask: var(--decor) center / contain no-repeat;
+    transition: opacity .15s var(--ease-out);
+}
+
+body[data-design-mode="focus"] .hub-action:hover .hub-action-art,
+body[data-design-mode="focus"] .hub-action:focus-visible .hub-action-art {
+    opacity: .5;
+}
+
+.hub-action-art--settings { --decor: var(--decor-hub-settings); }
+.hub-action-art--addons { --decor: var(--decor-hub-addons); }
+.hub-action-art--coins { --decor: var(--decor-hub-coins); }
+
+body[data-decor-art="off"] .hub-action-art {
+    display: none !important;
+}
+
+.hub-update {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border: 0;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--ha-fill);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.hub-update:hover {
+    background: var(--ha-fill-hover);
+}
+
+.hub-update-dot {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgb(var(--accent-rgb));
+}
+
+.hub-update-text {
+    display: grid;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.hub-update-text strong {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.hub-update-text span {
+    opacity: .6;
+    font-size: 12px;
+}
+
+.hub-update-cta {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border-radius: var(--f-radius, 10px);
+    background: rgb(var(--accent-rgb));
+    color: #050505;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+@media (max-width: 760px) {
+    .hub-action {
+        min-height: 84px;
+        gap: 12px;
+        padding: 0 14px 0 20px;
+    }
+
+    body[data-design-mode="focus"] .hub-action-art {
+        width: 104px;
+        height: 65px;
+    }
+
+    .hub-action-text strong {
+        font-size: 18px;
+    }
+}
+
+@media (max-width: 520px) {
+    .hub-action {
+        gap: 8px;
+        padding: 0 14px 0 18px;
+    }
+
+    body[data-design-mode="focus"] .hub-action-art {
+        width: 76px;
+        height: 48px;
+    }
+
+    .hub-action-go {
+        width: 20px;
+    }
+
+    .hub-action-text span {
+        font-size: 13px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-design-mode="focus"] .hub-action-art,
+    .hub-action-go {
+        transition: none;
+    }
+}
+
+/* ── Быстрый запуск аддонов на главной хаба (#hubQuick) ────────────────────
+   Те же плашки, что у разделов; автор аддона может задать фон —
+   manifest.background, картинка от левого до правого края плашки. Затемнение
+   слева держит читаемым текст на любой картинке. */
+.hub-actions[hidden] {
+    display: none;
+}
+
+.hub-actions--addons {
+    margin-top: 12px;
+}
+
+.hub-action--addon {
+    position: relative;
+    isolation: isolate;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.hub-action--addon:disabled {
+    cursor: progress;
+    opacity: .7;
+}
+
+.hub-action--addon.has-bg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+        linear-gradient(90deg, rgba(9,10,12,.88) 0%, rgba(9,10,12,.58) 52%, rgba(9,10,12,.18) 100%),
+        var(--addon-bg) center / cover no-repeat;
+    transition: filter .15s var(--ease-out);
+}
+
+.hub-action--addon.has-bg:hover::before,
+.hub-action--addon.has-bg:focus-visible::before {
+    filter: brightness(1.15);
+}
+
+.hub-action--addon.has-bg .hub-action-text span {
+    opacity: .82;
+}
+
+.hub-action--addon .hub-action-text strong {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Описание аддона пишет разработчик — длинное не должно ни слипаться с краем плашки
+   (min-height держит 84px, а три строки заполняли её впритык), ни растягивать её. */
+.hub-action {
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.hub-action-text span {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+}
+
+/* Хаб без переключателя вкладок: из «Аддонов» и «Подписи» назад — «Назад в хаб». */
+.hub-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    min-height: var(--f-ctl, 36px);
+    margin: 0 0 12px;
+    padding: 0 14px 0 10px;
+    border: 0;
+    border-radius: var(--f-radius, 10px);
+    background: var(--f-fill, rgba(255,255,255,.065));
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s var(--ease-out);
+}
+
+.hub-back:hover {
+    background: var(--f-fill-hover, rgba(255,255,255,.095));
+}
+
+.hub-back:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.hub-back-chevron {
+    width: 8px;
+    height: 8px;
+    margin-left: 4px;
+    border-left: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    opacity: .7;
+}
+
+.hub-addons-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   МАГАЗИН АДДОНОВ (вкладка «Аддоны» хаба) и публикация в окне подписи
+   Язык «Фокуса»: плоские заливки, лайм — сплошной и только у главных
+   кнопок. Карточка: обложка (фон аддона, если он задан), иконка, название,
+   автор и версия, описание, разрешения, цена и одна кнопка действия.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.hub-store {
+    --st-surface: var(--f-surface, rgba(255,255,255,.04));
+    --st-fill: var(--f-fill, rgba(255,255,255,.065));
+    --st-fill-hover: var(--f-fill-hover, rgba(255,255,255,.095));
+    --st-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    display: grid;
+    gap: 16px;
+    margin-bottom: 28px;
+}
+
+.hub-store-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.hub-store-head h3 {
+    margin: 2px 0 6px;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -.015em;
+    line-height: 1.15;
+}
+
+.hub-store-sub {
+    max-width: 58ch;
+    margin: 0;
+    color: var(--text);
+    opacity: .6;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.hub-store-balance {
+    flex: 0 0 auto;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: var(--st-fill);
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.hub-store-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.hub-store-search {
+    display: flex;
+    flex: 1 1 240px;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 14px;
+    border-radius: 12px;
+    background: var(--st-fill);
+    color: var(--text);
+    transition: box-shadow .15s var(--ease-out);
+}
+
+.hub-store-search:focus-within {
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.hub-store-search svg {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    opacity: .5;
+}
+
+.hub-store-search input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 14px;
+}
+
+.hub-store-filters {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 12px;
+    background: var(--st-surface);
+}
+
+.store-chip {
+    padding: 8px 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text);
+    opacity: .6;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.store-chip:hover {
+    opacity: .9;
+}
+
+.store-chip.is-selected {
+    background: var(--st-fill-strong);
+    opacity: 1;
+}
+
+.store-chip:focus-visible,
+.store-get:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.hub-store-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(256px, 1fr));
+    gap: 14px;
+}
+
+.store-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--st-fill);
+    transition: background .15s var(--ease-out);
+}
+
+.store-card:hover {
+    background: var(--st-fill-hover);
+}
+
+.store-card-cover {
+    height: 76px;
+    background: var(--st-fill-strong);
+}
+
+.store-card.has-bg .store-card-cover {
+    background:
+        linear-gradient(180deg, rgba(9,10,12,.1) 0%, rgba(9,10,12,.6) 100%),
+        var(--store-bg) center / cover no-repeat;
+}
+
+.store-card-icon {
+    position: absolute;
+    top: 46px;
+    left: 16px;
+    display: grid;
+    place-items: center;
+    width: 60px;
+    height: 60px;
+    overflow: hidden;
+    border-radius: 16px;
+    background: #17181b;
+    box-shadow: 0 0 0 3px rgba(9,10,12,.55);
+    color: rgb(var(--accent-rgb));
+    font-size: 24px;
+    font-weight: 800;
+}
+
+.store-card-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.store-card-body {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 8px;
+    padding: 38px 16px 12px;
+}
+
+.store-card-name {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.store-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--text);
+    opacity: .6;
+    font-size: 12px;
+}
+
+.store-official {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--st-fill-strong);
+    color: var(--text);
+    opacity: 1;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.store-official::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgb(var(--accent-rgb));
+}
+
+.store-card-desc {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    color: var(--text);
+    opacity: .78;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.store-perms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.store-perm {
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--st-surface);
+    color: var(--text);
+    opacity: .75;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.store-perm.is-elevated {
+    color: var(--f-warn, #ffcc66);
+    opacity: 1;
+}
+
+.store-perms-none {
+    margin: 0;
+    color: var(--text);
+    opacity: .5;
+    font-size: 11px;
+}
+
+.store-card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px 16px;
+}
+
+.store-price {
+    font-size: 15px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.store-price:not(.is-paid) {
+    opacity: .7;
+    font-weight: 700;
+}
+
+.store-price small {
+    font-size: 11px;
+    opacity: .7;
+}
+
+.store-get {
+    min-height: 38px;
+    padding: 0 16px;
+    border-radius: var(--f-radius, 10px);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.store-get:disabled {
+    cursor: default;
+    opacity: .55;
+}
+
+.store-empty {
+    grid-column: 1 / -1;
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 36px 20px;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--st-surface);
+    text-align: center;
+}
+
+.store-empty strong {
+    font-size: 16px;
+}
+
+.store-empty span {
+    max-width: 52ch;
+    color: var(--text);
+    opacity: .6;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.store-empty.is-error strong {
+    color: var(--red);
+}
+
+.store-card.is-skeleton .store-card-body {
+    padding-top: 34px;
+    min-height: 150px;
+}
+
+.store-skel {
+    display: block;
+    height: 12px;
+    border-radius: 6px;
+    background: var(--st-fill-strong);
+    animation: store-skel 1.3s ease-in-out infinite;
+}
+
+.store-skel.w60 { width: 60%; height: 16px; }
+.store-skel.w40 { width: 40%; }
+.store-skel.w90 { width: 90%; }
+
+@keyframes store-skel {
+    0%, 100% { opacity: .45; }
+    50% { opacity: .9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .store-skel {
+        animation: none;
+    }
+}
+
+@media (max-width: 560px) {
+    .hub-store-head {
+        flex-direction: column;
+    }
+
+    .hub-store-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Публикация в магазин — в окне подписи, под выбранным файлом. */
+.store-publish {
+    display: grid;
+    gap: 12px;
+    margin-top: 12px;
+    padding: 16px;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--f-surface, rgba(255,255,255,.04));
+}
+
+.store-publish-head {
+    display: grid;
+    gap: 2px;
+}
+
+.store-publish-head strong {
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.store-publish-head span,
+.store-publish-note,
+.store-publish-hint {
+    margin: 0;
+    color: var(--text);
+    opacity: .6;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.store-publish-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.store-seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(255,255,255,.065));
+}
+
+.store-seg-btn {
+    padding: 8px 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text);
+    opacity: .6;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.store-seg-btn.is-selected {
+    background: var(--f-fill-strong, rgba(255,255,255,.11));
+    opacity: 1;
+}
+
+.store-seg-btn:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.store-price-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(255,255,255,.065));
+}
+
+.store-price-field[hidden] {
+    display: none;
+}
+
+.store-price-field input {
+    width: 84px;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.store-price-field span {
+    opacity: .6;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.store-publish-btn {
+    margin-left: auto;
+}
+
+.store-publish-note.is-error {
+    color: var(--red);
+    opacity: 1;
+}
+
+.store-publish-note.is-success {
+    color: var(--text);
+    opacity: .9;
+}
+
+.addon-chip.is-store {
+    background: var(--f-fill-strong, rgba(255,255,255,.11));
+    color: var(--text);
+}
+
+.addon-chip.is-store.is-muted {
+    opacity: .6;
+}
+
+.store-dialog-field {
+    display: grid;
+    gap: 6px;
+    margin: 14px 0 6px;
+    font-size: 13px;
+}
+
+.store-dialog-field input {
+    height: 42px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(255,255,255,.065));
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.store-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.store-link:hover {
+    color: rgb(var(--accent-rgb));
+}
+
+/* «Фокус»: хвосты старого языка, найденные обходом экранов (2026-10-15) —
+   полупрозрачный лайм на тёмном читается грязно-оливковым, поэтому плоская
+   заливка, а лайм — только сплошной «пятнышком». */
+body[data-design-mode="focus"] .hub-addon-icon {
+    border-color: transparent;
+    background: var(--f-fill-strong, rgba(255,255,255,.1));
+}
+
+body[data-design-mode="focus"] .hub-component-version {
+    border-color: transparent;
+    background: var(--f-fill-strong, rgba(255,255,255,.1));
+    color: var(--text);
+}
+
+body[data-design-mode="focus"] .zc-legend-item.is-me {
+    background: var(--f-fill, rgba(255,255,255,.065));
+}
+
+body[data-design-mode="focus"] .zc-legend-me {
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent, #050505);
+}
+
+/* Хаб на телефоне: во вложенных вкладках большая шапка с иллюстрацией съедала
+   полэкрана до самого содержимого (магазин, подпись) — там есть «Назад в хаб». */
+@media (max-width: 760px) {
+    #viewHub[data-hub-current="addons"] .hub-hero,
+    #viewHub[data-hub-current="signing"] .hub-hero {
+        display: none;
+    }
+}

@@ -21,6 +21,7 @@ MAGIC = b"ZALIEXTN"
 FORMAT_VERSION = 1
 MANIFEST_PATH = "manifest.json"
 FILE_BYTES = 32 * 1024 * 1024
+BACKGROUND_BYTES = 512 * 1024
 ENTRIES = 2000
 MANIFEST_BYTES = 64 * 1024
 PATH_BYTES = 255
@@ -132,6 +133,13 @@ def check_manifest(files):
         icon = file_ref(data["icon"], "icon", files)
         if ext_of(icon) not in ICON_EXTS:
             raise AddonError("Манифест: icon — png, svg, webp или jpeg.")
+
+    if data.get("background") not in (None, ""):
+        background = file_ref(data["background"], "background", files)
+        if ext_of(background) not in ICON_EXTS:
+            raise AddonError("Манифест: background — png, svg, webp или jpeg.")
+        if len(files[background]) > BACKGROUND_BYTES:
+            raise AddonError("Манифест: background больше 512 КБ.")
 
     permissions = data.get("permissions") or []
     if not isinstance(permissions, list):

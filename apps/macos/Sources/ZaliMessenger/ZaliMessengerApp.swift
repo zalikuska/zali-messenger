@@ -37,6 +37,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
         buildWindow()
         NSApp.activate(ignoringOtherApps: true)
         maximizeMainWindow()
+        // Системный простой → маршрут уведомлений по активности (DeviceIdleWatcher).
+        DeviceIdleWatcher.shared.start()
+        observeScreenLock()
         UNUserNotificationCenter.current().delegate = self
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             DispatchQueue.main.async {
@@ -58,6 +61,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
     func windowDidBecomeKey(_ notification: Notification) { syncWebAppFocus() }
     func windowDidResignKey(_ notification: Notification) { syncWebAppFocus() }
     func windowDidMiniaturize(_ notification: Notification) { syncWebAppFocus() }
+    func windowDidDeminiaturize(_ notification: Notification) { syncWebAppFocus() }
+
+    /// Экран заблокирован или погас: приложение остаётся «активным» и с ключевым окном,
+    /// и открытый чат глушил уведомление — а на заблокированном экране его никто не
+    /// видит, зато баннер на экране блокировки увидят.
+    private var screenLocked = false
+
+    private func observeScreenLock() {
+        let distributed = DistributedNotificationCenter.default()
+        let workspace = NSWorkspace.shared.notificationCenter
+        let lock: (Notification) -> Void = { [weak self] _ in
+            self?.screenLocked = true
+            self?.syncWebAppFocus()
+        }
+        let unlock: (Notification) -> Void = { [weak self] _ in
+            self?.screenLocked = false
+            self?.syncWebAppFocus()
+        }
+        distributed.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main, using: lock)
+        distributed.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main, using: unlock)
+        workspace.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main, using: lock)
+        workspace.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main, using: lock)
+        workspace.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main, using: unlock)
+        // Экран просто погас и проснулся без пароля — снятия блокировки не будет.
+        workspace.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.screenLocked = AppDelegate.isScreenLockedNow()
+            self?.syncWebAppFocus()
+        }
+    }
+
+    private static func isScreenLockedNow() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
+    }
 
     // Уведомление и звук идут, когда приложение не в фокусе, даже при открытом чате
     // (isAppAttended в web/src/interface/notifications.js). document.hasFocus() в
@@ -70,6 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
     // (onPageFinished в MainActivity.kt) и Windows (опрос в main.rs).
     func syncWebAppFocus() {
         let focused = NSApp.isActive && (window?.isKeyWindow ?? false) && !(window?.isMiniaturized ?? true)
+            && !screenLocked
         let script = "window.__zaliNativeAppFocus = \(focused); var ui = window.__ZALI_INTERFACE; if (ui && ui.onNativeAppFocusChange) ui.onNativeAppFocusChange();"
         coordinator?.webView?.evaluateJavaScript(script, completionHandler: nil)
     }

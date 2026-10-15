@@ -68,9 +68,12 @@ mod focus;
 // Подпись аддонов, реестр авторов и казна аддонов (ZaliCoin).
 mod addon_cloud;
 mod addons;
+mod addon_store;
 mod raffles;
 mod fcm;
 pub(crate) use fcm::*;
+mod device_activity;
+pub(crate) use device_activity::{note_device_activity, notify_route_for, send_notify_route, NotifyRoute};
 mod coins;
 pub(crate) use coins::*;
 mod treasury;
@@ -522,6 +525,9 @@ pub struct AppState {
     // Per-socket presence for the Web Push decision, keyed by connection id — see
     // push.rs::push_suppressed_for.
     push_presence: DashMap<u64, ConnectionPresence>,
+    // Когда на каждом устройстве пользователя что-то делали в последний раз — маршрут
+    // уведомлений «только на активные, если такие есть» (device_activity.rs).
+    device_activity: device_activity::DeviceActivityMap,
     // Сообщения, уведомление о которых отложено или ушло тихо (focus.rs), по id
     // сообщения. Живёт в памяти: теряется только отсрочка пуша, не сообщения.
     focus_pending: focus::PendingMap,
@@ -1398,6 +1404,19 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .await
         .ok();
 
+    // Последнее действие на каждом устройстве аккаунта, unix-секунды (device_activity.rs).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS device_activity (
+            username TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            last_active_at INTEGER NOT NULL,
+            PRIMARY KEY (username, device_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы device_activity");
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS client_diagnostic_reports (
             id TEXT PRIMARY KEY,
@@ -1760,6 +1779,47 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    // Магазин аддонов (addon_store.rs): листинг на аддон и покупки-лицензии.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_store_listings (
+            addon_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            version TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            name TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            author TEXT NOT NULL DEFAULT '',
+            permissions TEXT NOT NULL DEFAULT '[]',
+            price INTEGER NOT NULL DEFAULT 0,
+            size INTEGER NOT NULL,
+            published_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            icon_ext TEXT NOT NULL DEFAULT '',
+            bg_ext TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_store_listings");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_addon_store_listings_owner ON addon_store_listings (owner, status)")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS addon_store_purchases (
+            addon_id TEXT NOT NULL,
+            buyer TEXT NOT NULL,
+            price INTEGER NOT NULL DEFAULT 0,
+            version TEXT NOT NULL DEFAULT '',
+            at INTEGER NOT NULL,
+            tx_id TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (addon_id, buyer)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы addon_store_purchases");
     // Розыгрыши ZaliCoin (raffles.rs): сам розыгрыш, диапазоны призов и участники.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS raffles (
@@ -2033,6 +2093,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
 
     init_server_metrics();
     let addon_signer = addons::AddonSigner::load_or_create(&data_dir);
+    let device_activity = device_activity::load_device_activity(&pool).await;
     Arc::new(AppState {
         db: pool,
         data_dir,
@@ -2040,6 +2101,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         releases_dir,
         user_connections: DashMap::new(),
         push_presence: DashMap::new(),
+        device_activity,
         focus_pending: DashMap::new(),
         addon_signer,
         voice_rooms: DashMap::new(),
@@ -2228,6 +2290,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/push/unsubscribe", post(unsubscribe_push))
         .route("/api/push/fcm/register", post(register_fcm_token))
         .route("/api/push/device/unregister", post(unregister_push_device))
+        .route("/api/devices/activity", get(device_activity::get_device_activity))
         .route(
             "/api/diagnostics/decrypt-failure",
             post(report_decrypt_failure),
@@ -2300,6 +2363,17 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/addons/sign", post(addons::sign_addon))
         .route("/api/addons/register-official", post(addons::register_official))
         .route("/api/addons/mine", get(addons::list_mine))
+        .route("/api/addons/store", get(addon_store::list_store))
+        // Файл аддона — base64 внутри JSON: до 16 МиБ на файл.
+        .route(
+            "/api/addons/store/publish",
+            post(addon_store::publish).layer(DefaultBodyLimit::max(22 * 1024 * 1024 + 4096)),
+        )
+        .route("/api/addons/store/:id", axum::routing::delete(addon_store::unpublish))
+        .route("/api/addons/store/:id/update", post(addon_store::update_listing))
+        .route("/api/addons/store/:id/assets", get(addon_store::assets))
+        .route("/api/addons/store/:id/buy", post(addon_store::buy))
+        .route("/api/addons/store/:id/download", get(addon_store::download))
         .route("/api/addons/:id", get(addons::get_registry))
         .route("/api/addons/:id/deposit", post(addons::deposit))
         .route("/api/addons/:id/withdraw", post(addons::withdraw))

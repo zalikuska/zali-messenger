@@ -21,6 +21,8 @@
         fileBytes: 32 * 1024 * 1024,
         entries: 2000,
         manifestBytes: 64 * 1024,
+        // Фон плашки аддона на главной хаба (manifest.background).
+        backgroundBytes: 512 * 1024,
         signatureBytes: 16 * 1024,
         pathBytes: 255,
         storageBytes: 1024 * 1024,
@@ -292,6 +294,14 @@
             if (!ICON_EXTS.includes(extOf(icon))) fail('Манифест: icon — png, svg, webp или jpeg.');
         }
 
+        // Фон плашки аддона на главной хаба: картинка во всю ширину плашки.
+        let background = '';
+        if (data.background !== undefined && data.background !== null && data.background !== '') {
+            background = fileRef(data.background, 'background', files);
+            if (!ICON_EXTS.includes(extOf(background))) fail('Манифест: background — png, svg, webp или jpeg.');
+            if (files.get(background).length > LIMITS.backgroundBytes) fail('Манифест: background больше 512 КБ.');
+        }
+
         const permissionsRaw = data.permissions ?? [];
         if (!Array.isArray(permissionsRaw)) fail('Манифест: permissions должен быть списком.');
         const permissions = [];
@@ -353,7 +363,7 @@
         }
         if (permissions.includes('process') && !backend) fail('Манифест: разрешение «process» без backend.');
 
-        return { zaliAddon: 1, id, name, version, description, author, entry, icon, permissions, network, backend };
+        return { zaliAddon: 1, id, name, version, description, author, entry, icon, background, permissions, network, backend };
     }
 
     async function sha256Hex(bytes) {
@@ -377,8 +387,8 @@
     }
 
     /**
-     * Собирает файл аддона. Нужен упаковщику-харнессу и тестам; приложение
-     * аддоны не собирает.
+     * Собирает файл аддона. Зовут упаковщик хаба (interface/addons_pack.js: ZIP →
+     * .zali), подпись (withSignature) и тесты.
      * @param {Array<[string, Uint8Array|string]>} entries
      * @param {{id?: string}} [options]
      */

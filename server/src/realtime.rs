@@ -243,7 +243,10 @@ pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     AuthenticatedUser(username): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    // Нативные оболочки называют устройство заголовком апгрейда; браузер — кадрами.
+    let device_id = crate::header_device_id(&headers);
     // Предел соединений на человека: нормальному пользователю хватает пары
     // вкладок и устройств, остальное — утечка либо попытка занять память.
     let open_connections = state
@@ -265,10 +268,15 @@ pub(crate) async fn ws_handler(
     // по умолчанию библиотека принимает кадры до 16 МиБ и сообщения до 64 МиБ.
     ws.max_message_size(WS_MAX_INBOUND_BYTES)
         .max_frame_size(WS_MAX_INBOUND_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state, username))
+        .on_upgrade(move |socket| handle_socket(socket, state, username, device_id))
 }
 
-pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, username: String) {
+pub(crate) async fn handle_socket(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    username: String,
+    device_id: Option<String>,
+) {
     let capacity = state.config.ws_channel_capacity;
     let (tx, mut rx) = mpsc::channel::<String>(capacity);
 
@@ -279,6 +287,7 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
         .push(tx.clone());
     // Для решения «слать ли Web Push на это устройство» — см. push.rs::push_suppressed_for.
     let presence_id = crate::register_connection_presence(&state, &username);
+    crate::set_connection_device(&state, presence_id, device_id.as_deref());
 
     info!(
         "[WS] '{}' подключился (voice_rooms={}, active_ws={})",
@@ -376,6 +385,38 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, u
                                         value["attended"].as_bool().unwrap_or(false),
                                         value["deviceId"].as_str(),
                                     );
+                                } else if event_type == "client_view" {
+                                    // Какой чат открыт перед глазами — при открытом чате
+                                    // уведомлений нет нигде (device_activity.rs).
+                                    crate::set_connection_device(
+                                        &state,
+                                        presence_id,
+                                        value["deviceId"].as_str(),
+                                    );
+                                    crate::update_connection_view(
+                                        &state,
+                                        presence_id,
+                                        value["conversation"].as_str(),
+                                    );
+                                } else if event_type == "client_idle" {
+                                    // Сколько секунд назад на устройстве что-то делали —
+                                    // маршрут уведомлений, см. device_activity.rs.
+                                    crate::set_connection_device(
+                                        &state,
+                                        presence_id,
+                                        value["deviceId"].as_str(),
+                                    );
+                                    if let (Some(device), Some(idle)) = (
+                                        crate::connection_device(&state, presence_id),
+                                        value["idleSeconds"].as_f64().filter(|idle| idle.is_finite()),
+                                    ) {
+                                        crate::note_device_activity(
+                                            &state,
+                                            &username,
+                                            &device,
+                                            idle.max(0.0) as u64,
+                                        );
+                                    }
                                 } else if event_type == "client_activity" {
                                     // Игровой статус: уже определён и отфильтрован настройкой
                                     // приватности на клиенте — см. activity.rs.

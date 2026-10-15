@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.view.MotionEvent
 import android.net.Uri
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -19,14 +20,18 @@ import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -34,13 +39,24 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,7 +64,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,17 +75,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * Sections, mirroring the shared web dock buttons — все четыре.
+ * Sections, mirroring the shared web dock buttons — все четыре. Настройки открываются из Хаба.
  *
  * Хаба здесь не было, а веб-док (в котором он есть) на Android скрыт инъекцией
  * CSS — то есть в Хаб можно было попасть только окольным путём, через
@@ -81,8 +104,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 private enum class Tab(val id: String, val title: String, val icon: ImageVector) {
     Chats("chats", "Чаты", Icons.Filled.Chat),
     Servers("servers", "Сервера", Icons.Filled.Dns),
-    Hub("hub", "Хаб", Icons.Filled.Home),
-    Settings("settings", "Настройки", Icons.Filled.Settings);
+    ZaliCoin("zalicoin", "ZaliCoin", Icons.Filled.MonetizationOn),
+    Hub("hub", "Хаб", Icons.Filled.Home);
 
     companion object {
         fun fromId(value: String): Tab? = entries.firstOrNull { it.id == value }
@@ -92,7 +115,11 @@ private enum class Tab(val id: String, val title: String, val icon: ImageVector)
 private const val ASSET_BASE_URL = "file:///android_asset/web/"
 
 private val Accent = Color(0xFFC7FA48)      // brand lime
-private val BarGlass = Color(0xCC0E1014)    // translucent dark glass
+// Почти непрозрачное стекло: чат и список не должны просвечивать сквозь панель.
+private val BarGlass = Color(0xF50E1014)
+private val CapsuleShape = RoundedCornerShape(percent = 50)   // полностью круглые торцы, как у iOS
+private val BarPadding = 6.dp
+private val TabHeight = 48.dp
 
 /**
  * Thin native Android shell. Wraps the shared web UI (`Web/`, bundled by
@@ -316,7 +343,12 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Приложение тёмное всегда: значки статус-бара и навигации светлые, независимо от
+        // системной темы (иначе на светлой теме часы и батарея тёмные на тёмном фоне).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         pendingNotificationIntent = intent
         // Сессия, сохранённая на прошлом запуске, регистрирует FCM-токен и без нового входа.
         PushSession.syncRegistration(this)
@@ -334,7 +366,6 @@ class MainActivity : ComponentActivity() {
             var selected by remember { mutableStateOf(Tab.Chats) }
             // 0 = dialog list on screen (bar visible), 1 = chat (bar gone).
             var navProgress by remember { mutableFloatStateOf(0f) }
-            var navAnimate by remember { mutableStateOf(true) }
             var webView by remember { mutableStateOf<WebView?>(null) }
 
             // System bars ∪ display cutout: the notch/front camera and the
@@ -343,7 +374,18 @@ class MainActivity : ComponentActivity() {
             // against these (var(--m-safe-top/bottom) in style.css).
             val safeInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues()
             val insetTop = safeInsets.calculateTopPadding()
-            val insetBottom = safeInsets.calculateBottomPadding()
+            // Клавиатура. Приложение edge-to-edge (targetSdk 35), и `adjustResize` окно
+            // больше не ресайзит: поле ввода уходило ПОД клавиатуру, а `visualViewport`
+            // не менялся (`--kbd-inset` оставался 0). Поэтому вебвью сжимается по IME
+            // сам (`imePadding()` ниже), и `.input-area { bottom: 0 }` садится над ней.
+            //
+            // IME-инсет считается от нижнего края экрана и включает полосу навигации, а
+            // нижний отступ веба (`--m-safe-bottom`) резервирует именно её. Над клавиатурой
+            // он был бы пустым зазором под полем ввода — вычитаем: остаётся только то, что
+            // клавиатура ещё не закрыла (непрерывно по ходу анимации).
+            val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+            val insetBottom = (safeInsets.calculateBottomPadding().value - imeBottom.value)
+                .coerceAtLeast(0f).dp
             LaunchedEffect(insetTop, insetBottom, webView) {
                 safeTopDp = insetTop.value
                 safeBottomDp = insetBottom.value
@@ -352,7 +394,7 @@ class MainActivity : ComponentActivity() {
 
             Box(Modifier.fillMaxSize().background(Color(0xFF0B0D12))) {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().imePadding(),
                     factory = { ctx ->
                         val wv = WebView(ctx)
                         // MUST be set explicitly, and MUST be MATCH_PARENT.
@@ -385,8 +427,7 @@ class MainActivity : ComponentActivity() {
                         bridge = nativeBridge
                         nativeBridge.setAppVisible(PushSession.appVisible)
                         webView = wv
-                        nativeBridge.onMobileNavProgress = { progress, animate ->
-                            navAnimate = animate
+                        nativeBridge.onMobileNavProgress = { progress, _ ->
                             navProgress = progress
                         }
                         nativeBridge.onMobileNavSection = { section ->
@@ -560,7 +601,6 @@ class MainActivity : ComponentActivity() {
                         bridge?.selectTab(tab.id)
                     },
                     navProgress = navProgress,
-                    animateProgress = navAnimate,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
@@ -593,6 +633,14 @@ class MainActivity : ComponentActivity() {
             """.trimIndent(),
             null,
         )
+    }
+
+    // Любое касание — действие на этом устройстве (маршрут уведомлений по активности,
+    // NativeBridge.noteUserActivity). Касание приходит сюда раньше вебвью; частоту
+    // отправки режет мост.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        bridge?.noteUserActivity()
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onStart() {
@@ -635,63 +683,196 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * @param navProgress 0 = dialog list (bar shown), 1 = chat screen (bar parked
- *   below the bottom edge). Reported by the web UI through
+ * @param navProgress 0 = dialog list (bar shown), 1 = chat screen (bar slid off
+ *   the bottom edge). Reported by the web UI through
  *   NativeBridge.onMobileNavProgress — the chat needs the full height for its
  *   message input, and the bar used to cover it.
- * @param animateProgress false while a back/forward swipe is tracking the
- *   finger, so the bar follows it 1:1; true for a committed transition, where
- *   this runs its own slide (the web dock's is a CSS transition we can't see).
  */
 @Composable
 private fun ZaliBottomBar(
     selected: Tab,
     onSelect: (Tab) -> Unit,
     navProgress: Float,
-    animateProgress: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var barHeightPx by remember { mutableFloatStateOf(0f) }
-    val progress by animateFloatAsState(
-        targetValue = navProgress.coerceIn(0f, 1f),
-        animationSpec = if (animateProgress) tween(240, easing = FastOutSlowInEasing) else snap(),
-        label = "zaliBottomBarNav",
+    // Панель — нативный слой НАД вебвью: чат её не перекрывает и «под него» она
+    // уйти не может. Поэтому она не следит за пальцем 1:1: на отменённом свайпе
+    // она бы выехала поверх поля ввода и упала обратно.
+    //
+    // Решает не то, где сейчас палец, а куда ведёт жест: на отпускании веб присылает
+    // конечное значение (0 или 1), порог — 0.5. Отменённый свайп оставляет панель
+    // спрятанной, а переход в чат (тап по диалогу, кнопка «назад», свайп) — это
+    // один и тот же плавный выезд за нижний край. Гасить альфой нельзя: панель
+    // «просто пропадала».
+    //
+    // Кривая — стандартная Material, не `cubic-bezier(.2,.8,.2,1)` чата: у той
+    // ~90% пути проходится за первые 100 мс, и на коротком ходе панели (≈80dp)
+    // это читается как резкий сброс, а не выезд. 300 мс — чат (240 мс) уже
+    // перекрывает область панели, когда она ещё доезжает.
+    val hidden = navProgress >= 0.5f
+    val slide by animateFloatAsState(
+        targetValue = if (hidden) 1f else 0f,
+        animationSpec = tween(300, easing = FastOutSlowInEasing),
+        label = "zaliBottomBarSlide",
     )
+    var barHeightPx by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val currentSelected by rememberUpdatedState(selected)
+    val currentOnSelect by rememberUpdatedState(onSelect)
+
+    val padPx = with(density) { BarPadding.toPx() }
+    val tabCount = Tab.entries.size
+    var barWidthPx by remember { mutableFloatStateOf(0f) }
+    // Ширина слота под один пункт: капсула занимает ровно его.
+    val slotPx = if (barWidthPx > 0f) (barWidthPx - 2 * padPx) / tabCount else 0f
+    val selectedIndex = Tab.entries.indexOf(selected)
+
+    // Пока палец тащит капсулу — её ведёт dragX; иначе settledX (пружина к пункту).
+    var dragging by remember { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    val settledX = remember { Animatable(0f) }
+    val capsuleScale = remember { Animatable(1f) }
+    val settle = spring<Float>(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow)
+
+    // Выбор извне (тап, переход из веба) — капсула пружиной встаёт на пункт.
+    LaunchedEffect(selectedIndex, slotPx) {
+        if (!dragging && slotPx > 0f) settledX.animateTo(padPx + selectedIndex * slotPx, settle)
+    }
+
+    fun finishDrag() {
+        dragging = false
+        val index = if (slotPx > 0f) ((dragX - padPx) / slotPx).roundToInt().coerceIn(0, tabCount - 1) else selectedIndex
+        val from = dragX
+        scope.launch {
+            settledX.snapTo(from)
+            launch { capsuleScale.animateTo(1f, settle) }
+            settledX.animateTo(padPx + index * slotPx, settle)
+        }
+        val tab = Tab.entries[index]
+        if (tab != currentSelected) currentOnSelect(tab)
+    }
+
+    // Целиком уехавшая панель не должна ловить касания, предназначенные полю ввода
+    // чата, поэтому её убираем из композиции. Возврат — после всех remember выше,
+    // чтобы позиция капсулы переживала скрытие (иначе она каждый раз пружинила бы
+    // слева).
+    if (hidden && slide >= 0.999f) return
+
     Box(
         modifier
             .fillMaxWidth()
             .onSizeChanged { barHeightPx = it.height.toFloat() }
             .graphicsLayer {
-                // Past its own height it is fully off-window, so it also stops
-                // taking touches meant for the chat's input area.
-                translationY = progress * barHeightPx
-                alpha = 1f - progress
+                // Высота включает отступ под системную навигацию: сдвиг на неё целиком
+                // выводит панель за нижний край окна.
+                translationY = slide * barHeightPx
             }
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        androidx.compose.foundation.layout.Row(
+        Box(
             Modifier
                 .widthIn(max = 460.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(30.dp))
-                .then(
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                        Modifier.graphicsLayer { } // RenderEffect blur can be attached on the host View
-                    else Modifier
-                )
-                .background(BarGlass, RoundedCornerShape(30.dp))
-                .padding(6.dp),
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+                .height(TabHeight + BarPadding * 2)
+                .onSizeChanged { barWidthPx = it.width.toFloat() }
+                .clip(CapsuleShape)
+                .background(BarGlass, CapsuleShape)
+                .pointerInput(slotPx) {
+                    // Палец по панели двигает капсулу; короткий тап проходит к пункту.
+                    detectDragGestures(
+                        onDragStart = {
+                            dragging = true
+                            dragX = settledX.value
+                            scope.launch { capsuleScale.animateTo(1.08f, tween(160)) }
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val maxX = padPx + (tabCount - 1) * slotPx
+                            dragX = (dragX + dragAmount.x).coerceIn(padPx, maxX)
+                        },
+                        onDragEnd = { finishDrag() },
+                        onDragCancel = { finishDrag() },
+                    )
+                },
         ) {
-            Tab.entries.forEach { tab ->
-                TabItem(
-                    tab = tab,
-                    active = tab == selected,
-                    onClick = { onSelect(tab) },
-                    modifier = Modifier.weight(1f),
+            if (slotPx > 0f) {
+                // Сама капсула — первой, под подписями. Её позиция и масштаб — из тех же
+                // значений, что и у тёмной копии ниже, поэтому они не расходятся.
+                //
+                // Анимируемые значения читаются ВНУТРИ лямбд (фаза раскладки/отрисовки), а не
+                // в теле композиции: иначе пружина (≈0.7 с после каждого тапа) заставляла
+                // перекомпоновать всю панель — два ряда TabItem с пересозданными onClick —
+                // на каждом кадре, и главный поток не укладывался в бюджет (gfxinfo: до 44%
+                // «медленных» кадров на переключении вкладок).
+                Box(
+                    Modifier
+                        .offset {
+                            val x = if (dragging) dragX else settledX.value
+                            IntOffset(x.roundToInt(), padPx.roundToInt())
+                        }
+                        .size(with(density) { slotPx.toDp() }, TabHeight)
+                        .graphicsLayer {
+                            val s = capsuleScale.value
+                            scaleX = s
+                            scaleY = s
+                        }
+                        .clip(CapsuleShape)
+                        .background(Brush.verticalGradient(listOf(Accent, Accent.copy(alpha = 0.82f))), CapsuleShape)
                 )
+            }
+            // Светлые подписи — основа панели.
+            androidx.compose.foundation.layout.Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(BarPadding),
+            ) {
+                Tab.entries.forEach { tab ->
+                    TabItem(
+                        tab = tab,
+                        fg = Color.White.copy(alpha = 0.62f),
+                        modifier = Modifier.weight(1f),
+                        onClick = { onSelect(tab) },
+                    )
+                }
+            }
+            if (slotPx > 0f) {
+                // Тёмная копия подписей — тот же ряд, что и белый (те же отступы и веса), но
+                // обрезанный скруглённой формой капсулы: подпись под капсулой темнеет, остальные
+                // остаются светлыми — как фильтр. Координаты совпадают, смещений нет.
+                // Касания сюда не попадают: у TabItem без onClick нет pointer input.
+                androidx.compose.foundation.layout.Row(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(BarPadding)
+                        .drawWithContent {
+                            val capsuleX = if (dragging) dragX else settledX.value
+                            val scale = capsuleScale.value
+                            val h = size.height
+                            val cx = (capsuleX - padPx) + slotPx / 2f
+                            val halfW = slotPx / 2f * scale
+                            val halfH = h / 2f * scale
+                            val path = Path().apply {
+                                addRoundRect(
+                                    RoundRect(
+                                        cx - halfW, h / 2f - halfH, cx + halfW, h / 2f + halfH,
+                                        CornerRadius(halfH),
+                                    )
+                                )
+                            }
+                            clipPath(path) { this@drawWithContent.drawContent() }
+                        },
+                ) {
+                    Tab.entries.forEach { tab ->
+                        TabItem(
+                            tab = tab,
+                            fg = Color(0xFF05210B),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
         }
     }
@@ -700,21 +881,14 @@ private fun ZaliBottomBar(
 @Composable
 private fun TabItem(
     tab: Tab,
-    active: Boolean,
-    onClick: () -> Unit,
+    fg: Color,
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
-    val fg = if (active) Color(0xFF05210B) else Color.White.copy(alpha = 0.62f)
     Column(
         modifier
-            .clip(RoundedCornerShape(22.dp))
-            .then(
-                if (active) Modifier.background(
-                    Brush.verticalGradient(listOf(Accent, Accent.copy(alpha = 0.82f)))
-                ) else Modifier
-            )
-            .clickableNoRipple(onClick)
-            .height(48.dp)
+            .then(if (onClick != null) Modifier.clickableNoRipple(onClick) else Modifier)
+            .height(TabHeight)
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,

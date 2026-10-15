@@ -9,13 +9,22 @@ ZaliMixin(ZaliInterface, class {
     // video without starving the audio that shares it, and audio is what the call is
     // for — so video is refused with a reason rather than allowed to break the call.
     // Audio alone stays fine well past this; see MAX_MESH_AUDIO_PEERS.
-    static get MAX_MESH_VIDEO_PEERS() { return 6; }
+    // 15 peers = a room of MAX_VOICE_TILES. voiceVideoBudget already divides a fixed
+    // uplink total by the peer count (floored at 150 kbit/s), so a full room costs
+    // no more than a small one — each stream just gets thinner.
+    static get MAX_MESH_VIDEO_PEERS() { return 15; }
 
     // Not enforced — a mesh audio call this large still works, it just stops being
     // comfortable, and refusing to connect people who asked to be connected is worse
     // than a warning in the log. Crossing it is recorded so that "звонок тормозил at
     // 11 people" is a fact in the journal rather than a recollection.
-    static get MAX_MESH_AUDIO_PEERS() { return 8; }
+    static get MAX_MESH_AUDIO_PEERS() { return 15; }
+
+    // How many participants get a 16:9 tile; the rest collapse into small circles
+    // under the grid (renderVoiceTiles). Smaller while a screen share owns the stage:
+    // the tiles are a one-row strip then.
+    static get MAX_VOICE_TILES() { return 16; }
+    static get MAX_VOICE_TILES_WITH_STAGE() { return 8; }
 
     // Dedupes concurrent capture requests. In a group call every incoming offer
     // handler (and every voice_room_state) calls this, and handleVoiceEvent is
@@ -110,7 +119,7 @@ ZaliMixin(ZaliInterface, class {
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
                     audio: micConstraint,
-                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                    video: this.voiceCameraConstraint(),
                 });
                 this.voice.cameraOn = true;
             } catch (error) {
@@ -206,7 +215,7 @@ ZaliMixin(ZaliInterface, class {
             }
             try {
                 const camStream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                    video: this.voiceCameraConstraint(),
                 });
                 const track = camStream.getVideoTracks()[0];
                 if (!track) return;
@@ -366,8 +375,11 @@ ZaliMixin(ZaliInterface, class {
     toggleScreenShare() {
         if (this.voice.screenSharing) {
             this.stopScreenShare();
-        } else {
+        } else if (!navigator.mediaDevices?.getDisplayMedia && this.nativeSupports('screenCapture')) {
+            // Android: MediaProjection shows the system's own dialog, nothing to pick.
             this.startScreenShare();
+        } else {
+            this.openVoiceScreenPicker();
         }
     }
 
@@ -408,7 +420,9 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
-    async startScreenShare() {
+    // options: { surface: 'monitor'|'window', height, fps } from the
+    // screen picker; absent = last saved choice (or the old defaults).
+    async startScreenShare(options = null) {
         // Guards the getDisplayMedia() call itself — screenSharing only flips
         // true once it resolves, so a fast double-click before the OS picker
         // even returns would otherwise fire two concurrent capture requests;
@@ -429,10 +443,27 @@ ZaliMixin(ZaliInterface, class {
         }
         this.voice.screenShareRequestInFlight = true;
         try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-                video: { cursor: 'always', frameRate: 30 },
-                audio: false,
-            });
+            const choice = options || this.loadVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY);
+            const video = { cursor: 'always', frameRate: Number(choice.fps) || 30 };
+            const height = Number(choice.height) || 0;
+            if (height) {
+                video.height = { ideal: height };
+                video.width = { ideal: Math.round(height * 16 / 9) };
+            }
+            const request = { video, audio: false };
+            if (['monitor', 'window'].includes(choice.surface)) {
+                // Hints only: a browser that does not know them ignores them.
+                video.displaySurface = choice.surface;
+                if (choice.surface === 'window') request.monitorTypeSurfaces = 'exclude';
+            }
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getDisplayMedia(request);
+            } catch (error) {
+                // An engine that rejects the hints (TypeError) gets the plain request.
+                if (error?.name !== 'TypeError') throw error;
+                stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', frameRate: 30 }, audio: false });
+            }
             const track = stream.getVideoTracks()[0];
             if (!track) return;
             this.voice.localScreenStream = stream;

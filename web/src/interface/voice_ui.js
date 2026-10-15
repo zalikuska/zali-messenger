@@ -11,6 +11,8 @@ ZaliMixin(ZaliInterface, class {
         const screen = '<rect x="3" y="4.5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 6.5v6M9.5 10 12 7.5 14.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
         const headphones = '<path d="M4.5 13.5v-1.7a7.5 7.5 0 0 1 15 0v1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="3" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/><rect x="17" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/>';
         const chevronDown = '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        const chevronUp = '<path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        const windowIcon = '<rect x="3" y="5" width="18" height="14" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M3 9.5h18" stroke="currentColor" stroke-width="1.8"/><path d="M6.5 7.3h.01M9 7.3h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
         const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
         // Положенная трубка — общепринятый знак «сбросить», понятнее
         // перечёркнутой: трубка, повёрнутая на 135° вокруг центра.
@@ -29,6 +31,8 @@ ZaliMixin(ZaliInterface, class {
             headphones,
             'headphones-off': headphones + slash,
             'chevron-down': chevronDown,
+            'chevron-up': chevronUp,
+            window: windowIcon,
         };
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
@@ -40,6 +44,13 @@ ZaliMixin(ZaliInterface, class {
         const cls = ['call-ctrl-btn', active ? 'active' : '', danger ? 'danger' : ''].filter(Boolean).join(' ');
         const shortAttr = short ? ` data-short="${this.esc(short)}"` : '';
         return `<button class="${cls}" type="button" id="${id}" title="${this.esc(label)}" aria-label="${this.esc(label)}"${shortAttr}>${this.voiceIcon(kind)}</button>`;
+    }
+
+    // Кнопка камеры + «хвостик» выбора устройства (#voiceCameraPickBtn).
+    cameraCtrlSplit(opts) {
+        const main = this.callCtrlBtn(opts);
+        const label = 'Выбрать камеру';
+        return `<span class="call-ctrl-split">${main}<button class="call-ctrl-caret" type="button" id="voiceCameraPickBtn" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon('chevron-up')}</button></span>`;
     }
 
     // Discord-style call stage: one rectangular tile per participant, avatar in
@@ -70,7 +81,8 @@ ZaliMixin(ZaliInterface, class {
             return '<div class="voice-empty">Пока никого нет</div>';
         }
         const myName = String(this.myName() || '').trim().toLowerCase();
-        return `<div class="voice-tiles" id="voiceTiles">` + participants.map(name => {
+        const { shown, overflow } = this.splitVoiceParticipants(participants);
+        const tiles = `<div class="voice-tiles" id="voiceTiles">` + shown.map(name => {
             const key = name.toLowerCase();
             const mine = key === myName;
             // Mute state is only known for ourselves — the protocol carries no
@@ -91,6 +103,115 @@ ZaliMixin(ZaliInterface, class {
                 </div>
             `;
         }).join('') + `</div>`;
+        if (!overflow.length) return `<div class="voice-tiles-wrap" id="voiceTilesWrap">${tiles}</div>`;
+        const dots = overflow.map(name => {
+            const key = name.toLowerCase();
+            return `<div class="voice-dot" data-peer="${this.esc(key)}" title="${this.esc(name)}">${this.renderAvatarHTML(name, 'avatar-img', name)}</div>`;
+        }).join('');
+        return `<div class="voice-tiles-wrap" id="voiceTilesWrap">${tiles}`
+            + `<div class="voice-overflow" id="voiceOverflow" role="group" aria-label="${this.esc('Ещё ' + overflow.length)}">`
+            + `<span class="voice-overflow-label">Ещё ${overflow.length}</span>${dots}</div></div>`;
+    }
+
+    // Keys are lowercased so lookups match every other voice map.
+    parseVoiceJoinedAt(raw) {
+        const out = {};
+        if (!raw || typeof raw !== 'object') return out;
+        for (const [name, ms] of Object.entries(raw)) {
+            const key = String(name || '').trim().toLowerCase();
+            const value = Number(ms);
+            if (key && Number.isFinite(value) && value > 0) out[key] = value;
+        }
+        return out;
+    }
+
+    // Who gets a tile, in what order. Screen shares come first, then cameras, then
+    // everyone else by time spent in the room (server-stamped entry time, so every
+    // client ranks the same way). Speaking is deliberately NOT a key: the grid would
+    // reshuffle on every pause in a conversation, and speakers already have a ring.
+    rankVoiceParticipants(participants) {
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const sharers = new Set(Array.from(this.voice.remoteScreens.keys(), name => String(name).trim().toLowerCase()));
+        if (this.voice.screenSharing) sharers.add(me);
+        const cameras = new Set(Array.from(this.voice.remoteVideos.keys(), name => String(name).trim().toLowerCase()));
+        if (this.voice.cameraOn) cameras.add(me);
+        const joinedAt = this.voice.joinedAt || {};
+        const firstSeen = this.voice.firstSeen instanceof Map ? this.voice.firstSeen : (this.voice.firstSeen = new Map());
+        const now = Date.now();
+        const tenure = key => {
+            if (joinedAt[key]) return joinedAt[key];
+            // Server did not stamp this person (older server): the first moment this
+            // client saw them is the next best thing.
+            if (!firstSeen.has(key)) firstSeen.set(key, now);
+            return firstSeen.get(key);
+        };
+        const rows = participants.map(name => {
+            const key = name.toLowerCase();
+            return { name, key, rank: sharers.has(key) ? 0 : (cameras.has(key) ? 1 : 2), since: tenure(key) };
+        });
+        rows.sort((a, b) => (a.rank - b.rank) || (a.since - b.since) || a.key.localeCompare(b.key));
+        return rows.map(row => row.name);
+    }
+
+    voiceTileLimit() {
+        const staged = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
+        return staged ? ZaliInterface.MAX_VOICE_TILES_WITH_STAGE : ZaliInterface.MAX_VOICE_TILES;
+    }
+
+    // Top N of the ranking get tiles, the rest become circles. Our own tile is
+    // always among them: a late joiner to a full room must still see themselves.
+    splitVoiceParticipants(participants) {
+        const limit = this.voiceTileLimit();
+        const ranked = this.rankVoiceParticipants(participants);
+        if (ranked.length <= limit) return { shown: ranked, overflow: [] };
+        const me = String(this.myName() || '').trim().toLowerCase();
+        let shown = ranked.slice(0, limit);
+        let overflow = ranked.slice(limit);
+        if (me && !shown.some(name => name.toLowerCase() === me)) {
+            const mine = overflow.find(name => name.toLowerCase() === me);
+            if (mine) {
+                overflow = overflow.filter(name => name !== mine);
+                overflow.unshift(shown[shown.length - 1]);
+                shown = shown.slice(0, -1).concat(mine);
+            }
+        }
+        return { shown, overflow };
+    }
+
+    // The expanded grid shows 16:9 tiles that keep their shape and leave the rest of
+    // the area empty, so the grid cannot be left to CSS auto-fit: pick the column
+    // count whose tile comes out largest in the box we actually have.
+    fitVoiceTiles() {
+        const tiles = document.getElementById('voiceTiles');
+        const host = tiles?.closest('.voice-call-expanded-grid');
+        if (!tiles || !host) return;
+        const panel = host.closest('.voice-panel');
+        if (panel?.classList.contains('has-stage')) return;
+        const count = tiles.children.length;
+        const width = tiles.clientWidth;
+        const height = tiles.clientHeight;
+        if (!count || width <= 0 || height <= 0) return;
+        const gap = 10;
+        let best = { w: 0, c: 1 };
+        for (let c = 1; c <= count; c++) {
+            const r = Math.ceil(count / c);
+            const byWidth = (width - (c - 1) * gap) / c;
+            const byHeight = ((height - (r - 1) * gap) / r) * 16 / 9;
+            const w = Math.min(byWidth, byHeight);
+            if (w > best.w) best = { w, c };
+        }
+        const w = Math.max(96, Math.floor(best.w));
+        tiles.style.setProperty('--vt-cols', String(best.c));
+        tiles.style.setProperty('--vt-w', `${w}px`);
+        tiles.style.setProperty('--vt-av', `${Math.max(32, Math.min(96, Math.round(w * 0.28)))}px`);
+        if (typeof ResizeObserver === 'function') {
+            if (this._voiceTilesObserved !== tiles) {
+                this._voiceTilesObserver?.disconnect();
+                this._voiceTilesObserver = new ResizeObserver(() => this.fitVoiceTiles());
+                this._voiceTilesObserver.observe(tiles);
+                this._voiceTilesObserved = tiles;
+            }
+        }
     }
 
     // Компактный идущий звонок: таймер, затем микрофон и звук, затем «сбросить».
@@ -231,7 +352,7 @@ ZaliMixin(ZaliInterface, class {
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Покинуть', short: 'Покинуть', danger: true }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.cameraCtrlSplit({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Присоединиться</span></button>`);
@@ -241,7 +362,7 @@ ZaliMixin(ZaliInterface, class {
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceLeaveBtn', kind: 'phone-down', label: 'Завершить', short: 'Завершить', danger: true }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceMuteBtn', kind: this.voice.muted ? 'mic-off' : 'mic', label: this.voice.muted ? 'Включить микрофон' : 'Выключить микрофон', short: 'Микрофон', active: !this.voice.muted }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
-                actionButtons.push(this.callCtrlBtn({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
+                actionButtons.push(this.cameraCtrlSplit({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">${this.voiceIcon('phone')}<span>Принять</span></button>`);
@@ -623,7 +744,8 @@ ZaliMixin(ZaliInterface, class {
         // speaking ring 8×/s and used to re-run querySelectorAll on every tick;
         // the tile set only ever changes when this function rebuilds it.
         const byPeer = new Map();
-        for (const tile of tiles.querySelectorAll('.voice-tile')) {
+        const root = document.getElementById('voiceTilesWrap') || tiles;
+        for (const tile of root.querySelectorAll('.voice-tile, .voice-dot')) {
             tile.classList.remove('has-video');
             const media = tile.querySelector('.voice-tile-media');
             if (media) media.replaceChildren();
@@ -644,6 +766,7 @@ ZaliMixin(ZaliInterface, class {
             mountVideo(peer, video);
         }
         this.applyVoiceSpeakingState();
+        this.fitVoiceTiles();
     }
 
     // Discord's "green ring while talking". Driven straight from the meter loop

@@ -23,6 +23,10 @@
 //!
 //! Вкладка, которая жива, но не перед глазами, получает и пуш, и своё локальное уведомление.
 //! Второй звонок о том же сообщении гасится по `messageId` — и в service worker, и на странице.
+//!
+//! Поверх этого — маршрут по активности (device_activity.rs): если человек что-то делал
+//! на каком-то из устройств меньше двух минут назад, пуш уходит только на такие
+//! устройства; бездельничают все — на все.
 
 use crate::{header_device_id, AppState, AuthenticatedUser};
 use axum::{
@@ -87,6 +91,10 @@ pub(crate) struct ConnectionPresence {
     /// лежит здесь, потому что это единственная запись «что известно о живом сокете»
     /// и она уже создаётся и удаляется вместе с ним.
     pub(crate) activity: Option<crate::activity::ConnectionActivity>,
+    /// Переписка, открытая сейчас на экране этого соединения перед глазами человека
+    /// (`client_view`): `dm:<собеседник>` или `<сервер>:<канал>` — то же, что `tag`
+    /// уведомления без `zali:`. По ней не звенит ни одно устройство (device_activity.rs).
+    pub(crate) viewing: Option<String>,
 }
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
@@ -101,6 +109,7 @@ pub(crate) fn register_connection_presence(state: &AppState, username: &str) -> 
             attended: false,
             last_inbound: Instant::now(),
             activity: None,
+            viewing: None,
         },
     );
     id
@@ -119,13 +128,57 @@ pub(crate) fn update_connection_presence(
     attended: bool,
     device_id: Option<&str>,
 ) {
-    if let Some(mut entry) = state.push_presence.get_mut(&connection_id) {
+    let (username, device) = {
+        let Some(mut entry) = state.push_presence.get_mut(&connection_id) else {
+            return;
+        };
         entry.attended = attended;
         entry.last_inbound = Instant::now();
         if let Some(device) = device_id.map(str::trim).filter(|device| !device.is_empty()) {
             entry.device_id = Some(device.to_string());
         }
+        (entry.username.clone(), entry.device_id.clone())
+    };
+    // Устройство ушло с экрана (Android onStop шлёт это из натива): открытая на нём
+    // переписка больше не «перед глазами», даже если вебвью замёрз раньше, чем успел
+    // сказать это сам по своему сокету.
+    if !attended {
+        if let Some(device) = device {
+            for mut entry in state.push_presence.iter_mut() {
+                if entry.username == username && entry.device_id.as_deref() == Some(device.as_str()) {
+                    entry.viewing = None;
+                }
+            }
+        }
     }
+}
+
+/// `client_view`: какая переписка открыта на экране соединения, если на него смотрят.
+pub(crate) fn update_connection_view(state: &AppState, connection_id: u64, conversation: Option<&str>) {
+    if let Some(mut entry) = state.push_presence.get_mut(&connection_id) {
+        entry.last_inbound = Instant::now();
+        entry.viewing = conversation
+            .map(str::trim)
+            .filter(|key| !key.is_empty() && key.len() <= 512)
+            .map(str::to_string);
+    }
+}
+
+/// Устройство соединения, известное из заголовка `X-Zali-Device-ID` апгрейда WS
+/// (нативные оболочки). Браузер заголовков к WS не добавляет и называет устройство
+/// сам — в `client_presence`/`client_idle`.
+pub(crate) fn set_connection_device(state: &AppState, connection_id: u64, device_id: Option<&str>) {
+    let Some(device) = device_id.map(str::trim).filter(|device| !device.is_empty()) else {
+        return;
+    };
+    if let Some(mut entry) = state.push_presence.get_mut(&connection_id) {
+        entry.device_id = Some(device.to_string());
+    }
+}
+
+/// Устройство, от имени которого говорит соединение.
+pub(crate) fn connection_device(state: &AppState, connection_id: u64) -> Option<String> {
+    state.push_presence.get(&connection_id).and_then(|entry| entry.device_id.clone())
 }
 
 pub(crate) fn remove_connection_presence(state: &AppState, connection_id: u64) {
@@ -183,6 +236,11 @@ impl PushNotification {
             }),
             silent: false,
         }
+    }
+
+    /// Переписка уведомления — ключ, которым клиент называет открытый чат (`client_view`).
+    pub(crate) fn conversation(&self) -> String {
+        self.tag.strip_prefix("zali:").unwrap_or(&self.tag).to_string()
     }
 
     /// То же уведомление, но без звука.
@@ -360,6 +418,7 @@ pub(crate) struct PushTarget {
 pub(crate) async fn push_targets_for(
     state: &Arc<AppState>,
     username: &str,
+    route: &crate::NotifyRoute,
 ) -> Result<Vec<PushTarget>, sqlx::Error> {
     let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
         "SELECT id, endpoint, p256dh, auth, device_id FROM push_subscriptions WHERE username = ?",
@@ -371,6 +430,13 @@ pub(crate) async fn push_targets_for(
     Ok(rows
         .into_iter()
         .filter(|(id, _, _, _, device_id)| {
+            if !route.allows(device_id.as_deref()) {
+                info!(
+                    "Push пропущен: человек сейчас на другом устройстве username={} id={}",
+                    username, id
+                );
+                return false;
+            }
             let suppressed = push_suppressed_for(state, username, device_id.as_deref());
             if suppressed {
                 info!(
@@ -494,25 +560,46 @@ async fn endpoint_resolves_public(endpoint: &str) -> bool {
 }
 
 /// Every push channel of `username`: Web Push subscriptions of their browsers and FCM
-/// tokens of their Android devices. Each decides per device on its own.
+/// tokens of their Android devices. Each decides per device on its own, within the
+/// activity route (device_activity.rs).
 pub(crate) async fn send_push(state: &Arc<AppState>, username: &str, notification: &PushNotification) {
-    send_web_push(state, username, notification).await;
-    crate::send_fcm_push(state, username, notification).await;
+    let route = crate::notify_route_for(state, username, Some(&notification.conversation())).await;
+    send_push_routed(state, username, notification, &route).await;
+}
+
+/// `send_push` с уже посчитанным маршрутом: доставка по сокету считает его раньше, чтобы
+/// клиенты и пуши решали по одному и тому же.
+///
+/// Web Push и FCM — параллельно. Последовательно FCM ждал, пока отработают все
+/// подписки браузеров (на каждую — DNS и HTTP до пуш-сервиса, до 10 с таймаута), и
+/// телефон узнавал о сообщении на секунды позже компьютера.
+pub(crate) async fn send_push_routed(
+    state: &Arc<AppState>,
+    username: &str,
+    notification: &PushNotification,
+    route: &crate::NotifyRoute,
+) {
+    tokio::join!(
+        send_web_push(state, username, notification, route),
+        crate::send_fcm_push(state, username, notification, route),
+    );
 }
 
 /// Sends `notification` to every subscription of `username` that should get it
 /// (`push_targets_for`). No-ops silently if Web Push isn't configured. Expired
 /// subscriptions (404/410 from the push service) are pruned as they're discovered.
+/// Subscriptions are pushed concurrently: one slow push service must not hold up the rest.
 pub(crate) async fn send_web_push(
     state: &Arc<AppState>,
     username: &str,
     notification: &PushNotification,
+    route: &crate::NotifyRoute,
 ) {
-    let Some(private_key) = state.config.vapid_private_key.as_deref() else {
+    if state.config.vapid_private_key.is_none() {
         return;
-    };
+    }
 
-    let targets = match push_targets_for(state, username).await {
+    let targets = match push_targets_for(state, username, route).await {
         Ok(targets) => targets,
         Err(e) => {
             warn!("Ошибка чтения push subscriptions username={}: {}", username, e);
@@ -530,91 +617,103 @@ pub(crate) async fn send_web_push(
             return;
         }
     };
-    let http_client = web_push_client();
+    let payload: Arc<str> = Arc::from(payload);
+    let mut sends = tokio::task::JoinSet::new();
+    for target in targets {
+        let state = Arc::clone(state);
+        let username = username.to_string();
+        let payload = Arc::clone(&payload);
+        sends.spawn(async move { send_one_web_push(&state, &username, &payload, target).await });
+    }
+    while sends.join_next().await.is_some() {}
+}
 
-    for PushTarget {
+async fn send_one_web_push(state: &Arc<AppState>, username: &str, payload: &str, target: PushTarget) {
+    let Some(private_key) = state.config.vapid_private_key.as_deref() else {
+        return;
+    };
+    let PushTarget {
         id,
         endpoint,
         p256dh,
         auth,
-    } in targets
-    {
-        if !is_acceptable_push_endpoint(&endpoint) {
-            warn!("Push endpoint отклонён (не публичный https) id={}", id);
-            continue;
+    } = target;
+    if !is_acceptable_push_endpoint(&endpoint) {
+        warn!("Push endpoint отклонён (не публичный https) id={}", id);
+        return;
+    }
+    if !endpoint_resolves_public(&endpoint).await {
+        warn!("Push endpoint отклонён (резолвится во внутренний адрес или не резолвится) id={}", id);
+        return;
+    }
+    let subscription_info = SubscriptionInfo {
+        endpoint: endpoint.clone(),
+        keys: SubscriptionKeys { p256dh, auth },
+    };
+
+    let message = (|| -> Result<web_push::WebPushMessage, web_push::WebPushError> {
+        let mut sig_builder = VapidSignatureBuilder::from_base64_no_sub(private_key)?
+            .add_sub_info(&subscription_info);
+        sig_builder.add_claim("sub", state.config.vapid_subject.as_str());
+        let signature = sig_builder.build()?;
+
+        let mut builder = WebPushMessageBuilder::new(&subscription_info);
+        builder.set_payload(ContentEncoding::Aes128Gcm, payload.as_bytes());
+        builder.set_vapid_signature(signature);
+        // High: сообщение мессенджера ждут сейчас. С Normal пуш-сервисы на телефоне
+        // вправе придержать доставку до выхода устройства из энергосбережения.
+        builder.set_urgency(Urgency::High);
+        builder.set_ttl(3600);
+        builder.build()
+    })();
+
+    let message = match message {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("Ошибка сборки web push username={} id={}: {:?}", username, id, e);
+            return;
         }
-        if !endpoint_resolves_public(&endpoint).await {
-            warn!("Push endpoint отклонён (резолвится во внутренний адрес или не резолвится) id={}", id);
-            continue;
+    };
+
+    let http_client = web_push_client();
+    let mut request = http_client.post(message.endpoint.to_string()).header("TTL", message.ttl.to_string());
+    if let Some(urgency) = message.urgency {
+        request = request.header("Urgency", urgency.to_string());
+    }
+    let status = if let Some(payload) = message.payload {
+        request = request
+            .header("Content-Encoding", payload.content_encoding.to_str())
+            .header("Content-Type", "application/octet-stream");
+        for (key, value) in payload.crypto_headers {
+            request = request.header(key, value);
         }
-        let subscription_info = SubscriptionInfo {
-            endpoint: endpoint.clone(),
-            keys: SubscriptionKeys { p256dh, auth },
-        };
+        request.body(payload.content).send().await
+    } else {
+        request.send().await
+    };
 
-        let message = (|| -> Result<web_push::WebPushMessage, web_push::WebPushError> {
-            let mut sig_builder = VapidSignatureBuilder::from_base64_no_sub(private_key)?
-                .add_sub_info(&subscription_info);
-            sig_builder.add_claim("sub", state.config.vapid_subject.as_str());
-            let signature = sig_builder.build()?;
-
-            let mut builder = WebPushMessageBuilder::new(&subscription_info);
-            builder.set_payload(ContentEncoding::Aes128Gcm, payload.as_bytes());
-            builder.set_vapid_signature(signature);
-            // High: сообщение мессенджера ждут сейчас. С Normal пуш-сервисы на телефоне
-            // вправе придержать доставку до выхода устройства из энергосбережения.
-            builder.set_urgency(Urgency::High);
-            builder.set_ttl(3600);
-            builder.build()
-        })();
-
-        let message = match message {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("Ошибка сборки web push username={} id={}: {:?}", username, id, e);
-                continue;
-            }
-        };
-
-        let mut request = http_client.post(message.endpoint.to_string()).header("TTL", message.ttl.to_string());
-        if let Some(urgency) = message.urgency {
-            request = request.header("Urgency", urgency.to_string());
+    match status {
+        Ok(response) if response.status() == 404 || response.status() == 410 => {
+            info!("Push endpoint устарел, удаляю subscription id={}", id);
+            sqlx::query("DELETE FROM push_subscriptions WHERE id = ?")
+                .bind(&id)
+                .execute(&state.db)
+                .await
+                .ok();
         }
-        let status = if let Some(payload) = message.payload {
-            request = request
-                .header("Content-Encoding", payload.content_encoding.to_str())
-                .header("Content-Type", "application/octet-stream");
-            for (key, value) in payload.crypto_headers {
-                request = request.header(key, value);
-            }
-            request.body(payload.content).send().await
-        } else {
-            request.send().await
-        };
-
-        match status {
-            Ok(response) if response.status() == 404 || response.status() == 410 => {
-                info!("Push endpoint устарел, удаляю subscription id={}", id);
-                sqlx::query("DELETE FROM push_subscriptions WHERE id = ?")
-                    .bind(&id)
-                    .execute(&state.db)
-                    .await
-                    .ok();
-            }
-            Ok(response) if !response.status().is_success() => {
-                warn!(
-                    "Push отправка неуспешна username={} id={} status={}",
-                    username,
-                    id,
-                    response.status()
-                );
-            }
-            Ok(_) => {
-                info!("Push отправлен username={} id={}", username, id);
-            }
-            Err(e) => {
-                warn!("Push отправка не удалась username={} id={}: {}", username, id, e);
-            }
+        Ok(response) if !response.status().is_success() => {
+            warn!(
+                "Push отправка неуспешна username={} id={} status={}",
+                username,
+                id,
+                response.status()
+            );
+        }
+        Ok(_) => {
+            info!("Push отправлен username={} id={}", username, id);
+        }
+        Err(e) => {
+            warn!("Push отправка не удалась username={} id={}: {}", username, id, e);
         }
     }
 }
@@ -661,7 +760,7 @@ mod tests {
     }
 
     async fn target_ids(state: &Arc<AppState>, username: &str) -> Vec<String> {
-        let mut ids: Vec<String> = push_targets_for(state, username)
+        let mut ids: Vec<String> = push_targets_for(state, username, &crate::NotifyRoute::All)
             .await
             .expect("targets")
             .into_iter()
@@ -756,6 +855,23 @@ mod tests {
         state.user_connections.entry("alice".to_string()).or_default().push(tx);
 
         assert!(target_ids(&state, "alice").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_activity_route_keeps_pushes_off_idle_devices() {
+        let state = test_state().await;
+        subscribe(&state, "laptop", "alice", Some("dev-laptop")).await;
+        subscribe(&state, "phone", "alice", Some("dev-phone")).await;
+        subscribe(&state, "legacy", "alice", None).await;
+        let route = crate::NotifyRoute::Only(["dev-phone".to_string()].into_iter().collect());
+        let mut ids: Vec<String> = push_targets_for(&state, "alice", &route)
+            .await
+            .expect("targets")
+            .into_iter()
+            .map(|target| target.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["phone".to_string()]);
     }
 
     #[test]

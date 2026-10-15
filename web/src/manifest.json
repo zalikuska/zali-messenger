@@ -32,6 +32,7 @@
     "modules/wasm_bridge.js",
     "modules/tgs.js",
     "modules/addon_format.js",
+    "modules/zip_reader.js",
     "modules/addon_sdk.js"
   ],
   "core": [
@@ -63,6 +64,7 @@
     "interface/server_rail.js",
     "interface/voice_transport.js",
     "interface/voice_media.js",
+    "interface/voice_devices.js",
     "interface/voice_negotiation.js",
     "interface/voice_call.js",
     "interface/voice_signal.js",
@@ -79,6 +81,7 @@
     "interface/message_send.js",
     "interface/notifications.js",
     "interface/web_push.js",
+    "interface/device_activity.js",
     "interface/state_sync.js",
     "interface/message_edit.js",
     "interface/profiles.js",
@@ -96,7 +99,9 @@
     "interface/addons_cloud.js",
     "interface/addons_coins.js",
     "interface/addons_ui.js",
+    "interface/addons_store_ui.js",
     "interface/addons_signing.js",
+    "interface/addons_pack.js",
     "interface/sidebar_settings.js",
     "interface/deep_links.js",
     "interface/user_suggest.js",

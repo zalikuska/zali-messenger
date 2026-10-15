@@ -7,7 +7,7 @@ use crate::{
     get_server_member_role, hash_archive_on_disk, history_access_matches,
     last_payload_for_message, load_channel_permissions, push_history_access_predicate,
     record_message_event, record_message_event_best_effort, resolve_history_access,
-    role_permissions_for_view, send_payload_to_user, send_push, server_conversation_scope,
+    role_permissions_for_view, send_payload_to_user, send_push, send_push_routed, server_conversation_scope,
     AppState, AuthenticatedUser, ChainEvent, Message, MessagePageQuery, MessageResponse,
     PayloadDigest, ReactionPayload, ReactionSummary, ServerRecord,
 };
@@ -1398,6 +1398,17 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
             return;
         }
     };
+    // На какие устройства получателя уведомлять (device_activity.rs): только на те, где
+    // человек что-то делал последние две минуты, а если таких нет — на все. Клиентам
+    // маршрут уходит раньше сообщения, пушам — тот же самый.
+    let route = if msg.sender != username {
+        let route =
+            crate::notify_route_for(state, username, Some(&format!("dm:{}", msg.sender))).await;
+        crate::send_notify_route(state, username, &msg.id, &route).await;
+        Some(route)
+    } else {
+        None
+    };
     let sent = send_payload_to_user(state, username, payload, "deliver_to_user").await;
     if sent > 0 {
         info!(
@@ -1416,7 +1427,7 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
     // connections silenced every browser of a user whose Mac app happened to be open.
     // Spawned: each push is an HTTP round trip to a push service, and this runs inside the
     // sender's /api/upload. Never push the sender their own echo.
-    if msg.sender != username {
+    if let Some(route) = route {
         let state = Arc::clone(state);
         let username = username.to_string();
         let notification = crate::PushNotification::direct_message(&msg.sender, &msg.id);
@@ -1427,12 +1438,12 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
             Some(crate::focus::FocusMode::Silent) => {
                 let notification = notification.silenced();
                 tokio::spawn(async move {
-                    send_push(&state, &username, &notification).await;
+                    send_push_routed(&state, &username, &notification, &route).await;
                 });
             }
             _ => {
                 tokio::spawn(async move {
-                    send_push(&state, &username, &notification).await;
+                    send_push_routed(&state, &username, &notification, &route).await;
                 });
             }
         }
@@ -1577,6 +1588,17 @@ pub(crate) async fn deliver_server_message(state: &Arc<AppState>, msg: &Message)
         };
 
     for viewer in allowed_viewers {
+        // Маршрут уведомлений зрителя (device_activity.rs) — раньше сообщения. Пуши
+        // ниже считают его заново: между ними секунды, а не минуты.
+        if viewer != msg.sender {
+            let route = crate::notify_route_for(
+                state,
+                &viewer,
+                Some(&format!("{}:{}", server_id, channel_id)),
+            )
+            .await;
+            crate::send_notify_route(state, &viewer, &msg.id, &route).await;
+        }
         let sent =
             send_payload_to_user(state, &viewer, payload.clone(), "deliver_server_message").await;
         if sent > 0 {

@@ -63,6 +63,11 @@ pub(crate) struct VoiceRoom {
     initiator: Option<String>,
     target: Option<String>,
     participants: HashSet<String>,
+    /// When each participant entered the room, Unix milliseconds. The call grid
+    /// ranks people by time spent in the channel, and every client has to reach the
+    /// same order: a client's own "first seen" clock cannot give that (a late joiner
+    /// sees everyone at once). Kept in step with `participants`.
+    joined_at: HashMap<String, i64>,
     /// Which DEVICE of each participant holds that participant's place in the room.
     ///
     /// Membership is per account (`participants`, `user_voice_rooms`), but a call is
@@ -91,6 +96,7 @@ impl VoiceRoom {
             initiator: None,
             target: None,
             participants: HashSet::new(),
+            joined_at: HashMap::new(),
             devices: HashMap::new(),
             initiator_device: None,
         }
@@ -241,6 +247,14 @@ fn voice_room_key(
 fn voice_room_payload(room_id: &str, room: &VoiceRoom) -> serde_json::Value {
     let mut participants: Vec<String> = room.participants.iter().cloned().collect();
     participants.sort();
+    let joined_at: serde_json::Map<String, serde_json::Value> = participants
+        .iter()
+        .filter_map(|name| {
+            room.joined_at
+                .get(name)
+                .map(|ms| (name.clone(), serde_json::json!(ms)))
+        })
+        .collect();
     serde_json::json!({
         "type": "voice_room_state",
         "roomId": room_id,
@@ -251,6 +265,7 @@ fn voice_room_payload(room_id: &str, room: &VoiceRoom) -> serde_json::Value {
         "serverId": room.server_id,
         "channelId": room.channel_id,
         "participants": participants,
+        "joinedAt": joined_at,
     })
 }
 
@@ -331,6 +346,7 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
     if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
         room_type = room.room_type.clone();
         room.participants.remove(username);
+        room.joined_at.remove(username);
         room.devices.remove(username);
         remaining_participants = room.participants.iter().cloned().collect();
         devices = room.devices.clone();
@@ -488,7 +504,12 @@ async fn join_voice_room(
             // An explicit join from a client that names no device: nothing to target.
             room.devices.remove(username);
         }
-        (room.participants.insert(username.to_string()), displaced)
+        let inserted = room.participants.insert(username.to_string());
+        if inserted || !room.joined_at.contains_key(username) {
+            room.joined_at
+                .insert(username.to_string(), chrono::Utc::now().timestamp_millis());
+        }
+        (inserted, displaced)
     };
     drop(room); // release DashMap shard lock before re-entering voice_rooms via broadcast
 
@@ -1061,6 +1082,7 @@ pub(crate) async fn handle_voice_event(
                 room.initiator = Some(sender.to_string());
                 room.target = Some(target.clone());
                 room.participants.clear();
+                room.joined_at.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(target.clone());
                 room.devices.clear();
@@ -1201,6 +1223,7 @@ pub(crate) async fn handle_voice_event(
                 room.initiator = Some(inviter.clone());
                 room.target = Some(sender.to_string());
                 room.participants.clear();
+                room.joined_at.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(inviter.clone());
                 // The call now lives on exactly two devices: the one that dialled and

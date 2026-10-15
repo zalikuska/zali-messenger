@@ -335,31 +335,56 @@
                             <div>
                                 <span class="settings-kicker">Zali Hub</span>
                                 <h2>Главная панель Zali Messenger</h2>
-                                <p>Уведомления, обновления и быстрый вход в разделы приложения.</p>
+                                <p>Настройки, аддоны и кошелёк ZaliCoin — в один клик.</p>
                             </div>
                             <div class="hub-orb" aria-hidden="true">HUB</div>
                         </section>
-                        <div class="hub-tabs" id="hubTabs" role="tablist" aria-label="Разделы хаба">
-                            <button class="hub-tab is-active" type="button" role="tab" aria-selected="true" data-hub-tab="overview">Обзор</button>
-                            <button class="hub-tab" type="button" role="tab" aria-selected="false" data-hub-tab="signing">Подпись аддонов</button>
-                        </div>
                         <div class="hub-pane" data-hub-pane="overview">
-                        <div class="hub-grid" id="hubGrid"></div>
+                        <nav class="hub-actions" id="hubGrid" aria-label="Быстрые переходы"></nav>
+                        <nav class="hub-actions hub-actions--addons" id="hubQuick" aria-label="Быстрый запуск аддонов" hidden></nav>
+                        </div>
+                        <div class="hub-pane" data-hub-pane="addons" hidden>
+                        <button class="hub-back" type="button" data-hub-tab="overview"><span class="hub-back-chevron" aria-hidden="true"></span>Назад в хаб</button>
+                        <section class="hub-store" id="hubStore" aria-labelledby="hubStoreTitle">
+                            <header class="hub-store-head">
+                                <div>
+                                    <span class="settings-kicker">Магазин</span>
+                                    <h3 id="hubStoreTitle">Магазин аддонов</h3>
+                                    <p class="hub-store-sub">Здесь только официально подписанные аддоны: приложение проверяет подпись при установке.</p>
+                                </div>
+                                <span class="hub-store-balance" id="hubStoreBalance" title="Ваш баланс ZaliCoin" hidden></span>
+                            </header>
+                            <div class="hub-store-tools">
+                                <label class="hub-store-search">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+                                    <input id="hubStoreSearch" type="search" placeholder="Найти аддон" autocomplete="off" aria-label="Поиск по магазину аддонов">
+                                </label>
+                                <div class="hub-store-filters" id="hubStoreFilters" role="tablist" aria-label="Фильтр магазина"></div>
+                            </div>
+                            <p class="hub-addons-status" id="hubStoreStatus" role="status" aria-live="polite" hidden></p>
+                            <div class="hub-store-grid" id="hubStoreGrid"></div>
+                        </section>
                         <section class="hub-components hub-addons" id="hubAddons" aria-labelledby="hubAddonsTitle">
                             <div class="hub-components-head">
                                 <div>
                                     <span class="settings-kicker">Аддоны</span>
-                                    <h3 id="hubAddonsTitle">Мини-приложения</h3>
+                                    <h3 id="hubAddonsTitle">Установленные мини-приложения</h3>
                                 </div>
-                                <button class="auth-btn primary hub-addons-install" id="hubAddonsInstallBtn" type="button" data-addon-action="install" hidden>Установить аддон</button>
+                                <div class="hub-addons-head-actions">
+                                    <button class="btn-flat" type="button" data-hub-tab="signing">Подпись аддонов</button>
+                                    <button class="auth-btn primary hub-addons-install" id="hubAddonsInstallBtn" type="button" data-addon-action="install" hidden>Установить аддон</button>
+                                </div>
                             </div>
                             <p class="hub-addons-status" id="hubAddonsStatus" role="status" aria-live="polite" hidden></p>
                             <div class="hub-addons-list" id="hubAddonsList"></div>
                             <input type="file" id="addonFileInput" accept=".zali" hidden>
                         </section>
-                        <section class="hub-components" id="hubComponents"></section>
+                        <div id="hubPack">
+                            <div id="hubPackBody"></div>
+                        </div>
                         </div>
                         <div class="hub-pane" data-hub-pane="signing" id="hubSigning" hidden>
+                        <button class="hub-back" type="button" data-hub-tab="overview"><span class="hub-back-chevron" aria-hidden="true"></span>Назад в хаб</button>
                             <div id="hubSigningBody"></div>
                         </div>
                     </div>
@@ -492,6 +517,13 @@
                                 </div>
                                 <div class="settings-stack">
                                     <div class="design-mode-options" id="designModeOptions"></div>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputDecorArt" type="checkbox">
+                                        <span>
+                                            <strong>Иллюстрации</strong>
+                                            <small>Рисунки в Хабе, ZaliCoin и пустых списках. На слабых телефонах отключение ускоряет переходы между экранами</small>
+                                        </span>
+                                    </label>
                                     <p class="settings-help">Цветовая схема, шрифты и вся логика приложения не меняются — переключается только оформление. Выбор сохраняется на этом устройстве.</p>
                                 </div>
                             </section>
@@ -1234,10 +1266,11 @@
         </div>
 
         <div class="mobile-dock" id="mobileDock" aria-label="Мобильная навигация">
+            <span class="mobile-dock-thumb" aria-hidden="true"></span>
             <button class="mobile-dock-btn" id="mobileChatsBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></span><span class="mobile-dock-label">Чаты</span></button>
             <button class="mobile-dock-btn" id="mobileServersBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg></span><span class="mobile-dock-label">Сервера</span></button>
+            <button class="mobile-dock-btn" id="mobileZaliCoinBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25"/><path d="M9.5 9h5l-5 6h5M10.4 12h3.2"/></svg></span><span class="mobile-dock-label">ZaliCoin</span></button>
             <button class="mobile-dock-btn" id="mobileHubBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/></svg></span><span class="mobile-dock-label">Хаб</span></button>
-            <button class="mobile-dock-btn" id="mobileSettingsBtn" type="button"><span class="mobile-dock-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="mobile-dock-label">Настройки</span></button>
         </div>
     </div>
 
@@ -1251,7 +1284,7 @@
              (в остальных скрыта): бренд и иллюстрация, чисто декоративная. -->
         <aside class="auth-showcase" aria-hidden="true">
             <div class="auth-showcase-brand">ZaliMessenger</div>
-            <svg class="auth-art" viewBox="28 16 520 408" role="presentation" focusable="false">
+            <svg class="auth-art auth-art--login" viewBox="28 16 520 408" role="presentation" focusable="false">
                 <ellipse class="aa-orbit" cx="280" cy="230" rx="250" ry="168"/>
                 <ellipse class="aa-orbit" cx="280" cy="230" rx="186" ry="122"/>
                 <g class="aa-spark">
@@ -1314,9 +1347,132 @@
                     </g>
                 </g>
             </svg>
+            <!-- Ошибка входа: сервер и телефон, кабель между ними оборван, сообщения
+                 ждут отправки. Показывается вместо витрины входа, пока открыт экран
+                 ошибки (.auth-overlay.is-error). -->
+            <svg class="auth-art auth-art--error" viewBox="28 16 520 408" role="presentation" focusable="false">
+                <ellipse class="aa-orbit" cx="288" cy="220" rx="250" ry="168"/>
+                <ellipse class="aa-orbit" cx="288" cy="220" rx="186" ry="122"/>
+                <g class="aa-spark">
+                    <path d="M86 44l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+                    <path d="M508 62l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                    <path d="M520 386l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                </g>
+                <g class="aa-dots">
+                    <circle cx="468" cy="30" r="4"/><circle cx="36" cy="392" r="5"/>
+                    <circle cx="540" cy="238" r="3"/><circle cx="214" cy="32" r="3"/>
+                </g>
+
+                <!-- сервер: окно с тремя полками, средняя в тревоге -->
+                <g class="aa-tilt-l">
+                    <rect class="aa-card" x="40" y="72" width="204" height="282" rx="30"/>
+                    <circle class="aa-lime" cx="74" cy="108" r="13"/>
+                    <rect class="aa-txt" x="96" y="100" width="82" height="9" rx="4.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="96" y="115" width="50" height="7" rx="3.5"/>
+                    <path class="aa-hair" d="M40 138h204"/>
+
+                    <rect class="aa-bubble" x="60" y="156" width="164" height="50" rx="16"/>
+                    <circle class="aa-lime" cx="84" cy="181" r="7"/>
+                    <rect class="aa-txt" x="102" y="172" width="64" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="102" y="186" width="40" height="6" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="186" y="174" width="6" height="14" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="197" y="174" width="6" height="14" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="208" y="174" width="6" height="14" rx="3"/>
+
+                    <rect class="aa-bubble aa-shelf--warn" x="60" y="218" width="164" height="50" rx="16"/>
+                    <circle class="aa-warn aa-led" cx="84" cy="243" r="7"/>
+                    <rect class="aa-txt" x="102" y="234" width="54" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="102" y="248" width="34" height="6" rx="3"/>
+                    <path class="aa-prongs-off" d="M190 232l16 22M206 232l-16 22"/>
+
+                    <rect class="aa-bubble" x="60" y="280" width="164" height="50" rx="16"/>
+                    <circle class="aa-lime" cx="84" cy="305" r="7"/>
+                    <rect class="aa-txt" x="102" y="296" width="76" height="7" rx="3.5"/>
+                    <rect class="aa-txt aa-txt--dim" x="102" y="310" width="46" height="6" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="186" y="298" width="6" height="14" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="197" y="298" width="6" height="14" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="208" y="298" width="6" height="14" rx="3"/>
+                </g>
+
+                <!-- телефон: сообщения ждут отправки -->
+                <g class="aa-tilt-r">
+                    <rect class="aa-card" x="388" y="106" width="136" height="250" rx="34"/>
+                    <rect class="aa-txt aa-txt--dim" x="432" y="122" width="48" height="7" rx="3.5"/>
+                    <rect class="aa-bubble" x="404" y="146" width="88" height="34" rx="14"/>
+                    <rect class="aa-txt" x="414" y="158" width="56" height="6" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="414" y="168" width="36" height="5" rx="2.5"/>
+                    <rect class="aa-pending" x="424" y="196" width="88" height="42" rx="16"/>
+                    <circle class="aa-clock" cx="444" cy="217" r="8"/>
+                    <path class="aa-clock" d="M444 212v5l3.5 2"/>
+                    <rect class="aa-txt aa-txt--dim" x="460" y="212" width="40" height="6" rx="3"/>
+                    <rect class="aa-txt aa-txt--dim" x="460" y="222" width="26" height="5" rx="2.5"/>
+                    <rect class="aa-pending aa-pending--late" x="440" y="250" width="72" height="34" rx="14"/>
+                    <circle class="aa-clock" cx="456" cy="267" r="6"/>
+                    <path class="aa-clock" d="M456 263v4l2.8 1.6"/>
+                    <path class="aa-hair" d="M388 306h136"/>
+                    <circle class="aa-warn" cx="412" cy="331" r="5"/>
+                    <rect class="aa-txt" x="424" y="327" width="70" height="8" rx="4"/>
+                </g>
+
+                <!-- оборванный кабель -->
+                <g class="aa-cable-group">
+                    <path class="aa-cable" d="M244 230h52"/>
+                    <rect class="aa-plug" x="296" y="217" width="30" height="26" rx="9"/>
+                    <path class="aa-prong" d="M326 224h11M326 236h11"/>
+                    <g class="aa-swing">
+                        <path class="aa-cable" d="M388 230h-6"/>
+                        <rect class="aa-plug" x="352" y="217" width="30" height="26" rx="9"/>
+                        <rect class="aa-hole" x="356" y="223" width="8" height="5" rx="2.5"/>
+                        <rect class="aa-hole" x="356" y="234" width="8" height="5" rx="2.5"/>
+                    </g>
+                    <path class="aa-bolt" d="M345 204l-6 11h9l-6 12"/>
+                    <path class="aa-break" d="M334 196l-6-9M356 196l6-9M334 266l-6 9M356 266l6 9"/>
+                </g>
+
+                <!-- предупреждение над разрывом -->
+                <g class="aa-float aa-float--c">
+                    <circle class="aa-ring aa-ring--warn" cx="345" cy="132" r="46"/>
+                    <circle class="aa-warn" cx="345" cy="132" r="32"/>
+                    <path class="aa-ink-line" d="M345 118v18"/>
+                    <path class="aa-ink-line" d="M345 147h.01"/>
+                </g>
+
+                <!-- «повторить» -->
+                <g class="aa-float aa-float--b">
+                    <rect class="aa-pill" x="124" y="372" width="190" height="48" rx="24"/>
+                    <circle class="aa-lime" cx="152" cy="396" r="16"/>
+                    <path class="aa-ink-line" d="M144 396a8 8 0 0 1 13.5-5.8M160 396a8 8 0 0 1-13.5 5.8M153 388h5v-5M151 404h-5v5"/>
+                    <rect class="aa-txt" x="178" y="388" width="96" height="8" rx="4"/>
+                    <rect class="aa-txt aa-txt--dim" x="178" y="403" width="62" height="6" rx="3"/>
+                </g>
+            </svg>
         </aside>
         <div class="auth-card">
             <div class="auth-brand">ZaliMessenger</div>
+            <!-- Экран ошибки входа: показывается вместо формы, пока открыт
+                 .auth-overlay.is-error (auth.js: showAuthFailure). -->
+            <section class="auth-fail" id="authFail" aria-labelledby="authFailTitle" hidden>
+                <h1 id="authFailTitle">Не удалось войти</h1>
+                <p id="authFailHint"></p>
+                <div class="auth-fail-msg" id="authFailMsg" role="alert">
+                    <div class="auth-fail-msg-text" id="authFailMsgText"></div>
+                    <div class="auth-fail-msg-detail" id="authFailMsgDetail" hidden></div>
+                </div>
+                <div class="auth-actions">
+                    <button id="authRetryBtn" class="auth-btn primary" type="button">Повторить попытку</button>
+                </div>
+                <div class="auth-footer auth-fail-footer">
+                    <button id="authFailBackBtn" class="auth-link" type="button">Вернуться ко входу</button>
+                </div>
+                <div class="auth-fail-server">
+                    <label class="auth-fail-server-label" for="authFailApiBaseUrl">Сервер авторизации</label>
+                    <div class="auth-fail-server-row">
+                        <input id="authFailApiBaseUrl" class="auth-input auth-input--compact" type="url" placeholder="https://msgs.zalikus.org" autocomplete="off" spellcheck="false">
+                        <button id="authFailServerBtn" class="auth-btn auth-btn--ghost" type="button">Сменить</button>
+                    </div>
+                    <p class="auth-fail-server-note" id="authFailServerNote"></p>
+                </div>
+            </section>
             <h1 id="authTitle">Вход в аккаунт</h1>
             <p id="authHint">Войдите, чтобы синхронизировать сообщения и контакты.</p>
             <p class="auth-vault-sync" id="authVaultSyncNote">Ключи переписки подгрузятся из облака при входе.</p>

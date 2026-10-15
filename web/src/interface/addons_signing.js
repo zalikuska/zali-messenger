@@ -26,13 +26,17 @@ ZaliMixin(ZaliInterface, class {
             this._addonSigning = {
                 info: null, digest: '', fileName: '', busy: false, error: '', result: null,
                 mine: null, mineError: '', mineLoading: false,
+                // Публикация в магазин: цена и итог последней попытки.
+                store: { mode: 'free', price: '100', busy: false, error: '', done: null, seeded: '' },
             };
         }
         return this._addonSigning;
     }
 
     bindAddonSigningEvents() {
-        document.getElementById('hubTabs')?.addEventListener('click', (e) => {
+        // Переключателя вкладок над хабом нет: разделы открываются плитками и
+        // кнопками с data-hub-tab («Назад в хаб», «Подпись аддонов»).
+        document.getElementById('viewHub')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-hub-tab]');
             if (btn) this.setHubTab(btn.getAttribute('data-hub-tab'));
         });
@@ -52,6 +56,18 @@ ZaliMixin(ZaliInterface, class {
             else if (action === 'reset') this.resetAddonSigning();
             else if (action === 'manage') void this.openAddonManageDialog(id);
             else if (action === 'refresh') void this.loadMyAddons();
+            else if (action === 'store-free' || action === 'store-paid') this.setStorePublishMode(action === 'store-paid' ? 'paid' : 'free');
+            else if (action === 'store-publish') void this.publishPickedToStore();
+            else if (action === 'store-listing') void this.openStoreListingDialog(id);
+        });
+        // Цену вводят без перерисовки: иначе поле теряло бы фокус на каждой цифре.
+        pane.addEventListener('input', (e) => {
+            const input = e.target;
+            if (input && input.matches?.('[data-store-price]')) {
+                const store = this.addonSigningState().store;
+                store.price = String(input.value || '');
+                store.seeded = this.addonStoreSource()?.manifest?.id || store.seeded;
+            }
         });
         // Поле выбора файла создаётся при каждой перерисовке вкладки, поэтому
         // слушатель — на панели (событие всплывает), а не на самом поле: к
@@ -97,7 +113,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     setHubTab(name) {
-        const tab = name === 'signing' ? 'signing' : 'overview';
+        const tab = name === 'signing' ? 'signing' : ((name === 'addons' || name === 'pack') ? 'addons' : 'overview');
         this._hubTab = tab;
         document.querySelectorAll('#hubTabs [data-hub-tab]').forEach((btn) => {
             const on = btn.getAttribute('data-hub-tab') === tab;
@@ -107,9 +123,21 @@ ZaliMixin(ZaliInterface, class {
         document.querySelectorAll('[data-hub-pane]').forEach((pane) => {
             pane.hidden = pane.getAttribute('data-hub-pane') !== tab;
         });
+        // CSS на телефоне прячет шапку хаба на вложенных вкладках (там уже есть «Назад в хаб»),
+        // а новая вкладка всегда открывается сверху, а не с прежней позиции прокрутки.
+        const hubView = document.getElementById('viewHub');
+        // Имя НЕ data-hub-pane: по нему выше выбираются сами панели и #viewHub пряталась бы.
+        if (hubView && hubView.getAttribute('data-hub-current') !== tab) {
+            hubView.setAttribute('data-hub-current', tab);
+            hubView.scrollTop = 0;
+            hubView.querySelector('.hub-view')?.scrollTo?.(0, 0);
+        }
         if (tab === 'signing') {
             this.renderHubSigning();
             void this.loadMyAddons();
+        } else if (tab === 'addons') {
+            this.renderHubPack();
+            void this.loadStore?.();
         }
     }
 
@@ -249,7 +277,7 @@ ZaliMixin(ZaliInterface, class {
         const result = this.addonSigningState().result;
         if (!result) return;
         const file = new File([result.bytes], result.fileName, { type: 'application/octet-stream' });
-        this.setHubTab('overview');
+        this.setHubTab('addons');
         await this.installAddonFromFile(file);
     }
 
@@ -307,6 +335,174 @@ ZaliMixin(ZaliInterface, class {
         return '<span class="addon-chip">Не подписан</span>';
     }
 
+    // ---- Магазин: публикация из окна подписи ----
+
+    /** Что можно выложить: только файл с официальной подписью, выданной вам. */
+    addonStoreSource() {
+        const st = this.addonSigningState();
+        const me = String(this.myName() || '');
+        if (st.result && st.result.kind === 'official') {
+            return { bytes: st.result.bytes, manifest: st.result.manifest, fileName: st.result.fileName };
+        }
+        if (st.info && st.info.signature?.state === 'official' && String(st.info.signature.owner || '') === me) {
+            return { bytes: st.info.bytes, manifest: st.info.manifest, fileName: st.fileName };
+        }
+        return null;
+    }
+
+    setStorePublishMode(mode) {
+        const store = this.addonSigningState().store;
+        store.mode = mode === 'paid' ? 'paid' : 'free';
+        store.seeded = this.addonStoreSource()?.manifest?.id || store.seeded;
+        store.error = '';
+        this.renderHubSigning();
+    }
+
+    renderStorePublishBlock() {
+        const st = this.addonSigningState();
+        const store = st.store;
+        const source = this.addonStoreSource();
+        if (!source) {
+            // Подсказка только когда файл уже выбран — иначе окно и так пустое.
+            if (!st.info && !st.result) return '';
+            const info = st.info;
+            const owner = String(info?.signature?.owner || '');
+            const text = info?.signature?.state === 'official' && owner && owner !== String(this.myName() || '')
+                ? `Подпись выдана @${this.esc(owner)} — в магазин выкладывает только он.`
+                : 'В магазин попадают только официально подписанные аддоны: подайте заявку на официальную подпись, и после одобрения аддон можно выложить прямо здесь.';
+            return `<p class="addon-sign-hint store-publish-hint">${text}</p>`;
+        }
+        const m = source.manifest;
+        const mine = Array.isArray(st.mine) ? st.mine.find(a => a.id === m.id) : null;
+        const listed = mine?.store && mine.store.status === 'active' ? mine.store : null;
+        // Обновление уже выложенного аддона начинается с его текущей цены: иначе
+        // переключатель по умолчанию «Бесплатно» молча обнулял бы цену одним кликом.
+        // Пока человек сам не тронул переключатель/цену (seeded), ориентир — витрина.
+        if (listed && store.seeded !== m.id) {
+            store.seeded = m.id;
+            store.mode = listed.price > 0 ? 'paid' : 'free';
+            if (listed.price > 0) store.price = String(listed.price);
+        }
+        const paid = store.mode === 'paid';
+        const busy = store.busy ? ' disabled aria-busy="true"' : '';
+        const done = store.done && store.done.id === m.id ? store.done : null;
+        let note = '';
+        if (store.error) note = `<p class="store-publish-note is-error" role="alert">${this.esc(store.error)}</p>`;
+        else if (done) note = `<p class="store-publish-note is-success" role="status">«${this.esc(done.name)}» ${this.esc(done.version)} теперь в магазине: ${done.price ? `${this.esc(this.addonCoinsShort(done.price))} ZC` : 'бесплатно'}. <button class="store-link" type="button" data-hub-tab="addons">Открыть магазин</button></p>`;
+        else if (listed) note = `<p class="store-publish-note">Сейчас в магазине: версия ${this.esc(listed.version)}, ${listed.price ? `${this.esc(this.addonCoinsShort(listed.price))} ZC` : 'бесплатно'}. Публикация заменит её.</p>`;
+        else note = '<p class="store-publish-note">Покупатель получит именно этот файл с вашей официальной подписью. Цену можно сменить позже.</p>';
+        return `<section class="store-publish" aria-label="Публикация в магазин аддонов">
+            <div class="store-publish-head">
+                <strong>Магазин аддонов</strong>
+                <span>Выложите аддон прямо отсюда — отдельной загрузки не нужно.</span>
+            </div>
+            <div class="store-publish-row">
+                <div class="store-seg" role="radiogroup" aria-label="Цена аддона">
+                    <button type="button" role="radio" aria-checked="${paid ? 'false' : 'true'}" class="store-seg-btn${paid ? '' : ' is-selected'}" data-sign-action="store-free">Бесплатно</button>
+                    <button type="button" role="radio" aria-checked="${paid ? 'true' : 'false'}" class="store-seg-btn${paid ? ' is-selected' : ''}" data-sign-action="store-paid">Платно</button>
+                </div>
+                <label class="store-price-field"${paid ? '' : ' hidden'}>
+                    <input type="number" inputmode="numeric" min="1" max="10000" step="1" value="${this.esc(store.price)}" data-store-price aria-label="Цена в ZaliCoin">
+                    <span>ZC</span>
+                </label>
+                <button class="auth-btn primary store-publish-btn" type="button" data-sign-action="store-publish"${busy}>${store.busy ? 'Публикуем…' : (listed ? 'Обновить в магазине' : 'Выложить в магазин')}</button>
+            </div>
+            ${note}
+        </section>`;
+    }
+
+    async publishPickedToStore() {
+        const st = this.addonSigningState();
+        const store = st.store;
+        const source = this.addonStoreSource();
+        if (!source || store.busy) return;
+        let price = 0;
+        if (store.mode === 'paid') {
+            price = Math.floor(Number(store.price));
+            if (!Number.isSafeInteger(price) || price < 1 || price > 10000) {
+                store.error = 'Цена — целое число ZaliCoin от 1 до 10 000';
+                this.renderHubSigning();
+                return;
+            }
+        }
+        store.busy = true;
+        store.error = '';
+        store.done = null;
+        this.renderHubSigning();
+        try {
+            const res = await this.apiFetch('/api/addons/store/publish', {
+                method: 'POST',
+                body: JSON.stringify({ fileBase64: this.addonBytesToBase64(source.bytes), price }),
+                interactive: true,
+            });
+            let body = null;
+            try { body = await res.json(); } catch (e) { /* пустой ответ */ }
+            if (!res.ok) throw new Error(String(body?.message || `Сервер отказал (${res.status})`));
+            const listing = body?.listing || {};
+            store.done = { id: source.manifest.id, name: listing.name || source.manifest.name, version: listing.version || source.manifest.version, price };
+            await this.loadMyAddons();
+            void this.loadStore?.({ force: true });
+        } catch (error) {
+            store.error = `Не удалось выложить: ${error?.message || error}`;
+        } finally {
+            store.busy = false;
+            this.renderHubSigning();
+        }
+    }
+
+    /** Цена и снятие с витрины для уже выложенного аддона («Мои аддоны»). */
+    async openStoreListingDialog(id) {
+        const st = this.addonSigningState();
+        const item = (st.mine || []).find(a => a.id === id);
+        const listing = item?.store;
+        if (!item || !listing) return;
+        const active = listing.status === 'active';
+        const html = `
+            <div class="addon-dialog-head">
+                <div>
+                    <h2 id="addonDialogTitle">В магазине</h2>
+                    <p class="addon-dialog-sub">«${this.esc(item.name || item.id)}» ${this.esc(listing.version)} · ${active ? 'опубликован' : 'снят с витрины'} · продаж ${this.esc(String(listing.purchases || 0))}</p>
+                </div>
+            </div>
+            <label class="store-dialog-field">
+                <span>Цена, ZaliCoin (0 — бесплатно)</span>
+                <input type="number" inputmode="numeric" min="0" max="10000" step="1" value="${this.esc(String(listing.price || 0))}" data-store-dialog-price>
+            </label>
+            <p class="store-publish-note is-error" data-store-dialog-error hidden></p>
+            <div class="coin-transfer-actions">
+                ${active ? '<button class="btn-flat is-danger" type="button" data-dialog-action="unpublish">Снять с витрины</button>' : ''}
+                <button class="btn-flat" type="button" data-dialog-action="cancel">Закрыть</button>
+                <button class="auth-btn primary" type="button" data-dialog-action="save">Сохранить цену</button>
+            </div>`;
+        const closed = this.openAddonDialog(html);
+        const overlay = Array.from(document.querySelectorAll('.addon-dialog')).pop();
+        const price = () => overlay?.querySelector('[data-store-dialog-price]');
+        const errorEl = overlay?.querySelector('[data-store-dialog-error]');
+        const outcome = await closed;
+        if (outcome !== 'save' && outcome !== 'unpublish') return;
+        const value = Math.floor(Number(price()?.value));
+        try {
+            let res;
+            if (outcome === 'unpublish') {
+                res = await this.apiFetch(`/api/addons/store/${encodeURIComponent(id)}`, { method: 'DELETE', interactive: true });
+            } else {
+                if (!Number.isSafeInteger(value) || value < 0 || value > 10000) throw new Error('Цена — целое число от 0 до 10 000');
+                res = await this.apiFetch(`/api/addons/store/${encodeURIComponent(id)}/update`, {
+                    method: 'POST', body: JSON.stringify({ price: value }), interactive: true,
+                });
+            }
+            let body = null;
+            try { body = await res.json(); } catch (e) { /* пустой ответ */ }
+            if (!res.ok) throw new Error(String(body?.message || `Сервер отказал (${res.status})`));
+            await this.loadMyAddons();
+            void this.loadStore?.({ force: true });
+        } catch (error) {
+            if (errorEl) { errorEl.textContent = String(error?.message || error); errorEl.hidden = false; }
+            st.error = String(error?.message || error);
+            this.renderHubSigning();
+        }
+    }
+
     renderHubSigning() {
         const box = document.getElementById('hubSigningBody');
         if (!box) return;
@@ -335,10 +531,18 @@ ZaliMixin(ZaliInterface, class {
             const pending = !!request && request.digest === st.digest && request.status === 'pending';
             const isOfficial = item?.kind === 'official';
             const line = this.addonRequestLine(request, { digest: st.digest });
-            const hint = !item ? 'Подпись закрепит этот id за вашим аккаунтом.' : '';
+            // Файл уже несёт вашу официальную подпись: предлагать «Получить официальную»
+            // или «Подписать» ещё раз бессмысленно — ему нужна только раздача/магазин.
+            const signedOfficially = st.info.signature?.state === 'official'
+                && String(st.info.signature.owner || '') === String(this.myName() || '');
+            const hint = signedOfficially
+                ? 'Файл уже подписан официально — раздавайте его как есть или выложите в магазин ниже.'
+                : (!item ? 'Подпись закрепит этот id за вашим аккаунтом.' : '');
             const busy = st.busy ? ' disabled aria-busy="true"' : '';
             let actions;
-            if (approved) {
+            if (signedOfficially) {
+                actions = '';
+            } else if (approved) {
                 actions = `<button class="auth-btn primary" type="button" data-sign-action="sign-official"${busy}>${st.busy ? 'Подписываем…' : 'Получить официальную подпись'}</button>
                     <button class="btn-flat" type="button" data-sign-action="sign"${busy}>Самоподпись</button>`;
             } else {
@@ -356,7 +560,7 @@ ZaliMixin(ZaliInterface, class {
                     </div>
                     ${this.addonSignChipHtml(st.info.signature)}
                 </div>
-                ${line || hint ? `<p class="addon-sign-hint">${line || this.esc(hint)}</p>` : ''}
+                ${signedOfficially ? `<p class="addon-sign-hint">${this.esc(hint)}</p>` : (line || hint ? `<p class="addon-sign-hint">${line || this.esc(hint)}</p>` : '')}
                 <div class="addon-sign-actions">
                     ${actions}
                     <button class="btn-flat" type="button" data-sign-action="reset"${busy}>Другой файл</button>
@@ -368,6 +572,9 @@ ZaliMixin(ZaliInterface, class {
                 <button class="auth-btn primary" type="button" data-sign-action="pick">Выбрать файл</button>
             </div>`;
         }
+
+        // Публикация в магазин — в том же окне, под выбранным файлом.
+        if (st.info || st.result) picked += this.renderStorePublishBlock();
 
         let mineHtml;
         if (st.mineError) {
@@ -389,10 +596,12 @@ ZaliMixin(ZaliInterface, class {
                         <div class="addon-mine-title">
                             <strong>${this.esc(a.name || a.id)}</strong>
                             <span class="addon-chip ${official ? 'is-official' : 'is-self'}">${official ? 'Официальный' : 'Самоподпись'}</span>
+                            ${a.store ? `<span class="addon-chip is-store${this.esc(a.store.status === 'active' ? '' : ' is-muted')}">${a.store.status === 'active' ? `В магазине · ${a.store.price ? `${this.esc(this.addonCoinsShort(a.store.price))} ZC` : 'бесплатно'}` : 'Снят с витрины'}</span>` : ''}
                         </div>
                         <p class="addon-mine-stats">Установок ${this.addonCoinsShort(a.installs)} · запусков за 7 дней ${this.addonCoinsShort(a.launches7d)} · в казне ${this.addonCoinsShort(t.balance)} ZC</p>
                         ${requestLine ? `<p class="addon-mine-request">${requestLine}</p>` : ''}
                     </div>
+                    ${a.store ? `<button class="btn-flat" type="button" data-sign-action="store-listing">Магазин</button>` : ''}
                     <button class="btn-flat" type="button" data-sign-action="manage">Управление</button>
                 </article>`;
             }).join('');

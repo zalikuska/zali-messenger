@@ -26,7 +26,9 @@ ZaliMixin(ZaliInterface, class {
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
         this.bindAddonEvents();                           // аддоны хаба и «Свернуть» в верхней полосе (после кнопок окна)
+        this.bindAddonStoreEvents();                      // магазин аддонов во вкладке «Аддоны»
         this.bindAddonSigningEvents();                    // вкладка «Подпись аддонов» в хабе
+        this.bindAddonPackEvents();                       // вкладка «Упаковщик» в хабе (ZIP → .zali)
         this.bindUserSuggestEvents();                     // подсказки имён в полях ввода логина
         this.bindDeepLinkEvents();                        // ссылки …/server/<код> и …/profile/<имя>
         this.bindSidebarSettingsEvents();                 // категории настроек слева, на месте списка чатов
@@ -166,9 +168,14 @@ ZaliMixin(ZaliInterface, class {
                     this.toggleVoiceCallExpanded();
                     return;
                 }
+                const cameraPickBtn = e.target.closest('#voiceCameraPickBtn');
+                if (cameraPickBtn) {
+                    await this.openVoiceCameraPicker();
+                    return;
+                }
                 const cameraBtn = e.target.closest('#voiceCameraBtn');
                 if (cameraBtn) {
-                    await this.setVoiceCameraEnabled(!this.voice.cameraOn);
+                    await this.onVoiceCameraButton();
                     return;
                 }
                 const screenShareBtn = e.target.closest('#voiceScreenShareBtn');
@@ -854,6 +861,25 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        // Экран ошибки входа (auth.js: showAuthFailure).
+        document.getElementById('authRetryBtn')?.addEventListener('click', () => { void this.retryAuthFailure(); });
+        document.getElementById('authFailBackBtn')?.addEventListener('click', () => this.dismissAuthFailure({ focus: true }));
+        document.getElementById('authFailServerBtn')?.addEventListener('click', () => { void this.changeAuthServerFromFailure(); });
+        const authFailApiBaseUrl = document.getElementById('authFailApiBaseUrl');
+        if (authFailApiBaseUrl) {
+            authFailApiBaseUrl.addEventListener('input', () => {
+                authFailApiBaseUrl.dataset.dirty = '1';
+                const note = document.getElementById('authFailServerNote');
+                if (note) { note.textContent = ''; note.classList.remove('is-error'); }
+            });
+            authFailApiBaseUrl.addEventListener('blur', () => this.syncAuthFailServerInput());
+            authFailApiBaseUrl.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                void this.changeAuthServerFromFailure();
+            });
+        }
+
         const authGuestBtn = document.getElementById('authGuestBtn');
         if (authGuestBtn) authGuestBtn.addEventListener('click', () => this.continueAsGuest());
 
@@ -936,6 +962,7 @@ ZaliMixin(ZaliInterface, class {
         const meAva = document.getElementById('meAva');
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
         const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
+        const inputDecorArt = document.getElementById('inputDecorArt');
         const designModeOptions = document.getElementById('designModeOptions');
         const cacheSettings = document.getElementById('cacheSettings');
         const inputVoiceTrace = document.getElementById('inputVoiceTrace');
@@ -1051,6 +1078,11 @@ ZaliMixin(ZaliInterface, class {
         if (inputUiV2Enabled) {
             inputUiV2Enabled.addEventListener('change', () => {
                 this.saveUiV2Enabled(!!inputUiV2Enabled.checked);
+            });
+        }
+        if (inputDecorArt) {
+            inputDecorArt.addEventListener('change', () => {
+                this.saveDecorArt(!!inputDecorArt.checked);
             });
         }
         if (inputExperimentalDesign) {
@@ -1517,12 +1549,9 @@ ZaliMixin(ZaliInterface, class {
         if (mobileHubBtn) {
             mobileHubBtn.addEventListener('click', () => this.openHubView());
         }
-        const mobileSettingsBtn = document.getElementById('mobileSettingsBtn');
-        if (mobileSettingsBtn) {
-            mobileSettingsBtn.addEventListener('click', () => {
-                this.applyNetworkConfigToInputs();
-                showSettingsView();
-            });
+        const mobileZaliCoinBtn = document.getElementById('mobileZaliCoinBtn');
+        if (mobileZaliCoinBtn) {
+            mobileZaliCoinBtn.addEventListener('click', () => this.openZaliCoinView());
         }
         const hubGrid = document.getElementById('hubGrid');
         if (hubGrid) {
@@ -1530,10 +1559,10 @@ ZaliMixin(ZaliInterface, class {
                 const actionCard = e.target.closest('[data-hub-action]');
                 if (actionCard) {
                     const action = actionCard.getAttribute('data-hub-action');
-                    if (action === 'components') {
-                        document.getElementById('hubComponents')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    } else if (action === 'update') {
+                    if (action === 'update') {
                         this.handleHubUpdateAction();
+                    } else if (action === 'addons') {
+                        this.setHubTab('addons');
                     }
                     return;
                 }
@@ -1921,10 +1950,12 @@ ZaliMixin(ZaliInterface, class {
         this.syncMobileChrome();
         this.setupMobileNavGestures();
         this.setupMobileForwardNavGesture();
+        this.setupMobileDockDrag();
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();
         this.applyUiV2Chrome();
         this.applyDesignMode();
+        this.applyDecorArt();
         this.applyVoiceTraceEnabled();
         const mobileQuery = this.mobileLayoutQuery();
         if (mobileQuery) {

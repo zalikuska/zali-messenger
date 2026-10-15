@@ -868,6 +868,36 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         ])
     }
 
+    /// Когда на этом Mac последний раз был ввод, уже сообщённое серверу (`client_idle`).
+    private var lastReportedActivityAt: Date?
+
+    /// Маршрут уведомлений по активности (server/src/device_activity.rs): сервер шлёт
+    /// уведомление только на устройства, где что-то делали последние две минуты. Простой —
+    /// системный (DeviceIdleWatcher), не только окна мессенджера.
+    ///
+    /// По сокету сообщений, а не голосовому: тот поднимается не всегда. Пока человек
+    /// активен — раз в 30 с; перестал — молчим, простой на сервере растёт сам. После
+    /// переподключения (lastReportedActivityAt = nil) — сразу.
+    func reportDeviceIdle(idleSeconds: TimeInterval) {
+        connectionQueue.async { [weak self] in
+            guard let self, let task = self.webSocketTask, !self.currentDeviceId.isEmpty else { return }
+            let idle = max(0, idleSeconds)
+            let lastActivity = Date().addingTimeInterval(-idle)
+            if let last = self.lastReportedActivityAt, lastActivity.timeIntervalSince(last) < 30 { return }
+            let payload: [String: Any] = [
+                "type": "client_idle",
+                "deviceId": self.currentDeviceId,
+                "idleSeconds": Int(idle),
+            ]
+            guard let text = zaliJSONString(payload) else { return }
+            self.lastReportedActivityAt = lastActivity
+            task.send(.string(text)) { [weak self] error in
+                guard error != nil else { return }
+                self?.connectionQueue.async { self?.lastReportedActivityAt = nil }
+            }
+        }
+    }
+
     /// Appends to the offline queue, dropping the oldest once it is full.
     private func enqueueVoicePayload(_ payload: [String: Any], completion: ((Bool) -> Void)?) {
         while voicePendingQueue.count >= NetworkService.voicePendingQueueMax {
@@ -2443,6 +2473,8 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 return
             }
             self.reconnectAttempt = 0
+            // Сервер мог перезапуститься — активность сообщается заново (reportDeviceIdle).
+            self.lastReportedActivityAt = nil
             let proto = `protocol` ?? "nil"
             self.trace("ws didOpen protocol=\(proto) user=\(self.currentUsername)")
             DispatchQueue.main.async {

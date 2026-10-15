@@ -140,6 +140,47 @@ ZaliMixin(ZaliInterface, class {
         if (host.innerHTML !== html) host.innerHTML = html;
     }
 
+    // ============================================================
+    // ИЛЛЮСТРАЦИИ — декоративные рисунки Хаба, ZaliCoin и пустых списков.
+    // Дорогие в отрисовке (SVG-маска): на слабых телефонах переход Хаб ↔ ZaliCoin
+    // давал до 80% рывков. Поэтому тумблер, а не безусловное скрытие; правила —
+    // `body[data-decor-art="off"]` в web/style.css.
+    // ============================================================
+
+    decorArtStorageKey() {
+        return 'zali_decor_art_v1';
+    }
+
+    // Без явного выбора: на Android-оболочке выключено (там это и тормозило),
+    // везде остальное — включено.
+    defaultDecorArt() {
+        return this.nativeBridge?.()?.transport !== 'android';
+    }
+
+    loadDecorArt() {
+        try {
+            const raw = localStorage.getItem(this.decorArtStorageKey());
+            if (raw === '1') return true;
+            if (raw === '0') return false;
+        } catch (e) { /* без хранилища — по умолчанию */ }
+        return this.defaultDecorArt();
+    }
+
+    saveDecorArt(enabled) {
+        this.decorArt = !!enabled;
+        try {
+            localStorage.setItem(this.decorArtStorageKey(), this.decorArt ? '1' : '0');
+        } catch (e) {}
+        this.applyDecorArt();
+    }
+
+    applyDecorArt() {
+        if (typeof this.decorArt !== 'boolean') this.decorArt = this.loadDecorArt();
+        document.body?.setAttribute('data-decor-art', this.decorArt ? 'on' : 'off');
+        const toggle = document.getElementById('inputDecorArt');
+        if (toggle) toggle.checked = this.decorArt;
+    }
+
     // Обратная совместимость: старый API продолжает работать, но теперь это
     // просто «переключить между classic и flat» поверх designMode.
     loadExperimentalDesign() {

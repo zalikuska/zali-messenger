@@ -716,6 +716,8 @@ ZaliMixin(ZaliInterface, class {
         this.voice.channelId = cid;
         this.voice.status = 'connecting';
         this.voice.participants = [];
+        this.voice.joinedAt = {};
+        this.voice.firstSeen = new Map();
         this.sendVoiceEvent({
             type: 'voice_join',
             roomId,

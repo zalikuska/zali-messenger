@@ -541,6 +541,8 @@ fn main() -> wry::Result<()> {
         );
         message_bridge.configure(&guard);
     }
+    #[cfg(target_os = "windows")]
+    spawn_windows_idle_reporter(Arc::clone(&native_state), Arc::clone(&voice_bridge));
     let native_state_for_ipc = Arc::clone(&native_state);
     let runtime_for_ipc = Arc::clone(&runtime);
     let voice_bridge_for_ipc = Arc::clone(&voice_bridge);
@@ -815,6 +817,65 @@ fn spawn_windows_focus_watcher(window: &tao::window::Window, proxy: tao::event_l
             if proxy.send_event(AppEvent::EvaluateScript(script)).is_err() {
                 break;
             }
+        }
+    });
+}
+
+/// Windows: системный простой для маршрута уведомлений (server/src/device_activity.rs) —
+/// уведомление о сообщении уходит только на устройства, где человек что-то делал последние
+/// две минуты, а если бездельничают все — на все.
+///
+/// «Что-то делал» — любой ввод в системе (`GetLastInputInfo`), а не в окне мессенджера:
+/// вебвью свёрнутого окна или окна в трее ни мыши, ни клавиатуры не видит, а таймеры ему
+/// Chromium режет. Поэтому `client_idle` шлёт оболочка, из своего потока: опрос раз в 5 с,
+/// отправка — раз в 30 с, пока человек активен; перестал — молчим, простой на сервере
+/// растёт сам. Зеркало macOS DeviceIdleWatcher.swift и Android NativeBridge.noteUserActivity.
+#[cfg(target_os = "windows")]
+fn spawn_windows_idle_reporter(state: Arc<Mutex<NativeState>>, voice_bridge: Arc<native::VoiceBridge>) {
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+
+    std::thread::spawn(move || {
+        let mut last_reported: Option<(String, Instant)> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let idle_ms = unsafe {
+                let mut info = LASTINPUTINFO {
+                    cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                    dwTime: 0,
+                };
+                if GetLastInputInfo(&mut info) == 0 {
+                    continue;
+                }
+                // Оба счётчика 32-битные и переполняются раз в 49,7 суток — разность
+                // по модулю остаётся верной.
+                GetTickCount().wrapping_sub(info.dwTime)
+            };
+            let device_id = match state.lock() {
+                Ok(guard) if guard.auth_token.is_some() => guard.current_device_id.trim().to_string(),
+                _ => continue,
+            };
+            if device_id.is_empty() {
+                continue;
+            }
+            let Some(last_activity) = Instant::now().checked_sub(Duration::from_millis(idle_ms as u64)) else {
+                continue;
+            };
+            // Другой аккаунт или устройство — сообщить сразу.
+            if let Some((reported_device, reported_at)) = &last_reported {
+                if *reported_device == device_id
+                    && last_activity.saturating_duration_since(*reported_at) < Duration::from_secs(30)
+                {
+                    continue;
+                }
+            }
+            voice_bridge.send_event(serde_json::json!({
+                "type": "client_idle",
+                "deviceId": device_id,
+                "idleSeconds": idle_ms / 1000,
+            }));
+            last_reported = Some((device_id, last_activity));
         }
     });
 }

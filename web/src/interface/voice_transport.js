@@ -342,6 +342,10 @@ ZaliMixin(ZaliInterface, class {
                 // Серверу — смотрит ли пользователь в приложение: от этого зависит, уйдёт
                 // ли Web Push на это устройство (web_push.js, reportClientPresence).
                 this.reportClientPresence({ force: true });
+                // И когда на этом устройстве последний раз что-то делали — маршрут
+                // уведомлений по активности (device_activity.js).
+                this.reportDeviceIdle({ force: true });
+                this.reportConversationView({ force: true });
                 // The browser-side counterpart of the native shells'
                 // voice_transport_state:'up'. iOS and Android both declare
                 // `voice: false` and therefore run on THIS socket, so without it
@@ -554,6 +558,8 @@ ZaliMixin(ZaliInterface, class {
         this.voice.targetUser = '';
         this.voice.inviter = '';
         this.voice.participants = [];
+        this.voice.joinedAt = {};
+        this.voice.firstSeen = new Map();
         this.voice.status = 'idle';
         this.voice.muted = false;
         this.voice.deafened = false;

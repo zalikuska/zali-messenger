@@ -861,6 +861,7 @@ ZaliMixin(ZaliInterface, class {
             this.voice.serverId = String(payload.serverId || this.voice.serverId || '').trim();
             this.voice.channelId = String(payload.channelId || this.voice.channelId || '').trim();
             this.voice.participants = participants;
+            this.voice.joinedAt = this.parseVoiceJoinedAt(payload.joinedAt);
             // The server's record of who placed a DM call, for EVERY room state — not
             // only ringing ones. A client restored from the reconnect snapshot (page
             // reload, app restart mid-call) has no callTrack, so its offer-owner

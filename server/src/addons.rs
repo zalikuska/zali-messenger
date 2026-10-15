@@ -118,7 +118,7 @@ fn hold_ms() -> i64 {
         .unwrap_or(HOLD_MS_DEFAULT)
 }
 
-fn fingerprint(public_key: &[u8]) -> String {
+pub(crate) fn fingerprint(public_key: &[u8]) -> String {
     hex(&Sha256::digest(public_key))
 }
 
@@ -289,7 +289,7 @@ pub(crate) fn addon_error(status: StatusCode, code: &str, message: &str) -> Resp
     (status, Json(json!({ "code": code, "message": message }))).into_response()
 }
 
-fn internal(context: &str, error: impl std::fmt::Display) -> Response {
+pub(crate) fn internal(context: &str, error: impl std::fmt::Display) -> Response {
     error!("addons: {} err={}", context, error);
     StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
@@ -304,7 +304,7 @@ pub(crate) fn valid_addon_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-fn valid_version(version: &str) -> bool {
+pub(crate) fn valid_version(version: &str) -> bool {
     let bytes = version.as_bytes();
     (1..=32).contains(&bytes.len())
         && bytes[0].is_ascii_alphanumeric()
@@ -313,11 +313,11 @@ fn valid_version(version: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-'))
 }
 
-fn valid_digest(digest: &str) -> bool {
+pub(crate) fn valid_digest(digest: &str) -> bool {
     digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn clean_line(value: &str, max: usize) -> String {
+pub(crate) fn clean_line(value: &str, max: usize) -> String {
     let flat: String = value
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -325,21 +325,21 @@ fn clean_line(value: &str, max: usize) -> String {
     trim_limited(flat, max)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
 #[derive(Debug, Clone)]
-struct RegistryRow {
-    addon_id: String,
-    owner: String,
-    kind: String,
-    key_fp: String,
-    name: String,
-    claimed_at: i64,
+pub(crate) struct RegistryRow {
+    pub(crate) addon_id: String,
+    pub(crate) owner: String,
+    pub(crate) kind: String,
+    pub(crate) key_fp: String,
+    pub(crate) name: String,
+    pub(crate) claimed_at: i64,
 }
 
-async fn load_registry(
+pub(crate) async fn load_registry(
     conn: &mut SqliteConnection,
     addon_id: &str,
 ) -> Result<Option<RegistryRow>, sqlx::Error> {
@@ -418,6 +418,9 @@ pub(crate) async fn admin_revoke_build(
     };
     match result {
         Ok(_) => {
+            if !body.restore {
+                crate::addon_store::hide_revoked(&state, &body.addon_id, &digest).await;
+            }
             info!("[ADDON] revoke id={} digest={} restore={}", body.addon_id, digest, body.restore);
             Json(json!({ "ok": true, "restored": body.restore })).into_response()
         }
@@ -1958,9 +1961,11 @@ pub(crate) async fn list_mine(
             .map(|(version, digest, status, note, decision_note, created_at, decided_at)| {
                 request_json(&id, &version, &digest, &status, &note, &decision_note, created_at, decided_at)
             });
+            let store = crate::addon_store::owner_summary(&mut conn, &id).await?;
             items.push(json!({
                 "id": id, "name": name, "kind": kind, "claimedAt": claimed_at,
                 "officialRequest": request,
+                "store": store,
                 "treasury": summary_json(&summary),
                 "installs": stats["installs"], "launches7d": stats["launches7d"],
             }));

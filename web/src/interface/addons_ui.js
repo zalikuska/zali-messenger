@@ -21,6 +21,12 @@ ZaliMixin(ZaliInterface, class {
             this.handleAddonAction(btn.getAttribute('data-addon-action'), id);
         });
         this.bindAddonDropZone(document.getElementById('hubAddons'));
+        // Быстрый запуск на главной хаба: управление аддонами живёт во вкладке «Аддоны».
+        document.getElementById('hubQuick')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-addon-open]');
+            if (!btn || btn.disabled) return;
+            void this.openAddonFromHub(btn.getAttribute('data-addon-open') || '');
+        });
         const input = document.getElementById('addonFileInput');
         input?.addEventListener('change', () => {
             const file = input.files?.[0];
@@ -99,6 +105,8 @@ ZaliMixin(ZaliInterface, class {
             await this.launchAddon(id);
         } catch (error) {
             this.setAddonsStatus(`Не удалось открыть аддон: ${error?.message || error}`, 'error');
+            // Строка состояния живёт во вкладке «Аддоны»: с главной ошибку не видно.
+            if (this._hubTab !== 'addons') this.setHubTab('addons');
         } finally {
             this._addonLaunching.delete(id);
             this.renderHubAddons();
@@ -145,7 +153,96 @@ ZaliMixin(ZaliInterface, class {
         return `<span class="hub-addon-icon" aria-hidden="true">${this.esc(letter)}</span>`;
     }
 
+    /** Фон плашки аддона (manifest.background) как data-URL для хранилища; пусто, если фона нет. */
+    async addonBackgroundDataUrl(info) {
+        const path = info.manifest.background;
+        const bytes = path ? info.files.get(path) : null;
+        if (!bytes || bytes.length > window.ZaliAddonFormat.LIMITS.backgroundBytes) return '';
+        const mime = window.ZaliAddonFormat.mimeForPath(path);
+        const raw = `data:${mime};base64,${this.addonBytesToBase64(bytes)}`;
+        // Метаданные аддона ходят через мост оболочек при каждом чтении списка, а
+        // плашка — полоса высотой ~90 px: большую растровую картинку сжимаем (до
+        // 1200 px по ширине, webp), векторную и так лёгкую оставляем как есть.
+        if (mime === 'image/svg+xml' || bytes.length <= 160 * 1024) return raw;
+        try {
+            const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
+            const scale = Math.min(1, 1200 / bitmap.width);
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+            canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            bitmap.close?.();
+            const blob = await new Promise(res => canvas.toBlob(res, 'image/webp', 0.82));
+            if (!blob || blob.size >= bytes.length) return raw;
+            const out = new Uint8Array(await blob.arrayBuffer());
+            return `data:${blob.type || 'image/webp'};base64,${this.addonBytesToBase64(out)}`;
+        } catch (e) {
+            return raw;
+        }
+    }
+
+    /**
+     * blob:-адрес фона плашки. Data-URL в разметку не кладём (полезная нагрузка
+     * по тексту — см. skill performance): адрес собирается один раз на аддон и
+     * версию, прежний освобождается.
+     */
+    addonBackgroundUrl(meta) {
+        const src = String(meta?.backgroundDataUrl || '');
+        const m = /^data:(image\/(?:png|jpeg|webp|svg\+xml));base64,([A-Za-z0-9+/=]+)$/.exec(src);
+        if (!m) return '';
+        const cache = this._addonBgUrls || (this._addonBgUrls = new Map());
+        const key = `${meta.id}:${meta.sha256 || src.length}`;
+        const hit = cache.get(meta.id);
+        if (hit && hit.key === key) return hit.url;
+        try {
+            const bin = atob(m[2]);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+            const url = URL.createObjectURL(new Blob([bytes], { type: m[1] }));
+            if (hit) URL.revokeObjectURL(hit.url);
+            cache.set(meta.id, { key, url });
+            return url;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    /** Главная хаба: по плашке на каждый установленный аддон — только быстрый запуск. */
+    renderHubQuick() {
+        const box = document.getElementById('hubQuick');
+        if (!box) return;
+        const items = this.addonsAvailable() && !this._addonsError ? (this._addonsList || []) : [];
+        box.hidden = !items.length;
+        if (!items.length) {
+            if (box.childElementCount) box.innerHTML = '';
+            return;
+        }
+        const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9 5l7 7-7 7"/></svg>';
+        this.setHTMLIfChanged(box, items.map((meta) => {
+            const m = meta.manifest;
+            const running = this.addonInstances().has(meta.id);
+            const launching = !!this._addonLaunching?.has(meta.id);
+            return `
+            <button class="hub-action hub-action--addon${meta.backgroundDataUrl ? ' has-bg' : ''}" type="button" data-addon-open="${this.esc(meta.id)}"${launching ? ' disabled aria-busy="true"' : ''}>
+                ${this.addonIconHtml(meta)}
+                <span class="hub-action-text">
+                    <strong>${this.esc(m.name)}${running ? ' <span class="hub-addon-flag is-running">Работает</span>' : ''}</strong>
+                    <span>${this.esc(m.description || 'Мини-приложение')}</span>
+                </span>
+                <span class="hub-action-go" aria-hidden="true">${chevron}</span>
+            </button>`;
+        }).join(''));
+        for (const btn of box.querySelectorAll('[data-addon-open]')) {
+            const meta = items.find(item => item.id === btn.getAttribute('data-addon-open'));
+            const url = meta ? this.addonBackgroundUrl(meta) : '';
+            if (url) btn.style.setProperty('--addon-bg', `url("${url}")`);
+            else btn.style.removeProperty('--addon-bg');
+        }
+    }
+
     renderHubAddons() {
+        this.renderHubQuick();
+        this.renderHubStore?.();
         const list = document.getElementById('hubAddonsList');
         const installBtn = document.getElementById('hubAddonsInstallBtn');
         if (!list) return;
@@ -270,6 +367,7 @@ ZaliMixin(ZaliInterface, class {
                 sha256: info.sha256,
                 size: info.size,
                 iconDataUrl: this.addonIconDataUrl(info),
+                backgroundDataUrl: await this.addonBackgroundDataUrl(info),
                 // Для списка и сведений: сам файл при запуске проверяется заново.
                 signature: {
                     state: info.signature.state,

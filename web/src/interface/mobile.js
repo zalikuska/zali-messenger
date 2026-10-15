@@ -178,12 +178,145 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
-    /** 'chats' | 'servers' | 'hub' | 'settings' — источник истины для подсветки
-     * и веб-дока, и нативной панели. */
+    /** 'chats' | 'servers' | 'zalicoin' | 'hub' — источник истины для подсветки и веб-дока,
+     * и нативной панели. Настройки в доке нет: они открываются из Хаба, поэтому подсвечивают Хаб. */
     activeMobileNavSection() {
-        if (document.getElementById('viewSettings')?.classList.contains('active')) return 'settings';
+        if (document.getElementById('viewSettings')?.classList.contains('active')) return 'hub';
+        if (document.getElementById('viewZaliCoin')?.classList.contains('active')) return 'zalicoin';
         if (document.getElementById('viewHub')?.classList.contains('active')) return 'hub';
         return this.S.navMode === 'servers' ? 'servers' : 'chats';
+    }
+
+    /** Ставит капсулу под активную кнопку дока. Во время перетаскивания не трогает —
+     *  там её ведёт setupMobileDockDrag. */
+    syncMobileDockThumb() {
+        // Нативная панель (Android/iOS) рисует свою и прячет веб-док. Чтение
+        // offsetWidth/offsetLeft у скрытого дока принудительно пересчитывало
+        // раскладку всей страницы синхронно в обработчике клика: ~40 мс на каждое
+        // переключение вкладки на телефоне (замер CPU-профилем, 2026-10-11).
+        if (this.nativeSupports('mobileNav')) return;
+        const dock = document.getElementById('mobileDock');
+        const thumb = dock?.querySelector('.mobile-dock-thumb');
+        const active = dock?.querySelector('.mobile-dock-btn.active');
+        if (!thumb || !active || dock.classList.contains('is-dragging')) return;
+        thumb.style.width = `${active.offsetWidth}px`;
+        thumb.style.setProperty('--tx', `${active.offsetLeft}px`);
+        dock.__syncDockInk?.();
+    }
+
+    /**
+     * Перетаскивание по доку: палец или мышь двигают капсулу плавно, она немного
+     * растёт, а при отпускании встаёт под ближайший пункт и переключает раздел.
+     * Короткий тап (без движения дальше порога) остаётся обычным кликом кнопки.
+     */
+    setupMobileDockDrag() {
+        // Веб-док скрыт нативной панелью — перетаскивать нечего, а слушатели resize
+        // и чтение геометрии были бы чистой нагрузкой.
+        if (this.nativeSupports('mobileNav')) return;
+        const dock = document.getElementById('mobileDock');
+        if (!dock || dock.__dockDragBound) return;
+        dock.__dockDragBound = true;
+        const thumb = dock.querySelector('.mobile-dock-thumb');
+        const buttons = [...dock.querySelectorAll('.mobile-dock-btn')];
+        if (!thumb || buttons.length < 2) return;
+        const DRAG_SLOP = 6;
+        const GROW = 1.08;
+        let drag = null;
+
+        // Тёмная копия подписей внутри капсулы: капсула лежит над кнопками и обрезает
+        // копию, поэтому под ней текст и иконка тёмные, а вне капсулы остаются светлыми —
+        // как фильтр. Копия обязана совпадать с рядом кнопок до пикселя, иначе подпись
+        // удваивается: ряд встаёт в те же x/y/ширину (offsetLeft/offsetTop первой кнопки
+        // уже включают padding и рамку дока), сдвиг — переменная --tx капсулы.
+        const ink = document.createElement('div');
+        ink.className = 'mobile-dock-ink';
+        ink.setAttribute('aria-hidden', 'true');
+        ink.innerHTML = buttons.map((b) => `<span class="mobile-dock-btn mobile-dock-ink-item">${b.innerHTML}</span>`).join('');
+        thumb.appendChild(ink);
+        const inkItems = [...ink.children];
+        const syncInk = () => {
+            const shown = buttons.filter((b) => b.offsetWidth > 0);
+            if (!shown.length) return;
+            const first = shown[0];
+            const last = shown[shown.length - 1];
+            buttons.forEach((b, i) => { inkItems[i].style.display = b.offsetWidth > 0 ? '' : 'none'; });
+            ink.style.setProperty('--ink-x', `${first.offsetLeft}px`);
+            ink.style.setProperty('--ink-y', `${first.offsetTop - thumb.offsetTop}px`);
+            ink.style.setProperty('--ink-w', `${last.offsetLeft + last.offsetWidth - first.offsetLeft}px`);
+            ink.style.setProperty('--ink-h', `${first.offsetHeight}px`);
+            ink.style.gap = getComputedStyle(dock).columnGap;
+        };
+        dock.__syncDockInk = syncInk;
+        syncInk();
+
+        const clampX = (x) => Math.min(Math.max(x, buttons[0].offsetLeft), buttons[buttons.length - 1].offsetLeft);
+        const nearestButton = (x) => {
+            const center = x + thumb.offsetWidth / 2;
+            let best = buttons[0];
+            let bestDist = Infinity;
+            for (const b of buttons) {
+                const dist = Math.abs(b.offsetLeft + b.offsetWidth / 2 - center);
+                if (dist < bestDist) { best = b; bestDist = dist; }
+            }
+            return best;
+        };
+
+        dock.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            if (!e.target.closest('.mobile-dock-btn')) return;
+            const active = dock.querySelector('.mobile-dock-btn.active') || buttons[0];
+            drag = { id: e.pointerId, startX: e.clientX, startTx: active.offsetLeft, moved: false };
+        });
+
+        dock.addEventListener('pointermove', (e) => {
+            if (!drag || e.pointerId !== drag.id) return;
+            const dx = e.clientX - drag.startX;
+            if (!drag.moved) {
+                if (Math.abs(dx) < DRAG_SLOP) return;
+                drag.moved = true;
+                try { dock.setPointerCapture(e.pointerId); } catch (err) { /* не критично */ }
+                dock.classList.add('is-dragging');
+                thumb.style.setProperty('--ts', String(GROW));
+            }
+            const x = clampX(drag.startTx + dx);
+            thumb.style.setProperty('--tx', `${x}px`);
+            const target = nearestButton(x);
+            buttons.forEach((b) => b.classList.toggle('is-target', b === target));
+        });
+
+        const finishDrag = (e, cancelled) => {
+            if (!drag || e.pointerId !== drag.id) return;
+            const moved = drag.moved;
+            drag = null;
+            if (!moved) return;
+            dock.classList.remove('is-dragging');
+            thumb.style.setProperty('--ts', '1');
+            buttons.forEach((b) => b.classList.remove('is-target'));
+            const x = parseFloat(thumb.style.getPropertyValue('--tx')) || 0;
+            const current = dock.querySelector('.mobile-dock-btn.active');
+            const target = cancelled ? current : nearestButton(x);
+            if (target && target !== current) {
+                // Кнопка сама вызовет переход и обновит подсветку через syncMobileDock().
+                target.click();
+            } else {
+                this.syncMobileDockThumb();
+            }
+            // Браузер может отправить свой click после отпускания — он уже не нужен.
+            dock.__suppressDockClick = true;
+            setTimeout(() => { dock.__suppressDockClick = false; }, 350);
+        };
+        dock.addEventListener('pointerup', (e) => finishDrag(e, false));
+        dock.addEventListener('pointercancel', (e) => finishDrag(e, true));
+
+        dock.addEventListener('click', (e) => {
+            if (!dock.__suppressDockClick) return;
+            dock.__suppressDockClick = false;
+            e.stopPropagation();
+            e.preventDefault();
+        }, true);
+
+        window.addEventListener('resize', () => { syncInk(); this.syncMobileDockThumb(); });
+        this.syncMobileDockThumb();
     }
 
     currentMobileNavProgress() {
@@ -570,13 +703,14 @@ ZaliMixin(ZaliInterface, class {
         const section = this.activeMobileNavSection();
         const chatsBtn = document.getElementById('mobileChatsBtn');
         const serversBtn = document.getElementById('mobileServersBtn');
+        const zaliCoinBtn = document.getElementById('mobileZaliCoinBtn');
         const hubBtn = document.getElementById('mobileHubBtn');
-        const settingsBtn = document.getElementById('mobileSettingsBtn');
 
         if (chatsBtn) chatsBtn.classList.toggle('active', section === 'chats');
         if (serversBtn) serversBtn.classList.toggle('active', section === 'servers');
+        if (zaliCoinBtn) zaliCoinBtn.classList.toggle('active', section === 'zalicoin');
         if (hubBtn) hubBtn.classList.toggle('active', section === 'hub');
-        if (settingsBtn) settingsBtn.classList.toggle('active', section === 'settings');
+        this.syncMobileDockThumb();
 
         const mobileMenuBtn = document.getElementById('mobileMenuBtn');
         if (mobileMenuBtn) {

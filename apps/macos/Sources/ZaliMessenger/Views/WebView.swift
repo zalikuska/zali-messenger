@@ -2014,9 +2014,10 @@ struct WebView {
                 case .voiceEvent: do {
                     let payload = dict["payload"] as? [String: Any] ?? dict["event"] as? [String: Any] ?? dict
                     let voiceType = payload["type"] as? String ?? ""
-                    // client_activity (игровой статус) повторяется раз в ~25 с по этому же
-                    // каналу — в лог звонков и в журнал интерфейса он не пишется.
-                    let quiet = voiceType == "client_activity"
+                    // client_activity (игровой статус) и client_view (открытый чат,
+                    // device_activity.js) повторяются раз в ~25 с по этому же каналу — в
+                    // лог звонков и в журнал интерфейса они не пишутся.
+                    let quiet = voiceType == "client_activity" || voiceType == "client_view"
                     if !quiet {
                         print("[VOICE][BRIDGE][OUT] type=\(voiceType) roomId=\(payload["roomId"] as? String ?? "") roomType=\(payload["roomType"] as? String ?? "") to=\(payload["to"] as? String ?? "") target=\(payload["target"] as? String ?? "")")
                     }

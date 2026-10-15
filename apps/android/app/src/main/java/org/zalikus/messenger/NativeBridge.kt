@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.core.app.ActivityCompat
@@ -276,10 +277,14 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
           };
           window.__zaliSelectTab = function (name) {
             var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
-                        hub: 'mobileHubBtn', settings: 'mobileSettingsBtn' };
+                        zalicoin: 'mobileZaliCoinBtn', hub: 'mobileHubBtn' };
             var el = document.getElementById(map[name]);
             if (el) { el.click(); }
           };
+          // Метка оболочки для CSS (web/style.css, `.is-android-shell`): на Android
+          // отключается размытие фона. Именно documentElement — на document-start
+          // body ещё нет.
+          document.documentElement.classList.add('is-android-shell');
           var hide = function () {
             if (document.getElementById('__zaliNativeBarCss')) return;
             var st = document.createElement('style');
@@ -315,7 +320,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         if (!bridgeNonceMatches(dict.optString("bridgeNonce", ""))) return
         when (dict.optString("type", "")) {
             "NETWORK_CONFIG" -> {
-                val base = dict.optString("apiBaseUrl", "")
+                val base = normalizeApiBaseUrl(dict.optString("apiBaseUrl", ""))
                 if (base.isNotEmpty() && base != apiBaseUrl) {
                     apiBaseUrl = base
                     PushSession.update(context, apiBaseUrl = base)
@@ -507,6 +512,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             perAttemptTimeout = firstAttemptTimeout, finalAttemptTimeout = finalAttemptTimeout)
     }
 
+    /**
+     * Адрес сервера, введённый без схемы (`192.168.0.104:3000`), OkHttp не принимает.
+     * Схему подставляем сами: `http://` для localhost и частных адресов (LAN, dev-сервер),
+     * иначе `https://`. Адрес с уже указанной схемой не трогаем.
+     */
+    private fun normalizeApiBaseUrl(raw: String): String {
+        val trimmed = raw.trim().trimEnd('/')
+        if (trimmed.isEmpty() || trimmed.contains("://")) return trimmed
+        val host = trimmed.substringBefore(':').substringBefore('/')
+        val isPrivate = host == "localhost" || host == "127.0.0.1" ||
+            host.startsWith("10.") || host.startsWith("192.168.") ||
+            Regex("""172\.(1[6-9]|2\d|3[01])\..*""").matches(host)
+        return (if (isPrivate) "http://" else "https://") + trimmed
+    }
+
     private fun attemptApiRequest(
         url: String, method: String, rawHeaders: JSONObject, bodyStr: String?,
         requestId: String, attempt: Int, maxAttempts: Int,
@@ -527,7 +547,14 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 .build()
         }
 
-        val builder = Request.Builder().url(url)
+        // Битый адрес OkHttp отвергает исключением. Раньше оно уходило наверх из
+        // @JavascriptInterface и вебвью показывало «Java exception was raised».
+        val builder = try {
+            Request.Builder().url(url)
+        } catch (e: IllegalArgumentException) {
+            sendNativeResponse(requestId, ok = false, error = "Некорректный адрес сервера: $url")
+            return
+        }
         val keys = rawHeaders.keys()
         while (keys.hasNext()) {
             val k = keys.next()
@@ -1317,6 +1344,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     wsReconnectAttempt = 0
                     setConnectionStatusJs(true)
                     sendClientPresence()
+                    reportDeviceIdle(force = true)
                 }
             }
 
@@ -2154,8 +2182,43 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    /** Последнее действие в приложении и то, что о нём уже знает сервер (elapsedRealtime). */
+    private var lastUserActivityAt = 0L
+    private var lastReportedActivityAt = 0L
+
+    /**
+     * Маршрут уведомлений по активности (server/src/device_activity.rs): уведомление уходит
+     * только на устройства, где человек что-то делал последние две минуты, а если
+     * бездельничают все — на все. Телефон активен, если его касались, открыли, свернули
+     * или закрыли приложение меньше двух минут назад — поэтому и onStart, и onStop здесь
+     * тоже действия. После закрытия сокета не будет, но сервер помнит время по устройству
+     * и шлёт пуш через FCM.
+     *
+     * Веб в вебвью этого не делает — он видит мост, а свёрнутый вебвью ничего не видит.
+     * Отправка — раз в 30 с, пока человек активен; перестал — молчим, простой растёт сам.
+     * Вызывается с главного потока (MainActivity.dispatchTouchEvent, setAppVisible).
+     */
+    fun noteUserActivity(force: Boolean = false) {
+        lastUserActivityAt = SystemClock.elapsedRealtime()
+        reportDeviceIdle(force)
+    }
+
+    private fun reportDeviceIdle(force: Boolean = false) {
+        val socket = wsInstance ?: return
+        if (wsDeviceId.isEmpty() || lastUserActivityAt == 0L) return
+        if (!force && lastUserActivityAt - lastReportedActivityAt < DEVICE_IDLE_REPORT_MS) return
+        val idleSeconds = (SystemClock.elapsedRealtime() - lastUserActivityAt) / 1000
+        val payload = JSONObject().apply {
+            put("type", "client_idle")
+            put("deviceId", wsDeviceId)
+            put("idleSeconds", idleSeconds)
+        }
+        if (socket.send(payload.toString())) lastReportedActivityAt = lastUserActivityAt
+    }
+
     fun setAppVisible(visible: Boolean) {
         PushSession.appVisible = visible
+        noteUserActivity(force = true)
         mainHandler.removeCallbacks(warmupRunnable)
         if (visible) mainHandler.postDelayed(warmupRunnable, warmupIntervalMs)
         sendClientPresence()
@@ -2216,6 +2279,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     companion object {
         private const val LAST_USERNAME_KEY = "last_username"
+
+        /** Пока человек активен, `client_idle` уходит не чаще (noteUserActivity). */
+        private const val DEVICE_IDLE_REPORT_MS = 30_000L
 
         /** Потолки обоих кэшей расшифровки — те же, что у Windows (`native/cache.rs`). */
         private const val DECRYPTED_CACHE_MAX_ENTRIES = 400

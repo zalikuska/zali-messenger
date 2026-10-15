@@ -211,10 +211,110 @@ async function presenceReport() {
         `последнее attended=${sent.at(-1)?.attended}`, 'attended=false');
 }
 
+// Маршрут по активности (server/src/device_activity.rs): уведомление только на
+// устройства, где человек что-то делал последние две минуты. Сервер шлёт
+// notify_route раньше сообщения; проверяется сторона клиента.
+async function activityRoute() {
+    console.log('\n──────── маршрут уведомлений по активности устройств\n');
+    const make = (device = 'dev-mac') => {
+        const client = makeClient();
+        client.env.focused = false;
+        client.api.currentDeviceId = () => device;
+        return client;
+    };
+
+    const idle = make();
+    const routed = idle.api.dispatchRealtimeEvent({ type: 'notify_route', messageId: 'r1', devices: ['dev-phone'] });
+    idle.api.receiveMessage({ id: 'r1', sender: 'alice', receiver: 'me', text: 'на телефон' });
+    check('notify_route разбирается общим маршрутизатором', routed === true, 'dispatchRealtimeEvent не знает notify_route');
+    check('человек за другим устройством — здесь ни уведомления', idle.shown.length === 0,
+        `${idle.shown.length} уведомлений на бездельничающем устройстве`, 'тишина');
+    check('…но счётчик непрочитанного растёт', idle.api.S.unread.alice === 1, `unread=${idle.api.S.unread.alice || 0}`, 'unread=1');
+
+    const active = make();
+    active.api.dispatchRealtimeEvent({ type: 'notify_route', messageId: 'r2', devices: ['dev-phone', 'dev-mac'] });
+    active.api.receiveMessage({ id: 'r2', sender: 'alice', receiver: 'me', text: 'сюда' });
+    check('устройство в маршруте — уведомление есть', active.shown.length === 1, `${active.shown.length} уведомлений`, '1 уведомление');
+
+    const noRoute = make();
+    noRoute.api.receiveMessage({ id: 'r3', sender: 'alice', receiver: 'me', text: 'все бездельничают' });
+    check('маршрута нет (бездельничают все) — уведомление есть', noRoute.shown.length === 1, `${noRoute.shown.length} уведомлений`, '1 уведомление');
+
+    const unknown = make('');
+    unknown.api.dispatchRealtimeEvent({ type: 'notify_route', messageId: 'r4', devices: ['dev-phone'] });
+    unknown.api.receiveMessage({ id: 'r4', sender: 'alice', receiver: 'me', text: 'кто я?' });
+    check('своё устройство неизвестно — лучше лишнее уведомление', unknown.shown.length === 1, 'уведомление пропало', '1 уведомление');
+
+    // Браузерная вкладка сама сообщает о своей активности; нативные оболочки — нет.
+    const browser = makeClient({ native: false });
+    const sent = [];
+    browser.sandbox.WebSocket.OPEN = 1;
+    browser.api.voice.socket = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
+    browser.api.currentDeviceId = () => 'dev-laptop';
+    browser.api.noteLocalActivity();
+    check('действие во вкладке — client_idle с id устройства',
+        sent.at(-1)?.type === 'client_idle' && sent.at(-1).deviceId === 'dev-laptop' && sent.at(-1).idleSeconds === 0,
+        JSON.stringify(sent.at(-1)), JSON.stringify(sent.at(-1)));
+    browser.api.noteLocalActivity();
+    browser.api.noteLocalActivity();
+    check('каждое движение мыши не шлётся — не чаще раза в 30 с', sent.length === 1, `${sent.length} кадров`, '1 кадр');
+    browser.api._lastLocalActivityAt = Date.now() + 31000;
+    browser.api.reportDeviceIdle();
+    check('через 30 с активности — следующий отчёт', sent.length === 2, `${sent.length} кадров`, '2 кадра');
+
+    const shell = makeClient();
+    const shellSent = [];
+    shell.api.voice.socket = { readyState: 1, send: (raw) => shellSent.push(raw) };
+    shell.api.currentDeviceId = () => 'dev-mac';
+    shell.api.noteLocalActivity();
+    check('в нативной оболочке вебвью простой не шлёт — это делает оболочка', shellSent.length === 0,
+        'вебвью шлёт client_idle поверх отчётов оболочки');
+}
+
+// Открытый чат перед глазами глушит уведомления на всех устройствах: сервер узнаёт о
+// нём из client_view. Проверяется, что веб говорит это правильно.
+async function conversationView() {
+    console.log('\n──────── открытый чат сообщается серверу\n');
+    const { api, env, sandbox } = makeClient({ native: false });
+    const sent = [];
+    sandbox.WebSocket.OPEN = 1;
+    api.voice.socket = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
+    api.currentDeviceId = () => 'dev-laptop';
+    const last = () => sent.filter(f => f.type === 'client_view').at(-1);
+
+    api.reportConversationView({ force: true });
+    check('чат открыт, окно в фокусе — сервер знает переписку',
+        last()?.conversation === 'dm:alice' && last()?.deviceId === 'dev-laptop', JSON.stringify(last()), JSON.stringify(last()));
+    api.reportConversationView();
+    check('без изменений повторно не шлёт', sent.length === 1, `${sent.length} кадров`, '1 кадр');
+
+    env.focused = false;
+    api.reportConversationView();
+    check('окно ушло с экрана — чат больше не «перед глазами»', last()?.conversation === null,
+        JSON.stringify(last()), 'conversation=null');
+
+    env.focused = true;
+    Object.assign(api.S, { navMode: 'servers', activeServer: 's1', activeChannel: 'c1' });
+    api.reportConversationView();
+    check('канал — ключ как у tag уведомления', last()?.conversation === 's1:c1', JSON.stringify(last()), 's1:c1');
+
+    api._lastConversationViewAt = Date.now() - 26000;
+    const before = sent.length;
+    api.reportConversationView();
+    check('пока чат открыт — повтор раз в 25 с', sent.length === before + 1, 'отметка протухнет на сервере', 'повторён');
+
+    api.S.session = null;
+    const loggedOut = sent.length;
+    api.reportConversationView({ force: true });
+    check('без сессии ничего не шлёт', sent.length === loggedOut, 'кадр до входа');
+}
+
 await attendedGate();
 await catchUpBurst();
 await hiddenWindow();
 await presenceReport();
+await activityRoute();
+await conversationView();
 
 console.log(`\n  итог: ${checks} проверок, ${failures} нарушено`);
 process.exit(failures ? 1 : 0);

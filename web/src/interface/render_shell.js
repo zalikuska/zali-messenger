@@ -274,195 +274,65 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
-    componentRegistry() {
-        const componentVersion = (track, update, serverCompat, moduleVersion) =>
-            `${track}0.1.${update}s${serverCompat}l${moduleVersion}`;
-        return [
-            {
-                name: 'Zali Interface',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Web UI',
-                description: 'Основной интерфейс: чаты, хаб, настройки, контакты, серверы и composer.',
-                dependencies: ['ZaliBus', 'ZaliStyler', 'NetworkService', 'Rust Core'],
-            },
-            {
-                name: 'Zali Styler',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Web UI',
-                description: 'Темы, CSS-переменные, радиусы, сохранение выбранной схемы и динамическая кастомизация.',
-                dependencies: ['localStorage', 'Swift UserDefaults bridge'],
-            },
-            {
-                name: 'ZaliBus',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Runtime',
-                description: 'Командная шина между веб-модулями, Swift WebView и нативными обработчиками.',
-                dependencies: ['bootstrap.js', 'native_types.js'],
-            },
-            {
-                name: 'Messaging Module',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Web UI',
-                description: 'Отправка сообщений, вложения, реакции, история, локальная очередь и realtime-обновления.',
-                dependencies: ['api_routes.js', 'NetworkService', 'Rust Core', 'WebSocket'],
-            },
-            {
-                name: 'Contacts Module',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Web UI',
-                description: 'Список диалогов, поиск пользователей, добавление контактов и аватары.',
-                dependencies: ['api_routes.js', 'Avatar API', 'Message Cache'],
-            },
-            {
-                name: 'Servers Module',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Web UI',
-                description: 'Серверы, каналы, роли, участники, публичные серверы и настройки сервера.',
-                dependencies: ['api_routes.js', 'Server API', 'Roles API'],
-            },
-            {
-                name: 'Voice Module',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Realtime',
-                description: 'Голосовые комнаты и прямые звонки через WebRTC-сигналинг.',
-                dependencies: ['WebRTC', 'Voice WebSocket', 'TURN config'],
-            },
-            {
-                name: 'Rust Core',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Core',
-                description: 'Шифрование, упаковка сообщений, файловые операции и нативная core-логика.',
-                dependencies: ['Swift bridge', 'ZaliCrypto', 'FileManager'],
-            },
-            {
-                name: 'NetworkService',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'macOS Native',
-                description: 'HTTP/WebSocket-клиент macOS, загрузка вложений, realtime и связка с сервером.',
-                dependencies: ['URLSession', 'UserDefaults', 'Zali Server API'],
-            },
-            {
-                name: 'Windows Native Shell',
-                version: componentVersion('b', 2, 1, 2),
-                layer: 'Windows Native',
-                description: 'Wry/Tao оболочка Windows, WebView2, AppUserModelID, native bridge и сборка exe.',
-                dependencies: ['WebView2', 'windows-sys', 'ZaliBus', 'Rust Core'],
-            },
-            {
-                name: 'Native Notifications',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'macOS Native',
-                description: 'Права macOS, доставка уведомлений и перепроверка статуса при активации приложения.',
-                dependencies: ['UNUserNotificationCenter', 'ZaliMessenger.app bundle'],
-            },
-            {
-                name: 'Zali Server',
-                version: componentVersion('b', 1, 1, 1),
-                layer: 'Backend',
-                description: 'REST API, WebSocket realtime, SQLite-хранилище, авторизация и uploads.',
-                dependencies: ['axum 0.7', 'tokio 1.0', 'sqlx 0.7', 'jsonwebtoken 9.0'],
-            },
-        ];
-    }
-
-    renderHubComponents() {
-        const box = document.getElementById('hubComponents');
-        if (!box) return;
-        const components = this.componentRegistry();
-        box.innerHTML = `
-            <div class="hub-components-head">
-                <div>
-                    <h3>Компоненты приложения</h3>
-                </div>
-                <span>${components.length} модулей</span>
-            </div>
-            <div class="hub-components-list">
-                ${components.map(component => `
-                    <article class="hub-component-item">
-                        <div class="hub-component-main">
-                            <div class="hub-component-top">
-                                <strong>${this.esc(component.name)}</strong>
-                                <span>${this.esc(component.layer)}</span>
-                            </div>
-                            <p>${this.esc(component.description)}</p>
-                        </div>
-                        <div class="hub-component-meta">
-                            <span class="hub-component-version">${this.esc(component.version)}</span>
-                            <small>${component.dependencies.map(dep => this.esc(dep)).join(' / ')}</small>
-                        </div>
-                    </article>
-                `).join('')}
-            </div>
-        `;
-    }
-
+    // Хаб: три крупные кнопки быстрых переходов и, пока есть обновление, полоса
+    // «Доступно обновление». Разметка — строка без чужих данных, кроме версии
+    // (через esc); обработчик клика — на #hubGrid (events.js).
     renderHub() {
         const grid = document.getElementById('hubGrid');
         if (!grid) return;
-        const unreadTotal = Object.values(this.S.unread || {}).reduce((sum, value) => sum + Number(value || 0), 0);
-        const contactsCount = Array.isArray(this.S.contacts) ? this.S.contacts.length : 0;
-        const serversCount = Array.isArray(this.S.servers) ? this.S.servers.length : 0;
-        const onlineLabel = this.S.wsOn ? 'WebSocket активен' : 'WebSocket не подключён';
-        const cards = [
+        // Маленькая картинка на кнопке — сцена из scripts/build_decor.py
+        // (--decor-hub-*), одноцветная маска, как у больших иллюстраций; тумблер
+        // «Иллюстрации» (data-decor-art) прячет и её. Шапку хаба это не трогает.
+        const tiles = [
             {
-                kind: 'notifications',
-                title: 'Уведомления',
-                value: unreadTotal ? `${unreadTotal}` : '0',
-                body: unreadTotal ? 'Есть непрочитанные сообщения.' : 'Новых уведомлений пока нет.',
-                action: 'К диалогам',
-                segment: 'dm',
-            },
-            (() => {
-                const status = this.S.updateStatus || {};
-                if (status.available) {
-                    return {
-                        kind: 'updates',
-                        title: 'Обновления',
-                        value: `v${status.version}`,
-                        body: status.readyToInstall
-                            ? 'Загружено — установите и перезапустите приложение.'
-                            : (status.downloading
-                                ? `Загрузка… ${Math.round((status.progress || 0) * 100)}%`
-                                : 'Доступна новая версия приложения.'),
-                        action: status.readyToInstall ? 'Установить и перезапустить' : 'Скачать',
-                        actionId: 'update',
-                    };
-                }
-                return {
-                    kind: 'updates',
-                    title: 'Обновления',
-                    value: 'Актуально',
-                    body: `${onlineLabel}. Контактов: ${contactsCount}. Серверов: ${serversCount}.`,
-                    action: 'Сервера',
-                    segment: 'servers',
-                };
-            })(),
-            {
-                kind: 'components',
-                title: 'Компоненты',
-                value: `${this.componentRegistry().length} модулей`,
-                body: 'Список частей приложения, их версий, зависимостей и зон ответственности.',
-                action: 'Смотреть список',
-                actionId: 'components',
-            },
-            {
-                kind: 'settings',
-                title: 'Настройки',
-                value: 'Аккаунт',
-                body: 'Профиль, тема, ключи, быстрые аккаунты и журнал событий.',
-                action: 'Открыть настройки',
                 segment: 'settings',
+                art: 'settings',
+                title: 'Настройки',
+                note: 'Профиль, тема, ключи и журнал событий',
+            },
+            {
+                actionId: 'addons',
+                art: 'addons',
+                title: 'Аддоны',
+                note: 'Упаковщик .zali из ZIP, установка и подпись',
+            },
+            {
+                segment: 'zalicoin',
+                art: 'coins',
+                title: 'ZaliCoin',
+                note: 'Баланс, переводы и карточки',
             },
         ];
-        grid.innerHTML = cards.map(card => `
-            <button class="hub-card hub-card--${this.esc(card.kind)}" type="button"${card.segment ? ` data-hub-segment="${this.esc(card.segment)}"` : ''}${card.actionId ? ` data-hub-action="${this.esc(card.actionId)}"` : ''}>
-                <span class="hub-card-kicker">${this.esc(card.title)}</span>
-                <strong>${this.esc(card.value)}</strong>
-                <span>${this.esc(card.body)}</span>
-                <em class="hub-card-action">${this.esc(card.action)}</em>
-            </button>
-        `).join('');
-        this.renderHubComponents();
+        const status = this.S.updateStatus || {};
+        let update = '';
+        if (status.available) {
+            const detail = status.readyToInstall
+                ? 'Загружено — установите и перезапустите приложение.'
+                : (status.downloading
+                    ? `Загрузка… ${Math.round((status.progress || 0) * 100)}%`
+                    : 'Доступна новая версия приложения.');
+            const cta = status.readyToInstall ? 'Установить и перезапустить' : 'Скачать';
+            update = `
+            <button class="hub-update" type="button" data-hub-action="update">
+                <span class="hub-update-dot" aria-hidden="true"></span>
+                <span class="hub-update-text">
+                    <strong>Доступно обновление v${this.esc(status.version)}</strong>
+                    <span>${this.esc(detail)}</span>
+                </span>
+                <span class="hub-update-cta">${this.esc(cta)}</span>
+            </button>`;
+        }
+        const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9 5l7 7-7 7"/></svg>';
+        this.renderHubQuick?.();
+        this.setHTMLIfChanged(grid, update + tiles.map(tile => `
+            <button class="hub-action" type="button"${tile.segment ? ` data-hub-segment="${this.esc(tile.segment)}"` : ''}${tile.actionId ? ` data-hub-action="${this.esc(tile.actionId)}"` : ''}>
+                <span class="hub-action-text">
+                    <strong>${this.esc(tile.title)}</strong>
+                    <span>${this.esc(tile.note)}</span>
+                </span>
+                <span class="hub-action-art hub-action-art--${this.esc(tile.art)}" aria-hidden="true"></span>
+                <span class="hub-action-go" aria-hidden="true">${chevron}</span>
+            </button>`).join(''));
     }
 
     /**

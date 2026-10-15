@@ -41,11 +41,26 @@ ZaliMixin(ZaliInterface, class {
 
             let restored = false;
             let invalidateStoredSession = false;
-            for (const candidate of candidates) {
-                const result = await this.restoreSession(candidate);
-                restored = !!result?.ok;
-                invalidateStoredSession = invalidateStoredSession || !!result?.invalidate;
-                if (restored) break;
+            // Start from the stored session straight away and verify it in the
+            // background. restoreSession() awaits GET /api/auth/me (12 s timeout), and
+            // the boot splash covers the whole app until bootstrapSession() returns —
+            // so with a slow or unreachable server every launch was a 12-second freeze
+            // on a screen that could already have shown the user's cached chats. The
+            // token is a locally-checked, unexpired JWT; a server that has revoked it
+            // still gets the user back to the login form, just a moment later.
+            const optimistic = candidates.find(c => String(c?.username || '').trim()) || null;
+            if (optimistic) {
+                this.trace(`bootstrapSession optimistic username=${optimistic.username}`);
+                this.applySession(optimistic, { persist: false, syncNative: false });
+                restored = true;
+                this.revalidateBootSession(candidates, optimistic, { hadStored: !!stored?.token, hadLast: !!lastStored?.token });
+            } else {
+                for (const candidate of candidates) {
+                    const result = await this.restoreSession(candidate);
+                    restored = !!result?.ok;
+                    invalidateStoredSession = invalidateStoredSession || !!result?.invalidate;
+                    if (restored) break;
+                }
             }
 
             if (!restored) {
@@ -107,6 +122,63 @@ ZaliMixin(ZaliInterface, class {
             this.hideBootSplash(!!this.S.session?.token);
             this.trace('bootstrapSession done');
         }
+    }
+
+    // Background half of the optimistic start in bootstrapSession(). Asks the
+    // server whether the session we already entered the app with is still good.
+    //  - accepted: persist it and sync the native shell, as restoreSession() did;
+    //  - refused (401/403 for every candidate): clear the stored tokens and return
+    //    to the login form, exactly where the blocking path used to end up;
+    //  - unreachable / 5xx: keep the session — the same answer the old fallback gave.
+    // Every step bails if the user has meanwhile signed out or switched account.
+    revalidateBootSession(candidates, applied, { hadStored = false, hadLast = false } = {}) {
+        const appliedToken = String(applied?.token || '');
+        const stillCurrent = () => String(this.S.session?.token || '') === appliedToken;
+        void (async () => {
+            let refused = false;
+            for (const candidate of candidates) {
+                let result;
+                try {
+                    result = await this.verifyRecentAccountSession(candidate);
+                } catch (e) {
+                    result = { ok: false, invalidate: false };
+                }
+                if (!stillCurrent()) return;
+                if (result?.ok) {
+                    const username = result.username || candidate.username || '';
+                    this.applySession({ username, token: candidate.token, guest: false }, { persist: true, syncNative: true });
+                    if (typeof result.cloudVaultSyncEnabled !== 'undefined') {
+                        this.applyVaultCloudSyncEnabled(!!result.cloudVaultSyncEnabled, { persistLocal: true });
+                    }
+                    if (String(candidate.token || '') !== appliedToken) {
+                        this.startPostAuthSetup({ reason: 'bootstrapSession-revalidate', restoreStoredUnlockSecret: true });
+                    }
+                    this.trace(`bootstrapSession revalidated username=${username}`);
+                    return;
+                }
+                refused = refused || !!result?.invalidate;
+                if (!result?.invalidate) {
+                    // Server unreachable: later candidates would fail the same way.
+                    this.trace('bootstrapSession revalidate inconclusive — keeping session');
+                    return;
+                }
+            }
+            if (!refused || !stillCurrent()) return;
+            this.trace('bootstrapSession revalidate refused — back to login');
+            if (hadStored) this.clearStoredSession();
+            if (hadLast) this.clearLastStoredSession();
+            this.S.auth.error = 'Сессия истекла. Войдите заново.';
+            this.addLogEntry({ type: 'WARN', msg: 'Сохранённая сессия отклонена сервером — войдите заново', ts: new Date().toLocaleTimeString() });
+            this.applySession({ username: '', token: null, guest: true }, { persist: false });
+            this.S.contacts = [];
+            this.S.users = [];
+            this.S.servers = [];
+            this.ensureServerSelection();
+            this.renderContacts();
+            this.renderServerInterface();
+            this.scheduleRenderMessages();
+            this.updateAuthView();
+        })();
     }
 
     /**
@@ -467,6 +539,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     setAuthMode(mode, { clearInputs = true, focus = true } = {}) {
+        this.S.auth.failure = null;
         this.S.auth.mode = mode === 'register' ? 'register' : 'login';
         this.S.auth.error = '';
         this.S.auth.loading = false;
@@ -743,7 +816,9 @@ ZaliMixin(ZaliInterface, class {
                         msg: `Регистрация отклонена для ${username}: ${text || res.status}`,
                         ts: new Date().toLocaleTimeString()
                     });
-                    throw new Error(text || 'Не удалось зарегистрироваться');
+                    const rejected = new Error(text || 'Не удалось зарегистрироваться');
+                    rejected.status = res.status;
+                    throw rejected;
                 }
 
                 const data = await res.json();
@@ -775,7 +850,9 @@ ZaliMixin(ZaliInterface, class {
 
             if (!res.ok) {
                 const text = await res.text();
-                throw new Error(text || 'Не удалось войти');
+                const rejected = new Error(text || 'Не удалось войти');
+                rejected.status = res.status;
+                throw rejected;
             }
 
             const data = await res.json();
@@ -820,6 +897,13 @@ ZaliMixin(ZaliInterface, class {
             if (!silent) {
                 this.S.auth.error = friendly;
                 if (errorBox) errorBox.textContent = friendly;
+                // Сбой самого входа — отдельный экран с повтором и сменой сервера.
+                // Проверки формы (пустой логин, короткий пароль) до сюда не доходят.
+                this.showAuthFailure({
+                    error: e,
+                    mode,
+                    retry: () => this.executeAuth(mode, username, password, { logAttempt: false }),
+                });
             }
             if (mode === 'register') {
                 this.addLogEntry({
@@ -1312,6 +1396,169 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // ── Экран ошибки входа ───────────────────────────────────────────────
+    // Тот же #authOverlay, другая витрина и другое наполнение: сообщение, повтор и
+    // смена сервера авторизации. Состояние — S.auth.failure; пока оно есть и сессии
+    // нет, оверлей несёт класс is-error (см. updateAuthView).
+
+    classifyAuthFailure(error, mode = 'login') {
+        const raw = String(error?.message || error || '').trim();
+        const status = Number(error?.status || 0);
+        const timedOut = /timed out|timeout|время ожидания/i.test(raw);
+        const offline = /load failed|failed to fetch|network error|abort|не удалось связаться|connection|offline/i.test(raw);
+        const server = status >= 500;
+        const registering = mode === 'register';
+        if (offline || timedOut || server) {
+            const api = (() => { try { return this.loadNetworkConfig().apiBaseUrl || ''; } catch (e) { return ''; } })();
+            const message = server
+                ? 'Сервер авторизации ответил ошибкой. Попробуйте ещё раз чуть позже.'
+                : (timedOut ? 'Сервер авторизации не ответил вовремя.' : 'Не удалось связаться с сервером авторизации.');
+            const detailParts = [];
+            if (api) detailParts.push(api);
+            if (server) detailParts.push(`HTTP ${status}`);
+            else if (raw && !/не удалось связаться/i.test(raw)) detailParts.push(raw);
+            return {
+                kind: 'connection',
+                title: 'Нет связи с сервером',
+                hint: 'Дело не в логине и пароле: до сервера авторизации не удалось достучаться.',
+                message,
+                detail: detailParts.join(' · ').slice(0, 220),
+            };
+        }
+        return {
+            kind: 'rejected',
+            title: registering ? 'Не удалось создать аккаунт' : 'Не удалось войти',
+            hint: registering ? 'Измените данные и попробуйте ещё раз.' : 'Проверьте логин и пароль и попробуйте ещё раз.',
+            message: raw || 'Сервер отклонил запрос.',
+            detail: '',
+        };
+    }
+
+    showAuthFailure({ error, mode = 'login', retry = null } = {}) {
+        const info = this.classifyAuthFailure(error, mode);
+        this.S.auth.failure = { ...info, mode, retry, retrying: false };
+        this.updateAuthView();
+        requestAnimationFrame(() => {
+            document.getElementById('authRetryBtn')?.focus({ preventScroll: true });
+        });
+    }
+
+    dismissAuthFailure({ focus = true } = {}) {
+        if (!this.S.auth.failure) return;
+        this.S.auth.failure = null;
+        this.updateAuthView();
+        if (focus) {
+            const username = document.getElementById('authUsername');
+            const password = document.getElementById('authPassword');
+            const target = String(username?.value || '').trim() ? password : username;
+            requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+        }
+    }
+
+    // Связь пропала — повторяем тот же вход; отказ сервера — возвращаем к форме с
+    // уже введённым логином, повторять тот же пароль незачем.
+    async retryAuthFailure() {
+        const failure = this.S.auth.failure;
+        if (!failure || this.S.auth.loading) return;
+        if (failure.kind === 'connection' && typeof failure.retry === 'function') {
+            failure.retrying = true;
+            this.updateAuthView();
+            try {
+                await failure.retry();
+            } catch (e) {
+                this.trace(`authRetry error=${e?.message || e}`);
+            }
+            if (this.S.auth.failure === failure) {
+                failure.retrying = false;
+                this.updateAuthView();
+            }
+            return;
+        }
+        this.dismissAuthFailure({ focus: true });
+    }
+
+    syncAuthFailServerInput({ force = false } = {}) {
+        const input = document.getElementById('authFailApiBaseUrl');
+        if (!input) return;
+        let apiBaseUrl = '';
+        try { apiBaseUrl = this.loadNetworkConfig().apiBaseUrl || ''; } catch (e) {}
+        const typing = document.activeElement === input;
+        if (force || (!typing && input.dataset.dirty !== '1')) input.value = apiBaseUrl;
+    }
+
+    async changeAuthServerFromFailure() {
+        const input = document.getElementById('authFailApiBaseUrl');
+        const note = document.getElementById('authFailServerNote');
+        const setNote = (text, isError = false) => {
+            if (!note) return;
+            note.textContent = text;
+            note.classList.toggle('is-error', !!isError);
+        };
+        const apiBaseUrl = String(input?.value || '').trim();
+        if (!apiBaseUrl) {
+            setNote('Укажите адрес сервера, например https://msgs.zalikus.org', true);
+            input?.focus({ preventScroll: true });
+            return;
+        }
+        try {
+            const current = this.loadNetworkConfig();
+            this.setNetworkConfig({
+                apiBaseUrl,
+                wsBaseUrl: this.deriveWsBaseUrl(apiBaseUrl),
+                iceServers: current.iceServers,
+            });
+        } catch (e) {
+            setNote(e?.message || 'Не удалось сохранить адрес сервера', true);
+            return;
+        }
+        if (input) input.dataset.dirty = '0';
+        this.addLogEntry({ type: 'SUCCESS', msg: `Адрес сервера обновлён: ${apiBaseUrl}`, ts: new Date().toLocaleTimeString() });
+        setNote('');
+        const failure = this.S.auth.failure;
+        if (failure?.kind === 'connection' && typeof failure.retry === 'function') {
+            await this.retryAuthFailure();
+        } else {
+            this.dismissAuthFailure({ focus: true });
+        }
+    }
+
+    renderAuthFailure() {
+        const el = document.getElementById('authFail');
+        if (!el) return;
+        const failure = this.S.session?.token ? null : this.S.auth.failure;
+        if (this.S.session?.token) this.S.auth.failure = null;
+        document.getElementById('authOverlay')?.classList.toggle('is-error', !!failure);
+        el.hidden = !failure;
+        if (!failure) return;
+        const set = (id, text) => {
+            const node = document.getElementById(id);
+            if (node && node.textContent !== text) node.textContent = text;
+        };
+        set('authFailTitle', failure.title);
+        set('authFailHint', failure.hint);
+        set('authFailMsgText', failure.message);
+        const detail = document.getElementById('authFailMsgDetail');
+        if (detail) {
+            detail.hidden = !failure.detail;
+            set('authFailMsgDetail', failure.detail || '');
+        }
+        const busy = !!(failure.retrying || this.S.auth.loading);
+        const retryBtn = document.getElementById('authRetryBtn');
+        if (retryBtn) {
+            retryBtn.disabled = busy;
+            set('authRetryBtn', failure.retrying ? 'Подключаемся…' : 'Повторить попытку');
+        }
+        const back = document.getElementById('authFailBackBtn');
+        if (back) {
+            // Отказ сервера и так возвращает к форме кнопкой «Повторить попытку».
+            back.hidden = failure.kind !== 'connection';
+            back.disabled = busy;
+        }
+        const serverBtn = document.getElementById('authFailServerBtn');
+        if (serverBtn) serverBtn.disabled = busy;
+        this.syncAuthFailServerInput();
+    }
+
     updateAuthView() {
         // Ссылка …/server/<код> или …/profile/<имя>, с которой открыли страницу,
         // отрабатывается, как только есть сессия (см. deep_links.js).
@@ -1357,6 +1604,7 @@ ZaliMixin(ZaliInterface, class {
         if (regBtn) regBtn.disabled = this.S.auth.loading;
         if (guestBtn) guestBtn.disabled = this.S.auth.loading;
         this.syncAuthNetworkInput();
+        this.renderAuthFailure();
         this.renderVaultCloudSyncControls();
         if (!this.S.session?.token && overlay && overlay.classList.contains('visible') && !this.S.auth.fieldsCleared && !this.S.auth.loading) {
             this.clearAuthInputs();

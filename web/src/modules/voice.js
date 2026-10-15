@@ -60,6 +60,12 @@
                 remoteAudios: new Map(),
                 remoteVideos: new Map(),
                 participants: [],
+                // Server-supplied room entry time per participant (lowercased name →
+                // Unix ms); drives which people get a tile when a room has more than
+                // fit (see rankVoiceParticipants). firstSeen is the local fallback for
+                // a server that does not send it yet.
+                joinedAt: {},
+                firstSeen: new Map(),
                 outgoingInvite: null,
                 incomingInvite: null,
                 socket: null,

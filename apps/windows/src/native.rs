@@ -54,7 +54,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b51";
+const APP_DISPLAY_VERSION: &str = "0.2b52";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -2138,9 +2138,9 @@ pub fn handle_ipc_message(
                 .cloned()
                 .unwrap_or_else(|| payload.clone());
             let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
-            // client_activity (игровой статус) повторяется раз в ~25 с — в трассу звонков
-            // он не пишется.
-            if event_type != "client_activity" {
+            // client_activity (игровой статус), client_idle и client_view (маршрут
+            // уведомлений) повторяются раз в ~25–30 с — в трассу звонков не пишутся.
+            if !matches!(event_type, "client_activity" | "client_idle" | "client_view") {
                 trace(format!(
                     "VOICE_EVENT queued type={} roomId={} roomType={} to={}",
                     event_type,

@@ -86,6 +86,9 @@ ZaliMixin(ZaliInterface, class {
     onNativeAppFocusChange() {
         this.clearAttendedConversationUnread();
         this.reportClientPresence?.();
+        // Открытый чат перед глазами глушит уведомления на всех устройствах
+        // (device_activity.js) — ушедшее с экрана окно обязано снять это сразу.
+        this.reportConversationView?.();
     }
 
     // Входящее не требует уведомления, только если его чат на экране И пользователь
@@ -625,6 +628,12 @@ ZaliMixin(ZaliInterface, class {
         }
         this.syncTaskbarBadge();
         if ((this.S.mutedChats || {})[muteKey]) return;
+        // Человек сейчас за другим своим устройством (server/src/device_activity.rs):
+        // уведомление звенит там, здесь — только счётчик.
+        if (!this.notifyRouteAllows?.(messageId)) {
+            this.trace?.(`notify: routed to another device message=${messageId}`);
+            return;
+        }
         // Режим «в игре» получателя (game_focus.js): сервер прислал политику до самого
         // сообщения. Счётчик непрочитанного уже вырос — меняется только шум.
         let silent = false;

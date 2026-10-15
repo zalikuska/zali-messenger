@@ -88,8 +88,8 @@ def check_paths():
 # в тексте скилла схлопываются, поэтому фрагмент пишется через один пробел.
 CLAIMS = [
     ("voice-calls", "через **150 с** после закрытия", "server/src/realtime.rs", r"from_secs\(150\)"),
-    ("voice-calls", "`MAX_MESH_VIDEO_PEERS` (6)", "web/src/interface/voice_media.js", r"MAX_MESH_VIDEO_PEERS\(\)\s*\{\s*return 6;"),
-    ("voice-calls", "`MAX_MESH_AUDIO_PEERS` (8)", "web/src/interface/voice_media.js", r"MAX_MESH_AUDIO_PEERS\(\)\s*\{\s*return 8;"),
+    ("voice-calls", "`MAX_MESH_VIDEO_PEERS` (15)", "web/src/interface/voice_media.js", r"MAX_MESH_VIDEO_PEERS\(\)\s*\{\s*return 15;"),
+    ("voice-calls", "`MAX_MESH_AUDIO_PEERS` (15)", "web/src/interface/voice_media.js", r"MAX_MESH_AUDIO_PEERS\(\)\s*\{\s*return 15;"),
     ("voice-calls", "Аудио `maxBitrate` — 64 кбит/с", "web/src/interface/voice_media.js", r"maxBitrate = 64000"),
     ("voice-calls", "протокольный `Ping` каждые 20 с", "server/src/realtime.rs", r"interval\(Duration::from_secs\(20\)\)"),
     ("android-client", "`ZaliCoreBridge.MAX_DECRYPT_CANDIDATES` (12)", "apps/android/app/src/main/java/org/zalikus/messenger/ZaliCoreBridge.kt", r"MAX_DECRYPT_CANDIDATES: Int = 12"),

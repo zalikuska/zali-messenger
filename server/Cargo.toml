@@ -124,12 +124,20 @@ name = "activity"
 path = "../tests/activity.rs"
 
 [[test]]
+name = "device_activity"
+path = "../tests/device_activity.rs"
+
+[[test]]
 name = "focus"
 path = "../tests/focus.rs"
 
 [[test]]
 name = "addons"
 path = "../tests/addons.rs"
+
+[[test]]
+name = "addon_store"
+path = "../tests/addon_store.rs"
 
 [[test]]
 name = "addon_cloud"

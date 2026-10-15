@@ -11,6 +11,8 @@
 //!
 //! **Кому.** То же решение по устройству, что у Web Push (`push_suppressed_for`):
 //! токен хранит device_id, приложение сообщает по своему WebSocket, на экране ли оно.
+//! И тот же маршрут по активности (device_activity.rs): телефон в кармане молчит, пока
+//! человек работает за другим своим устройством.
 //!
 //! **Включение.** Путь к JSON-ключу сервисного аккаунта в `FCM_SERVICE_ACCOUNT_FILE`.
 //! Не задан — `/api/push/fcm/register` отвечает 404, `send_fcm_push` ничего не делает.
@@ -234,6 +236,7 @@ pub(crate) async fn upsert_fcm_token(
 pub(crate) async fn fcm_targets_for(
     state: &Arc<AppState>,
     username: &str,
+    route: &crate::NotifyRoute,
 ) -> Result<Vec<String>, sqlx::Error> {
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT token, device_id FROM fcm_tokens WHERE username = ?",
@@ -243,7 +246,9 @@ pub(crate) async fn fcm_targets_for(
     .await?;
     Ok(rows
         .into_iter()
-        .filter(|(_, device_id)| !push_suppressed_for(state, username, Some(device_id)))
+        .filter(|(_, device_id)| {
+            route.allows(Some(device_id)) && !push_suppressed_for(state, username, Some(device_id))
+        })
         .map(|(token, _)| token)
         .collect())
 }
@@ -328,11 +333,12 @@ pub(crate) async fn send_fcm_push(
     state: &Arc<AppState>,
     username: &str,
     notification: &PushNotification,
+    route: &crate::NotifyRoute,
 ) {
     let Some(account) = state.config.fcm_service_account.as_ref() else {
         return;
     };
-    let targets = match fcm_targets_for(state, username).await {
+    let targets = match fcm_targets_for(state, username, route).await {
         Ok(targets) => targets,
         Err(e) => {
             warn!("Ошибка чтения FCM-токенов username={}: {}", username, e);
@@ -355,53 +361,63 @@ pub(crate) async fn send_fcm_push(
     );
     let data = serde_json::Value::Object(notification.native_data(username));
 
+    // Токены — параллельно: устройства пользователя не ждут друг друга.
+    let mut sends = tokio::task::JoinSet::new();
     for token in targets {
-        let body = serde_json::json!({
-            "message": {
-                "token": token,
-                "data": data.clone(),
-                // high: только так FCM будит приложение в Doze сразу, а не в следующее
-                // окно обслуживания.
-                "android": { "priority": "high", "ttl": "3600s" },
-            }
-        });
-        let response = http_client()
-            .post(&url)
-            .bearer_auth(&access)
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
-            .send()
-            .await;
-        match response {
-            Ok(response) if response.status().is_success() => {
-                info!("FCM отправлен username={}", username);
-            }
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let text = response.text().await.unwrap_or_default();
-                if fcm_token_is_dead(status, &text) {
-                    info!("FCM-токен недействителен, удаляю username={}", username);
-                    sqlx::query("DELETE FROM fcm_tokens WHERE token = ?")
-                        .bind(&token)
-                        .execute(&state.db)
-                        .await
-                        .ok();
-                } else {
-                    if status == 401 {
-                        forget_access_token().await;
+        let state = Arc::clone(state);
+        let username = username.to_string();
+        let url = url.clone();
+        let access = access.clone();
+        let data = data.clone();
+        sends.spawn(async move {
+            let body = serde_json::json!({
+                "message": {
+                    "token": token,
+                    "data": data.clone(),
+                    // high: только так FCM будит приложение в Doze сразу, а не в следующее
+                    // окно обслуживания.
+                    "android": { "priority": "high", "ttl": "3600s" },
+                }
+            });
+            let response = http_client()
+                .post(url.as_str())
+                .bearer_auth(&access)
+                .header("Content-Type", "application/json")
+                .body(body.to_string())
+                .send()
+                .await;
+            match response {
+                Ok(response) if response.status().is_success() => {
+                    info!("FCM отправлен username={}", &username);
+                }
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let text = response.text().await.unwrap_or_default();
+                    if fcm_token_is_dead(status, &text) {
+                        info!("FCM-токен недействителен, удаляю username={}", &username);
+                        sqlx::query("DELETE FROM fcm_tokens WHERE token = ?")
+                            .bind(&token)
+                            .execute(&state.db)
+                            .await
+                            .ok();
+                    } else {
+                        if status == 401 {
+                            forget_access_token().await;
+                        }
+                        let snippet: String = text.chars().take(300).collect();
+                        warn!(
+                            "FCM отправка неуспешна username={} status={} body={}",
+                            username, status, snippet
+                        );
                     }
-                    let snippet: String = text.chars().take(300).collect();
-                    warn!(
-                        "FCM отправка неуспешна username={} status={} body={}",
-                        username, status, snippet
-                    );
+                }
+                Err(e) => {
+                    warn!("FCM отправка не удалась username={}: {}", username, e);
                 }
             }
-            Err(e) => {
-                warn!("FCM отправка не удалась username={}: {}", username, e);
-            }
-        }
+        });
     }
+    while sends.join_next().await.is_some() {}
 }
 
 #[cfg(test)]
@@ -492,7 +508,7 @@ mod tests {
         upsert_fcm_token(&state, "alice", "dev-phone", "token-old").await.expect("old");
         upsert_fcm_token(&state, "alice", "dev-phone", "token-new").await.expect("new");
 
-        assert_eq!(fcm_targets_for(&state, "alice").await.expect("targets"), vec!["token-new".to_string()]);
+        assert_eq!(fcm_targets_for(&state, "alice", &crate::NotifyRoute::All).await.expect("targets"), vec!["token-new".to_string()]);
     }
 
     #[tokio::test]
@@ -501,8 +517,8 @@ mod tests {
         upsert_fcm_token(&state, "alice", "dev-alice", "token-phone").await.expect("alice");
         upsert_fcm_token(&state, "bob", "dev-bob", "token-phone").await.expect("bob");
 
-        assert!(fcm_targets_for(&state, "alice").await.expect("alice").is_empty());
-        assert_eq!(fcm_targets_for(&state, "bob").await.expect("bob"), vec!["token-phone".to_string()]);
+        assert!(fcm_targets_for(&state, "alice", &crate::NotifyRoute::All).await.expect("alice").is_empty());
+        assert_eq!(fcm_targets_for(&state, "bob", &crate::NotifyRoute::All).await.expect("bob"), vec!["token-phone".to_string()]);
     }
 
     #[tokio::test]
@@ -513,7 +529,7 @@ mod tests {
         let connection = register_connection_presence(&state, "alice");
         update_connection_presence(&state, connection, true, Some("dev-phone"));
 
-        assert_eq!(fcm_targets_for(&state, "alice").await.expect("targets"), vec!["token-tablet".to_string()]);
+        assert_eq!(fcm_targets_for(&state, "alice", &crate::NotifyRoute::All).await.expect("targets"), vec!["token-tablet".to_string()]);
     }
 
     #[test]
