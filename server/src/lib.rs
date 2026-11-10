@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 mod voice;
 use voice::{
-    get_turn_credentials, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
+    get_turn_credentials, get_server_voice_presence, get_voice_channel_presence, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
     VoiceLeave, VoiceRoom,
 };
 
@@ -65,6 +65,7 @@ pub(crate) use push::*;
 mod activity;
 // Режим «в игре»: откладывание уведомлений о сообщениях. Тоже без glob-реэкспорта.
 mod focus;
+mod settings_sync;
 // Подпись аддонов, реестр авторов и казна аддонов (ZaliCoin).
 mod addon_cloud;
 mod addons;
@@ -1493,6 +1494,7 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    updates::init_release_channels(&pool).await;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS coin_balances (
@@ -1937,6 +1939,8 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .await
     .expect("Ошибка создания таблицы game_focus_settings");
 
+    settings_sync::init_table(&pool).await;
+
     // Две зеркальные строки пришлось бы держать согласованными при каждом
     // удалении, а рассинхрон дал бы "друг у одного, не друг у другого".
     sqlx::query(
@@ -2185,6 +2189,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/servers/:server_id/channels/:channel_id",
             patch(update_channel).delete(delete_channel),
         )
+        .route(
+            "/api/servers/:server_id/channels/:channel_id/voice",
+            get(get_voice_channel_presence),
+        )
+        .route("/api/servers/:server_id/voice", get(get_server_voice_presence))
         .route("/api/servers/:server_id", put(update_server))
         .route(
             "/api/servers/:server_id/assets/avatar",
@@ -2357,6 +2366,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/game-focus",
             get(focus::get_settings).put(focus::put_settings),
+        )
+        .route(
+            "/api/settings-sync",
+            get(settings_sync::get_settings).put(settings_sync::put_settings),
         )
         .route("/api/message/:id/notify-now", post(focus::notify_now))
         .route("/api/addons/signing-key", get(addons::get_signing_keys))

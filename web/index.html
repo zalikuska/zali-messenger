@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#0B0D12">
     <meta name="mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261011-b5057">
+    <link rel="stylesheet" href="style.css?v=20261110-m1">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -140,7 +140,7 @@
                 <div class="tb-addon" id="tbAddon" hidden></div>
             </div>
             <div class="tb-c">
-                <span class="tb-brand">ZaliMessenger</span>
+                <span class="tb-brand" id="tbBrand">ZaliMessenger</span>
                 <span class="tb-sep">/</span>
                 <span class="tb-chat" id="tbChat">Загрузка...</span>
                 <span class="tb-addon-title" id="tbAddonTitle"></span>
@@ -297,6 +297,12 @@
                     <div class="msgs" id="msgs"></div>
 
                     <div class="input-area">
+                        <!-- «К последним сообщениям». Внутри .input-area, чтобы стоять над
+                             полем ввода при любой его высоте (ответ, вложения, много строк).
+                             Показывает syncJumpToBottom() в viewport.js. -->
+                        <button class="msgs-jump-btn" id="msgsJumpBtn" type="button" tabindex="-1" title="К последним сообщениям" aria-label="К последним сообщениям">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9.5 6 6 6-6"/></svg>
+                        </button>
                         <!-- Shown while replying to, or editing, a message. Contents are
                              filled in by renderComposerContext() in interface.js. -->
                         <div class="composer-context" id="composerContext" hidden></div>
@@ -524,7 +530,37 @@
                                             <small>Рисунки в Хабе, ZaliCoin и пустых списках. На слабых телефонах отключение ускоряет переходы между экранами</small>
                                         </span>
                                     </label>
-                                    <p class="settings-help">Цветовая схема, шрифты и вся логика приложения не меняются — переключается только оформление. Выбор сохраняется на этом устройстве.</p>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputMsgOneSide" type="checkbox">
+                                        <span>
+                                            <strong>Все сообщения с одной стороны</strong>
+                                            <small>Свои и чужие сообщения идут вдоль левого края, как в Discord. Различаются цветом и именем отправителя</small>
+                                        </span>
+                                    </label>
+                                    <p class="settings-help">Цветовая схема, шрифты и вся логика приложения не меняются — переключается только оформление. Выбор сохраняется на устройстве и, если включена «Синхронизация настроек», в вашем аккаунте.</p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card" data-settings-section="settings-sync">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Облако</span>
+                                        <h3 class="settings-card-title">Синхронизация настроек</h3>
+                                    </div>
+                                    <span class="settings-card-note">sync</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputSettingsSync" type="checkbox" checked>
+                                        <span>
+                                            <strong>Хранить настройки в облаке</strong>
+                                            <small>Тема, расстановка сообщений, разделы Хаба и громкости одинаковы на всех ваших устройствах. Устройства ввода и вывода звука, ключи и кеш не синхронизируются. Настройки не шифруются: сервер видит их значения</small>
+                                        </span>
+                                    </label>
+                                    <div class="settings-inline-actions">
+                                        <button type="button" class="btn-flat" id="btnSettingsSyncNow">Синхронизировать сейчас</button>
+                                        <small id="settingsSyncStatus" class="settings-help"></small>
+                                    </div>
                                 </div>
                             </section>
 
@@ -565,6 +601,13 @@
                                     <label class="settings-field">
                                         <span>Громкость собеседников: <span id="masterVolumeValue">100%</span></span>
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputMasterVolume" class="settings-range">
+                                    </label>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputVoiceProcessing" type="checkbox">
+                                        <span>
+                                            <strong>Эхо- и шумоподавление микрофона</strong>
+                                            <small>На Mac включённое подавление занимает микрофон на уровне системы: другие приложения слышат с него тишину. Выключено по умолчанию; в наушниках оно не нужно, на колонках собеседники могут слышать эхо</small>
+                                        </span>
                                     </label>
                                     <p class="settings-help">Применяется сразу, в том числе во время звонка. Громкость отдельного собеседника можно настроить через кнопку «⋯» у контакта в списке чатов.</p>
                                 </div>
@@ -697,6 +740,28 @@
                                 <div class="settings-stack">
                                     <p class="settings-help" id="appUpdateStatusText">Проверка версии доступна в приложении для macOS и Windows.</p>
                                     <button class="btn-flat" id="checkForUpdatesBtn" type="button">Проверить обновления</button>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputUpdateAlpha" type="checkbox">
+                                        <span>
+                                            <strong>Alpha</strong>
+                                            <small>Самые ранние сборки: могут быть нестабильными. Метка обновления красная</small>
+                                        </span>
+                                    </label>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputUpdateBeta" type="checkbox">
+                                        <span>
+                                            <strong>Beta</strong>
+                                            <small>Проверенные сборки перед релизом. Метка обновления жёлтая</small>
+                                        </span>
+                                    </label>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputUpdateRelease" type="checkbox">
+                                        <span>
+                                            <strong>Release</strong>
+                                            <small>Стабильные версии. Метка обновления лаймовая</small>
+                                        </span>
+                                    </label>
+                                    <p class="settings-help">Какие версии предлагать и скачивать. Сервер хранит последнюю опубликованную сборку: если её канал выключен, обновление не предлагается.</p>
                                 </div>
                             </section>
 
@@ -887,7 +952,7 @@
                                 <span class="zc-available" id="coinTransferAvailable">Доступно: —</span>
                             </div>
                             <div class="zc-amount-box">
-                                <input type="number" id="coinTransferAmountInput" min="1" step="1" placeholder="0" inputmode="numeric" enterkeyhint="done">
+                                <input type="text" id="coinTransferAmountInput" placeholder="0" inputmode="decimal" autocomplete="off" enterkeyhint="done">
                                 <span class="zc-amount-unit" aria-hidden="true">ZC</span>
                                 <button class="zc-amount-max" id="coinTransferMaxBtn" type="button" aria-label="Подставить всю доступную сумму">Всё</button>
                             </div>
@@ -1506,6 +1571,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261011-b5057"></script>
+    <script src="app.js?v=20261110-m1"></script>
 </body>
 </html>

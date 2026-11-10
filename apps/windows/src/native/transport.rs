@@ -352,7 +352,7 @@ pub(crate) async fn run_voice_transport(
         // inbound frame clears it (the server pings every 20 s of its own accord, so
         // a healthy link clears this constantly).
         let mut unanswered_ping_at: Option<tokio::time::Instant> = None;
-        let mut down_reason = "closed";
+        let down_reason: &str;
 
         loop {
             tokio::select! {

@@ -42,6 +42,7 @@ ZaliMixin(ZaliInterface, class {
             entry.audioSender = null;
             entry.videoSender = null;
             entry.screenSender = null;
+            entry.screenAudioSender = null;
             entry.remoteScreenStreamId = null;
             try { entry.pc.close(); } catch (e) {}
             this.voice.peerConnections.delete(name);
@@ -513,6 +514,9 @@ ZaliMixin(ZaliInterface, class {
         if (status !== 'connecting' && status !== 'connected') return false;
         const roomType = String(this.voice.roomType || '').trim();
         if (roomType !== 'channel' && roomType !== 'dm') return false;
+        // Самоописание (микрофон/звук/камера/экран) переотправляем вместе с
+        // подтверждением членства: после переподключения сокета сервер мог его потерять.
+        this.syncVoiceMemberState({ force: true });
         return this.sendVoiceEvent({
             type: 'voice_join',
             roomId,

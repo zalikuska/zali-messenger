@@ -54,7 +54,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b52";
+const APP_DISPLAY_VERSION: &str = "0.2b53";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -68,8 +68,10 @@ struct AuthRequestPayload {
 pub enum AppEvent {
     EvaluateScript(String),
     StartDrag,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Quit,
     /// Windows only: tray icon "Открыть" / left-click — restore and focus the window.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     TrayShow,
     /// Windows only: total unread count changed — update the taskbar overlay badge
     /// (see native/taskbar_badge.rs). Carries the raw count; 0 clears the overlay.

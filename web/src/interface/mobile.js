@@ -29,6 +29,11 @@ ZaliMixin(ZaliInterface, class {
         if (isOpen) {
             document.body?.classList.add('mobile-list-visible');
             this.setMobileListParked(false);
+            // Уходим со страницы чата — клавиатура его поля ввода больше не нужна.
+            // Без этого она оставалась над списком диалогов: фокус держало поле,
+            // уехавшее за край экрана.
+            const focused = document.activeElement;
+            if (focused && focused.id === 'msgInput' && this.isMobileLayout()) focused.blur();
         }
         this.setMobileNavProgress(isOpen ? 0 : 1, { animate });
         if (!isOpen) {
@@ -98,8 +103,21 @@ ZaliMixin(ZaliInterface, class {
         const body = document.body;
         if (!body) return;
         const clamped = Math.max(0, Math.min(1, Number(p) || 0));
+        const moved = clamped !== this._mobileNavProgress;
         this._mobileNavProgress = clamped;
         body.classList.toggle('mobile-nav-instant', !animate);
+        // Доводка перехода (тап по диалогу, «назад», отпущенный свайп) двигает
+        // #viewChat с обеими матовыми поверхностями внутри ровно так же, как
+        // перетаскивание пальцем, но стекло снималось только на время
+        // перетаскивания: все 240 мс анимации каждый кадр заново размывал полосу
+        // во всю ширину. На время доводки — тот же режим, что и при жесте.
+        if (animate && moved && this.isMobileLayout()) {
+            body.classList.add('mobile-nav-animating');
+            clearTimeout(this._mobileNavAnimTimer);
+            this._mobileNavAnimTimer = setTimeout(() => {
+                body.classList.remove('mobile-nav-animating');
+            }, 300);
+        }
         const vc = document.getElementById('viewChat');
         if (vc) vc.style.transform = `translateX(${((1 - clamped) * 100).toFixed(4)}%)`;
         this.applyMobileDockTransform(clamped);
@@ -195,6 +213,11 @@ ZaliMixin(ZaliInterface, class {
         // раскладку всей страницы синхронно в обработчике клика: ~40 мс на каждое
         // переключение вкладки на телефоне (замер CPU-профилем, 2026-10-11).
         if (this.nativeSupports('mobileNav')) return;
+        // На десктопной раскладке док скрыт: чтение его геометрии — та же
+        // принудительная раскладка страницы на каждом переключении экрана
+        // (до 7 мс в WKWebView macOS), а результат никому не виден. Переход
+        // в мобильную раскладку пересинхронизирует капсулу обработчиком resize.
+        if (!this.isMobileLayout()) return;
         const dock = document.getElementById('mobileDock');
         const thumb = dock?.querySelector('.mobile-dock-thumb');
         const active = dock?.querySelector('.mobile-dock-btn.active');
@@ -323,88 +346,202 @@ ZaliMixin(ZaliInterface, class {
         return typeof this._mobileNavProgress === 'number' ? this._mobileNavProgress : 1;
     }
 
-    // Interactive back-swipe: dragging from the left edge of the open chat
-    // drags it to the right, revealing the fullscreen picker underneath
-    // (mirror of the forward transition driven by setMobileSidebarOpen).
+    // Горизонтальные жесты на экране чата. Вертикаль принадлежит прокрутке ленты,
+    // горизонталь — нам, и у неё два значения:
+    //
+    //  • вправо, откуда угодно — назад к списку: чат едет за пальцем и открывает
+    //    список под собой (зеркало перехода в setMobileSidebarOpen). Раньше жест
+    //    начинался только в полосе 28px у левого края — а именно её Android в
+    //    жестовой навигации забирает под системное «назад», так что в оболочке
+    //    он почти не срабатывал;
+    //  • влево по сообщению — ответить на него: строка уезжает, справа
+    //    проявляется значок, отпускание за порогом открывает плашку ответа.
+    //
+    // Слушатели пассивные. Прежний `touchmove` с `passive: false` на #viewChat
+    // делал блокирующей каждую прокрутку ленты: браузер обязан дождаться
+    // обработчика, прежде чем сдвинуть контент, и любой занятый кадр главного
+    // потока (приём сообщения, перерисовка) превращался в рывок под пальцем.
+    // Теперь вертикаль отдана компоновщику целиком (`touch-action: pan-y` на
+    // ленте в style.css): жест, начатый горизонтально, браузер прокруткой не
+    // считает вовсе, поэтому отменять его через preventDefault не нужно.
     setupMobileNavGestures() {
         const chatEl = document.getElementById('viewChat');
         if (!chatEl || chatEl.__mobileSwipeNavBound) return;
         chatEl.__mobileSwipeNavBound = true;
 
-        const EDGE_ZONE = 28;
-        const DRAG_ACTIVATE = 8;
-        let tracking = false;
-        let dragging = false;
+        const LOCK_SLOP = 10;       // сколько пальцу пройти до выбора направления
+        const REPLY_TRIGGER = 54;   // после этого отпускание = «ответить»
+        const REPLY_MAX = 78;       // дальше строка не едет
+        // Всё, что само владеет горизонтальным движением или выделением текста.
+        const OWN_GESTURE = 'input, textarea, select, [contenteditable="true"], pre, video[controls], '
+            + '.voice-panel, .draft-attachments, .server-rail, [data-no-swipe]';
+        let mode = null;            // null | 'pending' | 'back' | 'reply'
         let startX = 0;
         let startY = 0;
         let viewportWidth = 1;
         let velocity = 0;
         let lastT = 0;
         let lastDx = 0;
+        let row = null;
+        let armed = false;
+        let hint = null;
+
+        const replyHint = () => {
+            if (hint) return hint;
+            hint = document.createElement('div');
+            hint.className = 'swipe-reply-hint';
+            hint.setAttribute('aria-hidden', 'true');
+            hint.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
+                + 'stroke-linecap="round" stroke-linejoin="round"><path d="M10 8 5 13l5 5"/>'
+                + '<path d="M5 13h9a5 5 0 0 1 5 5v1"/></svg>';
+            chatEl.appendChild(hint);
+            return hint;
+        };
+
+        const releaseRow = () => {
+            if (row) {
+                row.classList.remove('swipe-reply-drag');
+                row.classList.add('swipe-reply-settle');
+                row.style.transform = '';
+                const settled = row;
+                setTimeout(() => settled.classList.remove('swipe-reply-settle'), 220);
+            }
+            if (hint) {
+                hint.classList.remove('visible', 'armed');
+                hint.style.transform = '';
+            }
+            row = null;
+            armed = false;
+        };
 
         const reset = () => {
-            tracking = false;
-            dragging = false;
+            mode = null;
             velocity = 0;
             lastT = 0;
             lastDx = 0;
         };
 
         chatEl.addEventListener('touchstart', (e) => {
-            if (!this.isMobileLayout() || this.currentMobileNavProgress() < 0.98) return;
+            if (mode) { releaseRow(); reset(); }
+            if (!this.isMobileLayout() || e.touches.length !== 1) return;
+            if (this.currentMobileNavProgress() < 0.98) return;
             const touch = e.touches[0];
-            if (!touch || touch.clientX > EDGE_ZONE) return;
-            tracking = true;
-            dragging = false;
+            const target = e.target;
+            if (!touch || target?.closest?.(OWN_GESTURE)) return;
+            mode = 'pending';
             startX = touch.clientX;
             startY = touch.clientY;
             viewportWidth = window.innerWidth || 1;
+            const candidate = target?.closest?.('#msgs .msg[data-message-id]');
+            row = candidate && !candidate.classList.contains('notice') ? candidate : null;
         }, { passive: true });
 
         chatEl.addEventListener('touchmove', (e) => {
-            if (!tracking) return;
+            if (!mode) return;
+            if (e.touches.length !== 1) { releaseRow(); reset(); return; }
             const touch = e.touches[0];
-            if (!touch) return;
             const dx = touch.clientX - startX;
             const dy = touch.clientY - startY;
-            if (!dragging) {
-                if (Math.abs(dy) > Math.abs(dx) + 4) { reset(); return; }
-                if (dx < DRAG_ACTIVATE) return;
-                dragging = true;
-                document.body?.classList.add('mobile-nav-dragging');
-                // Unpark the list — see setMobileListParked() — so it's
-                // sitting at Y=0 as the chat starts moving: the reveal must
-                // look like the chat sliding off the list on the left, not
-                // the list rising from below.
-                document.body?.classList.add('mobile-list-visible');
-                this.setMobileListParked(false);
+
+            if (mode === 'pending') {
+                // Вертикальное намерение — это прокрутка, жест не наш.
+                if (Math.abs(dy) >= LOCK_SLOP && Math.abs(dy) >= Math.abs(dx)) { row = null; reset(); return; }
+                if (Math.abs(dx) < LOCK_SLOP || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+                if (dx > 0) {
+                    mode = 'back';
+                    row = null;
+                    document.body?.classList.add('mobile-nav-dragging');
+                    // Список должен стоять на месте (Y=0) к началу движения: чат
+                    // съезжает с него вправо, а не список поднимается снизу.
+                    document.body?.classList.add('mobile-list-visible');
+                    this.setMobileListParked(false);
+                } else if (row) {
+                    mode = 'reply';
+                    row.classList.remove('swipe-reply-settle');
+                    row.classList.add('swipe-reply-drag');
+                    const rect = row.getBoundingClientRect();
+                    const host = chatEl.getBoundingClientRect();
+                    const el = replyHint();
+                    el.style.top = `${Math.round(rect.top - host.top + rect.height / 2)}px`;
+                    el.classList.add('visible');
+                } else {
+                    reset();
+                    return;
+                }
+                // Отсчёт пути — от точки выбора направления, без скачка на LOCK_SLOP.
+                startX = touch.clientX;
+                return;
             }
-            if (dragging) {
-                if (e.cancelable) e.preventDefault();
+
+            if (mode === 'back') {
                 const now = (e.timeStamp || Date.now());
                 if (lastT && now > lastT) velocity = (dx - lastDx) / (now - lastT); // px/ms
                 lastT = now;
                 lastDx = dx;
                 const progress = Math.max(0, Math.min(1, 1 - dx / viewportWidth));
                 this.setMobileNavProgress(progress, { animate: false });
+                return;
             }
-        }, { passive: false });
 
-        const finish = () => {
-            if (!tracking) return;
-            document.body?.classList.remove('mobile-nav-dragging');
-            if (dragging) {
-                // Commit on a fast flick even when the drag is short — matching
-                // native back-swipes — otherwise fall back to the 40% position.
-                const flicked = velocity > 0.45;
-                const openList = flicked || this.currentMobileNavProgress() < 0.6;
-                this.setMobileSidebarOpen(openList, { animate: true });
+            // reply: строка идёт за пальцем с нарастающим сопротивлением.
+            const pull = Math.max(0, -dx);
+            const offset = pull <= REPLY_TRIGGER
+                ? pull
+                : Math.min(REPLY_MAX, REPLY_TRIGGER + (pull - REPLY_TRIGGER) * 0.35);
+            row.style.transform = `translate3d(${-offset.toFixed(1)}px, 0, 0)`;
+            const nowArmed = pull >= REPLY_TRIGGER;
+            if (hint) {
+                const k = Math.min(1, pull / REPLY_TRIGGER);
+                hint.style.transform = `translate3d(0, -50%, 0) scale(${(0.5 + k * 0.5).toFixed(3)})`;
+                hint.style.opacity = k.toFixed(3);
+                hint.classList.toggle('armed', nowArmed);
             }
+            if (nowArmed && !armed && navigator.vibrate) {
+                try { navigator.vibrate(8); } catch (err) { /* нет вибро */ }
+            }
+            armed = nowArmed;
+        }, { passive: true });
+
+        const finish = (cancelled) => {
+            if (!mode) return;
+            if (mode === 'back') {
+                document.body?.classList.remove('mobile-nav-dragging');
+                // Быстрый смах подтверждает переход и на коротком пути — как
+                // системный «назад»; иначе решает положение (40% пути).
+                const flicked = !cancelled && velocity > 0.45;
+                const openList = !cancelled && (flicked || this.currentMobileNavProgress() < 0.6);
+                this.setMobileSidebarOpen(openList, { animate: true });
+            } else if (mode === 'reply') {
+                const messageId = row?.getAttribute('data-message-id');
+                const go = !cancelled && armed && messageId;
+                if (hint) hint.style.opacity = '';
+                releaseRow();
+                if (go) this.startReplyToMessage(messageId);
+            }
+            row = null;
             reset();
         };
 
-        chatEl.addEventListener('touchend', finish);
-        chatEl.addEventListener('touchcancel', finish);
+        chatEl.addEventListener('touchend', () => finish(false), { passive: true });
+        chatEl.addEventListener('touchcancel', () => finish(true), { passive: true });
+    }
+
+    // Телефон без выбранного разговора открывается на списке диалогов. Раньше
+    // вход (и запуск с пустой сессией) оставлял на экране чата заглушку
+    // «Выберите собеседника» со стрелкой «назад» и выключенным полем ввода —
+    // экран, на котором нечего делать, а список был в одном лишнем шаге.
+    landMobileOnListIfEmpty() {
+        if (!this.isMobileLayout()) return;
+        const body = document.body;
+        if (!body || body.classList.contains('mobile-sidebar-open')
+            || body.classList.contains('mobile-nav-dragging')) return;
+        if (!document.getElementById('viewChat')?.classList.contains('active')) return;
+        const selected = this.S?.navMode === 'servers'
+            ? !!this.currentServerChatKey()
+            : !!String(this.S?.current || '').trim();
+        if (selected) return;
+        this.setMobileSidebarOpen(true, { animate: false });
+        this.syncMobileChrome();
     }
 
     // True when sliding the chat screen back in would actually show something:
@@ -474,7 +611,7 @@ ZaliMixin(ZaliInterface, class {
             if (!dragging) {
                 // Vertical intent wins — never fight the dialog list's scroll.
                 if (Math.abs(dy) > Math.abs(dx) + 4) { reset(); return; }
-                if (dx > -DRAG_ACTIVATE) return;
+                if (dx > -DRAG_ACTIVATE || Math.abs(dx) < Math.abs(dy) * 1.3) return;
                 dragging = true;
                 document.body?.classList.add('mobile-nav-dragging');
                 // The list must stay put at Y=0 for the whole drag — the chat
@@ -483,7 +620,6 @@ ZaliMixin(ZaliInterface, class {
                 this.setMobileListParked(false);
             }
             if (dragging) {
-                if (e.cancelable) e.preventDefault();
                 const now = (e.timeStamp || Date.now());
                 if (lastT && now > lastT) velocity = (dx - lastDx) / (now - lastT); // px/ms
                 lastT = now;
@@ -491,7 +627,10 @@ ZaliMixin(ZaliInterface, class {
                 const progress = Math.max(0, Math.min(1, -dx / viewportWidth));
                 this.setMobileNavProgress(progress, { animate: false });
             }
-        }, { passive: false });
+        // Пассивный, как и жест чата: вертикаль списка диалогов — у компоновщика
+        // (`touch-action: pan-y` на .contacts), и прокрутка списка больше не ждёт
+        // этот обработчик на каждом движении пальца.
+        }, { passive: true });
 
         const finish = () => {
             if (!tracking) return;
@@ -510,8 +649,8 @@ ZaliMixin(ZaliInterface, class {
             reset();
         };
 
-        sidebarEl.addEventListener('touchend', finish);
-        sidebarEl.addEventListener('touchcancel', finish);
+        sidebarEl.addEventListener('touchend', finish, { passive: true });
+        sidebarEl.addEventListener('touchcancel', finish, { passive: true });
         sidebarEl.addEventListener('click', (e) => {
             if (!this._suppressNextSidebarClick) return;
             this._suppressNextSidebarClick = false;
@@ -520,29 +659,232 @@ ZaliMixin(ZaliInterface, class {
         }, true);
     }
 
-    // Raises the message input above the on-screen keyboard on mobile by
-    // exposing the keyboard inset as a CSS var; style.css shifts
-    // #viewChat .input-area/.msgs by it.
+    // Экранная клавиатура: одна модель на все оболочки.
+    //
+    // Клавиатура приходит двумя разными способами, и раньше учитывался только
+    // один, причём в двух правилах CSS (отступы ленты):
+    //  • Android-оболочка и Chrome с `interactive-widget=resizes-content` сжимают
+    //    сам вьюпорт раскладки — `innerHeight` уменьшается, приложение (100vh)
+    //    садится над клавиатурой само, `--kbd-inset` остаётся 0;
+    //  • iOS (Safari, WKWebView, PWA) вьюпорт раскладки не трогает: клавиатура
+    //    ложится ПОВЕРХ страницы, уменьшается только `visualViewport`. Всё, что
+    //    прижато к низу (поле ввода, нижние листы, список), оказывалось под ней,
+    //    а Safari «спасал» поле, сдвигая страницу вверх вместе с шапкой.
+    //
+    // Поэтому наружу отдаются три вещи, и остальное делает CSS:
+    //  • `--app-h` на <html> — высота видимой области. Пишется ТОЛЬКО когда
+    //    клавиатура перекрывает раскладку (второй случай): `.app` сжимается до
+    //    видимой части, и каждый экран, а не только чат, заканчивается над
+    //    клавиатурой. В первом случае свойство не пишется вовсе: смена
+    //    наследуемого свойства на <html> — пересчёт стилей всего документа, а
+    //    Android во время анимации клавиатуры меняет высоту на каждом кадре;
+    //  • `--kbd-inset` — сколько раскладки закрыто клавиатурой (для
+    //    `position: fixed`, которые от `.app` не зависят);
+    //  • `body.kbd-open` — клавиатура на экране. По нему прячется док, снимается
+    //    нижний безопасный отступ (под клавиатурой он — пустая полоса) и
+    //    ужимаются поля.
     setupMobileKeyboardAvoidance() {
-        const vv = window.visualViewport;
-        if (!vv || this._mobileKeyboardBound) return;
+        if (this._mobileKeyboardBound) return;
         this._mobileKeyboardBound = true;
-        const apply = () => {
-            if (!this.isMobileLayout()) {
-                document.body?.style.setProperty('--kbd-inset', '0px');
-                return;
-            }
-            const inset = Math.max(0, (window.innerHeight - vv.height - vv.offsetTop));
-            document.body?.style.setProperty('--kbd-inset', `${Math.round(inset)}px`);
-            // The keyboard opening/closing resizes the message list under a fixed
-            // scrollTop, which pushed the newest message off-screen exactly when the
-            // user was about to reply to it. Re-pin, but only if we were the ones
-            // holding the view at the bottom.
-            this.repinMessagesAfterViewportChange();
+        const vv = window.visualViewport || null;
+        const root = document.documentElement;
+        // Клавиатура ниже этого не бывает; панель адреса браузера и полоса
+        // подсказок — бывают, и они не должны переключать раскладку.
+        const KEYBOARD_MIN = 120;
+        let baselineWidth = 0;
+        let baselineHeight = 0;
+        let raf = 0;
+        let lastInset = '';
+        let lastAppH = '';
+
+        const isTextEntry = (el) => {
+            if (!el || el === document.body) return false;
+            if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
+            if (el.tagName !== 'INPUT') return false;
+            return !/^(button|checkbox|radio|range|file|color|submit|reset|image|hidden)$/i.test(el.type || 'text');
         };
-        vv.addEventListener('resize', apply);
-        vv.addEventListener('scroll', apply);
+
+        const apply = () => {
+            raf = 0;
+            const body = document.body;
+            if (!body) return;
+            // Щипок масштабирует visualViewport — это не клавиатура.
+            if (vv && Math.abs((vv.scale || 1) - 1) > 0.01) return;
+
+            const layoutH = window.innerHeight || root.clientHeight || 0;
+            const visibleH = vv ? vv.height : layoutH;
+            const mobile = this.isMobileLayout();
+            const inset = mobile && vv
+                ? Math.max(0, Math.round(layoutH - vv.height - vv.offsetTop))
+                : 0;
+
+            // Полная высота для этой ширины — наибольшая из виденных. Поворот
+            // экрана меняет ширину и начинает отсчёт заново.
+            const width = window.innerWidth || 0;
+            if (width !== baselineWidth) {
+                baselineWidth = width;
+                baselineHeight = 0;
+            }
+            if (visibleH > baselineHeight) baselineHeight = visibleH;
+            const covered = baselineHeight - visibleH;
+            const open = mobile && covered > KEYBOARD_MIN && isTextEntry(document.activeElement);
+
+            const insetValue = `${inset}px`;
+            if (insetValue !== lastInset) {
+                lastInset = insetValue;
+                body.style.setProperty('--kbd-inset', insetValue);
+            }
+            const appH = inset > 0 ? `${Math.round(visibleH)}px` : '';
+            if (appH !== lastAppH) {
+                lastAppH = appH;
+                if (appH) root.style.setProperty('--app-h', appH);
+                else root.style.removeProperty('--app-h');
+            }
+            // iOS успевает сдвинуть страницу к полю до того, как приложение
+            // сжалось: возвращаем её на место, иначе шапка остаётся за краем.
+            if (inset > 0 && vv && vv.offsetTop > 0) {
+                try { window.scrollTo(0, 0); } catch (e) { /* не критично */ }
+            }
+
+            if (open !== !!this._kbdOpen) {
+                this._kbdOpen = open;
+                body.classList.toggle('kbd-open', open);
+                if (open) this.revealFocusedField();
+            }
+        };
+        const schedule = () => {
+            if (raf) return;
+            raf = requestAnimationFrame(apply);
+        };
+
+        if (vv) {
+            vv.addEventListener('resize', schedule);
+            vv.addEventListener('scroll', schedule);
+        }
+        window.addEventListener('resize', schedule, { passive: true });
+        // Фокус — половина условия: клавиатуру могли убрать жестом «назад», не
+        // снимая фокус, а переход между полями на мгновение оставляет документ
+        // без активного элемента — поэтому пересчёт в следующем кадре, а не сразу.
+        document.addEventListener('focusin', schedule);
+        document.addEventListener('focusout', schedule);
         apply();
+    }
+
+    // Системное «назад» (кнопка или жест Android). Оболочка спрашивает веб, есть
+    // ли что закрыть, и сворачивает приложение, только если ответ — нет. До этого
+    // «назад» из открытого чата, меню сообщения или окна перевода сразу
+    // выбрасывало из приложения: у оболочки не было ни одного обработчика.
+    //
+    // Порядок — от самого верхнего слоя вниз: окно или меню → вложенный экран →
+    // чат → список. Возвращает true, если шаг был сделан.
+    handleMobileBack() {
+        const shown = (el) => !!el && !el.hidden && el.getClientRects().length > 0;
+
+        // 1. Окна и меню. Сначала их собственные закрывающие методы, затем — для
+        //    всего, что открыто как dialog/menu и здесь не перечислено, — Escape,
+        //    который каждое такое окно уже обрабатывает.
+        const closers = [
+            ['#reactionMenu, .reaction-menu', () => this.hideReactionMenu?.()],
+            ['.contact-context-menu, #contactContextMenu', () => this.closeContactContextMenu?.()],
+            ['.server-rail-menu, #serverRailContextMenu', () => this.closeServerRailContextMenu?.()],
+            ['#coinTransferModal', () => this.closeCoinTransferModal?.()],
+            ['#treasuryModal', () => this.closeTreasuryModal?.()],
+            ['#updateAvailableModal', () => this.closeUpdateModal?.()],
+            ['#profileOverlay', () => this.closeProfile?.()],
+            ['#serverOverlay', () => this.closeServerOverlay?.()],
+        ];
+        for (const [selector, close] of closers) {
+            const el = document.querySelector(selector);
+            if (!shown(el)) continue;
+            try { close(); } catch (e) { /* закрываем как получится */ }
+            if (!shown(el)) return true;
+        }
+        const layers = [...document.querySelectorAll('[role="dialog"], [role="menu"], [aria-modal="true"]')]
+            .filter((el) => shown(el) && !el.closest('#authOverlay'));
+        if (layers.length) {
+            const top = layers[layers.length - 1];
+            const escape = () => new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+            (top.contains(document.activeElement) ? document.activeElement : top).dispatchEvent(escape());
+            if (shown(top)) document.dispatchEvent(escape());
+            if (!shown(top)) return true;
+        }
+
+        if (!this.isMobileLayout()) return false;
+        // Экран входа — выходить некуда, пусть оболочка сворачивает приложение.
+        if (document.getElementById('authOverlay')?.classList.contains('visible')) return false;
+
+        // 2. Плашка ответа или правки занимает поле ввода — «назад» её снимает.
+        if ((this.S?.replyDraft || this.S?.editDraft) && this.currentMobileNavProgress() >= 0.5
+            && document.getElementById('viewChat')?.classList.contains('active')) {
+            this.cancelComposerContext?.();
+            return true;
+        }
+
+        // 3. Вложенные экраны: настройки открываются из Хаба, вкладки Хаба — из обзора.
+        if (document.getElementById('viewSettings')?.classList.contains('active')) {
+            this.openHubView();
+            return true;
+        }
+        const hub = document.getElementById('viewHub');
+        if (hub?.classList.contains('active')) {
+            const tab = hub.getAttribute('data-hub-current') || 'overview';
+            if (tab !== 'overview' && typeof this.setHubTab === 'function') {
+                this.setHubTab('overview');
+            } else {
+                this.openChatView({ showList: true });
+            }
+            return true;
+        }
+        if (document.getElementById('viewZaliCoin')?.classList.contains('active')) {
+            this.openChatView({ showList: true });
+            return true;
+        }
+
+        // 4. Открытый чат → список диалогов.
+        if (!document.body?.classList.contains('mobile-sidebar-open')
+            && this.currentMobileNavProgress() >= 0.5) {
+            this.openChatView({ showList: true });
+            return true;
+        }
+        return false;
+    }
+
+    isKeyboardOpen() {
+        return !!this._kbdOpen;
+    }
+
+    // Поле, в которое печатают, должно быть на экране. Android-оболочка
+    // подкручивает его сама, когда сжимает вебвью; iOS — нет: раскладку мы
+    // сжали собственным `--app-h`, и поле внутри длинной прокрутки (настройки,
+    // сервер, перевод) оставалось ниже видимой части. Поле ввода сообщения
+    // закреплено над клавиатурой раскладкой, ему это не нужно.
+    revealFocusedField() {
+        const el = document.activeElement;
+        if (!el || el.id === 'msgInput' || typeof el.getBoundingClientRect !== 'function') return;
+        requestAnimationFrame(() => {
+            if (document.activeElement !== el) return;
+            // Не `scrollIntoView`: он прокручивает и предков с `overflow: hidden`
+            // (сам `.app`, body), а вернуть их обратно пользователю нечем — экран
+            // остаётся сдвинутым. Двигаем только ближайшую настоящую прокрутку.
+            let scroller = el.parentElement;
+            while (scroller && scroller !== document.body) {
+                const overflowY = getComputedStyle(scroller).overflowY;
+                if ((overflowY === 'auto' || overflowY === 'scroll')
+                    && scroller.scrollHeight > scroller.clientHeight + 1) break;
+                scroller = scroller.parentElement;
+            }
+            if (!scroller || scroller === document.body) return;
+            const rect = el.getBoundingClientRect();
+            const box = scroller.getBoundingClientRect();
+            const visibleBottom = Math.min(box.bottom,
+                window.visualViewport ? window.visualViewport.height : window.innerHeight);
+            const margin = 16;
+            if (rect.bottom > visibleBottom - margin) {
+                scroller.scrollTop += rect.bottom - (visibleBottom - margin);
+            } else if (rect.top < box.top + margin) {
+                scroller.scrollTop -= (box.top + margin) - rect.top;
+            }
+        });
     }
 
     // Mobile touch gestures, delegated on the persistent containers (#msgs /
@@ -756,6 +1098,7 @@ ZaliMixin(ZaliInterface, class {
     // forced the browser to commit the intermediate transform).
     openChatView({ showList = false } = {}) {
         this.collapseAddonForNavigation?.();
+        this.closeCoinOverlaysForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -777,6 +1120,7 @@ ZaliMixin(ZaliInterface, class {
 
     openSettingsView() {
         this.collapseAddonForNavigation?.();
+        this.closeCoinOverlaysForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -816,6 +1160,7 @@ ZaliMixin(ZaliInterface, class {
 
     openHubView() {
         this.collapseAddonForNavigation?.();
+        this.closeCoinOverlaysForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
@@ -840,6 +1185,7 @@ ZaliMixin(ZaliInterface, class {
 
     openZaliCoinView() {
         this.collapseAddonForNavigation?.();
+        this.closeCoinOverlaysForNavigation?.();
         const cv = document.getElementById('viewChat');
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');

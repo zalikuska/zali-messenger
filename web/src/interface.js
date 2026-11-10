@@ -166,6 +166,7 @@ const DefaultApiRoutes = Object.freeze({
         register: apiRoute('/auth/register'),
         login: apiRoute('/auth/login'),
         wsTicket: apiRoute('/auth/ws-ticket'),
+        password: apiRoute('/auth/password'),
     },
     contacts: {
         list: apiRoute('/contacts'),
@@ -173,6 +174,7 @@ const DefaultApiRoutes = Object.freeze({
     },
     users: {
         search: (query) => apiRoute(`/users?q=${encodeURIComponent(query)}`),
+        suggest: (query, limit = 6) => apiRoute(`/users/suggest?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(limit)}`),
     },
     avatar: {
         base: apiRoute('/avatar'),
@@ -235,6 +237,13 @@ const DefaultApiRoutes = Object.freeze({
         giftCancel: (id) => apiRoute(`/coins/gifts/${encodeURIComponent(id)}/cancel`),
         managedTreasuries: apiRoute('/coins/treasuries/managed'),
         serverPayouts: apiRoute('/coins/server-payouts'),
+    },
+    raffles: {
+        base: apiRoute('/raffles'),
+        lookup: (ids) => apiRoute(`/raffles?ids=${ids.map(encodeURIComponent).join(',')}`),
+        mine: apiRoute('/raffles/mine'),
+        join: (id) => apiRoute(`/raffles/${encodeURIComponent(id)}/join`),
+        cancel: (id) => apiRoute(`/raffles/${encodeURIComponent(id)}/cancel`),
     },
     diagnostics: {
         decryptFailure: apiRoute('/diagnostics/decrypt-failure'),

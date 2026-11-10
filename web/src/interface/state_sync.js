@@ -98,6 +98,12 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Облако настроек (server/src/settings_sync.rs): другое устройство изменило настройки.
+        if (type === 'settings_sync') {
+            this.handleSettingsSyncRealtime();
+            return true;
+        }
+
         // Режим «в игре» (server/src/focus.rs): политика уведомления, заметка
         // отправителю, «Всё равно оповестить», конец игровой сессии.
         if (['notify_policy', 'notify_now', 'focus_flush', 'delivery_note', 'delivery_note_done'].includes(type)) {

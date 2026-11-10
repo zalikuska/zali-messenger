@@ -718,8 +718,10 @@ ZaliMixin(ZaliInterface, class {
                 if (settled) return;
                 settled = true;
                 listeners.forEach(off => off());
-                overlay.classList.remove('visible');
-                setTimeout(() => { overlay.hidden = true; }, 180);
+                // concealLayer: следующий кроппер, открытый в течение 180 мс,
+                // отменяет это скрытие — раньше таймер прятал уже новое окно,
+                // и его промис не разрешался никогда.
+                this.concealLayer(overlay);
                 URL.revokeObjectURL(objectUrl);
                 img.removeAttribute('src');
                 resolve(result);
@@ -782,7 +784,7 @@ ZaliMixin(ZaliInterface, class {
                 zoomInput.max = '1000';
                 zoomInput.value = '0';
 
-                requestAnimationFrame(() => overlay.classList.add('visible'));
+                this.revealLayer(overlay);
             };
             img.onerror = () => finish(null);
             img.src = objectUrl;

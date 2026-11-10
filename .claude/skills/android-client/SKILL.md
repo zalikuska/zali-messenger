@@ -71,6 +71,12 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   `visualViewport`/`--kbd-inset` остаются нулями (веб это не увидит). Нижний
   отступ веба `--m-safe-bottom` обязан быть `max(0, навбар − IME)`: IME-инсет
   включает полосу навигации, и без вычитания под полем остаётся пустой зазор.
+- **Системное «назад» идёт через веб** (`BackHandler` в `MainActivity`,
+  2026-11-10). Оболочка вызывает `window.__zaliHandleBack()`; `true` — веб закрыл
+  верхний слой (окно, меню, вложенный экран, чат), `false` — `moveTaskToBack`,
+  а не `finish()`: сокет и звонок остаются живы. До этого обработчика не было, и
+  «назад» из открытого чата закрывало приложение. Порядок слоёв —
+  `handleMobileBack()` в `web/src/interface/mobile.js`.
 - **`<input type="file">` работает только через `onShowFileChooser`**
   (`MainActivity`). Android WebView, в отличие от WKWebView и WebView2, диалог
   сам не открывает — без этой правки `input.click()` молча не делал ничего.

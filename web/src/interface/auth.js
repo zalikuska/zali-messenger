@@ -1573,6 +1573,7 @@ ZaliMixin(ZaliInterface, class {
             // The overlay covers whichever view is active underneath, so a
             // native bottom bar must come back while it is up and re-hide once
             // it closes onto the chat screen (notifyNativeMobileNav reads it).
+            if (!shouldShow) this.landMobileOnListIfEmpty?.();
             this.syncNativeMobileNav();
         }
 

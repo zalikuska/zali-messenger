@@ -107,12 +107,26 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // Отрисовка в ближайшем кадре — и страховочный таймер на случай, когда кадра
+    // долго не будет. WebKit (macOS WKWebView) после нескольких секунд без
+    // изменений на экране опускает частоту requestAnimationFrame до 2–3 Гц:
+    // входящее сообщение в такой момент ждало отрисовки до 400 мс (замер
+    // web/src/modules/perf_probe.js в живом приложении, 2026-10-22). Скрытую
+    // вкладку таймер не будит — там rAF и так придёт при показе.
     scheduleRenderMessages() {
         if (this.messageRenderRaf) return;
-        this.messageRenderRaf = requestAnimationFrame(() => {
+        const run = () => {
+            if (!this.messageRenderRaf) return;
+            cancelAnimationFrame(this.messageRenderRaf);
+            clearTimeout(this.messageRenderTimer);
             this.messageRenderRaf = 0;
+            this.messageRenderTimer = 0;
             this._renderMessagesNow();
-        });
+        };
+        this.messageRenderRaf = requestAnimationFrame(run);
+        if (typeof document === 'undefined' || !document.hidden) {
+            this.messageRenderTimer = setTimeout(run, 50);
+        }
     }
 
     renderMessages() {
@@ -168,7 +182,7 @@ ZaliMixin(ZaliInterface, class {
             // screen and then some. Voice channels have no text chat of their own
             // (sendInputMessage() no-ops for them), so this box just says that
             // instead of duplicating the call view.
-            box.innerHTML = '<div class="voice-empty voice-channel-no-chat">Голосовые каналы не поддерживают текстовые сообщения</div>';
+            this.setMessagesPlaceholder(box, '<div class="voice-empty voice-channel-no-chat">Голосовые каналы не поддерживают текстовые сообщения</div>');
             if (isServers && server) {
                 const chatHdrAva = document.getElementById('chatHdrAva');
                 const chatHdrName = document.getElementById('chatHdrName');
@@ -193,7 +207,7 @@ ZaliMixin(ZaliInterface, class {
             this.lastRenderedConversationKey = conversationKey;
             if (isServers) {
                 const hasServers = (this.S.servers || []).some(Boolean);
-                box.innerHTML = !channel
+                this.setMessagesPlaceholder(box, !channel
                     ? `<div class="empty-state">
                     <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">${hasServers ? 'Выберите канал' : 'Серверов пока нет'}</div>
@@ -204,24 +218,24 @@ ZaliMixin(ZaliInterface, class {
                     <div class="empty-art" aria-hidden="true"></div>
                     <div class="empty-ttl">Нет сообщений в канале</div>
                     <div class="empty-sub">#${this.esc(channel.name)}</div>
-                </div>`;
+                </div>`);
                 return;
             }
             if (!this.S.current) {
-                box.innerHTML = `<div class="empty-state">
+                this.setMessagesPlaceholder(box, `<div class="empty-state">
                 <div class="empty-art" aria-hidden="true"></div>
                 <div class="empty-ttl">Пока нет диалогов</div>
                 <div class="empty-sub">Найдите человека по логину и напишите ему</div>
                 ${this.emptyActionsHTML('contacts')}
-            </div>`;
+            </div>`);
                 return;
             }
             // empty-art — иллюстрация «как доходит сообщение» (оформление «Фокус»).
-            box.innerHTML = `<div class="empty-state">
+            this.setMessagesPlaceholder(box, `<div class="empty-state">
                 <div class="empty-art" aria-hidden="true"></div>
                 <div class="empty-ttl">Нет сообщений</div>
                 <div class="empty-sub">Начните разговор</div>
-            </div>`;
+            </div>`);
             return;
         }
 
@@ -295,7 +309,11 @@ ZaliMixin(ZaliInterface, class {
             const showInlineTime = item.groupPos === 'single' || item.groupPos === 'end';
             const inlineTimeLabel = this.messageInlineTimeLabel(msg);
             const dir = isCall ? (isOut ? 'out' : 'in') : (isOut ? 'out' : 'in');
-            const showAvatar = !isOut && (item.groupPos === 'single' || item.groupPos === 'end');
+            // «Все сообщения с одной стороны» (prefs.js, msgOneSide): свои встают в колонку
+            // чужих, поэтому им тоже нужен аватар — иначе слева не оказывается «моего кружка».
+            const oneSide = this.msgOneSide === true;
+            const hasAvatarSlot = !isOut || oneSide;
+            const showAvatar = hasAvatarSlot && (item.groupPos === 'single' || item.groupPos === 'end');
             if (dateStr && dateStr !== lastDate) {
                 rows.push(`<div class="date-sep"><span>${this.esc(dateStr)}</span></div>`);
                 lastDate = dateStr;
@@ -322,16 +340,15 @@ ZaliMixin(ZaliInterface, class {
             // читалась бы как то, на что нажимать не нужно.
             if (coinCard) {
                 let html = `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
-                if (!isOut && showAvatar) {
+                if (showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
-                } else if (!isOut) {
+                } else if (hasAvatarSlot) {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
                 html += `<div class="bwrap coin-card-wrap">
                     ${senderLabelHtml}
                     ${this.renderCoinCard(coinCard, msg)}
-                    ${this.renderMessageReactions(msg)}
-                ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
+                    ${this.renderMessageReactions(msg)}</div></div>`;
                 rows.push(html);
                 return;
             }
@@ -373,9 +390,9 @@ ZaliMixin(ZaliInterface, class {
                 const attachments = this.normalizeAttachments(msg.attachments);
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
                 let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
-                if (!isOut && showAvatar) {
+                if (showAvatar) {
                     html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
-                } else if (!isOut) {
+                } else if (hasAvatarSlot) {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
                 html += `<div class="bwrap image-caption-wrap">
@@ -383,8 +400,7 @@ ZaliMixin(ZaliInterface, class {
                     <div class="image-caption-media">${mediaHtml}</div>
                     <div class="bubble image-caption-text msg-time-anchor"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageText(msg.text)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>
                     ${this.renderMessageState(msg, isOut)}
-                    ${this.renderMessageReactions(msg)}
-                ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
+                    ${this.renderMessageReactions(msg)}</div></div>`;
                 rows.push(html);
                 return;
             }
@@ -394,17 +410,16 @@ ZaliMixin(ZaliInterface, class {
             const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
             let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
-            if (!isOut && showAvatar) {
+            if (showAvatar) {
                 html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
-            } else if (!isOut) {
+            } else if (hasAvatarSlot) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
             html += `<div class="bwrap ${isCall ? 'call-wrap' : ''}">
                 ${senderLabelHtml}
                 ${`<div class="${bubbleClass}"${hoverTimeLabel ? ` title="${this.esc(hoverTimeLabel)}"` : ''}>${this.renderMessageBody(msg)}${inlineTimeLabel ? `<span class="msg-time" aria-hidden="true">${this.esc(inlineTimeLabel)}</span>` : ''}</div>`}
                 ${this.renderMessageState(msg, isOut)}
-                ${!isCall ? this.renderMessageReactions(msg) : ''}
-            ${this.renderMessageMoreButton(messageId, msg)}</div></div>`;
+                ${!isCall ? this.renderMessageReactions(msg) : ''}</div></div>`;
             rows.push(html);
         });
 
@@ -453,7 +468,7 @@ ZaliMixin(ZaliInterface, class {
                 if (counted > 0) {
                     const avgHeight = total / counted;
                     const current = Number(this.messageWindow?.avgHeight || 92);
-                    this.messageWindow.avgHeight = Math.max(56, Math.min(160, current * 0.7 + avgHeight * 0.3));
+                    this.messageWindow.avgHeight = Math.max(this.minMessageRowHeight(), Math.min(160, current * 0.7 + avgHeight * 0.3));
                 }
             }
         }
@@ -524,6 +539,20 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.lastRenderedConversationKey = conversationKey;
+    }
+
+    // Пустое состояние #msgs (нет сообщений, нет диалогов, голосовой канал)
+    // пишется только когда меняется. Каждая перерисовка пустого чата
+    // перезаписывала тот же HTML, .empty-state создавался заново, и его fade-up
+    // проигрывался на каждом кадре — экран «Нет сообщений» мигал при любой
+    // перерисовке (смена чата, статус соединения, догрузка аватарки).
+    setMessagesPlaceholder(box, html) {
+        if (box.__zaliPlaceholderHTML === html
+            && box.childElementCount === 1
+            && box.firstElementChild === box.__zaliPlaceholderNode) return;
+        box.innerHTML = html;
+        box.__zaliPlaceholderHTML = html;
+        box.__zaliPlaceholderNode = box.firstElementChild;
     }
 
     switchChat(name) {

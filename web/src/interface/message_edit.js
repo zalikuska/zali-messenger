@@ -108,7 +108,9 @@ ZaliMixin(ZaliInterface, class {
         // instead of doing nothing.
         void node.offsetWidth;
         node.classList.add('msg-flash');
-        setTimeout(() => node.classList.remove('msg-flash'), 1600);
+        // Таймер предыдущего клика снял бы класс посреди повторной вспышки.
+        clearTimeout(node.__zaliFlashTimer);
+        node.__zaliFlashTimer = setTimeout(() => node.classList.remove('msg-flash'), 1600);
         return true;
     }
 

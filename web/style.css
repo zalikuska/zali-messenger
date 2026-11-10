@@ -75,6 +75,12 @@
 /* Общая анимация появления для всех всплывающих меню: короткая, из точки
    привязки (--menu-origin ставит JS по месту клика), без «прыжка» — меню
    должно догонять курсор, а не разворачиваться на пол-экрана. */
+/* Анимации появления в этом файле — с fill-mode `backwards`, не `both`:
+   `both` после окончания навсегда держал конечный кадр поверх каскада, и
+   transform/opacity элемента больше ничем не менялись (активная кнопка темы не
+   приподнималась, #viewChat на телефоне пришлось отдельно спасать от view-enter).
+   `backwards` держит первый кадр только на время задержки, а по окончании
+   отдаёт значение обычным правилам. Новую — так же. */
 @keyframes menu-pop {
     from { opacity: 0; transform: scale(.965) translateY(-3px); }
     to   { opacity: 1; transform: none; }
@@ -95,22 +101,62 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-size: 14px;
     letter-spacing: 0;
-    scrollbar-color: rgba(var(--accent-rgb),.45) rgba(255,255,255,.04);
+}
+
+/* ── Полоса прокрутки: одна на всё приложение ────────────────────────────
+   Тонкий (4px видимых) скруглённый ползунок без подложки и без стрелок,
+   нейтрального цвета — одинаков в классическом, плоском и «Фокусе». Раньше было
+   пять наборов правил (акцентный градиент, «Фокус», «Плоский», по 8/10px).
+   Свойства `scrollbar-color`/`scrollbar-width` намеренно НЕ задаются: в новых
+   движках они отключают ::-webkit-scrollbar целиком. Для движков без него
+   (Firefox) — запасной вариант внизу. */
+:root {
+    --sb-size: 6px;
+    /* Не ниже .34: на тёмном фоне ползунок слабее не виден (ui_doctor, скилл
+       web-ui-architecture). Наведение — заметно ярче покоя. */
+    --sb-thumb: rgba(255,255,255,.34);
+    --sb-thumb-hover: rgba(255,255,255,.52);
+    --sb-thumb-active: rgba(var(--accent-rgb), .85);
 }
 
 ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: var(--sb-size);
+    height: var(--sb-size);
 }
 
-::-webkit-scrollbar-track {
-    background: rgba(255,255,255,.03);
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
 }
 
 ::-webkit-scrollbar-thumb {
-    border: 2px solid rgba(0,0,0,.25);
+    border: 1px solid transparent;
     border-radius: 999px;
-    background: linear-gradient(180deg, rgba(var(--accent-rgb),.82), rgba(var(--accent-rgb),.36));
+    background: var(--sb-thumb);
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--sb-thumb-hover);
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:active {
+    background: var(--sb-thumb-active);
+    background-clip: padding-box;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--sb-thumb) transparent;
+    }
 }
 
 button,
@@ -750,7 +796,7 @@ body[data-ui-v2="on"] .mode-switch {
 
 .hub-segment-btn.active svg {
     stroke-width: 2.25;
-    animation: segment-icon-pop .52s cubic-bezier(.2, 1.18, .2, 1) both;
+    animation: segment-icon-pop .52s cubic-bezier(.2, 1.18, .2, 1) backwards;
 }
 
 .hub-segment-badge {
@@ -770,7 +816,7 @@ body[data-ui-v2="on"] .mode-switch {
     line-height: 1;
     border: 2px solid var(--sidebar);
     z-index: 2;
-    animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) both;
+    animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) backwards;
 }
 
 .mode-switch {
@@ -1241,7 +1287,7 @@ body[data-nav-mode="servers"] .contacts {
     color: #050505;
     font-size: 11px;
     font-weight: 900;
-    animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) both;
+    animation: badge-pop .22s cubic-bezier(.2,.9,.18,1) backwards;
 }
 
 .server-list {
@@ -1477,7 +1523,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .view.active {
     display: grid;
-    animation: view-enter .24s cubic-bezier(.2,.8,.2,1) both;
+    animation: view-enter .24s cubic-bezier(.2,.8,.2,1) backwards;
 }
 
 #viewChat {
@@ -1735,7 +1781,7 @@ body[data-nav-mode="servers"] .contacts {
     background: rgba(255,255,255,.02);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    animation: row-fade .24s cubic-bezier(.2,.8,.2,1) both;
+    animation: row-fade .24s cubic-bezier(.2,.8,.2,1) backwards;
 }
 
 .chat-hdr-ava {
@@ -3381,7 +3427,7 @@ body[data-nav-mode="servers"] .contacts {
     box-shadow: 0 18px 48px rgba(0,0,0,.16);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    animation: card-rise .3s cubic-bezier(.2,.8,.2,1) both;
+    animation: card-rise .3s cubic-bezier(.2,.8,.2,1) backwards;
     content-visibility: auto;
     contain-intrinsic-size: 220px;
 }
@@ -3511,7 +3557,7 @@ body[data-nav-mode="servers"] .contacts {
     letter-spacing: .08em;
     box-shadow: 0 10px 24px rgba(0,0,0,.18);
     transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out), filter .18s var(--ease-out), border-color .18s var(--ease-out);
-    animation: chip-pop .22s cubic-bezier(.2,.9,.18,1) both;
+    animation: chip-pop .22s cubic-bezier(.2,.9,.18,1) backwards;
 }
 
 .settings-theme-grid .btn-theme::before {
@@ -3849,7 +3895,7 @@ body[data-nav-mode="servers"] .contacts {
     display: grid;
     gap: 1px;
     transform-origin: var(--menu-origin, top left);
-    animation: menu-pop .15s var(--ease-out) both;
+    animation: menu-pop .15s var(--ease-out) backwards;
 }
 
 .peer-context-menu-item {
@@ -5873,7 +5919,7 @@ body[data-nav-mode="servers"] .contacts {
     white-space: nowrap;
     pointer-events: none;
     transform: translateX(-50%);
-    animation: menu-pop .12s var(--ease-out) both;
+    animation: menu-pop .12s var(--ease-out) backwards;
 }
 
 .server-msg-main {
@@ -6141,6 +6187,15 @@ body[data-nav-mode="servers"] .contacts {
     pointer-events: auto;
     transform: translateY(0) scale(1);
     transition: opacity .14s var(--ease-out), transform .14s var(--ease-out);
+}
+
+/* Меню выходит из display:none, а из display:none переход не стартует —
+   без стартового стиля меню просто появлялось, без анимации. */
+@starting-style {
+    .reaction-menu.visible {
+        opacity: 0;
+        transform: translateY(3px) scale(.96);
+    }
 }
 
 .reaction-menu .reaction-btn {
@@ -6848,7 +6903,7 @@ body[data-nav-mode="servers"] .contacts {
     border: 1px solid var(--border);
     border-radius: 14px;
     background: rgba(255,255,255,.03);
-    animation: card-rise .22s cubic-bezier(.2,.8,.2,1) both;
+    animation: card-rise .22s cubic-bezier(.2,.8,.2,1) backwards;
     content-visibility: auto;
     contain-intrinsic-size: 140px;
 }
@@ -6945,6 +7000,8 @@ body[data-nav-mode="servers"] .contacts {
     min-width: 0;
     height: 36px;
     max-height: 140px;
+    overflow-y: hidden;
+    overscroll-behavior: contain;
     resize: none;
     border: 0;
     outline: 0;
@@ -7202,7 +7259,7 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text3);
     text-align: center;
     gap: 4px;
-    animation: fade-up .28s cubic-bezier(.2,.8,.2,1) both;
+    animation: fade-up .28s cubic-bezier(.2,.8,.2,1) backwards;
 }
 
 .empty-ttl {
@@ -7309,7 +7366,7 @@ body[data-nav-mode="servers"] .contacts {
 .auth-overlay.visible .auth-card {
     transform: translateY(0) scale(1);
     opacity: 1;
-    animation: auth-pop .42s cubic-bezier(.2,.9,.18,1) both;
+    animation: auth-pop .42s cubic-bezier(.2,.9,.18,1) backwards;
 }
 
 .auth-brand {
@@ -7505,7 +7562,7 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .auth-overlay.visible .auth-form > * {
-    animation: auth-field-in .42s cubic-bezier(.2,.8,.2,1) both;
+    animation: auth-field-in .42s cubic-bezier(.2,.8,.2,1) backwards;
 }
 
 .auth-overlay.visible .auth-form > *:nth-child(1) { animation-delay: .05s; }
@@ -8430,13 +8487,6 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
     filter: none;
 }
 
-/* Scrollbar — solid */
-body[data-experimental-design="on"] ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.12);
-}
-body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
-}
 
 /* Installed as a home-screen app (iOS/Android standalone PWA): the OS status bar
    overlaps the top of the viewport instead of pushing it down, so pad it ourselves. */
@@ -8877,7 +8927,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .coin-transfer-modal:not([hidden]) .zc-send {
-    animation: zc-send-in .2s var(--ease-out) both;
+    animation: zc-send-in .2s var(--ease-out) backwards;
 }
 
 @keyframes zc-send-in {
@@ -10235,7 +10285,7 @@ body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
         font-weight: 700;
         color: #05210b;
         background: linear-gradient(180deg, rgba(var(--accent-rgb),.96), rgba(var(--accent-rgb),.82));
-        animation: m-net-slide .28s var(--m-spring) both;
+        animation: m-net-slide .28s var(--m-spring) backwards;
     }
     .m-net-spin {
         width: 12px;
@@ -11706,7 +11756,6 @@ body[data-design-mode="focus"] {
     --f-warn: #ffcc66;
     --footer-line-color: var(--f-hairline);
     --menu-hover: rgba(255,255,255,.07);
-    scrollbar-color: rgba(255,255,255,.14) transparent;
 }
 
 /* Метатекст (время, подписи разделов, «Сегодня») — var(--text) с
@@ -11735,25 +11784,6 @@ body[data-design-mode="focus"] .hub-card-kicker {
     text-transform: uppercase;
 }
 
-body[data-design-mode="focus"] ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-body[data-design-mode="focus"] ::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-body[data-design-mode="focus"] ::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    background: rgba(255,255,255,.12);
-    background-clip: padding-box;
-}
-
-body[data-design-mode="focus"] ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255,255,255,.22);
-    background-clip: padding-box;
-}
 
 /* ── Холст и титлбар ─────────────────────────────────────────────────── */
 
@@ -11904,8 +11934,6 @@ body[data-design-mode="focus"] .ws-pill.on:not(:hover) #wsLabel {
     body[data-design-mode="focus"] #viewChat .input-area {
         padding: 0 16px 14px;
         background: transparent;
-        backdrop-filter: none;
-        -webkit-backdrop-filter: none;
     }
 
     body[data-design-mode="focus"] #viewChat .input-area::before {
@@ -13903,7 +13931,7 @@ body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
 /* ── Кольца уровня ───────────────────────────────────────────────────── */
 
 .voice-tile {
-    transition: --voice-level .16s linear, box-shadow .12s var(--ease-out), border-color .12s var(--ease-out);
+    transition: --voice-level .22s ease-out, box-shadow .12s var(--ease-out), border-color .12s var(--ease-out);
 }
 
 /* Полоски «Микрофон / С сервера» убраны: уровень у каждого — свой, кольцом
@@ -14323,7 +14351,7 @@ body[data-design-mode="focus"] .auth-showcase {
     border: 0;
     border-radius: 28px;
     background: none;
-    animation: auth-pop .5s cubic-bezier(.2,.9,.18,1) both;
+    animation: auth-pop .5s cubic-bezier(.2,.9,.18,1) backwards;
 }
 
 body[data-design-mode="focus"] .auth-showcase-brand {
@@ -14935,11 +14963,6 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     outline-offset: 2px;
 }
 
-/* Поле ввода без рамки: фокус показывает акцентная линия контейнера. */
-#viewChat .input-bar:focus-within {
-    box-shadow: inset 0 2px 0 rgba(203,255,0,.5);
-}
-
 /* Область нажатия не меньше 44×44, при этом вид кнопок не меняется:
    невидимый ::after расширяет зону, на сенсорных экранах — только для них. */
 @media (pointer: coarse), (max-width: 760px) {
@@ -14993,32 +15016,7 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     }
 }
 
-/* Видимый вход в меню сообщения («⋯» у верхнего внешнего угла пузыря). */
 .bwrap { position: relative; }
-
-.msg-more {
-    position: absolute;
-    top: -12px;
-    right: -10px;
-    z-index: 3;
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border: 1px solid var(--menu-border);
-    border-radius: 50%;
-    background: var(--menu-bg);
-    color: var(--text2);
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity .14s var(--ease-out), color .12s var(--ease-out), background .12s var(--ease-out);
-}
-
-.msg.out .msg-more { right: auto; left: -10px; }
-.msg-more .ui-icon { width: 16px; height: 16px; }
-.msg-more:hover { color: var(--text); background: var(--menu-hover); }
 
 .msg:focus-visible {
     outline: 2px solid var(--lime);
@@ -15029,36 +15027,6 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 #msgs:focus-visible {
     outline: 2px solid rgba(203,255,0,.5);
     outline-offset: -2px;
-}
-
-@media (hover: hover) {
-    .msg:hover .msg-more,
-    .msg:focus-within .msg-more,
-    .msg-more:focus-visible {
-        opacity: 1;
-        pointer-events: auto;
-    }
-}
-
-/* Тач-экраны: у последнего сообщения кнопка видна всегда, остальные
-   открываются долгим нажатием (подсказка в пустом поле не нужна). */
-@media (hover: none), (pointer: coarse) {
-    #msgs > .msg:last-child .msg-more {
-        opacity: .9;
-        pointer-events: auto;
-    }
-}
-
-@media (pointer: coarse), (max-width: 760px) {
-    .msg-more::after {
-        content: "";
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 44px;
-        height: 44px;
-        transform: translate(-50%, -50%);
-    }
 }
 
 /* «⋯» в строке контакта: видимый вход в меню (профиль, заглушить, громкость).
@@ -19190,7 +19158,7 @@ body[data-design-mode="focus"][data-design-glow="on"] #authLoginBtn {
     background: color-mix(in srgb, var(--bg) 90%, #fff 10%);
     box-shadow: var(--menu-shadow, 0 18px 48px rgba(0,0,0,.5));
     transform-origin: top left;
-    animation: menu-pop .15s var(--ease-out, ease-out) both;
+    animation: menu-pop .15s var(--ease-out, ease-out) backwards;
     outline: none;
 }
 .zs-menu.is-above { transform-origin: bottom left; }
@@ -19224,50 +19192,6 @@ body[data-design-mode="focus"][data-design-glow="on"] #authLoginBtn {
     font-weight: 800;
     letter-spacing: .08em;
     text-transform: uppercase;
-}
-
-/* ════════════════════════════════════════════════════════════════════════
-   Полосы прокрутки: в «Фокусе» и «Плоском» ползунок был белым с прозрачностью
-   .12–.14 на тёмном — на глаз его не существовало, а у списков и карточек
-   настроек не было понятно, что они прокручиваются. Современные движки к тому же
-   отдают приоритет `scrollbar-color` над ::-webkit-scrollbar, поэтому задаются
-   оба. Значения — один набор переменных на все оформления, кроме классического
-   (там ползунок акцентный и так виден).
-   ════════════════════════════════════════════════════════════════════════ */
-
-body[data-design-mode="focus"],
-body[data-experimental-design="on"] {
-    --sb-thumb: rgba(255,255,255,.34);
-    --sb-thumb-hover: rgba(255,255,255,.55);
-    --sb-track: rgba(255,255,255,.05);
-    scrollbar-color: var(--sb-thumb) var(--sb-track);
-}
-
-body[data-design-mode="focus"] ::-webkit-scrollbar,
-body[data-experimental-design="on"] ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-}
-body[data-design-mode="focus"] ::-webkit-scrollbar-track,
-body[data-experimental-design="on"] ::-webkit-scrollbar-track {
-    background: var(--sb-track);
-}
-body[data-design-mode="focus"] ::-webkit-scrollbar-thumb,
-body[data-experimental-design="on"] ::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: 999px;
-    background: var(--sb-thumb);
-    background-clip: padding-box;
-}
-body[data-design-mode="focus"] ::-webkit-scrollbar-thumb:hover,
-body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:hover {
-    background: var(--sb-thumb-hover);
-    background-clip: padding-box;
-}
-body[data-design-mode="focus"] ::-webkit-scrollbar-thumb:active,
-body[data-experimental-design="on"] ::-webkit-scrollbar-thumb:active {
-    background: rgba(255,255,255,.7);
-    background-clip: padding-box;
 }
 
 /* Участники: добавление только через приглашение. */
@@ -19847,7 +19771,7 @@ body[data-design-mode="focus"] .auth-overlay.is-error .auth-art--error {
 }
 
 .auth-overlay.visible .auth-fail > * {
-    animation: auth-field-in .42s cubic-bezier(.2,.8,.2,1) both;
+    animation: auth-field-in .42s cubic-bezier(.2,.8,.2,1) backwards;
 }
 
 .auth-overlay.visible .auth-fail > *:nth-child(1) { animation-delay: .04s; }
@@ -21019,5 +20943,1225 @@ body[data-design-mode="focus"] .zc-legend-me {
     #viewHub[data-hub-current="addons"] .hub-hero,
     #viewHub[data-hub-current="signing"] .hub-hero {
         display: none;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Чат (десктоп): мягкий низ переписки и полоса прокрутки рядом с композером.
+   — Док композера был прямоугольником с blur(10px): сообщения резко обрывались
+     по его верхней кромке, а в полях слева и справа от поля ввода оставались
+     размытые полосы с жёсткой границей. Теперь сам .input-area без фильтра, а
+     размытие вынесено в ::before и плавно сходит на нет вверх и вправо (две
+     маски, пересечение) — ни верхнего, ни бокового шва.
+   — Справа остаётся свободная колонка (16px поля композера): полоса прокрутки
+     переписки идёт вдоль всей высоты, включая уровень кнопки «отправить», и не
+     размывается доком.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (min-width: 761px) {
+    #viewChat .input-area {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+
+    body[data-design-mode="focus"] #viewChat .input-area::before,
+    #viewChat .input-area::before {
+        display: block;
+        content: "";
+        position: absolute;
+        z-index: -1;
+        left: 0;
+        /* Ровно до колонки скроллбара: правее содержимого переписки нет (его
+           обрезает сам .msgs), так что блюр заканчивается там же, где и
+           картинка, а полоса прокрутки остаётся над ним, не размытая. */
+        right: 0;
+        bottom: 0;
+        top: -36px;
+        height: auto;
+        background: linear-gradient(180deg, transparent, rgba(var(--bg-rgb, 9,11,14), .55) 70%);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        -webkit-mask-image:
+            linear-gradient(180deg, transparent, #000 36px);
+        -webkit-mask-composite: source-in;
+        mask-image:
+            linear-gradient(180deg, transparent, #000 36px);
+        mask-composite: intersect;
+        pointer-events: none;
+    }
+
+    #viewChat .msgs {
+        margin-right: 0;
+        padding-right: 20px;
+    }
+    #viewChat .msgs::-webkit-scrollbar-track {
+        margin: 8px 0;
+    }
+    #msgInput::-webkit-scrollbar-track {
+        margin: 4px 0;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Композер «Фокуса» (десктоп): рамка, масштаб иконок, многострочный ввод.
+   — Рамка была полупрозрачной поверх фона, залитого под border-box, поэтому
+     на скруглении просвечивал слой фона и толщина «плыла» на глаз. Теперь
+     рамка непрозрачная (цвет подмешан к --bg), а фон обрезан по padding-box.
+   — Иконки: скрепка 20px, монета 22px (её круг r=8.25 из viewBox 24 иначе
+     выглядел вдвое мельче скрепки), «отправить» 18px.
+   — Высота поля = 36px ровно в одну строку (line-height 20 + padding 8+8):
+     раньше было 31px против 36px у кнопок, текст съезжал. При росте поля
+     кнопки прижаты к нижней строке (как в мессенджерах), а не висят по
+     центру многострочного блока.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (min-width: 761px) {
+    body[data-design-mode="focus"] #viewChat .input-bar {
+        align-items: end;
+        border-color: color-mix(in srgb, #fff 9%, var(--bg));
+        background-clip: padding-box;
+    }
+    body[data-design-mode="focus"] #viewChat .input-bar:focus-within {
+        border-color: color-mix(in srgb, var(--lime) 45%, var(--bg));
+    }
+
+    body[data-design-mode="focus"] #msgInput {
+        box-sizing: border-box;
+        min-height: var(--f-ctl);
+        padding: 8px 8px;
+        font-size: 14px;
+        line-height: 20px;
+        overflow-wrap: anywhere;
+    }
+
+    body[data-design-mode="focus"] .attach-btn .ui-icon,
+    body[data-design-mode="focus"] .attach-btn .ui-icon-paperclip {
+        width: 20px;
+        height: 20px;
+    }
+    body[data-design-mode="focus"] .attach-btn.coin-transfer-btn .ui-icon {
+        width: 22px;
+        height: 22px;
+    }
+    body[data-design-mode="focus"] .attach-btn .ui-icon-paperclip {
+        transform: none;
+    }
+    body[data-design-mode="focus"] .send-btn svg {
+        width: 18px;
+        height: 18px;
+    }
+}
+
+
+/* ── Окно перевода ZaliCoin: поле суммы ──────────────────────────────────
+   В «Фокусе» общее правило для всех input'ов окна (заливка --f-fill, рамка и
+   кольцо при фокусе) попадало и на input ВНУТРИ .zc-amount-box: поверх заливки
+   самой коробки получался второй, более светлый прямоугольник с квадратными
+   углами, а кольцо фокуса рисовалось дважды (вокруг коробки и вокруг input'а —
+   отсюда тёмно-лаймовая вертикальная черта перед «ZC»). Рамка, заливка и кольцо
+   принадлежат коробке, input в ней прозрачный. */
+body[data-design-mode="focus"] .zc-send .zc-amount-box input,
+body[data-design-mode="focus"] .zc-send .zc-amount-box input:focus {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+}
+body[data-design-mode="focus"] .zc-send .zc-amount-box input::placeholder {
+    color: var(--text3);
+    font-weight: 700;
+}
+
+/* ── Строка контакта («Фокус»): «⋯» у правого края ─────────────────────
+   Сетка .contact-actions была в две колонки: время сверху, значок «без
+   уведомлений» (кол. 1) и бейдж (кол. 2) во второй строке. Кнопка «⋯» и
+   крестик в явные ячейки не ставились и попадали в первую свободную
+   (колонка 1) — кнопка висела по центру под датой, не доставая до её правого
+   края. Теперь у строки три колонки: значок · бейдж · «⋯»; «⋯» всегда в
+   последней и прижата вправо вровень с датой, остальные сдвигаются влево от
+   неё. */
+body[data-design-mode="focus"] .contact-actions {
+    grid-template-columns: auto auto auto;
+    justify-content: end;
+}
+body[data-design-mode="focus"] .contact-actions .contact-more {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+    align-self: center;
+    /* Кнопка 24px, иконка 16px: 4px внутреннего зазора съедаем, чтобы точки
+       стояли вровень с правым краем даты, а не на 4px левее. */
+    margin-right: -4px;
+}
+
+/* ── Голосовой канал, в котором мы не состоим: превью + большая «Зайти» ────
+   Экран тот же, что у идущего звонка (.voice-call-expanded.embedded): сетка
+   плиток тех, кто сейчас в канале, а на месте панели управления — одна
+   широкая кнопка входа. */
+.voice-preview-count {
+    flex: none;
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.voice-preview-count.has-people {
+    color: var(--lime);
+}
+
+.voice-call-expanded.is-preview .voice-tile {
+    opacity: .92;
+}
+
+.voice-join-bar {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    padding: 12px 0 4px;
+}
+
+body .voice-btn.voice-join-big {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    max-width: 560px;
+    min-height: 56px;
+    padding: 0 28px;
+    border: 0;
+    border-radius: 16px;
+    background: var(--lime);
+    color: #050505;
+    box-shadow: none;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: none;
+    cursor: pointer;
+}
+body .voice-btn.voice-join-big:hover {
+    filter: brightness(1.06);
+}
+body .voice-btn.voice-join-big:active {
+    transform: scale(.985);
+}
+body .voice-btn.voice-join-big svg {
+    width: 22px;
+    height: 22px;
+}
+
+/* ── Чужая демонстрация экрана: размытое превью до клика «Смотреть» ──────
+   Поток приходит сразу, но первые секунды он в низком разрешении; пока
+   зритель не нажал, кадр размыт (с запасом масштаба, чтобы края не светлели),
+   поверх — кнопка. После клика размытие плавно снимается. */
+.voice-stage-tile video {
+    transition: filter .3s var(--ease-out), transform .3s var(--ease-out);
+}
+.voice-stage-tile.is-gated video {
+    filter: blur(18px) saturate(.85) brightness(.8);
+    transform: scale(1.08);
+    pointer-events: none;
+}
+.voice-screen-watch {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: rgba(0,0,0,.18);
+    cursor: pointer;
+}
+.voice-screen-watch-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 22px 0 16px;
+    border-radius: 999px;
+    background: rgb(var(--accent-rgb));
+    color: #050505;
+    font-size: 15px;
+    font-weight: 800;
+    transition: transform .15s var(--ease-out), filter .15s var(--ease-out);
+}
+.voice-screen-watch-pill svg {
+    width: 20px;
+    height: 20px;
+}
+.voice-screen-watch:hover .voice-screen-watch-pill {
+    filter: brightness(1.06);
+    transform: scale(1.03);
+}
+.voice-screen-watch:focus-visible .voice-screen-watch-pill {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+/* Меню демонстрации экрана рисует иконки голосового набора (.call-ctrl-icon),
+   у которых нет собственного размера — без него SVG раздувается на весь пункт. */
+.peer-context-menu .call-ctrl-icon {
+    flex: none;
+    width: 16px;
+    height: 16px;
+}
+
+/* ── Список каналов: кто сидит в голосовом канале ────────────────────────
+   Под голосовым каналом — его участники (аватар, имя, игра, значки), на строке
+   канала — секундомер звонка. «В эфире» — человек показывает экран. */
+.sidebar-voice-members {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: -2px 0 6px;
+    padding: 0 6px 0 30px;
+    cursor: pointer;
+}
+.sidebar-voice-member {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    color: var(--text2);
+    font-size: 13px;
+}
+.sidebar-voice-member:hover {
+    background: rgba(255,255,255,.05);
+}
+.svm-ava {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+}
+.svm-ava > * {
+    width: 100%;
+    height: 100%;
+}
+.svm-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-weight: 500;
+}
+.svm-activity {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 96px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border-radius: 6px;
+    background: rgba(255,255,255,.07);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+}
+.svm-activity .game-activity-icon {
+    flex: none;
+}
+.svm-activity-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.svm-flags {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.svm-flag {
+    display: inline-grid;
+    place-items: center;
+    color: var(--text2);
+}
+.svm-flag svg {
+    width: 16px;
+    height: 16px;
+}
+.svm-flag.is-off {
+    color: var(--text3);
+}
+.svm-live {
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--red, #e5484d);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+.svm-timer {
+    color: rgb(var(--accent-rgb));
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Аватар-заглушка рисует только букву тёмным: заливка у неё — у родителя
+   (.ava), поэтому в строке участника родитель (.svm-ava) задаёт её сам. */
+.svm-ava {
+    background: rgb(var(--accent-rgb));
+}
+.svm-ava .avatar-fallback {
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    font-weight: 800;
+}
+/* В узкой панели первой уступает место игра, затем имя; значки не сжимаются. */
+.svm-name {
+    min-width: 56px;
+}
+.svm-activity {
+    flex-shrink: 100;
+    min-width: 52px;
+}
+
+/* Строка участника: значок игры — в слоте слева от аватара (без названия);
+   справа только значки состояния, ничего не выезжает за край. */
+.sidebar-voice-members {
+    padding-left: 8px;
+}
+.sidebar-voice-member {
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+}
+.svm-game {
+    flex: none;
+    width: 16px;
+    display: inline-grid;
+    place-items: center;
+    color: var(--text2);
+}
+.svm-game .game-activity-icon {
+    width: 16px;
+    height: 16px;
+}
+.svm-name {
+    min-width: 0;
+    flex: 0 1 auto;
+}
+.svm-flags {
+    min-width: 0;
+}
+
+/* ── Иконки голосового UI ────────────────────────────────────────────────
+   Раньше размеры были 12/14/15/17 px при viewBox 24 — дробный масштаб, линии
+   «мылились». Теперь только 12/16/20 px, а толщина обводки подобрана так, чтобы
+   на экране было 1,5 px (16 и 20) и 1,25 px (12): stroke-width = px × 24 / размер. */
+.call-ctrl-icon,
+.game-activity-icon {
+    flex: none;
+    shape-rendering: geometricPrecision;
+}
+.voice-btn .call-ctrl-icon,
+.call-ctrl-btn.small .call-ctrl-icon,
+.voice-callbar-btn .call-ctrl-icon,
+.voice-callbar-action .call-ctrl-icon,
+.voice-call-collapse-btn .call-ctrl-icon,
+.voice-call-strip .voice-callbar-btn .call-ctrl-icon,
+.call-card-icon .call-ctrl-icon,
+body[data-design-mode="focus"] .voice-btn .call-ctrl-icon,
+.svm-flag .call-ctrl-icon,
+.svm-live-card .call-ctrl-icon,
+.game-activity-icon {
+    width: 16px;
+    height: 16px;
+    stroke-width: 2.25;
+}
+.call-ctrl-btn .call-ctrl-icon {
+    width: 20px;
+    height: 20px;
+    stroke-width: 1.8;
+}
+.voice-tile-mic .call-ctrl-icon {
+    width: 12px;
+    height: 12px;
+    stroke-width: 2.5;
+}
+
+/* Приглушённый значок — прозрачностью ВСЕГО svg, а не альфа-цветом обводки:
+   при альфа-цвете места, где линии пересекаются, выходили ярче («наслаивались»). */
+.svm-flag {
+    color: var(--text);
+    opacity: .75;
+}
+.svm-flag.is-off {
+    color: var(--text);
+    opacity: .5;
+}
+.svm-game {
+    color: var(--lime);
+}
+
+/* Эфир в списке каналов — отдельный прямоугольник под строкой человека. */
+.svm-live-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 2px 8px 4px 54px;
+    padding: 6px 8px 6px 10px;
+    border: 1px solid rgba(229,72,77,.45);
+    border-radius: 8px;
+    background: rgba(229,72,77,.14);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+}
+.svm-live-card-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Превью канала: эфир — отдельные карточки над плитками людей. */
+.voice-live-cards {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.voice-live-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid rgba(229,72,77,.45);
+    border-radius: 14px;
+    background: rgba(229,72,77,.12);
+}
+.voice-live-card-icon {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: rgba(229,72,77,.22);
+    color: var(--text);
+}
+.voice-live-card-icon .call-ctrl-icon {
+    width: 24px;
+    height: 24px;
+    stroke-width: 2;
+}
+.voice-live-card-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--text2);
+    font-size: 13px;
+}
+.voice-live-card-text strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: 15px;
+}
+
+/* Камера у человека включена — вместо аватара значок веб-камеры (в превью видео нет). */
+.voice-tile.cam-hint .voice-tile-avatar {
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+}
+.voice-tile.cam-hint .voice-tile-avatar .call-ctrl-icon {
+    width: 40%;
+    height: 40%;
+    max-width: 40px;
+    max-height: 40px;
+    stroke-width: 1.8;
+}
+
+/* Карточка эфира в списке каналов: короткая, на всю ширину под именем. */
+.svm-live-card {
+    margin: 2px 6px 6px 30px;
+    padding: 6px 10px;
+    border-color: rgba(229,72,77,.55);
+    color: #ff8a8f;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+.svm-live-card .call-ctrl-icon {
+    color: #ff8a8f;
+}
+
+/* Время у большого сообщения: у высокого пузыря оно висело по центру высоты,
+   далеко от последней строки. Прижимаем к низу пузыря; для широкого (на всю
+   ширину колонки) в поле справа не помещается — тогда время уходит под пузырь. */
+@media (min-width: 761px) {
+    .msg-time { top: auto; bottom: 4px; transform: none; }
+}
+
+/* Десктоп: нативная полоса ленты скрыта, вместо неё .chat-scroll-thumb
+   (bindChatScrollThumb, events.js) поверх дока — блюр доходит до края панели,
+   а ползунок остаётся чётким над ним. */
+@media (min-width: 761px) {
+    #viewChat .msgs {
+        scrollbar-width: none;
+        padding-right: 22px;
+    }
+    #viewChat .msgs::-webkit-scrollbar { width: 0; height: 0; display: none; }
+    .chat-scroll-thumb {
+        position: absolute;
+        top: 0;
+        right: 6px;
+        z-index: 5;
+        width: 6px;
+        border-radius: 3px;
+        background: var(--sb-thumb);
+        cursor: default;
+        display: none;
+        transition: background .15s var(--ease-out), width .15s var(--ease-out);
+        will-change: transform;
+    }
+    .chat-scroll-thumb:hover,
+    .chat-scroll-thumb.dragging { background: var(--sb-thumb-active); }
+}
+@media (max-width: 760px) {
+    .chat-scroll-thumb { display: none !important; }
+}
+
+/* Короткая переписка прижата к низу, у композера, а не висит под шапкой:
+   первое сообщение без остальных оказывалось далеко от взгляда. margin-top:auto
+   у первого потомка — безопасное выравнивание: когда сообщений много, он 0 и
+   лента скроллится как обычно (в отличие от justify-content:flex-end). */
+#viewChat .msgs {
+    display: flex;
+    flex-direction: column;
+}
+#viewChat .msgs > :first-child {
+    margin-top: auto;
+}
+#viewChat .msgs > * {
+    flex-shrink: 0;
+}
+
+/* Настройка «Все сообщения с одной стороны»: свои сообщения выравниваются по
+   левому краю, как чужие; время уходит вправо от пузыря. */
+/* Без align-self у самого .msg: лента — flex-колонка, и align-self:flex-start
+   сжимал строку по содержимому, а max-width:74% у .bwrap считался от этой
+   сжатой ширины — пузырь схлопывался до «6 / 7» в столбик. Строка остаётся на
+   всю ширину (stretch), как у чужих. */
+body[data-msg-side="one"] .msg.out,
+body[data-msg-side="one"] .msg.out .bwrap,
+body[data-msg-side="one"] .msg.out .reaction-row {
+    justify-content: flex-start;
+    align-items: flex-start;
+}
+body[data-msg-side="one"] .msg.out .reaction-row { align-self: flex-start; }
+body[data-msg-side="one"] .msg.out .msg-sender { text-align: left; }
+body[data-msg-side="one"] .msg.out .msg-time {
+    left: calc(100% + 12px);
+    right: auto;
+}
+body[data-msg-side="one"] .msg.out .msg-state { justify-content: flex-start; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Настройки: читаемая ширина и переключатели вместо «голых» чекбоксов.
+   — Колонка настроек растягивалась на всю панель (до 1280px): на широком окне
+     строки справки тянулись на 150+ символов. Теперь она не шире 880px.
+   — Булевы настройки (.server-toggle.settings-toggle) были строкой с мелким
+     чекбоксом слева: нативная галочка выпадала из стиля, а включённое/выключенное
+     состояние читалось плохо. Теперь это строка «текст — переключатель справа»:
+     переключатель крупный, включённый — сплошной лайм, вся строка кликабельна.
+   ════════════════════════════════════════════════════════════════════════ */
+.settings-shell {
+    max-width: 880px;
+    gap: 16px;
+}
+.settings-body .settings-card {
+    padding: 20px;
+}
+.settings-body .settings-stack {
+    gap: 12px;
+}
+
+.settings-body .server-toggle.settings-toggle {
+    gap: 18px;
+    padding: 14px 16px;
+    margin-top: 0;
+    transition: background .15s var(--ease-out);
+}
+.settings-body .server-toggle.settings-toggle:hover {
+    background: rgba(255,255,255,.06);
+}
+.settings-body .server-toggle.settings-toggle > span {
+    min-width: 0;
+    flex: 1;
+}
+.settings-body .server-toggle.settings-toggle small {
+    margin-top: 4px;
+    line-height: 1.45;
+}
+.settings-body .server-toggle.settings-toggle > input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    order: 2;
+    flex: none;
+    position: relative;
+    width: 40px;
+    height: 24px;
+    margin: 0;
+    border-radius: 12px;
+    background: rgba(255,255,255,.16);
+    cursor: pointer;
+    transition: background .18s var(--ease-out);
+}
+.settings-body .server-toggle.settings-toggle > input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.35);
+    transition: transform .18s var(--ease-out), background .18s var(--ease-out);
+}
+.settings-body .server-toggle.settings-toggle > input[type="checkbox"]:checked {
+    background: var(--lime);
+}
+.settings-body .server-toggle.settings-toggle > input[type="checkbox"]:checked::after {
+    transform: translateX(16px);
+    background: #0b1200;
+}
+.settings-body .server-toggle.settings-toggle > input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .settings-body .server-toggle.settings-toggle > input[type="checkbox"],
+    .settings-body .server-toggle.settings-toggle > input[type="checkbox"]::after { transition: none; }
+}
+@media (max-width: 760px) {
+    .settings-body .settings-card { padding: 16px; }
+}
+
+/* Настройки: всегда одна колонка. В «Фокусе» карточки раскладывались сеткой
+   «сколько влезет по 460px»: на широком окне Аватар слева, «Игровой статус»
+   справа, «Режим в игре» под ними, порядок читался вразнобой, и колонка
+   растягивалась на всю панель. Теперь — столбец до 880px по центру, карточки
+   идут по порядку (order) сверху вниз во всех режимах. */
+body .settings-shell,
+body[data-design-mode="focus"] .settings-shell,
+body:not([data-design-mode="focus"]) #viewSettings .settings-shell {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    max-width: 880px;
+    margin-left: auto;
+    margin-right: auto;
+    gap: 14px;
+}
+
+/* Надпись в заголовке окна как уведомление об обновлении (updates.js,
+   renderTitlebarUpdate): alpha — красная, beta — жёлтая, release — лаймовая.
+   Тот же цвет держится при загрузке («Загрузка… N%») и после неё. */
+.tb-brand.is-update {
+    cursor: pointer;
+    font-weight: 800;
+    border-radius: 6px;
+    padding: 2px 8px;
+    margin: -2px -8px;
+    transition: background .15s var(--ease-out), opacity .15s var(--ease-out);
+}
+.tb-brand.is-update[data-channel="a"] { color: var(--red); }
+.tb-brand.is-update[data-channel="b"] { color: #ffc531; }
+.tb-brand.is-update[data-channel="r"] { color: var(--lime); }
+.tb-brand.is-update:hover { background: rgba(255,255,255,.07); }
+.tb-brand.is-update:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.tb-brand.is-update.is-downloading { cursor: progress; font-variant-numeric: tabular-nums; }
+.tb-brand.is-update.is-downloading:hover { background: none; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ТЕЛЕФОН, 2026-11: клавиатура, поле ввода в потоке, единая шкала скруглений,
+   жесты. Слой идёт последним и держит всю мобильную геометрию в одном месте;
+   селекторы начинаются с `html body[data-design-mode]`, чтобы перекрывать и
+   классический режим, и «Плоский», и «Фокус» (атрибут стоит всегда —
+   prefs.js: applyDesignMode), не дублируя правило на каждый режим.
+   JS-половина — mobile.js: setupMobileKeyboardAvoidance / setupMobileNavGestures,
+   viewport.js: setupMessagesViewportAnchor.
+   ════════════════════════════════════════════════════════════════════════ */
+.msgs-jump-btn,
+.swipe-reply-hint { display: none; }
+
+@media (max-width: 760px) {
+    :root {
+        /* Шкала скруглений телефона. До неё на одном экране чата встречались
+           10, 12, 14, 19 и 26px — каждое правило выбирало своё. Четыре ступени,
+           и у каждой своя роль:
+             xs — метки, счётчики, мелкие плашки;
+             sm — кнопки, поля, значки-кнопки;
+             md — карточки, строки-плитки, меню;
+             lg — поле ввода сообщения, нижние листы, окна. */
+        --m-r-xs: 8px;
+        --m-r-sm: 12px;
+        --m-r-md: 16px;
+        --m-r-lg: 22px;
+        --m-r-pill: 999px;
+        --m-bubble-r: 20px;
+        --m-bubble-join: 6px;
+        --m-gutter: 12px;
+        --m-tap: 44px;
+    }
+
+    /* «Фокус» берёт радиусы из своих токенов — на телефоне они встают на ту же
+       шкалу (10 → 12, 16 остаётся), и все его кнопки, поля и карточки
+       подтягиваются разом, а не правилом на каждый элемент. */
+    html body[data-design-mode="focus"] {
+        --f-radius: var(--m-r-sm);
+        --f-radius-l: var(--m-r-md);
+    }
+
+    /* ── Каркас: приложение занимает ровно видимую область ──────────────────
+       `--app-h` пишет mobile.js, только когда клавиатура лежит ПОВЕРХ раскладки
+       (iOS). В остальных случаях — прежние 100vh: Android-оболочка и Chrome
+       сжимают сам вьюпорт. `min-height: 100vh` у .body/.main не давал каркасу
+       стать ниже экрана, поэтому над клавиатурой iOS он остаться не мог. */
+    html body .app {
+        height: var(--app-h, 100vh);
+        grid-template-rows: minmax(0, 1fr);
+    }
+    html body .app > .body,
+    html body .app .main {
+        min-height: 0;
+        height: 100%;
+    }
+    /* Список — `position: fixed`, от высоты .app он не зависит. */
+    html body .sidebar {
+        bottom: var(--kbd-inset, 0px);
+    }
+
+    /* Клавиатура на экране: нижний безопасный отступ (жестовая полоска) закрыт
+       ею и превращается в пустую полосу под полем ввода. */
+    html body.kbd-open {
+        --m-safe-bottom: 0px;
+    }
+    /* Док при клавиатуре не нужен: печатают, а не переключают разделы. Иначе он
+       висит над клавиатурой поверх результатов поиска и последних строк списка.
+       Transform у дока инлайновый (applyMobileDockTransform) — отсюда !important. */
+    html body.kbd-open .mobile-dock {
+        transform: translate(-50%, 160%) !important;
+        pointer-events: none;
+    }
+    html body.kbd-open .contacts {
+        padding-bottom: 12px;
+    }
+    html body.kbd-open #viewSettings,
+    html body.kbd-open #viewHub,
+    html body.kbd-open #viewZaliCoin {
+        padding-bottom: 12px;
+    }
+
+    /* ── Переходы: стекло снимается и на доводке, не только под пальцем ───── */
+    body.mobile-nav-animating {
+        --m-glass: none;
+    }
+    body.mobile-nav-animating #viewChat {
+        will-change: transform;
+    }
+    /* Док размывал фон собственным blur(28px) saturate(1.8) мимо общего токена,
+       то есть не выключался ни на жесте, ни в Android-оболочке. */
+    html body[data-design-mode] .mobile-dock {
+        -webkit-backdrop-filter: var(--m-glass);
+        backdrop-filter: var(--m-glass);
+    }
+
+    /* ── Прокрутка: вертикаль — компоновщику, горизонталь — жестам ──────────
+       Жесты слушают касания пассивно (mobile.js) и не могут отменить прокрутку
+       через preventDefault — и не должны: `pan-y` говорит браузеру, что
+       горизонтальный жест прокруткой не является, ещё до первого кадра. */
+    html body #viewChat .msgs,
+    html body .contacts {
+        touch-action: pan-y;
+        overscroll-behavior-y: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+    html body #viewChat .chat-hdr {
+        touch-action: pan-y;
+    }
+    /* Строки списка диалогов за экраном не раскладываются и не рисуются: список
+       на 150 чатов стоил раскладки всех 150 строк при каждом входящем. Высота
+       строки запоминается после первого показа (auto), прокрутка не прыгает. */
+    html body .contacts .contact {
+        content-visibility: auto;
+        contain-intrinsic-size: auto 66px;
+    }
+
+    /* ── ЧАТ ──────────────────────────────────────────────────────────────── */
+
+    /* Поле ввода — обычный нижний ряд колонки чата, а не слой поверх ленты.
+       Раньше оно было `position: absolute`, а лента резервировала под него
+       жёсткие 96px: плашка ответа, вложения или три строки текста делали поле
+       выше резерва, и последние сообщения уходили под него. В потоке лента
+       заканчивается ровно над полем при любой его высоте, а её низ держит
+       setupMessagesViewportAnchor(). */
+    html body[data-design-mode] #viewChat .input-area {
+        position: relative;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        flex: 0 0 auto;
+        z-index: 5;
+        margin: 0;
+        padding: 6px var(--m-gutter) calc(8px + var(--m-safe-bottom));
+        border-radius: 0;
+        transition: none;
+    }
+    html body.kbd-open[data-design-mode] #viewChat .input-area {
+        padding-bottom: 6px;
+    }
+    html body[data-design-mode] #viewChat .msgs {
+        padding: 10px var(--m-gutter) 6px;
+        scroll-padding-bottom: 6px;
+    }
+
+    /* Шапка чата: кнопки одной высоты и одного радиуса. */
+    html body[data-design-mode] #viewChat .chat-hdr {
+        padding: calc(var(--m-safe-top) + 6px) 8px 6px;
+        gap: 6px;
+        min-height: calc(var(--m-safe-top) + 56px);
+    }
+    html body.ws-offline[data-design-mode] #viewChat .chat-hdr {
+        padding-top: calc(var(--m-safe-top) + var(--m-net-h) + 6px);
+    }
+    html body[data-design-mode] .chat-back-btn,
+    html body[data-design-mode] #viewChat .chat-hdr-actions .server-settings-btn,
+    html body[data-design-mode] #viewChat .chat-hdr-actions button {
+        width: var(--m-tap);
+        height: var(--m-tap);
+        border-radius: var(--m-r-sm);
+    }
+    html body[data-design-mode] #viewChat .chat-hdr-actions {
+        gap: 4px;
+    }
+
+    /* Пузыри: один радиус, стык внутри группы — малый. */
+    html body[data-design-mode] #viewChat .bubble {
+        border-radius: var(--m-bubble-r);
+        padding: 7px 12px 7px;
+    }
+    html body[data-design-mode] #viewChat .msg.in.group-start  .bubble,
+    html body[data-design-mode] #viewChat .msg.in.group-single .bubble { border-bottom-left-radius: var(--m-bubble-join); }
+    html body[data-design-mode] #viewChat .msg.in.group-mid    .bubble,
+    html body[data-design-mode] #viewChat .msg.in.group-end    .bubble { border-top-left-radius: var(--m-bubble-join); border-bottom-left-radius: var(--m-bubble-join); }
+    html body[data-design-mode] #viewChat .msg.out.group-start  .bubble,
+    html body[data-design-mode] #viewChat .msg.out.group-single .bubble { border-bottom-right-radius: var(--m-bubble-join); }
+    html body[data-design-mode] #viewChat .msg.out.group-mid    .bubble,
+    html body[data-design-mode] #viewChat .msg.out.group-end    .bubble { border-top-right-radius: var(--m-bubble-join); border-bottom-right-radius: var(--m-bubble-join); }
+
+    /* Поле ввода сообщения: капсула. Кнопки прижаты к нижней строке — когда
+       текст растёт в несколько строк, они остаются у большого пальца. */
+    html body[data-design-mode] #viewChat .input-bar {
+        grid-template-columns: auto auto minmax(0, 1fr) auto;
+        align-items: end;
+        gap: 2px;
+        min-height: 48px;
+        height: auto;
+        padding: 4px;
+        border-radius: var(--m-r-lg);
+    }
+    html body[data-design-mode] #viewChat .attach-btn,
+    html body[data-design-mode] #viewChat .coin-transfer-btn,
+    html body[data-design-mode] #viewChat .send-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+    }
+    html body[data-design-mode] #viewChat #msgInput {
+        align-self: center;
+        min-height: 24px;
+        padding: 9px 6px;
+        font-size: 16px;
+        line-height: 22px;
+    }
+
+    /* «К последним сообщениям» — над полем ввода, у правого края. */
+    html body #viewChat .msgs-jump-btn {
+        display: grid;
+        place-items: center;
+        position: absolute;
+        right: var(--m-gutter);
+        bottom: calc(100% + 10px);
+        width: 42px;
+        height: 42px;
+        padding: 0;
+        border: 1px solid var(--m-hairline);
+        border-radius: 50%;
+        background: var(--m-surface-2);
+        color: var(--text);
+        box-shadow: 0 6px 18px rgba(0,0,0,.38);
+        opacity: 0;
+        transform: translateY(10px) scale(.86);
+        pointer-events: none;
+        transition: opacity .16s var(--ease-out), transform .2s var(--m-spring);
+        -webkit-tap-highlight-color: transparent;
+    }
+    html body #viewChat .msgs-jump-btn svg { width: 22px; height: 22px; }
+    html body #viewChat .msgs-jump-btn.visible {
+        opacity: 1;
+        transform: none;
+        pointer-events: auto;
+    }
+    html body #viewChat .msgs-jump-btn:active { transform: scale(.92); }
+
+    /* Свайп влево по сообщению — ответ. Строка едет за пальцем (transform пишет
+       mobile.js), значок проявляется на освободившемся месте справа. */
+    html body #viewChat .swipe-reply-hint {
+        display: grid;
+        place-items: center;
+        position: absolute;
+        right: 14px;
+        top: 0;
+        z-index: 4;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(255,255,255,.11);
+        color: var(--text);
+        opacity: 0;
+        visibility: hidden;
+        transform: translate3d(0, -50%, 0) scale(.5);
+        pointer-events: none;
+    }
+    html body #viewChat .swipe-reply-hint svg { width: 18px; height: 18px; }
+    html body #viewChat .swipe-reply-hint.visible { visibility: visible; }
+    html body #viewChat .swipe-reply-hint.armed {
+        background: var(--lime);
+        color: #050505;
+    }
+    html body #viewChat .msg.swipe-reply-drag {
+        will-change: transform;
+        transition: none;
+    }
+    html body #viewChat .msg.swipe-reply-settle {
+        transition: transform .2s var(--m-spring);
+    }
+}
+
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+    html body #viewChat .msgs-jump-btn,
+    html body #viewChat .msg.swipe-reply-settle { transition: none; }
+}
+
+/* Время в строке с текстом. Раньше оно стояло отдельной строкой под текстом, и
+   «ок» занимало два ряда: лента из коротких реплик была вдвое выше, чем нужно.
+   Теперь текст — строчный, а время плавает вправо в конце последней строки;
+   не помещается — само переносится под неё. Пузырь без текста (фото, стикер)
+   получает время, как и раньше, отдельной строкой справа. */
+@media (max-width: 760px) {
+    html body[data-design-mode] #viewChat .bubble {
+        display: flow-root;
+    }
+    html body[data-design-mode] #viewChat .bubble > .msg-text {
+        display: inline;
+    }
+    html body[data-design-mode] #viewChat .bubble > .msg-time {
+        float: right;
+        width: auto;
+        margin: 7px 0 -2px 10px;
+        line-height: 14px;
+        font-size: 11.5px;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+/* ── Размытие на телефоне: только там, где за поверхностью что-то есть ────
+   Замер по DOM (2026-11): на экране чата и списка одновременно жили пять
+   backdrop-filter, и ни один ничего не размывал:
+     • .sidebar — blur(8px) во весь экран поверх собственного сплошного фона;
+     • .sidebar-head, .search-wrap, шапка чата, поле ввода — blur(12px) у
+       полупрозрачных (86–92%) полос, под которыми тот же сплошной var(--bg):
+       лента и список прокручиваются в соседнем блоке колонки и под эти полосы
+       не заходят вовсе.
+   То есть картинка не менялась, а компоновщик держал пять слоёв с фильтром и
+   пересчитывал их при каждом движении экрана. В Android-оболочке их уже
+   сняли; здесь — для всех, с тем же результатом на экране. Настоящее стекло
+   остаётся у дока: он действительно плавает над списком. Полноэкранные
+   подложки окон размывали всё приложение целиком (blur 16px на 375×812) —
+   на телефоне это сплошное затемнение. */
+@media (max-width: 760px) {
+    :root {
+        --m-glass: none;
+        --m-glass-float: blur(12px);
+    }
+    :root.is-android-shell,
+    body.mobile-nav-dragging,
+    body.mobile-nav-animating {
+        --m-glass-float: none;
+    }
+
+    html body .sidebar {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+    html body[data-design-mode] .sidebar-head,
+    html body[data-design-mode] .search-wrap,
+    html body[data-design-mode] #viewChat .chat-hdr,
+    html body[data-design-mode] #viewChat .input-area {
+        background: var(--bg);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+    html body[data-design-mode] .mobile-dock {
+        -webkit-backdrop-filter: var(--m-glass-float);
+        backdrop-filter: var(--m-glass-float);
+    }
+
+    html body .coin-transfer-modal,
+    html body .avatar-crop-overlay,
+    html body .server-overlay,
+    html body .profile-overlay {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background-color: rgba(4, 6, 10, .86);
+    }
+    html body .contacts-suggest {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background-color: #111318;
+    }
+
+    /* Кнопка отправки в «Фокусе» — сплошной лайм без свечения, как и остальные
+       акцентные пятна этого режима. */
+    html body[data-design-mode="focus"] #viewChat .send-btn {
+        box-shadow: none;
+    }
+    html body[data-design-mode] #viewChat .bubble > .msg-time {
+        margin-top: 6px;
+    }
+}
+
+/* ── Телефон: хвосты шкалы скруглений и оставшиеся размытия ─────────────── */
+@media (max-width: 760px) {
+    /* Всплывающие меню: одно умеренное размытие вместо blur(22px) saturate(1.5)
+       — под фоном меню непрозрачностью 88% разницы не видно, а стоит оно
+       заметно; в Android-оболочке и на время жеста — без размытия, сплошной фон. */
+    :root {
+        --menu-blur: var(--m-glass-float);
+    }
+    :root.is-android-shell {
+        --menu-bg: #111318;
+    }
+    /* Карточки и панели над неподвижным фоном размывать нечем. */
+    html body .settings-card,
+    html body .voice-call-expanded,
+    html body .server-modal-actions,
+    html body .logs-bar {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+
+    /* Карточки — ступень md. */
+    html body[data-design-mode] .settings-card,
+    html body[data-design-mode] .hub-action,
+    html body[data-design-mode] .hub-card {
+        border-radius: var(--m-r-md);
+    }
+    /* Меню сообщения и контекстные меню — md, пункты внутри — sm. */
+    html body[data-design-mode] .reaction-menu,
+    html body[data-design-mode] .peer-context-menu,
+    html body[data-design-mode] .contacts-suggest {
+        border-radius: var(--m-r-md);
+    }
+    html body[data-design-mode] .reaction-menu .reaction-menu-action {
+        border-radius: var(--m-r-sm);
+        min-height: var(--m-tap);
+    }
+    /* Нижние листы — lg сверху, у нижнего края экрана — без скругления. */
+    html body[data-design-mode] .coin-transfer-box {
+        border-radius: var(--m-r-lg) var(--m-r-lg) 0 0;
+    }
+    html body[data-design-mode] .zc-amount-max {
+        border-radius: var(--m-r-xs);
+    }
+    html body[data-design-mode] #viewChat .composer-context {
+        border-radius: var(--m-r-md);
+    }
+
+    /* Список: поле поиска и «+» одной высоты; подпись раздела не липнет к линии. */
+    html body[data-design-mode] .contact-add-btn {
+        width: var(--m-tap);
+        height: var(--m-tap);
+        flex: 0 0 var(--m-tap);
+        border-radius: var(--m-r-sm);
+    }
+    html body[data-design-mode] .search-input {
+        height: var(--m-tap);
+        border-radius: var(--m-r-sm);
+    }
+    html body[data-design-mode] .sidebar .nav-label {
+        padding-top: 14px;
+    }
+}
+
+/* ── Телефон: окна и листы заканчиваются над клавиатурой ───────────────────
+   Все они `position: fixed` от края до края, то есть от высоты .app не
+   зависят. Там, где клавиатура перекрывает раскладку (iOS), нижний лист
+   перевода оказывался под ней целиком, а у полноэкранных окон под клавиатуру
+   уходили кнопки действий. `--kbd-inset` в остальных случаях равен 0. */
+@media (max-width: 760px) {
+    html body .coin-transfer-modal,
+    html body .server-overlay,
+    html body .profile-overlay,
+    html body .avatar-crop-overlay,
+    html body .auth-overlay {
+        bottom: var(--kbd-inset, 0px);
+    }
+    html body .server-overlay .server-modal {
+        height: 100%;
+        min-height: 0;
+        max-height: 100%;
+    }
+    html body .profile-overlay .profile-modal {
+        max-height: 100%;
+    }
+}
+
+/* ── Телефон: фото с подписью — один блок ──────────────────────────────────
+   Картинка скруглялась на 12px сверху, подпись под ней — как отдельный пузырь
+   на 20px: два соседних элемента с разными углами. Теперь внешние углы блока —
+   радиус пузыря, стык картинки с подписью — малый, как стык пузырей в группе. */
+@media (max-width: 760px) {
+    html body[data-design-mode] #viewChat .discord-media-shell,
+    html body[data-design-mode] #viewChat .discord-media-shell > .media {
+        border-radius: var(--m-r-md);
+    }
+    html body[data-design-mode] #viewChat .image-caption-media .discord-media-shell,
+    html body[data-design-mode] #viewChat .image-caption-media .discord-media-shell > .media {
+        border-radius: var(--m-bubble-r) var(--m-bubble-r) var(--m-bubble-join) var(--m-bubble-join);
+    }
+    html body[data-design-mode] #viewChat .msg.image-caption .bubble.image-caption-text {
+        border-top-left-radius: var(--m-bubble-join);
+        border-top-right-radius: var(--m-bubble-join);
+        margin-top: 3px;
     }
 }

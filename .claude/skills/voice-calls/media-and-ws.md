@@ -57,3 +57,27 @@
 - **Камера:** выбор хранится в `zali_voice_camera_v1` как `ideal` deviceId — отключённая
   камера молча заменяется системной, а не рвёт включение. Смена на лету
   (`switchVoiceCamera`) берёт новый трек ДО остановки старого и делает `replaceTrack`.
+- **Звук демонстрации экрана** (`startScreenShare`, пикер «Звук», по умолчанию вкл):
+  `getDisplayMedia({audio})` + `systemAudio: 'include'`; аудиодорожка едет в ТОМ ЖЕ
+  MediaStream, что и картинка (`entry.screenAudioSender`). Отдаёт только Chromium
+  (Windows/WebView2; macOS WKWebView — нет), иначе демонстрация идёт без звука
+  (`voice.screenAudioShared=false`, запись в логе). **Инвариант приёма:**
+  аудиодорожка потока с id, отличным от уже играющего голоса человека, — звук
+  экрана (`isRemoteScreenStream`), а не его микрофон; иначе она вытесняла голос в
+  `remoteAudios`. Играет из `<video>` плитки: до «Смотреть» — без звука,
+  громкость 0–100 % в `audioPrefs.screenVolumePercents`, ПКМ по плитке
+  (`openScreenContextMenu`), «Звук» (deafen) глушит и его. Android (canvas-захват)
+  звука не имеет.
+- **Микрофон и другие приложения (macOS).** WebKit включает эхо-/шумоподавление через
+  системный VoiceProcessingIO; пока он держит вход, другие приложения слышат с микрофона
+  тишину. Поэтому `micAudioConstraints()` (prefs.js) на WebKit/macOS по умолчанию шлёт
+  `echoCancellation/noiseSuppression/autoGainControl: false`; в Chromium (Windows,
+  Android) — `true`. Выбор — `audioPrefs.voiceProcessing` (чекбокс в настройках),
+  применяется на лету через `setAudioInputDevice`. Любой новый `getUserMedia({audio})`
+  обязан брать ограничения оттуда, а не `audio: true`.
+- **Мигание видео.** Не присваивать `srcObject` на каждое событие дорожки и не сносить
+  `<video>` на краткий `mute`: `attachRemoteVideoStream` ждёт 2,5 с (`_dropTimer`),
+  `ended` убирает сразу; плитка получает `has-video` только после первого кадра
+  (`readyState >= 2`).
+- **Кольцо «говорит»** сглажено (`applyVoiceSpeakingState`: рост 0,5 / спад 0,16 за такт
+  80 мс, удержание 350 мс); не возвращать сырой уровень анализатора в CSS-переменную.

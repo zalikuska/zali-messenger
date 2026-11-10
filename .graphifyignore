@@ -13,6 +13,7 @@
 !web/src/
 !web/src/**
 
+!apps/
 !apps/macos/
 !apps/macos/Sources/
 !apps/macos/Sources/**
@@ -39,6 +40,9 @@
 !sdk/Swift/**
 
 !apps/android/
+!apps/android/app/
+!apps/android/app/src/
+!apps/android/app/src/main/
 !apps/android/app/src/main/java/
 !apps/android/app/src/main/java/**
 
@@ -60,3 +64,10 @@ ZaliMessenger.app/
 *.log
 .env
 .env.*
+
+# Сгенерированные копии веб-бандла внутри нативных шеллов (источник — web/src)
+apps/macos/Sources/ZaliMessenger/Resources/
+**/Resources/Web/
+apps/android/app/src/main/assets/
+apps/android/app/src/main/res/
+apps/android/app/src/main/jniLibs/

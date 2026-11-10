@@ -4,37 +4,47 @@
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
+    // Набор иконок голосового UI. Рисуются на сетке 24×24 из целых координат,
+    // обводка наследуется от <svg> (CSS подбирает толщину под размер так, чтобы на
+    // экране выходило ровно 1,5 px: см. «Иконки голосового UI» в style.css).
+    // «Выключено» — не «иконка + перечёркивание», а отдельная геометрия, где линии
+    // фигуры обрываются у диагонали: раньше косая черта шла поверх контура, и на
+    // полупрозрачном цвете места наложения выходили ярче, а тонкие линии слипались.
     voiceIcon(kind) {
-        const phone = '<path d="M6.15 4.4c-.92.16-1.62.9-1.72 1.83-.67 6.32 6.98 13.97 13.3 13.3.93-.1 1.67-.8 1.83-1.72l.36-2.08a1.18 1.18 0 0 0-.76-1.32l-3.18-1.16a1.22 1.22 0 0 0-1.27.3l-1.1 1.06a10.4 10.4 0 0 1-4.22-4.22l1.06-1.1c.34-.35.45-.86.3-1.27L9.59 4.84a1.18 1.18 0 0 0-1.32-.76l-2.12.32Z" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>';
-        const mic = '<rect x="9" y="3" width="6" height="10" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 18v3M9 21h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
-        const cam = '<rect x="3.5" y="6.5" width="12" height="11" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 10.4 20 7.6a.6.6 0 0 1 .92.51v7.78a.6.6 0 0 1-.92.51l-4.5-2.8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
-        const screen = '<rect x="3" y="4.5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5v3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 6.5v6M9.5 10 12 7.5 14.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
-        const headphones = '<path d="M4.5 13.5v-1.7a7.5 7.5 0 0 1 15 0v1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="3" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/><rect x="17" y="13" width="4" height="6.2" rx="1.7" stroke="currentColor" stroke-width="1.8"/>';
-        const chevronDown = '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
-        const chevronUp = '<path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
-        const windowIcon = '<rect x="3" y="5" width="18" height="14" rx="2.2" stroke="currentColor" stroke-width="1.8"/><path d="M3 9.5h18" stroke="currentColor" stroke-width="1.8"/><path d="M6.5 7.3h.01M9 7.3h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
-        const slash = '<path d="M19.5 4.5l-15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
-        // Положенная трубка — общепринятый знак «сбросить», понятнее
-        // перечёркнутой: трубка, повёрнутая на 135° вокруг центра.
+        const phone = '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92Z"/>';
+        const mic = '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>';
+        const micOff = '<path d="M3 3l18 18"/><path d="M15 9.3V5a3 3 0 0 0-5.7-1.3"/><path d="M9 9v3a3 3 0 0 0 5.1 2.1"/><path d="M19 10v2a7 7 0 0 1-.9 3.4"/><path d="M5 10v2a7 7 0 0 0 11.5 5.4"/><path d="M12 19v3"/>';
+        const cam = '<path d="M16 10.5 21 7.4a.5.5 0 0 1 .8.4v8.4a.5.5 0 0 1-.8.4L16 13.5"/><rect x="2" y="6" width="14" height="12" rx="2.5"/>';
+        const camOff = '<path d="M3 3l18 18"/><path d="M7 6h7a2 2 0 0 1 2 2v2.5l5-3.1a.5.5 0 0 1 .8.4v8.4"/><path d="M16 14v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 1-1.7"/>';
+        const screen = '<rect x="2" y="3" width="20" height="14" rx="2.5"/><path d="M8 21h8"/><path d="M12 17v4"/>';
+        const screenOff = '<path d="M3 3l18 18"/><path d="M20 6.5V6a3 3 0 0 0-3-3H7"/><path d="M2 8v6a3 3 0 0 0 3 3h12"/><path d="M8 21h8"/><path d="M12 17v4"/>';
+        const headphones = '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>';
+        const headphonesOff = '<path d="M3 3l18 18"/><path d="M3 12a9 9 0 0 1 1.45-4.9"/><path d="M7.1 4.45A9 9 0 0 1 21 12v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-1"/><path d="M21 14h-3a2 2 0 0 0-2 2"/><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7"/>';
+        const gamepad = '<path d="M6 11h4"/><path d="M8 9v4"/><path d="M15 12h.01"/><path d="M18 10h.01"/><path d="M17.3 5H6.7a4 4 0 0 0-4 3.6C2.6 9.4 2 14.5 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.4-1.4a2 2 0 0 1 1.4-.6h4.4a2 2 0 0 1 1.4.6L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.5-.6-6.6-.7-7.3A4 4 0 0 0 17.3 5Z"/>';
+        const chevronDown = '<path d="m6 9 6 6 6-6"/>';
+        const chevronUp = '<path d="m6 15 6-6 6 6"/>';
+        const windowIcon = '<rect x="2" y="4" width="20" height="16" rx="2.5"/><path d="M2 9h20"/>';
+        // Положенная трубка — общепринятый знак «сбросить»: трубка, повёрнутая на 135°.
         const phoneDown = `<g transform="rotate(135 12 12)">${phone}</g>`;
         const icons = {
             phone,
-            'phone-off': phone + slash,
+            'phone-off': phone + '<path d="M3 3l18 18"/>',
             'phone-down': phoneDown,
             mic,
-            'mic-off': mic + slash,
+            'mic-off': micOff,
             cam,
-            'cam-off': cam + slash,
+            'cam-off': camOff,
             screen,
-            'screen-off': screen + slash,
+            'screen-off': screenOff,
             video: cam,
             headphones,
-            'headphones-off': headphones + slash,
+            'headphones-off': headphonesOff,
+            gamepad,
             'chevron-down': chevronDown,
             'chevron-up': chevronUp,
             window: windowIcon,
         };
-        return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
+        return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
 
     // short — короткая подпись под кнопкой («Микрофон», «Камера»): label
@@ -53,13 +63,209 @@ ZaliMixin(ZaliInterface, class {
         return `<span class="call-ctrl-split">${main}<button class="call-ctrl-caret" type="button" id="voiceCameraPickBtn" title="${this.esc(label)}" aria-label="${this.esc(label)}">${this.voiceIcon('chevron-up')}</button></span>`;
     }
 
+    // ── «Кто сидит в канале» в списке каналов ────────────────────────────
+    // Состав комнат приходит только участникам, поэтому для каналов, в которых мы
+    // не сидим, раз в несколько секунд спрашиваем сервер разом про весь сервер
+    // (GET /api/servers/:id/voice); для канала, в котором мы сами, берём живые
+    // данные звонка. Секундомер канала считается от входа самого раннего участника.
+    // Порядок в списке: сначала те, кто в эфире (показывает экран), затем с камерой,
+    // дальше — по времени входа (у всех клиентов один порядок), затем по имени.
+    rankVoiceOccupants({ names, joinedAt = {}, states = {} }) {
+        const key = n => String(n).toLowerCase();
+        const rank = n => (states[key(n)]?.screen ? 0 : (states[key(n)]?.camera ? 1 : 2));
+        return names.slice().sort((a, b) => (rank(a) - rank(b))
+            || ((joinedAt[key(a)] || 0) - (joinedAt[key(b)] || 0))
+            || key(a).localeCompare(key(b)));
+    }
+
+    voiceChannelOccupants(server, channel) {
+        const raw = this.voiceChannelOccupantsRaw(server, channel);
+        return { ...raw, names: this.rankVoiceOccupants(raw) };
+    }
+
+    voiceChannelOccupantsRaw(server, channel) {
+        const roomId = this.voiceRoomKeyForChannel(server.id, channel.id);
+        const inThisCall = this.voiceLiveCallType?.() === 'channel' && String(this.voice.roomId || '') === roomId;
+        if (inThisCall) {
+            const names = Array.isArray(this.voice.participants) ? this.voice.participants.filter(Boolean) : [];
+            return { names, joinedAt: this.voice.joinedAt || {}, states: this.voice.memberStates || {} };
+        }
+        const live = this._serverVoicePresence?.[server.id]?.[channel.id];
+        if (!live) return { names: [], joinedAt: {}, states: {} };
+        return live;
+    }
+
+    async refreshServerVoicePresence() {
+        const server = this.currentServer?.();
+        if (!server?.id) return;
+        try {
+            const res = await this.apiFetch(`/api/servers/${encodeURIComponent(server.id)}/voice`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const channels = {};
+            for (const [cid, raw] of Object.entries(data.channels || {})) {
+                const joinedAt = this.parseVoiceJoinedAt(raw.joinedAt);
+                const names = (Array.isArray(raw.participants) ? raw.participants : [])
+                    .map(name => String(name || '').trim()).filter(Boolean)
+                    .sort((a, b) => ((joinedAt[a.toLowerCase()] || 0) - (joinedAt[b.toLowerCase()] || 0)) || a.localeCompare(b));
+                if (names.length) channels[cid] = { names, joinedAt, states: this.parseVoiceMemberStates(raw.states) };
+            }
+            const before = JSON.stringify(this._serverVoicePresence?.[server.id] || {});
+            if (!this._serverVoicePresence) this._serverVoicePresence = {};
+            this._serverVoicePresence[server.id] = channels;
+            if (JSON.stringify(channels) !== before && this.S.navMode === 'servers') this.renderServers();
+        } catch (e) { /* список — удобство, не критично */ }
+    }
+
+    ensureServerVoicePoll() {
+        if (this._serverVoiceTimer) return;
+        let tick = 0;
+        void this.refreshServerVoicePresence();
+        this._serverVoiceTimer = setInterval(() => {
+            if (this.S.navMode !== 'servers' || !this.currentServer?.()) {
+                this.stopServerVoicePoll();
+                return;
+            }
+            this.fillVoiceChannelTimers();
+            tick += 1;
+            if (tick % 5 === 0 && document.visibilityState !== 'hidden') void this.refreshServerVoicePresence();
+        }, 1000);
+    }
+
+    stopServerVoicePoll() {
+        if (!this._serverVoiceTimer) return;
+        clearInterval(this._serverVoiceTimer);
+        this._serverVoiceTimer = null;
+    }
+
+    voiceElapsedLabel(sinceMs) {
+        const total = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const sec = total % 60;
+        const mm = h ? String(m).padStart(2, '0') : String(m);
+        return `${h ? `${h}:` : ''}${mm}:${String(sec).padStart(2, '0')}`;
+    }
+
+    // Текст секундомера не входит в разметку (она сравнивается с прошлой, и
+    // тикающие секунды пересобирали бы список под курсором) — вписывается сюда.
+    fillVoiceChannelTimers() {
+        for (const el of document.querySelectorAll('[data-voice-since]')) {
+            const since = Number(el.getAttribute('data-voice-since')) || 0;
+            if (!since) continue;
+            const label = this.voiceElapsedLabel(since);
+            if (el.textContent !== label) el.textContent = label;
+        }
+    }
+
+    // Строки участников под голосовым каналом: аватар, имя, игра («Играет в …»),
+    // справа — «В ЭФИРЕ» (показывает экран), камера, выключенный микрофон/звук.
+    voiceChannelMembersHTML(server, channel, occupants) {
+        if (!occupants.names.length) return '';
+        const rows = occupants.names.map(name => {
+            const key = name.toLowerCase();
+            const st = occupants.states?.[key] || {};
+            const game = this.gameActivityFor?.(name);
+            // Игра — только значок, слева от аватара; название в подсказке. Слот
+            // занят всегда (пустой у тех, кто не играет), чтобы аватары стояли ровно.
+            const activity = `<span class="svm-game"${game ? ` title="${this.esc(this.gameActivityLabel(game))}"` : ' aria-hidden="true"'}>${game ? this.gameActivityIconHTML() : ''}</span>`;
+            const flags = [
+                st.screen ? '<span class="svm-live">В эфире</span>' : '',
+                st.camera ? `<span class="svm-flag" title="Камера включена">${this.voiceIcon('cam')}</span>` : '',
+                st.deafened
+                    ? `<span class="svm-flag is-off" title="Звук выключен">${this.voiceIcon('headphones-off')}</span>`
+                    : (st.muted ? `<span class="svm-flag is-off" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''),
+            ].join('');
+            return `<div class="sidebar-voice-member" data-peer="${this.esc(key)}" data-name="${this.esc(name)}">
+                ${activity}
+                <span class="svm-ava">${this.renderAvatarHTML(name, 'avatar-img', name)}</span>
+                <span class="svm-name">${this.esc(name)}</span>
+                <span class="svm-flags">${flags}</span>
+            </div>`;
+        }).join('');
+        return `<div class="sidebar-voice-members" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(channel.id)}" data-channel-kind="voice">${rows}</div>`;
+    }
+
+    // ── Превью голосового канала ─────────────────────────────────────────
+    // Комнатные voice_room_state приходят только тем, кто в комнате, поэтому
+    // снаружи канал выглядел пустым. Пока открыт экран «Зайти в канал»,
+    // спрашиваем сервер (GET …/channels/:id/voice) раз в несколько секунд.
+    voicePresenceKey() {
+        const server = this.currentServer?.();
+        const channel = this.currentChannel?.();
+        return server?.id && channel?.id ? `${server.id}:${channel.id}` : '';
+    }
+
+    voicePresenceNames() {
+        const data = this._voicePresence;
+        if (!data || data.key !== this.voicePresenceKey()) return [];
+        return this.rankVoiceOccupants({ names: data.names, joinedAt: data.joinedAt, states: data.states });
+    }
+
+    voicePresenceStates() {
+        const data = this._voicePresence;
+        return (data && data.key === this.voicePresenceKey()) ? (data.states || {}) : {};
+    }
+
+    async refreshVoicePresence() {
+        const key = this.voicePresenceKey();
+        if (!key) return;
+        const [serverId, channelId] = [this.currentServer().id, this.currentChannel().id];
+        try {
+            const res = await this.apiFetch(`/api/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/voice`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const joinedAt = this.parseVoiceJoinedAt(data.joinedAt);
+            const names = (Array.isArray(data.participants) ? data.participants : [])
+                .map(name => String(name || '').trim()).filter(Boolean)
+                .sort((a, b) => ((joinedAt[a.toLowerCase()] || 0) - (joinedAt[b.toLowerCase()] || 0)) || a.localeCompare(b));
+            const prev = this._voicePresence;
+            const states = this.parseVoiceMemberStates(data.states);
+            const changed = !prev || prev.key !== key || prev.names.join('\n') !== names.join('\n')
+                || JSON.stringify(prev.states) !== JSON.stringify(states);
+            this._voicePresence = { key, names, joinedAt, states };
+            if (changed && key === this.voicePresenceKey()) this.scheduleRenderVoicePanel(0);
+        } catch (e) { /* превью — удобство, не критично */ }
+    }
+
+    ensureVoicePresencePoll() {
+        if (this._voicePresenceTimer) return;
+        void this.refreshVoicePresence();
+        this._voicePresenceTimer = setInterval(() => {
+            if (document.visibilityState === 'hidden' || !document.getElementById('viewChat')?.classList.contains('active')) return;
+            void this.refreshVoicePresence();
+        }, 4000);
+    }
+
+    stopVoicePresencePoll() {
+        if (!this._voicePresenceTimer) return;
+        clearInterval(this._voicePresenceTimer);
+        this._voicePresenceTimer = null;
+    }
+
     // Discord-style call stage: one rectangular tile per participant, avatar in
     // the middle, name badge at the bottom — the tile *is* the participant list,
     // and it's also where that participant's camera feed mounts (see
     // mountVoiceVideoElements, which fills `.voice-tile-media` by data-peer).
     // Keyed on the lowercased name because every other voice code path
     // (participants, remoteVideos, remoteAudios) normalises that way.
-    renderVoiceTiles() {
+    // Эфир в превью — отдельный прямоугольник над плитками людей (сам кадр доступен
+    // только после входа и «Смотреть»): значок монитора, чей экран, красная метка.
+    voicePreviewLiveCardsHTML(preview) {
+        const live = preview.names.filter(name => preview.states?.[name.toLowerCase()]?.screen);
+        if (!live.length) return '';
+        return `<div class="voice-live-cards">${live.map(name => `
+            <div class="voice-live-card" data-peer="${this.esc(name.toLowerCase())}">
+                <span class="voice-live-card-icon">${this.voiceIcon('screen')}</span>
+                <span class="voice-live-card-text"><strong>${this.esc(name)}</strong><span>показывает экран</span></span>
+                <span class="svm-live">В эфире</span>
+            </div>`).join('')}</div>`;
+    }
+
+    // previewNames — превью голосового канала, в котором мы не состоим: показываем
+    // только тех, кого назвал сервер (voicePresenceNames), без нас самих и без
+    // медиа-карт текущего звонка.
+    renderVoiceTiles(previewNames = null, previewStates = null) {
         const seen = new Set();
         const participants = [];
         const push = name => {
@@ -70,31 +276,42 @@ ZaliMixin(ZaliInterface, class {
             seen.add(key);
             participants.push(raw);
         };
-        push(this.myName());
-        for (const name of (Array.isArray(this.voice.participants) ? this.voice.participants : [])) push(name);
-        // Someone whose media arrived before the room-state snapshot listing them
-        // would otherwise have a video element with no tile to mount into.
-        for (const name of this.voice.remoteVideos.keys()) push(name);
-        for (const name of this.voice.remoteAudios.keys()) push(name);
+        if (Array.isArray(previewNames)) {
+            for (const name of previewNames) push(name);
+        } else {
+            push(this.myName());
+            for (const name of (Array.isArray(this.voice.participants) ? this.voice.participants : [])) push(name);
+            // Someone whose media arrived before the room-state snapshot listing them
+            // would otherwise have a video element with no tile to mount into.
+            for (const name of this.voice.remoteVideos.keys()) push(name);
+            for (const name of this.voice.remoteAudios.keys()) push(name);
+        }
 
         if (!participants.length) {
-            return '<div class="voice-empty">Пока никого нет</div>';
+            return `<div class="voice-empty">${Array.isArray(previewNames) ? 'В канале пока никого — зайдите первым' : 'Пока никого нет'}</div>`;
         }
         const myName = String(this.myName() || '').trim().toLowerCase();
-        const { shown, overflow } = this.splitVoiceParticipants(participants);
+        // Превью уже упорядочено (эфир → камера → время входа) тем же правилом, что и
+        // список слева; пересортировка по живым картам звонка (их у нас нет) сбила бы его.
+        const { shown, overflow } = Array.isArray(previewNames)
+            ? { shown: participants.slice(0, this.voiceTileLimit()), overflow: participants.slice(this.voiceTileLimit()) }
+            : this.splitVoiceParticipants(participants);
         const tiles = `<div class="voice-tiles" id="voiceTiles">` + shown.map(name => {
             const key = name.toLowerCase();
             const mine = key === myName;
-            // Mute state is only known for ourselves — the protocol carries no
-            // per-peer mic state, so no badge is drawn for remote participants
-            // rather than a badge that would be a guess.
-            const muted = mine && !!this.voice.muted;
+            // Чужой микрофон — по самоописанию участника (voice_state); клиент
+            // старой версии его не шлёт, и тогда значка нет, а не догадка.
+            const states = Array.isArray(previewNames) ? previewStates : this.voice.memberStates;
+            const muted = mine ? !!this.voice.muted : !!states?.[key]?.muted;
+            // В превью видео нет, но у человека с включённой камерой вместо аватара —
+            // плейсхолдер веб-камеры: так сразу видно, кто покажется в кадре.
+            const camHint = Array.isArray(previewNames) && !!states?.[key]?.camera;
             return `
-                <div class="voice-tile ${mine ? 'mine' : ''}" data-peer="${this.esc(key)}">
+                <div class="voice-tile ${mine ? 'mine' : ''}${camHint ? ' cam-hint' : ''}" data-peer="${this.esc(key)}" data-name="${this.esc(name)}">
                     <div class="voice-tile-media"></div>
                     <div class="voice-tile-person">
                         <span class="voice-level-ring" aria-hidden="true"></span>
-                        <div class="voice-tile-avatar">${this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
+                        <div class="voice-tile-avatar">${camHint ? this.voiceIcon('cam') : this.renderAvatarHTML(name, 'voice-tile-ava', name)}</div>
                     </div>
                     <div class="voice-tile-footer">
                         ${muted ? `<span class="voice-tile-mic muted" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''}
@@ -106,11 +323,48 @@ ZaliMixin(ZaliInterface, class {
         if (!overflow.length) return `<div class="voice-tiles-wrap" id="voiceTilesWrap">${tiles}</div>`;
         const dots = overflow.map(name => {
             const key = name.toLowerCase();
-            return `<div class="voice-dot" data-peer="${this.esc(key)}" title="${this.esc(name)}">${this.renderAvatarHTML(name, 'avatar-img', name)}</div>`;
+            return `<div class="voice-dot" data-peer="${this.esc(key)}" data-name="${this.esc(name)}" title="${this.esc(name)}">${this.renderAvatarHTML(name, 'avatar-img', name)}</div>`;
         }).join('');
         return `<div class="voice-tiles-wrap" id="voiceTilesWrap">${tiles}`
             + `<div class="voice-overflow" id="voiceOverflow" role="group" aria-label="${this.esc('Ещё ' + overflow.length)}">`
             + `<span class="voice-overflow-label">Ещё ${overflow.length}</span>${dots}</div></div>`;
+    }
+
+    // Самоописание участников комнаты (voice_state): имя в нижнем регистре →
+    // {muted, deafened, camera, screen}. Протокол раньше не нёс состояния собеседников,
+    // поэтому чужой микрофон и камера нигде не показывались.
+    parseVoiceMemberStates(raw) {
+        const out = {};
+        if (!raw || typeof raw !== 'object') return out;
+        for (const [name, st] of Object.entries(raw)) {
+            const key = String(name || '').trim().toLowerCase();
+            if (!key || !st || typeof st !== 'object') continue;
+            out[key] = { muted: !!st.muted, deafened: !!st.deafened, camera: !!st.camera, screen: !!st.screen };
+        }
+        return out;
+    }
+
+    // Сообщает серверу, что у нас с микрофоном/звуком/камерой/экраном. Вызывается из
+    // renderVoicePanel (его зовёт каждый переход состояния звонка) и с keepalive;
+    // повтор того же состояния не шлётся, пока не сменилась сессия в комнате.
+    syncVoiceMemberState({ force = false } = {}) {
+        const roomId = String(this.voice.roomId || '').trim();
+        const status = String(this.voice.status || '');
+        const roomType = String(this.voice.roomType || '').trim();
+        if (!roomId || (status !== 'connecting' && status !== 'connected') || (roomType !== 'channel' && roomType !== 'dm')) return;
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const state = {
+            muted: !!this.voice.muted,
+            deafened: !!this.voice.deafened,
+            camera: !!this.voice.cameraOn,
+            screen: !!this.voice.screenSharing,
+        };
+        // Время входа в сигнатуре: после выхода и повторного входа сервер забыл
+        // состояние, и оно должно уйти заново.
+        const signature = `${roomId}|${this.voice.joinedAt?.[me] || 0}|${JSON.stringify(state)}`;
+        if (!force && signature === this._voiceStateSig) return;
+        this._voiceStateSig = signature;
+        this.sendVoiceEvent({ type: 'voice_state', roomId, roomType, ...state });
     }
 
     // Keys are lowercased so lookups match every other voice map.
@@ -135,6 +389,12 @@ ZaliMixin(ZaliInterface, class {
         if (this.voice.screenSharing) sharers.add(me);
         const cameras = new Set(Array.from(this.voice.remoteVideos.keys(), name => String(name).trim().toLowerCase()));
         if (this.voice.cameraOn) cameras.add(me);
+        // Самоописание участников (voice_state) знает про экран и камеру ещё до того,
+        // как дошло видео: эфир и камера поднимают человека наверх сразу.
+        for (const [key, st] of Object.entries(this.voice.memberStates || {})) {
+            if (st.screen) sharers.add(key);
+            if (st.camera) cameras.add(key);
+        }
         const joinedAt = this.voice.joinedAt || {};
         const firstSeen = this.voice.firstSeen instanceof Map ? this.voice.firstSeen : (this.voice.firstSeen = new Map());
         const now = Date.now();
@@ -281,7 +541,23 @@ ZaliMixin(ZaliInterface, class {
     // only where the tiles are shown.
     // `embedded` is the voice channel's own view: the call is the whole screen
     // there already, so there is nothing to collapse back to.
-    renderVoiceCallExpanded({ title, actionButtons, embedded = false }) {
+    renderVoiceCallExpanded({ title, actionButtons, embedded = false, preview = null }) {
+        if (preview) {
+            const count = preview.names.length;
+            const countLabel = count ? `${count} в канале` : 'Никого в канале';
+            return `
+                <div class="voice-call-expanded embedded is-preview" id="voiceCallExpanded">
+                    <div class="voice-call-expanded-header">
+                        <div class="voice-call-expanded-title">${this.esc(title)}</div>
+                        <div class="voice-preview-count${count ? ' has-people' : ''}">${this.esc(countLabel)}</div>
+                    </div>
+                    <div class="voice-stage" id="voiceStage"></div>
+                    ${this.voicePreviewLiveCardsHTML(preview)}
+                    <div class="voice-call-expanded-grid">${this.renderVoiceTiles(preview.names, preview.states)}</div>
+                    <div class="voice-join-bar">${actionButtons.join('')}</div>
+                </div>
+            `;
+        }
         const header = embedded
             ? `<div class="voice-call-expanded-header">
                     <div class="voice-call-expanded-title">${this.esc(title)}</div>
@@ -355,7 +631,7 @@ ZaliMixin(ZaliInterface, class {
                 actionButtons.push(this.cameraCtrlSplit({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
             } else {
-                actionButtons.push(`<button class="voice-btn" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Присоединиться</span></button>`);
+                actionButtons.push(`<button class="voice-btn voice-join-big" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Зайти в канал</span></button>`);
             }
         } else if (this.S.navMode === 'dm' && this.S.current) {
             if (activeRoom) {
@@ -383,9 +659,18 @@ ZaliMixin(ZaliInterface, class {
         // The call timer is owned by renderVoiceCallStrip, which runs on every
         // renderVoicePanel — not here, where a non-call view used to stop it.
         if (activeRoom) {
+            this.stopVoicePresencePoll();
             if (isVoice) return this.renderVoiceCallExpanded({ title, actionButtons, embedded: true });
             return this.voice.expanded ? this.renderVoiceCallExpanded({ title, actionButtons }) : '';
         }
+
+        // Голосовой канал, в котором мы не состоим: превью (кто сейчас внутри) и
+        // большая кнопка входа внизу — на месте панели управления звонком.
+        if (isVoice) {
+            this.ensureVoicePresencePoll();
+            return this.renderVoiceCallExpanded({ title, actionButtons, embedded: true, preview: { names: this.voicePresenceNames(), states: this.voicePresenceStates() } });
+        }
+        this.stopVoicePresencePoll();
 
         const sub = isVoice
             ? 'Нажмите «Присоединиться», чтобы войти в канал'
@@ -455,6 +740,10 @@ ZaliMixin(ZaliInterface, class {
             this.stopRingtone();
         }
         this.renderVoicePanelBody();
+        this.syncVoiceMemberState();
+        // Список каналов слева показывает, кто сидит в голосовых каналах: любое
+        // изменение звонка (вход, выход, состав, значки) отражается и там.
+        if (this.S.navMode === 'servers') this.renderServers?.();
         // After the panel: whether the strip shows depends on what the panel
         // just decided to cover (a voice channel's own view, a DM's fullscreen grid).
         this.renderVoiceCallStrip();
@@ -481,6 +770,8 @@ ZaliMixin(ZaliInterface, class {
             panel.innerHTML = '';
             panel.classList.remove('has-stage', 'call-bar-mode', 'call-expanded-mode', 'call-room-mode');
             this._voiceTileNodes = null;
+            this._voicePanelHtml = '';
+            this.stopVoicePresencePoll();
             return;
         }
         panel.hidden = false;
@@ -489,6 +780,16 @@ ZaliMixin(ZaliInterface, class {
         // run well past that at their 16:9 aspect ratio.
         const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
         panel.classList.toggle('has-stage', hasStage);
+        // Разметка не изменилась (переключение вкладки, повторный вызов из
+        // вспомогательных обновлений): DOM уже верный, а пересборка innerHTML
+        // выбрасывает каждый <video> из документа и вставляет заново — на кадр-два
+        // превью камеры и демонстрации экрана гаснут, это и было «мигание».
+        // Оставляем узлы как есть и лишь донастраиваем видео.
+        if (this._voicePanelHtml === html && panel.firstElementChild) {
+            this.mountVoiceVideoElements();
+            return;
+        }
+        this._voicePanelHtml = html;
         panel.innerHTML = html;
         // The fullscreen DM grid is an overlay over the whole chat; a voice
         // channel's embedded call just fills the panel's own grid row.
@@ -713,26 +1014,64 @@ ZaliMixin(ZaliInterface, class {
     mountVoiceVideoElements() {
         const stage = document.getElementById('voiceStage');
         if (stage) {
-            stage.replaceChildren();
+            // Состав сцены: [видео, подпись, закрыто ли превью]. Если он совпадает с
+            // тем, что уже смонтировано, ничего не трогаем — иначе <video> вынимается
+            // из документа и вставляется заново, и кадр мигает.
+            // Чужой экран изначально закрыт: размытый кадр и «Смотреть». Первые
+            // секунды демонстрации идут в низком разрешении (кодек ещё набирает
+            // качество), и размытие прячет это; клик открывает поток. Решение
+            // хранится на самом <video> (dataset.watching): новая демонстрация —
+            // новый элемент — снова закрыта, а перерисовки панели его не сбрасывают.
+            const wanted = [];
             if (this.voice.localScreenVideoEl && this.voice.screenSharing) {
-                const wrap = document.createElement('div');
-                wrap.className = 'voice-stage-tile';
-                wrap.appendChild(this.voice.localScreenVideoEl);
-                const label = document.createElement('span');
-                label.className = 'voice-video-label';
-                label.textContent = 'Ваш экран';
-                wrap.appendChild(label);
-                stage.appendChild(wrap);
+                wanted.push([this.voice.localScreenVideoEl, 'Ваш экран', false, '']);
             }
             for (const [peer, video] of this.voice.remoteScreens.entries()) {
-                const wrap = document.createElement('div');
-                wrap.className = 'voice-stage-tile';
-                wrap.appendChild(video);
-                const label = document.createElement('span');
-                label.className = 'voice-video-label';
-                label.textContent = `Экран: ${peer}`;
-                wrap.appendChild(label);
-                stage.appendChild(wrap);
+                wanted.push([video, `Экран: ${peer}`, !video.dataset.watching, peer]);
+            }
+            const tilesNow = Array.from(stage.children);
+            const same = tilesNow.length === wanted.length && wanted.every(([video, text, gated], i) => {
+                const tile = tilesNow[i];
+                return tile.firstElementChild === video
+                    && tile.querySelector('.voice-video-label')?.textContent === text
+                    && tile.classList.contains('is-gated') === gated;
+            });
+            if (!same) {
+                stage.replaceChildren();
+                for (const [video, text, gated, peer] of wanted) {
+                    const wrap = document.createElement('div');
+                    wrap.className = `voice-stage-tile${gated ? ' is-gated' : ''}`;
+                    wrap.appendChild(video);
+                    const label = document.createElement('span');
+                    label.className = 'voice-video-label';
+                    label.textContent = text;
+                    wrap.appendChild(label);
+                    if (gated) {
+                        const watch = document.createElement('button');
+                        watch.type = 'button';
+                        watch.className = 'voice-screen-watch';
+                        watch.setAttribute('aria-label', `Смотреть: ${text}`);
+                        watch.innerHTML = `<span class="voice-screen-watch-pill">${this.voiceIcon('screen')}<span>Смотреть</span></span>`;
+                        watch.addEventListener('click', () => {
+                            video.dataset.watching = '1';
+                            wrap.classList.remove('is-gated');
+                            watch.remove();
+                            // Звук включается вместе с картинкой, не раньше; клик — это
+                            // и жест пользователя, без которого браузер не даст играть.
+                            this.applyScreenVolume(peer);
+                            video.play?.().catch(() => {});
+                        });
+                        wrap.appendChild(watch);
+                    }
+                    // ПКМ по чужой демонстрации — громкость её звука.
+                    if (peer) {
+                        wrap.addEventListener('contextmenu', (event) => {
+                            event.preventDefault();
+                            this.openScreenContextMenu(peer, event.clientX, event.clientY);
+                        });
+                    }
+                    stage.appendChild(wrap);
+                }
             }
         }
         const tiles = document.getElementById('voiceTiles');
@@ -746,24 +1085,45 @@ ZaliMixin(ZaliInterface, class {
         const byPeer = new Map();
         const root = document.getElementById('voiceTilesWrap') || tiles;
         for (const tile of root.querySelectorAll('.voice-tile, .voice-dot')) {
-            tile.classList.remove('has-video');
-            const media = tile.querySelector('.voice-tile-media');
-            if (media) media.replaceChildren();
             byPeer.set(tile.dataset.peer || '', tile);
         }
         this._voiceTileNodes = byPeer;
-        const mountVideo = (peer, video) => {
+        // Сначала — какое видео должно стоять в какой плитке, потом — минимальная
+        // правка: уже стоящее на месте видео не трогаем (вынуть и вставить
+        // <video> = мигающий кадр), лишнее убираем.
+        const wantedVideo = new Map();
+        const wantVideo = (peer, video) => {
             const key = String(peer || '').trim().toLowerCase();
-            if (!key || !video) return;
-            const tile = byPeer.get(key);
-            const media = tile?.querySelector('.voice-tile-media');
-            if (!media) return;
-            media.appendChild(video);
-            tile.classList.add('has-video');
+            if (!key || !video || !byPeer.get(key)?.querySelector('.voice-tile-media')) return;
+            wantedVideo.set(key, video);
         };
-        if (this.voice.cameraOn) mountVideo(this.myName(), this.voice.localVideoEl);
+        if (this.voice.cameraOn) wantVideo(this.myName(), this.voice.localVideoEl);
         for (const [peer, video] of this.voice.remoteVideos.entries()) {
-            mountVideo(peer, video);
+            wantVideo(peer, video);
+        }
+        for (const [key, tile] of byPeer) {
+            const media = tile.querySelector('.voice-tile-media');
+            if (!media) continue;
+            const video = wantedVideo.get(key);
+            if (!video) {
+                if (media.childNodes.length) media.replaceChildren();
+                tile.classList.remove('has-video');
+                continue;
+            }
+            if (media.childNodes.length !== 1 || media.firstChild !== video) media.replaceChildren(video);
+            // Аватар прячется только когда у видео есть первый кадр: раньше класс
+            // ставился сразу, и до прихода кадра плитка была просто чёрной.
+            const ready = video.readyState >= 2;
+            tile.classList.toggle('has-video', ready);
+            if (!ready && !video._readyHook) {
+                video._readyHook = true;
+                const onReady = () => {
+                    video._readyHook = false;
+                    video.closest('.voice-tile, .voice-dot')?.classList.add('has-video');
+                };
+                video.addEventListener('loadeddata', onReady, { once: true });
+                video.addEventListener('playing', onReady, { once: true });
+            }
         }
         this.applyVoiceSpeakingState();
         this.fitVoiceTiles();
@@ -783,14 +1143,27 @@ ZaliMixin(ZaliInterface, class {
         // ~60 % шкалы, где уже громкая речь. Пишется только при заметном
         // изменении, чтобы 8 обновлений в секунду не трогали стиль впустую.
         const LEVEL_FULL = 60;
+        const SPEAKING_HOLD_MS = 350;
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         for (const [peer, tile] of byPeer) {
             const percent = Number(this._voiceTileLevels[peer] || 0);
-            const level = Math.round(Math.min(1, percent / LEVEL_FULL) * 50) / 50;
+            // Мгновенный уровень анализатора рваный (слоги, паузы, шум): кольцо
+            // прыгало на каждом замере. Сглаживаем: рост быстрый (чтобы начало речи
+            // не запаздывало), спад медленный (чтобы кольцо не дёргалось в паузах).
+            const target = Math.min(1, percent / LEVEL_FULL);
+            const prev = tile._voiceSmooth || 0;
+            let smooth = prev + (target - prev) * (target > prev ? 0.5 : 0.16);
+            if (smooth < 0.015) smooth = 0;
+            tile._voiceSmooth = smooth;
+            const level = Math.round(smooth * 50) / 50;
             if (tile._voiceLevel !== level) {
                 tile._voiceLevel = level;
                 tile.style.setProperty('--voice-level', String(level));
             }
-            const speaking = percent >= SPEAKING_THRESHOLD;
+            // «Говорит» держится ещё долю секунды после последнего громкого замера —
+            // иначе обводка мигала на каждой паузе между словами.
+            if (percent >= SPEAKING_THRESHOLD) tile._speakUntil = now + SPEAKING_HOLD_MS;
+            const speaking = now < (tile._speakUntil || 0);
             // classList.toggle with an explicit force flag still writes the
             // attribute every call, which dirties style on tiles that did not
             // change. Only touch the ones whose state actually flipped.

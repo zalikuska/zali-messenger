@@ -231,11 +231,88 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // ПКМ по чужой демонстрации экрана: громкость ЕЁ звука (отдельно от голоса
+    // этого человека) и быстрое выключение. Меню и закрытие — те же, что у
+    // контекстного меню контакта (один #contactContextMenu на экране).
+    openScreenContextMenu(peer, x, y) {
+        this.closeContactContextMenu();
+        const name = String(peer || '').trim();
+        if (!name) return;
+        const hasAudio = this.remoteScreenHasAudio(name);
+        const percent = this.getScreenVolumePercent(name);
+        const muted = !!this.voice.screenMuted?.has(name);
+        const menu = document.createElement('div');
+        menu.id = 'contactContextMenu';
+        menu.className = 'peer-context-menu';
+        menu.setAttribute('role', 'menu');
+        menu.tabIndex = -1;
+        menu.innerHTML = hasAudio ? `
+            <div class="peer-context-menu-volume-head" style="padding:8px 12px 0"><span>Экран: ${this.esc(name)}</span></div>
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
+                ${this.voiceIcon(muted ? 'headphones' : 'headphones-off')}<span>${muted ? 'Включить звук экрана' : 'Выключить звук экрана'}</span>
+            </button>
+            <div class="peer-context-menu-volume">
+                <div class="peer-context-menu-volume-head"><span>Громкость</span><strong id="screenVolumeValue">${percent}%</strong></div>
+                <input type="range" min="0" max="100" step="5" value="${percent}" id="screenVolumeRange"
+                       class="peer-context-menu-range" aria-label="Громкость звука демонстрации">
+            </div>
+        ` : `
+            <div class="peer-context-menu-volume-head" style="padding:8px 12px 0"><span>Экран: ${this.esc(name)}</span></div>
+            <div class="peer-context-menu-item" role="note" style="opacity:.7;cursor:default">${this.voiceIcon('headphones-off')}<span>Без звука: собеседник не передаёт звук экрана</span></div>
+        `;
+        document.body.appendChild(menu);
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        const pad = 8;
+        const flipX = x + width + pad > window.innerWidth && x - width > pad;
+        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        menu.style.left = `${Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad))}px`;
+        menu.style.top = `${Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad))}px`;
+        menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
+
+        menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
+            if (!this.voice.screenMuted) this.voice.screenMuted = new Set();
+            if (this.voice.screenMuted.has(name)) this.voice.screenMuted.delete(name);
+            else this.voice.screenMuted.add(name);
+            this.applyScreenVolume(name);
+            this.closeContactContextMenu();
+        });
+        const range = menu.querySelector('#screenVolumeRange');
+        const label = menu.querySelector('#screenVolumeValue');
+        const paintRange = (value) => range?.style.setProperty('--fill', `${Math.max(0, Math.min(100, value))}%`);
+        paintRange(percent);
+        range?.addEventListener('input', () => {
+            const value = Number(range.value) || 0;
+            if (label) label.textContent = `${value}%`;
+            paintRange(value);
+            this.setScreenVolumePercent(name, value);
+        });
+
+        const keyHandler = (evt) => {
+            if (!menu.isConnected) return;
+            if (evt.key === 'Escape') { evt.preventDefault(); this.closeContactContextMenu(); }
+        };
+        this._contactContextMenuKeyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler, true);
+        menu.focus({ preventScroll: true });
+        const outsideHandler = (evt) => {
+            if (menu.contains(evt.target)) return;
+            this.closeContactContextMenu();
+        };
+        this._contactContextMenuOutsideHandler = outsideHandler;
+        setTimeout(() => {
+            document.addEventListener('click', outsideHandler);
+            document.addEventListener('contextmenu', outsideHandler);
+        }, 0);
+    }
+
     // Right-click on a contact — notification mute (existing behavior) plus
     // per-contact call volume, applied live to that peer's WebAudio gain node
     // (see ensureRemotePlaybackNode/applyPeerVolume) when they're in a call,
     // and persisted for future calls either way.
-    openContactContextMenu(peer, x, y) {
+    // fromVoice — меню открыто по человеку в звонке/списке голосового канала: он
+    // не обязательно контакт, поэтому «Удалить из контактов» и громкость для себя не нужны.
+    openContactContextMenu(peer, x, y, { fromVoice = false } = {}) {
         this.closeContactContextMenu();
         const name = String(peer || '').trim();
         if (!name) return;
@@ -268,12 +345,12 @@ ZaliMixin(ZaliInterface, class {
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
                 ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
-            <div class="peer-context-menu-volume">
+            ${(fromVoice && isSelf) ? '' : `<div class="peer-context-menu-volume">
                 <div class="peer-context-menu-volume-head"><span>Громкость</span><strong id="contactVolumeValue">${percent}%</strong></div>
                 <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
                        class="peer-context-menu-range" aria-label="Громкость собеседника">
-            </div>
-            ${isSelf ? '' : `
+            </div>`}
+            ${(isSelf || fromVoice) ? '' : `
             <div class="peer-context-menu-sep" aria-hidden="true"></div>
             <button type="button" class="peer-context-menu-item is-danger" role="menuitem" data-action="remove">
                 ${this.uiIcon('trash')}<span>Удалить из контактов</span>

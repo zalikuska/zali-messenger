@@ -201,7 +201,7 @@ ZaliMixin(ZaliInterface, class {
         }
         let stream;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: this.micAudioConstraints() });
         } catch (error) {
             throw this.addonError('denied', 'Нет доступа к микрофону — разрешите его приложению');
         }

@@ -13,22 +13,19 @@ ZaliMixin(ZaliInterface, class {
     openServerOverlay() {
         const overlay = document.getElementById('serverOverlay');
         if (overlay) {
-            overlay.hidden = false;
-            requestAnimationFrame(() => {
-                overlay.classList.add('visible');
-                this.syncSidebarPanel?.({ force: true });
-            });
+            // revealLayer, а не hidden=false + класс в requestAnimationFrame: закрытие
+            // в течение 180 мс оставляло таймер, который прятал уже открытый заново
+            // слой, а открытие с мгновенным закрытием дорисовывало класс после него.
+            this.revealLayer(overlay);
+            this.syncSidebarPanel?.({ force: true });
         }
     }
 
     closeServerOverlay() {
         const overlay = document.getElementById('serverOverlay');
         if (overlay) {
-            overlay.classList.remove('visible');
+            this.concealLayer(overlay);
             this.syncSidebarPanel?.({ force: true });
-            setTimeout(() => {
-                overlay.hidden = true;
-            }, 180);
         }
     }
 

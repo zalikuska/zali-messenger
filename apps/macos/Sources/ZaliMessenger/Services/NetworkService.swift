@@ -63,7 +63,16 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private var pingTimeoutWorkItem: DispatchWorkItem?
     private var receiveLoopTask: Task<Void, Never>?
     private var pendingOutboxJSON: String = "[]"
-    private var messageCacheJSON: String = #"{"chats":{},"serverChats":{}}"#
+    private var messageCacheJSON: String = #"{"chats":{},"serverChats":{}}"# {
+        didSet { messageCacheGeneration &+= 1 }
+    }
+    /// Растёт при каждой замене messageCacheJSON — по нему cachedHistoryMessage
+    /// понимает, что индекс устарел, не сравнивая мегабайтные строки.
+    private var messageCacheGeneration = 0
+    private let historyReuseLock = NSLock()
+    private var historyReuseGeneration = -1
+    private var historyReuseBuiltAt: TimeInterval = 0
+    private var historyReuseIndex: [String: [String: Any]] = [:]
 
     // Voice signaling runs on its own dedicated WebSocket, independent of the
     // message socket's connection health — mirrors Windows' VoiceBridge/run_voice_transport.
@@ -310,6 +319,70 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         connectionQueue.sync {
             messageCacheJSON
         }
+    }
+
+    /// Сообщение истории, которое веб-слой уже держит расшифрованным в своём кэше
+    /// сообщений (тот же messageCacheJSON, что подкладывается в WebView при запуске),
+    /// — чтобы не скачивать и не расшифровывать его заново. Без этого каждый запуск
+    /// заново расшифровывал всю загружаемую историю: два PBKDF2 на 210 000 итераций
+    /// на сообщение, ~230 мс CPU; 222 сообщения — ~50 с процессора и ~14 с до
+    /// появления чата (sample + perf_probe, 2026-10-22).
+    ///
+    /// Годится только запись, расшифрованная из ТОГО ЖЕ архива: поле `archive`
+    /// ставит WebView.renderHistoryRecord, а правка сообщения пишет на сервере новый
+    /// файл под новым именем — отредактированное сообщение расшифруется заново.
+    /// Вложения обязаны быть с данными, иначе веб-слой подменил бы ими свои.
+    /// Своё отправленное сообщение (тот же clientId) веб-слой при загрузке истории
+    /// сопоставляет по clientId и содержимое ответа не берёт (state_sync.js,
+    /// finalizePendingMessage) — его расшифровка была чистой потерей.
+    ///
+    /// Зовётся из фоновых задач: первый вызов после изменения кэша разбирает JSON.
+    func cachedHistoryMessage(id: String, archive: String, clientId: String, sender: String) -> [String: Any]? {
+        guard !id.isEmpty else { return nil }
+        let (json, generation) = connectionQueue.sync { (messageCacheJSON, messageCacheGeneration) }
+        let me = currentUser
+        historyReuseLock.lock()
+        defer { historyReuseLock.unlock() }
+        let now = Date().timeIntervalSince1970
+        // Пока история грузится, веб-слой пересохраняет кэш часто; нужные здесь
+        // записи — из прошлых запусков и от этого не меняются, так что индекс
+        // перестраивается не чаще раза в 5 с.
+        if historyReuseGeneration < 0 || (generation != historyReuseGeneration && now - historyReuseBuiltAt > 5) {
+            historyReuseIndex = Self.buildHistoryReuseIndex(json)
+            historyReuseGeneration = generation
+            historyReuseBuiltAt = now
+        }
+        guard let cached = historyReuseIndex[id] else { return nil }
+        let cachedClientId = (cached["clientId"] as? String) ?? (cached["client_id"] as? String) ?? ""
+        if !clientId.isEmpty, cachedClientId == clientId, !me.isEmpty, sender == me {
+            return cached
+        }
+        guard !archive.isEmpty, (cached["archive"] as? String) == archive, cached["text"] is String else { return nil }
+        let attachments = (cached["attachments"] as? [[String: Any]]) ?? []
+        for attachment in attachments {
+            guard let dataUrl = attachment["dataUrl"] as? String, !dataUrl.isEmpty else { return nil }
+        }
+        return cached
+    }
+
+    private static func buildHistoryReuseIndex(_ json: String) -> [String: [String: Any]] {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        var index: [String: [String: Any]] = [:]
+        for storeKey in ["chats", "serverChats"] {
+            guard let store = root[storeKey] as? [String: Any] else { continue }
+            for value in store.values {
+                guard let messages = value as? [[String: Any]] else { continue }
+                for message in messages {
+                    guard let id = (message["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !id.isEmpty else { continue }
+                    let hasArchive = !((message["archive"] as? String) ?? "").isEmpty
+                    let hasClientId = !(((message["clientId"] as? String) ?? (message["client_id"] as? String)) ?? "").isEmpty
+                    if hasArchive || hasClientId { index[id] = message }
+                }
+            }
+        }
+        return index
     }
 
     func saveMessageCacheJSON(_ value: String) {

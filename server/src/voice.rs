@@ -4,7 +4,12 @@
 //! can be found and fixed without wading through unrelated HTTP handlers.
 
 use crate::{can_access_channel, contact_exists, send_json_to_user, AppState, AuthenticatedUser};
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Path as AxumPath, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use base64::Engine;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -54,6 +59,17 @@ pub(crate) async fn get_turn_credentials(
     .into_response()
 }
 
+/// Что участник сообщил о себе (`voice_state`): значки в списке каналов у тех,
+/// кто в комнату не входил, и бейджи на плитках у тех, кто внутри. Сервер ничего
+/// не проверяет по существу — это отображение, а не право.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct VoiceMemberState {
+    muted: bool,
+    deafened: bool,
+    camera: bool,
+    screen: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct VoiceRoom {
     room_type: String,
@@ -68,6 +84,8 @@ pub(crate) struct VoiceRoom {
     /// same order: a client's own "first seen" clock cannot give that (a late joiner
     /// sees everyone at once). Kept in step with `participants`.
     joined_at: HashMap<String, i64>,
+    /// Самоописание участников (микрофон/звук/камера/демонстрация), по имени.
+    states: HashMap<String, VoiceMemberState>,
     /// Which DEVICE of each participant holds that participant's place in the room.
     ///
     /// Membership is per account (`participants`, `user_voice_rooms`), but a call is
@@ -97,6 +115,7 @@ impl VoiceRoom {
             target: None,
             participants: HashSet::new(),
             joined_at: HashMap::new(),
+            states: HashMap::new(),
             devices: HashMap::new(),
             initiator_device: None,
         }
@@ -255,6 +274,22 @@ fn voice_room_payload(room_id: &str, room: &VoiceRoom) -> serde_json::Value {
                 .map(|ms| (name.clone(), serde_json::json!(ms)))
         })
         .collect();
+    let states: serde_json::Map<String, serde_json::Value> = participants
+        .iter()
+        .filter_map(|name| {
+            room.states.get(name).map(|st| {
+                (
+                    name.clone(),
+                    serde_json::json!({
+                        "muted": st.muted,
+                        "deafened": st.deafened,
+                        "camera": st.camera,
+                        "screen": st.screen,
+                    }),
+                )
+            })
+        })
+        .collect();
     serde_json::json!({
         "type": "voice_room_state",
         "roomId": room_id,
@@ -266,7 +301,92 @@ fn voice_room_payload(room_id: &str, room: &VoiceRoom) -> serde_json::Value {
         "channelId": room.channel_id,
         "participants": participants,
         "joinedAt": joined_at,
+        "states": states,
     })
+}
+
+/// Кто сейчас в голосовом канале — для превью на экране «Присоединиться»,
+/// пока человек сам в комнате не состоит (комнатные `voice_room_state` шлются
+/// только участникам, поэтому снаружи канал выглядел пустым). Доступ — те же
+/// права «просмотр канала», что и у списка каналов; отдаём только имена и время
+/// входа, ничего из сигналинга.
+pub(crate) async fn get_voice_channel_presence(
+    AuthenticatedUser(username): AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    AxumPath((server_id, channel_id)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    match can_access_channel(&state.db, &server_id, &channel_id, &username, "view").await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::FORBIDDEN.into_response(),
+        Err(e) => {
+            error!("[VOICE][PRESENCE] access check failed: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    let room_id = voice_room_key("channel", Some(&server_id), Some(&channel_id), None);
+    let payload = state
+        .voice_rooms
+        .get(&room_id)
+        .map(|room| voice_room_payload(&room_id, room.value()));
+    let (participants, joined_at, states) = match payload {
+        Some(p) => (p["participants"].clone(), p["joinedAt"].clone(), p["states"].clone()),
+        None => (serde_json::json!([]), serde_json::json!({}), serde_json::json!({})),
+    };
+    Json(serde_json::json!({
+        "serverId": server_id,
+        "channelId": channel_id,
+        "participants": participants,
+        "joinedAt": joined_at,
+        "states": states,
+    }))
+    .into_response()
+}
+
+/// Все голосовые каналы сервера разом — для списка каналов в боковой панели
+/// («кто сидит в канале»). Показываются только каналы, доступные зрителю
+/// (то же право «просмотр канала»), пустые комнаты в ответ не попадают.
+pub(crate) async fn get_server_voice_presence(
+    AuthenticatedUser(username): AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    AxumPath(server_id): AxumPath<String>,
+) -> impl IntoResponse {
+    // Снимок собирается синхронно: guard DashMap не должен жить через await.
+    let rooms: Vec<(String, serde_json::Value)> = state
+        .voice_rooms
+        .iter()
+        .filter(|room| {
+            room.room_type == "channel" && room.server_id.as_deref() == Some(server_id.as_str())
+        })
+        .filter_map(|room| {
+            room.channel_id
+                .clone()
+                .map(|cid| (cid, voice_room_payload(room.key(), room.value())))
+        })
+        .collect();
+    let mut channels = serde_json::Map::new();
+    for (channel_id, payload) in rooms {
+        if payload["participants"].as_array().map_or(true, |p| p.is_empty()) {
+            continue;
+        }
+        match can_access_channel(&state.db, &server_id, &channel_id, &username, "view").await {
+            Ok(true) => {
+                channels.insert(
+                    channel_id,
+                    serde_json::json!({
+                        "participants": payload["participants"],
+                        "joinedAt": payload["joinedAt"],
+                        "states": payload["states"],
+                    }),
+                );
+            }
+            Ok(false) => {}
+            Err(e) => {
+                error!("[VOICE][PRESENCE] access check failed: {}", e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    }
+    Json(serde_json::json!({ "serverId": server_id, "channels": channels })).into_response()
 }
 
 pub(crate) async fn send_voice_room_snapshot_to_user(state: &Arc<AppState>, username: &str) {
@@ -347,6 +467,7 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
         room_type = room.room_type.clone();
         room.participants.remove(username);
         room.joined_at.remove(username);
+        room.states.remove(username);
         room.devices.remove(username);
         remaining_participants = room.participants.iter().cloned().collect();
         devices = room.devices.clone();
@@ -988,6 +1109,32 @@ pub(crate) async fn handle_voice_event(
         "voice_signal" => {
             route_voice_signal(state, sender, payload).await;
         }
+        "voice_state" => {
+            let room_id = payload["roomId"].as_str().unwrap_or_default().trim().to_string();
+            if room_id.is_empty() {
+                return;
+            }
+            let next = VoiceMemberState {
+                muted: payload["muted"].as_bool().unwrap_or(false),
+                deafened: payload["deafened"].as_bool().unwrap_or(false),
+                camera: payload["camera"].as_bool().unwrap_or(false),
+                screen: payload["screen"].as_bool().unwrap_or(false),
+            };
+            let changed = match state.voice_rooms.get_mut(&room_id) {
+                Some(mut room) if room.participants.contains(sender) => {
+                    if room.states.get(sender) == Some(&next) {
+                        false
+                    } else {
+                        room.states.insert(sender.to_string(), next);
+                        true
+                    }
+                }
+                _ => false,
+            };
+            if changed {
+                broadcast_voice_room_state(state, &room_id).await;
+            }
+        }
         "voice_call_invite" => {
             let target = payload["target"]
                 .as_str()
@@ -1083,6 +1230,7 @@ pub(crate) async fn handle_voice_event(
                 room.target = Some(target.clone());
                 room.participants.clear();
                 room.joined_at.clear();
+                room.states.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(target.clone());
                 room.devices.clear();
@@ -1224,6 +1372,7 @@ pub(crate) async fn handle_voice_event(
                 room.target = Some(sender.to_string());
                 room.participants.clear();
                 room.joined_at.clear();
+                room.states.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(inviter.clone());
                 // The call now lives on exactly two devices: the one that dialled and

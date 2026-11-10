@@ -179,23 +179,43 @@ ZaliMixin(ZaliInterface, class {
         const prevCleanup = overlay._cleanup;
         overlay._cleanup = () => { alive = false; stopPreview(); try { navigator.mediaDevices?.removeEventListener?.('devicechange', refresh); } catch (e) {} prevCleanup?.(); };
 
+        // Каждый запуск получает номер: при быстром переключении камер ответ
+        // getUserMedia приходит в произвольном порядке, и без этой проверки
+        // «опоздавший» поток перезаписывал актуальный (превью показывало не ту
+        // камеру), а перезаписанный так и оставался включённым — лампочка камеры
+        // горела после закрытия окна.
+        let previewSeq = 0;
+        let listBuilt = false;
         const startPreview = async () => {
-            stopPreview();
-            hint.hidden = false;
-            hint.textContent = 'Запрашиваю доступ к камере…';
+            const seq = ++previewSeq;
+            // Прежний кадр остаётся на экране, пока не открыта новая камера: раньше
+            // поток гасился заранее, и превью мигало чёрным с подсказкой «Запрашиваю…»
+            // на каждое переключение. Подсказка нужна только когда показывать нечего.
+            if (!previewStream) {
+                hint.hidden = false;
+                hint.textContent = 'Запрашиваю доступ к камере…';
+            }
             try {
                 const constraints = selected
                     ? { video: { deviceId: { exact: selected } } }
                     : { video: true };
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                if (!alive) { for (const t of stream.getTracks()) t.stop(); return; }
+                if (!alive || seq !== previewSeq) { for (const t of stream.getTracks()) t.stop(); return; }
+                const previous = previewStream;
                 previewStream = stream;
                 video.srcObject = stream;
                 video.play?.().catch(() => {});
                 hint.hidden = true;
+                if (previous) for (const t of previous.getTracks()) { try { t.stop(); } catch (e) {} }
                 if (!selected) selected = stream.getVideoTracks()[0]?.getSettings?.().deviceId || '';
-                await refresh();
+                // Подписи камер становятся доступны только после разрешения; список
+                // строится один раз, а не перерисовывается на каждое переключение
+                // (иначе строки мигали и терялся hover/фокус).
+                if (!listBuilt) { listBuilt = true; await refresh(); }
             } catch (error) {
+                if (!alive || seq !== previewSeq) return;
+                stopPreview();
+                video.srcObject = null;
                 hint.hidden = false;
                 hint.textContent = error?.name === 'NotAllowedError'
                     ? 'Доступ к камере запрещён. Разрешите его в настройках системы или сайта.'
@@ -224,7 +244,9 @@ ZaliMixin(ZaliInterface, class {
         list.addEventListener('click', (e) => {
             const row = e.target.closest('.voice-picker-row');
             if (!row) return;
-            selected = row.dataset.device || '';
+            const picked = row.dataset.device || '';
+            if (picked === selected && previewStream) return;
+            selected = picked;
             for (const el of list.querySelectorAll('.voice-picker-row')) {
                 const on = el === row;
                 el.classList.toggle('is-selected', on);
@@ -249,6 +271,9 @@ ZaliMixin(ZaliInterface, class {
         let surface = categories.some(c => c.id === pref.surface) ? pref.surface : 'monitor';
         let height = [0, 720, 1080].includes(Number(pref.height)) ? Number(pref.height) : 1080;
         let fps = [15, 30, 60].includes(Number(pref.fps)) ? Number(pref.fps) : 30;
+        // Звук демонстрации: по умолчанию включён. В Windows отдаётся звук всей
+        // системы (или вкладки); где платформа не умеет — картинка идёт без звука.
+        let audio = !(pref.audio === 0 || pref.audio === false);
         const seg = (name, items, current) => `<div class="voice-picker-seg" data-seg="${this.esc(name)}" role="radiogroup">${items.map(it => `<button type="button" role="radio" class="voice-picker-seg-btn${it.v === current ? ' is-selected' : ''}" aria-checked="${this.esc(String(it.v === current))}" data-v="${this.esc(String(it.v))}">${this.esc(it.l)}</button>`).join('')}</div>`;
         this.mountVoicePicker({
             title: 'Что показать',
@@ -264,6 +289,7 @@ ZaliMixin(ZaliInterface, class {
                 </div>
                 <div class="voice-picker-field"><span class="voice-picker-label">Разрешение</span>${seg('height', [{ v: 720, l: '720p' }, { v: 1080, l: '1080p' }, { v: 0, l: 'Оригинал' }], height)}</div>
                 <div class="voice-picker-field"><span class="voice-picker-label">Частота кадров</span>${seg('fps', [{ v: 15, l: '15' }, { v: 30, l: '30' }, { v: 60, l: '60' }], fps)}</div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Звук</span>${seg('audio', [{ v: 1, l: 'Передавать' }, { v: 0, l: 'Без звука' }], audio ? 1 : 0)}</div>
                 <div class="voice-picker-note">Конкретный экран или окно вы выберете в следующем системном окне.</div>`,
             onMount: (overlay) => {
                 overlay.addEventListener('click', (e) => {
@@ -276,6 +302,7 @@ ZaliMixin(ZaliInterface, class {
                     if (name === 'surface') surface = value;
                     else if (name === 'height') height = Number(value);
                     else if (name === 'fps') fps = Number(value);
+                    else if (name === 'audio') audio = Number(value) === 1;
                     for (const el of group.querySelectorAll('[data-v]')) {
                         const on = el === btn;
                         el.classList.toggle('is-selected', on);
@@ -284,7 +311,7 @@ ZaliMixin(ZaliInterface, class {
                 });
             },
             onConfirm: () => {
-                const choice = { surface, height, fps };
+                const choice = { surface, height, fps, audio: audio ? 1 : 0 };
                 this.saveVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY, choice);
                 void this.startScreenShare(choice);
                 return true;

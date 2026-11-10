@@ -34,6 +34,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
@@ -390,6 +391,27 @@ class MainActivity : ComponentActivity() {
                 safeTopDp = insetTop.value
                 safeBottomDp = insetBottom.value
                 webView?.let { applySafeAreaInsets(it) }
+            }
+
+            // Системное «назад» (кнопка или жест). Обработчика не было вовсе, и
+            // «назад» из открытого чата, меню сообщения или окна перевода сразу
+            // закрывало Activity. Теперь оболочка спрашивает веб: тот закрывает
+            // верхний слой (окно → вложенный экран → чат → список) и отвечает
+            // true; на false — со списка диалогов или экрана входа — приложение
+            // уходит в фон, а не завершается: сокет и идущий звонок остаются живы.
+            // Клавиатуру система убирает сама, до этого обработчика.
+            BackHandler(enabled = webView != null) {
+                val wv = webView
+                if (wv == null) {
+                    moveTaskToBack(true)
+                } else {
+                    wv.evaluateJavascript(
+                        "(function(){try{return !!(window.__zaliHandleBack&&window.__zaliHandleBack());}" +
+                            "catch(e){return false;}})()"
+                    ) { handled ->
+                        if (handled != "true") moveTaskToBack(true)
+                    }
+                }
             }
 
             Box(Modifier.fillMaxSize().background(Color(0xFF0B0D12))) {

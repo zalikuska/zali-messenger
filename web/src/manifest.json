@@ -33,7 +33,8 @@
     "modules/tgs.js",
     "modules/addon_format.js",
     "modules/zip_reader.js",
-    "modules/addon_sdk.js"
+    "modules/addon_sdk.js",
+    "modules/perf_probe.js"
   ],
   "core": [
     "bus.js",
@@ -91,6 +92,7 @@
     "interface/diagnostic_reports.js",
     "interface/game_activity.js",
     "interface/game_focus.js",
+    "interface/settings_sync.js",
     "interface/confirm_dialog.js",
     "interface/addons_store.js",
     "interface/addons_runtime.js",

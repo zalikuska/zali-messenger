@@ -56,6 +56,10 @@
                 screenCaptureCanvas: null,
                 screenCaptureCtx: null,
                 remoteScreens: new Map(),
+                // Чужие демонстрации, звук которых выключен кнопкой в меню (имена).
+                screenMuted: new Set(),
+                // Передаём ли мы звук своей демонстрации (есть аудиодорожка захвата).
+                screenAudioShared: false,
                 peerConnections: new Map(),
                 remoteAudios: new Map(),
                 remoteVideos: new Map(),

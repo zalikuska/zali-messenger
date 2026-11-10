@@ -25,14 +25,19 @@
         return readyPromise;
     }
 
-    // ---- Распаковка в воркере ------------------------------------------------
-    // unpack_message_wasm — это PBKDF2 на 210k итераций плюс AES-GCM, синхронно.
+    // ---- Упаковка и распаковка в воркерах ------------------------------------
+    // pack_message_wasm и unpack_message_wasm — это PBKDF2 на 210k итераций плюс
+    // AES-GCM, синхронно: ~105 мс на сообщение, с вложением 5 МБ — ~0,5 с.
     // В главном потоке каждое сообщение (и каждый неподошедший ключ-кандидат)
-    // замораживал вкладку: история из десятков сообщений или одно сообщение,
-    // перебирающее десяток старых ключей, — секунды без отрисовки и ввода.
+    // замораживал вкладку: история из десятков сообщений, одно сообщение,
+    // перебирающее десяток старых ключей, или каждая отправка — кадры без
+    // отрисовки и ввода, а пузырёк своего сообщения появлялся только после упаковки.
     // Воркер собирается из Blob и сам импортирует тот же wasm-pkg по абсолютному
     // адресу, поэтому отдельного файла на сервере для него не нужно. Не поднялся
-    // (старый движок, запрет blob:) — распаковываем по-старому в главном потоке.
+    // (старый движок, запрет blob:) — работаем по-старому в главном потоке.
+    //
+    // Упаковка идёт в собственный воркер, а не в пул распаковки: воркер исполняет
+    // задачи по очереди, и отправка вставала бы за всей догружаемой историей.
     const WORKER_SOURCE = `
         let ready = null;
         function load(url) {
@@ -42,8 +47,17 @@
             }
             return ready;
         }
+        function run(mod, op, args) {
+            if (op === 'pack') {
+                return mod.pack_message_wasm(
+                    args.sender, args.text, args.key, args.keyVersion,
+                    args.attachments, args.call, args.reply,
+                );
+            }
+            return mod.unpack_message_wasm(args.archive, args.key);
+        }
         self.onmessage = async (event) => {
-            const { id, url, archive, key } = event.data || {};
+            const { id, url, op, args } = event.data || {};
             let mod;
             try {
                 mod = await load(url);
@@ -52,8 +66,9 @@
                 return;
             }
             try {
-                const value = mod.unpack_message_wasm(archive, key);
+                const value = run(mod, op, args || {});
                 const transfer = [];
+                if (value && value.buffer instanceof ArrayBuffer) transfer.push(value.buffer);
                 for (const att of (value && value.attachments) || []) {
                     if (att && att.bytes && att.bytes.buffer) transfer.push(att.bytes.buffer);
                 }
@@ -64,7 +79,8 @@
             }
         };
     `;
-    const workerPool = [];
+    const unpackPool = [];
+    let packWorker = null;
     let workerBroken = false;
     let workerSeq = 0;
     let workerCursor = 0;
@@ -87,7 +103,7 @@
                 return;
             }
             if (ok) pending.resolve(value);
-            else pending.reject(new Error(error || 'unpack failed'));
+            else pending.reject(new Error(error || `${pending.op} failed`));
         };
         worker.onerror = () => {
             // Воркер не загрузился целиком (например, движок без module workers):
@@ -103,41 +119,55 @@
         return worker;
     }
 
-    function pickWorker() {
+    function pickWorker(op) {
         if (workerBroken || typeof Worker === 'undefined') return null;
         try {
-            if (!workerPool.length) {
+            if (op === 'pack') {
+                if (!packWorker) packWorker = spawnWorker();
+                return packWorker;
+            }
+            if (!unpackPool.length) {
                 const cores = Number(navigator.hardwareConcurrency) || 2;
                 const size = Math.max(1, Math.min(2, cores - 1));
-                for (let i = 0; i < size; i += 1) workerPool.push(spawnWorker());
+                for (let i = 0; i < size; i += 1) unpackPool.push(spawnWorker());
             }
         } catch (e) {
             workerBroken = true;
             return null;
         }
-        workerCursor = (workerCursor + 1) % workerPool.length;
-        return workerPool[workerCursor];
+        workerCursor = (workerCursor + 1) % unpackPool.length;
+        return unpackPool[workerCursor];
     }
 
-    async function unpackOnMainThread(bytes, key) {
+    async function runOnMainThread(op, args) {
         const mod = await load();
-        return mod.unpack_message_wasm(bytes, key);
+        if (op === 'pack') {
+            return mod.pack_message_wasm(
+                args.sender, args.text, args.key, args.keyVersion,
+                args.attachments, args.call, args.reply,
+            );
+        }
+        return mod.unpack_message_wasm(args.archive, args.key);
     }
 
-    function unpackInWorker(bytes, key) {
-        const worker = pickWorker();
-        if (!worker) return unpackOnMainThread(bytes, key);
+    // `args` уходит в воркер копией байтов (`makeWorkerArgs`) — переданные буферы
+    // отсоединяются, а при откате в главный поток нужны исходные `args`.
+    function runInWorker(op, args, makeWorkerArgs) {
+        const worker = pickWorker(op);
+        if (!worker) return runOnMainThread(op, args);
         const url = new URL('./wasm-pkg/zali_core.js', document.baseURI).href;
         return new Promise((resolve, reject) => {
             const id = ++workerSeq;
             workerPending.set(id, {
                 worker,
+                op,
                 resolve,
                 reject,
-                fallback: () => unpackOnMainThread(bytes, key).then(resolve, reject),
+                fallback: () => runOnMainThread(op, args).then(resolve, reject),
             });
-            // Копия, а не передача буфера: при откате в главный поток байты нужны здесь.
-            worker.postMessage({ id, url, archive: bytes.slice(), key });
+            const transfer = [];
+            const workerArgs = makeWorkerArgs(transfer);
+            worker.postMessage({ id, url, op, args: workerArgs }, transfer);
         });
     }
 
@@ -160,7 +190,6 @@
          * @returns {Promise<Uint8Array>}
          */
         async packMessage(sender, text, key, keyVersion, attachments, call, reply) {
-            const mod = await load();
             const jsAttachments = (attachments || []).map(a => ({
                 name: a.name,
                 archivePath: a.archivePath,
@@ -171,15 +200,23 @@
             // `call`/`reply` are opaque JSON strings; the core encrypts them with
             // the conversation key exactly like the body. undefined = absent, which
             // keeps the archive byte-identical to what a pre-reply client wrote.
-            return mod.pack_message_wasm(
+            const args = {
                 sender,
                 text,
                 key,
-                keyVersion || 0,
-                jsAttachments,
-                call || undefined,
-                reply || undefined,
-            );
+                keyVersion: keyVersion || 0,
+                attachments: jsAttachments,
+                call: call || undefined,
+                reply: reply || undefined,
+            };
+            return runInWorker('pack', args, (transfer) => ({
+                ...args,
+                attachments: jsAttachments.map(att => {
+                    const bytes = att.bytes.slice();
+                    transfer.push(bytes.buffer);
+                    return { ...att, bytes };
+                }),
+            }));
         },
 
         /**
@@ -189,7 +226,11 @@
          */
         async unpackMessage(archiveBytes, key) {
             const bytes = archiveBytes instanceof Uint8Array ? archiveBytes : new Uint8Array(archiveBytes);
-            return unpackInWorker(bytes, key);
+            return runInWorker('unpack', { archive: bytes, key }, (transfer) => {
+                const archive = bytes.slice();
+                transfer.push(archive.buffer);
+                return { archive, key };
+            });
         },
     };
 })();

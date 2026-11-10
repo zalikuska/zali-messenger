@@ -246,11 +246,31 @@ ZaliMixin(ZaliInterface, class {
         window.ZaliTgs?.hydrate(wrap);
     }
 
-    resizeComposer() {
+    // `typing: true` — вызов из обработчика ввода. Высоту нужно сбрасывать в auto,
+    // только когда текст мог стать короче: сброс сжимает поле до одной строки, и
+    // чтение scrollHeight следом заставляет браузер разложить колонку чата в
+    // этом промежуточном состоянии — раскладка на каждое нажатие клавиши, а на
+    // телефоне поле стоит в потоке и тянет за собой высоту ленты. Пока текст
+    // растёт, scrollHeight и без сброса не меньше нужной высоты.
+    resizeComposer({ typing = false } = {}) {
         const inp = document.getElementById('msgInput');
         if (!inp) return;
-        inp.style.height = 'auto';
-        inp.style.height = `${Math.min(inp.scrollHeight, 140)}px`;
+        const value = inp.value;
+        const length = value.length;
+        let breaks = 0;
+        for (let i = value.indexOf('\n'); i !== -1; i = value.indexOf('\n', i + 1)) breaks += 1;
+        // «Вырос» — стало не короче и не меньше переносов (замена выделенных
+        // пустых строк текстом длиннее их самих делает поле ниже).
+        const grew = typing && !!inp.style.height
+            && length >= (this._composerTextLength || 0)
+            && breaks >= (this._composerTextBreaks || 0);
+        this._composerTextLength = length;
+        this._composerTextBreaks = breaks;
+        if (!grew) inp.style.height = 'auto';
+        const h = Math.min(inp.scrollHeight, 140);
+        inp.style.height = `${h}px`;
+        // Прокрутка только когда текст реально не влезает (иначе 1px-округление даёт лишний скролл).
+        inp.style.overflowY = inp.scrollHeight > 140 ? 'auto' : 'hidden';
     }
 
     extractUrls(text) {

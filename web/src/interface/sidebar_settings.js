@@ -25,7 +25,7 @@ ZaliMixin(ZaliInterface, class {
               icon: ico('<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.5-1.9-.3-1 .4-2.1 1.5-2.1H17a4 4 0 0 0 4-4c0-5-4-10-9-10z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>') },
             { id: 'sound', label: 'Звук и звонки', sections: ['audio', 'notify-sound'],
               icon: ico('<path d="M4 10v4h4l5 4V6l-5 4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>') },
-            { id: 'account', label: 'Аккаунт', sections: ['session', 'crypto'],
+            { id: 'account', label: 'Аккаунт', sections: ['session', 'settings-sync', 'crypto'],
               icon: ico('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>') },
             { id: 'app', label: 'Приложение', sections: ['updates', 'autostart', 'cache'],
               icon: ico('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6M12 9v6"/>') },

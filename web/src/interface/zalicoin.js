@@ -391,6 +391,18 @@ ZaliMixin(ZaliInterface, class {
         if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
     }
 
+    /**
+     * Переключение вкладки/чата закрывает окна ZaliCoin (перевод/карточка и
+     * конструктор розыгрыша). Они лежат внутри .main поверх любой вкладки и
+     * не гасят левую навигацию, поэтому раньше висели над Хабом, Настройками
+     * и другими чатами после переключения.
+     */
+    closeCoinOverlaysForNavigation() {
+        if (this.coinModalOpen()) this.closeCoinTransferModal();
+        const raffle = document.getElementById('raffleModal');
+        if (raffle && !raffle.hidden) raffle.querySelector('#raffleCancelBtn')?.click();
+    }
+
     coinModalOpen() {
         const modal = document.getElementById('coinTransferModal');
         return !!modal && !modal.hidden;
@@ -416,6 +428,18 @@ ZaliMixin(ZaliInterface, class {
         return this._coinModal?.mode === 'gift' ? Math.floor(balance / this.coinGiftClaimsValue()) : balance;
     }
 
+    /**
+     * Сумма из поля: поле текстовое (цифры и «.» «,»), поэтому запятую —
+     * десятичный разделитель — приводим к точке до Number(); пустое поле или
+     * одиночный разделитель дают NaN, как и раньше у type=number. Монеты
+     * целые — дробная часть отбрасывается.
+     */
+    coinAmountFromInput(input) {
+        const raw = String(input?.value ?? '').trim().replace(',', '.');
+        if (!raw || raw === '.') return NaN;
+        return Math.trunc(Number(raw));
+    }
+
     fillCoinModalMax() {
         const amountInput = document.getElementById('coinTransferAmountInput');
         if (!amountInput) return;
@@ -438,7 +462,7 @@ ZaliMixin(ZaliInterface, class {
         const rawBalance = this.S.zaliCoinBalance;
         const known = rawBalance !== undefined && rawBalance !== null && Number.isFinite(Number(rawBalance));
         const balance = known ? Math.max(0, Math.trunc(Number(rawBalance))) : 0;
-        const amount = Math.trunc(Number(document.getElementById('coinTransferAmountInput')?.value));
+        const amount = this.coinAmountFromInput(document.getElementById('coinTransferAmountInput'));
         const claims = isGift ? this.coinGiftClaimsValue() : 1;
         const valid = Number.isFinite(amount) && amount > 0;
         const total = valid ? amount * claims : 0;
@@ -515,7 +539,7 @@ ZaliMixin(ZaliInterface, class {
         const setStatus = (msg) => this.setCoinModalStatus(msg);
 
         const to = String(recipientInput?.value || '').trim();
-        const amount = Math.trunc(Number(amountInput?.value));
+        const amount = this.coinAmountFromInput(amountInput);
         if (!to) { setStatus('Укажите получателя'); return; }
         if (!Number.isFinite(amount) || amount <= 0) { setStatus('Укажите сумму больше нуля'); return; }
         if (to === this.myName()) { setStatus('Нельзя перевести самому себе'); return; }
@@ -594,7 +618,7 @@ ZaliMixin(ZaliInterface, class {
         const amountInput = document.getElementById('coinTransferAmountInput');
         const setStatus = (msg) => this.setCoinModalStatus(msg);
 
-        const amount = Math.trunc(Number(amountInput?.value));
+        const amount = this.coinAmountFromInput(amountInput);
         const claims = this.coinGiftClaimsValue();
         if (!ctx.serverId || !ctx.channelId) { setStatus('Откройте текстовый канал'); return; }
         if (!Number.isFinite(amount) || amount <= 0) { setStatus('Укажите сумму больше нуля'); return; }

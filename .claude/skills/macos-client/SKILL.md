@@ -40,6 +40,19 @@ description: Основной macOS Swift-клиент (apps/macos/) и эксп
   `NSViewRepresentable`/`WindowGroup` в macOS-клиент.**
 - IPC: `WKScriptMessageHandler.userContentController` в `WebView.swift`; все
   хендлеры проверяют `message.frameInfo.isMainFrame`.
+- **Coordinator изолирован на MainActor** (через `WKScriptMessageHandler`), и
+  задачи `withTaskGroup` внутри него — тоже. Вызов ядра (`ZaliCore` pack/unpack =
+  PBKDF2 на 210 000 итераций) из такого кода идёт **на главном потоке**: до
+  2026-10-22 загрузка истории из 222 сообщений держала его ~14 с (sample), окно
+  не рисовало ни кадра. Распаковка истории — только через `Task.detached`
+  (`unpackHistoryMessage`), упаковка в SEND/EDIT_MESSAGE — в
+  `DispatchQueue.global`. Windows (`spawn_blocking`) и Android (свой
+  исполнитель) делали это правильно с самого начала.
+- **История не расшифровывается повторно**: `NetworkService.cachedHistoryMessage`
+  берёт сообщение из кэша сообщений веб-слоя, если там та же `archive` (имя файла
+  архива на сервере — правка его меняет) или это своё отправленное (тот же
+  `clientId`). Поле `archive` ставит `renderHistoryRecord`; не убирать его из
+  ответа истории, иначе каждый запуск снова будет ~230 мс CPU на сообщение.
 - Ключ шифрования хранится в **обычном файле**
   (`Coordinator.saveLegacyCryptoKey`/`loadLegacyCryptoKey`,
   `~/Library/Application Support/ZaliMessenger/legacy_crypto_key.txt`), не в

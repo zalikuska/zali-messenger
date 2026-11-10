@@ -16,18 +16,16 @@ ZaliMixin(ZaliInterface, class {
     showProfileOverlay() {
         const overlay = document.getElementById('profileOverlay');
         if (!overlay) return;
-        overlay.hidden = false;
-        requestAnimationFrame(() => overlay.classList.add('visible'));
+        this.revealLayer(overlay);
         this.renderProfileOverlay();
     }
 
     hideProfileOverlay() {
         const overlay = document.getElementById('profileOverlay');
         if (!overlay) return;
-        overlay.classList.remove('visible');
-        setTimeout(() => {
-            if (!this.ensureProfileState().open) overlay.hidden = true;
-        }, 180);
+        // Повторное открытие отменяет таймер скрытия (revealLayer), так что
+        // отдельная сверка с состоянием профиля здесь не нужна.
+        this.concealLayer(overlay);
     }
 
     /**

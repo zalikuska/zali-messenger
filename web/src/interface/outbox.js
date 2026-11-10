@@ -13,7 +13,10 @@ ZaliMixin(ZaliInterface, class {
                 return injected;
             }
             const parsed = JSON.parse(raw);
-            this.trace(`loadPendingOutbox local=yes count=${Array.isArray(parsed) ? parsed.length : 0}`);
+            // Пустую очередь не журналируем: её читает каждое сообщение истории.
+            if (!Array.isArray(parsed) || parsed.length) {
+                this.trace(`loadPendingOutbox local=yes count=${Array.isArray(parsed) ? parsed.length : 0}`);
+            }
             return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object') : this.loadInjectedPendingOutbox();
         } catch (e) {
             this.trace('loadPendingOutbox error fallback injected');
@@ -228,10 +231,16 @@ ZaliMixin(ZaliInterface, class {
     dropPendingOutbox(clientId) {
         const pendingId = String(clientId || '').trim();
         if (!pendingId) return;
-        this.trace(`dropPendingOutbox clientId=${pendingId}`);
         this.clearSendWatchdog(pendingId);
         if (this._outboxAttachmentCache) this._outboxAttachmentCache.delete(pendingId);
-        const pending = this.loadPendingOutbox().filter(item => String(item.clientId || '').trim() !== pendingId);
+        const all = this.loadPendingOutbox();
+        const pending = all.filter(item => String(item.clientId || '').trim() !== pendingId);
+        // Нечего убирать — нечего и сохранять. Сюда заходит каждое своё сообщение
+        // загруженной истории: без этой проверки запуск macOS-клиента писал пустую
+        // очередь ~220 раз за секунду, каждый раз через нативный мост и с тремя
+        // строками журнала (тоже через мост) — отсюда «адские» лаги первых секунд.
+        if (pending.length === all.length) return;
+        this.trace(`dropPendingOutbox clientId=${pendingId}`);
         this.savePendingOutbox(pending);
     }
 

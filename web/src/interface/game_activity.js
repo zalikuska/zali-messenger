@@ -324,6 +324,7 @@ ZaliMixin(ZaliInterface, class {
     onGameActivityConnected() {
         // Настройки режима «в игре» живут на сервере: подтянуть их на каждом входе —
         // от них зависит, нужно ли вообще определять игру (game_focus.js).
+        this.settingsSyncOnConnected?.();
         const me = this.myName?.() || '';
         if (me && this._gameFocusLoadedFor !== me) void this.loadGameFocusSettings?.();
         this.syncGameDetector();
@@ -402,7 +403,8 @@ ZaliMixin(ZaliInterface, class {
     // ------------------------------------------------------------
 
     gameActivityIconHTML() {
-        return '<svg class="game-activity-icon" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 11h4M8 9v4"/><circle cx="15.5" cy="10.5" r=".6"/><circle cx="17.5" cy="12.5" r=".6"/><path d="M17.3 5H6.7a4 4 0 0 0-3.9 3.2l-1.3 6.4A2.5 2.5 0 0 0 5.9 17l1.6-2.2a2 2 0 0 1 1.6-.8h5.8a2 2 0 0 1 1.6.8l1.6 2.2a2.5 2.5 0 0 0 4.4-2.4l-1.3-6.4A4 4 0 0 0 17.3 5Z"/></svg>';
+        // Один набор иконок с голосовым UI (voice_ui.js, воспроизводится 16×16 px).
+        return this.voiceIcon('gamepad').replace('class="call-ctrl-icon"', 'class="game-activity-icon"');
     }
 
     gameActivityLabel(activity) {

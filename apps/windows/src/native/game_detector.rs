@@ -20,6 +20,7 @@
 //!
 //! Работает на отдельном потоке: опрос — это снимок процессов и несколько
 //! `OpenProcess`, ему не место ни в цикле окна, ни в tokio-рантайме.
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))] // потребители — только в Windows-сборке
 
 use serde_json::{json, Value};
 use std::collections::HashMap;

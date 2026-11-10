@@ -100,18 +100,28 @@ ZaliMixin(ZaliInterface, class {
         if (!this.voice.supported) {
             throw new Error('Голосовые звонки не поддерживаются в этом окружении');
         }
-        const micConstraint = this.audioPrefs?.micDeviceId
-            ? { deviceId: { exact: this.audioPrefs.micDeviceId } }
-            : true;
+        const micConstraint = this.micAudioConstraints();
+        const hasPickedDevice = !!this.audioPrefs?.micDeviceId;
+        // На WebKit/macOS при выключенной обработке просим ОБЯЗАТЕЛЬНО без неё (см.
+        // micAudioConstraints); отказ движка — не ошибка звонка, идём на обычные.
+        const strictFirst = this.isWebKitOnMac() && !this.voiceProcessingEnabled();
         const getAudioOnlyStream = async () => {
+            if (strictFirst) {
+                try {
+                    return await navigator.mediaDevices.getUserMedia({ audio: this.micAudioConstraints({ strict: true }), video: false });
+                } catch (error) {
+                    this.voiceTrace('mic-strict-constraints-rejected', { name: error?.name || '', error: error?.message || String(error) }, 'WARN');
+                }
+            }
             try {
                 return await navigator.mediaDevices.getUserMedia({ audio: micConstraint, video: false });
             } catch (error) {
                 // Saved device id may no longer exist (unplugged/removed) — fall
                 // back to the system default rather than failing the whole call.
-                if (micConstraint === true) throw error;
+                if (!hasPickedDevice) throw error;
                 this.voiceTrace('mic-fallback-default', { error: error?.message || String(error) }, 'WARN');
-                return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                const { deviceId, ...withoutDevice } = micConstraint;
+                return navigator.mediaDevices.getUserMedia({ audio: withoutDevice, video: false });
             }
         };
         let stream;
@@ -132,6 +142,7 @@ ZaliMixin(ZaliInterface, class {
             stream = await getAudioOnlyStream();
         }
         this.voice.localStream = stream;
+        await this.enforceMicProcessing(stream);
         this.voice.micError = '';
         this.voice.muted = false;
         this.voiceDiag('local-stream-ready', {
@@ -140,6 +151,36 @@ ZaliMixin(ZaliInterface, class {
         this.ensureVoiceMeterLoop();
         this.attachLocalVideoPreview();
         return stream;
+    }
+
+    // Движок мог не принять ограничения обработки при захвате (они «желательные», а не
+    // обязательные): на WebKit/macOS это значит, что VoiceProcessingIO всё же занял
+    // микрофон и другие приложения слышат с него тишину. Сверяем фактические настройки
+    // дорожки с желаемыми и при расхождении применяем их повторно; итог — в журнал звонка.
+    async enforceMicProcessing(stream) {
+        const track = stream?.getAudioTracks?.()[0];
+        if (!track) return;
+        const want = this.voiceProcessingEnabled();
+        const read = () => {
+            const s = track.getSettings?.() || {};
+            return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGainControl };
+        };
+        let actual = read();
+        const mismatch = ['echoCancellation', 'noiseSuppression', 'autoGainControl']
+            .some(key => typeof actual[key] === 'boolean' && actual[key] !== want);
+        if (mismatch && typeof track.applyConstraints === 'function') {
+            try {
+                await track.applyConstraints({
+                    echoCancellation: { exact: want },
+                    noiseSuppression: { exact: want },
+                    autoGainControl: { exact: want },
+                });
+            } catch (error) {
+                this.voiceTrace('mic-apply-constraints-failed', { error: error?.message || String(error) }, 'WARN');
+            }
+            actual = read();
+        }
+        this.voiceDiag('mic-processing', { want, webkitMac: this.isWebKitOnMac(), ...actual, label: track.label || '' }, mismatch ? 'WARN' : 'INFO');
     }
 
     attachLocalVideoPreview() {
@@ -415,6 +456,10 @@ ZaliMixin(ZaliInterface, class {
         if (!track) return false;
         entry.screenSender = entry.pc.addTrack(track, this.voice.localScreenStream);
         void this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
+        // Звук идёт в том же MediaStream, что и картинка: по id потока принимающая
+        // сторона отличает его от голоса (см. isRemoteScreenStream).
+        const screenAudio = this.voice.localScreenStream.getAudioTracks()[0];
+        if (screenAudio) entry.screenAudioSender = entry.pc.addTrack(screenAudio, this.voice.localScreenStream);
         this.sendScreenShareMeta(peer, 'start');
         this.voiceTrace('screen-track-attached', { peer, streamId: this.voice.localScreenStream.id || '' });
         return true;
@@ -450,7 +495,17 @@ ZaliMixin(ZaliInterface, class {
                 video.height = { ideal: height };
                 video.width = { ideal: Math.round(height * 16 / 9) };
             }
-            const request = { video, audio: false };
+            // Звук демонстрации — по выбору в окне «Что показать» (по умолчанию да).
+            // Эхо/шумодав/АРУ для системного звука вредны: они режут музыку и игры.
+            const wantAudio = !(choice.audio === 0 || choice.audio === false);
+            const request = {
+                video,
+                // restrictOwnAudio — подсказка Chromium (Windows): не захватывать звук самого
+                // приложения, иначе голоса звонка из наших динамиков уйдут в демонстрацию и
+                // собеседники услышат себя с задержкой. Неизвестный ключ движок игнорирует.
+                audio: wantAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, restrictOwnAudio: true } : false,
+            };
+            if (wantAudio) request.systemAudio = 'include';
             if (['monitor', 'window'].includes(choice.surface)) {
                 // Hints only: a browser that does not know them ignores them.
                 video.displaySurface = choice.surface;
@@ -462,11 +517,18 @@ ZaliMixin(ZaliInterface, class {
             } catch (error) {
                 // An engine that rejects the hints (TypeError) gets the plain request.
                 if (error?.name !== 'TypeError') throw error;
-                stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', frameRate: 30 }, audio: false });
+                stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', frameRate: 30 }, audio: wantAudio });
             }
             const track = stream.getVideoTracks()[0];
             if (!track) return;
             this.voice.localScreenStream = stream;
+            // Аудиодорожки может не быть: платформа не умеет (macOS WKWebView),
+            // не отдан системный звук, или в системном окне не отмечено «Поделиться
+            // звуком». Тогда демонстрация идёт как раньше — только картинка.
+            this.voice.screenAudioShared = stream.getAudioTracks().length > 0;
+            if (wantAudio && !this.voice.screenAudioShared) {
+                this.addLogEntry({ type: 'INFO', msg: 'Звук демонстрации недоступен — передаётся только картинка', ts: new Date().toLocaleTimeString() });
+            }
             this.voice.screenSharing = true;
             // Fires when the user stops sharing via the browser/OS's own
             // "Stop sharing" control, not just our in-app button.
@@ -518,9 +580,14 @@ ZaliMixin(ZaliInterface, class {
         }
         this.voice.localScreenStream = null;
         this.voice.screenSharing = false;
+        this.voice.screenAudioShared = false;
         this.resetNativeScreenCaptureState();
         this.detachLocalScreenPreview();
         for (const [peer, entry] of this.voice.peerConnections.entries()) {
+            if (entry.screenAudioSender) {
+                try { entry.pc.removeTrack(entry.screenAudioSender); } catch (e) {}
+                entry.screenAudioSender = null;
+            }
             if (entry.screenSender) {
                 try { entry.pc.removeTrack(entry.screenSender); } catch (e) {}
                 entry.screenSender = null;
@@ -696,6 +763,7 @@ ZaliMixin(ZaliInterface, class {
                 audioSender: null,
                 videoSender: null,
                 screenSender: null,
+                screenAudioSender: null,
                 remoteScreenStreamId: null,
                 negotiating: false,
                 renegotiationPending: false,
@@ -835,7 +903,7 @@ ZaliMixin(ZaliInterface, class {
                     receiverTrack: event.receiver?.track ? `${event.receiver.track.kind}:${event.receiver.track.readyState}:${event.receiver.track.enabled ? 'on' : 'off'}` : '',
                     tracks: stream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled ? 'on' : 'off'}`),
                 });
-                if (track && track.kind === 'video' && entry.remoteScreenStreamId && stream.id === entry.remoteScreenStreamId) {
+                if (this.isRemoteScreenStream(entry, name, stream, track)) {
                     this.attachRemoteScreenStream(name, stream);
                 } else {
                     this.attachRemoteVoiceStream(name, stream);
@@ -1247,7 +1315,8 @@ ZaliMixin(ZaliInterface, class {
             } catch (error) {
                 this.voiceTrace('meter-update-error', { error: error?.message || String(error) }, 'WARN');
             }
-            this.voice.meterRaf = setTimeout(tick, 125);
+            // 80 мс (было 125): плавнее кольцо при том же сглаживании.
+            this.voice.meterRaf = setTimeout(tick, 80);
         };
         this.voice.meterRaf = setTimeout(tick, 0);
     }
@@ -1586,15 +1655,38 @@ ZaliMixin(ZaliInterface, class {
         // does. Treating a muted-but-present track as "no video" is what makes
         // toggling the camera off actually clear the frozen frame instead of
         // just leaving the last rendered picture on screen forever.
-        const hasVideo = stream.getVideoTracks().some(t => t.readyState === 'live' && !t.muted);
+        const tracks = stream.getVideoTracks();
+        const hasVideo = tracks.some(t => t.readyState === 'live' && !t.muted);
+        const trackEnded = !tracks.some(t => t.readyState === 'live');
         let video = this.voice.remoteVideos.get(name);
+        const dropVideo = () => {
+            const current = this.voice.remoteVideos.get(name);
+            if (!current) return;
+            try { current.pause?.(); current.srcObject = null; current.remove?.(); } catch (e) {}
+            this.voice.remoteVideos.delete(name);
+            this.scheduleRenderVoicePanel();
+        };
         if (!hasVideo) {
-            if (video) {
-                try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
-                this.voice.remoteVideos.delete(name);
-                this.scheduleRenderVoicePanel();
+            if (!video) return;
+            // Дорожка кончилась — убираем сразу. А вот краткое «mute» (пауза RTP, смена
+            // битрейта, ожидание ключевого кадра) раньше тоже сносило <video> и
+            // пересоздавало его через долю секунды: картинка мигала чёрным. Теперь
+            // ждём: вернётся кадр — элемент остаётся на месте, нет — убираем.
+            if (trackEnded) {
+                clearTimeout(video._dropTimer);
+                dropVideo();
+            } else if (!video._dropTimer) {
+                video._dropTimer = setTimeout(() => {
+                    video._dropTimer = 0;
+                    const stillGone = !(video.srcObject?.getVideoTracks?.() || []).some(t => t.readyState === 'live' && !t.muted);
+                    if (stillGone) dropVideo();
+                }, 2500);
             }
             return;
+        }
+        if (video?._dropTimer) {
+            clearTimeout(video._dropTimer);
+            video._dropTimer = 0;
         }
         if (!video) {
             video = document.createElement('video');
@@ -1604,15 +1696,35 @@ ZaliMixin(ZaliInterface, class {
             video.dataset.peer = name;
             this.voice.remoteVideos.set(name, video);
         }
-        // Always (re)assign + play, even if this exact stream object was already
-        // set as srcObject before: a camera turned back on reuses the same local
-        // MediaStream/transceiver, so the object reference here is often
-        // unchanged even though the track just came back to life — skipping the
-        // reassignment on a reference-equality check is what left a re-enabled
-        // camera showing nothing for the peer.
-        video.srcObject = stream;
-        video.play?.().catch(error => this.voiceTrace('remote-video-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
+        // Присваиваем поток, только если он другой или у элемента нет данных. Раньше
+        // присваивание шло на КАЖДОЕ событие дорожки (unmute/mute/ended, новый
+        // ontrack) — а каждое присваивание srcObject сбрасывает видеоэлемент, и между
+        // кадрами вставал чёрный. Вернувшаяся после паузы дорожка играет и без этого.
+        if (video.srcObject !== stream || video.readyState === 0) {
+            video.srcObject = stream;
+        }
+        if (video.paused) {
+            video.play?.().catch(error => this.voiceTrace('remote-video-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
+        }
         this.scheduleRenderVoicePanel();
+    }
+
+    // Принадлежит ли пришедшая дорожка демонстрации экрана собеседника. Раньше
+    // решала только пара «видео + id из screen-meta»; теперь в потоке экрана едет
+    // ещё и звук, и без этой проверки он попадал в голосовой <audio> человека и
+    // ВЫТЕСНЯЛ его микрофон. Звуковая дорожка из потока с другим id, чем у уже
+    // играющего голоса этого человека, — это звук экрана, даже если screen-meta
+    // ещё не дошёл (голос и камера едут в одном потоке, экран — в отдельном).
+    isRemoteScreenStream(entry, name, stream, track) {
+        if (entry.remoteScreenStreamId && stream.id === entry.remoteScreenStreamId) return true;
+        if (track?.kind === 'audio') {
+            const voiceStream = this.voice.remoteAudios.get(name)?.srcObject;
+            if (voiceStream && voiceStream.id !== stream.id) {
+                entry.remoteScreenStreamId = stream.id;
+                return true;
+            }
+        }
+        return false;
     }
 
     attachRemoteScreenStream(peer, stream) {
@@ -1629,6 +1741,10 @@ ZaliMixin(ZaliInterface, class {
         }
         if (video.srcObject !== stream) {
             video.srcObject = stream;
+        }
+        this.applyScreenVolume(name);
+        if (this.audioPrefs?.speakerDeviceId && typeof video.setSinkId === 'function') {
+            video.setSinkId(this.audioPrefs.speakerDeviceId).catch(() => {});
         }
         video.play?.().catch(error => this.voiceTrace('remote-screen-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
         this.voiceTrace('remote-screen-attach', { peer: name, streamId: stream.id || '' });

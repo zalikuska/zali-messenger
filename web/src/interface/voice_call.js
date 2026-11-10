@@ -357,6 +357,8 @@ ZaliMixin(ZaliInterface, class {
         for (const audio of this.voice.remoteAudios.values()) {
             try { audio.muted = deafened; } catch (e) {}
         }
+        // Звук чужих демонстраций играет из их <video>: «Звук» глушит и его.
+        for (const peer of this.voice.remoteScreens.keys()) this.applyScreenVolume(peer);
     }
 
     // «Отменить» исходящий, пока собеседник не ответил: из шапки чата, из

@@ -791,7 +791,7 @@ ZaliMixin(ZaliInterface, class {
         const top = Math.max(topInset, Math.min(Number.isFinite(preferredTop) ? preferredTop : fallbackTop, maxTop));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
-        // С клавиатуры или с кнопки «⋯» фокус переходит в меню (на первую реакцию).
+        // С клавиатуры фокус переходит в меню (на первую реакцию).
         if (focus) menu.querySelector('button:not([hidden])')?.focus();
     }
 
@@ -807,13 +807,6 @@ ZaliMixin(ZaliInterface, class {
         if ((restoreFocus || hadFocus) && opener && document.contains(opener)) {
             try { opener.focus(); } catch (e) { /* элемента уже нет */ }
         }
-    }
-
-    /** Видимый вход в меню сообщения: на десктопе при наведении и фокусе, на
-     *  телефоне — у последнего сообщения (остальные открываются долгим нажатием). */
-    renderMessageMoreButton(messageId, msg) {
-        if (!messageId || !msg || msg.kind === 'call') return '';
-        return `<button class="msg-more" type="button" data-msg-more tabindex="-1" aria-haspopup="true" aria-label="Действия с сообщением">${this.uiIcon('more')}</button>`;
     }
 
     markMessageSeen(msg) {

@@ -106,6 +106,7 @@ ZaliMixin(ZaliInterface, class {
         if (this.ensureProfileState().open) this.closeProfile();
         const serverOverlay = document.getElementById('serverOverlay');
         if (serverOverlay && !serverOverlay.hidden) this.closeServerOverlay();
+        this.closeCoinOverlaysForNavigation?.();
     }
 
     commitListHTML(el, slot, html) {
@@ -176,6 +177,15 @@ ZaliMixin(ZaliInterface, class {
         }
         const matched = new Array(rows.length);
         const reused = new Uint8Array(prevRows.length);
+        // Строка изменилась, но это та же запись (тот же data-message-id /
+        // data-name) — пузырь, у которого сменилась позиция в группе, статус
+        // доставки или время, строка контакта с новым превью. Раньше такой
+        // узел пересоздавался целиком: фото в предыдущем пузыре заново
+        // декодировалось и мигало, видео и стикер начинались сначала, аватарка
+        // в списке контактов моргала на каждом входящем, бейдж заново «выпрыгивал».
+        // Теперь к живому узлу применяется только разница старой и новой разметки.
+        const morphFrom = new Array(rows.length).fill(-1);
+        const nextRows = new Set(rows);
         const freshRows = [];
         let lastOld = -1;
         for (let i = 0; i < rows.length; i += 1) {
@@ -191,10 +201,24 @@ ZaliMixin(ZaliInterface, class {
                 lastOld = found;
             } else {
                 matched[i] = null;
+                const next = lastOld + 1;
+                // Старую строку, которая ещё найдётся в новом списке как есть, не трогаем.
+                if (next < prevRows.length && !reused[next] && !nextRows.has(prevRows[next])) {
+                    const key = this.listRowKey(rows[i]);
+                    if (key && key === this.listRowKey(prevRows[next])) {
+                        morphFrom[i] = next;
+                        reused[next] = 1;
+                        lastOld = next;
+                    }
+                }
                 freshRows.push(rows[i]);
             }
         }
-        if (freshRows.length * 2 > rows.length) return false;
+        // Порог «дешевле переписать целиком» считается без строк, которые
+        // обновятся на месте: в коротком списке (один-два контакта) одна такая
+        // строка — уже половина, и полная перезапись вернула бы мигание аватарок.
+        const morphCount = morphFrom.reduce((n, from) => n + (from >= 0 ? 1 : 0), 0);
+        if ((freshRows.length - morphCount) * 2 > rows.length) return false;
 
         let fresh = [];
         if (freshRows.length) {
@@ -203,20 +227,40 @@ ZaliMixin(ZaliInterface, class {
             if (tpl.content.childNodes.length !== freshRows.length) return false;
             fresh = Array.from(tpl.content.childNodes);
         }
+        let freshCursor = 0;
+        const freshFor = new Array(rows.length);
+        for (let i = 0; i < rows.length; i += 1) {
+            if (matched[i]) continue;
+            freshFor[i] = fresh[freshCursor++];
+            const from = morphFrom[i];
+            if (from < 0) continue;
+            if (typeof freshFor[i]?.isEqualNode !== 'function') {
+                reused[from] = 0;
+                continue;
+            }
+            const live = prevNodes[from];
+            const tpl = document.createElement('template');
+            tpl.innerHTML = prevRows[from];
+            const before = tpl.content.childNodes.length === 1 ? tpl.content.firstChild : null;
+            if (before && this.morphListNode(live, before, freshFor[i]) === true) {
+                matched[i] = live;
+            } else {
+                reused[from] = 0;
+            }
+        }
         for (let i = 0; i < prevNodes.length; i += 1) {
             if (!reused[i]) prevNodes[i].remove();
         }
         // После удаления в #msgs остались только переиспользованные узлы, уже в
         // нужном порядке; новые вставляются перед следующим переиспользованным.
         let ref = box.firstChild;
-        let freshIndex = 0;
         const nodes = new Array(rows.length);
         for (let i = 0; i < rows.length; i += 1) {
             if (matched[i]) {
                 nodes[i] = matched[i];
                 ref = matched[i].nextSibling;
             } else {
-                const node = fresh[freshIndex++];
+                const node = freshFor[i];
                 box.insertBefore(node, ref);
                 nodes[i] = node;
             }
@@ -225,6 +269,106 @@ ZaliMixin(ZaliInterface, class {
         state.rows = rows;
         state.nodes = nodes;
         return true;
+    }
+
+    // Ключ строки списка — то, по чему строки одной и той же записи узнаются
+    // между кадрами: data-message-id пузыря или data-name контакта в первом теге.
+    listRowKey(row) {
+        const head = /^\s*<[a-z][^>]*>/i.exec(String(row || ''));
+        if (!head) return '';
+        const m = /\sdata-(message-id|name)="([^"]*)"/.exec(head[0]);
+        return m ? `${m[1]}:${m[2]}` : '';
+    }
+
+    // Переносит на живой узел `live` разницу между разметкой, из которой он был
+    // собран (`before`), и новой (`after`). Сравниваются именно две разметки, а не
+    // живой узел с новой: всё, что код дописал в DOM уже после отрисовки (класс
+    // msg-flash, стили из обработчика load у картинки, SVG стикера), там, где
+    // разметка не менялась, остаётся нетронутым. Где поменялось строение —
+    // заменяется только этот потомок. true — живой узел обновлён на месте;
+    // 'replace' — его самого придётся заменить на `after`.
+    morphListNode(live, before, after) {
+        // Без настоящего DOM (упрощённый DOM perf_doctor) — прежняя замена строки.
+        if (typeof before?.isEqualNode !== 'function' || typeof after?.getAttributeNames !== 'function') return 'replace';
+        if (before.nodeType !== after.nodeType || before.nodeName !== after.nodeName) return 'replace';
+        if (live.nodeType !== before.nodeType || live.nodeName !== before.nodeName) return 'replace';
+        if (before.isEqualNode(after)) return true;
+        if (before.nodeType === Node.TEXT_NODE || before.nodeType === Node.COMMENT_NODE) {
+            live.nodeValue = after.nodeValue;
+            return true;
+        }
+        if (before.nodeType !== Node.ELEMENT_NODE) return 'replace';
+        const beforeKids = Array.from(before.childNodes);
+        const afterKids = Array.from(after.childNodes);
+        const liveKids = Array.from(live.childNodes);
+        if (beforeKids.length !== afterKids.length || liveKids.length !== beforeKids.length) return 'replace';
+        for (const name of before.getAttributeNames()) {
+            if (name === 'class' || after.hasAttribute(name)) continue;
+            live.removeAttribute(name);
+        }
+        for (const name of after.getAttributeNames()) {
+            const value = after.getAttribute(name);
+            if (name === 'class') continue;
+            if (before.getAttribute(name) !== value) live.setAttribute(name, value);
+        }
+        // Классы — по разнице, а не присваиванием: классы, которые поставил JS,
+        // переживают перерисовку.
+        if (before.getAttribute('class') !== after.getAttribute('class')) {
+            if (live.getAttribute('class') === before.getAttribute('class')) {
+                // Чужих классов нет — пишем строку как есть, чтобы результат
+                // совпадал с полной отрисовкой побайтно.
+                const value = after.getAttribute('class');
+                if (value == null) live.removeAttribute('class');
+                else live.setAttribute('class', value);
+                return this.morphListChildren(live, beforeKids, afterKids, liveKids);
+            }
+            const was = new Set(before.classList);
+            const now = new Set(after.classList);
+            for (const name of was) if (!now.has(name)) live.classList.remove(name);
+            for (const name of now) if (!was.has(name)) live.classList.add(name);
+        }
+        return this.morphListChildren(live, beforeKids, afterKids, liveKids);
+    }
+
+    morphListChildren(live, beforeKids, afterKids, liveKids) {
+        for (let i = 0; i < afterKids.length; i += 1) {
+            if (this.morphListNode(liveKids[i], beforeKids[i], afterKids[i]) === 'replace') {
+                live.replaceChild(afterKids[i], liveKids[i]);
+            }
+        }
+        return true;
+    }
+
+    // Показ слоя с CSS-переходом по классу. Снятие display:none и класс,
+    // попавшие в один пересчёт стилей, перехода не дают — слой просто
+    // появляется, поэтому между ними читается offsetWidth. Класс ставится сразу,
+    // а не в requestAnimationFrame: отложенный класс доезжал и после того, как
+    // слой успели закрыть, и закрытый слой вспыхивал поверх интерфейса.
+    // Незавершённое скрытие (concealLayer) отменяется — иначе его таймер прятал
+    // только что открытый заново слой.
+    revealLayer(el, className = 'visible') {
+        if (!el) return;
+        clearTimeout(el.__zaliConcealTimer);
+        el.__zaliConcealTimer = 0;
+        if (el.hidden) {
+            el.hidden = false;
+            void el.offsetWidth;
+        }
+        el.classList.add(className);
+    }
+
+    // Пара к revealLayer(): снимает класс и прячет слой после перехода, если
+    // за это время его не открыли снова.
+    concealLayer(el, { className = 'visible', delayMs = 180 } = {}) {
+        if (!el) return;
+        el.classList.remove(className);
+        clearTimeout(el.__zaliConcealTimer);
+        el.__zaliConcealTimer = 0;
+        if (el.hidden) return;
+        el.__zaliConcealTimer = setTimeout(() => {
+            el.__zaliConcealTimer = 0;
+            if (!el.classList.contains(className)) el.hidden = true;
+        }, delayMs);
     }
 
     // commitListHTML() для списков, собранных построчно: та же защёлка «не
@@ -393,22 +537,29 @@ ZaliMixin(ZaliInterface, class {
                 // is-generic — подпись лишь повторяет иконку («Текстовый канал»):
                 // оформление «Фокус» её прячет, тема канала и «Вы в канале» остаются.
                 const genericSub = !ch.topic && !inCall;
-                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}${count > 0 ? ' has-unread' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
+                const occupants = kind === 'voice' ? this.voiceChannelOccupants(server, ch) : null;
+                const since = occupants ? Math.min(...occupants.names.map(n => occupants.joinedAt?.[n.toLowerCase()] || Infinity)) : Infinity;
+                const timer = Number.isFinite(since) ? `<span class="svm-timer" data-voice-since="${this.esc(String(since))}"></span>` : '';
+                const membersHTML = occupants ? this.voiceChannelMembersHTML(server, ch, occupants) : '';
+                return `<div class="sidebar-channel${active}${inCall ? ' in-call' : ''}${count > 0 ? ' has-unread' : ''}${membersHTML ? ' has-members' : ''}" data-server-id="${this.esc(server.id)}" data-channel-id="${this.esc(ch.id)}" data-channel-kind="${kind}">
                     <span class="sidebar-channel-icon ${kind}">${this.channelKindIcon(kind, 'sidebar-channel-glyph')}</span>
                     <div class="contact-info">
                         <div class="contact-name">${this.esc(ch.name)}</div>
                         <div class="contact-prev${genericSub ? ' is-generic' : ''}">${sub}</div>
                     </div>
                     <div class="contact-actions">
+                        ${timer}
                         ${badge}
                         ${muted ? `<span class="contact-mute-indicator" title="Уведомления отключены" aria-label="Уведомления отключены">${this.uiIcon('bell-off')}</span>` : ''}
                     </div>
-                </div>`;
+                </div>${membersHTML}`;
             }).join('');
         const html = rows
             ? `<div class="sidebar-channel-list">${rows}</div>`
             : empty(q ? 'Ничего не найдено' : 'Каналов нет', q ? 'Попробуйте другой запрос' : 'Создайте канал в настройках сервера');
         this.commitListHTML(target, 'servers', html);
+        this.fillVoiceChannelTimers();
+        if ((server.channels || []).some(ch => ch && this.normalizeChannelKind(ch.kind) === 'voice')) this.ensureServerVoicePoll();
     }
 
     updateServerSelection() {

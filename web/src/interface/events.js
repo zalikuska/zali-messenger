@@ -54,7 +54,7 @@ ZaliMixin(ZaliInterface, class {
         if (contactsEl) {
             contactsEl.addEventListener('click', (e) => {
                 // In servers mode the sidebar lists the selected server's channels.
-                const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
+                const channelRow = e.target.closest('.sidebar-channel[data-channel-id], .sidebar-voice-members[data-channel-id]');
                 if (channelRow) {
                     const channelId = channelRow.getAttribute('data-channel-id');
                     if (channelId) {
@@ -99,6 +99,13 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
             contactsEl.addEventListener('contextmenu', (e) => {
+                // ПКМ по человеку в списке голосового канала — то же меню, что у контакта.
+                const voiceMember = e.target.closest('.sidebar-voice-member[data-name]');
+                if (voiceMember) {
+                    e.preventDefault();
+                    this.openContactContextMenu(voiceMember.dataset.name, e.clientX, e.clientY, { fromVoice: true });
+                    return;
+                }
                 const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
                 if (channelRow) {
                     if (channelRow.getAttribute('data-channel-kind') === 'voice') return;
@@ -124,6 +131,14 @@ ZaliMixin(ZaliInterface, class {
     bindVoicePanelEvents() {
         const voicePanel = document.getElementById('voicePanel');
         if (voicePanel) {
+            // ПКМ по человеку в звонке (плитка или кружок «Ещё N») — меню контакта:
+            // профиль, подписка/дружба, громкость этого человека.
+            voicePanel.addEventListener('contextmenu', (e) => {
+                const person = e.target.closest('.voice-tile[data-name], .voice-dot[data-name]');
+                if (!person) return;
+                e.preventDefault();
+                this.openContactContextMenu(person.dataset.name, e.clientX, e.clientY, { fromVoice: true });
+            });
             voicePanel.addEventListener('click', async (e) => {
                 const callBtn = e.target.closest('#voiceCallBtn');
                 if (callBtn) {
@@ -325,11 +340,84 @@ ZaliMixin(ZaliInterface, class {
 
     }
 
+    /**
+     * Полоса прокрутки переписки на десктопе — свой ползунок поверх дока.
+     * Нативный скроллбар занимал отдельную колонку, в которой нет содержимого:
+     * блюр под композером обрывался о неё резкой линией. Теперь нативная полоса
+     * скрыта (CSS, ≥761px), лента идёт до самого края, а ползунок рисуется выше
+     * блюра и не размывается. Колесо и трекпад работают как раньше — это
+     * штатный скролл .msgs; ползунок только показывает позицию и тянется мышью.
+     */
+    bindChatScrollThumb(msgsEl) {
+        const view = document.getElementById('viewChat');
+        if (!view || !msgsEl || msgsEl._zaliThumb) return;
+        const thumb = document.createElement('div');
+        thumb.className = 'chat-scroll-thumb';
+        thumb.setAttribute('aria-hidden', 'true');
+        view.appendChild(thumb);
+        msgsEl._zaliThumb = thumb;
+        const inset = 8;
+        let raf = 0;
+        const geometry = () => {
+            const vr = view.getBoundingClientRect();
+            const mr = msgsEl.getBoundingClientRect();
+            const dock = document.querySelector('#viewChat .input-area');
+            const bottom = dock ? dock.getBoundingClientRect().bottom : mr.bottom;
+            const top = mr.top - vr.top + inset;
+            const height = bottom - mr.top - inset * 2;
+            return { top, height };
+        };
+        const update = () => {
+            raf = 0;
+            const { clientHeight, scrollHeight, scrollTop } = msgsEl;
+            const g = geometry();
+            if (scrollHeight <= clientHeight + 1 || g.height <= 0) {
+                thumb.style.display = 'none';
+                return;
+            }
+            const h = Math.max(36, g.height * clientHeight / scrollHeight);
+            const max = scrollHeight - clientHeight;
+            const y = (g.height - h) * (scrollTop / max);
+            thumb.style.display = 'block';
+            thumb.style.height = h + 'px';
+            thumb.style.transform = `translateY(${g.top + y}px)`;
+        };
+        const schedule = () => { if (!raf) raf = requestAnimationFrame(update); };
+        msgsEl.addEventListener('scroll', schedule, { passive: true });
+        window.addEventListener('resize', schedule);
+        if (window.ResizeObserver) new ResizeObserver(schedule).observe(msgsEl);
+        if (window.MutationObserver) new MutationObserver(schedule).observe(msgsEl, { childList: true, subtree: true });
+        thumb.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            thumb.setPointerCapture(e.pointerId);
+            thumb.classList.add('dragging');
+            const startY = e.clientY;
+            const startTop = msgsEl.scrollTop;
+            const move = (ev) => {
+                const g = geometry();
+                const h = thumb.offsetHeight;
+                const track = Math.max(1, g.height - h);
+                msgsEl.scrollTop = startTop + (ev.clientY - startY) * (msgsEl.scrollHeight - msgsEl.clientHeight) / track;
+            };
+            const up = () => {
+                thumb.classList.remove('dragging');
+                thumb.removeEventListener('pointermove', move);
+                thumb.removeEventListener('pointerup', up);
+                thumb.removeEventListener('pointercancel', up);
+            };
+            thumb.addEventListener('pointermove', move);
+            thumb.addEventListener('pointerup', up);
+            thumb.addEventListener('pointercancel', up);
+        });
+        schedule();
+    }
+
     /** Список сообщений: реакции, ссылки, контекстное меню. Вызывается только из bindEvents(). */
     bindMessageListEvents() {
         const msgsEl = document.getElementById('msgs');
         if (msgsEl) {
             msgsEl.addEventListener('scroll', () => this.onMessagesScroll(), { passive: true });
+            this.bindChatScrollThumb(msgsEl);
             msgsEl.addEventListener('click', (e) => {
                 const profileTarget = e.target.closest('[data-profile-open]');
                 if (profileTarget) {
@@ -402,8 +490,6 @@ ZaliMixin(ZaliInterface, class {
                 }
                 const discardBtn = e.target.closest('[data-msg-discard]');
                 if (discardBtn) void this.deleteMessage(discardBtn.getAttribute('data-msg-discard'));
-                const moreBtn = e.target.closest('[data-msg-more]');
-                if (moreBtn) this.toggleMessageMenuFromButton(moreBtn);
             });
             this.bindMessageKeyboardNav(msgsEl);
             msgsEl.addEventListener('contextmenu', (e) => {
@@ -451,20 +537,6 @@ ZaliMixin(ZaliInterface, class {
             }
         });
 
-    }
-
-    /** Кнопка «⋯» у сообщения: открывает или закрывает то же меню, что ПКМ и долгое нажатие. */
-    toggleMessageMenuFromButton(btn) {
-        const msgEl = btn.closest('.msg[data-message-id]');
-        const messageId = msgEl?.getAttribute('data-message-id');
-        if (!messageId) return;
-        const menu = document.getElementById('reactionMenu');
-        if (menu?.classList.contains('visible') && menu.getAttribute('data-message-id') === messageId) {
-            this.hideReactionMenu({ restoreFocus: true });
-            return;
-        }
-        const rect = btn.getBoundingClientRect();
-        this.showReactionMenu(msgEl, messageId, rect.left + rect.width / 2, rect.top, { focus: true });
     }
 
     /**
@@ -634,7 +706,19 @@ ZaliMixin(ZaliInterface, class {
             coinTransferAmountInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); this.submitCoinTransfer(); }
             });
-            coinTransferAmountInput.addEventListener('input', () => this.updateCoinModalSummary());
+            // Только цифры и разделители «.» «,»: чистим на каждый ввод, включая
+            // вставку и перетаскивание, и сохраняем позицию курсора.
+            coinTransferAmountInput.addEventListener('input', () => {
+                const el = coinTransferAmountInput;
+                const cleaned = el.value.replace(/[^0-9.,]/g, '');
+                if (cleaned !== el.value) {
+                    const pos = el.selectionStart ?? cleaned.length;
+                    const removedBefore = el.value.slice(0, pos).replace(/[0-9.,]/g, '').length;
+                    el.value = cleaned;
+                    try { el.setSelectionRange(pos - removedBefore, pos - removedBefore); } catch (e) { /* не критично */ }
+                }
+                this.updateCoinModalSummary();
+            });
         }
         const coinTransferRecipientInput = document.getElementById('coinTransferRecipientInput');
         if (coinTransferRecipientInput) {
@@ -645,12 +729,25 @@ ZaliMixin(ZaliInterface, class {
 
     }
 
+    /**
+     * Enter = перенос строки: телефонная раскладка на устройстве, где основной
+     * указатель — палец и нет мыши. Узкое окно на десктопе и планшет с
+     * клавиатурой и трекпадом отправляют по Enter, как раньше.
+     */
+    enterInsertsNewline() {
+        if (!this.isMobileLayout() || typeof window.matchMedia !== 'function') return false;
+        if (!this._touchPrimaryQuery) {
+            this._touchPrimaryQuery = window.matchMedia('(pointer: coarse) and (hover: none)');
+        }
+        return !!this._touchPrimaryQuery.matches;
+    }
+
     /** Поле ввода: ввод, вставка, drag-and-drop. Вызывается только из bindEvents(). */
     bindMessageInputEvents() {
         const msgInput = document.getElementById('msgInput');
         if (msgInput) {
             msgInput.addEventListener('input', () => {
-                this.resizeComposer();
+                this.resizeComposer({ typing: true });
                 this.updateSendButtonState();
             });
             msgInput.addEventListener('keydown', (e) => {
@@ -661,9 +758,14 @@ ZaliMixin(ZaliInterface, class {
                     this.cancelComposerContext();
                     return;
                 }
-                if (e.key === 'Enter' && !e.shiftKey) { 
-                    e.preventDefault(); 
-                    this.sendInputMessage(); 
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    // На телефоне Enter экранной клавиатуры — перенос строки, как в
+                    // любом мобильном мессенджере: отправляет кнопка рядом с полем.
+                    // Иначе многострочное сообщение с телефона не написать вовсе —
+                    // Shift+Enter на экранной клавиатуре не нажать.
+                    if (this.enterInsertsNewline()) return;
+                    e.preventDefault();
+                    this.sendInputMessage();
                 }
             });
             msgInput.addEventListener('paste', (e) => {
@@ -674,6 +776,28 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
+
+        // Кнопки композера не забирают фокус у поля ввода. Нажатие на «отправить»
+        // переносило фокус на кнопку — клавиатура закрывалась после КАЖДОГО
+        // сообщения, лента прыгала на её высоту, а следующее сообщение начиналось
+        // с тапа по полю. Фокус переводит действие по умолчанию у mousedown (в том
+        // числе у синтезированного из касания), сам click при этом остаётся.
+        const inputArea = document.querySelector('#viewChat .input-area');
+        if (inputArea && msgInput) {
+            inputArea.addEventListener('mousedown', (e) => {
+                if (document.activeElement !== msgInput) return;
+                if (e.target.closest('button')) e.preventDefault();
+            });
+        }
+
+        const jumpBtn = document.getElementById('msgsJumpBtn');
+        if (jumpBtn) {
+            jumpBtn.addEventListener('mousedown', (e) => {
+                if (document.activeElement === msgInput) e.preventDefault();
+            });
+            jumpBtn.addEventListener('click', () => this.jumpToLatestMessages());
+        }
+        this.setupMessagesViewportAnchor();
 
         const inputBar = document.getElementById('inputBar');
         if (inputBar) {
@@ -1043,6 +1167,12 @@ ZaliMixin(ZaliInterface, class {
                 this.setAudioInputDevice(inputAudioMic.value);
             });
         }
+        const inputVoiceProcessing = document.getElementById('inputVoiceProcessing');
+        if (inputVoiceProcessing) {
+            inputVoiceProcessing.addEventListener('change', () => {
+                void this.setVoiceProcessing(inputVoiceProcessing.checked);
+            });
+        }
         if (inputAudioSpeaker) {
             inputAudioSpeaker.addEventListener('change', () => {
                 this.setAudioOutputDevice(inputAudioSpeaker.value);
@@ -1079,6 +1209,21 @@ ZaliMixin(ZaliInterface, class {
             inputUiV2Enabled.addEventListener('change', () => {
                 this.saveUiV2Enabled(!!inputUiV2Enabled.checked);
             });
+        }
+        for (const [id, channel] of [['inputUpdateAlpha', 'a'], ['inputUpdateBeta', 'b'], ['inputUpdateRelease', 'r']]) {
+            document.getElementById(id)?.addEventListener('change', (e) => this.saveUpdateChannel(channel, !!e.target.checked));
+        }
+        const inputSettingsSync = document.getElementById('inputSettingsSync');
+        if (inputSettingsSync) {
+            inputSettingsSync.addEventListener('change', () => this.setSettingsSyncEnabled(!!inputSettingsSync.checked));
+        }
+        document.getElementById('btnSettingsSyncNow')?.addEventListener('click', () => {
+            this.setSettingsSyncStatus('Синхронизируем…');
+            void this.pullSettingsSync();
+        });
+        const inputMsgOneSide = document.getElementById('inputMsgOneSide');
+        if (inputMsgOneSide) {
+            inputMsgOneSide.addEventListener('change', () => this.saveMsgOneSide(!!inputMsgOneSide.checked));
         }
         if (inputDecorArt) {
             inputDecorArt.addEventListener('change', () => {
@@ -1894,8 +2039,20 @@ ZaliMixin(ZaliInterface, class {
         const titlebar = document.getElementById('titlebar');
         if (titlebar && this.nativeSupports('windowDrag')) {
             titlebar.addEventListener('mousedown', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.tb-announce-close') && !e.target.closest('.tb-brand.is-update')) {
                     this.postNativeMessage({ type: NativeMessageTypes.START_DRAG });
+                }
+            });
+        }
+
+        // Ярлык обновления в заголовке (updates.js, renderTitlebarUpdate).
+        const tbBrand = document.getElementById('tbBrand');
+        if (tbBrand) {
+            tbBrand.addEventListener('click', () => this.handleTitlebarUpdateClick());
+            tbBrand.addEventListener('keydown', (e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && tbBrand.classList.contains('is-update')) {
+                    e.preventDefault();
+                    this.handleTitlebarUpdateClick();
                 }
             });
         }
@@ -1938,7 +2095,7 @@ ZaliMixin(ZaliInterface, class {
                 this.postNativeMessage({ type: NativeMessageTypes.CLOSE_WINDOW });
             });
             titlebar.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close')) {
+                if (!e.target.closest('.ws-pill') && !e.target.closest('.hdr-btn') && !e.target.closest('.win-controls') && !e.target.closest('.tb-call') && !e.target.closest('.tb-addon') && !e.target.closest('.mobile-menu-btn') && !e.target.closest('.tb-announce-close') && !e.target.closest('.tb-brand.is-update')) {
                     this.postNativeMessage({ type: NativeMessageTypes.MAXIMIZE_WINDOW });
                 }
             });
@@ -1953,9 +2110,17 @@ ZaliMixin(ZaliInterface, class {
         this.setupMobileDockDrag();
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();
+        // Системное «назад» Android: оболочка вызывает это и сворачивает
+        // приложение, только если вернулось false (см. handleMobileBack).
+        window.__zaliHandleBack = () => {
+            try { return !!this.handleMobileBack(); } catch (e) { return false; }
+        };
         this.applyUiV2Chrome();
         this.applyDesignMode();
         this.applyDecorArt();
+        this.applyMsgOneSide();
+        this.applySettingsSyncUi();
+        this.applyUpdateChannelsUi();
         this.applyVoiceTraceEnabled();
         const mobileQuery = this.mobileLayoutQuery();
         if (mobileQuery) {

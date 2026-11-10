@@ -174,6 +174,35 @@ ZaliMixin(ZaliInterface, class {
         this.applyDecorArt();
     }
 
+    // Расстановка сообщений: свои справа (по умолчанию) или все вдоль левого края.
+    // Правила — `body[data-msg-side="one"]` в web/style.css.
+    msgOneSideStorageKey() {
+        return 'zali_msg_one_side_v1';
+    }
+
+    loadMsgOneSide() {
+        try {
+            return localStorage.getItem(this.msgOneSideStorageKey()) === '1';
+        } catch (e) { return false; }
+    }
+
+    saveMsgOneSide(enabled) {
+        this.msgOneSide = !!enabled;
+        try {
+            localStorage.setItem(this.msgOneSideStorageKey(), this.msgOneSide ? '1' : '0');
+        } catch (e) {}
+        this.applyMsgOneSide();
+        // Аватары у своих сообщений появляются/исчезают — нужна перерисовка ленты.
+        this.renderMessages?.();
+    }
+
+    applyMsgOneSide() {
+        if (typeof this.msgOneSide !== 'boolean') this.msgOneSide = this.loadMsgOneSide();
+        document.body?.setAttribute('data-msg-side', this.msgOneSide ? 'one' : 'split');
+        const toggle = document.getElementById('inputMsgOneSide');
+        if (toggle) toggle.checked = this.msgOneSide;
+    }
+
     applyDecorArt() {
         if (typeof this.decorArt !== 'boolean') this.decorArt = this.loadDecorArt();
         document.body?.setAttribute('data-decor-art', this.decorArt ? 'on' : 'off');
@@ -238,7 +267,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     loadAudioPrefs() {
-        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {} };
+        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {}, screenVolumePercents: {}, voiceProcessing: null };
         try {
             const raw = localStorage.getItem(this.audioPrefsStorageKey());
             if (!raw) return fallback;
@@ -253,6 +282,10 @@ ZaliMixin(ZaliInterface, class {
                 // бы, что звонок и звук нового сообщения нельзя развести.
                 notificationVolumePercent: Number.isFinite(parsed?.notificationVolumePercent) ? Math.max(0, Math.min(200, parsed.notificationVolumePercent)) : 100,
                 peerVolumePercents: (parsed?.peerVolumePercents && typeof parsed.peerVolumePercents === 'object') ? parsed.peerVolumePercents : {},
+                // Громкость звука ЧУЖОЙ ДЕМОНСТРАЦИИ — отдельно от голоса того же человека.
+                // null — «как принято на платформе» (см. voiceProcessingEnabled).
+                voiceProcessing: typeof parsed?.voiceProcessing === 'boolean' ? parsed.voiceProcessing : null,
+                screenVolumePercents: (parsed?.screenVolumePercents && typeof parsed.screenVolumePercents === 'object') ? parsed.screenVolumePercents : {},
             };
         } catch (e) {
             return fallback;
@@ -329,6 +362,45 @@ ZaliMixin(ZaliInterface, class {
 
     applyMasterVolume() {
         for (const peer of this.voice.remoteAudios.keys()) this.applyPeerVolume(peer);
+        for (const peer of this.voice.remoteScreens.keys()) this.applyScreenVolume(peer);
+    }
+
+    // ── Звук чужой демонстрации экрана ────────────────────────────────────
+    // Дорожка звука едет в том же MediaStream, что и картинка, и играет прямо из
+    // <video> плитки. Шкала 0–100 %: у HTMLMediaElement.volume потолок 1.0,
+    // «усилить» им нельзя (то же ограничение, что у effectiveRemoteVolume).
+    getScreenVolumePercent(peer) {
+        const name = String(peer || '').trim();
+        const value = this.audioPrefs?.screenVolumePercents?.[name];
+        return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 100;
+    }
+
+    setScreenVolumePercent(peer, percent) {
+        const name = String(peer || '').trim();
+        if (!name) return;
+        if (!this.audioPrefs.screenVolumePercents) this.audioPrefs.screenVolumePercents = {};
+        this.audioPrefs.screenVolumePercents[name] = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+        this.saveAudioPrefs();
+        this.applyScreenVolume(name);
+    }
+
+    remoteScreenHasAudio(peer) {
+        const stream = this.voice.remoteScreens.get(String(peer || '').trim())?.srcObject;
+        return !!stream?.getAudioTracks?.().some(t => t.readyState === 'live');
+    }
+
+    // Звук включён, только когда: у потока есть звук, зритель уже нажал
+    // «Смотреть» (до этого — размытое превью без звука), мы не «оглушены» и
+    // ползунок/кнопка не выключили его.
+    applyScreenVolume(peer) {
+        const name = String(peer || '').trim();
+        const video = this.voice.remoteScreens.get(name);
+        if (!video) return;
+        const percent = this.getScreenVolumePercent(name);
+        const master = (this.audioPrefs.masterVolumePercent || 100) / 100;
+        video.volume = Math.max(0, Math.min(1, (percent / 100) * master));
+        const userMuted = !!this.voice.screenMuted?.has(name);
+        video.muted = !this.remoteScreenHasAudio(name) || !video.dataset.watching || !!this.voice.deafened || userMuted || percent === 0;
     }
 
     applyPeerVolume(peer) {
@@ -374,6 +446,8 @@ ZaliMixin(ZaliInterface, class {
         if (volumeInput) volumeInput.value = String(this.audioPrefs.masterVolumePercent);
         const volumeLabel = document.getElementById('masterVolumeValue');
         if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.masterVolumePercent}%`;
+        const processing = document.getElementById('inputVoiceProcessing');
+        if (processing) processing.checked = this.voiceProcessingEnabled();
         this.refreshAudioDeviceOptions();
     }
 
@@ -516,14 +590,53 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // WebKit на macOS (WKWebView — оболочки macOS) включает эхо-/шумоподавление
+    // через системный аудиоблок VoiceProcessingIO. Пока он держит микрофон, другие
+    // приложения слышат с него тишину или сильно придушенный звук, а выключение
+    // звука у нас глушит вход системно. В Chromium (Windows, Android) подавление
+    // программное и внутри процесса — там оно безвредно и остаётся включённым.
+    isWebKitOnMac() {
+        const ua = String(navigator.userAgent || '');
+        return /Macintosh/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
+    }
+
+    // Явный выбор в настройках; иначе на WebKit/macOS подавление выключено, чтобы
+    // не занимать микрофон системно, на остальных — включено.
+    voiceProcessingEnabled() {
+        const pref = this.audioPrefs?.voiceProcessing;
+        return typeof pref === 'boolean' ? pref : !this.isWebKitOnMac();
+    }
+
+    // Ограничения захвата микрофона: устройство (если выбрано) + обработка.
+    // strict — обязательные (`exact`) ограничения: на WebKit/macOS «желательное»
+    // `echoCancellation: false` движок вправе проигнорировать и всё равно поднять
+    // VoiceProcessingIO (в журнале macOS это CADefaultDeviceAggregate у WebKit.GPU);
+    // `exact` либо отключает его, либо отказывает (OverconstrainedError) — и тогда
+    // вызывающий откатывается на обычные.
+    micAudioConstraints({ strict = false } = {}) {
+        const on = this.voiceProcessingEnabled();
+        const flag = value => (strict ? { exact: value } : value);
+        const base = {
+            echoCancellation: flag(on),
+            noiseSuppression: flag(on),
+            autoGainControl: flag(on),
+        };
+        return this.audioPrefs?.micDeviceId ? { ...base, deviceId: { exact: this.audioPrefs.micDeviceId } } : base;
+    }
+
+    async setVoiceProcessing(enabled) {
+        this.audioPrefs.voiceProcessing = !!enabled;
+        this.saveAudioPrefs();
+        // Идёт звонок — перехватываем микрофон с новыми ограничениями на лету.
+        await this.setAudioInputDevice(this.audioPrefs.micDeviceId);
+    }
+
     async setAudioInputDevice(deviceId) {
         this.audioPrefs.micDeviceId = String(deviceId || '');
         this.saveAudioPrefs();
         if (!this.voice.localStream) return;
         try {
-            const constraints = this.audioPrefs.micDeviceId
-                ? { audio: { deviceId: { exact: this.audioPrefs.micDeviceId } }, video: false }
-                : { audio: true, video: false };
+            const constraints = { audio: this.micAudioConstraints(), video: false };
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
             const newTrack = newStream.getAudioTracks()[0];
             if (!newTrack) return;

@@ -50,6 +50,108 @@ ZaliMixin(ZaliInterface, class {
         try { localStorage.removeItem(this.updateInstallAttemptsStorageKey()); } catch (e) {}
     }
 
+    // --- Каналы обновлений: какие сборки разрешено предлагать и скачивать ---
+
+    updateChannelsStorageKey() {
+        return 'zali_update_channels_v1';
+    }
+
+    // 'a' | 'b' | 'r' — по схеме версии (см. parseAppVersion); числовые легаси-версии — релиз.
+    updateChannelOf(version) {
+        return ['a', 'b', 'r'][this.parseAppVersion(version).channel] || 'r';
+    }
+
+    // Без явного выбора: каналы не ниже того, на котором работает сама сборка
+    // (бета-сборка получает беты и релизы, но не альфы); релиз разрешён всегда.
+    defaultUpdateChannels() {
+        const current = this.parseAppVersion(String(window.__ZALI_NATIVE_APP_VERSION || '')).channel;
+        return { a: current <= 0, b: current <= 1, r: true };
+    }
+
+    loadUpdateChannels() {
+        const fallback = this.defaultUpdateChannels();
+        try {
+            const parsed = JSON.parse(localStorage.getItem(this.updateChannelsStorageKey()) || 'null');
+            if (!parsed || typeof parsed !== 'object') return fallback;
+            return {
+                a: typeof parsed.a === 'boolean' ? parsed.a : fallback.a,
+                b: typeof parsed.b === 'boolean' ? parsed.b : fallback.b,
+                r: typeof parsed.r === 'boolean' ? parsed.r : fallback.r,
+            };
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    updateChannelAllowed(version) {
+        return !!this.loadUpdateChannels()[this.updateChannelOf(version)];
+    }
+
+    saveUpdateChannel(channel, enabled) {
+        if (!['a', 'b', 'r'].includes(channel)) return;
+        const next = { ...this.loadUpdateChannels(), [channel]: !!enabled };
+        try { localStorage.setItem(this.updateChannelsStorageKey(), JSON.stringify(next)); } catch (e) {}
+        this.applyUpdateChannelsUi();
+        // Применить сразу: ярлык вверху появляется или исчезает без перезапуска.
+        void this.checkForAppUpdate();
+    }
+
+    applyUpdateChannelsUi() {
+        const channels = this.loadUpdateChannels();
+        for (const [id, key] of [['inputUpdateAlpha', 'a'], ['inputUpdateBeta', 'b'], ['inputUpdateRelease', 'r']]) {
+            const el = document.getElementById(id);
+            if (el) el.checked = !!channels[key];
+        }
+    }
+
+    // Надпись «ZaliMessenger» в заголовке окна — она же и уведомление об обновлении:
+    // «Доступно обновление» (красная alpha / жёлтая beta / лаймовая release), при
+    // скачивании «Загрузка… N%» тем же цветом, после — «Установить обновление».
+    renderTitlebarUpdate() {
+        const el = document.getElementById('tbBrand');
+        if (!el) return;
+        const status = this.S.updateStatus || {};
+        if (!status.available) {
+            el.textContent = 'ZaliMessenger';
+            el.className = 'tb-brand';
+            el.removeAttribute('data-channel');
+            el.removeAttribute('role');
+            el.removeAttribute('tabindex');
+            el.removeAttribute('title');
+            return;
+        }
+        const channel = this.updateChannelOf(status.version);
+        let text = 'Доступно обновление';
+        let hint = `Версия ${status.version}: нажмите, чтобы скачать в фоне`;
+        if (status.readyToInstall) {
+            text = 'Установить обновление';
+            hint = 'Загружено — нажмите, чтобы перезапустить и установить';
+        } else if (status.downloading) {
+            text = `Загрузка… ${Math.round((status.progress || 0) * 100)}%`;
+            hint = `Скачиваем версию ${status.version}`;
+        } else if (status.error) {
+            hint = status.error;
+        }
+        el.className = `tb-brand is-update${status.downloading ? ' is-downloading' : ''}`;
+        el.setAttribute('data-channel', channel);
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.title = hint;
+        if (el.textContent !== text) el.textContent = text;
+    }
+
+    // Клик по ярлыку: скачать в фоне → (по готовности) установить. Про неподписанный
+    // релиз и ошибки — модалка с объяснением: тихо молчать нельзя.
+    handleTitlebarUpdateClick() {
+        const status = this.S.updateStatus || {};
+        if (!status.available || status.downloading) return;
+        if (!status.readyToInstall && (!status.downloadUrl || !status.releaseSigned)) {
+            this.openUpdateModal();
+            return;
+        }
+        void this.acceptAppUpdate();
+    }
+
     // App version scheme: MAJOR.MINOR{a|b|r}BUILD[.K], e.g. "0.2b9" or "0.2a48.1" (r=release >
     // b=beta > a=alpha at the same MAJOR.MINOR). Falls back to plain dotted
     // numeric versions (e.g. legacy "1.1.3") for compatibility with whatever the
@@ -133,7 +235,23 @@ ZaliMixin(ZaliInterface, class {
         const currentVersion = String(window.__ZALI_NATIVE_APP_VERSION || '').trim();
         if (!platform || !currentVersion) return;
         try {
-            const res = await this.apiFetch(`/api/version?platform=${encodeURIComponent(platform)}`);
+            // Сервер хранит последнюю сборку КАЖДОГО канала и отдаёт самую новую среди
+            // запрошенных, так что выключенная alpha не мешает получить свежий release.
+            const allowed = Object.entries(this.loadUpdateChannels()).filter(([, on]) => on).map(([id]) => id);
+            if (!allowed.length) {
+                this.S.updateStatus = null;
+                this.renderTitlebarUpdate();
+                this.renderHub();
+                return true;
+            }
+            const res = await this.apiFetch(`/api/version?platform=${encodeURIComponent(platform)}&channels=${allowed.join(',')}`);
+            // 404 — в разрешённых каналах ничего не опубликовано: это не сбой, обновления нет.
+            if (res.status === 404) {
+                this.S.updateStatus = null;
+                this.renderTitlebarUpdate();
+                this.renderHub();
+                return true;
+            }
             if (!res.ok) return;
             const data = await res.json();
             const latestVersion = String(data?.version || '').trim();
@@ -148,6 +266,16 @@ ZaliMixin(ZaliInterface, class {
             if (!latestVersion || this.compareVersions(latestVersion, currentVersion) <= 0) {
                 // We are running it — any earlier failed-install bookkeeping is stale.
                 this.clearUpdateInstallAttempts();
+                this.S.updateStatus = null;
+                this.renderTitlebarUpdate();
+                return true;
+            }
+            // Канал выключен в настройках — обновление не предлагается и не скачивается.
+            if (!this.updateChannelAllowed(latestVersion)) {
+                this.trace(`checkForAppUpdate channel disabled version=${latestVersion}`);
+                this.S.updateStatus = null;
+                this.renderTitlebarUpdate();
+                this.renderHub();
                 return true;
             }
             // Reaching here after having already installed this exact version means the
@@ -185,16 +313,14 @@ ZaliMixin(ZaliInterface, class {
                     : '',
             };
             this.renderHub();
-            const declined = (() => {
-                try { return localStorage.getItem(this.updateDeclinedStorageKey()); } catch (e) { return null; }
-            })();
+            this.renderTitlebarUpdate();
             if (installKeepsFailing) {
                 this.trace(`checkForAppUpdate install keeps failing version=${latestVersion} attempts=${attempts.count}`);
                 return true;
             }
-            if (this.S.updateStatus.mandatory || declined !== latestVersion) {
-                this.openUpdateModal();
-            }
+            // Обычное обновление — только ярлык в заголовке (без модалки). Обязательное
+            // отказом не закрыть, поэтому оно по-прежнему открывается окном.
+            if (this.S.updateStatus.mandatory) this.openUpdateModal();
             return true;
         } catch (e) {
             this.trace(`checkForAppUpdate failed err=${e?.message || e}`);
@@ -223,6 +349,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     renderUpdateModal() {
+        this.renderTitlebarUpdate();
         const modal = document.getElementById('updateAvailableModal');
         if (!modal) return;
         const status = this.S.updateStatus || {};
@@ -294,6 +421,8 @@ ZaliMixin(ZaliInterface, class {
         }
         this.renderUpdateModal();
         this.renderHub();
+        // Загрузка шла тихо, в фоне: если она сорвалась — человеку надо об этом сказать.
+        if (this.S.updateStatus?.error) this.openUpdateModal();
     }
 
     handleUpdateEvent(payload) {

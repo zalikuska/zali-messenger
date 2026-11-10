@@ -72,6 +72,14 @@ Cargo требует строгий SemVer, поэтому `apps/windows/Cargo.t
    `curl "https://msgs.zalikus.org/api/version?platform=macos"` и
    `curl -o /dev/null -w '%{http_code} %{size_download}\n' <downloadUrl>`.
 
+**Три канала.** Канал сборки — буква в версии (`a` alpha, `b` beta, `r` release; легаси
+`1.1.4` — release). Сервер хранит **последнюю публикацию каждого канала** на платформу
+(`app_releases_v2`, ключ `platform+channel`): публикация `0.2b53` заменяет только бету,
+релиз и альфа остаются. `GET /api/version?platform=…&channels=b,r` отдаёт самую новую
+версию среди запрошенных каналов (клиент берёт их из настроек «Обновления»); без
+`channels` (старые клиенты) — последний release, а без релизов — самая новая из всех.
+Порядок версий в `updates.rs::version_key` зеркалит `compareVersions` в `updates.js` — менять вместе.
+
 ## Ловушки
 
 - **`/uploads/:filename` не годится для артефактов.** Это роут вложений:

@@ -46,6 +46,7 @@ ZaliMixin(ZaliInterface, class {
         if (this.messageScrollRaf) return;
         this.messageScrollRaf = requestAnimationFrame(() => {
             this.messageScrollRaf = 0;
+            this.syncJumpToBottom(box);
             const msgs = this.getCurrentMessages();
             const conversationKey = this.S.navMode === 'servers'
                 ? this.currentServerChatKey()
@@ -55,22 +56,43 @@ ZaliMixin(ZaliInterface, class {
                 stickToBottom: this.isMessagesNearBottom(box),
             });
             const current = this.messageWindow || {};
-            if (
-                current.conversationKey === conversationKey &&
-                current.start === nextWindow.start &&
-                current.end === nextWindow.end &&
-                current.count === msgs.length &&
-                (!!current.useWindow) === (!!nextWindow.useWindow)
-            ) {
+            const sameList = current.conversationKey === conversationKey
+                && current.count === msgs.length
+                && (!!current.useWindow) === (!!nextWindow.useWindow);
+            if (sameList && current.start === nextWindow.start && current.end === nextWindow.end) {
                 return;
+            }
+            // Гистерезис окна: пока видимая часть ленты лежит внутри уже
+            // отрисованного окна с запасом не меньше трети overscan с каждой
+            // стороны, окно не двигаем. Иначе оно сдвигалось на каждом шаге
+            // прокрутки, и лента перестраивалась почти каждые два кадра (174 раза
+            // за 6 с прокрутки в живом приложении) — на слабых устройствах это и
+            // были рывки. Край списка (начало/конец переписки) — без запаса.
+            if (sameList && nextWindow.useWindow && Number.isFinite(nextWindow.overscan)) {
+                const margin = Math.max(4, Math.floor(nextWindow.overscan / 3));
+                const firstVisible = Math.floor(box.scrollTop / nextWindow.avgHeight);
+                const lastVisible = firstVisible + nextWindow.viewportCount;
+                const topOk = current.start === 0 || current.start <= firstVisible - margin;
+                const bottomOk = current.end >= msgs.length || current.end >= lastVisible + margin;
+                const edgeShift = (nextWindow.start === 0) !== (current.start === 0)
+                    || (nextWindow.end >= msgs.length) !== (current.end >= msgs.length);
+                if (topOk && bottomOk && !edgeShift) return;
             }
             this.scheduleRenderMessages();
         });
     }
 
+    // Нижняя граница средней высоты строки, по которой считаются заглушки окна
+    // виртуализации. На телефоне время стоит в строке с текстом, и короткая
+    // реплика занимает ~40px, а не 56: с прежней границей заглушки выходили на
+    // треть выше настоящих строк, и при сдвиге окна лента смещалась.
+    minMessageRowHeight() {
+        return this.isMobileLayout() ? 36 : 56;
+    }
+
     computeMessageWindow(msgs, box, { conversationChanged = false, stickToBottom = false } = {}) {
         const total = Array.isArray(msgs) ? msgs.length : 0;
-        const baseAvg = Math.max(56, Math.min(160, Number(this.messageWindow?.avgHeight || 92)));
+        const baseAvg = Math.max(this.minMessageRowHeight(), Math.min(160, Number(this.messageWindow?.avgHeight || 92)));
         // Windowing threshold by tier. Every mounted bubble costs layout, paint and
         // a share of the blurred panel it sits inside, so a budget phone starts
         // virtualising sooner than a desktop does. Purely a cost knob: the spacers
@@ -128,6 +150,8 @@ ZaliMixin(ZaliInterface, class {
             topSpacer: start * baseAvg,
             bottomSpacer: Math.max(0, (total - end) * baseAvg),
             avgHeight: baseAvg,
+            overscan,
+            viewportCount,
         };
     }
 
@@ -314,6 +338,101 @@ ZaliMixin(ZaliInterface, class {
         if (!this._bottomIntent) return;
         const box = document.getElementById('msgs');
         if (!box) return;
+        this.pinToBottomAfterLayout(box);
+    }
+
+    // Лента меняет высоту не только при повороте: клавиатура, выросшее на три
+    // строки поле ввода, плашка ответа, вложения. `scrollTop` при этом остаётся
+    // прежним, то есть верх ленты стоит, а низ уезжает под поле ввода — ровно
+    // тот край, на который человек смотрит. Держим низ: на сколько лента стала
+    // ниже, на столько и прокручиваем (и обратно). Открытая на последнем
+    // сообщении лента остаётся на нём, а прочитанное посередине истории не
+    // прыгает — как в нативных мессенджерах. ResizeObserver срабатывает после
+    // раскладки и до отрисовки, поэтому сдвиг не виден ни одним кадром.
+    setupMessagesViewportAnchor() {
+        const box = document.getElementById('msgs');
+        if (!box || box.__viewportAnchorBound || typeof ResizeObserver !== 'function') return;
+        box.__viewportAnchorBound = true;
+        // height — высота на момент прошлого срабатывания; gap — расстояние до
+        // низа, когда оно было измерено в согласованном состоянии.
+        const state = { height: box.clientHeight, gap: 0 };
+        const gapNow = () => Math.max(0, box.scrollHeight - box.scrollTop - box.clientHeight);
+        // Событие scroll приходит в начале кадра, ДО раскладки и наблюдателя. Если
+        // в этом же кадре меняется высота (анимация клавиатуры двигает её каждый
+        // кадр, а наша же поправка scrollTop порождает scroll), чтение геометрии
+        // здесь уже видит новую высоту — такой замер в память не идёт.
+        box.addEventListener('scroll', () => {
+            if (box.clientHeight === state.height) state.gap = gapNow();
+        }, { passive: true });
+        new ResizeObserver(() => {
+            const height = box.clientHeight;
+            const previous = state.height;
+            const delta = previous - height;
+            state.height = height;
+            // Скрытый экран (display: none) отдаёт 0 — это не изменение высоты.
+            if (!delta || !height || !previous || this.pendingMessagesScroll) {
+                if (height) state.gap = gapNow();
+                return;
+            }
+            const scrollHeight = box.scrollHeight;
+            const top = box.scrollTop;
+            let gapBefore;
+            if (delta > 0) {
+                // Стала ниже: scrollTop браузер не трогал, «было» считается точно.
+                gapBefore = scrollHeight - top - previous;
+            } else {
+                // Стала выше: у самого низа браузер уже прижал scrollTop к новому
+                // максимуму, и точное «было» потеряно — известно лишь, что оно не
+                // больше прироста. Тогда берём запомненное.
+                const now = scrollHeight - top - height;
+                gapBefore = now <= 1 ? Math.min(state.gap, -delta) : now - delta;
+            }
+            this.markProgrammaticScroll();
+            if (gapBefore <= 2 || this._bottomIntent) {
+                box.scrollTop = scrollHeight;
+                if (this._bottomIntent) this.pinToBottomAfterLayout(box);
+            } else {
+                // Середина истории: низ видимой части остаётся на месте.
+                box.scrollTop = scrollHeight - height - gapBefore;
+            }
+            state.gap = gapNow();
+            this.syncJumpToBottom(box);
+        }).observe(box);
+    }
+
+    // Кнопка «к последним сообщениям»: появляется, когда лента отмотана больше
+    // чем на экран с небольшим. Единственный способ вернуться без неё — мотать
+    // вручную всю историю.
+    syncJumpToBottom(box) {
+        const btn = this._jumpBtn || (this._jumpBtn = document.getElementById('msgsJumpBtn'));
+        if (!btn || !box) return;
+        const gap = box.scrollHeight - (box.scrollTop + box.clientHeight);
+        const show = gap > Math.max(320, box.clientHeight * 0.6);
+        if (show === this._jumpBtnShown) return;
+        this._jumpBtnShown = show;
+        btn.classList.toggle('visible', show);
+        btn.tabIndex = show ? 0 : -1;
+    }
+
+    jumpToLatestMessages() {
+        const box = document.getElementById('msgs');
+        if (!box) return;
+        const gap = box.scrollHeight - (box.scrollTop + box.clientHeight);
+        this._jumpBtnShown = false;
+        this._jumpBtn?.classList.remove('visible');
+        // Близко — доезжаем плавно, чтобы было видно, куда делась лента. Далеко
+        // (и тем более через заглушки окна виртуализации) — сразу: плавная
+        // прокрутка на десятки экранов заставила бы перерисовать их все по пути.
+        const near = gap <= box.clientHeight * 2.5 && typeof box.scrollTo === 'function';
+        if (near) {
+            box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+            return;
+        }
+        // Прыжок в самый низ переводит окно виртуализации в конец через обычный
+        // обработчик прокрутки; закрепление доводит до последнего сообщения,
+        // когда настоящие строки встанут на место заглушек.
+        this.markProgrammaticScroll();
+        box.scrollTop = box.scrollHeight;
         this.pinToBottomAfterLayout(box);
     }
 

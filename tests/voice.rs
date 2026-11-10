@@ -829,3 +829,213 @@ async fn a_channel_join_cannot_name_a_foreign_room() {
         assert_eq!(find_event(&events, "voice_error").expect("must be refused")["code"], "bad_request");
     }
 }
+
+// ── Присутствие в голосовых каналах и самоописание участников ────────────────
+
+async fn join_channel(ws: &mut Ws, server_id: &str, channel_id: &str) {
+    send(
+        ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": format!("voice:channel:{}:{}", server_id, channel_id),
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+        }),
+    )
+    .await;
+}
+
+async fn get_json(app: &TestApp, user: &RegisteredUser, path: &str) -> (u16, serde_json::Value) {
+    let resp = app
+        .http
+        .get(app.url(path))
+        .header("Authorization", user.auth_header())
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let body = resp.json().await.unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+/// Канал, в котором никого нет, отдаётся пустым, а вошедший появляется и в
+/// канальном, и в серверном снимке; сервер-снимок пустые комнаты не содержит.
+#[tokio::test]
+async fn voice_presence_lists_who_is_in_a_channel() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let chan_path = format!("/api/servers/{}/channels/{}/voice", server_id, channel_id);
+    let srv_path = format!("/api/servers/{}/voice", server_id);
+
+    let (status, body) = get_json(&app, &alice, &chan_path).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["participants"], serde_json::json!([]));
+    let (status, body) = get_json(&app, &alice, &srv_path).await;
+    assert_eq!(status, 200);
+    assert!(body["channels"].as_object().unwrap().is_empty());
+
+    let mut ws = connect_ws(&app, &alice).await;
+    join_channel(&mut ws, &server_id, &channel_id).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+
+    let (_, body) = get_json(&app, &alice, &chan_path).await;
+    assert_eq!(body["participants"], serde_json::json!(["alice"]));
+    assert!(body["joinedAt"]["alice"].is_i64() || body["joinedAt"]["alice"].is_u64());
+    let (_, body) = get_json(&app, &alice, &srv_path).await;
+    assert_eq!(
+        body["channels"][&channel_id]["participants"],
+        serde_json::json!(["alice"])
+    );
+
+    send(&mut ws, serde_json::json!({ "type": "voice_leave" })).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+    let (_, body) = get_json(&app, &alice, &chan_path).await;
+    assert_eq!(body["participants"], serde_json::json!([]));
+    let (_, body) = get_json(&app, &alice, &srv_path).await;
+    assert!(body["channels"].as_object().unwrap().is_empty());
+}
+
+/// Присутствие подчиняется праву «просмотр канала»: на приватном сервере
+/// посторонний получает 403 на канальный эндпоинт и пустой серверный снимок,
+/// а на публичном — видит то же, что и список каналов (просмотр открыт).
+#[tokio::test]
+async fn voice_presence_follows_channel_view_permission() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let mallory = register_user(&app, "mallory", "hunter22").await;
+
+    let private = {
+        let resp = app
+            .http
+            .post(app.url("/api/servers"))
+            .header("Authorization", alice.auth_header())
+            .json(&serde_json::json!({ "name": "Secret", "is_public": false }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["id"].as_str().unwrap().to_string()
+    };
+    let public = create_server(&app, &alice, "Guild").await;
+    let private_ch = create_voice_channel(&app, &alice, &private, "voice-room").await;
+    let public_ch = create_voice_channel(&app, &alice, &public, "voice-room").await;
+
+    let mut ws = connect_ws(&app, &alice).await;
+    join_channel(&mut ws, &private, &private_ch).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+    // Одновременно в двух комнатах сидеть нельзя: переходим в публичную.
+    join_channel(&mut ws, &public, &public_ch).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+
+    // Приватный: ни канал, ни снимок сервера посторонний не видит.
+    // (Пока alice в публичном канале, приватный пуст — проверяем только доступ.)
+    let (status, _) = get_json(
+        &app,
+        &mallory,
+        &format!("/api/servers/{}/channels/{}/voice", private, private_ch),
+    )
+    .await;
+    assert_eq!(status, 403);
+
+    // Публичный: просмотр открыт, посторонний видит, кто в канале.
+    let (status, body) = get_json(
+        &app,
+        &mallory,
+        &format!("/api/servers/{}/channels/{}/voice", public, public_ch),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["participants"], serde_json::json!(["alice"]));
+
+    // Вернём alice в приватный канал: серверный снимок для постороннего пуст.
+    join_channel(&mut ws, &private, &private_ch).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+    let (status, body) = get_json(&app, &mallory, &format!("/api/servers/{}/voice", private)).await;
+    assert_eq!(status, 200);
+    assert!(
+        body["channels"].as_object().unwrap().is_empty(),
+        "посторонний не должен видеть, кто сидит в приватном канале: {body}"
+    );
+    let (_, body) = get_json(&app, &alice, &format!("/api/servers/{}/voice", private)).await;
+    assert_eq!(body["channels"][&private_ch]["participants"], serde_json::json!(["alice"]));
+
+    // Без токена — не пускаем вовсе.
+    let resp = app
+        .http
+        .get(app.url(&format!("/api/servers/{}/voice", public)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+}
+
+/// `voice_state` участника расходится по комнате и попадает в снимок присутствия;
+/// чужой или посторонний `voice_state` ничего не меняет; выход стирает состояние.
+#[tokio::test]
+async fn voice_state_is_broadcast_and_scoped_to_members() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let mallory = register_user(&app, "mallory", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "voice-room").await;
+    let room_id = format!("voice:channel:{}:{}", server_id, channel_id);
+    let chan_path = format!("/api/servers/{}/channels/{}/voice", server_id, channel_id);
+
+    let mut ws = connect_ws(&app, &alice).await;
+    join_channel(&mut ws, &server_id, &channel_id).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_state", "roomId": room_id,
+            "muted": true, "deafened": false, "camera": true, "screen": false,
+        }),
+    )
+    .await;
+    let events = drain_voice_events(&mut ws, 400).await;
+    let state = find_event(&events, "voice_room_state").expect("изменение состояния должно разойтись");
+    assert_eq!(state["states"]["alice"]["muted"], true);
+    assert_eq!(state["states"]["alice"]["camera"], true);
+    assert_eq!(state["states"]["alice"]["screen"], false);
+
+    // Тот же самый state повторно — без лишней рассылки.
+    send(
+        &mut ws,
+        serde_json::json!({
+            "type": "voice_state", "roomId": room_id,
+            "muted": true, "deafened": false, "camera": true, "screen": false,
+        }),
+    )
+    .await;
+    let events = drain_voice_events(&mut ws, 300).await;
+    assert!(find_event(&events, "voice_room_state").is_none(), "{events:?}");
+
+    let (_, body) = get_json(&app, &alice, &chan_path).await;
+    assert_eq!(body["states"]["alice"]["muted"], true);
+
+    // Не участник комнаты состояние в неё записать не может.
+    let mut mws = connect_ws(&app, &mallory).await;
+    send(
+        &mut mws,
+        serde_json::json!({
+            "type": "voice_state", "roomId": room_id,
+            "muted": false, "deafened": true, "camera": false, "screen": true,
+        }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut mws, 300).await;
+    let (_, body) = get_json(&app, &alice, &chan_path).await;
+    assert!(body["states"]["mallory"].is_null(), "{body}");
+    assert_eq!(body["participants"], serde_json::json!(["alice"]));
+
+    // После выхода состояние не остаётся висеть.
+    send(&mut ws, serde_json::json!({ "type": "voice_leave" })).await;
+    let _ = drain_voice_events(&mut ws, 300).await;
+    let (_, body) = get_json(&app, &alice, &chan_path).await;
+    assert!(body["states"].as_object().unwrap().is_empty(), "{body}");
+}

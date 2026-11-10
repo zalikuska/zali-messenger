@@ -65,6 +65,10 @@ path = "../tests/security.rs"
 name = "voice"
 path = "../tests/voice.rs"
 
+[[test]]
+name = "settings_sync"
+path = "../tests/settings_sync.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }

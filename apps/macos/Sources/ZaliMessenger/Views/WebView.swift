@@ -379,7 +379,7 @@ struct WebView {
             return "file"
         }
 
-        private static func makeDataURL(data: Data, mimeType: String) -> String {
+        private nonisolated static func makeDataURL(data: Data, mimeType: String) -> String {
             let base64 = data.base64EncodedString()
             return "data:\(mimeType);base64,\(base64)"
         }
@@ -1086,12 +1086,40 @@ struct WebView {
             return min(base * multiplier, 2_000_000_000)
         }
 
+        /// Распаковка архива истории и подготовка вложений — в фоне, не в главном
+        /// потоке. Coordinator изолирован на MainActor (через WKScriptMessageHandler),
+        /// и задачи withTaskGroup в renderHistoryRecords наследовали эту изоляцию:
+        /// каждое сообщение истории — два PBKDF2 на 210 000 итераций (extract_all и
+        /// decrypt_aes_gcm) плюс чтение вложений и base64 — выполнялось на главном
+        /// потоке по очереди. Загрузка истории из ~220 сообщений держала его ~14 с:
+        /// окно не рисовало ни кадра, «адские лаги» после запуска (sample, 2026-10-22).
+        /// Ядро для этого вызова потокобезопасно: zali_bus_dispatch берёт загрузчик
+        /// под read-блокировкой, распаковка пишет только в свой tempDir.
         private func unpackHistoryMessage(
             archivePath: String,
             tempDir: String,
             keys: [String]
-        ) -> ZaliCore.MessagePayload? {
-            ZaliCore.shared.unpackMessage(archivePath: archivePath, tempDir: tempDir, keys: keys)
+        ) async -> (payload: ZaliCore.MessagePayload, attachments: [[String: Any]])? {
+            await Task.detached(priority: .userInitiated) { () -> (payload: ZaliCore.MessagePayload, attachments: [[String: Any]])? in
+                guard let unpacked = ZaliCore.shared.unpackMessage(archivePath: archivePath, tempDir: tempDir, keys: keys) else {
+                    return nil
+                }
+                let attachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
+                    // Same peer-authored-archivePath validation as live delivery
+                    // (NetworkService) and the Windows shell (native/messages.rs).
+                    guard let attachmentURL = NetworkService.safeAttachmentURL(tempDir: tempDir, archivePath: attachment.archivePath),
+                          let data = try? Data(contentsOf: attachmentURL) else { return nil }
+
+                    return [
+                        "name": attachment.name,
+                        "mimeType": attachment.mimeType,
+                        "kind": attachment.kind,
+                        "size": attachment.size,
+                        "dataUrl": Coordinator.makeDataURL(data: data, mimeType: attachment.mimeType)
+                    ]
+                }
+                return (unpacked, attachments)
+            }.value
         }
 
         private func renderHistoryRecord(
@@ -1105,6 +1133,25 @@ struct WebView {
 
             let verdict = decryptVerdict(for: messageId)
             if let cached = verdict.cached { return cached }
+
+            // Уже расшифрованное и лежащее в кэше сообщений веб-слоя — без
+            // скачивания и PBKDF2 (NetworkService.cachedHistoryMessage). Время и
+            // реакции — из свежей строки истории.
+            let archiveName = record.filename
+            let recordClientId = record.clientId ?? record.client_id ?? ""
+            let recordSender = record.sender
+            if let reused = await Task.detached(priority: .userInitiated, operation: {
+                NetworkService.shared.cachedHistoryMessage(id: messageId, archive: archiveName, clientId: recordClientId, sender: recordSender)
+            }).value {
+                var entry = reused
+                entry["id"] = messageId
+                entry["timestamp"] = record.timestamp
+                entry["archive"] = archiveName
+                entry["reactions"] = (record.reactions ?? []).map { ["emoji": $0.emoji, "count": $0.count] }
+                entry["myReactions"] = record.myReactions ?? []
+                self.cacheDecryptedMessage(messageId, entry)
+                return entry
+            }
 
             let keyFingerprint = currentKeyFingerprint()
             // Already tried, against exactly this key material, and none of it worked.
@@ -1203,25 +1250,13 @@ struct WebView {
                     try? FileManager.default.removeItem(atPath: tempDir)
                 }
 
-                if let unpacked = self.unpackHistoryMessage(
+                if let unpackedResult = await self.unpackHistoryMessage(
                     archivePath: fileURL.path,
                     tempDir: tempDir,
                     keys: keys
                 ) {
-                    let renderedAttachments = (unpacked.attachments ?? []).compactMap { attachment -> [String: Any]? in
-                        // Same peer-authored-archivePath validation as live delivery
-                        // (NetworkService) and the Windows shell (native/messages.rs).
-                        guard let attachmentURL = NetworkService.safeAttachmentURL(tempDir: tempDir, archivePath: attachment.archivePath),
-                              let data = try? Data(contentsOf: attachmentURL) else { return nil }
-
-                        return [
-                            "name": attachment.name,
-                            "mimeType": attachment.mimeType,
-                            "kind": attachment.kind,
-                            "size": attachment.size,
-                            "dataUrl": Self.makeDataURL(data: data, mimeType: attachment.mimeType)
-                        ]
-                    }
+                    let unpacked = unpackedResult.payload
+                    let renderedAttachments = unpackedResult.attachments
 
                     let result: [String: Any] = [
                         "id": messageId,
@@ -1233,6 +1268,9 @@ struct WebView {
                         "reply": unpacked.reply ?? "",
                         "attachments": renderedAttachments,
                         "timestamp": record.timestamp,
+                        // Имя архива на сервере: по нему следующий запуск узнаёт,
+                        // что это сообщение уже расшифровано (cachedHistoryMessage).
+                        "archive": record.filename,
                         // Flattened to plain JSON types on purpose. `record.reactions` is
                         // [RemoteReactionSummary] — a Codable struct with no Foundation
                         // bridge, so leaving it here boxed each element as __SwiftValue and
@@ -1685,84 +1723,91 @@ struct WebView {
                         }
                         return
                     }
-                    let tempPath = NSTemporaryDirectory() + UUID().uuidString + ".zali"
-                    let attachments = dict["attachments"] as? [[String: Any]] ?? []
-                    var packedAttachments: [[String: Any]] = []
-                    var tempAttachmentURLs: [URL] = []
-                    print("[ZALI][WEBVIEW] SEND_MESSAGE start clientId=\(clientId) sender=\(sender) recipient=\(recipient) serverId=\(serverId ?? "nil") channelId=\(channelId ?? "nil") attachments=\(attachments.count) textBytes=\(text.count) requestedKeySet=\(!requestedKey.isEmpty)")
+                    // Упаковка — в фоне: PBKDF2 на 210 000 итераций, декодирование
+                    // вложений из base64 и запись их на диск раньше шли прямо в
+                    // обработчике моста, на главном потоке, и каждая отправка
+                    // подвешивала окно (тем дольше, чем больше вложение). Всё, что
+                    // трогает UI, ниже и так уходит через DispatchQueue.main.async.
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let tempPath = NSTemporaryDirectory() + UUID().uuidString + ".zali"
+                        let attachments = dict["attachments"] as? [[String: Any]] ?? []
+                        var packedAttachments: [[String: Any]] = []
+                        var tempAttachmentURLs: [URL] = []
+                        print("[ZALI][WEBVIEW] SEND_MESSAGE start clientId=\(clientId) sender=\(sender) recipient=\(recipient) serverId=\(serverId ?? "nil") channelId=\(channelId ?? "nil") attachments=\(attachments.count) textBytes=\(text.count) requestedKeySet=\(!requestedKey.isEmpty)")
 
-                    for attachment in attachments {
-                        guard let dataUrl = attachment["dataUrl"] as? String else { continue }
-                        let name = attachment["name"] as? String ?? "attachment.bin"
-                        let kind = attachment["kind"] as? String ?? "file"
-                        let (data, mimeType, fileExtension) = self.decodedDataURL(dataUrl)
-                        guard !data.isEmpty else { continue }
+                        for attachment in attachments {
+                            guard let dataUrl = attachment["dataUrl"] as? String else { continue }
+                            let name = attachment["name"] as? String ?? "attachment.bin"
+                            let kind = attachment["kind"] as? String ?? "file"
+                            let (data, mimeType, fileExtension) = self.decodedDataURL(dataUrl)
+                            guard !data.isEmpty else { continue }
 
-                        let safeName = self.safeFileName(name, fallbackExtension: fileExtension)
-                        let tempAttachmentURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                            .appendingPathComponent("\(UUID().uuidString)_\(safeName)")
-                        try? data.write(to: tempAttachmentURL)
+                            let safeName = self.safeFileName(name, fallbackExtension: fileExtension)
+                            let tempAttachmentURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                                .appendingPathComponent("\(UUID().uuidString)_\(safeName)")
+                            try? data.write(to: tempAttachmentURL)
 
-                        tempAttachmentURLs.append(tempAttachmentURL)
-                        packedAttachments.append([
-                            "path": tempAttachmentURL.path,
-                            "archivePath": "attachments/\(safeName)",
-                            "name": name,
-                            "mimeType": attachment["mimeType"] as? String ?? mimeType,
-                            "kind": kind,
-                            "size": (attachment["size"] as? NSNumber).map { $0.uint64Value } ?? UInt64(data.count)
-                        ])
-                    }
-                    
-                    // Opaque structured payload (call records) — forwarded to the core,
-                    // which encrypts it with the conversation key like the body.
-                    let callPayload = (dict["call"] as? String)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Quote of the message being replied to — opaque here, encrypted
-                    // by the core exactly like the call payload above.
-                    let replyPayload = (dict["reply"] as? String)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments, call: (callPayload?.isEmpty == false) ? callPayload : nil, reply: (replyPayload?.isEmpty == false) ? replyPayload : nil) {
-                        DispatchQueue.main.async {
-                            self.addLog(level: "SUCCESS", text: "Core: Сообщение успешно упаковано и зашифровано в Rust бэкенде")
+                            tempAttachmentURLs.append(tempAttachmentURL)
+                            packedAttachments.append([
+                                "path": tempAttachmentURL.path,
+                                "archivePath": "attachments/\(safeName)",
+                                "name": name,
+                                "mimeType": attachment["mimeType"] as? String ?? mimeType,
+                                "kind": kind,
+                                "size": (attachment["size"] as? NSNumber).map { $0.uint64Value } ?? UInt64(data.count)
+                            ])
                         }
-                        tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
-                        print("[ZALI][WEBVIEW] SEND_MESSAGE packed clientId=\(clientId) tempPath=\(tempPath) packedAttachments=\(packedAttachments.count)")
+                    
+                        // Opaque structured payload (call records) — forwarded to the core,
+                        // which encrypts it with the conversation key like the body.
+                        let callPayload = (dict["call"] as? String)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Quote of the message being replied to — opaque here, encrypted
+                        // by the core exactly like the call payload above.
+                        let replyPayload = (dict["reply"] as? String)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if ZaliCore.shared.packMessage(sender: sender, text: text, output: tempPath, key: key, keyVersion: keyVersion, attachments: packedAttachments, call: (callPayload?.isEmpty == false) ? callPayload : nil, reply: (replyPayload?.isEmpty == false) ? replyPayload : nil) {
+                            DispatchQueue.main.async {
+                                self.addLog(level: "SUCCESS", text: "Core: Сообщение успешно упаковано и зашифровано в Rust бэкенде")
+                            }
+                            tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+                            print("[ZALI][WEBVIEW] SEND_MESSAGE packed clientId=\(clientId) tempPath=\(tempPath) packedAttachments=\(packedAttachments.count)")
                         
-                        let fileURL = URL(fileURLWithPath: tempPath)
-                        NetworkService.shared.uploadMessage(sender: sender, receiver: recipient, clientId: clientId, fileURL: fileURL, serverId: serverId, channelId: channelId, keyVersion: keyVersion) { [weak self] success, messageId, statusCode, responseBody in
-                            print("[ZALI][WEBVIEW] SEND_MESSAGE upload callback clientId=\(clientId) success=\(success) messageId=\(messageId ?? "nil") status=\(statusCode.map(String.init) ?? "nil") body=\((responseBody ?? "").prefix(200))")
+                            let fileURL = URL(fileURLWithPath: tempPath)
+                            NetworkService.shared.uploadMessage(sender: sender, receiver: recipient, clientId: clientId, fileURL: fileURL, serverId: serverId, channelId: channelId, keyVersion: keyVersion) { success, messageId, statusCode, responseBody in
+                                print("[ZALI][WEBVIEW] SEND_MESSAGE upload callback clientId=\(clientId) success=\(success) messageId=\(messageId ?? "nil") status=\(statusCode.map(String.init) ?? "nil") body=\((responseBody ?? "").prefix(200))")
+                                Coordinator.releaseSendClientId(clientId)
+                                DispatchQueue.main.async {
+                                    let safeClientId = WebView.javascriptLiteral(clientId)
+                                    let safeMessageId = WebView.javascriptLiteral(messageId ?? "")
+                                    if success {
+                                        self.addLog(level: "SUCCESS", text: "Network: Сообщение отправлено на сервер")
+                                        self.sendBusEvent(.onSendSuccess, payload: "{ clientId: \(safeClientId), messageId: \(safeMessageId) }")
+                                    } else {
+                                        let statusLabel = statusCode.map { "HTTP \($0)" } ?? "без статуса"
+                                        let bodyText = (responseBody ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                        let detail = bodyText.isEmpty ? "" : " (\(bodyText.prefix(140)))"
+                                        self.addLog(level: "ERROR", text: "Network: Не удалось отправить сообщение на сервер \(statusLabel)\(detail)")
+                                        self.sendBusEvent(.onSendError, payload: WebView.javascriptLiteral([
+                                            "clientId": clientId,
+                                            "statusCode": statusCode ?? 0,
+                                            "responseBody": bodyText
+                                        ]))
+                                    }
+                                }
+                                try? FileManager.default.removeItem(at: fileURL)
+                            }
+                        } else {
+                            tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
                             Coordinator.releaseSendClientId(clientId)
                             DispatchQueue.main.async {
-                                let safeClientId = WebView.javascriptLiteral(clientId)
-                                let safeMessageId = WebView.javascriptLiteral(messageId ?? "")
-                                if success {
-                                    self?.addLog(level: "SUCCESS", text: "Network: Сообщение отправлено на сервер")
-                                    self?.sendBusEvent(.onSendSuccess, payload: "{ clientId: \(safeClientId), messageId: \(safeMessageId) }")
-                                } else {
-                                    let statusLabel = statusCode.map { "HTTP \($0)" } ?? "без статуса"
-                                    let bodyText = (responseBody ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                                    let detail = bodyText.isEmpty ? "" : " (\(bodyText.prefix(140)))"
-                                    self?.addLog(level: "ERROR", text: "Network: Не удалось отправить сообщение на сервер \(statusLabel)\(detail)")
-                                    self?.sendBusEvent(.onSendError, payload: WebView.javascriptLiteral([
-                                        "clientId": clientId,
-                                        "statusCode": statusCode ?? 0,
-                                        "responseBody": bodyText
-                                    ]))
-                                }
+                                self.addLog(level: "ERROR", text: "Core: Ошибка при упаковке сообщения в Rust бэкенде")
+                                self.sendBusEvent(.onSendError, payload: WebView.javascriptLiteral([
+                                    "clientId": clientId,
+                                    "statusCode": 0,
+                                    "responseBody": "Core: Ошибка при упаковке сообщения в Rust бэкенде"
+                                ]))
                             }
-                            try? FileManager.default.removeItem(at: fileURL)
-                        }
-                    } else {
-                        tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
-                        Coordinator.releaseSendClientId(clientId)
-                        DispatchQueue.main.async {
-                            self.addLog(level: "ERROR", text: "Core: Ошибка при упаковке сообщения в Rust бэкенде")
-                            self.sendBusEvent(.onSendError, payload: WebView.javascriptLiteral([
-                                "clientId": clientId,
-                                "statusCode": 0,
-                                "responseBody": "Core: Ошибка при упаковке сообщения в Rust бэкенде"
-                            ]))
                         }
                     }
                 }
@@ -1790,84 +1835,88 @@ struct WebView {
                         return
                     }
 
-                    // The edit carries the WHOLE message, attachments included: the
-                    // archive is replaced wholesale server-side, so anything omitted
-                    // here is genuinely dropped from the message.
-                    let tempPath = NSTemporaryDirectory() + UUID().uuidString + ".zali"
-                    let attachments = dict["attachments"] as? [[String: Any]] ?? []
-                    var packedAttachments: [[String: Any]] = []
-                    var tempAttachmentURLs: [URL] = []
-                    for attachment in attachments {
-                        guard let dataUrl = attachment["dataUrl"] as? String else { continue }
-                        let name = attachment["name"] as? String ?? "attachment.bin"
-                        let kind = attachment["kind"] as? String ?? "file"
-                        let (data, mimeType, fileExtension) = self.decodedDataURL(dataUrl)
-                        guard !data.isEmpty else { continue }
+                    // Упаковка — в фоне, по той же причине, что и у SEND_MESSAGE.
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        // The edit carries the WHOLE message, attachments included: the
+                        // archive is replaced wholesale server-side, so anything omitted
+                        // here is genuinely dropped from the message.
+                        let tempPath = NSTemporaryDirectory() + UUID().uuidString + ".zali"
+                        let attachments = dict["attachments"] as? [[String: Any]] ?? []
+                        var packedAttachments: [[String: Any]] = []
+                        var tempAttachmentURLs: [URL] = []
+                        for attachment in attachments {
+                            guard let dataUrl = attachment["dataUrl"] as? String else { continue }
+                            let name = attachment["name"] as? String ?? "attachment.bin"
+                            let kind = attachment["kind"] as? String ?? "file"
+                            let (data, mimeType, fileExtension) = self.decodedDataURL(dataUrl)
+                            guard !data.isEmpty else { continue }
 
-                        let safeName = self.safeFileName(name, fallbackExtension: fileExtension)
-                        let tempAttachmentURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                            .appendingPathComponent("\(UUID().uuidString)_\(safeName)")
-                        try? data.write(to: tempAttachmentURL)
-                        tempAttachmentURLs.append(tempAttachmentURL)
-                        packedAttachments.append([
-                            "path": tempAttachmentURL.path,
-                            "archivePath": "attachments/\(safeName)",
-                            "name": name,
-                            "mimeType": attachment["mimeType"] as? String ?? mimeType,
-                            "kind": kind,
-                            "size": (attachment["size"] as? NSNumber).map { $0.uint64Value } ?? UInt64(data.count)
-                        ])
-                    }
+                            let safeName = self.safeFileName(name, fallbackExtension: fileExtension)
+                            let tempAttachmentURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                                .appendingPathComponent("\(UUID().uuidString)_\(safeName)")
+                            try? data.write(to: tempAttachmentURL)
+                            tempAttachmentURLs.append(tempAttachmentURL)
+                            packedAttachments.append([
+                                "path": tempAttachmentURL.path,
+                                "archivePath": "attachments/\(safeName)",
+                                "name": name,
+                                "mimeType": attachment["mimeType"] as? String ?? mimeType,
+                                "kind": kind,
+                                "size": (attachment["size"] as? NSNumber).map { $0.uint64Value } ?? UInt64(data.count)
+                            ])
+                        }
 
-                    print("[ZALI][WEBVIEW] EDIT_MESSAGE start messageId=\(messageId) attachments=\(packedAttachments.count) textBytes=\(text.count)")
+                        print("[ZALI][WEBVIEW] EDIT_MESSAGE start messageId=\(messageId) attachments=\(packedAttachments.count) textBytes=\(text.count)")
 
-                    guard ZaliCore.shared.packMessage(
-                        sender: NetworkService.shared.currentUser,
-                        text: text,
-                        output: tempPath,
-                        key: key,
-                        keyVersion: keyVersion,
-                        attachments: packedAttachments,
-                        call: (callPayload?.isEmpty == false) ? callPayload : nil,
-                        reply: (replyPayload?.isEmpty == false) ? replyPayload : nil
-                    ) else {
-                        tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
-                        self.addLog(level: "ERROR", text: "Core: Ошибка при упаковке отредактированного сообщения")
-                        self.sendNativeResponse([
-                            "requestId": requestId,
-                            "ok": false,
-                            "error": "Core: Ошибка при упаковке сообщения",
-                        ])
-                        return
-                    }
-                    tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
-
-                    let fileURL = URL(fileURLWithPath: tempPath)
-                    NetworkService.shared.editMessage(messageId: messageId, fileURL: fileURL, keyVersion: keyVersion) { [weak self] success, statusCode, responseBody in
-                        try? FileManager.default.removeItem(at: fileURL)
-                        DispatchQueue.main.async {
-                            guard let self = self else { return }
-                            if success {
-                                // The cache is keyed by message id and holds the text
-                                // decrypted from the archive we just replaced — leaving
-                                // it would make every later history reload re-render the
-                                // pre-edit message and look like the edit was lost.
-                                // Through forgetDecryptedMessage, not a bare removeValue:
-                                // the entry also has a slot in the eviction order and may
-                                // have a "no key opens this" verdict attached, and both
-                                // describe the archive that was just replaced.
-                                self.forgetDecryptedMessage(messageId)
-                                self.addLog(level: "SUCCESS", text: "Network: Сообщение отредактировано")
-                                self.sendNativeResponse(["requestId": requestId, "ok": true])
-                            } else {
-                                let bodyText = (responseBody ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                                let statusLabel = statusCode.map { "HTTP \($0)" } ?? "без статуса"
-                                self.addLog(level: "ERROR", text: "Network: Не удалось отредактировать сообщение \(statusLabel)")
+                        guard ZaliCore.shared.packMessage(
+                            sender: NetworkService.shared.currentUser,
+                            text: text,
+                            output: tempPath,
+                            key: key,
+                            keyVersion: keyVersion,
+                            attachments: packedAttachments,
+                            call: (callPayload?.isEmpty == false) ? callPayload : nil,
+                            reply: (replyPayload?.isEmpty == false) ? replyPayload : nil
+                        ) else {
+                            tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+                            DispatchQueue.main.async {
+                                self.addLog(level: "ERROR", text: "Core: Ошибка при упаковке отредактированного сообщения")
                                 self.sendNativeResponse([
                                     "requestId": requestId,
                                     "ok": false,
-                                    "error": bodyText.isEmpty ? "Не удалось отредактировать сообщение (\(statusLabel))" : bodyText,
+                                    "error": "Core: Ошибка при упаковке сообщения",
                                 ])
+                            }
+                            return
+                        }
+                        tempAttachmentURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+
+                        let fileURL = URL(fileURLWithPath: tempPath)
+                        NetworkService.shared.editMessage(messageId: messageId, fileURL: fileURL, keyVersion: keyVersion) { success, statusCode, responseBody in
+                            try? FileManager.default.removeItem(at: fileURL)
+                            DispatchQueue.main.async {
+                                if success {
+                                    // The cache is keyed by message id and holds the text
+                                    // decrypted from the archive we just replaced — leaving
+                                    // it would make every later history reload re-render the
+                                    // pre-edit message and look like the edit was lost.
+                                    // Through forgetDecryptedMessage, not a bare removeValue:
+                                    // the entry also has a slot in the eviction order and may
+                                    // have a "no key opens this" verdict attached, and both
+                                    // describe the archive that was just replaced.
+                                    self.forgetDecryptedMessage(messageId)
+                                    self.addLog(level: "SUCCESS", text: "Network: Сообщение отредактировано")
+                                    self.sendNativeResponse(["requestId": requestId, "ok": true])
+                                } else {
+                                    let bodyText = (responseBody ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let statusLabel = statusCode.map { "HTTP \($0)" } ?? "без статуса"
+                                    self.addLog(level: "ERROR", text: "Network: Не удалось отредактировать сообщение \(statusLabel)")
+                                    self.sendNativeResponse([
+                                        "requestId": requestId,
+                                        "ok": false,
+                                        "error": bodyText.isEmpty ? "Не удалось отредактировать сообщение (\(statusLabel))" : bodyText,
+                                    ])
+                                }
                             }
                         }
                     }
@@ -2362,6 +2411,19 @@ struct WebView {
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0"
         let versionBootstrap = "window.__ZALI_NATIVE_APP_VERSION = \(WebView.javascriptLiteral(appVersion)); window.__ZALI_NATIVE_PLATFORM = \(WebView.javascriptLiteral("macos"));"
         config.userContentController.addUserScript(WKUserScript(source: versionBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Замер фреймтайма (web/src/modules/perf_probe.js): только при запуске
+        // бинарника с ZALI_PERF_PROBE=1; значение — пауза перед замером, мс.
+        if let probe = ProcessInfo.processInfo.environment["ZALI_PERF_PROBE"], !probe.isEmpty {
+            // `startup` — замер самого запуска, а не установившегося режима.
+            let probeBootstrap: String
+            if probe == "startup" {
+                probeBootstrap = "window.__ZALI_PERF_PROBE = { mode: 'startup', durationMs: 30000 };"
+            } else {
+                let settleMs = Int(probe).map { $0 > 1 ? $0 : 8000 } ?? 8000
+                probeBootstrap = "window.__ZALI_PERF_PROBE = { settleMs: \(settleMs) };"
+            }
+            config.userContentController.addUserScript(WKUserScript(source: probeBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         let savedCss = UserDefaults.standard.string(forKey: "custom_css") ?? ""
         let savedCssBootstrap = "window.__ZALI_SAVED_CSS = \(WebView.javascriptLiteral(savedCss));"
         config.userContentController.addUserScript(WKUserScript(source: savedCssBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
