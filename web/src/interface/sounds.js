@@ -10,6 +10,10 @@
 //
 // Выбор лежит в audioPrefs (messageSound / ringtone), пустая строка = звук по умолчанию,
 // и ездит между устройствами вместе с громкостями (settings_sync.js, запись audio_volumes).
+//
+// Третья группа — звуки голосового канала (заход и выход участника, включение и
+// выключение демонстрации):
+// не выбираются, только включаются одним переключателем (audioPrefs.voiceSounds).
 ZaliMixin(ZaliInterface, class {
 
     soundKindInfo(kind) {
@@ -20,6 +24,7 @@ ZaliMixin(ZaliInterface, class {
 
     soundCatalog(kind) {
         const synth = window.ZaliSoundSynth;
+        if (kind === 'voice') return synth ? synth.list('voice') : [];
         const classic = {
             id: 'classic',
             name: 'Классика',
@@ -118,9 +123,11 @@ ZaliMixin(ZaliInterface, class {
             const now = ctx.currentTime + 0.02;
             if (loop) {
                 // Цикл начинается «с середины» бесконечного повтора — в его первых
-                // сэмплах уже лежит хвост предыдущего оборота. Короткий вход это прячет.
-                gain.gain.setValueAtTime(0.0001, now);
-                gain.gain.exponentialRampToValueAtTime(1, now + 0.03);
+                // сэмплах уже лежит хвост предыдущего оборота. Короткий вход это прячет:
+                // линейный, 20 мс. Экспонента от 0.0001 первые миллисекунды почти молчит,
+                // а потом выстреливает — слышно как щелчок с задержкой.
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(1, now + 0.02);
             }
             src.connect(gain);
             gain.connect(this.soundDirectBus(ctx));
@@ -135,6 +142,9 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Остановка — быстрое, но плавное затухание: постоянная времени fade/4, к моменту
+    // stop() громкость уже ниже −60 дБ. Обрыв посреди ноты щёлкает, а затухание дольше
+    // ~150 мс воспринимается как «тянет».
     stopSoundHandle(handle, fadeSeconds = 0.12) {
         if (!handle) return;
         try {
@@ -214,19 +224,82 @@ ZaliMixin(ZaliInterface, class {
             if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(fn, { timeout });
             else setTimeout(fn, Math.min(timeout, 1500));
         };
-        const queue = ['message', 'ring'];
+        const queue = [['message', this.selectedSound('message')], ['ring', this.selectedSound('ring')]];
+        if (this.voiceSoundsEnabled()) {
+            for (const sound of this.soundCatalog('voice')) queue.push(['voice', sound.id]);
+        }
         const step = () => {
-            const kind = queue.shift();
+            const next = queue.shift();
             const ctx = this.sound.ctx;
-            if (!kind || !ctx || ctx.state === 'closed') {
+            if (!next || !ctx || ctx.state === 'closed') {
                 this.sound.prewarmScheduled = false;
                 return;
             }
-            const id = this.selectedSound(kind);
+            const [kind, id] = next;
             if (id !== 'classic') this.soundBuffer(kind, id, ctx);
             idle(step, 8000);
         };
         idle(step, 5000);
+    }
+
+    // ── Голосовой канал ───────────────────────────────────────────────────────
+
+    voiceSoundsEnabled() {
+        return this.audioPrefs?.voiceSounds !== false;
+    }
+
+    setVoiceSoundsEnabled(enabled) {
+        if (!this.audioPrefs) return;
+        this.audioPrefs.voiceSounds = !!enabled;
+        this.saveAudioPrefs();
+        this.renderSoundSettings();
+    }
+
+    // id: 'join' | 'leave' | 'stream' | 'stream-stop'. Тихо пропускает, если звук ещё не разблокирован жестом:
+    // заход и демонстрация — события «сейчас», копить их до первого клика незачем.
+    // Один и тот же звук не чаще раза в 0,6 с — участник с плохой сетью, который
+    // выпадает и возвращается, не устраивает очередь из сигналов.
+    playVoiceEventSound(id) {
+        if (!this.sound || !this.voiceSoundsEnabled()) return false;
+        const ctx = this.ensureSoundContext();
+        if (!ctx || ctx.state !== 'running') return false;
+        const last = this.sound.voiceEventAt || (this.sound.voiceEventAt = {});
+        const now = Date.now();
+        if (now - (last[id] || 0) < 600) return false;
+        last[id] = now;
+        return !!this.playSoundBuffer('voice', id);
+    }
+
+    // Вызывается из обработчика voice_room_state ДО того, как новый состав записан в
+    // this.voice. Звук — один на обновление, сколько бы человек ни добавилось: при
+    // собственном заходе в канал приходит сразу весь состав. Только комнаты каналов
+    // и только когда я сам в комнате; периодические повторы состояния (каждые 8 с,
+    // после переподключения сокета) ничего не меняют в составе и молчат.
+    // Выход другого участника — только в той же комнате: при переходе в другой канал
+    // «пропавшие» люди из прошлой комнаты никуда не выходили. Заход важнее выхода:
+    // если в одном обновлении один ушёл, а другой пришёл, звучит заход.
+    noteVoiceRoomMembers({ roomId, roomType, participants }) {
+        if (roomType !== 'channel') return;
+        const me = String(this.myName?.() || '').trim();
+        if (!me || !participants.includes(me)) return;
+        const sameRoom = !!roomId && String(this.voice?.roomId || '') === roomId;
+        const previous = sameRoom && Array.isArray(this.voice.participants) ? this.voice.participants : [];
+        const before = new Set(previous);
+        const now = new Set(participants);
+        if (participants.some(name => !before.has(name))) {
+            this.playVoiceEventSound('join');
+        } else if (previous.some(name => !now.has(name))) {
+            this.playVoiceEventSound('leave');
+        }
+    }
+
+    // Свой выход из канала (кнопка, переход в другой канал, комната пропала на
+    // сервере) — из leaveVoiceRoom, пока состояние комнаты ещё не сброшено.
+    noteVoiceRoomLeft() {
+        if (this.voice?.roomType !== 'channel' || !String(this.voice.roomId || '').trim()) return;
+        const me = String(this.myName?.() || '').trim();
+        const participants = Array.isArray(this.voice.participants) ? this.voice.participants : [];
+        if (me && participants.includes(me)) this.playVoiceEventSound('leave');
     }
 
     // ── Настройки ─────────────────────────────────────────────────────────────
@@ -239,6 +312,10 @@ ZaliMixin(ZaliInterface, class {
         const same = !!current && current.kind === kind && current.id === id;
         this.stopSoundPreview();
         if (this.sound.ringing) return;
+        if (kind === 'voice') {
+            this.playSoundBuffer('voice', id);
+            return;
+        }
         if (kind !== 'ring') {
             if (id === 'classic' || !this.playSoundBuffer('message', id)) this.playClassicMessageChime();
             return;
@@ -265,7 +342,7 @@ ZaliMixin(ZaliInterface, class {
         if (!preview) return;
         this.sound.preview = null;
         clearTimeout(preview.timer);
-        this.stopSoundHandle(preview.handle, 0.4);
+        this.stopSoundHandle(preview.handle, 0.15);
         this.syncSoundPreviewState();
     }
 
@@ -285,11 +362,11 @@ ZaliMixin(ZaliInterface, class {
         const host = document.getElementById('soundSettings');
         if (!host) return;
         const group = (kind) => {
-            const selected = this.selectedSound(kind);
+            const selected = kind === 'voice' ? '' : this.selectedSound(kind);
             const options = this.soundCatalog(kind).map((sound) => {
                 const active = sound.id === selected;
                 return `
-                    <button type="button" class="sound-option${active ? ' active' : ''}" role="radio" aria-checked="${this.esc(String(active))}" data-sound-kind="${this.esc(kind)}" data-sound-id="${this.esc(sound.id)}">
+                    <button type="button" class="sound-option${active ? ' active' : ''}" ${kind === 'voice' ? 'aria-label="Прослушать"' : `role="radio" aria-checked="${this.esc(String(active))}"`} data-sound-kind="${this.esc(kind)}" data-sound-id="${this.esc(sound.id)}">
                         <span class="sound-option-icon" aria-hidden="true">
                             <svg class="sound-icon-play" viewBox="0 0 16 16" width="12" height="12"><path d="M5.2 3.1v9.8L13 8z" fill="currentColor"/></svg>
                             <span class="sound-icon-bars"><i></i><i></i><i></i></span>
@@ -300,6 +377,21 @@ ZaliMixin(ZaliInterface, class {
                         </span>
                     </button>`;
             }).join('');
+            if (kind === 'voice') {
+                const on = this.voiceSoundsEnabled();
+                return `
+                <div class="sound-group${on ? '' : ' is-off'}">
+                    <span class="sound-group-title">Голосовой канал</span>
+                    <label class="server-toggle settings-toggle sound-voice-toggle">
+                        <input type="checkbox" data-voice-sounds${on ? ' checked' : ''}>
+                        <span>
+                            <strong>Звуки захода, выхода и демонстрации</strong>
+                            <small>Когда кто-то заходит в канал, где вы сидите, выходит из него, включает или выключает демонстрацию экрана</small>
+                        </span>
+                    </label>
+                    <div class="sound-options">${options}</div>
+                </div>`;
+            }
             const title = this.soundKindInfo(kind).title;
             return `
                 <div class="sound-group">
@@ -307,17 +399,22 @@ ZaliMixin(ZaliInterface, class {
                     <div class="sound-options" role="radiogroup" aria-label="${this.esc(title)}">${options}</div>
                 </div>`;
         };
-        this.setHTMLIfChanged(host, group('message') + group('ring'));
+        this.setHTMLIfChanged(host, group('message') + group('ring') + group('voice'));
         this.syncSoundPreviewState();
         if (!host.dataset.bound) {
             host.dataset.bound = '1';
             host.addEventListener('click', (event) => {
                 const button = event.target?.closest?.('[data-sound-id]');
                 if (!button) return;
-                const kind = button.getAttribute('data-sound-kind') === 'ring' ? 'ring' : 'message';
+                const rawKind = button.getAttribute('data-sound-kind');
+                const kind = rawKind === 'ring' || rawKind === 'voice' ? rawKind : 'message';
                 const id = button.getAttribute('data-sound-id');
-                this.setSelectedSound(kind, id);
+                if (kind !== 'voice') this.setSelectedSound(kind, id);
                 this.previewSound(kind, id);
+            });
+            host.addEventListener('change', (event) => {
+                const toggle = event.target?.closest?.('[data-voice-sounds]');
+                if (toggle) this.setVoiceSoundsEnabled(toggle.checked);
             });
         }
     }

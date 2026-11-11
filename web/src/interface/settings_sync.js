@@ -82,6 +82,7 @@ ZaliMixin(ZaliInterface, class {
                             // Звук сообщения и рингтон; '' — по умолчанию.
                             ms: typeof p.messageSound === 'string' ? p.messageSound : '',
                             rt: typeof p.ringtone === 'string' ? p.ringtone : '',
+                            vs: p.voiceSounds !== false,
                         });
                     } catch (e) { return null; }
                 },
@@ -95,6 +96,7 @@ ZaliMixin(ZaliInterface, class {
                     // Запись от клиента без этих полей (старая сборка) выбор не трогает.
                     if (typeof v.ms === 'string') this.audioPrefs.messageSound = v.ms;
                     if (typeof v.rt === 'string') this.audioPrefs.ringtone = v.rt;
+                    if (typeof v.vs === 'boolean') this.audioPrefs.voiceSounds = v.vs;
                     this.saveAudioPrefs();
                     this.renderSoundSettings?.();
                     const slider = document.getElementById('inputMasterVolume');

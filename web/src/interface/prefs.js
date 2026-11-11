@@ -267,7 +267,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     loadAudioPrefs() {
-        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {}, screenVolumePercents: {}, voiceProcessing: null, messageSound: '', ringtone: '' };
+        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {}, screenVolumePercents: {}, voiceProcessing: null, messageSound: '', ringtone: '', voiceSounds: true };
         try {
             const raw = localStorage.getItem(this.audioPrefsStorageKey());
             if (!raw) return fallback;
@@ -289,6 +289,8 @@ ZaliMixin(ZaliInterface, class {
                 // Выбранные звук сообщения и рингтон (interface/sounds.js); '' — по умолчанию.
                 messageSound: typeof parsed?.messageSound === 'string' ? parsed.messageSound : '',
                 ringtone: typeof parsed?.ringtone === 'string' ? parsed.ringtone : '',
+                // Звуки голосового канала (заход, демонстрация); по умолчанию включены.
+                voiceSounds: parsed?.voiceSounds !== false,
             };
         } catch (e) {
             return fallback;

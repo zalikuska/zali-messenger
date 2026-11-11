@@ -402,6 +402,10 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceTrace('screen-meta-start', { roomId, from, streamId: entry.remoteScreenStreamId });
             } else if (signalPayload.action === 'stop') {
                 entry.remoteScreenStreamId = null;
+                // Конец демонстрации — только по явному сигналу собеседника. Его выход из
+                // звонка снимает экран через teardown пира без этого сигнала и звучит
+                // звуком выхода, а не двумя звуками сразу.
+                if (this.voice.remoteScreens?.has(from)) this.playVoiceEventSound?.('stream-stop');
                 this.detachRemoteScreenStream(from);
                 this.voiceTrace('screen-meta-stop', { roomId, from });
             }
@@ -856,6 +860,13 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceTrace('room-state-stale', { roomId, currentRoomId }, 'INFO');
                 return;
             }
+            // Звук захода в канал (interface/sounds.js) — по разнице со СТАРЫМ составом,
+            // поэтому до того, как он перезаписан ниже.
+            this.noteVoiceRoomMembers?.({
+                roomId,
+                roomType: String(payload.roomType || this.voice.roomType || '').trim(),
+                participants,
+            });
             this.voice.roomId = roomId;
             this.voice.roomType = String(payload.roomType || this.voice.roomType || '').trim();
             this.voice.serverId = String(payload.serverId || this.voice.serverId || '').trim();

@@ -745,6 +745,8 @@ ZaliMixin(ZaliInterface, class {
         if (this.voice.roomType === 'dm' && roomId && this.voice.callTrack && !this.voice.callTrack.recorded) {
             this.recordVoiceCallHistory({ outcome, endedAt: Date.now() });
         }
+        // Звук своего выхода из канала (interface/sounds.js) — пока состав ещё на месте.
+        this.noteVoiceRoomLeft?.();
         if (announce && roomId) {
             this.sendVoiceEvent({
                 type: 'voice_leave',

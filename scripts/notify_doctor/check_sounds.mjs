@@ -57,9 +57,10 @@ function measure(r) {
 }
 
 const levels = [];
-for (const kind of ['message', 'ring']) {
+for (const kind of ['message', 'ring', 'voice']) {
     const sounds = synth.list(kind);
-    check(`${kind}: в наборе несколько звуков`, sounds.length >= 4, `всего ${sounds.length}`, sounds.map(s => s.id).join(', '));
+    const expected = 4;
+    check(`${kind}: в наборе несколько звуков`, sounds.length >= expected, `всего ${sounds.length}`, sounds.map(s => s.id).join(', '));
     check(`${kind}: у каждого звука есть название и подпись`,
         sounds.every(s => s.id && s.name && s.hint && s.id !== 'classic'));
     for (const sound of sounds) {
@@ -70,11 +71,12 @@ for (const kind of ['message', 'ring']) {
             const problems = [];
             if (m.bad) problems.push(`${m.bad} нечисловых сэмплов`);
             if (m.peak > 0.9) problems.push(`пик ${m.peak.toFixed(3)} > 0.9`);
-            if (m.peak < 0.25) problems.push(`пик ${m.peak.toFixed(3)} — слишком тихо`);
+            if (m.peak < (kind === 'voice' ? 0.15 : 0.25)) problems.push(`пик ${m.peak.toFixed(3)} — слишком тихо`);
             if (r.sampleRate !== sr) problems.push(`частота ${r.sampleRate}`);
-            if (kind === 'message') {
-                if (r.loop) problems.push('звук сообщения помечен как цикл');
-                if (r.duration > 3.5) problems.push(`длится ${r.duration.toFixed(2)} с`);
+            if (kind !== 'ring') {
+                if (r.loop) problems.push('звук помечен как цикл');
+                const limit = kind === 'voice' ? 1.6 : 3.5;
+                if (r.duration > limit) problems.push(`длится ${r.duration.toFixed(2)} с`);
                 if (Math.abs(r.left[m.n - 1]) > 0.002) problems.push('обрывается не в тишину');
             } else {
                 if (!r.loop) problems.push('рингтон не помечен как цикл');
@@ -91,11 +93,44 @@ for (const kind of ['message', 'ring']) {
     check(`${kind}: неизвестный звук — null, а не исключение`, synth.render(kind, 'нет-такого', 48000) === null);
 }
 
+// Вход и конец: без щелчка и обрыва, но и без затянутого начала. Для разовых звуков
+// (сообщение, голосовой канал): первый сэмпл — тишина, звук слышен в первые 20 мс,
+// первая миллисекунда после начала не выше 30% пика (иначе это щелчок), последний
+// сэмпл — снова тишина. У рингтонов начало и конец — шов цикла, его проверяет шов,
+// а вход при запуске сглаживает playSoundBuffer.
+for (const kind of ['message', 'voice']) {
+    for (const { id } of synth.list(kind)) {
+        const r = synth.render(kind, id, 48000);
+        const n = r.left.length;
+        const at = (i) => Math.max(Math.abs(r.left[i]), Math.abs(r.right[i]));
+        let peak = 0;
+        for (let i = 0; i < n; i++) peak = Math.max(peak, at(i));
+        let onset = 0;
+        while (onset < n && at(onset) < peak * 0.003) onset += 1;
+        let firstMs = 0;
+        for (let i = onset; i < Math.min(n, onset + 48); i++) firstMs = Math.max(firstMs, at(i));
+        const problems = [];
+        if (at(0) > 1e-4) problems.push(`первый сэмпл ${at(0).toFixed(4)}`);
+        if (onset / 48 > 20) problems.push(`слышен только через ${(onset / 48).toFixed(0)} мс`);
+        if (firstMs > peak * 0.3) problems.push(`первая миллисекунда ${(firstMs / peak * 100).toFixed(0)}% пика — щелчок`);
+        if (at(n - 1) > 1e-3) problems.push(`обрывается на ${at(n - 1).toFixed(4)}`);
+        check(`${kind}/${id}: мягкое, но быстрое начало и конец без обрыва`, problems.length === 0, problems.join('; '),
+            `слышен через ${(onset / 48).toFixed(1)} мс, первая мс — ${(firstMs / peak * 100).toFixed(0)}% пика`);
+    }
+}
+
 // Все звуки выведены на один уровень: сравнивается самое громкое окно каждого.
 {
-    const loud = levels.map(l => l.loudDb);
+    const loud = levels.filter(l => l.kind !== 'voice').map(l => l.loudDb);
     const spread = Math.max(...loud) - Math.min(...loud);
     check('звуки и рингтоны выведены на один уровень', spread <= 6, `разброс ${spread.toFixed(1)} дБ`, `разброс ${spread.toFixed(1)} дБ`);
+    // Звуки канала звучат поверх разговора — заметно тише сигнала сообщения, но не шёпотом.
+    const avg = (list) => list.reduce((a, b) => a + b, 0) / list.length;
+    const message = avg(levels.filter(l => l.kind === 'message').map(l => l.loudDb));
+    for (const l of levels.filter(l => l.kind === 'voice')) {
+        const below = message - l.loudDb;
+        check(`voice/${l.id} тише звука сообщения на 2–9 дБ`, below >= 2 && below <= 9, `на ${below.toFixed(1)} дБ`, `на ${below.toFixed(1)} дБ`);
+    }
 }
 
 // Рингтон по умолчанию — остинато: одна короткая ячейка, повторённая без развития
@@ -167,6 +202,8 @@ function makeClient({ withSynth = true, prefs = {}, synthModule = synth, context
     api.audioPrefs = { notificationVolumePercent: 100, messageSound: '', ringtone: '', ...prefs };
     api.saveAudioPrefs = () => {};
     api.trace = () => {};
+    api.myName = () => 'me';
+    api.voice = { roomId: '', roomType: '', participants: [] };
     return { api, log };
 }
 
@@ -263,6 +300,79 @@ function makeClient({ withSynth = true, prefs = {}, synthModule = synth, context
     check('сбой рендера → звучит «Классика», а не тишина',
         !threw && log.sources.length === 0 && log.oscillators > 0 && api.sound.ringing === true && !!api.sound.ringTimer);
     api.stopRingtone();
+}
+
+// ── 3. Голосовой канал ───────────────────────────────────────────────────────
+
+{
+    const { api, log } = makeClient();
+    const join = (participants, roomId = 'ch-1', roomType = 'channel') => {
+        const before = log.sources.length;
+        api.sound.voiceEventAt = {};
+        api.noteVoiceRoomMembers({ roomId, roomType, participants });
+        api.voice.roomId = roomId;
+        api.voice.roomType = roomType;
+        api.voice.participants = participants;
+        return log.sources.length - before;
+    };
+    check('свой заход в канал с людьми — один звук, а не по одному на каждого', join(['alice', 'bob', 'me']) === 1);
+    check('повтор того же состава (раз в 8 с, переподключение) — тишина', join(['alice', 'bob', 'me']) === 0);
+    const last = () => log.sources[log.sources.length - 1]?.buffer;
+    const leaveBuffer = () => api.soundBuffer('voice', 'leave', api.sound.ctx);
+    const joinBuffer = () => api.soundBuffer('voice', 'join', api.sound.ctx);
+    check('кто-то вышел — звук выхода', join(['alice', 'me']) === 1 && last() === leaveBuffer());
+    check('кто-то зашёл — звук захода', join(['alice', 'me', 'carol']) === 1 && last() === joinBuffer());
+    check('один ушёл, другой пришёл за одно обновление — один звук, заход',
+        join(['alice', 'me', 'erin']) === 1 && last() === joinBuffer());
+    check('переход в другой канал — без звука выхода за людей прошлой комнаты',
+        join(['me'], 'ch-9') === 1 && last() === joinBuffer());
+    api.voice = { roomId: 'ch-9', roomType: 'channel', participants: ['me', 'alice'] };
+    check('чужая комната канала, где меня нет, — тишина', join(['x', 'y'], 'ch-2') === 0);
+    check('личный звонок — без звука захода', join(['me', 'alice'], 'dm-1', 'dm') === 0);
+    // Свой выход из канала.
+    api.voice = { roomId: 'ch-1', roomType: 'channel', participants: ['me', 'alice'] };
+    api.sound.voiceEventAt = {};
+    let before = log.sources.length;
+    api.noteVoiceRoomLeft();
+    check('свой выход из канала — звук выхода', log.sources.length - before === 1 && last() === leaveBuffer());
+    api.voice = { roomId: 'dm-1', roomType: 'dm', participants: ['me', 'alice'] };
+    api.sound.voiceEventAt = {};
+    before = log.sources.length;
+    api.noteVoiceRoomLeft();
+    check('конец личного звонка — без звука выхода', log.sources.length === before);
+    api.voice = { roomId: 'ch-1', roomType: 'channel', participants: ['me'] };
+    api.audioPrefs.voiceSounds = false;
+    check('выключено в настройках — тишина', join(['me', 'dave']) === 0);
+    api.audioPrefs.voiceSounds = true;
+
+    api.sound.voiceEventAt = {};
+    before = log.sources.length;
+    api.playVoiceEventSound('stream');
+    api.playVoiceEventSound('stream');
+    check('звук демонстрации играет готовый буфер и не повторяется пачкой',
+        log.sources.length - before === 1 && log.sources[log.sources.length - 1].buffer?.length > 1000);
+}
+
+{
+    // Звук ещё не разблокирован жестом: событий «сейчас» не копим.
+    const { api, log } = makeClient({ contextState: 'suspended' });
+    api.playVoiceEventSound('join');
+    api.noteVoiceRoomMembers({ roomId: 'ch-1', roomType: 'channel', participants: ['me', 'alice'] });
+    check('до разблокировки звуки канала не ставятся в очередь', log.sources.length === 0, `поставлено ${log.sources.length}`);
+}
+
+{
+    // Харнессы голоса (voice_doctor) поднимают клиент без this.sound — звук не должен ронять звонок.
+    const { api } = makeClient();
+    delete api.sound;
+    let threw = false;
+    try {
+        api.playVoiceEventSound('stream');
+        api.noteVoiceRoomMembers({ roomId: 'ch-1', roomType: 'channel', participants: ['me', 'alice'] });
+    } catch (error) {
+        threw = true;
+    }
+    check('без звукового состояния звуки канала молчат, а не бросают', !threw);
 }
 
 console.log('');

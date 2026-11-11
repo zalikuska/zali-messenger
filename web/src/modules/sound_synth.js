@@ -62,6 +62,13 @@
         return table[i] + (table[i + 1] - table[i]) * (x - i);
     }
 
+    // Вход ноты: полкосинуса за n сэмплов. Линейный подъём за 1–2 мс щёлкал (резкий
+    // излом огибающей слышен как тик), а дольше 5–6 мс — уже «наплыв». 3–5 мс — середина:
+    // звук начинается сразу, но мягко. Так же устроены и концы (см. finalize, riser).
+    function rise(j, n) {
+        return j >= n ? 1 : 0.5 - 0.5 * Math.cos(Math.PI * j / n);
+    }
+
     // Детерминированный шум: одна и та же нота — одни и те же сэмплы на любом устройстве.
     function prng(seed) {
         let a = seed >>> 0;
@@ -155,14 +162,14 @@
         const bodyK = Math.exp(-1 / (tau * 0.45 * sr));
         const strikeK = Math.exp(-1 / (0.045 * sr));
         const relK = Math.exp(-1 / (relTau * sr));
-        const attack = Math.max(1, Math.round(0.0025 * sr));
+        const attack = Math.max(1, Math.round(0.004 * sr));
         const holdSamples = hold * sr;
         let amp = 1, body = 1.5 * vel / TAU, strikeIdx = 1.1 * vel / TAU, rel = 1;
         const bodyFloor = 0.2 / TAU;
         let pA = 0, pB = 0.25;
         const { L, R, S, E } = mix;
         for (let j = 0, i = start; j < len; j++, i++) {
-            const env = amp * rel * (j < attack ? j / attack : 1);
+            const env = amp * rel * rise(j, attack);
             const idx = bodyFloor + body;
             let a = 0.8 * sinT(pA + idx * sinT(pA));
             let b = 0.8 * sinT(pB + idx * sinT(pB));
@@ -189,13 +196,13 @@
         marimba: {
             partials: [[1, 1, 1], [3.98, 0.26, 0.25], [9.9, 0.08, 0.1]],
             tau: (f) => clamp(0.34 * Math.pow(440 / f, 0.55), 0.12, 0.9),
-            click: 0.28, clickHz: 2800,
+            click: 0.2, clickHz: 2800,
         },
         // Язычок калимбы: негармоничные обертоны около 5,4× и щипок ногтем.
         kalimba: {
             partials: [[1, 1, 1], [2, 0.07, 0.55], [5.42, 0.18, 0.16], [6.28, 0.07, 0.1]],
             tau: (f) => clamp(0.75 * Math.pow(440 / f, 0.4), 0.3, 1.4),
-            click: 0.12, clickHz: 3800,
+            click: 0.1, clickHz: 3800,
         },
         // Металлофон: моды свободного стержня 1 : 2,756 : 5,404 : 8,933, долгий звон.
         glock: {
@@ -207,7 +214,7 @@
         musicbox: {
             partials: [[1, 1, 1], [2, 0.16, 0.6], [3, 0.06, 0.4], [5.4, 0.13, 0.17], [8.9, 0.045, 0.09]],
             tau: (f) => clamp(1.0 * Math.pow(880 / f, 0.45), 0.4, 1.6),
-            click: 0.1, clickHz: 5000,
+            click: 0.08, clickHz: 5000,
         },
     };
 
@@ -221,7 +228,7 @@
         const len = Math.min(Math.ceil(tau * 7 * sr), mix.n - start);
         if (len <= 0) return;
         const mono = scratchBuffer(len);
-        const attack = Math.max(1, Math.round(0.0012 * sr));
+        const attack = Math.max(1, Math.round(0.003 * sr));
         for (const [ratio, level, decay] of mode.partials) {
             const pf = f * ratio;
             if (pf > 0.45 * sr) continue;
@@ -240,7 +247,6 @@
                 env *= k;
             }
         }
-        for (let j = 0; j < attack && j < len; j++) mono[j] *= j / attack;
         // Щелчок палочки/ногтя: полоса шума на пару миллисекунд.
         if (mode.click) {
             const rnd = prng(Math.round(f * 31) + start * 7);
@@ -257,6 +263,7 @@
                 env *= k;
             }
         }
+        for (let j = 0; j < attack && j < len; j++) mono[j] *= rise(j, attack);
         mixMono(mix, start, mono, len, (o.gain ?? 1) * (0.3 + 0.7 * vel) * 0.55, o);
     }
 
@@ -307,6 +314,8 @@
             idx = idx + 1 === N ? 0 : idx + 1;
             mono[j] = x0;
         }
+        const pluckAttack = Math.max(1, Math.round(0.003 * sr));
+        for (let j = 0; j < pluckAttack && j < len; j++) mono[j] *= rise(j, pluckAttack);
         mixMono(mix, start, mono, len, (o.gain ?? 1) * (0.3 + 0.7 * vel) * 0.32, o);
     }
 
@@ -395,13 +404,13 @@
         const ampK = Math.exp(-1 / (tau * sr));
         const filterK = Math.exp(-1 / ((o.filterTau ?? 0.07) * sr));
         const relK = Math.exp(-1 / (relTau * sr));
-        const attack = Math.max(1, Math.round(0.002 * sr));
+        const attack = Math.max(1, Math.round(0.004 * sr));
         const holdSamples = hold * sr;
         let amp = 1, open = 0.25 + 0.75 * vel, rel = 1, pA = 0, pB = 0.4;
         const { L, R, S, E } = mix;
         const send = o.send || 0, echo = o.echo || 0;
         for (let j = 0, i = start; j < len; j++, i++) {
-            const env = amp * rel * (j < attack ? j / attack : 1) * gain;
+            const env = amp * rel * rise(j, attack) * gain;
             const dA = wtRead(darkTable, pA), dB = wtRead(darkTable, pB);
             const a = (dA + (wtRead(brightTable, pA) - dA) * open) * env;
             const b = (dB + (wtRead(brightTable, pB) - dB) * open) * env;
@@ -452,11 +461,11 @@
         const mono = scratchBuffer(len);
         const sweepK = Math.exp(-1 / (0.03 * sr));
         const ampK = Math.exp(-1 / (0.1 * sr));
-        const attack = Math.max(1, Math.round(0.002 * sr));
+        const attack = Math.max(1, Math.round(0.004 * sr));
         const base = o.base ?? 62;
         let phase = 0, extra = o.sweep ?? 90, amp = 1;
         for (let j = 0; j < len; j++) {
-            mono[j] = (sinT(phase) + 0.25 * sinT(phase * 2)) * amp * (j < attack ? j / attack : 1);
+            mono[j] = (sinT(phase) + 0.25 * sinT(phase * 2)) * amp * rise(j, attack);
             phase += (base + extra) / sr;
             extra *= sweepK;
             amp *= ampK;
@@ -478,16 +487,58 @@
         const aHigh = 1 - Math.exp(-TAU * Math.min(o.high ?? 12000, 0.45 * sr) / sr);
         const aLow = 1 - Math.exp(-TAU * (o.low ?? 4000) / sr);
         const k = Math.exp(-1 / (tau * sr));
-        const attack = Math.max(1, Math.round(0.0005 * sr));
+        const attack = Math.max(1, Math.round(0.0015 * sr));
         let hi = 0, lo = 0, env = 1;
         for (let j = 0; j < len; j++) {
             const x = rnd();
             hi += aHigh * (x - hi);
             lo += aLow * (hi - lo);
-            mono[j] = (hi - lo) * env * (j < attack ? j / attack : 1);
+            mono[j] = (hi - lo) * env * rise(j, attack);
             env *= k;
         }
         mixMono(mix, start, mono, len, o.gain ?? 0.3, o);
+    }
+
+    // Взлёт: шум через полосовой фильтр (state-variable), центр которого за dur
+    // поднимается от f0 до f1 по экспоненте, а громкость нарастает к концу — «вдох»
+    // перед ударом; гаснет за 35 мс полукосинусом, а не обрывается. С down: true —
+    // наоборот, «выдох»: центр падает от f1 к f0, звук стихает к концу. Уровень полосы
+    // держится ровным: у SVF выход полосы растёт с добротностью, он делится на неё.
+    function riser(mix, t, o) {
+        const sr = mix.sr;
+        const dur = o.dur ?? 0.25;
+        const start = Math.round(t * sr);
+        const len = Math.min(Math.ceil((dur + 0.04) * sr), mix.n - start);
+        if (len <= 0) return;
+        const mono = scratchBuffer(len);
+        const rnd = prng(o.seed ?? 7);
+        const f0 = o.f0 ?? 600, f1 = Math.min(o.f1 ?? 7000, 0.4 * sr);
+        const q = o.q ?? 2.2;
+        const down = !!o.down;
+        const durN = Math.round(dur * sr);
+        const fadeN = Math.max(1, Math.round(0.035 * sr));
+        const attackN = Math.max(1, Math.round(0.005 * sr));
+        let low = 0, band = 0;
+        for (let j = 0; j < len; j++) {
+            const x = Math.min(1, j / durN);
+            const fc = f0 * Math.pow(f1 / f0, down ? 1 - x : x);
+            const f = 2 * Math.sin(Math.PI * Math.min(fc, 0.24 * sr) / sr);
+            const high = rnd() - low - band / q;
+            band += f * high;
+            low += f * band;
+            let env;
+            if (down) {
+                env = (1 - x) * (1 - x) * rise(j, attackN);
+            } else {
+                // from — уровень, с которого начинается нарастание: с нуля «вдох»
+                // первые десятки миллисекунд неслышен, и звук кажется запоздавшим.
+                const from = o.from ?? 0;
+                env = (from + (1 - from) * x * x) * rise(j, attackN);
+                if (j > durN) env = 1 - rise(j - durN, fadeN);
+            }
+            mono[j] = band / q * env;
+        }
+        mixMono(mix, start, mono, len, o.gain ?? 0.5, o);
     }
 
     // ── Эффекты ───────────────────────────────────────────────────────────────
@@ -1024,7 +1075,78 @@
         },
     ];
 
-    const BY_KIND = { message: MESSAGE_SOUNDS, ring: RINGTONES };
+    // Звуки голосового канала — тем же голосом, что пара «Грув», и без хвостов.
+    // Звучат поверх разговора, поэтому короткие и на 4–5 дБ тише сигнала сообщения
+    // (trim): заметны, но голос собеседника не перекрывают.
+    const VOICE_SOUNDS = [
+        {
+            // Кто-то зашёл (или зашли вы сами): быстрое восходящее арпеджио ре мажора —
+            // ля, ре, фа-диез, — последняя нота с акцентом и октавой сверху.
+            id: 'join', name: 'Заход в канал', hint: 'Кто-то зашёл в голосовой канал',
+            seconds: 1.1, trim: -4,
+            build(m) {
+                grooveNote(m, 0, hz('A4'), 0.62, { drive: true });
+                grooveNote(m, 0.068, hz('D5'), 0.78, { drive: true });
+                grooveNote(m, 0.136, hz('F#5'), 1, { drive: true, octave: 0.22, hold: 0.14 });
+                reverb(m, ROOM);
+            },
+        },
+        {
+            // Кто-то вышел (или вышли вы сами): зеркало захода — то же арпеджио вниз,
+            // фа-диез, ре, ля, — мягче и без октавы сверху: заметно, но не зовёт.
+            id: 'leave', name: 'Выход из канала', hint: 'Кто-то вышел из голосового канала',
+            seconds: 1.1, trim: -5,
+            build(m) {
+                grooveNote(m, 0, hz('F#5'), 0.78, { drive: true });
+                grooveNote(m, 0.075, hz('D5'), 0.68, { drive: true });
+                grooveNote(m, 0.15, hz('A4'), 0.85, { drive: true, hold: 0.14 });
+                bass(m, 0.15, { f: hz('D3'), vel: 0.6, hold: 0.12, tau: 0.3, gain: 0.35 });
+                reverb(m, ROOM);
+            },
+        },
+        {
+            // Включили демонстрацию: короткий «взлёт» шума и на его вершине — удар
+            // аккордом ре мажора (электропиано + маримба в октаву) с бочкой. Ярче и
+            // «шире» захода: это событие, на которое стоит посмотреть.
+            id: 'stream', name: 'Включение стрима', hint: 'Кто-то начал демонстрацию экрана',
+            seconds: 1.3, trim: -5,
+            build(m) {
+                const hit = 0.16;
+                riser(m, 0, { dur: hit, from: 0.3, f0: 900, f1: 6500, gain: 0.55 });
+                grooveNote(m, hit - 0.08, hz('A4'), 0.55, { drive: true });
+                grooveNote(m, hit - 0.04, hz('D5'), 0.7, { drive: true });
+                for (const [note, pan] of [['D5', -0.25], ['F#5', 0], ['A5', 0.25]]) {
+                    grooveNote(m, hit, hz(note), 1, { drive: true, octave: 0.18, hold: 0.16 });
+                    tine(m, hit, { f: hz(note), vel: 0.8, hold: 0.12, gain: 0.3, pan, send: 0.3 });
+                }
+                bass(m, hit, { f: hz('D3'), vel: 0.85, hold: 0.18, tau: 0.35, gain: 0.55 });
+                thump(m, hit, { gain: 0.7, base: 68, sweep: 120 });
+                mallet(m, hit, 'glock', { f: hz('D7'), vel: 0.6, gain: 0.16, tau: 0.3, pan: 0.3, send: 0.3 });
+                reverb(m, ROOM);
+            },
+        },
+    ];
+
+    VOICE_SOUNDS.push({
+        // Выключили демонстрацию: зеркало включения — мягкий аккорд и «выдох» шума
+        // вниз, мелодически — шаг вниз ля → ре. Без бочки: событие закончилось, а не
+        // началось.
+        id: 'stream-stop', name: 'Конец стрима', hint: 'Кто-то выключил демонстрацию экрана',
+        seconds: 1.2, trim: -6,
+        build(m) {
+            for (const [note, pan] of [['D5', -0.25], ['F#5', 0], ['A5', 0.25]]) {
+                grooveNote(m, 0, hz(note), 0.8, { drive: true, hold: 0.1 });
+                tine(m, 0, { f: hz(note), vel: 0.6, hold: 0.08, gain: 0.25, pan, send: 0.3 });
+            }
+            riser(m, 0.02, { down: true, dur: 0.26, f0: 450, f1: 5000, gain: 0.4 });
+            grooveNote(m, 0.12, hz('A4'), 0.7, { drive: true });
+            grooveNote(m, 0.2, hz('D4'), 0.8, { drive: true, hold: 0.14 });
+            bass(m, 0.2, { f: hz('D3'), vel: 0.55, hold: 0.12, tau: 0.3, gain: 0.3 });
+            reverb(m, ROOM);
+        },
+    });
+
+    const BY_KIND = { message: MESSAGE_SOUNDS, ring: RINGTONES, voice: VOICE_SOUNDS };
 
     function find(kind, id) {
         return (BY_KIND[kind] || []).find((sound) => sound.id === id) || null;

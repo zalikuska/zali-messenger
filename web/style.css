@@ -22286,6 +22286,11 @@ body:not([data-design-mode="focus"]) #viewSettings .settings-shell {
     line-clamp: 2;
 }
 
+/* Группа «Голосовой канал»: переключатель над плитками прослушивания; выключенная
+   группа остаётся доступной для прослушивания, но приглушена. */
+.sound-voice-toggle { margin: 0; }
+.sound-group.is-off .sound-options { opacity: .5; }
+
 @media (max-width: 760px) {
     .sound-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .sound-option { border-radius: var(--m-r-sm, 12px); }

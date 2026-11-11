@@ -530,6 +530,7 @@ ZaliMixin(ZaliInterface, class {
                 this.addLogEntry({ type: 'INFO', msg: 'Звук демонстрации недоступен — передаётся только картинка', ts: new Date().toLocaleTimeString() });
             }
             this.voice.screenSharing = true;
+            this.playVoiceEventSound?.('stream');
             // Fires when the user stops sharing via the browser/OS's own
             // "Stop sharing" control, not just our in-app button.
             track.addEventListener('ended', () => this.stopScreenShare());
@@ -566,6 +567,9 @@ ZaliMixin(ZaliInterface, class {
 
     stopScreenShare() {
         if (!this.voice.screenSharing) return;
+        // Свой выход из канала гасит демонстрацию через resetVoiceState, не через этот
+        // метод, — поэтому здесь только намеренная остановка, и звук не двоится с выходом.
+        this.playVoiceEventSound?.('stream-stop');
         if (this.voice.screenCaptureFromNative) {
             this.postNativeMessage({
                 type: NativeMessageTypes.STOP_SCREEN_CAPTURE,
@@ -665,6 +669,7 @@ ZaliMixin(ZaliInterface, class {
         if (!track) return;
         this.voice.localScreenStream = stream;
         this.voice.screenSharing = true;
+        this.playVoiceEventSound?.('stream');
         this.voice.screenCaptureFromNative = true;
         this.voice.screenShareRequestInFlight = false;
         // Native-originated stream has no browser "Stop sharing" control, but
@@ -1732,6 +1737,8 @@ ZaliMixin(ZaliInterface, class {
         if (!name || !stream) return;
         let video = this.voice.remoteScreens.get(name);
         if (!video) {
+            // Новая демонстрация собеседника (не смена потока у уже идущей).
+            this.playVoiceEventSound?.('stream');
             video = document.createElement('video');
             video.autoplay = true;
             video.playsInline = true;
