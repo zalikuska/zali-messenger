@@ -22165,3 +22165,132 @@ body:not([data-design-mode="focus"]) #viewSettings .settings-shell {
         margin-top: 3px;
     }
 }
+
+
+/* ── Настройки: выбор звука сообщения и рингтона ─────────────────────────────
+   Плитки рисует renderSoundSettings() (web/src/interface/sounds.js). Нажатие
+   выбирает звук и проигрывает его; у играющего рингтона значок ▶ сменяется
+   «эквалайзером». Язык «Фокуса»: плоские нейтральные заливки, акцент — только
+   сплошной лайм (кольцо выбранной плитки и кружок значка), без полупрозрачных
+   лаймовых подложек. */
+.sound-settings {
+    display: grid;
+    gap: 16px;
+}
+
+.sound-group {
+    display: grid;
+    gap: 8px;
+}
+
+.sound-group-title {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.sound-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 8px;
+}
+
+.sound-option {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    padding: 8px 12px 8px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--f-radius, 12px);
+    background: var(--f-fill, rgba(255,255,255,.05));
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .16s var(--ease-out), border-color .16s var(--ease-out), transform .16s var(--ease-out);
+}
+
+.sound-option:hover { background: var(--f-fill-hover, rgba(255,255,255,.08)); }
+.sound-option:active { transform: translateY(1px); }
+.sound-option:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+.sound-option.active { border-color: var(--lime); }
+
+.sound-option-icon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--f-fill-strong, rgba(255,255,255,.1));
+    color: var(--text2);
+    flex: none;
+}
+
+.sound-option.active .sound-option-icon {
+    background: var(--lime);
+    color: var(--f-on-accent, #050505);
+}
+
+.sound-icon-play { display: block; margin-left: 1px; }
+
+.sound-icon-bars {
+    display: none;
+    align-items: flex-end;
+    gap: 2px;
+    height: 12px;
+}
+
+.sound-icon-bars i {
+    display: block;
+    width: 3px;
+    height: 100%;
+    border-radius: 1px;
+    background: currentColor;
+    transform-origin: 50% 100%;
+    animation: sound-bars .7s ease-in-out infinite alternate;
+}
+
+.sound-icon-bars i:nth-child(2) { animation-delay: -.45s; }
+.sound-icon-bars i:nth-child(3) { animation-delay: -.2s; }
+
+.sound-option.is-playing .sound-icon-play { display: none; }
+.sound-option.is-playing .sound-icon-bars { display: flex; }
+
+@keyframes sound-bars {
+    from { transform: scaleY(.3); }
+    to { transform: scaleY(1); }
+}
+
+.sound-option-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sound-option-copy strong {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.sound-option-copy small {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.3;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+}
+
+@media (max-width: 760px) {
+    .sound-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sound-option { border-radius: var(--m-r-sm, 12px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sound-icon-bars i { animation: none; transform: scaleY(.7); }
+}

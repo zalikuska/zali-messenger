@@ -295,6 +295,7 @@ const DefaultApiRoutes = Object.freeze({
  *   message_list.js         466 /   7  Окно сообщений, рендер списка, переключение чата.
  *   message_send.js         719 /  10  Отправка сообщений и приём в браузерном режиме.
  *   notifications.js        455 /  24  Мьюты, звуки, уведомления, бейдж непрочитанного.
+ *   sounds.js               290 /  16  Выбор звука сообщения и рингтона, проигрывание готовых буферов, плитки в настройках.
  *   state_sync.js           529 /  15  Приём состояния от нативного слоя: пользователи, история, статус связи.
  *   message_edit.js         376 /  15  Ответы, редактирование и удаление сообщений.
  *   profiles.js             470 /  25  Профили людей: состояние, подписки, дружба, комментарии.
@@ -425,7 +426,9 @@ class ZaliInterface {
         // fire while the window is minimized/unfocused. Created lazily and
         // unlocked on the first user gesture (see installSoundUnlock) since
         // AudioContext.resume() silently stays 'suspended' without one.
-        this.sound = { ctx: null, bus: null, unlocked: false, ringTimer: null, ringing: false };
+        // buffers — готовые AudioBuffer выбранных звуков, ringLoop — играющий зацикленный
+        // рингтон, preview — прослушивание из настроек (interface/sounds.js).
+        this.sound = { ctx: null, bus: null, unlocked: false, ringTimer: null, ringing: false, buffers: new Map(), ringLoop: null, preview: null };
         this.installSoundUnlock();
 
         const cachedMessages = this.loadStoredMessageCache();

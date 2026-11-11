@@ -57,6 +57,14 @@ query/explain/path` перед каждым Read/Grep по исходникам 
 
 ## Production Server
 
+> **Статус на 2026-11-11: прод недоступен.** API и веб-клиент не отвечают снаружи
+> (таймаут соединения). Версия `0.2b54` закоммичена и запушена, но **не опубликована**:
+> артефакты не собраны и не загружены, `POST /api/version` не выполнен, standalone
+> веб-клиент не обновлён, серверный репозиторий не пушился. Когда прод вернётся —
+> пройти `ops/RELEASE.md` с шага сборки и удалить эту запись. Что именно проверялось —
+> в `CLAUDE.local.md`; если причина та же, что в прошлый раз, — скилл
+> `zali-ops-incident-host-migration`.
+
 - API: `https://msgs.zalikus.org`; standalone веб-клиент: `https://msg.zalikus.org`.
 - Серверный репозиторий: https://github.com/zalikuska/zali-messenger-server (ветка `zali-server`).
 - Хост, SSH, systemd, соседние сервисы, coturn, деплой — в `CLAUDE.local.md`, `ops/` и

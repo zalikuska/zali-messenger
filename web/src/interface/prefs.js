@@ -267,7 +267,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     loadAudioPrefs() {
-        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {}, screenVolumePercents: {}, voiceProcessing: null };
+        const fallback = { micDeviceId: '', speakerDeviceId: '', masterVolumePercent: 100, notificationVolumePercent: 100, peerVolumePercents: {}, screenVolumePercents: {}, voiceProcessing: null, messageSound: '', ringtone: '' };
         try {
             const raw = localStorage.getItem(this.audioPrefsStorageKey());
             if (!raw) return fallback;
@@ -286,6 +286,9 @@ ZaliMixin(ZaliInterface, class {
                 // null — «как принято на платформе» (см. voiceProcessingEnabled).
                 voiceProcessing: typeof parsed?.voiceProcessing === 'boolean' ? parsed.voiceProcessing : null,
                 screenVolumePercents: (parsed?.screenVolumePercents && typeof parsed.screenVolumePercents === 'object') ? parsed.screenVolumePercents : {},
+                // Выбранные звук сообщения и рингтон (interface/sounds.js); '' — по умолчанию.
+                messageSound: typeof parsed?.messageSound === 'string' ? parsed.messageSound : '',
+                ringtone: typeof parsed?.ringtone === 'string' ? parsed.ringtone : '',
             };
         } catch (e) {
             return fallback;
@@ -348,6 +351,8 @@ ZaliMixin(ZaliInterface, class {
         // движке, где currentTime не продвигается, пока рендер-граф не
         // "тикнул", запланированное на "сейчас" значение молча не подхватится.
         if (bus?.master) bus.master.gain.value = 0.9 * this.notificationVolumeFactor();
+        // Вторая ветка того же графа — выход готовых буферов (soundDirectBus).
+        if (bus?.direct) bus.direct.gain.value = 0.5 * this.notificationVolumeFactor();
     }
 
     // Both sliders end up as one element volume. HTMLMediaElement.volume saturates
@@ -456,6 +461,7 @@ ZaliMixin(ZaliInterface, class {
         if (volumeInput) volumeInput.value = String(this.audioPrefs.notificationVolumePercent);
         const volumeLabel = document.getElementById('notificationVolumeValue');
         if (volumeLabel) volumeLabel.textContent = `${this.audioPrefs.notificationVolumePercent}%`;
+        this.renderSoundSettings?.();
     }
 
     // ============================================================

@@ -66,7 +66,7 @@ ZaliMixin(ZaliInterface, class {
                 apply: (raw) => this.saveUiV2Segments(JSON.parse(raw)),
             },
             {
-                // Только громкости; устройства и подавление эха остаются у машины.
+                // Громкости и выбранные звуки; устройства и подавление эха остаются у машины.
                 name: 'audio_volumes',
                 storageKey: this.audioPrefsStorageKey(),
                 read: () => {
@@ -79,6 +79,9 @@ ZaliMixin(ZaliInterface, class {
                             n: p.notificationVolumePercent ?? 100,
                             p: p.peerVolumePercents || {},
                             s: p.screenVolumePercents || {},
+                            // Звук сообщения и рингтон; '' — по умолчанию.
+                            ms: typeof p.messageSound === 'string' ? p.messageSound : '',
+                            rt: typeof p.ringtone === 'string' ? p.ringtone : '',
                         });
                     } catch (e) { return null; }
                 },
@@ -89,7 +92,11 @@ ZaliMixin(ZaliInterface, class {
                     this.setNotificationVolumePercent(v.n);
                     this.audioPrefs.peerVolumePercents = (v.p && typeof v.p === 'object') ? v.p : {};
                     this.audioPrefs.screenVolumePercents = (v.s && typeof v.s === 'object') ? v.s : {};
+                    // Запись от клиента без этих полей (старая сборка) выбор не трогает.
+                    if (typeof v.ms === 'string') this.audioPrefs.messageSound = v.ms;
+                    if (typeof v.rt === 'string') this.audioPrefs.ringtone = v.rt;
                     this.saveAudioPrefs();
+                    this.renderSoundSettings?.();
                     const slider = document.getElementById('inputMasterVolume');
                     if (slider) slider.value = String(this.audioPrefs.masterVolumePercent);
                     const nslider = document.getElementById('inputNotificationVolume');

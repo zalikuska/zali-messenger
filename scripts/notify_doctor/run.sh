@@ -17,6 +17,7 @@ run() {
 
 run "уведомления" node scripts/notify_doctor/check_notifications.mjs
 run "service worker" node scripts/notify_doctor/check_service_worker.mjs
+run "звуки" node scripts/notify_doctor/check_sounds.mjs
 
 echo ""
 if [ "$FAILED" = "0" ]; then echo "notify-doctor: all checks passed"; else echo "notify-doctor: FAILURES"; fi

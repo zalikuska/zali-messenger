@@ -34,7 +34,8 @@
     "modules/addon_format.js",
     "modules/zip_reader.js",
     "modules/addon_sdk.js",
-    "modules/perf_probe.js"
+    "modules/perf_probe.js",
+    "modules/sound_synth.js"
   ],
   "core": [
     "bus.js",
@@ -81,6 +82,7 @@
     "interface/message_list.js",
     "interface/message_send.js",
     "interface/notifications.js",
+    "interface/sounds.js",
     "interface/web_push.js",
     "interface/device_activity.js",
     "interface/state_sync.js",

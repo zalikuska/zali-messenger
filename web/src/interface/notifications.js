@@ -520,6 +520,10 @@ ZaliMixin(ZaliInterface, class {
     // it doesn't have to be the same gesture that later triggers a sound, so doing
     // this once up front means playMessageChime/startRingtone can fire later from an
     // async WS event (no gesture of their own) and still be audible.
+    //
+    // Звуки делятся на два семейства (выбор — в настройках, см. interface/sounds.js):
+    // готовые буферы из modules/sound_synth.js и «Классика» — живой синтез ниже в этом
+    // файле (playBellVoice и два его потребителя). Контекст и разблокировка — общие.
     installSoundUnlock() {
         const unlock = () => {
             if (this.sound.unlocked) return;
@@ -529,6 +533,7 @@ ZaliMixin(ZaliInterface, class {
                 this.sound.ctx = this.sound.ctx || new AudioCtx();
                 this.sound.ctx.resume?.().catch(() => {});
                 this.sound.unlocked = true;
+                this.scheduleSoundPrewarm?.();
             } catch (e) {}
             document.removeEventListener('click', unlock, true);
             document.removeEventListener('keydown', unlock, true);
@@ -624,11 +629,12 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Incoming message: a warm two-note rise (B5 → E6, a perfect fourth). Rising
-    // intervals read as "new/arrived"; falling ones read as dismissal or error.
+    // «Классика», новое сообщение: a warm two-note rise (B5 → E6, a perfect fourth).
+    // Rising intervals read as "new/arrived"; falling ones read as dismissal or error.
     // Synthesized (no audio asset) so it ships to every platform — macOS,
     // Windows, Android, browser — through bundle_web.py with nothing to bundle.
-    playMessageChime() {
+    // Какой звук играть, решает playMessageChime() в interface/sounds.js.
+    playClassicMessageChime() {
         const ctx = this.ensureSoundContext();
         if (!ctx) return;
         const now = ctx.currentTime + 0.02;
@@ -636,50 +642,41 @@ ZaliMixin(ZaliInterface, class {
         this.playBellVoice(ctx, { frequency: 1318.51, startTime: now + 0.11, duration: 0.9, gain: 0.34 });
     }
 
-    // Looping ringtone for an incoming call — started/stopped from the single
-    // choke point renderVoicePanel() based on this.voice.status, so it tracks
-    // every way a call stops ringing (answered, declined, missed, caller hung up)
-    // without needing to be threaded into each of those call sites separately.
+    // «Классика», рингтон. Запуск и остановку ведут startRingtone()/stopRingtone()
+    // в interface/sounds.js; здесь — сама фраза и её повтор по таймеру.
     //
     // Musical phrase (an E-major arpeggio played twice) rather than the usual
     // two-tone warble: it stays recognizable at low volume and doesn't turn
     // grating on the tenth repeat, while the silence between phrases is what
     // actually makes a ringtone read as urgent.
-    startRingtone() {
-        if (this.sound.ringing) return;
+    playClassicRingPhrase() {
         const ctx = this.ensureSoundContext();
-        if (!ctx) return;
-        this.sound.ringing = true;
-        const phrase = () => {
-            if (!this.sound.ringing) return;
-            const liveCtx = this.ensureSoundContext();
-            if (!liveCtx) return;
-            const now = liveCtx.currentTime + 0.02;
-            const notes = [659.25, 987.77, 1318.51, 987.77]; // E5 B5 E6 B5
-            for (const passOffset of [0, 0.78]) {
-                notes.forEach((frequency, index) => {
-                    this.playBellVoice(liveCtx, {
-                        frequency,
-                        startTime: now + passOffset + index * 0.15,
-                        duration: 0.7,
-                        gain: 0.4,
-                        brightness: 8,
-                    });
+        if (!ctx) return false;
+        const now = ctx.currentTime + 0.02;
+        const notes = [659.25, 987.77, 1318.51, 987.77]; // E5 B5 E6 B5
+        for (const passOffset of [0, 0.78]) {
+            notes.forEach((frequency, index) => {
+                this.playBellVoice(ctx, {
+                    frequency,
+                    startTime: now + passOffset + index * 0.15,
+                    duration: 0.7,
+                    gain: 0.4,
+                    brightness: 8,
                 });
-            }
-        };
-        phrase();
-        // Phrase runs ~1.8 s; a 3 s period leaves the ~1.2 s gap that makes it
-        // sound like a phone ringing rather than a continuous alarm.
-        this.sound.ringTimer = setInterval(phrase, 3000);
+            });
+        }
+        return true;
     }
 
-    stopRingtone() {
-        this.sound.ringing = false;
-        if (this.sound.ringTimer) {
-            clearInterval(this.sound.ringTimer);
-            this.sound.ringTimer = null;
-        }
+    // → false, если Web Audio недоступен (звонить нечем, флаг ringing не ставится).
+    startClassicRingtone() {
+        if (!this.playClassicRingPhrase()) return false;
+        // Phrase runs ~1.8 s; a 3 s period leaves the ~1.2 s gap that makes it
+        // sound like a phone ringing rather than a continuous alarm.
+        this.sound.ringTimer = setInterval(() => {
+            if (this.sound.ringing) this.playClassicRingPhrase();
+        }, 3000);
+        return true;
     }
 
     // Single choke point for "a message arrived in a chat the user isn't currently
@@ -741,7 +738,7 @@ ZaliMixin(ZaliInterface, class {
         // from postNativeMessage below. This chime is unconditional so a message
         // is always audible while its chat isn't the one on screen, independent
         // of native notification permission state, including when the window is
-        // minimized or not frontmost (see playMessageChime).
+        // minimized or not frontmost (see playMessageChime, interface/sounds.js).
         if (!silent) this.playMessageChime();
         this.postNativeMessage({
             type: NativeMessageTypes.SHOW_NOTIFICATION,

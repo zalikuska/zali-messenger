@@ -23,7 +23,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261110-m1">
+    <link rel="stylesheet" href="style.css?v=20261111-s8">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -617,16 +617,19 @@
                                 <div class="settings-card-head">
                                     <div>
                                         <span class="settings-kicker">Notifications</span>
-                                        <h3 class="settings-card-title">Звук уведомлений</h3>
+                                        <h3 class="settings-card-title">Звуки и рингтон</h3>
                                     </div>
                                     <span class="settings-card-note">sound</span>
                                 </div>
                                 <div class="settings-stack">
+                                    <!-- Плитки выбора рисует renderSoundSettings() (web/src/interface/sounds.js):
+                                         нажатие выбирает звук и сразу его проигрывает. -->
+                                    <div class="sound-settings" id="soundSettings"></div>
                                     <label class="settings-field">
                                         <span>Громкость уведомлений: <span id="notificationVolumeValue">100%</span></span>
                                         <input type="range" min="0" max="200" step="5" value="100" id="inputNotificationVolume" class="settings-range">
                                     </label>
-                                    <p class="settings-help">Звук нового сообщения и рингтон входящего звонка. Не влияет на громкость собеседника в разговоре — та настраивается отдельно, в блоке «Микрофон и динамики».</p>
+                                    <p class="settings-help">Нажмите на звук, чтобы выбрать и прослушать его. Громкость общая для звука сообщения и рингтона и не влияет на громкость собеседника в разговоре — та настраивается отдельно, в блоке «Микрофон и динамики».</p>
                                 </div>
                             </section>
 
@@ -1571,6 +1574,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261110-m1"></script>
+    <script src="app.js?v=20261111-s8"></script>
 </body>
 </html>
