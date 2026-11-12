@@ -73,8 +73,13 @@ ZaliMixin(ZaliInterface, class {
                 const serverId = item.getAttribute('data-server-id');
                 if (!serverId) return;
                 this.closeChatPanelModals();
-                // On the phone the sidebar rail sits on the list screen: picking a
-                // server there should show its channels, not jump into a chat.
+                // На телефоне лента — выбор сервера на экране каналов: выбранный
+                // сервер «сворачивает» ленту в свою шапку (mobile_server_bar.js),
+                // а не уводит в чат.
+                if (rail.id === 'serverRailSidebar' && this.isMobileLayout()) {
+                    this.selectServerFromMobileBar(serverId);
+                    return;
+                }
                 this.setActiveServer(serverId, { keepMobileList: rail.id === 'serverRailSidebar' });
             });
             // Настройки сервера и список участников переехали сюда с
@@ -407,6 +412,50 @@ ZaliMixin(ZaliInterface, class {
                 st.lastTs = 0;
                 st.raf = requestAnimationFrame(step);
             }
+        };
+
+        st.clamp = (value) => Math.max(0, Math.min(st.max, value));
+
+        // Общий переход «шапка сервера ↔ лента» на телефоне (mobile_server_bar.js)
+        // ставит ленту так, чтобы аватарка сервера оказалась ровно там, где была в
+        // шапке, — в том числе за краем ленты — и затем ведёт её за точное время.
+        // Своим твином, а не пружиной step(): у пружины время возврата не
+        // ограничено, а переход вместе с заменой каналов длится ровно 500 мс.
+        // Твин живёт в st.raf, поэтому касание ленты (pointerdown) его прерывает.
+        st.placeAt = (value) => {
+            if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; st.lastTs = 0; }
+            st.v = 0;
+            st.target = null;
+            st.x = value;
+            apply();
+        };
+
+        st.glideTo = (target, durationMs, done) => {
+            if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; st.lastTs = 0; }
+            st.v = 0;
+            st.target = null;
+            const from = st.x;
+            if (reduceMotion || !(durationMs > 0) || Math.abs(target - from) < 0.5) {
+                st.x = target;
+                apply();
+                done?.();
+                return;
+            }
+            const started = performance.now();
+            // Та же кривая, что --ease-out (.2,.8,.2,1): быстрый старт, мягкая посадка.
+            const ease = (t) => 1 - Math.pow(1 - t, 3);
+            const tick = (now) => {
+                const t = Math.min(1, (now - started) / durationMs);
+                st.x = from + (target - from) * ease(t);
+                apply();
+                if (t < 1) {
+                    st.raf = requestAnimationFrame(tick);
+                } else {
+                    st.raf = 0;
+                    done?.();
+                }
+            };
+            st.raf = requestAnimationFrame(tick);
         };
 
         st.revealActive = () => {

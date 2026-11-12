@@ -12,7 +12,7 @@ use reqwest::Method;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-const SUPPLY: i64 = 100_000;
+const SUPPLY: i64 = 1_000_000;
 const PASSWORD: &str = "correct horse battery staple";
 
 fn fast_raffles() {

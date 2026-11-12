@@ -24,8 +24,12 @@ ZaliMixin(ZaliInterface, class {
         const chevronDown = '<path d="m6 9 6 6 6-6"/>';
         const chevronUp = '<path d="m6 15 6-6 6 6"/>';
         const windowIcon = '<rect x="2" y="4" width="20" height="16" rx="2.5"/><path d="M2 9h20"/>';
-        // Положенная трубка — общепринятый знак «сбросить»: трубка, повёрнутая на 135°.
-        const phoneDown = `<g transform="rotate(135 12 12)">${phone}</g>`;
+        // Положенная трубка — знак «сбросить»: горизонтальная трубка, симметричная
+        // относительно x = 12 и по высоте занимающая 7,8…16,2, то есть с центром ровно
+        // в центре сетки; с обводкой — x 1,4…22,6, внутри сетки. Раньше это была обычная трубка, повёрнутая на 135°: её контур
+        // в сетке не центрирован, после поворота он съезжал вверх-влево и стоял с
+        // наклоном — в кнопке «Завершить» выглядел кривым и мельче соседних иконок.
+        const phoneDown = '<path d="M2.5 12.8c0-1.2.7-2.3 1.8-3C6.6 8.5 9.2 7.8 12 7.8s5.4.7 7.7 2c1.1.7 1.8 1.8 1.8 3v1.6a1.8 1.8 0 0 1-2 1.8l-2.7-.4a1.8 1.8 0 0 1-1.6-1.8v-1.6c-1-.4-2.1-.6-3.2-.6s-2.2.2-3.2.6v1.6a1.8 1.8 0 0 1-1.6 1.8l-2.7.4A1.8 1.8 0 0 1 2.5 14.4Z"/>';
         const icons = {
             phone,
             'phone-off': phone + '<path d="M3 3l18 18"/>',
@@ -249,19 +253,9 @@ ZaliMixin(ZaliInterface, class {
     // mountVoiceVideoElements, which fills `.voice-tile-media` by data-peer).
     // Keyed on the lowercased name because every other voice code path
     // (participants, remoteVideos, remoteAudios) normalises that way.
-    // Эфир в превью — отдельный прямоугольник над плитками людей (сам кадр доступен
-    // только после входа и «Смотреть»): значок монитора, чей экран, красная метка.
-    voicePreviewLiveCardsHTML(preview) {
-        const live = preview.names.filter(name => preview.states?.[name.toLowerCase()]?.screen);
-        if (!live.length) return '';
-        return `<div class="voice-live-cards">${live.map(name => `
-            <div class="voice-live-card" data-peer="${this.esc(name.toLowerCase())}">
-                <span class="voice-live-card-icon">${this.voiceIcon('screen')}</span>
-                <span class="voice-live-card-text"><strong>${this.esc(name)}</strong><span>показывает экран</span></span>
-                <span class="svm-live">В эфире</span>
-            </div>`).join('')}</div>`;
-    }
-
+    // Красной карточки «Х показывает экран · В эфире» над плитками превью больше нет —
+    // пользователь попросил её убрать (2026-11-11). Кто показывает экран, видно по
+    // метке «В эфире» у его строки в списке канала (voiceChannelMembersHTML).
     // previewNames — превью голосового канала, в котором мы не состоим: показываем
     // только тех, кого назвал сервер (voicePresenceNames), без нас самих и без
     // медиа-карт текущего звонка.
@@ -552,7 +546,6 @@ ZaliMixin(ZaliInterface, class {
                         <div class="voice-preview-count${count ? ' has-people' : ''}">${this.esc(countLabel)}</div>
                     </div>
                     <div class="voice-stage" id="voiceStage"></div>
-                    ${this.voicePreviewLiveCardsHTML(preview)}
                     <div class="voice-call-expanded-grid">${this.renderVoiceTiles(preview.names, preview.states)}</div>
                     <div class="voice-join-bar">${actionButtons.join('')}</div>
                 </div>
@@ -561,12 +554,12 @@ ZaliMixin(ZaliInterface, class {
         const header = embedded
             ? `<div class="voice-call-expanded-header">
                     <div class="voice-call-expanded-title">${this.esc(title)}</div>
-                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">${this.voiceCallClockLabel()}</div>
+                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer" data-voice-timer></div>
                 </div>`
             : `<div class="voice-call-expanded-header" id="voiceCollapseBar" role="button" tabindex="0" aria-label="Свернуть звонок">
                     <button class="voice-call-collapse-btn" type="button" id="voiceCollapseBtn" title="Свернуть" aria-label="Свернуть">${this.voiceIcon('chevron-down')}</button>
                     <div class="voice-call-expanded-title">${this.esc(title)}</div>
-                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer">${this.voiceCallClockLabel()}</div>
+                    <div class="voice-call-expanded-timer" id="voiceCallExpandedTimer" data-voice-timer></div>
                 </div>`;
         return `
             <div class="voice-call-expanded ${embedded ? 'embedded' : ''}" id="voiceCallExpanded">
@@ -789,8 +782,14 @@ ZaliMixin(ZaliInterface, class {
             this.mountVoiceVideoElements();
             return;
         }
+        // Часы в разметку не входят (data-voice-timer, fillVoiceCallTimers): с ними HTML
+        // менялся каждую секунду, и любая перерисовка шла сюда — каждый <video> камеры
+        // вынимался из документа и вставлялся заново, плитка мигала чёрным.
+        const videos = panel.querySelectorAll('video').length;
+        if (videos) this.voiceDiag?.('voice-panel-rebuild', { videos });
         this._voicePanelHtml = html;
         panel.innerHTML = html;
+        this.fillVoiceCallTimers();
         // The fullscreen DM grid is an overlay over the whole chat; a voice
         // channel's embedded call just fills the panel's own grid row.
         panel.classList.remove('call-bar-mode');

@@ -19,7 +19,7 @@ use reqwest::Method;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-const SUPPLY: i64 = 100_000;
+const SUPPLY: i64 = 1_000_000;
 const PASSWORD: &str = "correct horse battery staple";
 const TEST_OFFICIAL_PEM: &str = "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBCXHEzrDDQR50ht3jb5IIAYKNY9BB678l7vG5G4iL4IoAoGCCqGSM49\nAwEHoUQDQgAEamDET4L1/slDaWLJ5qCgPvEPiyrr4d/gSeGChWTHBIuRXl1nFc1K\nV/vruZwV98OSTH3I4rsBLe9RUnxtFkcUgw==\n-----END EC PRIVATE KEY-----\n";
 const TEST_OFFICIAL_PUBLIC: &str = "BGpgxE+C9f7JQ2liyeagoD7xD4sq6+Hf4EnhgoVkxwSLkV5dZxXNSlf767mcFffDkkx9yOK7AS3vUVJ8bRZHFIM=";

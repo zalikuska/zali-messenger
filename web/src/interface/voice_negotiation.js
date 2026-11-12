@@ -704,15 +704,22 @@ ZaliMixin(ZaliInterface, class {
         // that joined the room, rendered as «В эфире», and never sent a single offer,
         // because syncVoicePeers has no tracks to offer with. Failure is non-fatal: the
         // room is still joined (the peer may be audible one way), micError explains why.
-        try {
-            await this.ensureVoiceLocalStream();
-        } catch (error) {
+        //
+        // Захват ЗАПУСКАЕТСЯ здесь, синхронно в обработчике клика (getUserMedia
+        // вызывается до первого await внутри), но НЕ ожидается: voice_join уходит сразу.
+        // Раньше заход ждал полного старта микрофона — на macOS это сотни миллисекунд
+        // запуска аудиоустройства на каждый заход, и панель, и звук захода, и сам вход
+        // на сервере опаздывали на это время. Ждать незачем: обработчик voice_room_state
+        // перед syncVoicePeers ждёт тот же общий промис (ensureVoiceLocalStream
+        // дедуплицирует), так что оффер без дорожек не уйдёт. Выход, пока микрофон ещё
+        // стартует, ловит сам захват (captureVoiceLocalStream, эпоха сброса).
+        this.ensureVoiceLocalStream().catch((error) => {
             this.addLogEntry({
                 type: 'WARN',
                 msg: this.voice.micError || error?.message || 'Не удалось получить доступ к микрофону',
                 ts: new Date().toLocaleTimeString(),
             });
-        }
+        });
         this.voice.negotiationRetries = 0;
         this.voice.roomId = roomId;
         this.voice.roomType = 'channel';
@@ -729,6 +736,8 @@ ZaliMixin(ZaliInterface, class {
             serverId: sid,
             channelId: cid,
         });
+        // Свой звук захода — в момент клика, а не после ответа сервера (interface/sounds.js).
+        this.noteVoiceRoomJoining?.(roomId);
         this.ensureVoicePresenceKeepalive();
         this.renderVoicePanel();
     }
@@ -745,8 +754,6 @@ ZaliMixin(ZaliInterface, class {
         if (this.voice.roomType === 'dm' && roomId && this.voice.callTrack && !this.voice.callTrack.recorded) {
             this.recordVoiceCallHistory({ outcome, endedAt: Date.now() });
         }
-        // Звук своего выхода из канала (interface/sounds.js) — пока состав ещё на месте.
-        this.noteVoiceRoomLeft?.();
         if (announce && roomId) {
             this.sendVoiceEvent({
                 type: 'voice_leave',
@@ -756,6 +763,9 @@ ZaliMixin(ZaliInterface, class {
                 channelId: this.voice.channelId,
             });
         }
+        // Звук своего выхода (interface/sounds.js) — после voice_leave, чтобы сам выход
+        // ничего не ждал, но до сброса: тот стирает состав, по которому решается звук.
+        this.noteVoiceRoomLeft?.();
         this.resetVoiceState();
     }
 

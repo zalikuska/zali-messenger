@@ -111,8 +111,10 @@ section('CSS from server data');
 {
     record('safeCssColor exists and is restrictive',
         /safeCssColor\(/.test(all));
+    // Все аватарки сервера красятся через serverAvatarColors (avatars.js) —
+    // цвет из данных сервера попадает в style только после safeCssColor.
     record('server colours go through it',
-        /serverAvatarBackground[\s\S]{0,200}?safeCssColor\(/.test(all));
+        /serverAvatarColors\(server\)\s*\{[\s\S]{0,160}?safeCssColor\(/.test(all));
 }
 
 section('HTML attribute sinks');

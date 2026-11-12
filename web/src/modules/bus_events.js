@@ -39,6 +39,9 @@
         // События аддона хаба от оболочки (строки процесса-бэкенда, его выход) —
         // см. onNativeAddonEvent в interface/addons_elevated.js.
         ADDON_EVENT: 'addon_event',
+        // Нативный захват микрофона/камеры/экрана (interface/native_media.js):
+        // ответы на MEDIA_REQUEST и события потоков — {event, requestId?, stream?, …}.
+        MEDIA_EVENT: 'media_event',
     });
 
     window.ZaliBusEvents = ZaliBusEvents;

@@ -496,6 +496,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_FRAME || 'screen_capture_frame', (payload) => this.onNativeScreenCaptureFrame(payload));
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_ERROR || 'screen_capture_error', (payload) => this.onNativeScreenCaptureError(payload));
         this.bus.registerCommand('zali_interface', E.ADDON_EVENT || 'addon_event', (payload) => this.onNativeAddonEvent?.(payload));
+        this.bus.registerCommand('zali_interface', E.MEDIA_EVENT || 'media_event', (payload) => this.onNativeMediaEvent?.(payload));
 
         // Bind events after DOM is loaded
         if (document.readyState === 'loading') {
@@ -505,6 +506,8 @@ class ZaliInterface {
         }
 
         this.bootstrapSession();
+        // Ссылка разработчика (?as=…&open=…) на локальном адресе — interface/control.js.
+        void this.devBootFromUrl?.();
         setTimeout(() => this.syncNativeConversationKeys(), 0);
         this.startEnergyAwareMaintenance();
         // Resolves the tier once and stamps data-perf-tier on <html> before the

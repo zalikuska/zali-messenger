@@ -22,6 +22,28 @@
 //     после чего затирается свежим ответом. См. refreshProfile().
 ZaliMixin(ZaliInterface, class {
 
+    /**
+     * Личные профили (стена, автографы, комментарии, подписки, друзья)
+     * отключены (0.2b56, по решению владельца продукта). Код и серверные ручки
+     * на месте — флаг убирает только входы: аватарки и имена больше не ведут в
+     * профиль (клик по строке контакта открывает диалог), из контекстного меню
+     * пропали «Профиль»/«Отслеживать»/«В друзья», своя аватарка открывает
+     * настройки профиля (аватар), события профиля по WS гасятся молча.
+     * Вернуть — true здесь; каждое место проверяет profilesEnabled().
+     */
+    static get PROFILES_ENABLED() { return false; }
+
+    profilesEnabled() {
+        return ZaliInterface.PROFILES_ENABLED === true;
+    }
+
+    /** Атрибуты «открыть профиль» для аватарки/имени — пусто, пока профили выключены. */
+    profileOpenAttrs(username, title = '') {
+        if (!this.profilesEnabled()) return '';
+        const name = String(username || '');
+        return ` data-profile-open="${this.esc(name)}" title="${this.esc(title || `Профиль: ${name}`)}"`;
+    }
+
     /** Пустое состояние. Одна точка правды для конструктора и для закрытия. */
     static get emptyProfileState() {
         return {
@@ -103,6 +125,7 @@ ZaliMixin(ZaliInterface, class {
     async openProfile(username, { editing = false, tab = '' } = {}) {
         const name = String(username || '').trim();
         if (!name) return;
+        if (!this.profilesEnabled()) return;
         if (!this.S.session?.token) {
             this.addLogEntry({ type: 'WARN', msg: 'Профили доступны только после входа', ts: new Date().toLocaleTimeString() });
             return;

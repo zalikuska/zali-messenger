@@ -5,7 +5,7 @@
 ZaliMixin(ZaliInterface, class {
 
     // ============================================================
-    // ZALICOIN — fixed-supply (100 000) in-app currency. Balance/distribution
+    // ZALICOIN — fixed-supply (1 000 000, see ZALICOIN_TOTAL_SUPPLY in server/src/coins.rs) in-app currency. Balance/distribution
     // come from /api/coins/*; transfers are server-authoritative (balance
     // checks + double-spend protection live in server/src/coins.rs), this is
     // just presentation + the idempotency key that makes a retried submit safe.
@@ -19,6 +19,8 @@ ZaliMixin(ZaliInterface, class {
     // можно, а получить по ней деньги или выдать чужой перевод за свой — нет.
     // ============================================================
 
+    /** Эмиссия, пока сервер не ответил (/api/coins/distribution отдаёт totalSupply). */
+    static get ZALICOIN_DEFAULT_SUPPLY() { return 1000000; }
     static get COIN_GIFT_MAX_CLAIMS() { return 100; }
     /** Больше полосок в карточку не помещается — дальше один общий индикатор. */
     static get COIN_CHARGE_SEGMENTS_MAX() { return 20; }
@@ -53,7 +55,7 @@ ZaliMixin(ZaliInterface, class {
             const res = await this.apiFetch(this.apiRoutes.coins.distribution, { interactive: true });
             if (!res.ok) return;
             const data = await res.json();
-            this.S.zaliCoinTotalSupply = Number(data.totalSupply) || 100000;
+            this.S.zaliCoinTotalSupply = Number(data.totalSupply) || ZaliInterface.ZALICOIN_DEFAULT_SUPPLY;
             this.S.zaliCoinHolders = Array.isArray(data.holders) ? data.holders : [];
             this.S.zaliCoinHeldTotal = Number(data.held) || 0;
             this.S.zaliCoinTreasuriesTotal = Number(data.treasuries) || 0;
@@ -108,7 +110,8 @@ ZaliMixin(ZaliInterface, class {
     renderZaliCoinView() {
         const view = document.getElementById('viewZaliCoin');
         if (!view) return;
-        const totalSupply = this.S.zaliCoinTotalSupply || 100000;
+        this.hydrateZaliSigns(view);
+        const totalSupply = this.S.zaliCoinTotalSupply || ZaliInterface.ZALICOIN_DEFAULT_SUPPLY;
         const balance = this.S.zaliCoinBalance || 0;
         const holders = Array.isArray(this.S.zaliCoinHolders) ? this.S.zaliCoinHolders : [];
         const heldTotal = Math.max(0, Number(this.S.zaliCoinHeldTotal) || 0);
@@ -118,6 +121,13 @@ ZaliMixin(ZaliInterface, class {
 
         const balanceValue = document.getElementById('zaliCoinBalanceValue');
         if (balanceValue) balanceValue.textContent = balance.toLocaleString('ru-RU');
+        // Эмиссия в подписях — с сервера, а не вписана в разметку: при смене
+        // эмиссии (100 000 → 1 000 000) старый текст врал бы рядом с верными долями.
+        const supplyText = totalSupply.toLocaleString('ru-RU');
+        ['zaliCoinSupplyHint', 'zaliCoinSupplyTitle'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && el.textContent !== supplyText) el.textContent = supplyText;
+        });
         const balanceShare = document.getElementById('zaliCoinBalanceShare');
         if (balanceShare) {
             const pct = totalSupply > 0 ? (balance / totalSupply) * 100 : 0;
@@ -156,44 +166,48 @@ ZaliMixin(ZaliInterface, class {
             value: Number(holder.balance) || 0,
             isMe: holder.username === me,
             color: this.zaliCoinSeriesVar(index),
+            sign: 'person',
         }));
         if (restTotal > 0) {
-            segments.push({ label: `Остальные (${rest.length})`, value: restTotal, isMe: false, color: 'var(--zc-series-other)' });
+            segments.push({ label: `Остальные (${rest.length})`, value: restTotal, isMe: false, color: 'var(--zc-series-other)', sign: 'people' });
         }
         if (heldTotal > 0) {
-            segments.push({ label: 'На удержании', value: heldTotal, isMe: false, color: 'var(--zc-series-held)' });
+            segments.push({ label: 'На удержании', value: heldTotal, isMe: false, color: 'var(--zc-series-held)', sign: 'hourglass' });
         }
         // Казны — одной строкой: сервер не раскрывает, какие серверы сколько держат.
         if (treasuriesTotal > 0) {
-            segments.push({ label: 'Казны серверов', value: treasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)' });
+            segments.push({ label: 'Казны серверов', value: treasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)', sign: 'chest' });
         }
         if (addonTreasuriesTotal > 0) {
-            segments.push({ label: 'Казны аддонов', value: addonTreasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)' });
+            segments.push({ label: 'Казны аддонов', value: addonTreasuriesTotal, isMe: false, color: 'var(--zc-series-treasury)', sign: 'box' });
         }
         if (unassigned > 0) {
-            segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)' });
+            segments.push({ label: 'Не распределено', value: unassigned, isMe: false, color: 'var(--zc-series-unassigned)', sign: 'unassigned' });
         }
 
         const bar = document.getElementById('zaliCoinBar');
         if (bar) {
-            bar.innerHTML = segments.map(seg => {
+            this.setHTMLIfChanged(bar, segments.map(seg => {
                 const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
                 if (pct <= 0) return '';
                 const title = `${seg.label}: ${seg.value.toLocaleString('ru-RU')} ZC (${this.zaliCoinPctLabel(pct)}%)`;
                 return `<button type="button" class="zc-segment${seg.isMe ? ' zc-segment--me' : ''}" style="flex-grow:${Number(pct.toFixed(4))};background:${seg.color}" title="${this.esc(title)}" data-zc-label="${this.esc(seg.label)}" data-zc-value="${seg.value}" data-zc-pct="${pct.toFixed(2)}"></button>`;
-            }).join('');
+            }).join(''));
         }
 
         const legend = document.getElementById('zaliCoinLegend');
         if (legend) {
-            legend.innerHTML = segments.map(seg => {
+            // Строка легенды — знак сущности (человек, казна, удержание…) на нейтральной
+            // плитке; у моей строки знак акцентный. Цвет доли — точкой у имени: по ней
+            // строка находится на полосе.
+            this.setHTMLIfChanged(legend, segments.map(seg => {
                 const pct = totalSupply > 0 ? (seg.value / totalSupply) * 100 : 0;
                 return `<div class="zc-legend-item${seg.isMe ? ' is-me' : ''}">
-                    <span class="zc-legend-swatch" style="background:${seg.color}"></span>
-                    <span class="zc-legend-label">${this.esc(seg.label)}${seg.isMe ? '<span class="zc-legend-me">вы</span>' : ''}</span>
-                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')} ZC<span class="zc-legend-pct">${this.zaliCoinPctLabel(pct)}%</span></span>
+                    <span class="zc-tile-sign">${this.zaliSign(seg.sign)}</span>
+                    <span class="zc-legend-label"><span class="zc-legend-swatch" style="background:${seg.color}"></span><span class="zc-legend-name">${this.esc(seg.label)}</span>${seg.isMe ? '<span class="zc-legend-me">вы</span>' : ''}</span>
+                    <span class="zc-legend-value">${seg.value.toLocaleString('ru-RU')}<em>ZC</em><span class="zc-legend-pct">${this.zaliCoinPctLabel(pct)}%</span></span>
                 </div>`;
-            }).join('') || '<div class="zc-legend-empty">Пока никто не держит ZaliCoin</div>';
+            }).join('') || `<div class="zc-empty"><span class="zc-tile-sign">${this.zaliSign('pie')}</span><span>Пока никто не держит ZaliCoin</span></div>`);
         }
 
         this.renderMyCoinGifts();
@@ -210,7 +224,9 @@ ZaliMixin(ZaliInterface, class {
             .map(id => store.states.get(id)?.state)
             .filter(gift => gift && gift.sender === me && gift.status === 'active');
         card.hidden = gifts.length === 0;
-        list.innerHTML = gifts.map(gift => {
+        const count = document.getElementById('zaliCoinGiftsCount');
+        if (count) count.textContent = gifts.length ? String(gifts.length) : '';
+        this.setHTMLIfChanged(list, gifts.map(gift => {
             const id = String(gift.id);
             const total = Number(gift.totalClaims) || 1;
             const remaining = Math.max(0, total - (Number(gift.claimedCount) || 0));
@@ -219,13 +235,14 @@ ZaliMixin(ZaliInterface, class {
             const confirming = store.confirmId === id;
             const label = pending === 'cancel' ? 'Отмена…' : (confirming ? 'Точно отменить?' : 'Отменить');
             return `<div class="zc-gift-row">
+                <span class="zc-tile-sign">${this.zaliSign('gift')}</span>
                 <div class="zc-gift-row-main">
                     <span class="zc-gift-row-amount">${this.formatCoinAmount(gift.held)} ZC</span>
                     <span class="zc-gift-row-meta">${this.esc(meta)}</span>
                 </div>
                 <button type="button" class="zc-card-btn zc-gift-row-btn ${confirming ? 'is-confirm' : 'is-ghost'}" data-zc-gift-cancel="${this.esc(id)}"${pending ? ' disabled' : ''}><span>${label}</span></button>
             </div>`;
-        }).join('');
+        }).join(''));
     }
 
     // Выплаты из казны серверов (server/src/treasury.rs) — отдельный раздел, чтобы
@@ -245,18 +262,25 @@ ZaliMixin(ZaliInterface, class {
         const list = document.getElementById('zaliCoinPayoutsList');
         const total = document.getElementById('zaliCoinPayoutsTotal');
         if (!list) return;
-        const payouts = Array.isArray(this.S.zaliCoinServerPayouts) ? this.S.zaliCoinServerPayouts : [];
+        // Пока ответ не пришёл — тишина, а не «пусто»: ложное «ничего нет» до прихода
+        // данных мигает при каждом заходе (docs/UI_GUIDELINES.md, §8).
+        const loaded = Array.isArray(this.S.zaliCoinServerPayouts);
+        const payouts = loaded ? this.S.zaliCoinServerPayouts : [];
+        const card = document.getElementById('zaliCoinPayoutsCard');
+        if (card) card.hidden = !loaded;
         // Пустой раздел уходит под распределение: сверху — то, что требует внимания.
-        document.getElementById('zaliCoinPayoutsCard')?.classList.toggle('is-empty', !payouts.length);
+        card?.classList.toggle('is-empty', !payouts.length);
         if (total) {
             const sum = payouts.reduce((acc, payout) => acc + (Number(payout.amount) || 0), 0);
             total.textContent = sum > 0 ? `+${this.formatCoinAmount(sum)} ZC` : '';
         }
         if (!payouts.length) {
-            list.innerHTML = '<div class="zc-payouts-empty">Пока пусто. Выплаты из казны серверов появятся здесь.</div>';
+            this.setHTMLIfChanged(list, loaded
+                ? `<div class="zc-empty"><span class="zc-tile-sign">${this.zaliSign('chest')}</span><span>Пока пусто. Выплаты из казны серверов появятся здесь.</span></div>`
+                : '');
             return;
         }
-        list.innerHTML = payouts.map(payout => {
+        this.setHTMLIfChanged(list, payouts.map(payout => {
             const server = (this.S.servers || []).find(item => item.id === payout.serverId);
             const serverName = payout.serverName || server?.name || 'Сервер';
             const avatar = server
@@ -274,9 +298,9 @@ ZaliMixin(ZaliInterface, class {
                     <span class="zc-gift-row-meta">${this.esc(meta)}</span>
                     ${payout.note ? `<span class="zc-payout-note">${this.esc(payout.note)}</span>` : ''}
                 </div>
-                <span class="zc-payout-amount">+${this.formatCoinAmount(payout.amount)} ZC</span>
+                <span class="zc-payout-amount">+${this.formatCoinAmount(payout.amount)}<em>ZC</em></span>
             </div>`;
-        }).join('');
+        }).join(''));
     }
 
     coinGiftChannelLabel(gift) {
@@ -401,6 +425,9 @@ ZaliMixin(ZaliInterface, class {
         if (this.coinModalOpen()) this.closeCoinTransferModal();
         const raffle = document.getElementById('raffleModal');
         if (raffle && !raffle.hidden) raffle.querySelector('#raffleCancelBtn')?.click();
+        // Окно казны занимает область чата, как настройки сервера, — переход
+        // к другому диалогу/каналу/экрану его закрывает.
+        if (this._treasury) this.closeTreasuryModal?.();
     }
 
     coinModalOpen() {
@@ -622,7 +649,7 @@ ZaliMixin(ZaliInterface, class {
         const claims = this.coinGiftClaimsValue();
         if (!ctx.serverId || !ctx.channelId) { setStatus('Откройте текстовый канал'); return; }
         if (!Number.isFinite(amount) || amount <= 0) { setStatus('Укажите сумму больше нуля'); return; }
-        if (amount * claims > (this.S.zaliCoinTotalSupply || 100000)) { setStatus('Это больше, чем всего существует ZaliCoin'); return; }
+        if (amount * claims > (this.S.zaliCoinTotalSupply || ZaliInterface.ZALICOIN_DEFAULT_SUPPLY)) { setStatus('Это больше, чем всего существует ZaliCoin'); return; }
 
         // Same rule as the transfer above: one idempotency key per exact payload.
         const payloadSignature = `gift\0${ctx.serverId}\0${ctx.channelId}\0${amount}\0${claims}`;

@@ -14,7 +14,7 @@ APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
 # MAJOR.MINOR{a|b|r}BUILD (r > b > a, see compareVersions in interface.js);
 # unlike apps/windows/Cargo.toml, CFBundleShortVersionString isn't SemVer-locked
 # so this can hold the display version directly.
-APP_VERSION="0.2b55"
+APP_VERSION="0.2b56"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 
@@ -62,7 +62,8 @@ python3 scripts/bundle_web.py
 
 # 1. Сборка Rust ядра
 echo "📦 Сборка Rust ядра..."
-cd core && cargo build --release
+# --features apm: обработка звука нативного захвата микрофона (zali_apm_*, AEC3 → RNNoise → AGC2).
+cd core && cargo build --release --features apm
 cd ..
 
 # 2. Сборка Swift приложения
@@ -137,6 +138,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <string>ZaliMessenger uses the microphone for voice calls and voice channels.</string>
     <key>NSCameraUsageDescription</key>
     <string>ZaliMessenger uses the camera for video calls.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>ZaliMessenger listens to what is playing so your own speakers don't echo back to the people you are talking to.</string>
 </dict>
 </plist>
 EOF

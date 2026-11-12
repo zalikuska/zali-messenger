@@ -7,7 +7,7 @@
 //! `can_manage_treasury`.
 //!
 //! Деньги по-прежнему не появляются и не исчезают: инвариант эмиссии теперь
-//! `SUM(coin_balances) + SUM(server_treasuries) + удержанное в карточках = 100 000`.
+//! `SUM(coin_balances) + SUM(server_treasuries) + удержанное в карточках = 1 000 000`.
 //! Каждая операция — одна `BEGIN IMMEDIATE`-транзакция (`run_immediate_tx`), а
 //! списание — условный `UPDATE … WHERE balance >= ?`, так что два одновременных
 //! списания не могут оба пройти проверку остатка. Повтор запроса с тем же
@@ -40,6 +40,8 @@ const TREASURY_NOTE_MAX_CHARS: usize = 140;
 const TREASURY_HISTORY_LIMIT: i64 = 50;
 const SERVER_PAYOUTS_LIMIT: i64 = 100;
 const TREASURY_MEMBERS_LIMIT: i64 = 500;
+/// Сколько самых щедрых участников показывает окно казны.
+const TREASURY_TOP_CONTRIBUTORS: i64 = 5;
 /// Адресат выплаты «все участники сервера» вместо конкретной роли.
 pub(crate) const TREASURY_ALL_MEMBERS: &str = "*";
 
@@ -821,6 +823,39 @@ pub(crate) async fn get_server_treasury(
         .fetch_all(&state.db)
         .await?;
         let operations: Vec<TreasuryOperationView> = rows.into_iter().map(operation_view).collect();
+        // Итоги за всё время — отдельными агрегатами: история выше ограничена
+        // TREASURY_HISTORY_LIMIT, и посчитанные по ней суммы врали бы у любой
+        // казны старше пятидесяти операций.
+        let (total_in, total_out, operation_count): (i64, i64, i64) = sqlx::query_as(
+            "SELECT
+                COALESCE(SUM(CASE WHEN target_kind = 'server' AND target_id = ?1 THEN total ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN source_kind = 'server' AND source_id = ?1 THEN total ELSE 0 END), 0),
+                COUNT(*)
+             FROM treasury_operations
+             WHERE (source_kind = 'server' AND source_id = ?1)
+                OR (target_kind = 'server' AND target_id = ?1)",
+        )
+        .bind(&server_id)
+        .fetch_one(&state.db)
+        .await?;
+        let contributors: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT source_id, SUM(total), COUNT(*) FROM treasury_operations
+             WHERE target_kind = 'server' AND target_id = ? AND source_kind = 'user'
+             GROUP BY source_id ORDER BY SUM(total) DESC, source_id LIMIT ?",
+        )
+        .bind(&server_id)
+        .bind(TREASURY_TOP_CONTRIBUTORS)
+        .fetch_all(&state.db)
+        .await?;
+        let stats = serde_json::json!({
+            "totalIn": total_in,
+            "totalOut": total_out,
+            "operations": operation_count,
+            "contributors": contributors
+                .into_iter()
+                .map(|(username, total, count)| serde_json::json!({ "username": username, "total": total, "count": count }))
+                .collect::<Vec<_>>(),
+        });
         let (roles, members) = if can_manage {
             let members: Vec<String> = sqlx::query_scalar(
                 "SELECT m.username FROM server_members m JOIN users u ON u.username = m.username
@@ -840,6 +875,7 @@ pub(crate) async fn get_server_treasury(
             "balance": balance,
             "canManage": can_manage,
             "operations": operations,
+            "stats": stats,
             "roles": roles,
             "members": members,
         }))

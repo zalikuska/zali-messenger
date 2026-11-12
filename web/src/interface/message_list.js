@@ -184,19 +184,8 @@ ZaliMixin(ZaliInterface, class {
             // instead of duplicating the call view.
             this.setMessagesPlaceholder(box, '<div class="voice-empty voice-channel-no-chat">Голосовые каналы не поддерживают текстовые сообщения</div>');
             if (isServers && server) {
-                const chatHdrAva = document.getElementById('chatHdrAva');
-                const chatHdrName = document.getElementById('chatHdrName');
-                const chatHdrSub = document.getElementById('chatHdrSub');
-                if (chatHdrAva) {
-                    chatHdrAva.style.background = this.serverAvatarBackground(server);
-                    this.setHTMLIfChanged(chatHdrAva, this.serverAvatarInnerHTML(server));
-                }
-                if (chatHdrName) this.setHTMLIfChanged(chatHdrName, `<span class="chat-hdr-title">${this.channelKindIcon('voice', 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span></span><span class="chat-hdr-count">${this.esc(`Голосовой канал`)}</span>`);
-                if (chatHdrSub) chatHdrSub.textContent = `${server.name}${channel.topic ? ` · ${channel.topic}` : ''}`;
-                this.updateChatHeaderCryptoKey({
-                    serverId: server.id,
-                    channelId: channel?.id || null,
-                });
+                this.ensureConversationCryptoKey({ serverId: server.id, channelId: channel?.id || null, reason: 'updateChatHeaderCryptoKey' });
+                this.renderServerChatHeader(server, channel);
             }
             this.renderVoicePanel();
             return;
@@ -205,6 +194,12 @@ ZaliMixin(ZaliInterface, class {
         if (msgs.length === 0 && !this.S.loading) {
             this._lastMessagesHTML = null;
             this.lastRenderedConversationKey = conversationKey;
+            if (isServers && channel && this.isServerHistoryPending(conversationKey)) {
+                // История ещё в пути — не обещать «Нет сообщений» (см.
+                // markServerHistoryPending): спокойная пустая лента без анимации.
+                this.setMessagesPlaceholder(box, '<div class="msgs-pending" aria-busy="true" aria-label="Загрузка сообщений"></div>');
+                return;
+            }
             if (isServers) {
                 const hasServers = (this.S.servers || []).some(Boolean);
                 this.setMessagesPlaceholder(box, !channel
@@ -341,7 +336,7 @@ ZaliMixin(ZaliInterface, class {
             if (coinCard) {
                 let html = `<div class="msg ${dir} coin-card-msg group-${item.groupPos} ${isSending ? 'sending' : ''}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (showAvatar) {
-                    html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                    html += `<div class="msg-ava"${this.profileOpenAttrs(msg.sender)}>${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (hasAvatarSlot) {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
@@ -391,7 +386,7 @@ ZaliMixin(ZaliInterface, class {
                 const mediaHtml = attachments.map(att => this.renderAttachmentPreview(att)).join('');
                 let html = `<div class="msg ${dir} image-caption group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
                 if (showAvatar) {
-                    html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                    html += `<div class="msg-ava"${this.profileOpenAttrs(msg.sender)}>${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
                 } else if (hasAvatarSlot) {
                     html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
                 }
@@ -411,7 +406,7 @@ ZaliMixin(ZaliInterface, class {
 
             let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (showAvatar) {
-                html += `<div class="msg-ava" data-profile-open="${this.esc(msg.sender)}" title="${this.esc(`Профиль: ${msg.sender}`)}">${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
+                html += `<div class="msg-ava"${this.profileOpenAttrs(msg.sender)}>${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (hasAvatarSlot) {
                 html += `<div class="msg-ava msg-ava-spacer" aria-hidden="true"></div>`;
             }
@@ -514,30 +509,7 @@ ZaliMixin(ZaliInterface, class {
             this.pinToBottomAfterLayout(box);
         }
 
-        if (isServers && server) {
-            const chatHdrAva = document.getElementById('chatHdrAva');
-            const chatHdrName = document.getElementById('chatHdrName');
-            const chatHdrSub = document.getElementById('chatHdrSub');
-            if (chatHdrAva) {
-                chatHdrAva.style.background = this.serverAvatarBackground(server);
-                this.setHTMLIfChanged(chatHdrAva, this.serverAvatarInnerHTML(server));
-            }
-            if (chatHdrName) {
-                const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} ${this.ruPlural(server.memberCount, 'участник', 'участника', 'участников')}` : '';
-                const channelTitle = channel
-                    ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
-                    : this.esc(server.name);
-                this.setHTMLIfChanged(chatHdrName, `
-                    <span class="chat-hdr-title">${channelTitle}</span>
-                    ${membersText ? `<span class="chat-hdr-count">${this.esc(membersText)}</span>` : ''}
-                `);
-            }
-            if (chatHdrSub) {
-                chatHdrSub.textContent = channel
-                    ? `${server.name}${channel.topic ? ` · ${channel.topic}` : ''}`
-                    : (server.description || 'Сервер');
-            }
-        }
+        if (isServers && server) this.renderServerChatHeader(server, channel);
         this.lastRenderedConversationKey = conversationKey;
     }
 
@@ -594,7 +566,7 @@ ZaliMixin(ZaliInterface, class {
         this.updateChatHeaderCryptoKey({ peer });
         const chatHdrAva = document.getElementById('chatHdrAva');
         if (chatHdrAva) {
-            chatHdrAva.style.background = '';
+            this.clearServerAvatarPaint(chatHdrAva);
             this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(peer, 'avatar-img', peer));
         }
         const chatCallBtn = document.getElementById('chatCallBtn');

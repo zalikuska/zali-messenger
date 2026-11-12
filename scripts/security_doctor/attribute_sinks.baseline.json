@@ -52,7 +52,6 @@
     "web/src/interface/autographs.js|y|y",
     "web/src/interface/avatars.js|alt|safeAlt",
     "web/src/interface/avatars.js|class|classes",
-    "web/src/interface/avatars.js|style|this.serverAvatarBackground(server)",
     "web/src/interface/cache.js|aria-pressed|mode.id === prefs.mode",
     "web/src/interface/cache.js|max|ZaliInterface.cacheLimitStops.length - 1",
     "web/src/interface/cache.js|style|fill",

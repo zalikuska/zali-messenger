@@ -205,8 +205,86 @@ ZaliMixin(ZaliInterface, class {
         return this.esc((server?.name || 'BAN').slice(0, 3).toUpperCase());
     }
 
+    // Аватарка сервера — одна на все места (рейка, шапка канала, настройки,
+    // каталог, казна, выплаты): скруглённый квадрат (у людей — круг), заливка —
+    // цвет сервера, буква — контрастная к ней. Раньше буква всегда была белой с
+    // тенью (на белом/лаймовом/жёлтом сервере её не было видно), а сервер без
+    // цвета получал лайм-серый градиент — против языка «Фокуса». Без цвета —
+    // нейтральная заливка и акцентная буква, как у собеседника в списке.
     serverAvatarBackground(server) {
-        return this.safeCssColor(server?.color) || 'linear-gradient(180deg, #cbff00, #8c8c8c)';
+        return this.serverAvatarColors(server).background;
+    }
+
+    serverAvatarColors(server) {
+        const color = this.safeCssColor(server?.color);
+        if (!color) return { background: 'rgba(255,255,255,.11)', color: 'rgb(var(--accent-rgb))' };
+        return { background: color, color: this.serverAvatarInk(color) };
+    }
+
+    /** Белая буква, пока её контраст с заливкой ≥ 3:1, иначе почти чёрная. */
+    serverAvatarInk(color) {
+        const rgb = this.parseCssRgb(color);
+        if (!rgb) return '#ffffff';
+        const lin = (c) => {
+            const v = c / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        };
+        const luminance = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+        return 1.05 / (luminance + 0.05) >= 3 ? '#ffffff' : '#050505';
+    }
+
+    /** [r, g, b] из #rgb/#rrggbb(aa)/rgb()/первого цвета градиента; именованные и hsl — через браузер. */
+    parseCssRgb(value) {
+        const text = String(value || '').trim();
+        const hex = text.match(/#([0-9a-f]{3,8})\b/i);
+        if (hex) {
+            let h = hex[1];
+            if (h.length === 3 || h.length === 4) h = h.slice(0, 3).split('').map(ch => ch + ch).join('');
+            if (h.length >= 6) return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+        }
+        const rgb = text.match(/rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+        if (rgb) return [rgb[1], rgb[2], rgb[3]].map(Number);
+        if (typeof document === 'undefined' || !document.body || /gradient/i.test(text)) return null;
+        this._cssColorProbe = this._cssColorProbe || new Map();
+        if (this._cssColorProbe.has(text)) return this._cssColorProbe.get(text);
+        const probe = document.createElement('span');
+        probe.style.color = text;
+        probe.style.display = 'none';
+        document.body.appendChild(probe);
+        const resolved = getComputedStyle(probe).color;
+        probe.remove();
+        const parsed = resolved.match(/rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+        const result = parsed ? [parsed[1], parsed[2], parsed[3]].map(Number) : null;
+        this._cssColorProbe.set(text, result);
+        return result;
+    }
+
+    /** Красит готовый элемент (шапка канала, шапка настроек сервера) под сервер. */
+    paintServerAvatar(el, server) {
+        if (!el) return;
+        const colors = this.serverAvatarColors(server);
+        el.classList.add('is-server');
+        // Шапка канала красится на каждой перерисовке ленты: стиль пишется,
+        // только когда цвета реально сменились (браузер нормализует значение,
+        // поэтому сравнение идёт с тем, что записали мы, а не с el.style).
+        const paint = `${colors.background}|${colors.color}`;
+        if (el.__serverPaint !== paint) {
+            el.style.background = colors.background;
+            el.style.color = colors.color;
+            el.__serverPaint = paint;
+        }
+        this.setHTMLIfChanged(el, this.serverAvatarInnerHTML(server));
+        el.classList.toggle('has-img', !!el.querySelector('img'));
+    }
+
+    /** Снимает раскраску сервера — элемент снова показывает человека. */
+    clearServerAvatarPaint(el) {
+        if (!el) return;
+        el.classList.remove('is-server', 'has-img');
+        if (el.__serverPaint === undefined || el.__serverPaint === '') return;
+        el.style.background = '';
+        el.style.color = '';
+        el.__serverPaint = '';
     }
 
     // Shared by the server rail, the public-servers modal, and the chat header —
@@ -231,8 +309,11 @@ ZaliMixin(ZaliInterface, class {
     }
 
     renderServerAvatarHTML(server, extraClass = '') {
-        const classes = `server-avatar${extraClass ? ` ${extraClass}` : ''}`;
-        return `<span class="${classes}" style="background:${this.serverAvatarBackground(server)}">${this.serverAvatarInnerHTML(server)}</span>`;
+        const inner = this.serverAvatarInnerHTML(server);
+        const hasImg = inner.startsWith('<img');
+        const classes = `server-avatar${hasImg ? ' has-img' : ''}${extraClass ? ` ${extraClass}` : ''}`;
+        const colors = this.serverAvatarColors(server);
+        return `<span class="${classes}" style="background:${this.esc(colors.background)};color:${this.esc(colors.color)}">${inner}</span>`;
     }
 
     // Защёлка снимается ТЕМ ЖЕ вызовом, который делает работу, и работа
@@ -248,6 +329,14 @@ ZaliMixin(ZaliInterface, class {
             this.serverAssetRefreshScheduled = false;
             this.renderServers();
             this.renderServerToolbar();
+            // Шапки открытых окон (настройки сервера, казна) — та же картинка:
+            // без этого доехавшая аватарка появлялась в них только после
+            // повторного открытия.
+            const byId = (sid) => (this.S.servers || []).find(item => item.id === sid);
+            const head = document.getElementById('serverModalAvatar');
+            const modalServer = head?.classList.contains('is-server') ? byId(this.S.serverModal?.serverId) : null;
+            if (modalServer) this.paintServerAvatar(head, modalServer);
+            this.renderTreasuryHead?.();
         };
         requestAnimationFrame(run);
         setTimeout(run, 250);
@@ -279,6 +368,13 @@ ZaliMixin(ZaliInterface, class {
         const server = (this.S.servers || []).find(item => item.id === sid) || null;
         if (avatarBox) {
             avatarBox.style.backgroundImage = '';
+            // Цвет и буква — как у самой аватарки сервера (serverAvatarColors),
+            // а не лаймовая заглушка: превью должно показывать то, что увидят все.
+            if (server) {
+                const colors = this.serverAvatarColors(server);
+                avatarBox.style.background = colors.background;
+                avatarBox.style.color = colors.color;
+            }
             if (avatar) {
                 avatarBox.innerHTML = `<img class="avatar-img" src="${this.esc(avatar)}" alt="server avatar">`;
             } else {

@@ -466,6 +466,9 @@ ZaliMixin(ZaliInterface, class {
     }
 
     resetVoiceState({ preserveInvite = false } = {}) {
+        // Захват микрофона, начатый до этого сброса, по возвращении увидит другую
+        // эпоху и остановит пришедший поток (captureVoiceLocalStream).
+        this._voiceResetEpoch = (this._voiceResetEpoch || 0) + 1;
         // Written BEFORE anything is torn down: the per-peer counters, the last
         // stats sample and the selected candidate pair all live on entries this
         // method is about to close, and they are exactly what a post-mortem needs.
@@ -538,6 +541,7 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.voice.localScreenStream = null;
+        this.stopShareAppAudio?.('voice-reset');
         if (this.voice.audioContext) {
             try { this.voice.audioContext.close?.(); } catch (e) {}
         }

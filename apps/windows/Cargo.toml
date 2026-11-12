@@ -5,7 +5,7 @@ name = "zali_messenger_win"
 # APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
 # compares against the server's app_releases.version). This field only needs to
 # keep incrementing for Cargo's own bookkeeping; it is not shown to users.
-version = "0.2.55"
+version = "0.2.56"
 edition = "2021"
 
 [dependencies]
@@ -59,7 +59,52 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    # Нативный захват (native/media/, .claude/skills/voice-calls/native-capture.md):
+    # WASAPI-микрофон и loopback, Media Foundation-камера, Windows.Graphics.Capture
+    # экрана с D3D11 VideoProcessor (BGRA → NV12), WIC для превью-JPEG.
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Devices_Properties",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Imaging",
+    "Win32_Media",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_Shell_PropertiesSystem",
 ] }
+# Общая память WebView2 для кадров (ICoreWebView2Environment12::CreateSharedBuffer,
+# ICoreWebView2_17::PostSharedBufferToScript). Ровно та версия, что тянет wry 0.35:
+# её типы отдаёт `WebViewExtWindows::controller()`. Сама она построена на `windows`
+# 0.52 — отсюда второй, переименованный `windows` той же версии (ComInterface::cast,
+# PCWSTR); нового дерева зависимостей это не добавляет.
+webview2-com = "0.28"
+# `#[implement]` (IMMNotificationClient, обработчик активации process loopback)
+# раскрывается в пути `::windows_core::…` — нужен прямой зависимостью; та же 0.61,
+# что уже тянет `windows`.
+windows-core = "0.61"
+windows052 = { package = "windows", version = "0.52", features = ["Win32_Foundation"] }
+# Эхо/шум/громкость микрофона (core/src/audio_processing.rs) — только Windows-сборке;
+# экспериментальный macOS Rust-шелл нативный захват не делает.
+zali_messenger_core = { path = "../../core", features = ["apm"] }
 
 [build-dependencies]
 serde_json = "1.0"

@@ -8,10 +8,10 @@
 
 mod common;
 
-use common::{register_user, spawn_app, RegisteredUser, TestApp};
+use common::{register_user, spawn_app, spawn_app_with_data_dir, RegisteredUser, TestApp};
 use serde_json::{json, Value};
 
-const SUPPLY: i64 = 100_000;
+const SUPPLY: i64 = 1_000_000;
 
 async fn balance_of(app: &TestApp, user: &RegisteredUser) -> (i64, i64) {
     let body: Value = app
@@ -440,4 +440,33 @@ async fn transfer_receipt_is_visible_only_to_both_parties() {
         .await
         .unwrap();
     assert_eq!(receipt["cardClientId"], "");
+}
+
+/// Эмиссия выросла со 100 000 до 1 000 000. База, засеянная старой эмиссией и
+/// успевшая разойтись по рукам, получает разницу ровно один раз — на баланс
+/// zalikus; чужие балансы не трогаются, повторный запуск ничего не добавляет.
+#[tokio::test]
+async fn legacy_supply_is_topped_up_once() {
+    let app = spawn_app().await;
+    let zalikus = register_user(&app, "zalikus", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    assert_eq!(balance_of(&app, &zalikus).await, (SUPPLY, 0), "fresh database is seeded with the new supply");
+
+    // Состояние базы до 0.2b56: 100 000 в обороте, маркера доэмиссии нет.
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}/zali_messenger.db", app.data_dir.display()))
+        .await
+        .expect("connect to test db");
+    sqlx::query("UPDATE coin_balances SET balance = 70000 WHERE username = 'zalikus'").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO coin_balances (username, balance) VALUES ('bob', 30000)
+                 ON CONFLICT(username) DO UPDATE SET balance = 30000").execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM schema_flags WHERE name = 'zalicoin_supply_1m'").execute(&pool).await.unwrap();
+
+    let restarted = spawn_app_with_data_dir(app.data_dir.clone()).await;
+    assert_eq!(balance_of(&restarted, &zalikus).await, (70000 + SUPPLY - 100_000, 0));
+    assert_eq!(balance_of(&restarted, &bob).await, (30000, 0), "other holders are untouched");
+    assert_supply_conserved(&restarted, &bob).await;
+
+    let again = spawn_app_with_data_dir(app.data_dir.clone()).await;
+    assert_eq!(balance_of(&again, &zalikus).await, (70000 + SUPPLY - 100_000, 0), "top-up is one-shot");
+    assert_supply_conserved(&again, &bob).await;
 }

@@ -255,6 +255,31 @@
         "enabled",
         "games"
       ]
+    },
+    "MEDIA_REQUEST": {
+      "fields": [
+        "op",
+        "requestId",
+        "stream",
+        "kind",
+        "deviceId",
+        "sourceId",
+        "options"
+      ],
+      "optional": [
+        "requestId",
+        "stream",
+        "kind",
+        "deviceId",
+        "sourceId",
+        "options"
+      ]
+    },
+    "CONTROL_REQUEST": {
+      "fields": [
+        "requestId",
+        "op"
+      ]
     }
   }
 }

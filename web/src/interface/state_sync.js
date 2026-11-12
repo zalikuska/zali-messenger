@@ -154,6 +154,8 @@ ZaliMixin(ZaliInterface, class {
             // повтором кадра стоил бы человеку двух одинаковых уведомлений,
             // поэтому проверка всё равно дешевле, чем разбирательство потом.
             if (this.isDuplicateRealtimeEvent(type, payload)) return true;
+            // Профили выключены: событие наше (не «неизвестное»), но показывать его негде.
+            if (!this.profilesEnabled()) return true;
             this.handleProfileEvent(payload);
             return true;
         }
@@ -250,7 +252,10 @@ ZaliMixin(ZaliInterface, class {
                 // state) rather than hard-coding the fallback letter — otherwise this
                 // clobbers the just-loaded avatar image and it flashes then disappears.
                 const avaEl = document.getElementById('chatHdrAva');
-                if (avaEl) avaEl.innerHTML = this.renderAvatarHTML(this.myName(), 'avatar-img', this.myName());
+                if (avaEl) {
+                    this.clearServerAvatarPaint(avaEl);
+                    avaEl.innerHTML = this.renderAvatarHTML(this.myName(), 'avatar-img', this.myName());
+                }
                 set('chatHdrName', 'Добавьте контакт');
             }
             if (this.S.current) {

@@ -201,7 +201,8 @@ ZaliMixin(ZaliInterface, class {
         }
         let stream;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: this.micAudioConstraints() });
+            // Как в звонке: на десктопе микрофон из оболочки (без VoiceProcessingIO).
+            stream = (await this.tryNativeMicStream?.()) || await navigator.mediaDevices.getUserMedia({ audio: this.micAudioConstraints() });
         } catch (error) {
             throw this.addonError('denied', 'Нет доступа к микрофону — разрешите его приложению');
         }

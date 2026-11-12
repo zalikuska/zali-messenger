@@ -326,7 +326,7 @@ ZaliMixin(ZaliInterface, class {
         const chatHdrAva = document.getElementById('chatHdrAva');
         if (chatHdrAva) {
             chatHdrAva.addEventListener('click', () => {
-                if (this.S.navMode === 'servers') return;
+                if (this.S.navMode === 'servers' || !this.profilesEnabled()) return;
                 if (this.S.current) void this.openProfile(this.S.current);
             });
         }
@@ -1652,6 +1652,13 @@ ZaliMixin(ZaliInterface, class {
         const meAvaBtn = document.getElementById('meAvaBtn');
         if (meAvaBtn) {
             meAvaBtn.addEventListener('click', () => {
+                // Профили выключены — своя аватарка ведёт туда, где её меняют:
+                // в настройки, к карточке «Аватар профиля».
+                if (!this.profilesEnabled()) {
+                    this.openSettingsView?.();
+                    requestAnimationFrame(() => document.querySelector('[data-settings-section="profile"]')?.scrollIntoView?.({ block: 'start' }));
+                    return;
+                }
                 void this.openProfile(this.myName());
             });
         }
@@ -1659,7 +1666,7 @@ ZaliMixin(ZaliInterface, class {
         // внутри этого метода, поэтому вешаем его на экземпляр — иначе
         // редактор профиля (profile_ui.js) до него не дотянется.
         this.openAvatarPicker = openAvatarPicker;
-        if (meAva) meAva.title = 'Мой профиль';
+        if (meAva) meAva.title = this.profilesEnabled() ? 'Мой профиль' : 'Аватар и настройки профиля';
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
                 this._pendingLogEntries = [];

@@ -1,9 +1,9 @@
 // --- ZaliInterface: выбор камеры и источника демонстрации экрана. ---
-// Часть класса ZaliInterface (см. web/src/interface.js). Всё живёт в веб-слое:
-// нативные шеллы (macOS WKWebView, Windows WebView2) отдают getUserMedia /
-// getDisplayMedia самим движком, поэтому дублировать это в Swift/Rust/Kotlin
-// не нужно. Исключение — Android, где демонстрация идёт через MediaProjection
-// (системный диалог), и выбирать там нечего: туда пикер не показывается.
+// Часть класса ZaliInterface (см. web/src/interface.js). Окна выбора — в веб-слое.
+// Источник кадров: на macOS/Windows — оболочка (interface/native_media.js:
+// камеры и экраны/окна с превью перечисляет она), иначе getUserMedia /
+// getDisplayMedia движка. Android показывает системный диалог MediaProjection,
+// выбирать там нечего — туда окно экрана не показывается.
 ZaliMixin(ZaliInterface, class {
 
     static get VOICE_CAMERA_PREF_KEY() { return 'zali_voice_camera_v1'; }
@@ -35,10 +35,19 @@ ZaliMixin(ZaliInterface, class {
 
     currentVoiceCameraId() {
         const track = this.voice.localStream?.getVideoTracks?.()[0];
+        if (track?.__zaliDeviceId) return track.__zaliDeviceId;
         try { return track?.getSettings?.().deviceId || ''; } catch (e) { return ''; }
     }
 
     async listVoiceVideoInputs() {
+        if (this.nativeCaptureAvailable?.('camera')) {
+            try {
+                const { videoinput } = await this.listNativeMediaDevices();
+                return videoinput.map((d, i) => ({ id: String(d.id || ''), label: d.label || `Камера ${i + 1}` }));
+            } catch (error) {
+                this.voiceDiag?.('native-device-list-failed', { error: error?.message || String(error) }, 'WARN');
+            }
+        }
         if (!navigator.mediaDevices?.enumerateDevices) return [];
         let all = [];
         try { all = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return []; }
@@ -57,10 +66,7 @@ ZaliMixin(ZaliInterface, class {
         if (!this.voice.cameraOn || !this.voice.localStream) return;
         if (id && id === this.currentVoiceCameraId()) return;
         try {
-            const next = await navigator.mediaDevices.getUserMedia({
-                video: { deviceId: { exact: id }, width: { ideal: 1280 }, height: { ideal: 720 } },
-            });
-            const track = next.getVideoTracks()[0];
+            const track = await this.captureVoiceCameraTrack(id);
             if (!track) return;
             const stream = this.voice.localStream;
             for (const old of stream.getVideoTracks()) {
@@ -196,10 +202,19 @@ ZaliMixin(ZaliInterface, class {
                 hint.textContent = 'Запрашиваю доступ к камере…';
             }
             try {
-                const constraints = selected
-                    ? { video: { deviceId: { exact: selected } } }
-                    : { video: true };
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                let stream;
+                if (this.nativeCaptureAvailable?.('camera')) {
+                    // Превью из оболочки; тот же поток камеры она делит между превью и
+                    // звонком, так что открыть его при включённой камере безопасно.
+                    stream = await this.openNativeMediaStream({ kind: 'camera', deviceId: selected, defaultIfUnknown: true, options: { width: 640, height: 360, fps: 30 } });
+                    // Неизвестный оболочке id заменён камерой по умолчанию — выбрана она.
+                    if (stream.__zaliDeviceId) selected = stream.__zaliDeviceId;
+                } else {
+                    const constraints = selected
+                        ? { video: { deviceId: { exact: selected } } }
+                        : { video: true };
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                }
                 if (!alive || seq !== previewSeq) { for (const t of stream.getTracks()) t.stop(); return; }
                 const previous = previewStream;
                 previewStream = stream;
@@ -258,11 +273,174 @@ ZaliMixin(ZaliInterface, class {
         await startPreview();
     }
 
+    // Окно выбора для захвата в оболочке: экраны и окна перечисляет она
+    // (ScreenCaptureKit / Windows.Graphics.Capture) вместе с превью, выбор — здесь, в
+    // языке «Фокуса» (docs/UI_GUIDELINES.md): плитки на surface, выбор кольцом через
+    // зазор, одна главная кнопка. Превью обновляются раз в 2 с, пока окно открыто;
+    // плитки не перерисовываются целиком — меняется только картинка (без мигания).
+    openNativeScreenPicker() {
+        const pref = this.loadVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY);
+        let tab = pref.sourceKind === 'window' ? 'window' : 'display';
+        let height = [0, 720, 1080].includes(Number(pref.height)) ? Number(pref.height) : 1080;
+        let fps = [15, 30, 60].includes(Number(pref.fps)) ? Number(pref.fps) : 30;
+        const audioSupported = this.nativeSupports('nativeScreenAudio');
+        let audio = audioSupported && !(pref.audio === 0 || pref.audio === false);
+        let selectedId = '';
+        let sources = [];
+        let loadError = null;
+        let alive = true;
+        let timer = null;
+        const seg = (name, items, current) => `<div class="voice-picker-seg" data-seg="${this.esc(name)}" role="radiogroup">${items.map(it => `<button type="button" role="radio" class="voice-picker-seg-btn${it.v === current ? ' is-selected' : ''}" aria-checked="${this.esc(String(it.v === current))}" data-v="${this.esc(String(it.v))}">${this.esc(it.l)}</button>`).join('')}</div>`;
+        const overlay = this.mountVoicePicker({
+            title: 'Что показать',
+            confirmLabel: 'Показать',
+            bodyHtml: `
+                ${seg('tab', [{ v: 'display', l: 'Экраны' }, { v: 'window', l: 'Окна' }], tab)}
+                <div class="voice-src-grid" id="voiceSrcGrid" role="radiogroup" aria-label="Источник"></div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Разрешение</span>${seg('height', [{ v: 720, l: '720p' }, { v: 1080, l: '1080p' }, { v: 0, l: 'Оригинал' }], height)}</div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Частота кадров</span>${seg('fps', [{ v: 15, l: '15' }, { v: 30, l: '30' }, { v: 60, l: '60' }], fps)}</div>
+                ${audioSupported ? `<div class="voice-picker-field"><span class="voice-picker-label">Звук</span>${seg('audio', [{ v: 1, l: 'Передавать' }, { v: 0, l: 'Без звука' }], audio ? 1 : 0)}</div>` : ''}`,
+            onMount: (ov, confirm) => {
+                ov.querySelector('.voice-picker')?.classList.add('voice-picker--wide');
+                confirm.disabled = true;
+                ov.addEventListener('click', (e) => {
+                    const tile = e.target.closest('.voice-src-tile');
+                    if (tile) {
+                        selectedId = tile.dataset.id || '';
+                        syncSelection();
+                        return;
+                    }
+                    const btn = e.target.closest('[data-v]');
+                    const group = btn?.closest('[data-seg]');
+                    if (!btn || !group) return;
+                    const name = group.dataset.seg;
+                    const value = btn.dataset.v;
+                    if (name === 'tab') { tab = value; selectedId = ''; render(); }
+                    else if (name === 'height') height = Number(value);
+                    else if (name === 'fps') fps = Number(value);
+                    else if (name === 'audio') audio = Number(value) === 1;
+                    for (const el of group.querySelectorAll('[data-v]')) {
+                        const on = el === btn;
+                        el.classList.toggle('is-selected', on);
+                        el.setAttribute('aria-checked', String(on));
+                    }
+                });
+                ov.addEventListener('dblclick', (e) => {
+                    if (e.target.closest('.voice-src-tile') && selectedId) confirm.click();
+                });
+            },
+            onConfirm: () => {
+                if (!selectedId) return false;
+                alive = false;
+                clearTimeout(timer);
+                this.saveVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY, { sourceKind: tab, height, fps, audio: audio ? 1 : 0 });
+                // own — окно самого мессенджера: звук для него собирает страница
+                // (interface/share_audio.js), оболочка звук не снимает.
+                const own = !!sources.find(s => s.id === selectedId)?.own;
+                void this.startScreenShare({ sourceId: selectedId, sourceKind: tab, own, height, fps, audio: audio ? 1 : 0 });
+                return true;
+            },
+        });
+        const grid = overlay.querySelector('#voiceSrcGrid');
+        const confirm = overlay.querySelector('#voicePickerConfirm');
+        const prevCleanup = overlay._cleanup;
+        overlay._cleanup = () => { alive = false; clearTimeout(timer); prevCleanup?.(); };
+
+        const syncSelection = () => {
+            for (const el of grid.querySelectorAll('.voice-src-tile')) {
+                const on = el.dataset.id === selectedId;
+                el.classList.toggle('is-selected', on);
+                el.setAttribute('aria-checked', String(on));
+            }
+            confirm.disabled = !selectedId;
+        };
+        const emptyRow = (sign, text) => {
+            const row = document.createElement('div');
+            row.className = 'voice-src-empty';
+            row.innerHTML = `<span class="voice-src-empty-sign">${this.zaliSign(sign)}</span>`;
+            const label = document.createElement('span');
+            label.textContent = text;
+            row.appendChild(label);
+            return row;
+        };
+        const render = () => {
+            const list = sources.filter(src => (src.kind === 'window' ? 'window' : 'display') === tab);
+            if (selectedId && !list.some(src => String(src.id) === selectedId)) selectedId = '';
+            if (!selectedId && tab === 'display' && list.length) selectedId = String(list[0].id);
+            if (loadError || !list.length) {
+                grid.replaceChildren();
+                if (loadError?.code === 'permission') {
+                    grid.appendChild(emptyRow('display', 'Нет доступа к записи экрана. Разрешите его приложению в настройках системы и откройте окно ещё раз.'));
+                } else if (loadError) {
+                    grid.appendChild(emptyRow('display', 'Не удалось получить список экранов и окон'));
+                } else if (sources.length) {
+                    grid.appendChild(emptyRow(tab === 'window' ? 'window' : 'display', tab === 'window' ? 'Открытых окон нет' : 'Экраны не найдены'));
+                }
+                syncSelection();
+                return;
+            }
+            // Плитки по id: существующие обновляются на месте, лишние уходят, новые
+            // добавляются в порядке списка.
+            const existing = new Map(Array.from(grid.querySelectorAll('.voice-src-tile')).map(el => [el.dataset.id, el]));
+            for (const node of Array.from(grid.children)) if (!node.classList.contains('voice-src-tile')) node.remove();
+            let prev = null;
+            for (const src of list) {
+                const id = String(src.id);
+                let tile = existing.get(id);
+                existing.delete(id);
+                if (!tile) {
+                    tile = document.createElement('button');
+                    tile.type = 'button';
+                    tile.className = 'voice-src-tile';
+                    tile.setAttribute('role', 'radio');
+                    tile.dataset.id = id;
+                    tile.innerHTML = `<span class="voice-src-thumb"><img alt="" draggable="false"></span><span class="voice-src-title"></span><span class="voice-src-meta"></span>`;
+                }
+                const title = src.title || (src.kind === 'window' ? 'Окно' : 'Экран');
+                const meta = [src.kind === 'window' ? (src.app || '') : '', src.width && src.height ? `${src.width}×${src.height}` : ''].filter(Boolean).join(' · ');
+                const titleEl = tile.querySelector('.voice-src-title');
+                const metaEl = tile.querySelector('.voice-src-meta');
+                if (titleEl.textContent !== title) titleEl.textContent = title;
+                if (metaEl.textContent !== meta) metaEl.textContent = meta;
+                tile.setAttribute('aria-label', meta ? `${title}, ${meta}` : title);
+                const img = tile.querySelector('img');
+                const thumb = typeof src.thumb === 'string' && /^data:image\/(jpeg|png);base64,/.test(src.thumb) ? src.thumb : '';
+                if (thumb && img.getAttribute('src') !== thumb) img.src = thumb;
+                img.hidden = !thumb;
+                const expected = prev ? prev.nextSibling : grid.firstChild;
+                if (tile !== expected) grid.insertBefore(tile, expected);
+                prev = tile;
+            }
+            for (const stale of existing.values()) stale.remove();
+            syncSelection();
+        };
+        const load = async () => {
+            try {
+                sources = await this.listNativeScreenSources({ thumbWidth: 360 });
+                loadError = null;
+            } catch (error) {
+                loadError = { code: error?.code || '', message: error?.message || String(error) };
+                this.voiceDiag?.('native-screen-sources-failed', loadError, 'WARN');
+            }
+            if (!alive) return;
+            render();
+            // Живые превью, но не чаще раза в 5 с и не в скрытом окне: каждое
+            // обновление — снимок КАЖДОГО экрана и окна в оболочке, JPEG и base64 через
+            // мост; раз в 2 с при 30 окнах это заметно грузило процессор посреди звонка.
+            if (loadError?.code !== 'permission') timer = setTimeout(load, document.hidden ? 15000 : 5000);
+        };
+        void load();
+    }
+
     // Что показывать и в каком качестве. Список конкретных экранов/окон рисует
     // система — веб-слой не может их перечислить, поэтому здесь выбирается
     // КАТЕГОРИЯ (подсказка системному диалогу) и качество.
     openVoiceScreenPicker() {
         if (document.getElementById('voicePickerOverlay')) return;
+        if (this.nativeCaptureAvailable?.('screen')) {
+            this.openNativeScreenPicker();
+            return;
+        }
         const pref = this.loadVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY);
         const categories = [
             { id: 'monitor', icon: 'screen', title: 'Весь экран', note: 'Всё, что видно на мониторе' },

@@ -49,7 +49,7 @@ python3 scripts/bundle_web.py
 
 # 1. Сборка Rust-ядра
 echo "⚙️  Сборка Rust Core..."
-cd core && cargo build --release && cd ..
+cd core && cargo build --release --features apm && cd ..
 
 # 2. Сборка Swift-приложения через Swift Package Manager
 echo "🚀 Сборка SwiftUI приложения через SPM..."
@@ -91,6 +91,10 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>ZaliMessenger uses the microphone for voice calls and voice channels.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>ZaliMessenger uses the camera for video calls.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>ZaliMessenger listens to what is playing so your own speakers don't echo back to the people you are talking to.</string>
 </dict>
 </plist>
 EOF

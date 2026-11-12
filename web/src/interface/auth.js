@@ -693,7 +693,7 @@ ZaliMixin(ZaliInterface, class {
                     // Заявки в друзья нужны здесь, а не при открытии профиля:
                     // без них бейдж на своей аватарке остался бы пустым до
                     // первого захода в профиль, то есть о заявке никто бы не узнал.
-                    this.timeStage('loadFriendRequests', () => this.loadFriendRequests()),
+                    ...(this.profilesEnabled() ? [this.timeStage('loadFriendRequests', () => this.loadFriendRequests())] : []),
                 ]);
                 await this.timeStage('bootstrapDeviceTrust', () => this.bootstrapDeviceTrust());
                 await this.timeStage('restoreCloudVaultSnapshot', () => this.restoreCloudVaultSnapshot({ reason }));

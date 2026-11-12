@@ -146,7 +146,9 @@ doctor-проверки и `bridge_check.sh`. От поиска все они с
 | `core/` | Rust core, статическая `.a` для macOS FFI |
 | `sdk/Rust/` / `sdk/Swift/` | Зеркальные реализации формата `.zali` |
 
-Подробнее об архитектуре — `docs/ARCHITECTURE.md`.
+Подробнее об архитектуре — `docs/ARCHITECTURE.md`. Любой новый или переделываемый экран —
+по `docs/UI_GUIDELINES.md` (язык «Фокус», эталоны, токены, чек-лист); остальные дизайн-доки
+в `docs/` устарели.
 
 ## Git Safety
 

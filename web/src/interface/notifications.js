@@ -330,7 +330,9 @@ ZaliMixin(ZaliInterface, class {
         menu.className = 'peer-context-menu';
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
-        menu.innerHTML = `
+        // Без профилей первая группа меню (профиль, подписка, дружба) пропадает
+        // целиком вместе со своим разделителем.
+        const profileItems = !this.profilesEnabled() ? '' : `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="profile">
                 ${this.uiIcon('user')}<span>Открыть профиль</span>
             </button>
@@ -341,7 +343,8 @@ ZaliMixin(ZaliInterface, class {
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="friend">
                 ${this.uiIcon('user-plus')}<span id="contactFriendLabel">${this.contactFriendLabel(relation)}</span>
             </button>`}
-            <div class="peer-context-menu-sep" aria-hidden="true"></div>
+            <div class="peer-context-menu-sep" aria-hidden="true"></div>`;
+        menu.innerHTML = `${profileItems}
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
                 ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
@@ -356,7 +359,7 @@ ZaliMixin(ZaliInterface, class {
                 ${this.uiIcon('trash')}<span>Удалить из контактов</span>
             </button>`}
         `;
-        if (!isSelf) this.applyContactRelationToMenu(menu, relation);
+        if (!isSelf && this.profilesEnabled()) this.applyContactRelationToMenu(menu, relation);
         document.body.appendChild(menu);
 
         // Меню разворачивается ОТ курсора, а не на ближайший свободный край:
@@ -472,6 +475,8 @@ ZaliMixin(ZaliInterface, class {
      * до сервера. Если меню успели закрыть — ответ просто выбрасывается.
      */
     async decorateContactContextMenu(menu, name) {
+        // Без профилей в меню нечего дотягивать — и незачем ходить за профилем в сеть.
+        if (!this.profilesEnabled()) return;
         // Диск — прежде сети: он отвечает за миллисекунды и почти всегда уже
         // содержит то же самое, что вернёт сервер, поэтому обычно это и есть
         // тот единственный кадр, где подписи меняются, а сетевой ответ ниже
@@ -579,6 +584,9 @@ ZaliMixin(ZaliInterface, class {
         compressor.release.setValueAtTime(0.25, ctx.currentTime);
         master.connect(compressor);
         compressor.connect(ctx.destination);
+        // «Классика» — только уведомления и рингтон: в демонстрацию экрана, приглушённо
+        // (interface/share_audio.js).
+        this.teeShareSound?.(ctx, compressor);
         this.sound.bus = { ctx, input: master, master };
         return master;
     }

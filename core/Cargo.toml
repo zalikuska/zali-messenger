@@ -21,6 +21,9 @@ wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 jni = { version = "0.21", optional = true }
+# Обработка голоса нативного захвата (src/audio_processing.rs), только macOS/Windows.
+sonora = { version = "0.3", optional = true }
+nnnoiseless = { version = "0.5", optional = true, default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
@@ -28,7 +31,23 @@ js-sys = "0.3"
 
 [dev-dependencies]
 tempfile = "3.27"
+# Только для examples/apm_live.rs (живой акустический тест эхоподавления).
+cpal = "0.18"
+
+[[example]]
+name = "apm_live"
+required-features = ["apm"]
 
 [features]
 wasm = ["wasm-bindgen", "serde-wasm-bindgen", "console_error_panic_hook"]
 android = ["jni"]
+# Эхо/шум/громкость для нативного захвата микрофона (macOS, Windows). Не для wasm/Android.
+apm = ["sonora", "nnnoiseless"]
+
+# Тесты качества APM гоняют десятки секунд звука через AEC3 — без оптимизаций
+# зависимостей они идут минутами. На сборки потребителей (Windows) это не влияет:
+# профили берутся только из корневого манифеста.
+[profile.dev.package.sonora]
+opt-level = 3
+[profile.dev.package.nnnoiseless]
+opt-level = 3

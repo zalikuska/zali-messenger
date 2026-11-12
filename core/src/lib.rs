@@ -1,5 +1,7 @@
 #[cfg(feature = "android")]
 pub mod android_jni;
+#[cfg(feature = "apm")]
+pub mod audio_processing;
 pub mod bus;
 pub mod crypto;
 pub mod loader;

@@ -60,6 +60,9 @@
        Теперь это один набор токенов: правка здесь меняет все три. */
     --menu-bg: rgba(17,19,24,.88);
     --menu-border: rgba(255,255,255,.10);
+    /* Разделитель внутри меню — отдельно от рамки: «Фокус» рамку убирает,
+       а разделители пунктов оставляет. */
+    --menu-sep: var(--menu-border);
     --menu-shadow: 0 24px 64px -16px rgba(0,0,0,.72), 0 2px 10px rgba(0,0,0,.34);
     --menu-blur: blur(22px) saturate(150%);
     --menu-radius: 14px;
@@ -5436,6 +5439,33 @@ body[data-nav-mode="servers"] .contacts {
     line-height: 1.55;
 }
 
+/* Управление из терминала (web/src/interface/control.js). */
+.control-settings-pair {
+    display: grid;
+    gap: 8px;
+}
+
+.control-settings-code {
+    display: block;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(var(--accent-rgb), .18);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    font-family: "SF Mono", "Menlo", "Monaco", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    word-break: break-all;
+    user-select: all;
+    -webkit-user-select: all;
+}
+
+.control-settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .crypto-key-value {
     display: inline-block;
     max-width: 100%;
@@ -5787,6 +5817,16 @@ body[data-nav-mode="servers"] .contacts {
 .msg-sender:hover {
     text-decoration: underline;
     text-underline-offset: 2px;
+}
+
+/* Имя без профиля (личные профили выключены, см. PROFILES_ENABLED в
+   profiles.js) — подпись, а не ссылка: без руки-курсора и подчёркивания. */
+span.msg-sender {
+    cursor: default;
+}
+
+span.msg-sender:hover {
+    text-decoration: none;
 }
 
 .msg-time-anchor {
@@ -6241,7 +6281,7 @@ body[data-nav-mode="servers"] .contacts {
     flex-direction: column;
     gap: 1px;
     padding-top: 3px;
-    border-top: 1px solid var(--menu-border);
+    border-top: 1px solid var(--menu-sep);
 }
 
 .reaction-menu-action {
@@ -7251,6 +7291,12 @@ body[data-nav-mode="servers"] .contacts {
     }
 }
 
+/* Лента канала, история которого ещё в пути (markServerHistoryPending в
+   server_messages.js): пусто и тихо — ни «Нет сообщений», ни скелетона. */
+.msgs-pending {
+    min-height: 100%;
+}
+
 .empty-state,
 .contacts-loading {
     display: grid;
@@ -7259,7 +7305,12 @@ body[data-nav-mode="servers"] .contacts {
     color: var(--text3);
     text-align: center;
     gap: 4px;
-    animation: fade-up .28s cubic-bezier(.2,.8,.2,1) backwards;
+    /* Без анимации появления. Пустое состояние ленты («Нет сообщений в
+       канале», «Выберите канал») и заглушка списка показываются при каждой
+       смене канала/сервера — fade-up (.28s, сдвиг на 6px) проигрывался на
+       каждом переходе в пустой или ещё не загруженный канал, и интерфейс
+       «перемигивал»: лента гасла, потом всплывала. Смена содержимого при
+       навигации — мгновенная; анимируется только то, что появилось само. */
 }
 
 .empty-ttl {
@@ -8568,175 +8619,417 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
     --zc-series-treasury: repeating-linear-gradient(45deg, rgba(var(--accent-rgb), .42) 0 2px, rgba(var(--accent-rgb), .1) 2px 5px);
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   ZALICOIN: окно кошелька — язык «Фокус» (docs/UI_GUIDELINES.md).
+   Кошелёк — крупная плитка-значение со знаком монеты и одним главным
+   действием; «как устроено» — три плитки со знаками вместо абзаца; списки
+   карточек и выплат — строки-плитки прямо на фоне; распределение — группа.
+   Знаки (signs.js) стоят на нейтральной плитке; акцентный глиф — только у
+   «моего» (монета кошелька, моя строка легенды). Свои переменные — через
+   var(--f-*, запасное): classic и flat видят прежние значения.
+   ════════════════════════════════════════════════════════════════════════ */
 .zc-view {
+    --zc-surface: var(--f-surface, rgba(255,255,255,.04));
+    --zc-fill: var(--f-fill, rgba(255,255,255,.065));
+    --zc-fill-hover: var(--f-fill-hover, rgba(255,255,255,.095));
+    --zc-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    width: 100%;
     max-width: 880px;
     margin: 0 auto;
-    width: 100%;
 }
 
-/* Колонка ограниченной высоты: без flex:none карточки сжимались под соседей
-   и обрезали содержимое (кнопку «Отправить», строки карточек). Лишнее — в скролл. */
+.hub-view.zc-view {
+    gap: 12px;
+}
+
+/* Колонка ограниченной высоты: без flex:none блоки сжимались под соседей и
+   обрезали содержимое (кнопку «Отправить», строки карточек). Лишнее — в скролл. */
 .zc-view > * {
     flex: none;
 }
 
-.zc-orb {
-    font-weight: 800;
-    letter-spacing: -.03em;
+/* Знак на плитке — общий для фактов, строк и пустых состояний. */
+.zc-tile-sign {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: var(--zc-fill);
+    color: var(--text2);
 }
 
-.zc-orb svg {
-    width: 58%;
-    height: 58%;
+.zc-tile-sign svg {
+    width: 22px;
+    height: 22px;
 }
 
-/* Кошелёк. Баланс — главное на экране, «Отправить» — единственное
-   выделенное действие; остальное (эмиссия, правила) — тихой строкой ниже. */
+/* ── Кошелёк ── */
 .zc-wallet {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    column-gap: 20px;
-    row-gap: 16px;
-    padding: 24px;
-    border-radius: 24px;
-    background:
-        linear-gradient(135deg, rgba(var(--accent-rgb), .13), transparent 42%),
-        linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
-}
-
-.zc-wallet > * {
-    position: relative;
-    z-index: 1;
+    gap: 18px;
+    min-height: 132px;
+    padding: 22px;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--zc-fill);
 }
 
 .zc-wallet-coin {
     display: grid;
     place-items: center;
-    width: 72px;
-    aspect-ratio: 1;
-    border: 1px solid rgba(var(--accent-rgb), .34);
-    border-radius: 38%;
-    background:
-        radial-gradient(circle at 35% 28%, rgba(255,255,255,.52), transparent 18%),
-        linear-gradient(145deg, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), .46));
-    color: #050505;
-    box-shadow: 0 12px 28px rgba(var(--accent-rgb), .16);
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    background: var(--zc-fill-strong);
+    color: rgb(var(--accent-rgb));
+}
+
+.zc-wallet-coin svg {
+    width: 62%;
+    height: 62%;
 }
 
 .zc-wallet-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    gap: 6px;
     min-width: 0;
 }
 
-.zc-balance-label {
-    color: var(--text2);
-    font-size: 14px;
+.zc-balance-label,
+.zc-balance-share {
+    color: var(--text);
+    opacity: .6;
+    font-size: 13px;
     line-height: 1.4;
+}
+
+.zc-balance-label {
+    font-weight: 600;
 }
 
 .zc-balance-main {
     display: flex;
     align-items: baseline;
-    flex-wrap: wrap;
     gap: 8px;
+    min-width: 0;
 }
 
 .zc-balance-value {
+    overflow: hidden;
     color: var(--text);
-    font-size: clamp(36px, 7vw, 56px);
+    font-size: 40px;
     font-weight: 800;
-    line-height: 1.05;
-    letter-spacing: -.03em;
+    line-height: 1;
+    letter-spacing: -.02em;
     font-variant-numeric: tabular-nums;
-    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .zc-balance-unit {
-    color: var(--lime);
+    color: rgb(var(--accent-rgb));
+    font-size: 16px;
     font-weight: 800;
-    font-size: 20px;
 }
 
 .zc-balance-meta {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 12px;
+    gap: 6px 10px;
 }
 
-.zc-balance-share {
+.zc-balance-held {
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--zc-fill-strong);
     color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-wallet .zc-send-btn {
+    min-height: 44px;
+    padding: 0 24px;
+    border: 0;
+    border-radius: 12px;
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent, #050505);
     font-size: 14px;
+    font-weight: 700;
+    box-shadow: none;
+}
+
+/* ── Как устроено ── */
+.zc-facts {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.zc-fact {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    min-height: 64px;
+    padding: 12px 14px 12px 12px;
+    border-radius: 14px;
+    background: var(--zc-surface);
+}
+
+/* Факты — витрина знаков: плитка крупнее строки списка (44 r12) и знак светлее,
+   цвет --text, а не --text2. Акцент сюда не идёт — это не «моё» и не «новое». */
+.zc-fact .zc-tile-sign {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    color: var(--text);
+}
+
+.zc-fact .zc-tile-sign svg {
+    width: 26px;
+    height: 26px;
+}
+
+.zc-fact-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.zc-fact-copy strong {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-fact-copy > span {
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+/* ── Группы ── */
+.zc-group {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    padding: 16px 18px;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--zc-surface);
+}
+
+.zc-group[hidden] {
+    display: none;
+}
+
+/* Списки (карточки, выплаты) — заголовок прямо на фоне, строки — плитки. */
+.zc-group--list {
+    gap: 8px;
+    padding: 0;
+    background: none;
+}
+
+.zc-group--list .zc-group-head {
+    padding: 4px 2px 2px;
+}
+
+.zc-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+}
+
+.zc-group-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.zc-group-meta {
+    margin-left: auto;
+    color: var(--text);
+    opacity: .6;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-count {
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--zc-fill);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-count:empty {
+    display: none;
+}
+
+.zc-list {
+    display: grid;
+    gap: 8px;
+}
+
+/* Пустой раздел не стоит над распределением: он ничего не требует. */
+.zc-payouts-card.is-empty {
+    order: 1;
+}
+
+.zc-payouts-card .zc-list {
+    max-height: 372px;
+    overflow-y: auto;
+}
+
+.zc-payouts-total {
+    margin-left: auto;
+    color: rgb(var(--accent-rgb));
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Строки-плитки ── */
+.zc-gift-row,
+.zc-payout-row,
+.zc-empty {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    min-height: 58px;
+    padding: 10px 14px 10px 11px;
+    border-radius: 14px;
+    background: var(--zc-surface);
+}
+
+.zc-gift-row,
+.zc-payout-row {
+    transition: background .15s var(--ease-out);
+}
+
+.zc-gift-row:hover,
+.zc-payout-row:hover {
+    background: var(--zc-fill);
+}
+
+.zc-empty {
+    grid-template-columns: 36px minmax(0, 1fr);
+    color: var(--text2);
+    font-size: 13px;
     line-height: 1.4;
 }
 
-.zc-send-btn {
-    min-height: 48px;
-    padding: 0 32px;
-    font-size: 15px;
+/* Внутри группы (распределение) пустая строка — на ступень выше подложки. */
+.zc-group:not(.zc-group--list) .zc-empty {
+    background: var(--zc-fill);
 }
 
-.zc-wallet-hint {
-    grid-column: 1 / -1;
-    margin: 0;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
+.zc-gift-row-main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.zc-gift-row-amount,
+.zc-payout-server {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zc-gift-row-amount {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.zc-gift-row-meta {
     color: var(--text2);
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.zc-payout-note {
+    color: var(--text);
+    opacity: .72;
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.zc-card-btn.zc-gift-row-btn {
+    width: auto;
+    height: 40px;
+    margin-top: 0;
+    padding: 0 14px;
+    border-radius: 12px;
     font-size: 13px;
-    line-height: 1.5;
 }
 
-@media (max-width: 560px) {
-    .zc-wallet {
-        grid-template-columns: auto minmax(0, 1fr);
-        padding: 20px;
-    }
-
-    .zc-wallet-coin {
-        width: 56px;
-    }
-
-    .zc-send-btn {
-        grid-column: 1 / -1;
-        width: 100%;
-    }
+/* Сервер — сущность: своя форма (30 %, правило аватарок ниже), размер плитки. */
+.server-avatar.zc-payout-avatar {
+    width: 36px;
+    height: 36px;
+    flex: none;
+    font-size: 14px;
 }
 
-.zc-distribution-card {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
+.zc-payout-amount {
+    color: rgb(var(--accent-rgb));
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
-.zc-distribution-card > * {
-    position: relative;
-    z-index: 1;
+.zc-payout-amount em,
+.zc-legend-value em {
+    margin-left: 3px;
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 600;
 }
 
-.zc-distribution-card .settings-card-head {
-    margin-bottom: 0;
+.zc-payout-amount em {
+    opacity: .75;
 }
 
+/* ── Распределение ── */
 .zc-bar {
     display: flex;
     align-items: stretch;
     gap: 2px;
-    height: 24px;
+    height: 20px;
 }
 
-/* Доли делят ширину пропорционально (flex-grow задан в процентах из JS), а
-   не заданы жёсткой шириной: иначе мелкие доли с min-width и зазорами
-   выталкивали последний сегмент за край полосы, и тот обрезался. У каждого
-   сегмента свои скруглённые концы — края одинаковые с обеих сторон. */
+/* Доли делят ширину пропорционально (flex-grow в процентах из JS), а не
+   жёсткой шириной: иначе мелкие доли с min-width и зазорами выталкивали
+   последний сегмент за край полосы. У каждого сегмента свои скруглённые концы. */
 .zc-segment {
     flex: 1 1 0;
     min-width: 6px;
-    border: none;
-    border-radius: 8px;
     padding: 0;
+    border: 0;
+    border-radius: 6px;
     cursor: pointer;
     transition: filter .15s var(--ease-out), transform .15s var(--ease-out);
 }
@@ -8744,12 +9037,12 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
 .zc-segment:hover,
 .zc-segment:focus-visible {
     filter: brightness(1.18);
-    transform: scaleY(1.08);
+    transform: scaleY(1.12);
 }
 
 .zc-segment:focus-visible {
-    outline: 2px solid var(--text);
-    outline-offset: 2px;
+    outline: 0;
+    box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb), .22));
 }
 
 .zc-segment--me {
@@ -8758,75 +9051,164 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
 
 .zc-legend {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 4px 24px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 4px 16px;
 }
 
 .zc-legend-item {
-    display: flex;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    min-height: 40px;
-    padding: 0 12px;
-    border-radius: 12px;
-    font-size: 14px;
+    min-height: 52px;
+    padding: 8px 12px 8px 8px;
+    border-radius: 14px;
 }
 
 .zc-legend-item.is-me {
-    background: rgba(var(--accent-rgb), .08);
+    background: var(--zc-fill);
 }
 
-.zc-legend-swatch {
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 4px;
+.zc-legend-item.is-me .zc-tile-sign {
+    background: var(--zc-fill-strong);
+    color: rgb(var(--accent-rgb));
 }
 
 .zc-legend-label {
     display: flex;
     align-items: center;
     gap: 8px;
-    flex: 1;
     min-width: 0;
     color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.zc-legend-name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+.zc-legend-swatch {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 3px;
+}
+
 .zc-legend-me {
     flex: none;
-    padding: 2px 8px;
+    padding: 1px 8px;
     border-radius: 999px;
-    background: rgba(var(--accent-rgb), .16);
-    color: rgb(var(--accent-rgb));
-    font-size: 12px;
+    background: rgb(var(--accent-rgb));
+    color: var(--f-on-accent, #050505);
+    font-size: 11px;
     font-weight: 700;
-    line-height: 1.4;
+    line-height: 1.5;
 }
 
 .zc-legend-value {
     display: flex;
     align-items: baseline;
-    justify-content: flex-end;
-    gap: 10px;
-    flex: none;
     color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.zc-legend-value em {
+    color: var(--text2);
 }
 
 .zc-legend-pct {
-    min-width: 48px;
-    color: var(--text2);
-    font-size: 13px;
+    min-width: 52px;
+    color: var(--text);
+    opacity: .5;
+    font-size: 12px;
+    font-weight: 600;
     text-align: right;
 }
 
-.zc-legend-empty {
-    color: var(--text2);
-    font-size: 14px;
+@media (max-width: 760px) {
+    .zc-wallet {
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 14px 16px;
+        padding: 18px 16px;
+    }
+
+    .zc-wallet-coin {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+    }
+
+    .zc-balance-value {
+        font-size: 32px;
+    }
+
+    .zc-wallet .zc-send-btn {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
+
+    .zc-facts {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+    }
+
+    .zc-fact {
+        min-height: 58px;
+    }
+
+    .zc-group {
+        padding: 14px 16px;
+    }
+
+    .zc-group--list {
+        padding: 0;
+    }
+
+    .zc-legend {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 .coin-transfer-modal {
     /* Внутри .main, как и остальные модальные слои — см. .profile-overlay. */
@@ -9178,256 +9560,26 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
     box-shadow: none;
 }
 
-.zc-balance-held {
-    padding: 4px 12px;
-    border-radius: 999px;
-    border: 1px dashed rgba(var(--accent-rgb), .35);
-    color: var(--text2);
-    font-size: 13px;
-    line-height: 1.4;
-    font-variant-numeric: tabular-nums;
-}
 
-.zc-gifts-card {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
 
-.zc-gifts-card > * {
-    position: relative;
-    z-index: 1;
-}
 
-.zc-gifts-card .settings-card-head {
-    margin-bottom: 0;
-}
 
-.zc-gifts-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
 
-.zc-gift-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 14px;
-    border-radius: 14px;
-    border: 1px solid var(--border);
-    background: rgba(255,255,255,.025);
-}
 
-.zc-gift-row-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
 
-.zc-gift-row-amount {
-    color: var(--text);
-    font-weight: 800;
-    font-size: 16px;
-    font-variant-numeric: tabular-nums;
-}
 
-.zc-gift-row-meta {
-    color: var(--text2);
-    font-size: 13px;
-    line-height: 1.4;
-    overflow-wrap: anywhere;
-}
 
-.zc-card-btn.zc-gift-row-btn {
-    width: auto;
-    flex: none;
-    height: 44px;
-    margin-top: 0;
-    padding: 0 16px;
-    font-size: 14px;
-}
 
-/* ---- «От серверов»: выплаты из казны ---- */
-.zc-payouts-total {
-    align-self: center;
-    color: rgb(var(--accent-rgb));
-    font-weight: 800;
-    font-size: 16px;
-    font-variant-numeric: tabular-nums;
-}
 
-/* .zc-view — flex-колонка ограниченной высоты: без flex:none карточка
-   сжималась под соседей, и её собственный скролл срезал даже одну строку. */
-.zc-payouts-card {
-    flex: none;
-}
 
-.zc-payouts-card .zc-gifts-list {
-    max-height: 360px;
-    overflow-y: auto;
-}
 
-/* Пустой раздел не должен стоять над распределением: он ничего не требует.
-   Он уходит вниз и сжимается до заголовка и одной строки. */
-.zc-payouts-card.is-empty {
-    order: 1;
-    padding-block: 16px;
-    gap: 8px;
-}
 
-.zc-payouts-empty {
-    color: var(--text2);
-    font-size: 14px;
-    line-height: 1.5;
-}
 
-.zc-payout-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 14px;
-    border-radius: 14px;
-    border: 1px solid var(--border);
-    background: rgba(255,255,255,.025);
-}
 
-.server-avatar.zc-payout-avatar {
-    width: 40px;
-    height: 40px;
-    flex: none;
-    border-radius: 12px;
-    font-size: 15px;
-}
 
-.zc-payout-server {
-    color: var(--text);
-    font-weight: 700;
-    font-size: 15px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 
-.zc-payout-note {
-    color: var(--text2);
-    font-size: 13px;
-    line-height: 1.4;
-    font-style: italic;
-    overflow-wrap: anywhere;
-}
 
-.zc-payout-amount {
-    flex: none;
-    color: rgb(var(--accent-rgb));
-    font-weight: 800;
-    font-size: 16px;
-    font-variant-numeric: tabular-nums;
-}
 
-/* ---- Казна сервера (ПКМ по серверу → «Казна») ----
-   Модалка переносится в <body> (treasury.js), поэтому fixed, а не absolute
-   внутри .main, как у модалки перевода. */
-.coin-transfer-modal.treasury-modal {
-    position: fixed;
-    z-index: 1300;
-}
-
-.treasury-box {
-    width: min(100%, 440px);
-    max-height: calc(100vh - 24px);
-    max-height: calc(100dvh - 24px);
-    overflow-y: auto;
-}
-
-.treasury-head-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.treasury-head-copy .settings-kicker {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.treasury-balance {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 14px 16px;
-    border-radius: 16px;
-    border: 1px solid var(--border);
-    background: rgba(255,255,255,.025);
-}
-
-.treasury-balance-value {
-    color: var(--text);
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -.02em;
-    font-variant-numeric: tabular-nums;
-}
-
-.treasury-balance-unit {
-    color: rgb(var(--accent-rgb));
-    font-size: 14px;
-    font-weight: 800;
-}
-
-.treasury-balance-label {
-    margin-left: auto;
-    color: var(--text2);
-    font-size: 12px;
-}
-
-.treasury-tabs,
-.treasury-seg {
-    display: flex;
-    gap: 4px;
-    padding: 4px;
-    border-radius: 13px;
-    border: 1px solid var(--border);
-    background: rgba(255,255,255,.03);
-}
-
-.treasury-tab,
-.treasury-seg button {
-    flex: 1;
-    min-width: 0;
-    height: 32px;
-    border-radius: 9px;
-    background: transparent;
-    color: var(--text2);
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background .15s var(--ease-out), color .15s var(--ease-out);
-}
-
-.treasury-tab:hover,
-.treasury-seg button:hover {
-    color: var(--text);
-}
-
-.treasury-tab.is-active,
-.treasury-seg button.is-active {
-    background: rgba(255,255,255,.08);
-    color: var(--text);
-}
-
-.treasury-pane {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.treasury-pane[hidden],
-.treasury-tab[hidden],
 .coin-transfer-field[hidden] {
     display: none;
 }
@@ -9457,77 +9609,6 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
     color: rgb(var(--accent-rgb));
 }
 
-.treasury-hint {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--text2);
-}
-
-.treasury-history {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 320px;
-    overflow-y: auto;
-}
-
-.treasury-history-empty {
-    padding: 8px 2px;
-    color: var(--text2);
-    font-size: 13px;
-}
-
-.treasury-op {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 9px 12px;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-    background: rgba(255,255,255,.02);
-}
-
-.treasury-op-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.treasury-op-title {
-    color: var(--text);
-    font-size: 13px;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.treasury-op-meta {
-    color: var(--text2);
-    font-size: 12px;
-}
-
-.treasury-op-note {
-    color: var(--text2);
-    font-size: 12px;
-    font-style: italic;
-    overflow-wrap: anywhere;
-}
-
-.treasury-op-amount {
-    flex: none;
-    color: var(--text2);
-    font-size: 14px;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-}
-
-.treasury-op.is-in .treasury-op-amount {
-    color: rgb(var(--accent-rgb));
-}
 
 /* ---- Карточка ZaliCoin в ленте ------------------------------------------
    Спокойная нейтральная рамка; акцент — только монета, «ZC», заполненные
@@ -11279,7 +11360,7 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
 /* Во всю ширину меню (отрицательные поля гасят падинг контейнера) — 
    вставленный по центру разделитель короче пунктов читается как ещё
    один элемент списка, а не как граница между группами. */
-.peer-context-menu-sep { height: 1px; background: var(--menu-border); margin: 5px -6px; }
+.peer-context-menu-sep { height: 1px; background: var(--menu-sep); margin: 5px -6px; }
 
 @media (max-width: 720px) {
     .profile-overlay { padding: 0; }
@@ -11670,19 +11751,14 @@ body[data-experimental-design="on"] .attach-btn .ui-icon-paperclip {
     to { transform: none; opacity: 1; }
 }
 
-/* «Фокус»: монета кошелька без свечения — акцент только у «Отправить». */
-body[data-design-mode="focus"] .zc-wallet-coin {
-    border: 0;
-    background: rgba(255,255,255,.06);
-    box-shadow: none;
-    color: var(--lime);
-}
 
 
 /* ════════════════════════════════════════════════════════════════════════
    DESIGN MODE: FOCUS («Фокус»)
    Третий режим в Настройки → «Стиль оформления» (designModeCatalog() в
    web/src/interface/prefs.js). Не перекраска classic, а другая иерархия.
+   Полные гайдлайны (эталонные экраны, токены, рецепты компонентов,
+   движение, телефон, чек-лист) — docs/UI_GUIDELINES.md; ниже — сжатая суть.
 
    Принципы — по ним и проверять любую правку этого блока:
    1. Акцент = смысл, и он в полную силу. Лайм — сплошной заливкой с тёмным
@@ -11756,13 +11832,23 @@ body[data-design-mode="focus"] {
     --f-warn: #ffcc66;
     --footer-line-color: var(--f-hairline);
     --menu-hover: rgba(255,255,255,.07);
+    /* Плавающие слои (меню, автодополнение, пикер реакций, подсказки) —
+       сплошные, на тон светлее холста, без рамки и размытия; отделяет их
+       от контента только тень. Фон выводится из --bg, поэтому схема
+       меняет и его. Тот же приём, что у плоского режима, но без рамки. */
+    --menu-bg: color-mix(in srgb, var(--bg) 93%, #fff);
+    --menu-border: transparent;
+    --menu-sep: var(--f-hairline);
+    --menu-blur: none;
+    --menu-shadow: 0 18px 48px -12px rgba(0,0,0,.72), 0 2px 8px rgba(0,0,0,.36);
 }
 
 /* Метатекст (время, подписи разделов, «Сегодня») — var(--text) с
-   прозрачностью, а не --text3: у схем --text3 = 25–35 % белого, это
-   контраст ~2:1 — подпись видна, но не читается. Здесь ~3.5:1, и она
-   всё равно тише превью (--text2). Только на элементах без цветных
-   детей: opacity гасит и их. */
+   прозрачностью, а не --text3: в части схем (cyber, matrix) --text3
+   окрашен в цвет схемы и читается как акцент, а opacity от --text
+   нейтрален везде (~4:1) и всё равно тише превью (--text2). Только на
+   элементах без цветных детей: opacity гасит и их.
+   См. docs/UI_GUIDELINES.md §3. */
 body[data-design-mode="focus"] .contact-time,
 body[data-design-mode="focus"] .date-sep span,
 body[data-design-mode="focus"] .recent-accounts-title {
@@ -15278,8 +15364,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 /* Кикеры карточек Хаба и ZaliCoin — серые: лайм остаётся главному действию и
    активному состоянию (тридцать лаймовых надписей подряд ничего не выделяют). */
 .hub-card-kicker,
-.hub-view .settings-kicker,
-.zc-view .settings-kicker {
+.hub-view .settings-kicker {
     color: var(--text2);
 }
 
@@ -17545,16 +17630,7 @@ body[data-design-mode="focus"] .coin-gift-summary.is-error {
     background: rgba(255,77,109,.1);
 }
 
-body[data-design-mode="focus"] .treasury-tabs,
-body[data-design-mode="focus"] .treasury-seg {
-    border-color: transparent;
-    background: var(--f-fill);
-}
 
-body[data-design-mode="focus"] .treasury-tab.is-active,
-body[data-design-mode="focus"] .treasury-seg button.is-active {
-    background: var(--f-fill-strong);
-}
 body[data-design-mode="focus"] .avatar-crop-close {
     width: 32px;
     height: 32px;
@@ -17797,10 +17873,13 @@ body[data-design-mode="focus"] .zc-card-status {
    выбранной справа. Одна шкала: поле 44px, плитка 12–16px, текст 12–15px.
    ============================================================ */
 .server-modal {
-    --sm-surface: rgba(255,255,255,.04);
-    --sm-fill: rgba(255,255,255,.07);
-    --sm-fill-hover: rgba(255,255,255,.11);
-    --sm-hair: rgba(255,255,255,.07);
+    /* Через токены «Фокуса», как у казны: окно следует за режимом. Запасные
+       значения — прежние литералы, их видят classic и flat. */
+    --sm-surface: var(--f-surface, rgba(255,255,255,.04));
+    --sm-fill: var(--f-fill, rgba(255,255,255,.07));
+    --sm-fill-hover: var(--f-fill-hover, rgba(255,255,255,.11));
+    --sm-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    --sm-hair: var(--f-hairline, rgba(255,255,255,.07));
     --sm-ctl: 44px;
     gap: 0;
     padding: 0;
@@ -18325,9 +18404,11 @@ body[data-design-mode="focus"] .zc-card-status {
     background: var(--sm-fill);
 }
 
+/* Поднятая строка — непрозрачная (под ней едут соседние), тоном
+   fill-strong поверх холста схемы, а не прибитым серым; отделяет тень. */
 .server-modal .server-channel-row.dragging {
-    background: #23262c;
-    box-shadow: 0 16px 34px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.14);
+    background: linear-gradient(var(--sm-fill-strong), var(--sm-fill-strong)), var(--bg);
+    box-shadow: 0 16px 34px rgba(0,0,0,.5);
 }
 
 .server-modal .server-channel-row-name {
@@ -19395,6 +19476,132 @@ body .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles {
         linear-gradient(var(--vp-surface), var(--vp-surface)),
         var(--bg);
     color: var(--text);
+}
+
+/* Окно выбора экрана для захвата в оболочке (openNativeScreenPicker): шире,
+   плитки источников с превью. Выбор — кольцом через зазор, форма не меняется. */
+.voice-picker--wide {
+    width: min(760px, 100%);
+}
+
+.voice-picker--wide > .voice-picker-body > .voice-picker-seg[data-seg="tab"] {
+    align-self: flex-start;
+}
+
+.voice-src-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+    gap: 12px;
+    max-height: min(52vh, 460px);
+    overflow-y: auto;
+    /* место под кольцо выбора у крайних плиток */
+    padding: 5px;
+    margin: -5px;
+}
+
+.voice-src-tile {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 8px 10px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--vp-surface);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .15s var(--ease-out), box-shadow .15s var(--ease-out);
+}
+
+.voice-src-tile:hover {
+    background: var(--vp-fill);
+}
+
+.voice-src-tile.is-selected {
+    background: var(--vp-fill-strong);
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--accent-rgb));
+}
+
+.voice-src-tile:focus-visible {
+    outline: 0;
+    box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb), .22));
+}
+
+.voice-src-thumb {
+    display: block;
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    border-radius: 10px;
+    background: var(--vp-fill);
+}
+
+.voice-src-thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.voice-src-title,
+.voice-src-meta {
+    overflow: hidden;
+    padding: 0 4px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.voice-src-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.voice-src-meta {
+    margin-top: -5px;
+    color: var(--text2);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.voice-src-meta:empty {
+    display: none;
+}
+
+.voice-src-empty {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    min-height: 58px;
+    padding: 10px 14px 10px 11px;
+    border-radius: 14px;
+    background: var(--vp-surface);
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.voice-src-empty-sign {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: var(--vp-fill);
+    color: var(--text2);
+}
+
+.voice-src-empty-sign svg {
+    width: 22px;
+    height: 22px;
+}
+
+@media (max-width: 760px) {
+    .voice-src-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
 }
 
 .voice-picker-head {
@@ -20928,14 +21135,7 @@ body[data-design-mode="focus"] .hub-component-version {
     color: var(--text);
 }
 
-body[data-design-mode="focus"] .zc-legend-item.is-me {
-    background: var(--f-fill, rgba(255,255,255,.065));
-}
 
-body[data-design-mode="focus"] .zc-legend-me {
-    background: rgb(var(--accent-rgb));
-    color: var(--f-on-accent, #050505);
-}
 
 /* Хаб на телефоне: во вложенных вкладках большая шапка с иллюстрацией съедала
    полэкрана до самого содержимого (магазин, подпись) — там есть «Назад в хаб». */
@@ -21430,55 +21630,6 @@ body[data-design-mode="focus"] .voice-btn .call-ctrl-icon,
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-/* Превью канала: эфир — отдельные карточки над плитками людей. */
-.voice-live-cards {
-    flex: 0 0 auto;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 10px;
-    margin-bottom: 10px;
-}
-.voice-live-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 16px;
-    border: 1px solid rgba(229,72,77,.45);
-    border-radius: 14px;
-    background: rgba(229,72,77,.12);
-}
-.voice-live-card-icon {
-    flex: none;
-    width: 44px;
-    height: 44px;
-    display: grid;
-    place-items: center;
-    border-radius: 12px;
-    background: rgba(229,72,77,.22);
-    color: var(--text);
-}
-.voice-live-card-icon .call-ctrl-icon {
-    width: 24px;
-    height: 24px;
-    stroke-width: 2;
-}
-.voice-live-card-text {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    color: var(--text2);
-    font-size: 13px;
-}
-.voice-live-card-text strong {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text);
-    font-size: 15px;
 }
 
 /* Камера у человека включена — вместо аватара значок веб-камеры (в превью видео нет). */
@@ -22298,4 +22449,1422 @@ body:not([data-design-mode="focus"]) #viewSettings .settings-shell {
 
 @media (prefers-reduced-motion: reduce) {
     .sound-icon-bars i { animation: none; transform: scaleY(.7); }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   АВАТАРКИ СЕРВЕРОВ — одна форма везде (0.2b56)
+   Сервер — скруглённый квадрат (30 %), человек — круг: по форме сразу видно,
+   кто это. Раньше в рейке невыбранные были кругами, а выбранный и наведённый
+   превращались в квадрат с анимацией радиуса; в шапке канала, в превью
+   настроек и в выплатах — каждый своя форма. Цвет и букву пишет JS инлайном
+   (serverAvatarColors в avatars.js): заливка — цвет сервера, буква —
+   контрастная к ней, без тени; без цвета — нейтральная заливка и акцентная
+   буква. Выбор и наведение — кольцо через зазор, форма не меняется.
+   ════════════════════════════════════════════════════════════════════════ */
+.server-avatar,
+.server-avatar.zc-payout-avatar,
+.chat-hdr-ava.is-server,
+.sm-avatar,
+.server-avatar-preview,
+.server-modal .server-avatar-preview {
+    border-radius: 30%;
+}
+
+.server-avatar {
+    font-weight: 700;
+    text-shadow: none;
+    box-shadow: none;
+}
+
+.server-rail-item .server-rail-avatar,
+.server-rail-item:hover .server-rail-avatar,
+.server-rail-item:focus-visible .server-rail-avatar,
+.server-rail-item.active .server-rail-avatar {
+    border-radius: 30%;
+}
+
+.server-rail-item .server-rail-avatar {
+    transition: box-shadow .15s var(--ease-out), transform .16s var(--ease-out);
+}
+
+.server-rail-item:not(.active):not(.server-rail-action):hover .server-rail-avatar,
+.server-rail-item:not(.active):not(.server-rail-action):focus-visible .server-rail-avatar {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(255,255,255,.18);
+}
+
+.server-rail-item.active .server-rail-avatar {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--lime);
+}
+
+/* Действия рейки («+», каталог, меню) — кнопки, а не серверы: круг. */
+.server-rail-action .server-rail-avatar,
+.server-rail-action:hover .server-rail-avatar,
+.server-rail-action:focus-visible .server-rail-avatar {
+    border-radius: 50%;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   КАЗНА СЕРВЕРА — полноценное окно (разметка #treasuryModal в index.html,
+   логика — web/src/interface/treasury.js). Язык эталонных экранов
+   (docs/UI_GUIDELINES.md): шапка с аватаркой сервера → крупный баланс-плитка
+   → три итога → группа «Операция» → история списком плиток по дням; справа —
+   «Кто пополнял» и правила. Плоские заливки, никаких рамок/теней; акцент —
+   «ZC», входящие суммы, глиф поступления и главное действие.
+   На компьютере слой — в .main (сайдбар виден), на телефоне — в <body>.
+   ════════════════════════════════════════════════════════════════════════ */
+.tr-overlay {
+    --tr-surface: var(--f-surface, rgba(255,255,255,.04));
+    --tr-fill: var(--f-fill, rgba(255,255,255,.065));
+    --tr-fill-hover: var(--f-fill-hover, rgba(255,255,255,.095));
+    --tr-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    --tr-hair: var(--f-hairline, rgba(255,255,255,.07));
+    --tr-ctl: 44px;
+    --sm-fill: var(--tr-fill);
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.tr-overlay[hidden] {
+    display: none;
+}
+
+.tr-overlay.is-floating {
+    position: fixed;
+    z-index: 1300;
+}
+
+.tr-window {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.tr-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: none;
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--tr-hair);
+}
+
+.tr-head-ava {
+    width: 46px;
+    height: 46px;
+    font-size: 19px;
+    font-weight: 700;
+}
+
+.tr-head-copy {
+    flex: 1;
+    min-width: 0;
+}
+
+.tr-head-copy h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.tr-head-copy p {
+    margin: 2px 0 0;
+    overflow: hidden;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tr-close {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: var(--tr-fill);
+    color: var(--text);
+    cursor: pointer;
+    transition: background .15s var(--ease-out);
+}
+
+.tr-close svg {
+    width: 18px;
+    height: 18px;
+}
+
+.tr-close:hover {
+    background: var(--tr-fill-hover);
+}
+
+.tr-overlay button:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .22);
+}
+
+.tr-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 20px 24px 32px;
+}
+
+.tr-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    align-items: start;
+    gap: 16px;
+    max-width: 1120px;
+    margin: 0 auto;
+}
+
+.tr-main,
+.tr-side {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+}
+
+.tr-side {
+    position: sticky;
+    top: 0;
+}
+
+/* Баланс — главная плитка окна, по образцу кнопок хаба: заливка, крупная
+   цифра слева, одноцветная иллюстрация справа. */
+.tr-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    min-height: 132px;
+    padding: 22px 18px 22px 26px;
+    overflow: hidden;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--tr-fill);
+}
+
+.tr-hero-copy {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.tr-hero-label,
+.tr-hero-meta {
+    color: var(--text);
+    opacity: .6;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.tr-hero-label {
+    font-weight: 600;
+}
+
+.tr-hero-value {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.tr-hero-value > span:first-child {
+    overflow: hidden;
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tr-hero-unit {
+    color: rgb(var(--accent-rgb));
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.tr-hero-art {
+    display: none;
+}
+
+body[data-design-mode="focus"] .tr-hero-art {
+    display: block;
+    width: 168px;
+    height: 104px;
+    margin-right: -10px;
+    background: #fff;
+    opacity: .3;
+    -webkit-mask: var(--decor-hub-coins) center / contain no-repeat;
+    mask: var(--decor-hub-coins) center / contain no-repeat;
+}
+
+body[data-decor-art="off"] .tr-hero-art {
+    display: none !important;
+}
+
+.tr-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tr-stat {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--tr-surface);
+}
+
+.tr-stat span {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.tr-stat strong {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tr-group {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    padding: 16px 18px;
+    border-radius: var(--f-radius-l, 16px);
+    background: var(--tr-surface);
+}
+
+.tr-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+}
+
+.tr-group-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.tr-group-head .tr-seg {
+    margin-left: auto;
+}
+
+/* История и «Кто пополнял» — без подложки группы: заголовок прямо на фоне,
+   строки — плитки, как список каналов в настройках сервера. */
+.tr-main > .tr-group:last-child,
+.tr-side > .tr-group:first-child {
+    padding: 0;
+    background: none;
+}
+
+.tr-main > .tr-group:last-child > .tr-group-head,
+.tr-side > .tr-group:first-child > .tr-group-head {
+    padding: 0 2px;
+}
+
+/* Сегменты: контейнер-заливка, выбранный — заливка сильнее. */
+.tr-seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 12px;
+    background: var(--tr-fill);
+}
+
+.tr-seg button {
+    min-width: 0;
+    height: 34px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.tr-seg button:hover {
+    color: var(--text);
+}
+
+.tr-seg button.is-active {
+    background: var(--tr-fill-strong);
+    color: var(--text);
+}
+
+.tr-seg button[hidden] {
+    display: none;
+}
+
+.tr-seg--wide {
+    display: flex;
+}
+
+.tr-seg--wide button {
+    flex: 1;
+}
+
+.tr-seg--sm button {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
+}
+
+.tr-pane {
+    display: grid;
+    gap: 12px;
+}
+
+.tr-pane[hidden],
+.tr-field[hidden] {
+    display: none;
+}
+
+.tr-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.tr-field {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.tr-field > span:first-child {
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.tr-field--grow {
+    flex: 1 1 auto;
+}
+
+.tr-field--amount {
+    flex: 0 0 200px;
+}
+
+.tr-overlay .settings-input {
+    width: 100%;
+    min-height: var(--tr-ctl);
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.tr-amount {
+    position: relative;
+    display: block;
+}
+
+.tr-amount input.settings-input {
+    padding-right: 46px;
+    font-size: 16px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+}
+
+.tr-amount input::-webkit-outer-spin-button,
+.tr-amount input::-webkit-inner-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+}
+
+.tr-amount em {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    transform: translateY(-50%);
+    color: var(--text2);
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 700;
+    pointer-events: none;
+}
+
+.tr-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.tr-chip {
+    height: 32px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--tr-fill);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background .15s var(--ease-out);
+}
+
+.tr-chip:hover:not(:disabled) {
+    background: var(--tr-fill-hover);
+}
+
+.tr-chip:disabled {
+    opacity: .4;
+    cursor: default;
+}
+
+.tr-summary {
+    margin: 0;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--tr-fill);
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.tr-summary.is-warn {
+    background: rgba(255,77,109,.1);
+    color: #ff8aa0;
+}
+
+.tr-summary[hidden] {
+    display: none;
+}
+
+.tr-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+.tr-status {
+    margin: 0 auto 0 0;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.tr-status[hidden] {
+    display: none;
+}
+
+.tr-status.is-ok {
+    color: rgb(var(--accent-rgb));
+    font-weight: 600;
+}
+
+.tr-submit.auth-btn {
+    min-width: 148px;
+    min-height: var(--tr-ctl);
+    padding: 0 22px;
+    border-radius: 12px;
+}
+
+.tr-history,
+.tr-people {
+    display: grid;
+    gap: 6px;
+}
+
+.tr-day {
+    padding: 8px 2px 2px;
+    color: var(--text);
+    opacity: .45;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.tr-day:first-child {
+    padding-top: 0;
+}
+
+.tr-op {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    min-height: 58px;
+    padding: 10px 16px 10px 11px;
+    border-radius: 14px;
+    background: var(--tr-surface);
+    transition: background .15s var(--ease-out);
+}
+
+.tr-op:hover {
+    background: var(--tr-fill);
+}
+
+/* Глиф направления — нейтральная плитка; у поступления глиф акцентный:
+   цвет есть, пятна нет. */
+.tr-op-ico {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: var(--tr-fill);
+    color: var(--text2);
+}
+
+.tr-op-ico svg {
+    width: 18px;
+    height: 18px;
+}
+
+.tr-op.is-in .tr-op-ico {
+    color: rgb(var(--accent-rgb));
+}
+
+.tr-op-main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.tr-op-title {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tr-op-meta {
+    color: var(--text2);
+    font-size: 12px;
+}
+
+.tr-op-note {
+    color: var(--text);
+    opacity: .72;
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.tr-op-amount,
+.tr-person-total {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.tr-op-amount em,
+.tr-person-total em {
+    color: var(--text2);
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 600;
+}
+
+.tr-op.is-in .tr-op-amount {
+    color: rgb(var(--accent-rgb));
+}
+
+.tr-empty {
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--tr-surface);
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.tr-person {
+    display: grid;
+    grid-template-columns: 16px 32px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    padding: 8px 14px 8px 12px;
+    border-radius: 14px;
+    background: var(--tr-surface);
+}
+
+.tr-person-rank {
+    color: var(--text);
+    opacity: .45;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.tr-person-ava.ava {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+}
+
+.tr-person-main {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+}
+
+.tr-person-name {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tr-person-name em {
+    margin-left: 4px;
+    color: rgb(var(--accent-rgb));
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 600;
+}
+
+.tr-person-meta {
+    color: var(--text2);
+    font-size: 12px;
+}
+
+.tr-person-total {
+    font-size: 13px;
+}
+
+.tr-you {
+    display: grid;
+    gap: 6px;
+}
+
+.tr-you-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--tr-fill);
+    font-size: 13px;
+}
+
+.tr-you-row span {
+    color: var(--text2);
+}
+
+.tr-you-row strong {
+    color: var(--text);
+    font-weight: 600;
+    text-align: right;
+}
+
+.tr-rules {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.tr-rules li {
+    position: relative;
+    padding-left: 14px;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.tr-rules li::before {
+    content: "";
+    position: absolute;
+    top: .62em;
+    left: 2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: .6;
+}
+
+@media (max-width: 1100px) {
+    .tr-layout {
+        grid-template-columns: minmax(0, 1fr);
+        max-width: 760px;
+    }
+
+    .tr-side {
+        position: static;
+    }
+}
+
+@media (max-width: 760px) {
+    html body .tr-overlay {
+        bottom: var(--kbd-inset, 0px);
+    }
+
+    .tr-head {
+        padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px;
+    }
+
+    .tr-head-ava {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+    }
+
+    .tr-head-copy h2 {
+        font-size: 17px;
+    }
+
+    .tr-body {
+        padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .tr-hero {
+        min-height: 112px;
+        padding: 18px 12px 18px 18px;
+    }
+
+    .tr-hero-value > span:first-child {
+        font-size: 32px;
+    }
+
+    body[data-design-mode="focus"] .tr-hero-art {
+        width: 104px;
+        height: 65px;
+    }
+
+    .tr-stats {
+        gap: 8px;
+    }
+
+    .tr-stat {
+        padding: 12px;
+    }
+
+    .tr-stat strong {
+        font-size: 15px;
+    }
+
+    .tr-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .tr-field--amount {
+        flex-basis: auto;
+    }
+
+    .tr-group-head .tr-seg {
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .tr-group-head .tr-seg button {
+        flex: 1;
+    }
+
+    .tr-foot {
+        flex-direction: column-reverse;
+        align-items: stretch;
+    }
+
+    .tr-status {
+        margin: 0;
+        text-align: center;
+    }
+
+    .tr-submit.auth-btn {
+        width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tr-overlay * {
+        transition: none !important;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ТЕЛЕФОН: ЭКРАНЫ ВЫБОРА — диалоги, серверы, каналы (2026-11-12)
+   Язык docs/UI_GUIDELINES.md, §6. Слой последний и, как «ТЕЛЕФОН, 2026-11»,
+   начинает селекторы с `html body[data-design-mode]` — перекрывает все режимы.
+   Экран выбора — это выбор, а не «где я»: строки без подсветки текущего чата
+   (её некому видеть — чат на соседнем экране), без «⋯»/× на каждой строке
+   (действия — долгим нажатием, mobile.js: bindMobileLongPress), без линий
+   между строками и без метки раздела (его называет док внизу). Непрочитанное
+   выделено весом имени, акцентным временем и пилюлей-счётчиком.
+   Серверы: сверху слот «шапка выбранного сервера ↔ лента выбора» (ниже, блок
+   «Телефон: слот…», переход — mobile_server_bar.js) → каналы строками с
+   иконкой на нейтральной плашке.
+   ════════════════════════════════════════════════════════════════════════ */
+.chat-filter,
+.m-server-card {
+    display: none;
+}
+
+@media (max-width: 760px) {
+    html body[data-design-mode] .sidebar {
+        --ml-fill: var(--f-fill, rgba(255,255,255,.065));
+        --ml-fill-hover: var(--f-fill-hover, rgba(255,255,255,.095));
+        --ml-fill-strong: var(--f-fill-strong, rgba(255,255,255,.11));
+    }
+
+    /* Шапка: только бренд; линия под ней и под поиском не нужна — поиск и
+       список и так разделены отступом. Высота шапки зафиксирована: «липкий»
+       поиск стоит на `top: safe-top + 46px` (слой MOBILE REDESIGN), и шапка
+       ниже этой отметки пускала поиск поверх следующего блока (фильтра).
+       Верхний отступ не трогаем — его двигает полоса «Соединение…». */
+    html body[data-design-mode] .sidebar-head {
+        min-height: calc(var(--m-safe-top, 0px) + 46px);
+        box-sizing: border-box;
+        border-bottom: 0;
+    }
+
+    html body.ws-offline[data-design-mode] .sidebar-head {
+        min-height: calc(var(--m-safe-top, 0px) + var(--m-net-h, 0px) + 46px);
+    }
+
+    html body[data-design-mode] .search-wrap {
+        gap: 8px;
+        padding: 8px 16px;
+        border-bottom: 0;
+    }
+
+    html body[data-design-mode] .search-box {
+        background: transparent;
+    }
+
+    html body[data-design-mode] .search-input {
+        height: 44px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--ml-fill);
+        font-size: 15px;
+    }
+
+    html body[data-design-mode] .contact-add-btn {
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--ml-fill);
+        box-shadow: none;
+        color: rgb(var(--accent-rgb));
+    }
+
+    html body[data-design-mode] .sidebar .nav-label {
+        display: none;
+    }
+
+    /* Фильтр «Все / Непрочитанные». */
+    html body[data-design-mode] .chat-filter:not([hidden]) {
+        display: flex;
+        gap: 6px;
+        padding: 2px 16px 8px;
+    }
+
+    html body[data-design-mode] .chat-filter-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--ml-fill);
+        color: var(--text2);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+
+    html body[data-design-mode] .chat-filter-chip.is-active {
+        background: var(--ml-fill-strong);
+        color: var(--text);
+    }
+
+    html body[data-design-mode] .chat-filter-chip:disabled {
+        opacity: .45;
+        cursor: default;
+    }
+
+    html body[data-design-mode] .chat-filter-count {
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 999px;
+        background: rgb(var(--accent-rgb));
+        color: #050505;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 18px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Диалоги ─────────────────────────────────────────────────────── */
+    html body[data-design-mode] .sidebar .contacts {
+        padding: 0 0 calc(86px + env(safe-area-inset-bottom, 0px));
+    }
+
+    html body[data-design-mode] .contacts .contact,
+    html body[data-design-mode] .contacts .contact.active {
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        min-height: 72px;
+        margin: 0;
+        padding: 10px 16px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    html body[data-design-mode] .contacts .contact::before,
+    html body[data-design-mode] .contacts .contact::after {
+        display: none;
+    }
+
+    html body[data-design-mode] .contacts .contact:active,
+    html body[data-design-mode] .contacts .contact.press-hold {
+        background: var(--ml-fill);
+    }
+
+    html body[data-design-mode] .contacts .contact .ava {
+        width: 52px;
+        height: 52px;
+        font-size: 19px;
+    }
+
+    html body[data-design-mode] .contacts .contact .contact-info {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+    }
+
+    html body[data-design-mode] .contacts .contact .contact-name {
+        overflow: hidden;
+        color: var(--text);
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1.25;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .contacts .contact .contact-prev {
+        overflow: hidden;
+        color: var(--text2);
+        font-size: 14px;
+        line-height: 1.3;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .contacts .contact.has-unread .contact-name {
+        font-weight: 700;
+    }
+
+    html body[data-design-mode] .contacts .contact.has-unread .contact-prev {
+        color: var(--text);
+        opacity: .82;
+    }
+
+    /* Правая колонка: время сверху, счётчик под ним — по правому краю. */
+    html body[data-design-mode] .contacts .contact .contact-actions {
+        min-height: 0;
+        display: grid;
+        grid-auto-flow: row;
+        justify-items: end;
+        align-content: center;
+        gap: 6px;
+        min-width: 0;
+        opacity: 1;
+    }
+
+    html body[data-design-mode] .contacts .contact .contact-time {
+        color: var(--text);
+        opacity: .5;
+        font-size: 12px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .contacts .contact.has-unread .contact-time {
+        color: rgb(var(--accent-rgb));
+        opacity: 1;
+        font-weight: 600;
+    }
+
+    html body[data-design-mode] .contacts .contact .badge {
+        position: static;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border: 0;
+        border-radius: 999px;
+        background: rgb(var(--accent-rgb));
+        box-shadow: none;
+        color: #050505;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 20px;
+        animation: none;
+    }
+
+    html body[data-design-mode] .contacts .contact .contact-more,
+    html body[data-design-mode] .contacts .contact .contact-remove {
+        display: none;
+    }
+
+    html body[data-design-mode] .contacts .contact .contact-mute-indicator {
+        width: 16px;
+        height: 16px;
+        color: var(--text3);
+    }
+
+    /* ── Серверы ─────────────────────────────────────────────────────── */
+    html body[data-design-mode][data-nav-mode="servers"] .server-rail--sidebar:not([hidden]) {
+        margin: 2px 0 0;
+    }
+
+    html body[data-design-mode] .server-rail--sidebar .server-rail-track {
+        gap: 12px;
+        padding: 8px 16px;
+    }
+
+    /* Кнопка — ровно по аватарке: при 44 px кнопки аватарка 48 вылезала вниз,
+       и её центр не совпадал с центром аватарки шапки (общий переход). */
+    html body[data-design-mode] .server-rail--sidebar .server-rail-item {
+        width: 48px;
+        height: 48px;
+    }
+
+    html body[data-design-mode] .server-rail--sidebar .server-rail-item .server-rail-avatar {
+        width: 48px;
+        height: 48px;
+        font-size: 18px;
+    }
+
+    html body[data-design-mode] .server-rail--sidebar .server-rail-sep {
+        height: 28px;
+    }
+
+    html body[data-design-mode] .m-server-card:not([hidden]) {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr) 40px;
+        align-items: center;
+        gap: 12px;
+        margin: 4px 16px 8px;
+        padding: 12px 8px 12px 12px;
+        border-radius: 16px;
+        background: var(--ml-fill);
+    }
+
+    html body[data-design-mode] .m-server-card .m-server-card-ava {
+        width: 44px;
+        height: 44px;
+        font-size: 17px;
+    }
+
+    html body[data-design-mode] .m-server-card-copy {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+    }
+
+    html body[data-design-mode] .m-server-card-copy strong {
+        overflow: hidden;
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 700;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .m-server-card-copy span {
+        overflow: hidden;
+        color: var(--text2);
+        font-size: 13px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .m-server-card-menu {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+    }
+
+    html body[data-design-mode] .m-server-card-menu:active {
+        background: var(--ml-fill-hover);
+    }
+
+    html body[data-design-mode] .m-server-card-menu .ui-icon {
+        width: 20px;
+        height: 20px;
+    }
+
+    /* Каналы: строки на всю ширину с полем 8 px — нажатие подсвечивает плитку. */
+    html body[data-design-mode][data-nav-mode="servers"] .sidebar .contacts {
+        padding: 0 8px calc(86px + env(safe-area-inset-bottom, 0px));
+    }
+
+    html body[data-design-mode] .sidebar-channel-list {
+        gap: 2px;
+    }
+
+    html body[data-design-mode] .sidebar-channel,
+    html body[data-design-mode] .sidebar-channel.active {
+        grid-template-columns: 36px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        min-height: 56px;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 14px;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    html body[data-design-mode] .sidebar-channel.active::after,
+    html body[data-design-mode] .sidebar-channel.active::before {
+        display: none;
+    }
+
+    html body[data-design-mode] .sidebar-channel:active,
+    html body[data-design-mode] .sidebar-channel.press-hold {
+        background: var(--ml-fill);
+    }
+
+    html body[data-design-mode] .sidebar-channel-icon,
+    html body[data-design-mode] .sidebar-channel-icon.voice,
+    html body[data-design-mode] .sidebar-channel.active .sidebar-channel-icon {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 11px;
+        background: var(--ml-fill);
+        box-shadow: none;
+        color: var(--text2);
+    }
+
+    html body[data-design-mode] .sidebar-channel.in-call .sidebar-channel-icon {
+        background: rgb(var(--accent-rgb));
+        color: #050505;
+    }
+
+    html body[data-design-mode] .sidebar-channel .contact-info {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+    }
+
+    html body[data-design-mode] .sidebar-channel .contact-name {
+        overflow: hidden;
+        color: var(--text);
+        font-size: 16px;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .sidebar-channel .contact-prev {
+        overflow: hidden;
+        color: var(--text2);
+        font-size: 13px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    html body[data-design-mode] .sidebar-channel .contact-prev.is-generic {
+        display: none;
+    }
+
+    html body[data-design-mode] .sidebar-channel.has-unread .contact-name {
+        font-weight: 700;
+    }
+
+    html body[data-design-mode] .sidebar-channel .contact-actions {
+        min-height: 0;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        opacity: 1;
+    }
+
+    html body[data-design-mode] .sidebar-channel .badge {
+        position: static;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border: 0;
+        border-radius: 999px;
+        background: rgb(var(--accent-rgb));
+        box-shadow: none;
+        color: #050505;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 20px;
+        animation: none;
+    }
+
+    /* Панель категорий настроек занимает место списка — и карточки с фильтром. */
+    html body[data-sidebar-panel] .m-server-card,
+    html body[data-sidebar-panel] .chat-filter {
+        display: none !important;
+    }
+}
+
+/* ── Телефон: слот «шапка сервера ↔ лента серверов» (mobile_server_bar.js) ──
+   Лента и шапка — в одной ячейке сетки, по центру по вертикали: центры
+   аватарок совпадают, и переход между ними — одна аватарка, которая остаётся
+   на месте (или едет вместе с лентой), а всё вокруг меняется. На компьютере
+   обёртка прозрачна для раскладки (display: contents). */
+.m-server-bar {
+    display: contents;
+}
+
+@media (max-width: 760px) {
+    html body[data-design-mode] .m-server-bar {
+        display: none;
+    }
+
+    html body[data-design-mode][data-nav-mode="servers"] .m-server-bar {
+        position: relative;
+        display: grid;
+        grid-template-areas: "slot";
+        /* Ряд фиксированной высоты (шапка 68, лента 64): иначе слот менял
+           высоту в конце перехода, и каналы под ним прыгали на 4 px. */
+        grid-template-rows: 68px;
+        align-items: center;
+        padding: 2px 0 8px;
+    }
+
+    html body[data-design-mode][data-nav-mode="servers"] .m-server-bar > * {
+        grid-area: slot;
+        min-width: 0;
+    }
+
+    html body[data-design-mode][data-nav-mode="servers"] .m-server-bar .server-rail--sidebar:not([hidden]) {
+        position: relative;
+        z-index: 2;
+        display: block;
+        margin: 0;
+    }
+
+    html body[data-design-mode] .m-server-bar .m-server-card:not([hidden]) {
+        position: relative;
+        z-index: 1;
+        grid-template-columns: 40px 44px minmax(0, 1fr) 40px;
+        gap: 10px;
+        margin: 0 16px;
+        padding: 12px 8px 12px 6px;
+    }
+
+    html body[data-design-mode] .m-server-bar.is-header:not(.is-animating) .server-rail--sidebar {
+        display: none !important;
+    }
+
+    html body[data-design-mode] .m-server-bar.is-picker:not(.is-animating) .m-server-card {
+        display: none !important;
+    }
+
+    /* Во время перехода касания не принимаются: второй тап посреди
+       анимации начал бы новый переход с полпути. */
+    html body[data-design-mode] .m-server-bar.is-animating {
+        pointer-events: none;
+    }
+
+    html body[data-design-mode] .m-server-card-back {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+    }
+
+    html body[data-design-mode] .m-server-card-back:active {
+        background: var(--ml-fill-hover);
+    }
+
+    html body[data-design-mode] .m-server-card-back svg {
+        width: 22px;
+        height: 22px;
+    }
+
+    /* Снимок старых каналов поверх новых на время замены. */
+    html body[data-design-mode] .contacts.is-swapping {
+        position: relative;
+    }
+
+    html body[data-design-mode] .contacts .m-channel-ghost {
+        position: absolute;
+        z-index: 1;
+        pointer-events: none;
+    }
+
+    html body[data-sidebar-panel] .m-server-bar {
+        display: none !important;
+    }
 }

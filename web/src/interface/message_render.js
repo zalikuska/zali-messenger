@@ -407,6 +407,12 @@ ZaliMixin(ZaliInterface, class {
         const sender = String(msg?.sender || '').trim();
         if (!sender) return '';
         const label = this.messageSenderLabel(sender);
+        // Без профилей имя — просто подпись: кнопка, которая ничего не делает,
+        // обещала бы действие курсором и фокусом с клавиатуры.
+        if (!this.profilesEnabled()) {
+            const plainTitle = label === sender ? '' : ` title="${this.esc(`@${sender}`)}"`;
+            return `<span class="msg-sender"${plainTitle}>${this.esc(label)}</span>`;
+        }
         const title = label === sender ? `Профиль: ${sender}` : `${label} (@${sender})`;
         return `<button type="button" class="msg-sender" data-profile-open="${this.esc(sender)}" title="${this.esc(title)}">${this.esc(label)}</button>`;
     }

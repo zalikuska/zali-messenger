@@ -355,6 +355,7 @@ ZaliMixin(ZaliInterface, class {
         if (bus?.master) bus.master.gain.value = 0.9 * this.notificationVolumeFactor();
         // Вторая ветка того же графа — выход готовых буферов (soundDirectBus).
         if (bus?.direct) bus.direct.gain.value = 0.5 * this.notificationVolumeFactor();
+        if (bus?.directTee) bus.directTee.gain.value = 0.5 * this.notificationVolumeFactor();
     }
 
     // Both sliders end up as one element volume. HTMLMediaElement.volume saturates
@@ -425,7 +426,16 @@ ZaliMixin(ZaliInterface, class {
             // Device labels are only populated after a getUserMedia grant; until
             // then they just show as "Микрофон N" / "Динамики N" placeholders.
             const devices = await navigator.mediaDevices.enumerateDevices();
-            const mics = devices.filter(d => d.kind === 'audioinput');
+            let mics = devices.filter(d => d.kind === 'audioinput');
+            // Микрофон захватывает оболочка — и список её (id устройств другие).
+            if (this.nativeCaptureAvailable?.('mic')) {
+                try {
+                    const { audioinput } = await this.listNativeMediaDevices();
+                    mics = audioinput.map(d => ({ deviceId: String(d.id || ''), label: d.label || '' }));
+                } catch (error) {
+                    this.voiceTrace?.('native-device-list-failed', { error: error?.message || String(error) }, 'WARN');
+                }
+            }
             const speakers = devices.filter(d => d.kind === 'audiooutput');
             if (micSelect) {
                 const current = this.audioPrefs.micDeviceId;
@@ -610,9 +620,13 @@ ZaliMixin(ZaliInterface, class {
 
     // Явный выбор в настройках; иначе на WebKit/macOS подавление выключено, чтобы
     // не занимать микрофон системно, на остальных — включено.
+    // Микрофон из оболочки (native_media.js) обрабатывает наш APM в core, без
+    // системного VoiceProcessingIO, — там обработка безвредна и включена по умолчанию.
     voiceProcessingEnabled() {
         const pref = this.audioPrefs?.voiceProcessing;
-        return typeof pref === 'boolean' ? pref : !this.isWebKitOnMac();
+        if (typeof pref === 'boolean') return pref;
+        if (this.nativeCaptureAvailable?.('mic')) return true;
+        return !this.isWebKitOnMac();
     }
 
     // Ограничения захвата микрофона: устройство (если выбрано) + обработка.
@@ -635,6 +649,11 @@ ZaliMixin(ZaliInterface, class {
     async setVoiceProcessing(enabled) {
         this.audioPrefs.voiceProcessing = !!enabled;
         this.saveAudioPrefs();
+        // Нативный микрофон: обработка переключается в оболочке на лету, без перезахвата.
+        if (this.isNativeMediaStream?.(this.voice.localStream) || this.nativeCaptureAvailable?.('mic')) {
+            this.setNativeVoiceProcessing(!!enabled);
+            if (this.isNativeMediaStream?.(this.voice.localStream)) return;
+        }
         // Идёт звонок — перехватываем микрофон с новыми ограничениями на лету.
         await this.setAudioInputDevice(this.audioPrefs.micDeviceId);
     }
@@ -644,8 +663,12 @@ ZaliMixin(ZaliInterface, class {
         this.saveAudioPrefs();
         if (!this.voice.localStream) return;
         try {
-            const constraints = { audio: this.micAudioConstraints(), video: false };
-            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            let newStream = null;
+            if (this.isNativeMediaStream?.(this.voice.localStream)) newStream = await this.tryNativeMicStream(this.audioPrefs.micDeviceId);
+            if (!newStream) {
+                const constraints = { audio: this.micAudioConstraints(), video: false };
+                newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            }
             const newTrack = newStream.getAudioTracks()[0];
             if (!newTrack) return;
             const oldTrack = this.voice.localStream.getAudioTracks()[0];

@@ -11,7 +11,7 @@ use common::{register_user, spawn_app, RegisteredUser, TestApp};
 use reqwest::Method;
 use serde_json::{json, Value};
 
-const SUPPLY: i64 = 100_000;
+const SUPPLY: i64 = 1_000_000;
 
 async fn send(app: &TestApp, user: &RegisteredUser, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
     let mut request = app
@@ -273,6 +273,20 @@ async fn role_payout_pays_every_holder_of_the_role() {
     assert_eq!(roles[0]["roleId"], "*");
     assert_eq!(roles[0]["members"], 4);
     assert!(roles.iter().any(|role| role["roleId"] == vip.as_str() && role["members"] == 1));
+
+    // Итоги за всё время (окно казны): 1000 пришло, 20 + 100 + 20 ушло, четыре
+    // операции; отказанные выплаты в итоги не попадают.
+    let stats = &view["stats"];
+    assert_eq!(stats["totalIn"], 1000);
+    assert_eq!(stats["totalOut"], 140);
+    assert_eq!(stats["operations"], 4);
+    assert_eq!(stats["contributors"][0]["username"], "zalikus");
+    assert_eq!(stats["contributors"][0]["total"], 1000);
+    assert_eq!(stats["contributors"][0]["count"], 1);
+    // Итоги видны и участнику без права «Казна» — как и сама история.
+    let (_, member_view) = get(&app, &bob, &format!("/api/servers/{}/treasury", server_id)).await;
+    assert_eq!(member_view["stats"]["totalOut"], 140);
+    assert!(member_view["roles"].as_array().unwrap().is_empty());
     assert_supply_conserved(&app, &zalikus).await;
 }
 

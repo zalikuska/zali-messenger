@@ -113,6 +113,16 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
         if (parsed.kind === 'profile') {
+            // Ссылка на профиль при выключенных профилях открывает диалог с человеком.
+            if (!this.profilesEnabled()) {
+                const name = String(parsed.token || '').trim();
+                if (name && name !== this.myName()) {
+                    this.setNavMode?.('dm');
+                    this.ensureContact?.(name);
+                    this.switchChat(name);
+                }
+                return true;
+            }
             await this.openProfile(parsed.token);
             return true;
         }

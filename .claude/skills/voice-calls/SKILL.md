@@ -9,7 +9,8 @@ description: Голосовые звонки WebRTC full mesh (web/src/interface
 `voice_media`, `voice_negotiation`, `voice_call`, `voice_signal`, `voice_ui`) и
 исполняется в WebView; нативные шеллы (macOS/Windows/iOS/Android) только
 ретранслируют `voice_*` по WS. **Правки голоса дублировать в нативные клиенты
-не нужно** — достаточно `bundle_web.py`.
+не нужно** — достаточно `bundle_web.py`. Исключение — захват устройств на macOS и
+Windows: его делают оболочки (`native-capture.md`), веб получает кадры.
 
 Скилл разбит на три файла — читай нужный целиком, не выдёргивая пункты (инварианты
 взаимосвязаны). Подсказка по пути файла приходит хуком.
@@ -19,6 +20,7 @@ description: Голосовые звонки WebRTC full mesh (web/src/interface
 | Согласование: offer/answer, polite peer, ICE, `voice_signal.js`, `voice_negotiation.js` | этот файл (ниже) |
 | Комнаты и жизненный цикл: presence, устройства, инвайты, `voice_transport.js`, `server/src/voice.rs` | `.claude/skills/voice-calls/room-lifecycle.md` |
 | Битрейт, телеметрия звука, WS keepalive/heartbeat, `voice_media.js`, `server/src/realtime.rs` | `.claude/skills/voice-calls/media-and-ws.md` |
+| Нативный захват микрофона/камеры/экрана на macOS/Windows, `native_media.js`, обработка звука `core/src/audio_processing.rs`, протокол `MEDIA_REQUEST` | `.claude/skills/voice-calls/native-capture.md` |
 
 ## Согласование (offer/answer/ICE)
 

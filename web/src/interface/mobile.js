@@ -840,6 +840,13 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // 3½. Открытая лента выбора серверов на экране каналов — свернуть в шапку.
+        if (document.body?.classList.contains('mobile-sidebar-open')
+            && this.S.navMode === 'servers'
+            && this.closeMobileServerPicker?.()) {
+            return true;
+        }
+
         // 4. Открытый чат → список диалогов.
         if (!document.body?.classList.contains('mobile-sidebar-open')
             && this.currentMobileNavProgress() >= 0.5) {
@@ -1140,6 +1147,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderNotificationVolumeSettings();
         this.renderUpdateSettings();
         void this.renderAutostartSettings();
+        void this.renderControlSettings();
         this.renderGameActivitySettings();
         this.renderGameFocusSettings();
         this.renderRecentAccounts();

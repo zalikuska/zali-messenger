@@ -7,8 +7,9 @@
   1. фронтматтер скиллов (только SKILL.md; подфайлы вроде room-lifecycle.md — без него) (name == имя папки, description, закрывающий ---);
   2. ссылки «скилл `x`» и таблица в CLAUDE.md указывают на существующие скиллы;
   3. пути репозитория в обратных кавычках существуют;
-  4. числа в тексте скиллов (150 с, 6 камер, 32 КиБ, ...) совпадают с константами
-     в коде. Меняешь константу — скрипт падает и показывает, какой скилл править;
+  4. числа в тексте скиллов (150 с, 6 камер, 32 КиБ, ...) и дизайн-токены в
+     docs/UI_GUIDELINES.md совпадают с кодом. Меняешь константу — скрипт падает и
+     показывает, какой документ править;
   5. версии в четырёх местах согласованы (scripts/bump_version.py --check).
 
 Приватные скиллы zali-ops-* проверяются, только если лежат на диске.
@@ -51,8 +52,11 @@ def skill_files(d):
     return sorted(d.glob("*.md"))
 
 
+UI_GUIDELINES = ROOT / "docs" / "UI_GUIDELINES.md"
+
+
 def docs_files():
-    return [ROOT / "CLAUDE.md"] + [f for d in skill_dirs() for f in skill_files(d)]
+    return [ROOT / "CLAUDE.md", UI_GUIDELINES] + [f for d in skill_dirs() for f in skill_files(d)]
 
 
 def check_skill_refs():
@@ -97,10 +101,48 @@ CLAIMS = [
     ("messaging-protocol", "меньше 32 КиБ", "server/src/messages.rs", r"INLINE_ARCHIVE_MAX_BYTES: u64 = 32 \* 1024"),
     ("messaging-protocol", "210 000 итераций", "core/src/crypto.rs", r"PBKDF2_ITERS: u32 = 210_000"),
     ("messaging-protocol", "чанки по 1 МБ", "sdk/Rust/src/lib.rs", r"CHUNK_SIZE: usize = 1024 \* 1024"),
-    ("zalicoin-treasury", "`SUM(coin_balances.balance)` + удержанное = 100 000", "server/src/coins.rs", r"ZALICOIN_TOTAL_SUPPLY: i64 = 100_000"),
+    ("zalicoin-treasury", "`SUM(coin_balances.balance)` + удержанное = 1 000 000", "server/src/coins.rs", r"ZALICOIN_TOTAL_SUPPLY: i64 = 1_000_000"),
     ("web-ui-architecture", "после 50 неудачных попыток", "web/src/interface/outbox.js", r"MAX_OUTBOX_ATTEMPTS = 50"),
     ("notifications", "«смотрю» старше 60 с не в счёт", "server/src/push.rs", r"PRESENCE_FRESH: Duration = Duration::from_secs\(60\)"),
 ]
+
+
+# То же для дизайн-гайдлайнов: (фрагмент в docs/UI_GUIDELINES.md, файл кода, regex).
+UI_CLAIMS = [
+    ("`--f-surface` | `.032`", "web/style.css", r"--f-surface: rgba\(255,255,255,\.032\)"),
+    ("`--f-fill` | `.065`", "web/style.css", r"--f-fill: rgba\(255,255,255,\.065\)"),
+    ("`--f-fill-hover` | `.095`", "web/style.css", r"--f-fill-hover: rgba\(255,255,255,\.095\)"),
+    ("`--f-fill-strong` | `.11`", "web/style.css", r"--f-fill-strong: rgba\(255,255,255,\.11\)"),
+    ("`--f-hairline` | `.07`", "web/style.css", r"--f-hairline: rgba\(255,255,255,\.07\)"),
+    ("`--f-on-accent` | `#050505`", "web/style.css", r"--f-on-accent: #050505"),
+    ("`--f-ctl` | `36px`", "web/style.css", r"--f-ctl: 36px"),
+    ("`10px` / `16px` (телефон: 12 / 16)", "web/style.css", r"--f-radius: 10px;\s*--f-radius-l: 16px"),
+    ("`--tr-ctl: 44px` у казны", "web/style.css", r"--tr-ctl: 44px"),
+    ("`--sm-ctl` у настроек сервера", "web/style.css", r"--sm-ctl: 44px"),
+    ("(`--tr-*`, `--sm-*`, `--zc-*`) заданы через `var(--f-*, запасное)`", "web/style.css", r"--sm-surface: var\(--f-surface,[^;]*;\s*--sm-fill: var\(--f-fill,"),
+    ("на 7 % светлее `--bg` (`color-mix`)", "web/style.css", r"--menu-bg: color-mix\(in srgb, var\(--bg\) 93%, #fff\)"),
+    ("разделитель пунктов — `--menu-sep` (= `--f-hairline`)", "web/style.css", r"--menu-sep: var\(--f-hairline\)"),
+    ("основной контур 1.4–1.6 (по умолчанию 1.5)", "web/src/interface/signs.js", r'stroke="currentColor" stroke-width="1\.5"'),
+    ("деталь .9 с opacity .4", "web/src/interface/signs.js", r"const d = 'stroke-width=\".9\" opacity=\".4\"'"),
+    ("строка списка — 36 r11, знак 22", "web/style.css", r"\.zc-tile-sign \{[^}]*width: 36px;[^}]*border-radius: 11px;[^}]*\}\s*\.zc-tile-sign svg \{\s*width: 22px"),
+    ("факт — 44 r12, знак 26", "web/style.css", r"\.zc-fact \.zc-tile-sign \{\s*width: 44px;[^}]*border-radius: 12px;[^}]*\}\s*\.zc-fact \.zc-tile-sign svg \{\s*width: 26px"),
+    ("плитка-переход 92", "web/style.css", r"\.hub-action \{[^}]*min-height: 92px"),
+    ("левый отступ плитки-перехода 26", "web/style.css", r"\.hub-action \{[^}]*padding: 0 18px 0 26px"),
+    ("сейчас он 50 %", "web/src/styler.js", r"'--text3': 'rgba\(255,255,255,0\.5\)'"),
+    ("в схеме cyber акцент сам красный (`255,0,85`)", "web/src/styler.js", r"'--accent-rgb': '255,0,85'"),
+]
+
+
+def check_ui_claims():
+    if not UI_GUIDELINES.exists():
+        fail("docs/UI_GUIDELINES.md отсутствует")
+        return
+    text = re.sub(r"\s+", " ", UI_GUIDELINES.read_text(encoding="utf-8"))
+    for fragment, code_file, pattern in UI_CLAIMS:
+        if fragment not in text:
+            fail(f"UI_GUIDELINES.md: не нашёл фразу «{fragment}» — документ переписан? обнови UI_CLAIMS в scripts/check_docs.py")
+        elif not re.search(pattern, (ROOT / code_file).read_text(encoding="utf-8")):
+            fail(f"UI_GUIDELINES.md: «{fragment}» больше не совпадает с кодом ({code_file}, ищу /{pattern}/) — поправь документ")
 
 
 def check_claims():
@@ -127,10 +169,10 @@ def check_versions():
 
 
 if __name__ == "__main__":
-    for check in (check_frontmatter, check_skill_refs, check_paths, check_claims, check_versions):
+    for check in (check_frontmatter, check_skill_refs, check_paths, check_claims, check_ui_claims, check_versions):
         check()
     if errors:
         print("check_docs: найдено расхождений:", len(errors), file=sys.stderr)
         print(*("  - " + e for e in errors), sep="\n", file=sys.stderr)
         sys.exit(1)
-    print(f"check_docs: OK ({len(skill_dirs())} скиллов, {len(CLAIMS)} числовых утверждений сверено с кодом)")
+    print(f"check_docs: OK ({len(skill_dirs())} скиллов, {len(CLAIMS) + len(UI_CLAIMS)} числовых утверждений сверено с кодом)")

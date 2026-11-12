@@ -1,4 +1,4 @@
-//! ZaliCoin: a fixed-supply (100 000) in-app currency ledger. Coins only ever
+//! ZaliCoin: a fixed-supply (1 000 000) in-app currency ledger. Coins only ever
 //! move between existing users via `transfer_coins` and channel gift cards
 //! (`coin_gifts`) and server treasuries (`treasury.rs`) — nothing mints or
 //! burns them after `seed_zalicoin` grants the whole supply to `zalikus` on
@@ -99,7 +99,11 @@ pub(crate) struct CoinTransferRequest {
     card_client_id: Option<String>,
 }
 
-pub(crate) const ZALICOIN_TOTAL_SUPPLY: i64 = 100_000;
+/// Вся эмиссия ZaliCoin. Была 100 000 до 0.2b56; существующие базы доводит до
+/// нового значения одноразовая доэмиссия `seed_zalicoin` (маркер в `schema_flags`).
+pub(crate) const ZALICOIN_TOTAL_SUPPLY: i64 = 1_000_000;
+/// Эмиссия до 0.2b56 — разница с ней и есть доэмиссия для старых баз.
+pub(crate) const ZALICOIN_LEGACY_SUPPLY: i64 = 100_000;
 /// Потолок зарядов у одной карточки.
 pub(crate) const MAX_COIN_GIFT_CLAIMS: i64 = 100;
 const MAX_COIN_GIFT_LOOKUP: usize = 50;

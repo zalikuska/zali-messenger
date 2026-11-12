@@ -28,6 +28,10 @@ mod http;
 pub(crate) use http::*;
 mod keyring;
 pub(crate) use keyring::*;
+// Нативный захват микрофона/камеры/экрана (.claude/skills/voice-calls/native-capture.md).
+pub(crate) mod media;
+/// Управление из терминала по токену (CONTROL_REQUEST, scripts/zali_ctl.py).
+pub(crate) mod control;
 mod messages;
 pub(crate) use messages::*;
 mod transport;
@@ -54,7 +58,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b55";
+const APP_DISPLAY_VERSION: &str = "0.2b56";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -84,6 +88,13 @@ pub enum AppEvent {
     /// Windows only: in-app titlebar close button — mirrors the hide-to-tray
     /// behavior of the native close button it replaces.
     CloseWindowRequest,
+    /// Кадр нативного захвата (native/media/) — в страницу через общую память
+    /// WebView2; её COM-объекты доступны только из потока окна.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    MediaFrame(media::MediaFrame),
+    /// Управление из терминала (native/control.rs): выполнить скрипт в странице и
+    /// вернуть его значение (строку JSON, как её отдаёт WRY) в канал.
+    ControlEval(String, std::sync::mpsc::Sender<String>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,6 +127,8 @@ enum UiBusEvent {
     RealtimeEvent,
     /// События аддона хаба от оболочки: строки бэкенд-процесса, его выход.
     AddonEvent,
+    /// Нативный захват: ответы на MEDIA_REQUEST и события потоков (native/media/).
+    MediaEvent,
 }
 
 impl UiBusEvent {
@@ -145,6 +158,7 @@ impl UiBusEvent {
             UiBusEvent::SyncActiveConversation => "sync_active_conversation",
             UiBusEvent::UpdateEvent => "update_event",
             UiBusEvent::AddonEvent => "addon_event",
+            UiBusEvent::MediaEvent => "media_event",
         }
     }
 }
@@ -306,6 +320,16 @@ struct NativeCapabilities {
     addon_fs: bool,
     addon_launch: bool,
     addon_process: bool,
+    /// Нативный захват (native/media/): микрофон WASAPI с обработкой core APM,
+    /// камера Media Foundation, экран/окна Windows.Graphics.Capture, звук
+    /// демонстрации через process loopback. Только Windows-сборка; без флага
+    /// страница идёт в getUserMedia/getDisplayMedia движка.
+    native_mic: bool,
+    native_camera: bool,
+    native_screen: bool,
+    native_screen_audio: bool,
+    /// Управление из терминала по токену (native/control.rs), включается в настройках.
+    control_server: bool,
 }
 
 impl Default for NativeCapabilities {
@@ -336,6 +360,11 @@ impl Default for NativeCapabilities {
             addon_fs: cfg!(target_os = "windows"),
             addon_launch: cfg!(target_os = "windows"),
             addon_process: cfg!(target_os = "windows"),
+            native_mic: media::NATIVE_MEDIA,
+            native_camera: media::NATIVE_MEDIA,
+            native_screen: media::NATIVE_MEDIA,
+            native_screen_audio: media::NATIVE_MEDIA,
+            control_server: true,
         }
     }
 }
@@ -1370,6 +1399,23 @@ pub fn handle_ipc_message(
                 .cloned()
                 .unwrap_or_default();
             game_detector::configure(&proxy, enabled, &games);
+        }
+        BridgeProtocolMessageType::ControlRequest => {
+            // Карточка «Управление из терминала»: status | enable | disable | rotate.
+            // Токен создаёт и сверяет оболочка (native/control.rs).
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let op = payload.get("op").and_then(Value::as_str).unwrap_or("status").trim().to_string();
+            let status = control::handle(&op);
+            dispatch_ui_event(
+                &proxy,
+                UiBusEvent::NativeResponse,
+                json!({ "requestId": request_id, "ok": true, "data": status }),
+            );
         }
         BridgeProtocolMessageType::AutostartRequest => {
             // No `enabled` = the settings card asking what the state is; a boolean sets
@@ -2650,6 +2696,10 @@ pub fn handle_ipc_message(
             // NativeBridge.kt / ScreenCaptureService.kt). WebView2 already
             // supports getDisplayMedia() natively, so interface.js's
             // screen-share path never takes the native branch here.
+        }
+        BridgeProtocolMessageType::MediaRequest => {
+            // Нативный захват: ответы и события — шиной media_event (native/media/).
+            media::handle_media_request(&payload, &proxy);
         }
         BridgeProtocolMessageType::MobileNavProgress => {
             // Android-only (drives the system back-gesture progress indicator via

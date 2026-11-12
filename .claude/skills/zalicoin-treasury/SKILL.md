@@ -23,10 +23,18 @@ description: ZaliCoin-карточки (server/src/coins.rs) и казна се�
   такого перевода — только подделка. Не подменять эту проверку сравнением
   времени: время сообщения в браузерном приёме и в локальной копии идёт с
   часов отправителя.
-- **Инвариант: `SUM(coin_balances.balance)` + удержанное = 100 000.**
+- **Инвариант: `SUM(coin_balances.balance)` + удержанное = 1 000 000.**
   Удержанное считается как `amount × (total_claims − claimed_count)` у
   `active`-карточек, отдельной колонкой не хранится. Проверяется
   `tests/coin_gifts.rs`.
+- **Эмиссия была 100 000 до 0.2b56.** Существующую базу `seed_zalicoin`
+  доводит до 1 000 000 один раз: +900 000 на баланс `zalikus` по маркеру
+  `zalicoin_supply_1m` в `schema_flags` (маркер и начисление — одна
+  транзакция). Не пересчитывать «сколько в обороте» — держателей много
+  (казны серверов/аддонов, карточки, розыгрыши), пропуск одного = лишняя
+  эмиссия. Тест — `legacy_supply_is_topped_up_once` в `tests/coin_gifts.rs`.
+  Клиент берёт эмиссию из `/api/coins/distribution` (`totalSupply`), в
+  разметке её нет.
 - **Один заряд на аккаунт и защита от одновременных активаций** — три слоя:
   вся операция в `BEGIN IMMEDIATE`-транзакции (в отдельной задаче
   `run_immediate_tx`, по той же причине, что и hash chain), условный
@@ -48,7 +56,7 @@ description: ZaliCoin-карточки (server/src/coins.rs) и казна се�
   перерисовка ленты посреди анимации продолжает её отрицательной задержкой
   (`--zc-pop-delay`), не запускает заново. Глиф ZaliCoin — «Ƶ» (Z с чертой) в
   `coinGiftIcon`, кнопке композера (`index.html`), иконке хаба (`prefs.js`),
-  `.zc-orb` и `coin` в `uiIcon` — менять во всех пяти.
+  знак `coin` в `signs.js` (монета кошелька) и `coin` в `uiIcon` — менять во всех пяти.
 - Карточку нельзя редактировать (`canEditMessage`), в превью/цитате/
   уведомлении заменяется на `coinCardSummary`. Удержанное можно вернуть с
   экрана ZaliCoin даже если сообщение с карточкой не дошло или удалено.
@@ -58,7 +66,7 @@ description: ZaliCoin-карточки (server/src/coins.rs) и казна се�
 ## Казна сервера (`server/src/treasury.rs` + `web/src/interface/treasury.js`)
 
 - **ZaliCoin может лежать на балансе сервера** (`server_treasuries`). Инвариант
-  эмиссии: `SUM(coin_balances) + SUM(server_treasuries) + удержанное = 100 000`;
+  эмиссии: `SUM(coin_balances) + SUM(server_treasuries) + удержанное = 1 000 000`;
   `/api/coins/distribution` отдаёт казны одной суммой (`treasuries`) — имена
   чужих приватных серверов в общую статистику не попадают. Проверяется
   `tests/treasury.rs` и `tests/coin_gifts.rs`.

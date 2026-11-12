@@ -496,6 +496,9 @@ fn main() -> wry::Result<()> {
         script.push_str(
             "\n;try{window.ipc&&window.ipc.postMessage(JSON.stringify({type:'DIAG_ENV;secure='+window.isSecureContext+';mediaDevices='+!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)+';subtle='+!!(window.crypto&&window.crypto.subtle)+';rtc='+(typeof RTCPeerConnection!=='undefined'),bridgeNonce:window.__ZALI_BRIDGE_NONCE__}));}catch(e){}",
         );
+        // Транспорт кадров нативного захвата (native/media/): общая память WebView2,
+        // только верхнему фрейму — как и всё в этом скрипте.
+        script.push_str(native::media::media_bridge_script());
         // WebView2 выполняет init-скрипты и во вложенных фреймах (песочница
         // аддона) — всё выше только для верхнего фрейма, см. native/frame_guard.rs.
         native::top_frame_only_script(&script)
@@ -639,6 +642,13 @@ fn main() -> wry::Result<()> {
             }
             false
         })
+        // Перезагрузка страницы: её нативные потоки захвата (native/media/) никому не
+        // нужны — без этого микрофон и камера оставались бы заняты до выхода.
+        .with_on_page_load_handler(|event, _url| {
+            if matches!(event, wry::PageLoadEvent::Started) {
+                native::media::stop_all();
+            }
+        })
         .with_ipc_handler(move |msg| {
             native::handle_ipc_message(
                 msg,
@@ -671,6 +681,16 @@ fn main() -> wry::Result<()> {
     #[cfg(target_os = "macos")]
     install_media_capture_policy(&webview);
 
+    // Кадры нативного захвата → страница (native/media/shared_buffer.rs). Живёт в
+    // потоке окна: COM-объекты WebView2 другим потокам недоступны.
+    #[cfg(target_os = "windows")]
+    let mut media_poster = native::media::shared_buffer::Poster::default();
+    #[cfg(target_os = "windows")]
+    let media_proxy = proxy.clone();
+
+    // Управление из терминала: поднимается, только если включено в настройках.
+    native::control::init(proxy.clone());
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -691,6 +711,22 @@ fn main() -> wry::Result<()> {
                 if let Err(error) = webview.evaluate_script(&script) {
                     error!("Failed to evaluate JS: {}", error);
                 }
+            }
+            Event::UserEvent(AppEvent::ControlEval(script, reply)) => {
+                // native/control.rs: ответ уходит в канал HTTP-потока.
+                if let Err(error) = webview.evaluate_script_with_callback(&script, move |value| {
+                    let _ = reply.send(value);
+                }) {
+                    error!("Failed to evaluate control script: {}", error);
+                }
+            }
+            Event::UserEvent(AppEvent::MediaFrame(frame)) => {
+                #[cfg(target_os = "windows")]
+                if media_poster.post(&webview, &frame) {
+                    native::media::transport_unavailable(&media_proxy);
+                }
+                #[cfg(not(target_os = "windows"))]
+                drop(frame);
             }
             Event::UserEvent(AppEvent::StartDrag) => {
                 if let Err(error) = window.drag_window() {

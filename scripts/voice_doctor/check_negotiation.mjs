@@ -1139,5 +1139,69 @@ console.log('\n== randomized scenarios ==');
         bad ? `${bad} silent calls, e.g. ${examples.join(' | ')}` : '');
 }
 
+console.log('\n== joining and leaving while the microphone is still starting ==');
+
+// Микрофон, который отвечает только по команде теста: так видно, что заход не ждёт
+// старта аудиоустройства и что выход во время старта не оставляет микрофон включённым.
+// Захват здесь — НАСТОЯЩИЙ captureVoiceLocalStream (харнесс обычно подменяет его).
+function slowMicPeer(name) {
+    const clock = new VirtualClock();
+    const server = new SimServer({ clock });
+    const peer = new VoicePeer(name, server, { clock });
+    server.register(peer);
+    const api = peer.api;
+    api.captureVoiceLocalStream = Object.getPrototypeOf(api).captureVoiceLocalStream;
+    api.isWebKitOnMac = () => false;
+    api.enforceMicProcessing = async () => {};
+    api.ensureVoiceMeterLoop = () => {};
+    const mic = { release: null, stopped: 0 };
+    peer.sandbox.navigator.mediaDevices.getUserMedia = () => new Promise((resolve) => {
+        mic.release = () => {
+            const track = {
+                kind: 'audio', readyState: 'live', enabled: true, id: 'mic',
+                stop() { mic.stopped += 1; this.readyState = 'ended'; },
+                getSettings: () => ({}), addEventListener() {}, removeEventListener() {},
+            };
+            resolve({ id: 'mic-stream', getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] });
+        };
+    });
+    return { server, peer, api, mic };
+}
+
+{
+    const { api, peer, mic } = slowMicPeer('alice');
+    const channel = { id: 'srv-voice', type: 'voice', kind: 'voice' };
+    api.currentServer = () => ({ id: 'srv', channels: [channel] });
+    api.currentChannel = () => channel;
+    api.isVoiceChannel = () => true;
+    api.refreshVoiceTurnCredentials = async () => {};
+    api.unlockVoicePlayback = async () => {};
+    const joining = api.joinVoiceChannel({ serverId: 'srv', channelId: 'srv-voice' });
+    await drainMicrotasks();
+    const joinSent = peer.sent.some(e => e.type === 'voice_join');
+    record('joining a channel sends voice_join while the microphone is still starting',
+        joinSent && typeof mic.release === 'function' && !api.voice.localStream,
+        `joinSent=${joinSent} micAsked=${typeof mic.release === 'function'} stream=${!!api.voice.localStream}`);
+    mic.release?.();
+    await joining;
+    await drainMicrotasks();
+    record('and the microphone arrives into that same call',
+        !!api.voice.localStream && mic.stopped === 0, `stream=${!!api.voice.localStream} stopped=${mic.stopped}`);
+}
+
+{
+    const { api, mic } = slowMicPeer('bob');
+    api.voice.roomId = 'voice:channel:srv:srv-voice';
+    api.voice.roomType = 'channel';
+    const pending = api.ensureVoiceLocalStream();
+    await drainMicrotasks();
+    api.resetVoiceState();
+    mic.release?.();
+    await pending.catch(() => {});
+    await drainMicrotasks();
+    record('leaving while the microphone starts stops it instead of leaving it on',
+        mic.stopped === 1 && !api.voice.localStream, `stopped=${mic.stopped} stream=${!!api.voice.localStream}`);
+}
+
 console.log(`\n${failures === 0 ? 'OK' : 'FAILURES: ' + failures} (${results.length} checks)\n`);
 process.exit(failures === 0 ? 0 : 1);

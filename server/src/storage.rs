@@ -437,22 +437,45 @@ pub(crate) async fn ensure_message_columns(pool: &SqlitePool) -> Result<(), sqlx
     Ok(())
 }
 
-/// Grants the entire fixed ZaliCoin supply (100 000) to `zalikus` on first
-/// run. Only fires when `coin_balances` is completely empty, so it never
-/// re-seeds (and thus never resets balances) once transfers have happened.
+/// Grants the entire fixed ZaliCoin supply (`ZALICOIN_TOTAL_SUPPLY`) to
+/// `zalikus` on first run. Only fires when `coin_balances` is completely
+/// empty, so it never re-seeds (and thus never resets balances) once
+/// transfers have happened.
+///
+/// Эмиссия выросла со 100 000 до 1 000 000 (0.2b56). База, засеянная старой
+/// эмиссией, получает разницу один раз — на баланс `zalikus`, держателя всей
+/// эмиссии при посеве. Решает маркер в `schema_flags`, а не пересчёт «сколько
+/// монет сейчас в обороте»: держателей у монет много (балансы, казны серверов
+/// и аддонов, карточки, розыгрыши, магазин), и пропущенный в пересчёте держатель
+/// означал бы лишнюю эмиссию. Маркер и начисление — одна транзакция.
 pub(crate) async fn seed_zalicoin(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    const SUPPLY_FLAG: &str = "zalicoin_supply_1m";
     let holder_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM coin_balances")
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    if holder_count > 0 {
-        return Ok(());
-    }
-
-    sqlx::query("INSERT OR IGNORE INTO coin_balances (username, balance) VALUES ('zalikus', 100000)")
-        .execute(pool)
+    let mut tx = pool.begin().await?;
+    let marker = sqlx::query("INSERT OR IGNORE INTO schema_flags (name) VALUES (?)")
+        .bind(SUPPLY_FLAG)
+        .execute(&mut *tx)
         .await?;
-
+    if holder_count == 0 {
+        sqlx::query("INSERT OR IGNORE INTO coin_balances (username, balance) VALUES ('zalikus', ?)")
+            .bind(crate::ZALICOIN_TOTAL_SUPPLY)
+            .execute(&mut *tx)
+            .await?;
+    } else if marker.rows_affected() == 1 {
+        let top_up = crate::ZALICOIN_TOTAL_SUPPLY - crate::ZALICOIN_LEGACY_SUPPLY;
+        sqlx::query(
+            "INSERT INTO coin_balances (username, balance) VALUES ('zalikus', ?)
+             ON CONFLICT(username) DO UPDATE SET balance = balance + excluded.balance",
+        )
+        .bind(top_up)
+        .execute(&mut *tx)
+        .await?;
+        info!("[COINS] эмиссия доведена до {}: +{} на баланс zalikus", crate::ZALICOIN_TOTAL_SUPPLY, top_up);
+    }
+    tx.commit().await?;
     Ok(())
 }
 

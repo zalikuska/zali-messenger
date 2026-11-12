@@ -176,6 +176,33 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // История канала, которого ещё нет ни в памяти, ни в кеше на диске, едет по
+    // сети (браузер) или через нативный мост. Пока она в пути, лента пуста — и
+    // раньше это рисовалось как «Нет сообщений в канале», которое через долю
+    // секунды сменялось сообщениями: при каждом первом заходе в канал экран
+    // «перемигивал». Теперь до ответа (или до таймаута, если ответа нет) лента
+    // просто пуста, а «Нет сообщений» показывается, только когда это правда.
+    static get SERVER_HISTORY_PENDING_MAX_MS() { return 4000; }
+
+    markServerHistoryPending(key) {
+        this._serverHistoryPending = this._serverHistoryPending || new Map();
+        clearTimeout(this._serverHistoryPending.get(key));
+        const timer = setTimeout(() => this.clearServerHistoryPending(key), ZaliInterface.SERVER_HISTORY_PENDING_MAX_MS);
+        this._serverHistoryPending.set(key, timer);
+    }
+
+    clearServerHistoryPending(key) {
+        const pending = this._serverHistoryPending;
+        if (!pending || !pending.has(key)) return;
+        clearTimeout(pending.get(key));
+        pending.delete(key);
+        if (this.currentServerChatKey() === key) this.scheduleRenderMessages();
+    }
+
+    isServerHistoryPending(key) {
+        return !!this._serverHistoryPending?.has(key);
+    }
+
     async loadServerMessages(serverId, channelId, { silent = false } = {}) {
         const sid = String(serverId || '').trim();
         const cid = String(channelId || '').trim();
@@ -194,6 +221,7 @@ ZaliMixin(ZaliInterface, class {
             this.scheduleRenderMessages();
             return;
         }
+        if (this.S.serverChats[key].length === 0) this.markServerHistoryPending(key);
         this.scheduleRenderMessages();
 
         if (this.nativeSupports('serverHistory')) {
@@ -216,6 +244,7 @@ ZaliMixin(ZaliInterface, class {
         // history row. Route it through the same WASM download+unpack path used for
         // live-received messages instead of showing "encrypted, needs native bridge".
         if (!(await this.wasmAvailable())) {
+            this.clearServerHistoryPending(key);
             if (!silent) {
                 this.addLogEntry({ type: 'WARN', msg: 'WASM недоступен: сообщения канала не будут расшифрованы', ts: new Date().toLocaleTimeString() });
             }
@@ -265,6 +294,8 @@ ZaliMixin(ZaliInterface, class {
             if (!silent) {
                 this.addLogEntry({ type: 'ERROR', msg: `Ошибка загрузки канала ${cid}: ${e?.message || e}`, ts: new Date().toLocaleTimeString() });
             }
+        } finally {
+            this.clearServerHistoryPending(key);
         }
     }
 
@@ -333,6 +364,7 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             this.mergeServerChatMessages(key, reconciled);
+            this.clearServerHistoryPending(key);
             if (this.currentServerChatKey() === key) {
                 this.scheduleRenderMessages();
             }
@@ -567,7 +599,7 @@ ZaliMixin(ZaliInterface, class {
         if (serverMenuBtn) serverMenuBtn.hidden = !(isServers && server);
         if (!isServers) {
             if (chatHdrAva) {
-                chatHdrAva.style.background = '';
+                this.clearServerAvatarPaint(chatHdrAva);
                 const who = this.S.current || this.myName();
                 this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(who, 'avatar-img', who));
             }
@@ -589,7 +621,7 @@ ZaliMixin(ZaliInterface, class {
             // «bob / Диалог с bob» и активное поле ввода.
             const hasServers = (this.S.servers || []).some(Boolean);
             if (chatHdrAva) {
-                chatHdrAva.style.background = '';
+                this.clearServerAvatarPaint(chatHdrAva);
                 this.setHTMLIfChanged(chatHdrAva, this.renderAvatarHTML(this.myName(), 'avatar-img', this.myName()));
             }
             if (chatHdrName) chatHdrName.textContent = hasServers ? 'Выберите сервер' : 'Серверов пока нет';
@@ -600,25 +632,7 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
 
-        if (chatHdrAva) {
-            chatHdrAva.style.background = this.serverAvatarBackground(server);
-            this.setHTMLIfChanged(chatHdrAva, this.serverAvatarInnerHTML(server));
-        }
-        if (chatHdrName) {
-            const membersText = Number(server.memberCount || 0) > 0 ? `${Number(server.memberCount)} ${this.ruPlural(server.memberCount, 'участник', 'участника', 'участников')}` : '';
-            const channelTitle = channel
-                ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
-                : this.esc(server.name);
-            this.setHTMLIfChanged(chatHdrName, `
-                <span class="chat-hdr-title">${channelTitle}</span>
-                ${membersText ? `<span class="chat-hdr-count">${this.esc(membersText)}</span>` : ''}
-            `);
-        }
-        if (chatHdrSub) {
-            chatHdrSub.textContent = channel
-                ? `${server.name}${channel.topic ? ` · ${channel.topic}` : ''}`
-                : (server.description || 'Сервер');
-        }
+        this.renderServerChatHeader(server, channel);
         if (tbChat) {
             tbChat.textContent = channel
                 ? `${server.name} / ${this.channelKindLabel(channel.kind)}: ${channel.name}`
@@ -629,6 +643,35 @@ ZaliMixin(ZaliInterface, class {
         // toolbar sync is also where unread and mute changes land, so keep the list
         // in step from here; commitListHTML makes an unchanged list a string compare.
         this.renderContacts();
+    }
+
+    // Шапка канала: аватарка сервера, название, счётчик, подпись. ОДНА функция
+    // на renderServerToolbar и _renderMessagesNow: у каждого был свой шаблон
+    // (разные отступы, у голосового канала — другой счётчик), поэтому при смене
+    // канала шапка переписывалась дважды за кадр, а в голосовом канале мигала
+    // «N участников» ↔ «Голосовой канал» на каждой перерисовке ленты.
+    renderServerChatHeader(server, channel) {
+        if (!server) return;
+        this.paintServerAvatar(document.getElementById('chatHdrAva'), server);
+        const chatHdrName = document.getElementById('chatHdrName');
+        if (chatHdrName) {
+            const isVoice = !!channel && this.isVoiceChannel(channel);
+            const members = Number(server.memberCount || 0);
+            const countText = isVoice
+                ? 'Голосовой канал'
+                : (members > 0 ? `${members} ${this.ruPlural(members, 'участник', 'участника', 'участников')}` : '');
+            const title = channel
+                ? `${this.channelKindIcon(channel.kind, 'chat-hdr-channel-icon')}<span>${this.esc(channel.name)}</span>`
+                : this.esc(server.name);
+            this.setHTMLIfChanged(chatHdrName, `<span class="chat-hdr-title">${title}</span>${countText ? `<span class="chat-hdr-count">${this.esc(countText)}</span>` : ''}`);
+        }
+        const chatHdrSub = document.getElementById('chatHdrSub');
+        if (chatHdrSub) {
+            const sub = channel
+                ? `${server.name}${channel.topic ? ` · ${channel.topic}` : ''}`
+                : (server.description || 'Сервер');
+            if (chatHdrSub.textContent !== sub || chatHdrSub.childElementCount) chatHdrSub.textContent = sub;
+        }
     }
 
     setActiveChannel(channelId, { persist = true } = {}) {
@@ -642,6 +685,15 @@ ZaliMixin(ZaliInterface, class {
             // Hub/ZaliCoin/Settings asking to see the already-selected channel —
             // see ensureChatViewOpen().
             this.ensureChatViewOpen();
+            // На телефоне строка канала стоит на экране-списке поверх чата, а
+            // #viewChat при этом уже «active» — ensureChatViewOpen() ничего не
+            // делал, и тап по выбранному каналу (после смены сервера это его
+            // первый канал) оставлял человека на списке. Все вызовы сюда —
+            // «открой этот канал»: клик по строке, звонок, пуш.
+            if (this.isMobileLayout?.()) {
+                this.closeMobileSidebar();
+                this.syncMobileChrome();
+            }
             return;
         }
         // Same reasoning as switchChat: the channel list in the sidebar stays
@@ -704,6 +756,9 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         this.S.navMode = next;
+        // Вход на экран серверов — всегда в шапку выбранного сервера; лента
+        // выбора открывается по «↶» (mobile_server_bar.js).
+        if (next === 'servers') this.S.mobileServerBar = 'header';
         if (persist) {
             this.saveStoredNavMode(next);
         }

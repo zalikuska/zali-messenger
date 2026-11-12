@@ -105,8 +105,24 @@ ZaliMixin(ZaliInterface, class {
             gain.connect(shaper);
             shaper.connect(ctx.destination);
             bus.direct = gain;
+            // Вход для уведомлений и рингтонов: то же в динамики плюс отвод в звук
+            // демонстрации экрана (interface/share_audio.js, там же приглушение). Звуки
+            // звонка (вход/выход, демонстрация) идут прямо в bus.direct — зрители сами
+            // в звонке и слышат их у себя.
+            bus.directShared = ctx.createGain();
+            bus.directShared.connect(gain);
+            // Та же громкость, что у bus.direct (ползунок уведомлений, applyNotificationVolume).
+            bus.directTee = ctx.createGain();
+            bus.directTee.gain.value = 0.5 * this.notificationVolumeFactor();
+            bus.directShared.connect(bus.directTee);
+            this.teeShareSound?.(ctx, bus.directTee);
         }
         return bus.direct;
+    }
+
+    soundDirectSharedBus(ctx) {
+        this.soundDirectBus(ctx);
+        return this.sound.bus.directShared || this.sound.bus.direct;
     }
 
     // → { src, gain, ctx } или null (нет Web Audio / не удалось отрендерить).
@@ -130,7 +146,7 @@ ZaliMixin(ZaliInterface, class {
                 gain.gain.linearRampToValueAtTime(1, now + 0.02);
             }
             src.connect(gain);
-            gain.connect(this.soundDirectBus(ctx));
+            gain.connect(kind === 'voice' ? this.soundDirectBus(ctx) : this.soundDirectSharedBus(ctx));
             src.onended = () => {
                 try { src.disconnect(); gain.disconnect(); } catch (e) {}
             };
@@ -262,12 +278,34 @@ ZaliMixin(ZaliInterface, class {
     playVoiceEventSound(id) {
         if (!this.sound || !this.voiceSoundsEnabled()) return false;
         const ctx = this.ensureSoundContext();
-        if (!ctx || ctx.state !== 'running') return false;
+        if (!ctx || ctx.state !== 'running') {
+            this.voiceTrace?.('ui-sound-skipped', { id, ctx: ctx?.state || 'none' });
+            return false;
+        }
         const last = this.sound.voiceEventAt || (this.sound.voiceEventAt = {});
         const now = Date.now();
         if (now - (last[id] || 0) < 600) return false;
         last[id] = now;
-        return !!this.playSoundBuffer('voice', id);
+        // Сколько стоил звук в момент события: рендер, если буфер не был готов заранее,
+        // и задержка вывода контекста — чтобы жалоба «звук опаздывает» читалась по журналу.
+        const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        const started = clock();
+        const cached = !!this.sound.buffers?.has?.(`voice:${id}:${ctx.sampleRate}`);
+        const ok = !!this.playSoundBuffer('voice', id);
+        this.voiceTrace?.('ui-sound', {
+            id, ok, cached,
+            ms: Math.round(clock() - started),
+            outputLatencyMs: Math.round(((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000),
+        });
+        return ok;
+    }
+
+    // Свой заход в канал: звук — в момент клика (joinVoiceChannel), а не когда сервер
+    // пришлёт состав. Ответ сервера с этим же заходом затем не звучит второй раз.
+    noteVoiceRoomJoining(roomId) {
+        if (!this.sound) return;
+        this.sound.selfJoinRoom = roomId;
+        this.playVoiceEventSound('join');
     }
 
     // Вызывается из обработчика voice_room_state ДО того, как новый состав записан в
@@ -286,6 +324,13 @@ ZaliMixin(ZaliInterface, class {
         const previous = sameRoom && Array.isArray(this.voice.participants) ? this.voice.participants : [];
         const before = new Set(previous);
         const now = new Set(participants);
+        // Первый состав после своего захода — уже прозвучал по клику. Сравнение идёт
+        // со своим именем: состав, где новые только другие, — чей-то заход, а не мой.
+        const selfJoin = this.sound?.selfJoinRoom === roomId && !before.has(me);
+        if (selfJoin) {
+            this.sound.selfJoinRoom = '';
+            return;
+        }
         if (participants.some(name => !before.has(name))) {
             this.playVoiceEventSound('join');
         } else if (previous.some(name => !now.has(name))) {

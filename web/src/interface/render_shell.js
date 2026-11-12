@@ -10,13 +10,24 @@ ZaliMixin(ZaliInterface, class {
         const el = document.getElementById('contacts');
         if (!el) return;
         this.updateSidebarModeLabel();
+        this.bindMobileListChrome();
         if (this.S.navMode === 'servers') {
+            this.renderChatFilter(null);
             this.renderServers(el);
             return;
         }
+        this.renderMobileServerCard(null);
         const q = this.S.searchQ.toLowerCase();
-        const list = this.S.contacts
-            .filter(contact => contact !== this.myName() && (!q || contact.toLowerCase().includes(q)))
+        const all = this.S.contacts.filter(contact => contact !== this.myName());
+        // «Непрочитанные» — фильтр экрана выбора на телефоне (renderChatFilter).
+        // Сбрасывается сам, когда непрочитанных не осталось: иначе список
+        // оставался бы пустым без видимой причины.
+        const unreadCount = all.filter(contact => (this.S.unread[contact] || 0) > 0).length;
+        if (this.S.chatListFilter === 'unread' && unreadCount === 0) this.S.chatListFilter = 'all';
+        const onlyUnread = this.S.chatListFilter === 'unread';
+        this.renderChatFilter(all.length ? unreadCount : null);
+        const list = all
+            .filter(contact => (!q || contact.toLowerCase().includes(q)) && (!onlyUnread || (this.S.unread[contact] || 0) > 0))
             .map((contact, index) => ({
                 name: contact,
                 lastMessageAt: this.conversationLastMessageAt(contact),
@@ -28,7 +39,8 @@ ZaliMixin(ZaliInterface, class {
         if (list.length === 0) {
             // contacts-empty-art — иллюстрация «найти → добавить → написать»
             // (оформление «Фокус»); при пустом поиске она не к месту.
-            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${q ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : 'Добавьте первый контакт'}</span>${q ? '' : this.emptyActionsHTML('contacts')}</div>`);
+            const filtered = q || onlyUnread;
+            this.commitListHTML(el, 'contacts', `<div class="contacts-empty">${filtered ? '' : '<div class="contacts-empty-art" aria-hidden="true"></div>'}<span>${q ? 'Ничего не найдено' : (onlyUnread ? 'Всё прочитано' : 'Добавьте первый контакт')}</span>${filtered ? '' : this.emptyActionsHTML('contacts')}</div>`);
             return;
         }
 
@@ -66,7 +78,7 @@ ZaliMixin(ZaliInterface, class {
             // has-unread — чтобы строку с новым можно было выделить целиком
             // (имя, превью), а не только бейджем в углу.
             return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
-                <div class="ava" data-profile-open="${this.esc(contact)}" title="${this.esc(`Профиль: ${contact}`)}">${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
+                <div class="ava"${this.profileOpenAttrs(contact)}>${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}${gameBadge}</div>
                     <div class="contact-prev">${preview}</div>
@@ -81,6 +93,82 @@ ZaliMixin(ZaliInterface, class {
             </div>`;
         });
         this.commitListRows(el, 'contacts', rows);
+    }
+
+    /**
+     * «Все / Непрочитанные N» над списком диалогов. Виден только на телефоне
+     * (CSS), где список — отдельный экран выбора; null — спрятать (серверы,
+     * пустой список контактов).
+     */
+    renderChatFilter(unreadCount) {
+        const box = document.getElementById('chatFilter');
+        if (!box) return;
+        const show = unreadCount !== null && unreadCount !== undefined;
+        if (box.hidden === show) box.hidden = !show;
+        if (!show) return;
+        const active = this.S.chatListFilter === 'unread' ? 'unread' : 'all';
+        const chip = (id, label, extra = '') => `<button type="button" role="tab" class="chat-filter-chip${active === id ? ' is-active' : ''}" data-chat-filter="${this.esc(id)}" aria-selected="${this.esc(String(active === id))}"${extra}>${label}</button>`;
+        this.setHTMLIfChanged(box, chip('all', 'Все')
+            + chip('unread', `Непрочитанные${unreadCount ? ` <span class="chat-filter-count">${unreadCount > 99 ? '99+' : unreadCount}</span>` : ''}`, unreadCount ? '' : ' disabled'));
+    }
+
+    /**
+     * Карточка выбранного сервера над его каналами — только телефон (CSS): там
+     * у экрана-списка нет шапки чата, и без неё было не видно, чей это список,
+     * а меню сервера (казна, приглашение, настройки) пряталось за долгим
+     * нажатием на аватарку. null — спрятать.
+     */
+    renderMobileServerCard(server) {
+        const box = document.getElementById('mobileServerCard');
+        if (!box) return;
+        if (!server) {
+            if (!box.hidden) box.hidden = true;
+            this.syncMobileServerBar?.();
+            return;
+        }
+        const members = Number(server.memberCount || 0);
+        const channels = (server.channels || []).filter(Boolean).length;
+        const meta = [
+            members > 0 ? `${members} ${this.ruPlural(members, 'участник', 'участника', 'участников')}` : '',
+            `${channels} ${this.ruPlural(channels, 'канал', 'канала', 'каналов')}`,
+        ].filter(Boolean).join(' · ');
+        // «↶» — стрелка, развёрнутая назад: обратно к выбору сервера (лента
+        // встаёт на место шапки, mobile_server_bar.js).
+        this.setHTMLIfChanged(box, `<button type="button" class="m-server-card-back" data-server-bar="picker" aria-label="Выбрать другой сервер"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 14 4 9l5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            ${this.renderServerAvatarHTML(server, 'm-server-card-ava')}
+            <span class="m-server-card-copy">
+                <strong>${this.esc(server.name || 'Сервер')}</strong>
+                <span>${this.esc(meta)}</span>
+            </span>
+            <button type="button" class="m-server-card-menu" data-server-menu="${this.esc(server.id)}" aria-label="${this.esc(`Меню сервера ${server.name || ''}`)}" aria-haspopup="menu">${this.uiIcon('more')}</button>`);
+        if (box.hidden) box.hidden = false;
+        this.syncMobileServerBar?.();
+    }
+
+    /** Делегированные клики фильтра чатов и кнопки меню сервера — один раз. */
+    bindMobileListChrome() {
+        const sidebar = document.querySelector('.sidebar');
+        if (!sidebar || sidebar.__mobileListChromeBound) return;
+        sidebar.__mobileListChromeBound = true;
+        sidebar.addEventListener('click', (e) => {
+            const filter = e.target.closest('[data-chat-filter]');
+            if (filter && !filter.disabled) {
+                this.S.chatListFilter = filter.getAttribute('data-chat-filter') === 'unread' ? 'unread' : 'all';
+                this.renderContacts();
+                return;
+            }
+            if (e.target.closest('[data-server-bar="picker"]')) {
+                e.stopPropagation();
+                this.openMobileServerPicker();
+                return;
+            }
+            const menu = e.target.closest('[data-server-menu]');
+            if (menu) {
+                e.stopPropagation();
+                const rect = menu.getBoundingClientRect();
+                this.openServerRailContextMenu(menu.getAttribute('data-server-menu'), rect.right, rect.bottom + 4);
+            }
+        });
     }
 
     // renderContacts()/renderServers() are called from ~30 places (every incoming
@@ -512,6 +600,7 @@ ZaliMixin(ZaliInterface, class {
             <div class="empty-sub">${sub}</div>
             ${actions}
         </div>`;
+        this.renderMobileServerCard(server);
         if (!server) {
             const hasServers = (this.S.servers || []).some(Boolean);
             this.commitListHTML(target, 'servers', hasServers

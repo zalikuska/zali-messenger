@@ -95,17 +95,77 @@ ZaliMixin(ZaliInterface, class {
         return error?.message ? `Микрофон недоступен: ${error.message}` : 'Микрофон недоступен.';
     }
 
+    // Микрофон из оболочки (interface/native_media.js): обычный HAL/WASAPI-ввод и наша
+    // обработка (AEC3 → RNNoise → AGC2) вместо системного VoiceProcessingIO, который на
+    // macOS глушит звук всей системы на каждый вход в звонок. null — пути нет или он
+    // отказал; тогда вызывающий идёт в getUserMedia, звонок не падает.
+    // Сохранённый id от движка оболочка не знает — defaultIfUnknown (native_media.js).
+    async tryNativeMicStream(deviceId = this.audioPrefs?.micDeviceId || '') {
+        if (!this.nativeCaptureAvailable?.('mic')) return null;
+        try {
+            return await this.openNativeMediaStream({
+                kind: 'mic',
+                deviceId,
+                defaultIfUnknown: true,
+                options: { processing: this.voiceProcessingEnabled() },
+            });
+        } catch (error) {
+            this.voiceDiag('native-mic-fallback', { error: error?.message || String(error), code: error?.code || '' }, 'WARN');
+            return null;
+        }
+    }
+
+    // Видеодорожка камеры: из оболочки, при отказе — getUserMedia. deviceId === null —
+    // сохранённый выбор (как `ideal`: пропавшую камеру заменит системная), строка —
+    // именно эта камера.
+    async captureVoiceCameraTrack(deviceId = null) {
+        const pref = this.loadVoiceDevicePref(ZaliInterface.VOICE_CAMERA_PREF_KEY);
+        const id = deviceId === null ? String(pref.deviceId || '') : String(deviceId || '');
+        if (this.nativeCaptureAvailable?.('camera')) {
+            try {
+                const stream = await this.openNativeMediaStream({
+                    kind: 'camera',
+                    deviceId: id,
+                    // Сохранённый выбор — как `ideal`: неизвестный оболочке id (от движка)
+                    // заменяет камера по умолчанию. Явный выбор — именно эта камера.
+                    defaultIfUnknown: deviceId === null,
+                    options: { width: 1280, height: 720, fps: 30 },
+                });
+                const track = stream.getVideoTracks()[0];
+                if (track) {
+                    track.__zaliDeviceId = stream.__zaliDeviceId || id;
+                    return track;
+                }
+            } catch (error) {
+                this.voiceDiag('native-camera-fallback', { error: error?.message || String(error), code: error?.code || '' }, 'WARN');
+            }
+        }
+        const video = deviceId === null
+            ? this.voiceCameraConstraint()
+            : { deviceId: { exact: id }, width: { ideal: 1280 }, height: { ideal: 720 } };
+        const camStream = await navigator.mediaDevices.getUserMedia({ video });
+        const track = camStream.getVideoTracks()[0];
+        if (!track) throw new Error('Камера не отдала видео');
+        return track;
+    }
+
     async captureVoiceLocalStream() {
         if (this.voice.localStream) return this.voice.localStream;
         if (!this.voice.supported) {
             throw new Error('Голосовые звонки не поддерживаются в этом окружении');
         }
+        // Эпоха сброса (resetVoiceState увеличивает): если звонок закончился, пока шёл
+        // getUserMedia, пришедший поток никому не нужен — его нельзя класть в
+        // this.voice.localStream, иначе микрофон остаётся включённым после выхода.
+        const epoch = this._voiceResetEpoch || 0;
         const micConstraint = this.micAudioConstraints();
         const hasPickedDevice = !!this.audioPrefs?.micDeviceId;
         // На WebKit/macOS при выключенной обработке просим ОБЯЗАТЕЛЬНО без неё (см.
         // micAudioConstraints); отказ движка — не ошибка звонка, идём на обычные.
         const strictFirst = this.isWebKitOnMac() && !this.voiceProcessingEnabled();
         const getAudioOnlyStream = async () => {
+            const native = await this.tryNativeMicStream();
+            if (native) return native;
             if (strictFirst) {
                 try {
                     return await navigator.mediaDevices.getUserMedia({ audio: this.micAudioConstraints({ strict: true }), video: false });
@@ -125,7 +185,19 @@ ZaliMixin(ZaliInterface, class {
             }
         };
         let stream;
-        if (this.voice.videoEnabled) {
+        const nativeMicForVideo = this.voice.videoEnabled ? await this.tryNativeMicStream() : null;
+        if (nativeMicForVideo) {
+            // Микрофон из оболочки, камера — отдельно (тоже из оболочки, если умеет).
+            stream = nativeMicForVideo;
+            try {
+                stream.addTrack(await this.captureVoiceCameraTrack());
+                this.voice.cameraOn = true;
+            } catch (error) {
+                this.voiceTrace('camera-request-failed', { error: error?.message || String(error) }, 'WARN');
+                this.addLogEntry({ type: 'WARN', msg: 'Камера недоступна — продолжаем аудиозвонком', ts: new Date().toLocaleTimeString() });
+                this.voice.videoEnabled = false;
+            }
+        } else if (this.voice.videoEnabled) {
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
                     audio: micConstraint,
@@ -140,6 +212,13 @@ ZaliMixin(ZaliInterface, class {
             }
         } else {
             stream = await getAudioOnlyStream();
+        }
+        if ((this._voiceResetEpoch || 0) !== epoch) {
+            for (const track of stream.getTracks()) {
+                try { track.stop(); } catch (e) {}
+            }
+            this.voiceTrace('local-stream-discarded', { reason: 'session-reset-during-capture' });
+            return null;
         }
         this.voice.localStream = stream;
         await this.enforceMicProcessing(stream);
@@ -161,6 +240,12 @@ ZaliMixin(ZaliInterface, class {
         const track = stream?.getAudioTracks?.()[0];
         if (!track) return;
         const want = this.voiceProcessingEnabled();
+        // Нативный микрофон: обработку делает наш APM в оболочке, у дорожки-генератора
+        // настроек движка нет. Итог обработки оболочка присылает событием `stats`.
+        if (this.isNativeMediaStream?.(stream)) {
+            this.voiceDiag('mic-processing', { want, native: true, label: track.label || '' });
+            return;
+        }
         const read = () => {
             const s = track.getSettings?.() || {};
             return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGainControl };
@@ -255,10 +340,7 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             try {
-                const camStream = await navigator.mediaDevices.getUserMedia({
-                    video: this.voiceCameraConstraint(),
-                });
-                const track = camStream.getVideoTracks()[0];
+                const track = await this.captureVoiceCameraTrack();
                 if (!track) return;
                 this.voice.localStream.addTrack(track);
                 this.voice.videoEnabled = true;
@@ -512,15 +594,58 @@ ZaliMixin(ZaliInterface, class {
                 if (choice.surface === 'window') request.monitorTypeSurfaces = 'exclude';
             }
             let stream;
-            try {
-                stream = await navigator.mediaDevices.getDisplayMedia(request);
-            } catch (error) {
-                // An engine that rejects the hints (TypeError) gets the plain request.
-                if (error?.name !== 'TypeError') throw error;
-                stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', frameRate: 30 }, audio: wantAudio });
+            // Звук приложения без звонка (уведомления приглушённо, видео из переписки
+            // как есть) — при показе всего экрана и окна самого мессенджера. Окно
+            // другого приложения — только его звук (interface/share_audio.js).
+            const isDisplay = choice.sourceKind === 'display' || String(choice.sourceId || '').startsWith('display:');
+            const ownWindow = !!choice.own;
+            let appAudio = false;
+            if (choice.sourceId && this.nativeCaptureAvailable?.('screen')) {
+                appAudio = wantAudio && (isDisplay || ownWindow);
+                // Источник выбран в нашем окне с превью (openVoiceScreenPicker) — захват
+                // в оболочке: ScreenCaptureKit / Windows.Graphics.Capture, звук системы
+                // без звука самого приложения (иначе собеседники слышат себя).
+                stream = await this.openNativeMediaStream({
+                    kind: 'screen',
+                    sourceId: String(choice.sourceId),
+                    options: {
+                        fps: Number(choice.fps) || 30,
+                        maxHeight: height,
+                        // Своё окно: звук оболочки не нужен — весь звук приложения
+                        // соберёт страница без голосов звонка.
+                        audio: wantAudio && !ownWindow && this.nativeSupports('nativeScreenAudio'),
+                        cursor: true,
+                    },
+                    firstFrameTimeoutMs: 8000,
+                });
+            } else {
+                try {
+                    stream = await navigator.mediaDevices.getDisplayMedia(request);
+                } catch (error) {
+                    // An engine that rejects the hints (TypeError) gets the plain request.
+                    if (error?.name !== 'TypeError') throw error;
+                    stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', frameRate: 30 }, audio: wantAudio });
+                }
             }
             const track = stream.getVideoTracks()[0];
             if (!track) return;
+            // Звук системы от оболочки уже несёт звук приложения (macOS < 14.2: SCStream
+            // не исключает процесс WebKit) — подмешивание удвоило бы уведомления и видео.
+            if (appAudio && !ownWindow && stream.__zaliNativeInfo?.audioExcludesApp === false) {
+                appAudio = false;
+                this.voiceTrace('screen-share-app-audio-skipped', { reason: 'system-audio-includes-app' }, 'WARN');
+            }
+            if (appAudio) {
+                const systemAudio = stream.getAudioTracks()[0] || null;
+                const mixed = this.startShareAppAudio?.(systemAudio);
+                if (mixed) {
+                    // Звук системы остаётся в исходном потоке оболочки (питает смесь и
+                    // гаснет вместе с картинкой), наружу идёт смесь.
+                    stream = new MediaStream([track, mixed]);
+                    track.addEventListener('ended', () => this.stopShareAppAudio?.('track-ended'));
+                }
+                this.voiceTrace('screen-share-app-audio', { mixed: !!mixed, system: !!systemAudio, own: ownWindow, display: isDisplay });
+            }
             this.voice.localScreenStream = stream;
             // Аудиодорожки может не быть: платформа не умеет (macOS WKWebView),
             // не отдан системный звук, или в системном окне не отмечено «Поделиться
@@ -583,6 +708,7 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.voice.localScreenStream = null;
+        this.stopShareAppAudio?.('screen-stop');
         this.voice.screenSharing = false;
         this.voice.screenAudioShared = false;
         this.resetNativeScreenCaptureState();

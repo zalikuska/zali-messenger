@@ -296,6 +296,8 @@ struct WebView {
             case nativeResponse = "zali_interface:native_response"
             case updateEvent = "zali_interface:update_event"
             case addonEvent = "zali_interface:addon_event"
+            // Ответы на MEDIA_REQUEST и события нативного захвата (Services/Media).
+            case mediaEvent = "zali_interface:media_event"
         }
 
         fileprivate enum WindowFunction: String {
@@ -396,8 +398,10 @@ struct WebView {
             runJavaScript("window.\(name) && window.\(name)(\(args))")
         }
 
-        fileprivate func sendBusEvent(_ event: BusEvent, payload: String) {
-            runJavaScript("window.loader?.bus?.send(\(WebView.javascriptLiteral(event.rawValue)), \(payload));")
+        fileprivate func sendBusEvent(_ event: BusEvent, payload: String, completion: (() -> Void)? = nil) {
+            runJavaScript("window.loader?.bus?.send(\(WebView.javascriptLiteral(event.rawValue)), \(payload));") { _, _ in
+                completion?()
+            }
         }
 
         fileprivate func logToWeb(level: String, text: String) {
@@ -2163,12 +2167,29 @@ struct WebView {
                         NSApp.dockTile.badgeLabel = count > 0 ? (count > 99 ? "99+" : String(count)) : nil
                     }
 
+                case .controlRequest:
+                    // Карточка «Управление из терминала»: включить/выключить вход, новый
+                    // токен (Services/ControlServer.swift). Токен создаёт и сверяет оболочка.
+                    let requestId = dict["requestId"] as? String ?? ""
+                    let op = (dict["op"] as? String ?? "status").trimmingCharacters(in: .whitespaces)
+                    let status = ControlServer.shared.handle(op: op)
+                    self.sendBusEvent(.nativeResponse, payload: WebView.javascriptLiteral([
+                        "requestId": requestId,
+                        "ok": true,
+                        "data": status,
+                    ]))
+
+                case .mediaRequest:
+                    // Нативный захват микрофона/камеры/экрана (Services/Media/MediaController.swift,
+                    // .claude/skills/voice-calls/native-capture.md). Кадры идут не здесь, а
+                    // WebSocket-мостом на 127.0.0.1; сюда — только управление.
+                    MediaController.shared.handle(dict)
+
                 case .startScreenCapture, .stopScreenCapture:
                     // Android-only (MediaProjection capture, see NativeBridge.kt /
-                    // ScreenCaptureService.kt). macOS's WKWebView already supports
-                    // getDisplayMedia() natively, so interface.js's screen-share
-                    // path never takes the native branch here. No-op kept only for
-                    // switch exhaustiveness.
+                    // ScreenCaptureService.kt). macOS shares the screen through
+                    // MEDIA_REQUEST (ScreenCaptureKit, Services/Media) instead. No-op
+                    // kept only for switch exhaustiveness.
                     break
 
                 case .mobileNavProgress:
@@ -2313,6 +2334,29 @@ struct WebView {
         return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
+    /// pid процессов WebKit GPU и WebContent этого WKWebView (SPI, через responds(to:)).
+    static func webKitHelperPIDs(_ webView: WKWebView) -> [pid_t] {
+        typealias GetPID = @convention(c) (AnyObject, Selector) -> pid_t
+        return ["_gpuProcessIdentifier", "_webProcessIdentifier"].compactMap { name in
+            let selector = NSSelectorFromString(name)
+            guard webView.responds(to: selector) else { return nil }
+            let pid = unsafeBitCast(webView.method(for: selector), to: GetPID.self)(webView, selector)
+            return pid > 0 ? pid : nil
+        }
+    }
+
+    /// `-[WKPreferences _setICECandidateFilteringEnabled:NO]`, если сеттер есть.
+    static func disableICECandidateFiltering(_ preferences: WKPreferences) {
+        let selector = NSSelectorFromString("_setICECandidateFilteringEnabled:")
+        guard preferences.responds(to: selector) else {
+            print("[ZALI][WEBVIEW] _setICECandidateFilteringEnabled: unavailable")
+            return
+        }
+        typealias SetBool = @convention(c) (AnyObject, Selector, Bool) -> Void
+        let fn = unsafeBitCast(preferences.method(for: selector), to: SetBool.self)
+        fn(preferences, selector, false)
+    }
+
     private static func loadBridgeProtocolBootstrap() -> String {
         let candidates = [
             Bundle.module.url(forResource: "bridge_protocol", withExtension: "json", subdirectory: "Web"),
@@ -2331,6 +2375,21 @@ struct WebView {
     
     func makeWebView(coordinator: Coordinator) -> WKWebView {
         let config = WKWebViewConfiguration()
+        // Без getUserMedia (микрофон/камера теперь из оболочки) WebKit прячет локальные
+        // ICE-адреса за mDNS (`….local`) — прямые соединения в LAN ломаются. Приватный
+        // сеттер, поэтому через responds(to:) (проверено 2026-11-12 на macOS 27).
+        WebView.disableICECandidateFiltering(config.preferences)
+        // Нативный захват (Services/Media): мост кадров поднимается ДО user-скриптов —
+        // его порт и токен уходят в window.__ZALI_MEDIA_BRIDGE.
+        let media = MediaController.shared
+        mediaLogSink = { line in Coordinator.appendDebugLog(line) }
+        media.startBridge()
+        media.emit = { [weak coordinator] json, done in
+            DispatchQueue.main.async {
+                guard let coordinator else { done?(); return }
+                coordinator.sendBusEvent(.mediaEvent, payload: json, completion: done)
+            }
+        }
         config.userContentController.add(coordinator, name: "nativeApp")
         // Debug log capture: mirror every JS console.* call to a file on disk
         // (~/Library/Application Support/ZaliMessenger/zali-debug.log) so the whole
@@ -2374,7 +2433,7 @@ struct WebView {
         config.userContentController.addUserScript(WKUserScript(source: consoleHook, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let bridgeProtocolBootstrap = WebView.loadBridgeProtocolBootstrap()
         config.userContentController.addUserScript(WKUserScript(source: bridgeProtocolBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        let nativeCapabilities: [String: Any] = [
+        var nativeCapabilities: [String: Any] = [
             "sendMessage": true,
             "sessionSync": true,
             "networkConfig": true,
@@ -2405,7 +2464,15 @@ struct WebView {
             "addonFs": true,
             "addonLaunch": true,
             "addonProcess": true,
+            // Управление из терминала по токену (Services/ControlServer.swift, CONTROL_REQUEST).
+            "controlServer": true,
         ]
+        // nativeMic/nativeCamera/nativeScreen/nativeScreenAudio — только если мост кадров
+        // поднялся; без флага веб идёт в getUserMedia/getDisplayMedia.
+        for (key, value) in media.capabilities { nativeCapabilities[key] = value }
+        if let mediaBootstrap = media.bridgeBootstrapScript {
+            config.userContentController.addUserScript(WKUserScript(source: mediaBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         let nativeCapsBootstrap = "window.__ZALI_NATIVE_CAPS__ = \(WebView.javascriptLiteral(nativeCapabilities));"
         config.userContentController.addUserScript(WKUserScript(source: nativeCapsBootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0"
@@ -2478,6 +2545,16 @@ struct WebView {
         
         let webView = ZaliNativeWebView(frame: .zero, configuration: config)
         coordinator.webView = webView
+        // Управление из терминала (Services/ControlServer.swift): включается в настройках.
+        WebView.attachControlServer(to: webView)
+        // Звук экрана исключает процессы WebKit этого окна (там играют голоса собеседников),
+        // см. ScreenAudioTap в Services/Media/RenderTap.swift.
+        if #available(macOS 14.2, *) {
+            ScreenAudioTap.ownHelperPIDs = { [weak webView] in
+                let read = { () -> [pid_t] in webView.map { WebView.webKitHelperPIDs($0) } ?? [] }
+                return Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+            }
+        }
         webView.navigationDelegate = coordinator
         webView.uiDelegate = coordinator
         webView.setValue(false, forKey: "drawsBackground")

@@ -16,7 +16,7 @@ use openssl::{
 use reqwest::Method;
 use serde_json::{json, Value};
 
-const SUPPLY: i64 = 100_000;
+const SUPPLY: i64 = 1_000_000;
 const PASSWORD: &str = "correct horse battery staple";
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

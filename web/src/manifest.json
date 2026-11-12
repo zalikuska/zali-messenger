@@ -46,6 +46,7 @@
     "mixin.js",
     "interface.js",
     "interface/format.js",
+    "interface/signs.js",
     "interface/native_bridge.js",
     "interface/viewport.js",
     "interface/mobile.js",
@@ -64,7 +65,10 @@
     "interface/servers_model.js",
     "interface/server_modal.js",
     "interface/server_rail.js",
+    "interface/mobile_server_bar.js",
     "interface/voice_transport.js",
+    "interface/native_media.js",
+    "interface/share_audio.js",
     "interface/voice_media.js",
     "interface/voice_devices.js",
     "interface/voice_negotiation.js",
@@ -109,6 +113,7 @@
     "interface/sidebar_settings.js",
     "interface/deep_links.js",
     "interface/user_suggest.js",
+    "interface/control.js",
     "interface/events.js"
   ],
   "boot": [

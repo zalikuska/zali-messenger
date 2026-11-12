@@ -329,6 +329,16 @@ function makeClient({ withSynth = true, prefs = {}, synthModule = synth, context
     api.voice = { roomId: 'ch-9', roomType: 'channel', participants: ['me', 'alice'] };
     check('чужая комната канала, где меня нет, — тишина', join(['x', 'y'], 'ch-2') === 0);
     check('личный звонок — без звука захода', join(['me', 'alice'], 'dm-1', 'dm') === 0);
+    // Свой заход: звук по клику, первый состав от сервера не звучит второй раз,
+    // следующий чужой заход — звучит.
+    api.voice = { roomId: '', roomType: '', participants: [] };
+    api.sound.voiceEventAt = {};
+    let clicked = log.sources.length;
+    api.noteVoiceRoomJoining('ch-5');
+    check('свой заход — звук сразу по клику', log.sources.length - clicked === 1 && last() === joinBuffer());
+    check('первый состав после своего захода — без второго звука', join(['me', 'alice', 'bob'], 'ch-5') === 0);
+    check('после этого чужой заход звучит как обычно', join(['me', 'alice', 'bob', 'zed'], 'ch-5') === 1);
+
     // Свой выход из канала.
     api.voice = { roomId: 'ch-1', roomType: 'channel', participants: ['me', 'alice'] };
     api.sound.voiceEventAt = {};

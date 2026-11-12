@@ -29,7 +29,7 @@ ZaliMixin(ZaliInterface, class {
               icon: ico('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>') },
             { id: 'app', label: 'Приложение', sections: ['updates', 'autostart', 'cache'],
               icon: ico('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6M12 9v6"/>') },
-            { id: 'dev', label: 'Для разработчиков', sections: ['voice-trace', 'logs'],
+            { id: 'dev', label: 'Для разработчиков', sections: ['voice-trace', 'control', 'logs'],
               icon: ico('<path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/>') },
         ];
     }

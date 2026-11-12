@@ -251,10 +251,16 @@ ZaliMixin(ZaliInterface, class {
         }
         const headAvatar = document.getElementById('serverModalAvatar');
         if (headAvatar) {
-            const headName = isEdit ? (current?.name || server?.name || '') : '';
-            const headIcon = isEdit ? String(current?.icon || '').trim() : '';
-            headAvatar.textContent = headIcon || (headName ? headName.trim().charAt(0).toUpperCase() : (isDiscover ? '⌕' : '+'));
-            headAvatar.style.background = isEdit ? (this.safeCssColor(current?.color) || '') : '';
+            // Тот же путь, что у рейки и шапки канала: раньше здесь печаталась
+            // только буква, и загруженная аватарка сервера в шапке его же
+            // настроек не показывалась.
+            const headServer = isEdit ? (current || server) : null;
+            if (headServer) {
+                this.paintServerAvatar(headAvatar, headServer);
+            } else {
+                this.clearServerAvatarPaint(headAvatar);
+                headAvatar.textContent = isDiscover ? '⌕' : '+';
+            }
         }
         if (sidebarTitle) sidebarTitle.textContent = isEdit ? (current?.name || server?.name || 'Настройки сервера') : isDiscover ? 'Поиск серверов' : 'Создание сервера';
         if (sidebarHint) sidebarHint.textContent = isEdit
