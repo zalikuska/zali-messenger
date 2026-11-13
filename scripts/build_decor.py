@@ -407,6 +407,9 @@ ILLUSTRATIONS = {
         item('bubble', 210, 120, .7, 8, tone=.2),
         *bits(('sparkle', 26, 110, .34), ('dot', 150, 18, .28, .6), ('sparkle', 244, 28, .28, .7)),
     ]),
+    # Пустой голосовой канал (voice_ui.js: voiceEmptySceneHTML) — рисуется
+    # целиком вручную, не из иконок: voice_empty_svg() ниже.
+    'voice-empty': (360, 210, 'voice_empty_svg'),
     # Настройки: окно поверх большой шестерёнки, ползунки и палитра вокруг.
     'settings': (360, 260, [
         blob(184, 140, 150, 98, 13),
@@ -422,8 +425,119 @@ ILLUSTRATIONS = {
 }
 
 
+def voice_empty_svg():
+    """Пустой голосовой канал: студийный микрофон на подвесе посреди «комнаты»,
+    от него по полу расходятся круги, вокруг — пустые места участников
+    (пунктирные аватарки), одно из них — «ваше», с плюсом. Перспектива:
+    дальние места меньше и бледнее. Рисунок собран вручную, а не из иконок,
+    поэтому пропорции и тона согласованы, а лишних блёсток нет."""
+    cx, fy = 180, 160          # центр комнаты на полу
+    ring_rx, ring_ry = 142, 27  # эллипс, по которому стоят места
+
+    def arc(r, a0, a1, ox=180, oy=60):
+        x0, y0 = ox + r * math.cos(math.radians(a0)), oy + r * math.sin(math.radians(a0))
+        x1, y1 = ox + r * math.cos(math.radians(a1)), oy + r * math.sin(math.radians(a1))
+        return f'M{x0:.1f} {y0:.1f}A{r} {r} 0 0 1 {x1:.1f} {y1:.1f}'
+
+    seats = []
+    for ang, mine in ((228, False), (312, False), (162, False), (18, True)):
+        k = math.sin(math.radians(ang))           # -1 дальний край … +1 ближний
+        s = 0.86 + 0.2 * k
+        x = cx + ring_rx * math.cos(math.radians(ang))
+        y = fy + ring_ry * k
+        seats.append((x, y, s, mine, k))
+    seats.sort(key=lambda t: t[1])                # дальние рисуются первыми
+
+    def seat(x, y, s, mine, k):
+        r = 16 * s
+        hy = y - 22 * s                           # центр аватарки над полом
+        op = 1 if mine else 0.62 + 0.25 * (k + 1) / 2
+        out = [f'<ellipse cx="{x:.1f}" cy="{y:.1f}" rx="{r * 1.05:.1f}" ry="{r * .28:.1f}" '
+               f'class="f" fill-opacity="{.18 if mine else .1}"/>']
+        if mine:
+            out.append(f'<circle cx="{x:.1f}" cy="{hy:.1f}" r="{r:.1f}" fill="#000" fill-opacity=".2"/>')
+            p = r * .42
+            out.append(f'<path d="M{x - p:.1f} {hy:.1f}h{2 * p:.1f}M{x:.1f} {hy - p:.1f}v{2 * p:.1f}" '
+                       'stroke-width="2.4"/>')
+        else:
+            cid = f'seat{int(x)}'
+            out.append(f'<clipPath id="{cid}"><circle cx="{x:.1f}" cy="{hy:.1f}" r="{r - 1:.1f}"/></clipPath>')
+            out.append(f'<g clip-path="url(#{cid})" class="f" fill-opacity=".16">'
+                       f'<circle cx="{x:.1f}" cy="{hy - r * .2:.1f}" r="{r * .34:.1f}"/>'
+                       f'<ellipse cx="{x:.1f}" cy="{hy + r * .78:.1f}" rx="{r * .62:.1f}" ry="{r * .5:.1f}"/></g>')
+            out.append(f'<circle cx="{x:.1f}" cy="{hy:.1f}" r="{r:.1f}" stroke-dasharray="0.1 5.2"'
+                       f' stroke-width="2.2"/>')
+        return f'<g opacity="{op:.2f}">{"".join(out)}</g>', (x, hy, r, y)
+
+    seat_svg, seat_geo = zip(*(seat(*t) for t in seats))
+
+    # Вырез в полу под основанием, стойкой и местами — круги не просвечивают.
+    cut = [f'<ellipse cx="{cx}" cy="{fy + 4}" rx="34" ry="10"/>',
+           f'<rect x="{cx - 6}" y="118" width="12" height="46"/>']
+    for x, hy, r, y in seat_geo:
+        cut.append(f'<circle cx="{x:.1f}" cy="{hy:.1f}" r="{r + 4:.1f}"/>')
+        cut.append(f'<ellipse cx="{x:.1f}" cy="{y:.1f}" rx="{r * 1.2:.1f}" ry="{r * .4:.1f}"/>')
+    floor = ''.join(
+        f'<ellipse cx="{cx}" cy="{fy + 4}" rx="{rx}" ry="{ry}" opacity="{op}"'
+        + (f' stroke-dasharray="{dash}"' if dash else '') + '/>'
+        for rx, ry, op, dash in ((58, 11, .55, None), (96, 18.5, .38, '0.1 6'),
+                                 (ring_rx, ring_ry, .22, '0.1 6'), (176, 36, .1, '0.1 7'))
+    )
+
+    # Звуковые волны слева и справа от сетки, затухают наружу.
+    waves = ''.join(
+        f'<path d="{arc(r, 180 - sp, 180 + sp)}" opacity="{op}"/>'
+        f'<path d="{arc(r, -sp, sp)}" opacity="{op}"/>'
+        for r, sp, op in ((40, 30, .75), (54, 27, .48), (68, 24, .26))
+    )
+
+    # Микрофон: сетка с перекрёстной штриховкой, поясок, корпус, подвес-вилка,
+    # шарнир, стойка, основание.
+    grille = 'M159 84V54a21 21 0 0 1 42 0v30z'
+    hatch = ''.join(f'<path d="M{x} 24l40 70M{x + 40} 24l-40 70"/>' for x in range(122, 220, 7))
+    mic = (
+        f'<path d="M151 72v20a29 29 0 0 0 58 0V72" stroke-width="2.2"/>'
+        f'<path d="M151 72h5M204 72h5" stroke-width="2.2"/>'
+        f'<clipPath id="grille"><path d="{grille}"/></clipPath>'
+        f'<path d="{grille}" fill="#000" fill-opacity=".12"/>'
+        f'<g clip-path="url(#grille)" stroke-width="1" opacity=".42">{hatch}</g>'
+        f'<path d="M165 62V55a15 15 0 0 1 5-11" clip-path="url(#grille)" stroke-width="2.6" opacity=".55"/>'
+        f'<path d="{grille}" stroke-width="2.2"/>'
+        '<rect x="156" y="84" width="48" height="9" rx="3" fill="#000" fill-opacity=".45" stroke-width="2.2"/>'
+        '<path d="M160 93h40v12a12 12 0 0 1-12 12h-16a12 12 0 0 1-12-12z" fill="#000" fill-opacity=".26"'
+        ' stroke-width="2.2"/>'
+        '<path d="M167 100h26M167 106h26" opacity=".45"/>'
+        '<circle cx="154" cy="72" r="3.2" class="f"/><circle cx="206" cy="72" r="3.2" class="f"/>'
+        '<path d="M180 121v37" stroke-width="2.4"/>'
+        '<circle cx="180" cy="124" r="3.4" fill="#000" fill-opacity=".45" stroke-width="1.8"/>'
+        f'<ellipse cx="{cx}" cy="{fy + 4}" rx="27" ry="6.5" fill="#000" fill-opacity=".32" stroke-width="2.2"/>'
+        f'<path d="M153 {fy + 4}v3a27 6.5 0 0 0 54 0v-3" stroke-width="2.2"/>'
+    )
+
+    # Пара тихих деталей в воздухе — не больше трёх.
+    air = (
+        '<path class="f" d="M44 44l1.6 4.4 4.4 1.6-4.4 1.6L44 56l-1.6-4.4-4.4-1.6 4.4-1.6z" opacity=".5"/>'
+        '<circle class="f" cx="318" cy="38" r="2.2" opacity=".4"/>'
+        '<circle cx="292" cy="70" r="3.6" opacity=".3"/>'
+    )
+
+    back = [g for g, (x, hy, r, y) in zip(seat_svg, seat_geo) if y < fy]
+    front = [g for g, (x, hy, r, y) in zip(seat_svg, seat_geo) if y >= fy]
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 210" fill="none" '
+        'stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<style>*{vector-effect:non-scaling-stroke}.f{fill:#000;stroke:none}</style>'
+        '<defs><mask id="floorcut" maskUnits="userSpaceOnUse" x="0" y="0" width="360" height="210">'
+        '<rect width="360" height="210" fill="#fff" stroke="none"/>'
+        f'<g fill="#000" stroke="none">{"".join(cut)}</g></mask></defs>'
+        f'<g mask="url(#floorcut)">{floor}</g>{air}{"".join(back)}{waves}{mic}{"".join(front)}</svg>'
+    )
+
+
 def illustration_svg(name):
     w, h, items = ILLUSTRATIONS[name]
+    if isinstance(items, str):
+        return globals()[items]()
     used = set()
     for it in items:
         if it['kind'] == 'icon':

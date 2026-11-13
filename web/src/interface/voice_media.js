@@ -1003,6 +1003,13 @@ ZaliMixin(ZaliInterface, class {
                 // lifecycle events back through the same attach/detach helpers so the
                 // element actually reflects live track state.
                 const refreshRemoteVideoTrack = () => {
+                    // pc.close() в resetVoiceState (и пересоздание пира) гасит
+                    // дорожки — onmute/onended приходят уже ПОСЛЕ очистки
+                    // remoteScreens/remoteVideos, и attach заводил элемент заново:
+                    // в следующем звонке висела «Экран: <прошлый собеседник>» с
+                    // кнопкой «Смотреть» и плитка-призрак. Мёртвый пир ничего не
+                    // подключает.
+                    if (this.voice.peerConnections.get(name) !== entry) return;
                     const isScreen = !!(entry.remoteScreenStreamId && stream.id === entry.remoteScreenStreamId);
                     if (isScreen) {
                         this.attachRemoteScreenStream(name, stream);

@@ -124,14 +124,15 @@ ZaliMixin(ZaliInterface, class {
         if (!host) return;
         const active = this.normalizeDesignMode(this.designMode);
         const html = this.designModeCatalog().map(mode => `
-            <button type="button" class="design-mode-option${mode.id === active ? ' active' : ''}" data-design-mode="${this.esc(mode.id)}" aria-pressed="${mode.id === active}">
+            <button type="button" class="design-mode-option f-choice${mode.id === active ? ' active' : ''}" data-design-mode="${this.esc(mode.id)}" role="radio" aria-checked="${mode.id === active}">
+                <span class="f-choice-mark" aria-hidden="true"></span>
                 <span class="design-mode-preview design-mode-preview--${this.esc(mode.id)}" aria-hidden="true">
                     <span class="design-mode-preview-bar"></span>
                     <span class="design-mode-preview-row"></span>
                     <span class="design-mode-preview-row design-mode-preview-row--accent"></span>
                 </span>
                 <span class="design-mode-copy">
-                    <strong>${this.esc(mode.label)}</strong>
+                    <strong>${this.esc(mode.label)}${mode.note ? ` <span class="f-choice-tag">${this.esc(mode.note.toLowerCase())}</span>` : ''}</strong>
                     <small>${this.esc(mode.hint)}</small>
                 </span>
                 <span class="design-mode-note">${this.esc(mode.note)}</span>
@@ -201,6 +202,28 @@ ZaliMixin(ZaliInterface, class {
         document.body?.setAttribute('data-msg-side', this.msgOneSide ? 'one' : 'split');
         const toggle = document.getElementById('inputMsgOneSide');
         if (toggle) toggle.checked = this.msgOneSide;
+    }
+
+    // «Спокойный фон» всегда включён: фон почти чёрный и нейтральный в любой схеме
+    // (CSS: body[data-calm-bg="on"]). «Подкраска фона» добавляет примесь акцента
+    // схемы (CSS: body[data-calm-tint="on"]); выключена по умолчанию.
+    // Хранится на устройстве, как «Иллюстрации».
+    loadCalmTint() {
+        try { return localStorage.getItem('zali_calm_bg_tint_v1') === '1'; } catch (e) { return false; }
+    }
+
+    saveCalmTint(enabled) {
+        this.calmTint = !!enabled;
+        try { localStorage.setItem('zali_calm_bg_tint_v1', this.calmTint ? '1' : '0'); } catch (e) { /* без хранилища */ }
+        this.applyCalmBg();
+    }
+
+    applyCalmBg() {
+        if (typeof this.calmTint !== 'boolean') this.calmTint = this.loadCalmTint();
+        document.body?.setAttribute('data-calm-bg', 'on');
+        document.body?.setAttribute('data-calm-tint', this.calmTint ? 'on' : 'off');
+        const tintToggle = document.getElementById('inputCalmTint');
+        if (tintToggle) tintToggle.checked = this.calmTint;
     }
 
     applyDecorArt() {

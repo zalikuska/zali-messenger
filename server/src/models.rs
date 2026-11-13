@@ -214,6 +214,11 @@ pub(crate) struct ServerResponse {
     pub(crate) can_invite: bool,
     #[serde(rename = "memberCount")]
     pub(crate) member_count: i64,
+    /// Сколько участников сейчас с живым соединением. Считается только для
+    /// каталога публичных серверов (плитка «N в сети»); в остальных ответах
+    /// поля нет — старые клиенты его не ждут.
+    #[serde(rename = "onlineCount", skip_serializing_if = "Option::is_none")]
+    pub(crate) online_count: Option<i64>,
     pub(crate) channels: Vec<ChannelResponse>,
 }
 

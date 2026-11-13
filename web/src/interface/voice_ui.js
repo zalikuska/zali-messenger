@@ -259,6 +259,27 @@ ZaliMixin(ZaliInterface, class {
     // previewNames — превью голосового канала, в котором мы не состоим: показываем
     // только тех, кого назвал сервер (voicePresenceNames), без нас самих и без
     // медиа-карт текущего звонка.
+    /** Пустой голосовой канал: иллюстрация (scripts/build_decor.py, voice_empty_svg —
+     *  микрофон посреди пустой «комнаты»), заголовок и подсказка. Подпись выбирается по
+     *  id канала — у канала она всегда одна и та же, а соседние каналы не выглядят
+     *  копиями. Кнопка «Зайти в канал» остаётся в панели ниже (voice-join-bar). */
+    voiceEmptySceneHTML() {
+        const scenes = [
+            { title: 'Микрофон свободен', sub: 'Зайдите первым — остальные увидят вас в списке канала и смогут присоединиться.' },
+            { title: 'Здесь пока тихо', sub: 'Канал ждёт первого голоса. Зайдите — и друзья увидят, что вы на связи.' },
+            { title: 'Никого в эфире', sub: 'Начните разговор: как только вы зайдёте, канал оживёт у всех участников сервера.' },
+        ];
+        const key = String(this.currentChannel()?.id || this.currentChannel()?.name || '');
+        let hash = 0;
+        for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+        const scene = scenes[hash % scenes.length];
+        return `<div class="voice-empty-scene">
+            <div class="voice-empty-art" aria-hidden="true"></div>
+            <div class="voice-empty-title">${this.esc(scene.title)}</div>
+            <div class="voice-empty-sub">${this.esc(scene.sub)}</div>
+        </div>`;
+    }
+
     renderVoiceTiles(previewNames = null, previewStates = null) {
         const seen = new Set();
         const participants = [];
@@ -282,7 +303,9 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (!participants.length) {
-            return `<div class="voice-empty">${Array.isArray(previewNames) ? 'В канале пока никого — зайдите первым' : 'Пока никого нет'}</div>`;
+            return Array.isArray(previewNames)
+                ? this.voiceEmptySceneHTML()
+                : '<div class="voice-empty">Пока никого нет</div>';
         }
         const myName = String(this.myName() || '').trim().toLowerCase();
         // Превью уже упорядочено (эфир → камера → время входа) тем же правилом, что и
@@ -765,6 +788,7 @@ ZaliMixin(ZaliInterface, class {
             this._voiceTileNodes = null;
             this._voicePanelHtml = '';
             this.stopVoicePresencePoll();
+            this.syncVoiceFocusOverlay();
             return;
         }
         panel.hidden = false;
@@ -1010,7 +1034,112 @@ ZaliMixin(ZaliInterface, class {
         this.renderChatHeaderCallState();
     }
 
+    // ── Видео на весь экран ────────────────────────────────────────────────
+    // Тап по плитке с камерой или по показу экрана разворачивает это видео поверх
+    // всего приложения. Переезжает сам <video>, а не копия: второй элемент на тот же
+    // поток удвоил бы декодирование. Пока фокус открыт, mountVoiceVideoElements этот
+    // элемент в плитку/сцену не возвращает. Оверлей живёт на <body>: внутри панели
+    // звонка position:fixed ломает backdrop-filter предка (становится его рамкой).
+    // _voiceFocus = { kind: 'cam' | 'screen', peer, label }; peer у камеры — имя в
+    // нижнем регистре (data-peer плитки), у экрана — ключ remoteScreens ('' — свой).
+    openVoiceFocus(kind, peer, label = '') {
+        this._voiceFocus = { kind: kind === 'screen' ? 'screen' : 'cam', peer: String(peer || ''), label: String(label || '') };
+        if (!this.voiceFocusVideo()) {
+            this._voiceFocus = null;
+            return;
+        }
+        // Через mount, а не только оверлей: плитка, из которой ушло видео, должна
+        // сразу вернуться к аватару, а не стоять чёрной до следующей перерисовки.
+        this.mountVoiceVideoElements();
+    }
+
+    closeVoiceFocus() {
+        if (!this._voiceFocus && !document.getElementById('voiceFocus')) return;
+        const video = this.voiceFocusVideo();
+        this._voiceFocus = null;
+        document.getElementById('voiceFocus')?.remove();
+        if (this._voiceFocusKeyHook) {
+            document.removeEventListener('keydown', this._voiceFocusKeyHook, true);
+            this._voiceFocusKeyHook = null;
+        }
+        // Вернуть видео в его плитку/сцену; вынутый из документа <video> мог встать на паузу.
+        this.mountVoiceVideoElements();
+        video?.play?.().catch(() => {});
+    }
+
+    voiceFocusVideo() {
+        const focus = this._voiceFocus;
+        if (!focus) return null;
+        if (focus.kind === 'screen') {
+            if (!focus.peer) return this.voice.screenSharing ? (this.voice.localScreenVideoEl || null) : null;
+            return this.voice.remoteScreens.get(focus.peer) || null;
+        }
+        const me = String(this.myName() || '').trim().toLowerCase();
+        if (focus.peer === me) return this.voice.cameraOn ? (this.voice.localVideoEl || null) : null;
+        for (const [peer, video] of this.voice.remoteVideos.entries()) {
+            if (String(peer || '').trim().toLowerCase() === focus.peer) return video;
+        }
+        return null;
+    }
+
+    // Приводит оверлей к _voiceFocus: видео пропало (камеру выключили, человек вышел,
+    // звонок кончился) — оверлей закрывается сам.
+    syncVoiceFocusOverlay() {
+        const video = this.voiceFocusVideo();
+        let root = document.getElementById('voiceFocus');
+        if (!video) {
+            if (this._voiceFocus || root) {
+                this._voiceFocus = null;
+                root?.remove();
+                if (this._voiceFocusKeyHook) {
+                    document.removeEventListener('keydown', this._voiceFocusKeyHook, true);
+                    this._voiceFocusKeyHook = null;
+                }
+            }
+            return;
+        }
+        if (!root) {
+            root = document.createElement('div');
+            root.id = 'voiceFocus';
+            root.className = 'voice-focus';
+            root.setAttribute('role', 'dialog');
+            root.setAttribute('aria-modal', 'true');
+            root.innerHTML = `<div class="voice-focus-media"></div>
+                <div class="voice-focus-bar">
+                    <span class="voice-focus-name"></span>
+                    <button type="button" class="voice-focus-close" aria-label="Свернуть видео" title="Свернуть">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                    </button>
+                </div>`;
+            // Любой тап по видео сворачивает его обратно — тот же жест, что открыл.
+            root.addEventListener('click', () => this.closeVoiceFocus());
+            this._voiceFocusKeyHook = (event) => {
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                event.stopPropagation();
+                this.closeVoiceFocus();
+            };
+            document.addEventListener('keydown', this._voiceFocusKeyHook, true);
+            document.body.appendChild(root);
+        }
+        const focus = this._voiceFocus;
+        const me = String(this.myName() || '').trim().toLowerCase();
+        // Своя камера в плитке зеркальная (как в зеркале) — так же и крупно.
+        root.classList.toggle('is-mine', focus.kind === 'cam' && focus.peer === me);
+        root.classList.toggle('is-screen', focus.kind === 'screen');
+        const nameEl = root.querySelector('.voice-focus-name');
+        if (nameEl && nameEl.textContent !== focus.label) nameEl.textContent = focus.label;
+        const media = root.querySelector('.voice-focus-media');
+        if (media.firstChild !== video || media.childNodes.length !== 1) {
+            media.replaceChildren(video);
+            video.play?.().catch(() => {});
+        }
+    }
+
     mountVoiceVideoElements() {
+        // Видео, открытое на весь экран, остаётся в оверлее — сюда его не берём.
+        this.syncVoiceFocusOverlay();
+        const focusVideo = this.voiceFocusVideo();
         const stage = document.getElementById('voiceStage');
         if (stage) {
             // Состав сцены: [видео, подпись, закрыто ли превью]. Если он совпадает с
@@ -1028,6 +1157,10 @@ ZaliMixin(ZaliInterface, class {
             for (const [peer, video] of this.voice.remoteScreens.entries()) {
                 wanted.push([video, `Экран: ${peer}`, !video.dataset.watching, peer]);
             }
+            if (focusVideo) {
+                const at = wanted.findIndex(([video]) => video === focusVideo);
+                if (at >= 0) wanted.splice(at, 1);
+            }
             const tilesNow = Array.from(stage.children);
             const same = tilesNow.length === wanted.length && wanted.every(([video, text, gated], i) => {
                 const tile = tilesNow[i];
@@ -1040,6 +1173,9 @@ ZaliMixin(ZaliInterface, class {
                 for (const [video, text, gated, peer] of wanted) {
                     const wrap = document.createElement('div');
                     wrap.className = `voice-stage-tile${gated ? ' is-gated' : ''}`;
+                    // Для тапа «на весь экран» (bindVoicePanelEvents → openVoiceFocus).
+                    wrap.dataset.kind = 'screen';
+                    wrap.dataset.peer = peer;
                     wrap.appendChild(video);
                     const label = document.createElement('span');
                     label.className = 'voice-video-label';
@@ -1093,7 +1229,7 @@ ZaliMixin(ZaliInterface, class {
         const wantedVideo = new Map();
         const wantVideo = (peer, video) => {
             const key = String(peer || '').trim().toLowerCase();
-            if (!key || !video || !byPeer.get(key)?.querySelector('.voice-tile-media')) return;
+            if (!key || !video || video === focusVideo || !byPeer.get(key)?.querySelector('.voice-tile-media')) return;
             wantedVideo.set(key, video);
         };
         if (this.voice.cameraOn) wantVideo(this.myName(), this.voice.localVideoEl);

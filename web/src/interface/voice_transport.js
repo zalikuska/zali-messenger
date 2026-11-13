@@ -259,7 +259,18 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (this.voice.socket && (this.voice.socket.readyState === WebSocket.OPEN || this.voice.socket.readyState === WebSocket.CONNECTING)) {
-            return;
+            // Живой сокет к другому адресу — пересоздать. Без этого смена сервера
+            // (setNetworkConfig зовёт сюда) молча оставляла старый сокет, в том
+            // числе вечно подключающийся к недоступному хосту.
+            let sameTarget = true;
+            try {
+                const current = new URL(this.voice.socket.url);
+                const wanted = new URL(this.getWsBaseUrl());
+                sameTarget = current.host === wanted.host && current.pathname === wanted.pathname
+                    && current.protocol === wanted.protocol;
+            } catch (e) {}
+            if (sameTarget) return;
+            this.voiceDiag('socket-target-changed', { from: this.voice.socket.url.replace(/ticket=[^&]+/, 'ticket=…'), to: this.getWsBaseUrl() }, 'WARN');
         }
 
         this.disconnectBrowserVoiceSocket();
@@ -295,8 +306,19 @@ ZaliMixin(ZaliInterface, class {
             const socket = new WebSocket(url.toString());
             this.voice.socket = socket;
             this.voice.socketReady = false;
+            // Дедлайн подключения. WebSocket к хосту, который молча глотает SYN,
+            // висит в CONNECTING минутами (до таймаута TCP), а всё это время любой
+            // сигнал звонка отбрасывается с readyState=0 и реконнект не планируется.
+            // close() на CONNECTING вызывает onclose — тот и перепланирует попытку.
+            const connectTimer = setTimeout(() => {
+                if (generation !== this.voiceSocketGeneration) return;
+                if (socket.readyState !== WebSocket.CONNECTING) return;
+                this.voiceDiag('socket-connect-timeout', { generation, url: url.origin + url.pathname }, 'WARN');
+                try { socket.close(); } catch (e) {}
+            }, 10000);
 
             socket.onopen = () => {
+                clearTimeout(connectTimer);
                 if (generation !== this.voiceSocketGeneration) return;
                 this.voice.socketReady = true;
                 this.voiceSocketReconnectDelayMs = 1000;
@@ -525,6 +547,10 @@ ZaliMixin(ZaliInterface, class {
         this.voice.videoEnabled = false;
         this.voice.cameraOn = false;
         this.voice.screenSharing = false;
+        // Видео, развёрнутое на весь экран (voice_ui.js openVoiceFocus), уже
+        // остановлено — без этого оверлей с чёрным кадром переживал конец звонка.
+        this._voiceFocus = null;
+        this.syncVoiceFocusOverlay?.();
         if (this.voice.localStream) {
             for (const track of this.voice.localStream.getTracks()) {
                 try { track.stop(); } catch (e) {}

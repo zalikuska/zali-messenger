@@ -308,6 +308,21 @@ ZaliMixin(ZaliInterface, class {
         return `<img class="avatar-img" src="${this.esc(cached)}" alt="${this.esc(server?.name || '')}">`;
     }
 
+    /** URL загруженного баннера сервера или '' — тот же путь кэша, что у аватарки:
+     *  пока картинки нет, загрузка запускается, а отрисовка повторится по приезду. */
+    serverBannerUrl(server) {
+        const id = String(server?.id || '').trim();
+        if (!id) return '';
+        const key = this.serverAssetCacheKey(id, 'banner');
+        if (!this.serverAssetCache.has(key)) {
+            this.loadServerAsset(id, 'banner').then(url => { if (url) this.scheduleServerAssetRefresh(); });
+            return '';
+        }
+        const cached = this.serverAssetCache.get(key);
+        if (cached) this.cacheNoteAssetUse('server_asset', key);
+        return cached || '';
+    }
+
     renderServerAvatarHTML(server, extraClass = '') {
         const inner = this.serverAvatarInnerHTML(server);
         const hasImg = inner.startsWith('<img');
@@ -336,6 +351,9 @@ ZaliMixin(ZaliInterface, class {
             const head = document.getElementById('serverModalAvatar');
             const modalServer = head?.classList.contains('is-server') ? byId(this.S.serverModal?.serverId) : null;
             if (modalServer) this.paintServerAvatar(head, modalServer);
+            // Каталог публичных серверов: аватарки и баннеры плиток приезжают после
+            // первой отрисовки — без этого они появлялись только при переоткрытии.
+            if (this.S.serverModal?.mode === 'discover') this.renderPublicServersModal?.();
             this.renderTreasuryHead?.();
         };
         requestAnimationFrame(run);

@@ -2216,6 +2216,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             patch(update_server_member).delete(delete_server_member),
         )
         .route(
+            "/api/servers/:server_id/membership",
+            axum::routing::delete(leave_server),
+        )
+        .route(
             "/api/servers/:server_id/roles",
             get(get_server_roles).post(create_server_role),
         )

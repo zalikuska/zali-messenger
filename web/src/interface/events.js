@@ -140,6 +140,19 @@ ZaliMixin(ZaliInterface, class {
                 this.openContactContextMenu(person.dataset.name, e.clientX, e.clientY, { fromVoice: true });
             });
             voicePanel.addEventListener('click', async (e) => {
+                // Тап по плитке с видео (камера) или по показу экрана — это видео на
+                // весь экран (openVoiceFocus). Плитка без видео — только аватар,
+                // разворачивать нечего. Закрытый чужой экран открывает «Смотреть».
+                const videoTile = e.target.closest('.voice-tile.has-video[data-peer], .voice-dot.has-video[data-peer]');
+                if (videoTile) {
+                    this.openVoiceFocus('cam', videoTile.dataset.peer || '', videoTile.dataset.name || '');
+                    return;
+                }
+                const stageTile = e.target.closest('.voice-stage-tile[data-kind="screen"]');
+                if (stageTile && !stageTile.classList.contains('is-gated') && !e.target.closest('.voice-screen-watch')) {
+                    this.openVoiceFocus('screen', stageTile.dataset.peer || '', stageTile.querySelector('.voice-video-label')?.textContent || '');
+                    return;
+                }
                 const callBtn = e.target.closest('#voiceCallBtn');
                 if (callBtn) {
                     await this.startDirectCall(this.S.current);
@@ -1225,6 +1238,10 @@ ZaliMixin(ZaliInterface, class {
         if (inputMsgOneSide) {
             inputMsgOneSide.addEventListener('change', () => this.saveMsgOneSide(!!inputMsgOneSide.checked));
         }
+        const inputCalmTint = document.getElementById('inputCalmTint');
+        if (inputCalmTint) {
+            inputCalmTint.addEventListener('change', () => this.saveCalmTint(!!inputCalmTint.checked));
+        }
         if (inputDecorArt) {
             inputDecorArt.addEventListener('change', () => {
                 this.saveDecorArt(!!inputDecorArt.checked);
@@ -1442,8 +1459,8 @@ ZaliMixin(ZaliInterface, class {
                     if (!serverId) return;
                     const server = (this.S.publicServers || []).find(item => String(item.id || '') === serverId);
                     if (!server) return;
-                    const role = this.normalizeMemberRole(server.myRole || server.my_role || '');
-                    if (role === 'owner' || role === 'admin' || role === 'member') {
+                    // Пустой myRole — не участник (normalizeMemberRole('') дал бы 'member').
+                    if (String(server.myRole || server.my_role || '').trim()) {
                         this.closeServerOverlay();
                         this.setActiveServer(serverId);
                     } else {
@@ -1457,9 +1474,7 @@ ZaliMixin(ZaliInterface, class {
                     if (!serverId) return;
                     const server = (this.S.publicServers || []).find(item => String(item.id || '') === serverId);
                     if (!server) return;
-                    if (this.normalizeMemberRole(server.myRole || server.my_role || '') === 'owner'
-                        || this.normalizeMemberRole(server.myRole || server.my_role || '') === 'admin'
-                        || this.normalizeMemberRole(server.myRole || server.my_role || '') === 'member') {
+                    if (String(server.myRole || server.my_role || '').trim()) {
                         this.closeServerOverlay();
                         this.setActiveServer(serverId);
                         return;
@@ -2125,6 +2140,7 @@ ZaliMixin(ZaliInterface, class {
         this.applyUiV2Chrome();
         this.applyDesignMode();
         this.applyDecorArt();
+        this.applyCalmBg();
         this.applyMsgOneSide();
         this.applySettingsSyncUi();
         this.applyUpdateChannelsUi();

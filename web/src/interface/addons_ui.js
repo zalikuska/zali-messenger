@@ -245,35 +245,38 @@ ZaliMixin(ZaliInterface, class {
         this.renderHubStore?.();
         const list = document.getElementById('hubAddonsList');
         const installBtn = document.getElementById('hubAddonsInstallBtn');
+        const countEl = document.getElementById('hubAddonsCount');
         if (!list) return;
         const available = this.addonsAvailable();
+        if (countEl) {
+            const n = available && !this._addonsError ? (this._addonsList || []).length : 0;
+            countEl.textContent = String(n);
+            countEl.hidden = n === 0;
+        }
         if (installBtn) {
             installBtn.hidden = !available;
             installBtn.disabled = !!this._addonInstallBusy;
         }
         if (!available) {
-            list.innerHTML = '<p class="hub-addons-note">Аддоны недоступны в этой версии приложения.</p>';
+            this.setHTMLIfChanged(list, '<p class="hub-addons-empty">Аддоны недоступны в этой версии приложения.</p>');
             return;
         }
         if (this._addonsError) {
-            list.innerHTML = `<div class="hub-addons-note is-error">
+            this.setHTMLIfChanged(list, `<div class="hub-addons-note is-error">
                 <span>Не удалось открыть хранилище аддонов: ${this.esc(this._addonsError)}</span>
                 <button class="btn-flat" type="button" data-addon-action="retry">Повторить</button>
-            </div>`;
+            </div>`);
             return;
         }
         const items = this._addonsList || [];
         if (!items.length) {
-            list.innerHTML = this._addonsLoading
-                ? '<p class="hub-addons-note"><span class="addon-frame-spinner" aria-hidden="true"></span>Загрузка аддонов…</p>'
-                : `<div class="hub-addons-empty">
-                    <strong>Аддонов пока нет</strong>
-                    <span>Установите мини-приложение из файла .zali: игру, запись голоса, лаунчер.</span>
-                </div>`;
+            // Пока список читается из хранилища — тишина, а не «ничего нет» (гайдлайны §4).
+            this.setHTMLIfChanged(list, this._addonsLoading ? ''
+                : '<p class="hub-addons-empty">Пока ничего не установлено. Выберите аддон в магазине ниже или установите файл .zali.</p>');
             return;
         }
         const F = window.ZaliAddonFormat;
-        list.innerHTML = items.map((meta) => {
+        this.setHTMLIfChanged(list, items.map((meta) => {
             const m = meta.manifest;
             const instance = this.addonInstances().get(meta.id);
             const running = !!instance;
@@ -294,14 +297,14 @@ ZaliMixin(ZaliInterface, class {
                     <p>${this.esc(m.description || 'Без описания')}</p>
                 </div>
                 <div class="hub-addon-actions">
-                    <button class="auth-btn primary" type="button" data-addon-action="open"${launching ? ' disabled aria-busy="true"' : ''}>${launching ? 'Запуск…' : running ? 'Развернуть' : 'Открыть'}</button>
+                    <button class="btn-flat" type="button" data-addon-action="open"${launching ? ' disabled aria-busy="true"' : ''}>${launching ? 'Запуск…' : running ? 'Развернуть' : 'Открыть'}</button>
                     ${running ? '<button class="btn-flat" type="button" data-addon-action="stop">Остановить</button>' : ''}
                     <button class="hub-addon-more" type="button" data-addon-action="details" title="Об аддоне" aria-label="Об аддоне «${this.esc(m.name)}»">
                         <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="4.5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/></svg>
                     </button>
                 </div>
             </article>`;
-        }).join('');
+        }).join(''));
         const fresh = list.querySelector('.hub-addon-item.is-new');
         if (fresh && this._addonScrollToNew) {
             this._addonScrollToNew = false;

@@ -137,8 +137,27 @@ ZaliMixin(ZaliInterface, class {
         );
     }
 
+    // Адрес, введённый без схемы («10.195.126.221:3000»), — то же правило, что у
+    // NativeBridge.kt normalizeApiBaseUrl: http:// для localhost и частных сетей,
+    // иначе https://. Без этого на Android HTTP работал (схему дописывала натива),
+    // а веб-часть не узнавала строку как URL: deriveWsBaseUrl откатывался на прод
+    // wss://msgs.zalikus.org/ws, голосовой сокет вечно висел в CONNECTING к
+    // недоступному хосту, и каждый voice_call_invite отбрасывался
+    // (send-event-no-socket readyState=0) — звонок не уходил вовсе.
+    withDefaultScheme(value) {
+        const raw = String(value || '').trim();
+        if (!raw || /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
+        const host = (raw.startsWith('[')
+            ? raw.slice(0, raw.indexOf(']') + 1)
+            : raw.split(/[:/?#]/)[0]).toLowerCase();
+        const isPrivate = host === 'localhost' || host === '[::1]' || host.endsWith('.local')
+            || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)
+            || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+        return (isPrivate ? 'http://' : 'https://') + raw;
+    }
+
     normalizeLocalApiAddress(value) {
-        const raw = this.trimTrailingSlash(value);
+        const raw = this.withDefaultScheme(this.trimTrailingSlash(value));
         if (!raw) return '';
         try {
             const parsed = new URL(raw);
@@ -338,10 +357,29 @@ ZaliMixin(ZaliInterface, class {
         const storedWsBaseUrl = this.normalizeWsBaseUrl(stored.wsBaseUrl || '');
         const useDefaultApi = this.isDefaultableNetworkUrl(storedApiBaseUrl);
         const apiBaseUrl = useDefaultApi ? this.defaultApiBaseUrl() : (storedApiBaseUrl || this.defaultApiBaseUrl());
-        const wsBaseUrl = useDefaultApi
+        let wsBaseUrl = useDefaultApi
             ? this.defaultWsBaseUrl()
             : (storedWsBaseUrl || this.defaultWsBaseUrl());
+        // Самолечение конфигов, сохранённых до withDefaultScheme: адрес API свой, а
+        // WS — прод-дефолт, в который deriveWsBaseUrl откатился на адресе без схемы.
+        // Свой API с прод-сокетом осмысленным не бывает — берём WS из API.
+        if (!useDefaultApi && apiBaseUrl !== this.defaultApiBaseUrl()
+            && wsBaseUrl === this.defaultWsBaseUrl()) {
+            wsBaseUrl = this.deriveWsBaseUrl(apiBaseUrl);
+        }
         let iceServers = this.normalizeIceServers(stored.iceServers);
+        // Тот же след: встроенная пара zali/turnpass, сохранённая вместе с TURN-хостом
+        // прежнего сервера. Такой релей заведомо чужой — выбрасываем, getVoiceRtcConfig
+        // сам добавит TURN текущего сервера (выданные им креды или встроенную пару).
+        let apiHost = '';
+        try { apiHost = new URL(apiBaseUrl).hostname.toLowerCase(); } catch (e) {}
+        iceServers = iceServers.filter(server => {
+            if (server.username !== 'zali' || server.credential !== 'turnpass') return true;
+            return server.urls.some(url => {
+                const m = /^turns?:(\[[^\]]+\]|[^:?]+)/i.exec(url);
+                return !m || m[1].toLowerCase() === apiHost;
+            });
+        });
         if (!iceServers.length) {
             iceServers = this.normalizeIceServers(this.defaultIceServers());
         }

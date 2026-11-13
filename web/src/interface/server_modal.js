@@ -118,46 +118,84 @@ ZaliMixin(ZaliInterface, class {
         const list = document.getElementById('serverDiscoverList');
         const count = document.getElementById('serverDiscoverCount');
         const refreshBtn = document.getElementById('serverDiscoverRefreshBtn');
+        const heading = document.getElementById('serverDiscoverHeading');
         const servers = this.renderFilteredPublicServers();
-        if (count) count.textContent = String(servers.length || 0);
-        if (refreshBtn) refreshBtn.disabled = !!this.S.serverModal.loading;
-        if (!list) return;
-        if (this.S.serverModal.loading && servers.length === 0) {
-            list.innerHTML = `<div class="empty-state">
-                <div class="empty-ttl">Поиск серверов</div>
-                <div class="empty-sub">Секунду, подбираем публичные сообщества</div>
-            </div>`;
-            return;
+        const query = this.publicServerFilterValue();
+        const loading = !!this.S.serverModal.loading;
+        const total = Array.isArray(this.S.publicServers) ? this.S.publicServers.length : 0;
+        if (heading) heading.textContent = query ? 'Найдено' : 'Все серверы';
+        if (count) {
+            count.textContent = String(servers.length);
+            // Счётчик говорит только когда есть что считать: «0» рядом с пустым
+            // списком повторяет то, что и так видно.
+            count.hidden = servers.length === 0;
         }
+        if (refreshBtn) {
+            refreshBtn.disabled = loading;
+            refreshBtn.classList.toggle('is-busy', loading);
+        }
+        if (!list) return;
         if (servers.length === 0) {
-            list.innerHTML = `<div class="empty-state">
-                <div class="empty-ttl">Публичных серверов нет</div>
-                <div class="empty-sub">Пока что нечего открывать из меню</div>
-            </div>`;
+            // Пока список в пути — тишина, а не «ничего нет» (гайдлайны §4).
+            const empty = loading ? ''
+                : query && total
+                    ? `<div class="sm-empty">Ничего не нашлось по запросу «${this.esc(query)}».</div>`
+                    : '<div class="sm-empty">Публичных серверов пока нет. Сервер попадает сюда, когда владелец включает «Публичный сервер» в его настройках.</div>';
+            this.setHTMLIfChanged(list, empty);
             return;
         }
 
-        list.innerHTML = servers.map(server => {
+        const plural = (n, one, few, many) => {
+            const mod10 = n % 10, mod100 = n % 100;
+            if (mod10 === 1 && mod100 !== 11) return one;
+            if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+            return many;
+        };
+        // Сервер отдаёт каталог уже по убыванию участников; сортировка здесь —
+        // на случай старого сервера и чтобы фильтр поиска не менял порядок.
+        const sorted = servers.slice().sort((a, b) =>
+            (Number(b.memberCount || b.member_count || 0) - Number(a.memberCount || a.member_count || 0))
+            || String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+        this.setHTMLIfChanged(list, sorted.map(server => {
             const memberCount = Number(server.memberCount || server.member_count || 0) || 0;
-            const channelCount = Array.isArray(server.channels) ? server.channels.length : 0;
-            const role = this.normalizeMemberRole(server.myRole || server.my_role || '');
-            const alreadyJoined = role === 'owner' || role === 'admin' || role === 'member';
+            const onlineRaw = server.onlineCount ?? server.online_count;
+            const hasOnline = onlineRaw !== undefined && onlineRaw !== null;
+            const onlineCount = Number(onlineRaw) || 0;
+            // Каталог отдаёт только серверы, где зритель ещё не состоит, и myRole
+            // у них пустой. normalizeMemberRole('') возвращает 'member' — проверять
+            // надо сырое значение, иначе у всех плиток было «Вы участник / Открыть».
+            const rawRole = String(server.myRole || server.my_role || '').trim();
+            const alreadyJoined = !!rawRole;
             const joinTarget = server.joinLink || server.join_link || server.id;
-            const actionLabel = alreadyJoined ? 'Открыть' : 'Войти';
-            return `<div class="server-discover-row">
-                <button class="server-item server-discover-item" type="button" data-public-server-id="${this.esc(server.id)}" title="${this.esc(server.name)}">
-                    ${this.renderServerAvatarHTML(server)}
-                    <div class="server-meta">
-                        <div class="server-name">${this.esc(server.name)}</div>
-                        <div class="server-prev">${this.esc(server.description || 'Публичный сервер')}${channelCount ? ` · ${channelCount} каналов` : ''}${memberCount ? ` · ${memberCount} участников` : ''}</div>
-                    </div>
-                </button>
-                <div class="server-discover-actions">
-                    <button class="btn-flat" type="button" data-public-server-open="${this.esc(server.id)}">${actionLabel}</button>
-                    <button class="btn-flat" type="button" data-public-server-join="${this.esc(joinTarget)}">${alreadyJoined ? 'Перейти' : 'Вступить'}</button>
-                </div>
+            const description = String(server.description || '').trim();
+            const banner = this.serverBannerUrl(server);
+            const colors = this.serverAvatarColors(server);
+            const bannerStyle = banner
+                ? `background-image:url('${this.esc(banner)}')`
+                : `background:${this.esc(colors.background)}`;
+            const stats = [
+                hasOnline ? `<span class="server-card-stat is-online"><i aria-hidden="true"></i>${onlineCount} в сети</span>` : '',
+                `<span class="server-card-stat"><i aria-hidden="true"></i>${memberCount} ${plural(memberCount, 'участник', 'участника', 'участников')}</span>`,
+            ].join('');
+            // Вся плитка — одна кнопка (слой-«хит» поверх), «Вступить» — отдельная
+            // кнопка над ним: вложенных кнопок в разметке нет.
+            const action = alreadyJoined
+                ? `<button class="btn-flat server-discover-action" type="button" data-public-server-open="${this.esc(server.id)}">Открыть</button>`
+                : `<button class="btn-flat server-discover-action" type="button" data-public-server-join="${this.esc(joinTarget)}">Вступить</button>`;
+            return `<div class="server-discover-row server-card${alreadyJoined ? ' is-joined' : ''}">
+                <button class="server-discover-item server-card-hit" type="button" data-public-server-id="${this.esc(server.id)}" aria-label="${this.esc(server.name)}"></button>
+                <span class="server-card-banner${banner ? ' has-img' : ''}" style="${bannerStyle}" aria-hidden="true"></span>
+                ${this.renderServerAvatarHTML(server, 'server-card-ava')}
+                <span class="server-card-body">
+                    <span class="server-card-name">${this.esc(server.name)}</span>
+                    ${description ? `<span class="server-card-desc">${this.esc(description)}</span>` : ''}
+                    <span class="server-card-foot">
+                        <span class="server-card-stats">${stats}</span>
+                        ${action}
+                    </span>
+                </span>
             </div>`;
-        }).join('');
+        }).join(''));
     }
 
     renderServerModal() {
@@ -231,6 +269,8 @@ ZaliMixin(ZaliInterface, class {
         // Создание: одно окно из названия, иконки и «публичный»; остальное (цвет,
         // описание, аватар, баннер, код, роли, каналы) доступно после создания.
         document.getElementById('serverModal')?.classList.toggle('server-create-simple', !isEdit && !isDiscover);
+        // Каталог — один раздел: навигация окна из одного пункта ничего не выбирает.
+        document.getElementById('serverModal')?.classList.toggle('server-discover-mode', isDiscover);
         if (basicsCard) basicsCard.hidden = activeSection !== 'overview';
         if (channelsCard) channelsCard.hidden = activeSection !== 'channels';
         if (membersCard) membersCard.hidden = activeSection !== 'members';
@@ -259,7 +299,9 @@ ZaliMixin(ZaliInterface, class {
                 this.paintServerAvatar(headAvatar, headServer);
             } else {
                 this.clearServerAvatarPaint(headAvatar);
-                headAvatar.textContent = isDiscover ? '⌕' : '+';
+                // Каталог — про людей и сообщества: знак «люди», а не лупа-символ.
+                if (isDiscover) this.setHTMLIfChanged(headAvatar, this.zaliSign('people'));
+                else headAvatar.textContent = '+';
             }
         }
         if (sidebarTitle) sidebarTitle.textContent = isEdit ? (current?.name || server?.name || 'Настройки сервера') : isDiscover ? 'Поиск серверов' : 'Создание сервера';
@@ -280,7 +322,7 @@ ZaliMixin(ZaliInterface, class {
         if (hint) hint.textContent = isEdit
             ? this.serverModalSummaryLine(current || server)
             : isDiscover
-                ? 'Выберите публичный сервер и войдите в него через меню без автодобавления в список.'
+                ? 'Открытые сообщества. Вступите — и сервер появится среди ваших серверов.'
             : activeSection === 'roles'
                 ? 'Настройте роли и доступ перед созданием.'
                 : 'Назовите сервер. Остальное можно настроить после создания.';
@@ -1098,42 +1140,62 @@ ZaliMixin(ZaliInterface, class {
     }
 
     openJoinCodeModal() {
-        const existing = document.getElementById('joinCodeModalOverlay');
-        if (existing) existing.remove();
-
+        document.getElementById('joinCodeModalOverlay')?._close?.();
+        document.getElementById('joinCodeModalOverlay')?.remove();
+        // Тот же каркас, что у перевода и подтверждения (.coin-transfer-modal):
+        // слой внутри .main, сайдбар остаётся виден, вид задают общие правила диалога.
+        const host = document.querySelector('.main') || document.body;
+        const previousFocus = document.activeElement;
         const overlay = document.createElement('div');
         overlay.id = 'joinCodeModalOverlay';
-        overlay.className = 'modal-overlay';
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);';
+        overlay.className = 'coin-transfer-modal join-code-dialog';
         overlay.innerHTML = `
-            <div class="join-code-modal" style="background:var(--panel-bg,#1c1c1e);color:var(--text-color,#fff);border-radius:12px;padding:20px;min-width:280px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,0.4);">
-                <div style="font-weight:600;margin-bottom:10px;">Войти по коду</div>
-                <input type="text" id="joinCodeModalInput" placeholder="Код или ссылка сервера" autocomplete="off" spellcheck="false"
-                    style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:inherit;font-size:14px;margin-bottom:14px;">
-                <div style="display:flex;justify-content:flex-end;gap:8px;">
-                    <button type="button" id="joinCodeModalCancel" class="btn-flat">Отмена</button>
-                    <button type="button" id="joinCodeModalSubmit" class="btn-flat">Войти</button>
+            <div class="coin-transfer-box" role="dialog" aria-modal="true" aria-labelledby="joinCodeModalTitle">
+                <div class="coin-transfer-head">
+                    <h2 id="joinCodeModalTitle">Вступить по приглашению</h2>
+                    <button class="avatar-crop-close" type="button" data-join-code-close aria-label="Закрыть">×</button>
                 </div>
-            </div>
-        `;
-        document.body.appendChild(overlay);
+                <label class="coin-transfer-field">
+                    <span>Код или ссылка</span>
+                    <input type="text" id="joinCodeModalInput" placeholder="Например, zali://invite/dev-team" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="go">
+                </label>
+                <p class="coin-transfer-status">Приглашение присылает владелец или администратор сервера. Публичные серверы можно найти в каталоге.</p>
+                <div class="coin-transfer-actions">
+                    <button type="button" class="btn-flat" data-join-code-close>Отмена</button>
+                    <button type="button" class="auth-btn primary" id="joinCodeModalSubmit" disabled>Вступить</button>
+                </div>
+            </div>`;
+        host.appendChild(overlay);
 
-        const input = document.getElementById('joinCodeModalInput');
-        const close = () => overlay.remove();
+        const input = overlay.querySelector('#joinCodeModalInput');
+        const submitBtn = overlay.querySelector('#joinCodeModalSubmit');
+        const onKey = (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            close();
+        };
+        const close = () => {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            try { previousFocus?.focus?.(); } catch (e) { /* элемента уже нет */ }
+        };
+        overlay._close = close;
         const submit = () => {
             const link = this.extractInviteCode(input.value);
+            if (!link) return;
             close();
-            if (link) this.joinServerByLink(link);
+            this.joinServerByLink(link);
         };
-
+        // Пустое поле — главная кнопка выключена: «Вступить» в никуда ничего не скажет.
+        input.addEventListener('input', () => { submitBtn.disabled = !input.value.trim(); });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+        submitBtn.addEventListener('click', submit);
+        overlay.querySelectorAll('[data-join-code-close]').forEach(btn => btn.addEventListener('click', close));
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-        document.getElementById('joinCodeModalCancel').addEventListener('click', close);
-        document.getElementById('joinCodeModalSubmit').addEventListener('click', submit);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') submit();
-            if (e.key === 'Escape') close();
-        });
-        input.focus();
+        document.addEventListener('keydown', onKey, true);
+        // На телефоне клавиатура закрыла бы само окно (гайдлайны §6).
+        if (!this.isMobileLayout()) input.focus();
     }
 
     extractInviteCode(value) {

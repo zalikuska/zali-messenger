@@ -117,6 +117,58 @@ async fn public_servers_are_discoverable_by_others_but_not_shown_to_owner() {
 }
 
 #[tokio::test]
+async fn public_servers_are_sorted_by_members_and_carry_an_online_count() {
+    // Каталог — плитки «N в сети · M участников»: крупные сообщества первыми,
+    // и у каждой плитки есть onlineCount (здесь ни у кого нет сокета — 0).
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let carol = register_user(&app, "carol", "hunter22").await;
+    create_server(&app, &alice, "Small Place", true).await;
+    let big = create_server(&app, &alice, "Big Place", true).await;
+    let join_link = big["joinLink"].as_str().unwrap().to_string();
+    let resp = app
+        .http
+        .post(app.url("/api/servers/join"))
+        .header("Authorization", bob.auth_header())
+        .json(&serde_json::json!({ "link": join_link }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let discovered: serde_json::Value = app
+        .http
+        .get(app.url("/api/discover/servers"))
+        .header("Authorization", carol.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let servers = discovered["servers"].as_array().unwrap();
+    let names: Vec<&str> = servers.iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["Big Place", "Small Place"]);
+    assert_eq!(servers[0]["memberCount"], 2);
+    assert_eq!(servers[0]["onlineCount"], 0);
+    assert_eq!(servers[1]["onlineCount"], 0);
+
+    // В обычном списке своих серверов поля нет — его считают только для каталога.
+    let own: serde_json::Value = app
+        .http
+        .get(app.url("/api/servers"))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(own["servers"][0].get("onlineCount").is_none());
+}
+
+#[tokio::test]
 async fn join_server_link_rejects_private_servers() {
     let app = spawn_app().await;
     let alice = register_user(&app, "alice", "hunter22").await;
@@ -300,6 +352,70 @@ async fn only_owner_can_delete_server() {
         .await
         .unwrap();
     assert!(alice_servers["servers"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn members_can_leave_but_owner_cannot() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let server = create_server(&app, &alice, "Guild", true).await;
+    let server_id = server["id"].as_str().unwrap().to_string();
+    join_by_invite(&app, &alice, &server_id, "bob", "hunter22").await;
+
+    // Владелец не может выйти со своего сервера.
+    let owner_leave = app
+        .http
+        .delete(app.url(&format!("/api/servers/{}/membership", server_id)))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(owner_leave.status(), 400);
+
+    let leave = app
+        .http
+        .delete(app.url(&format!("/api/servers/{}/membership", server_id)))
+        .header("Authorization", bob.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(leave.status(), 204);
+
+    let bob_servers: serde_json::Value = app
+        .http
+        .get(app.url("/api/servers"))
+        .header("Authorization", bob.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(bob_servers["servers"].as_array().unwrap().is_empty());
+
+    // Повторный выход — уже не участник.
+    let again = app
+        .http
+        .delete(app.url(&format!("/api/servers/{}/membership", server_id)))
+        .header("Authorization", bob.auth_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 404);
+
+    // Сервер у владельца остался.
+    let alice_servers: serde_json::Value = app
+        .http
+        .get(app.url("/api/servers"))
+        .header("Authorization", alice.auth_header())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(alice_servers["servers"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

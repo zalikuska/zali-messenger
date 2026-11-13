@@ -368,27 +368,32 @@ ZaliMixin(ZaliInterface, class {
         if (!box) return;
         const accounts = this.loadRecentAccounts();
         if (!accounts.length) {
-            box.innerHTML = '<div class="recent-accounts-empty">После входа аккаунты появятся здесь для быстрого переключения на этом Mac.</div>';
+            this.setHTMLIfChanged(box, '<div class="recent-accounts-empty">После входа аккаунты появятся здесь для быстрого переключения на этом устройстве.</div>');
             return;
         }
         const current = String(this.S.session?.username || '').trim().toLowerCase();
         const rows = accounts.map(account => {
             const username = String(account.username || '').trim();
             const active = username.toLowerCase() === current && !!this.S.session?.token;
+            const letter = username.charAt(0).toUpperCase() || '?';
+            // Текущий аккаунт — без кнопок: выключенная «Активен» выглядела нажимаемой
+            // и ничего не делала (гайдлайны §2 п. 8). «Убрать» — служебное, видно
+            // по наведению (п. 3); на сенсорных экранах — всегда, но тише.
             return `
                 <div class="recent-account-row ${active ? 'is-active' : ''}">
+                    <span class="recent-account-ava" aria-hidden="true">${this.esc(letter)}</span>
                     <div class="recent-account-main">
                         <div class="recent-account-name">${this.esc(username)}</div>
-                        <div class="recent-account-meta">${active ? 'текущий аккаунт' : this.esc(this.formatRecentAccountTime(account.lastUsedAt))}</div>
+                        <div class="recent-account-meta">${active ? 'Текущий аккаунт' : this.esc(this.formatRecentAccountTime(account.lastUsedAt))}</div>
                     </div>
-                    <div class="recent-account-actions">
-                        <button class="btn-flat recent-account-switch" type="button" data-switch-account="${this.esc(username)}" ${active ? 'disabled' : ''}>${active ? 'Активен' : 'Войти'}</button>
-                        <button class="btn-flat recent-account-remove" type="button" data-remove-recent-account="${this.esc(username)}" title="Убрать из быстрых аккаунтов">×</button>
-                    </div>
+                    ${active ? '' : `<div class="recent-account-actions">
+                        <button class="btn-flat recent-account-remove" type="button" data-remove-recent-account="${this.esc(username)}" title="Убрать из быстрых аккаунтов" aria-label="Убрать ${this.esc(username)} из быстрых аккаунтов"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+                        <button class="btn-flat recent-account-switch" type="button" data-switch-account="${this.esc(username)}">Войти</button>
+                    </div>`}
                 </div>
             `;
         }).join('');
-        box.innerHTML = `<div class="recent-accounts-title">Недавние аккаунты</div>${rows}`;
+        this.setHTMLIfChanged(box, `<div class="recent-accounts-title">Недавние аккаунты</div>${rows}`);
     }
 
     async switchRecentAccount(username) {

@@ -784,6 +784,8 @@ ZaliMixin(ZaliInterface, class {
         //    всего, что открыто как dialog/menu и здесь не перечислено, — Escape,
         //    который каждое такое окно уже обрабатывает.
         const closers = [
+            // Видео звонка на весь экран (voice_ui.js openVoiceFocus) — поверх всего.
+            ['#voiceFocus', () => this.closeVoiceFocus?.()],
             ['#reactionMenu, .reaction-menu', () => this.hideReactionMenu?.()],
             ['.contact-context-menu, #contactContextMenu', () => this.closeContactContextMenu?.()],
             ['.server-rail-menu, #serverRailContextMenu', () => this.closeServerRailContextMenu?.()],
@@ -829,7 +831,8 @@ ZaliMixin(ZaliInterface, class {
         if (hub?.classList.contains('active')) {
             const tab = hub.getAttribute('data-hub-current') || 'overview';
             if (tab !== 'overview' && typeof this.setHubTab === 'function') {
-                this.setHubTab('overview');
+                // «Для разработчиков» вложена в «Аддоны» — назад на шаг, а не сразу в хаб.
+                this.setHubTab(tab === 'signing' ? 'addons' : 'overview');
             } else {
                 this.openChatView({ showList: true });
             }

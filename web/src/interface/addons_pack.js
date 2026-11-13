@@ -238,14 +238,11 @@ ZaliMixin(ZaliInterface, class {
         box.innerHTML = `
             <section class="hub-components addon-sign-section" aria-labelledby="hubPackTitle">
                 <div class="hub-components-head">
-                    <div>
-                        <span class="settings-kicker">Разработчикам</span>
-                        <h3 id="hubPackTitle">Упаковщик .zali</h3>
-                    </div>
+                    <h3 id="hubPackTitle"><span class="hub-step">1</span>Упаковать</h3>
                 </div>
-                <p class="addon-sign-intro">Соберите аддон из архива с исходным кодом. В корне архива (или внутри
+                <p class="addon-sign-intro">ZIP с исходниками превращается в файл .zali. В корне архива (или внутри
                     единственной папки) должен лежать <code>manifest.json</code>; скрытые и служебные файлы
-                    пропускаются. Манифест и файлы проверяются теми же правилами, что при установке.</p>
+                    пропускаются, манифест проверяется теми же правилами, что при установке.</p>
                 ${st.error ? `<p class="hub-addons-status is-error" role="alert">${this.esc(st.error)}</p>` : ''}
                 ${body}
                 <input type="file" id="addonPackFileInput" accept=".zip,application/zip,application/x-zip-compressed" hidden>

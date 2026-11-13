@@ -1372,13 +1372,16 @@ ZaliMixin(ZaliInterface, class {
         const prefs = this.loadCachePrefs();
         const summary = this.cacheSummary();
 
+        // Выбор одного из вариантов — радио-строки (гайдлайны §4, «Выбор из списка»):
+        // отметка слева, выбранная строка на ступень светлее. Пометку несёт только
+        // режим по умолчанию — «Всё», «Минимум», «Выкл.» лишь повторяли название.
         const modes = ZaliInterface.cacheModeCatalog.map(mode => `
-            <button type="button" class="cache-mode-option${mode.id === prefs.mode ? ' active' : ''}" data-cache-mode="${this.esc(mode.id)}" aria-pressed="${mode.id === prefs.mode}">
+            <button type="button" class="cache-mode-option f-choice${mode.id === prefs.mode ? ' active' : ''}" data-cache-mode="${this.esc(mode.id)}" role="radio" aria-checked="${mode.id === prefs.mode}">
+                <span class="f-choice-mark" aria-hidden="true"></span>
                 <span class="cache-mode-copy">
-                    <strong>${this.esc(mode.label)}</strong>
+                    <strong>${this.esc(mode.label)}${mode.id === 'light' ? ' <span class="f-choice-tag">по умолчанию</span>' : ''}</strong>
                     <small>${this.esc(mode.hint)}</small>
                 </span>
-                <span class="cache-mode-note">${this.esc(mode.note)}</span>
             </button>
         `).join('');
 
@@ -1411,7 +1414,10 @@ ZaliMixin(ZaliInterface, class {
             `).join('')
             : '<li class="cache-top-row cache-top-row--empty">Обращений пока не было</li>';
 
-        let status;
+        // Обычное состояние — итоги плитками; строка текста — только когда есть что
+        // объяснить (кеш недоступен, выключен или ещё не открывался).
+        let status = '';
+        let totals = '';
         if (summary.reason && !summary.available) {
             status = `Постоянный кеш недоступен: ${this.esc(summary.reason)}. Ассеты живут только до перезагрузки.`;
         } else if (prefs.mode === 'off') {
@@ -1419,10 +1425,14 @@ ZaliMixin(ZaliInterface, class {
         } else if (!summary.probed) {
             status = 'Кеш ещё не открывался в этом сеансе — сводка появится после первого обращения.';
         } else {
-            const foreign = summary.foreignCount
-                ? ` · из них ${summary.foreignCount} от других аккаунтов на этом устройстве`
-                : '';
-            status = `Занято ${this.esc(usedLabel)} из ${this.esc(limitLabel)} · ${summary.count} файлов · ${summary.hits} обращений${this.esc(foreign)}`;
+            totals = `<div class="cache-totals">
+                <div class="cache-total"><span>Занято</span><strong>${this.esc(usedLabel)} <small>из ${this.esc(limitLabel)}</small></strong></div>
+                <div class="cache-total"><span>Файлов</span><strong>${summary.count}</strong></div>
+                <div class="cache-total"><span>Обращений</span><strong>${summary.hits}</strong></div>
+            </div>`;
+            if (summary.foreignCount) {
+                status = `Из них ${summary.foreignCount} — от других аккаунтов на этом устройстве.`;
+            }
         }
 
         const nextOut = summary.nextEvicted && prefs.mode !== 'off'
@@ -1430,22 +1440,23 @@ ZaliMixin(ZaliInterface, class {
             : '';
 
         const html = `
-            <div class="cache-mode-options">${modes}</div>
+            <div class="cache-mode-options" role="radiogroup" aria-label="Что хранить в кеше">${modes}</div>
             <label class="settings-field cache-limit-field">
                 <span>Потолок кеша: <strong id="cacheLimitValue">${this.esc(limitLabel)}</strong></span>
                 <input type="range" min="0" max="${ZaliInterface.cacheLimitStops.length - 1}" step="1" value="${prefs.limitIndex}" id="inputCacheLimit" class="settings-range" list="cacheLimitStops">
                 <datalist id="cacheLimitStops">${stops}</datalist>
             </label>
+            ${totals}
             <div class="cache-usage-bar" role="presentation"><span style="width:${fill}%"></span></div>
-            <p class="settings-help cache-usage-status">${status}</p>
+            ${status ? `<p class="settings-help cache-usage-status">${status}</p>` : ''}
             ${nextOut}
             <div class="cache-summary-grid">
                 <div class="cache-summary-block">
-                    <span class="settings-kicker">По типам</span>
+                    <h4 class="cache-subhead">По типам</h4>
                     <ul class="cache-kind-list">${kinds}</ul>
                 </div>
                 <div class="cache-summary-block">
-                    <span class="settings-kicker">Чаще всего используются</span>
+                    <h4 class="cache-subhead">Чаще всего используются</h4>
                     <ul class="cache-top-list">${top}</ul>
                 </div>
             </div>

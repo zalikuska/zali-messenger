@@ -72,6 +72,7 @@
             assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
             members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
             member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
+            membership: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/membership`),
             roles: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles`),
             role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
             invites: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/invites`),

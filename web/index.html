@@ -23,7 +23,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261112-s9">
+    <link rel="stylesheet" href="style.css?v=20261112-g1">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -361,12 +361,27 @@
                         </div>
                         <div class="hub-pane" data-hub-pane="addons" hidden>
                         <button class="hub-back" type="button" data-hub-tab="overview"><span class="hub-back-chevron" aria-hidden="true"></span>Назад в хаб</button>
+                        <header class="hub-page-head">
+                            <h2>Аддоны</h2>
+                            <p>Мини-приложения внутри мессенджера: игры, инструменты, лаунчеры.</p>
+                        </header>
+                        <section class="hub-components hub-addons" id="hubAddons" aria-labelledby="hubAddonsTitle">
+                            <div class="hub-components-head">
+                                <h3 id="hubAddonsTitle">Установленные</h3>
+                                <span class="sm-count hub-count" id="hubAddonsCount" hidden>0</span>
+                                <div class="hub-addons-head-actions">
+                                    <button class="btn-flat hub-addons-install" id="hubAddonsInstallBtn" type="button" data-addon-action="install" hidden>Установить из файла</button>
+                                </div>
+                            </div>
+                            <p class="hub-addons-status" id="hubAddonsStatus" role="status" aria-live="polite" hidden></p>
+                            <div class="hub-addons-list" id="hubAddonsList"></div>
+                            <input type="file" id="addonFileInput" accept=".zali" hidden>
+                        </section>
                         <section class="hub-store" id="hubStore" aria-labelledby="hubStoreTitle">
                             <header class="hub-store-head">
                                 <div>
-                                    <span class="settings-kicker">Магазин</span>
-                                    <h3 id="hubStoreTitle">Магазин аддонов</h3>
-                                    <p class="hub-store-sub">Здесь только официально подписанные аддоны: приложение проверяет подпись при установке.</p>
+                                    <h3 id="hubStoreTitle">Магазин</h3>
+                                    <p class="hub-store-sub">Только официально подписанные аддоны — подпись проверяется при установке.</p>
                                 </div>
                                 <span class="hub-store-balance" id="hubStoreBalance" title="Ваш баланс ZaliCoin" hidden></span>
                             </header>
@@ -380,27 +395,25 @@
                             <p class="hub-addons-status" id="hubStoreStatus" role="status" aria-live="polite" hidden></p>
                             <div class="hub-store-grid" id="hubStoreGrid"></div>
                         </section>
-                        <section class="hub-components hub-addons" id="hubAddons" aria-labelledby="hubAddonsTitle">
-                            <div class="hub-components-head">
-                                <div>
-                                    <span class="settings-kicker">Аддоны</span>
-                                    <h3 id="hubAddonsTitle">Установленные мини-приложения</h3>
-                                </div>
-                                <div class="hub-addons-head-actions">
-                                    <button class="btn-flat" type="button" data-hub-tab="signing">Подпись аддонов</button>
-                                    <button class="auth-btn primary hub-addons-install" id="hubAddonsInstallBtn" type="button" data-addon-action="install" hidden>Установить аддон</button>
-                                </div>
-                            </div>
-                            <p class="hub-addons-status" id="hubAddonsStatus" role="status" aria-live="polite" hidden></p>
-                            <div class="hub-addons-list" id="hubAddonsList"></div>
-                            <input type="file" id="addonFileInput" accept=".zali" hidden>
-                        </section>
-                        <div id="hubPack">
-                            <div id="hubPackBody"></div>
+                        <div class="hub-actions hub-actions--dev">
+                        <button class="hub-action hub-action--dev" type="button" data-hub-tab="signing">
+                            <span class="hub-action-text">
+                                <strong>Для разработчиков</strong>
+                                <span>Упаковка .zali из исходников, подпись и публикация в магазине</span>
+                            </span>
+                            <span class="hub-action-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9 5l7 7-7 7"/></svg></span>
+                        </button>
                         </div>
                         </div>
                         <div class="hub-pane" data-hub-pane="signing" id="hubSigning" hidden>
-                        <button class="hub-back" type="button" data-hub-tab="overview"><span class="hub-back-chevron" aria-hidden="true"></span>Назад в хаб</button>
+                        <button class="hub-back" type="button" data-hub-tab="addons"><span class="hub-back-chevron" aria-hidden="true"></span>Назад к аддонам</button>
+                        <header class="hub-page-head">
+                            <h2>Для разработчиков</h2>
+                            <p>Соберите аддон из исходников, подпишите его своим аккаунтом и опубликуйте в магазине.</p>
+                        </header>
+                            <div id="hubPack">
+                                <div id="hubPackBody"></div>
+                            </div>
                             <div id="hubSigningBody"></div>
                         </div>
                     </div>
@@ -542,7 +555,14 @@
                                     <span class="settings-card-note">design</span>
                                 </div>
                                 <div class="settings-stack">
-                                    <div class="design-mode-options" id="designModeOptions"></div>
+                                    <div class="design-mode-options" id="designModeOptions" role="radiogroup" aria-label="Стиль оформления"></div>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputCalmTint" type="checkbox">
+                                        <span>
+                                            <strong>Подкраска фона</strong>
+                                            <small>Фон слегка окрашен цветом схемы. Выключено — фон нейтральный в любой схеме, в том числе в лаймовой</small>
+                                        </span>
+                                    </label>
                                     <label class="server-toggle settings-toggle">
                                         <input id="inputDecorArt" type="checkbox">
                                         <span>
@@ -1410,19 +1430,19 @@
                                     </section>
 
                                     <section class="server-modal-section" data-server-modal-panel="discover" id="serverDiscoverPanel" hidden>
-                                        <section class="server-modal-card server-discover-card" id="serverDiscoverCard">
-                                            <div class="settings-card-head settings-card-head--tight">
-                                                <div>
-                                                    <span class="settings-kicker">Public</span>
-                                                    <h3 class="settings-card-title">Публичные серверы</h3>
-                                                </div>
-                                                <div class="server-discover-head-actions">
-                                                    <span class="settings-card-note" id="serverDiscoverCount">0</span>
-                                                    <button class="btn-flat" id="serverDiscoverRefreshBtn" type="button">Обновить</button>
-                                                </div>
-                                            </div>
+                                        <section class="server-modal-card sm-page server-discover-card" id="serverDiscoverCard">
                                             <div class="server-discover-toolbar">
-                                                <input id="serverDiscoverQuery" class="settings-input" type="text" placeholder="Поиск публичных серверов">
+                                                <label class="server-discover-search">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+                                                    <input id="serverDiscoverQuery" class="settings-input" type="search" placeholder="Название или описание" aria-label="Поиск по каталогу" autocomplete="off" autocapitalize="none" spellcheck="false">
+                                                </label>
+                                                <button class="btn-flat server-discover-refresh" id="serverDiscoverRefreshBtn" type="button" aria-label="Обновить список" title="Обновить список">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+                                                </button>
+                                            </div>
+                                            <div class="sm-card-head">
+                                                <h3 class="sm-group-title" id="serverDiscoverHeading">Все серверы</h3>
+                                                <span class="sm-count" id="serverDiscoverCount" hidden>0</span>
                                             </div>
                                             <div class="server-discover-list" id="serverDiscoverList"></div>
                                         </section>
@@ -1685,6 +1705,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261112-ctl1"></script>
+    <script src="app.js?v=20261112-g1"></script>
 </body>
 </html>

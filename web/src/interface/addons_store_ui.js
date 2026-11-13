@@ -197,9 +197,7 @@ ZaliMixin(ZaliInterface, class {
             const searching = !!st.query || st.filter !== 'all';
             this.setHTMLIfChanged(grid, searching
                 ? '<div class="store-empty"><strong>Ничего не нашлось</strong><span>Измените запрос или фильтр.</span></div>'
-                : `<div class="store-empty"><strong>В магазине пока пусто</strong>
-                    <span>Разработчикам: выложить аддон можно в разделе «Подпись аддонов» — нужна официальная подпись.</span>
-                    <button class="btn-flat" type="button" data-hub-tab="signing">Подпись аддонов</button></div>`);
+                : '<div class="store-empty"><strong>В магазине пока пусто</strong><span>Аддоны появляются здесь после официальной подписи.</span></div>');
             return;
         }
         const F = window.ZaliAddonFormat;

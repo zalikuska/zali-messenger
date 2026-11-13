@@ -165,6 +165,7 @@ ZaliMixin(ZaliInterface, class {
         const server = (this.S.servers || []).find(s => s.id === sid);
         if (!server) return;
         const canManage = this.canManageServer(server);
+        const isOwner = this.normalizeMemberRole(server.myRole || server.my_role || '') === 'owner';
 
         const menu = document.createElement('div');
         menu.id = 'serverRailContextMenu';
@@ -185,6 +186,10 @@ ZaliMixin(ZaliInterface, class {
             </button>
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="members">
                 ${this.uiIcon('user')}<span>Список участников</span>
+            </button>` : ''}
+            ${!isOwner ? `
+            <button type="button" class="peer-context-menu-item is-danger" role="menuitem" data-action="leave">
+                ${this.uiIcon('close')}<span>Покинуть сервер</span>
             </button>` : ''}
         `;
         document.body.appendChild(menu);
@@ -219,6 +224,24 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="members"]')?.addEventListener('click', () => {
             this.closeServerRailContextMenu();
             this.openServerModal('edit', sid, 'members');
+        });
+        menu.querySelector('[data-action="leave"]')?.addEventListener('click', async () => {
+            this.closeServerRailContextMenu();
+            const confirmed = await this.confirmAction({
+                title: 'Покинуть сервер?',
+                message: `Вы выйдете из сервера «${server.name}». Чтобы вернуться, понадобится новое приглашение.`,
+                confirmLabel: 'Покинуть сервер',
+            });
+            if (!confirmed) return;
+            try {
+                const res = await this.apiFetch(this.apiRoutes.servers.membership(sid), { method: 'DELETE' });
+                if (!res.ok && res.status !== 204) {
+                    throw new Error(await res.text() || 'Не удалось покинуть сервер');
+                }
+                await this.loadServers({ silent: true });
+            } catch (err) {
+                this.addLogEntry({ type: 'WARN', msg: err?.message || 'Не удалось покинуть сервер', ts: new Date().toLocaleTimeString() });
+            }
         });
 
         const items = () => Array.from(menu.querySelectorAll('.peer-context-menu-item'));

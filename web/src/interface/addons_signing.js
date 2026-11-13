@@ -84,7 +84,10 @@ ZaliMixin(ZaliInterface, class {
 
     /** Файл .zali, брошенный на вкладку, выбирается для подписи (не устанавливается). */
     bindSigningDropZone(zone) {
-        const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+        // Упаковщик (#hubPack) лежит на той же странице и принимает ZIP сам:
+        // брошенное на него не должно уходить ещё и в подпись.
+        const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files')
+            && !e.target?.closest?.('#hubPack');
         let depth = 0;
         zone.addEventListener('dragenter', (e) => {
             if (!hasFiles(e)) return;
@@ -132,11 +135,13 @@ ZaliMixin(ZaliInterface, class {
             hubView.scrollTop = 0;
             hubView.querySelector('.hub-view')?.scrollTo?.(0, 0);
         }
+        // Упаковщик живёт на странице «Для разработчиков» рядом с подписью:
+        // это один путь автора (собрать → подписать → опубликовать).
         if (tab === 'signing') {
+            this.renderHubPack();
             this.renderHubSigning();
             void this.loadMyAddons();
         } else if (tab === 'addons') {
-            this.renderHubPack();
             void this.loadStore?.();
         }
     }
@@ -581,10 +586,10 @@ ZaliMixin(ZaliInterface, class {
             mineHtml = `<div class="hub-addons-note is-error"><span>Не удалось загрузить: ${this.esc(st.mineError)}</span>
                 <button class="btn-flat" type="button" data-sign-action="refresh">Повторить</button></div>`;
         } else if (mine === null || (st.mineLoading && !mine.length)) {
-            mineHtml = '<p class="hub-addons-note"><span class="addon-frame-spinner" aria-hidden="true"></span>Загрузка…</p>';
+            // Пока список в пути — тишина (гайдлайны §4); значок «Обновить» в шапке крутится.
+            mineHtml = '';
         } else if (!mine.length) {
-            mineHtml = `<div class="hub-addons-empty"><strong>За вами пока нет аддонов</strong>
-                <span>Подпишите файл выше — аддон закрепится за аккаунтом, и здесь появятся его установки и казна.</span></div>`;
+            mineHtml = '<p class="hub-addons-empty">За вами пока нет аддонов. Подпишите файл выше — здесь появятся его установки и казна.</p>';
         } else {
             mineHtml = mine.map((a) => {
                 const t = a.treasury || {};
@@ -610,10 +615,7 @@ ZaliMixin(ZaliInterface, class {
         box.innerHTML = `
             <section class="hub-components addon-sign-section" aria-labelledby="hubSignTitle">
                 <div class="hub-components-head">
-                    <div>
-                        <span class="settings-kicker">Подпись</span>
-                        <h3 id="hubSignTitle">Подписать аддон</h3>
-                    </div>
+                    <h3 id="hubSignTitle"><span class="hub-step">2</span>Подписать</h3>
                 </div>
                 <p class="addon-sign-intro">Подпись закрепляет аддон за вашим аккаунтом: вы видите установки и управляете его ZaliCoin.
                     Самоподпись — не сертификат приложения, предупреждение для пользователей остаётся.</p>
@@ -621,13 +623,12 @@ ZaliMixin(ZaliInterface, class {
                 ${picked}
                 <input type="file" id="addonSignFileInput" accept=".zali" hidden>
             </section>
-            <section class="hub-components addon-sign-section" aria-labelledby="hubMineTitle">
+            <section class="hub-components addon-sign-section addon-mine-section" aria-labelledby="hubMineTitle">
                 <div class="hub-components-head">
-                    <div>
-                        <span class="settings-kicker">Автор</span>
-                        <h3 id="hubMineTitle">Мои аддоны</h3>
+                    <h3 id="hubMineTitle"><span class="hub-step">3</span>Мои аддоны</h3>
+                    <div class="hub-addons-head-actions">
+                        <button class="btn-flat hub-icon-btn${st.mineLoading ? ' is-busy' : ''}" type="button" data-sign-action="refresh"${st.mineLoading ? ' disabled' : ''} aria-label="Обновить список" title="Обновить список"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg></button>
                     </div>
-                    <button class="btn-flat" type="button" data-sign-action="refresh"${st.mineLoading ? ' disabled' : ''}>Обновить</button>
                 </div>
                 <div class="addon-mine-list">${mineHtml}</div>
             </section>`;

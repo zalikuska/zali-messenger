@@ -367,7 +367,8 @@ ZaliMixin(ZaliInterface, class {
         const count = document.getElementById('treasuryHistoryCount');
         if (!t.data) {
             if (count) count.textContent = '…';
-            this.setHTMLIfChanged(list, '<p class="tr-empty">Загрузка…</p>');
+            // Пока история в пути — тишина, а не «Загрузка…» (гайдлайны §4).
+            this.setHTMLIfChanged(list, '');
             return;
         }
         const all = Array.isArray(t.data.operations) ? t.data.operations : [];
@@ -411,9 +412,12 @@ ZaliMixin(ZaliInterface, class {
         }
         const byActor = incoming && op.sourceKind === 'user' ? '' : op.actor;
         const meta = [byActor, this.formatTreasuryTime(op.createdAt)].filter(Boolean).join(' · ');
-        const glyph = incoming
-            ? '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v13M6.5 12.5 12 18l5.5-5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-            : '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V6M6.5 11.5 12 6l5.5 5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        // Плитка строки — знак второй стороны операции (гайдлайны §4, «Знаки»):
+        // человек, казна другого сервера или люди роли. Направление говорят
+        // знак суммы (+/−) и акцентный глиф у входящих.
+        const counterpart = incoming ? op.sourceKind : op.targetKind;
+        const sign = counterpart === 'user' ? 'person' : counterpart === 'server' ? 'chest' : 'people';
+        const glyph = this.zaliSign(sign);
         return `<div class="tr-op ${incoming ? 'is-in' : 'is-out'}">
             <span class="tr-op-ico">${glyph}</span>
             <span class="tr-op-main">
@@ -430,7 +434,7 @@ ZaliMixin(ZaliInterface, class {
         if (!box) return;
         const stats = this.treasuryStats();
         if (!stats) {
-            this.setHTMLIfChanged(box, '<p class="tr-empty">Загрузка…</p>');
+            this.setHTMLIfChanged(box, '');
             return;
         }
         if (!stats.contributors.length) {

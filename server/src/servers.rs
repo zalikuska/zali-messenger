@@ -117,6 +117,7 @@ pub(crate) async fn build_server_response(
         my_role,
         can_invite,
         member_count,
+        online_count: None,
         channels,
     })
 }
@@ -333,6 +334,7 @@ pub(crate) async fn build_server_responses_batch(
             my_role,
             can_invite,
             member_count: member_counts.get(&server_id).copied().unwrap_or(0),
+            online_count: None,
             channels,
         });
     }
@@ -648,13 +650,26 @@ pub(crate) async fn get_public_servers(
     .await
     {
         Ok(records) => {
-            let servers = match build_server_responses_batch(&state.db, records, &auth_user).await {
+            let mut servers = match build_server_responses_batch(&state.db, records, &auth_user).await {
                 Ok(servers) => servers,
                 Err(e) => {
                     error!("Ошибка сборки публичных серверов: {}", e);
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             };
+            // Плитка каталога показывает «N в сети»: участники с живым сокетом.
+            // Ошибка подсчёта не роняет каталог — поле просто не приходит.
+            if let Ok(online) = count_online_members(&state, &servers).await {
+                for server in &mut servers {
+                    server.online_count = Some(online.get(&server.id).copied().unwrap_or(0));
+                }
+            }
+            // Крупные сообщества — первыми; при равенстве — по имени.
+            servers.sort_by(|a, b| {
+                b.member_count
+                    .cmp(&a.member_count)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
             Json(ServerListResponse { servers }).into_response()
         }
         Err(e) => {
@@ -662,6 +677,44 @@ pub(crate) async fn get_public_servers(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Сколько участников каждого сервера сейчас подключено (есть запись в
+/// `push_presence` — она живёт ровно столько, сколько открыт WebSocket).
+async fn count_online_members(
+    state: &AppState,
+    servers: &[ServerResponse],
+) -> Result<HashMap<String, i64>, sqlx::Error> {
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    if servers.is_empty() {
+        return Ok(counts);
+    }
+    let online: std::collections::HashSet<String> = state
+        .push_presence
+        .iter()
+        .map(|entry| entry.value().username.to_lowercase())
+        .collect();
+    if online.is_empty() {
+        return Ok(counts);
+    }
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT server_id, username FROM server_members WHERE server_id IN (",
+    );
+    {
+        let mut separated = builder.separated(", ");
+        for server in servers {
+            separated.push_bind(&server.id);
+        }
+    }
+    builder.push(")");
+    for row in builder.build().fetch_all(&state.db).await? {
+        let username: String = row.get("username");
+        if online.contains(&username.to_lowercase()) {
+            let server_id: String = row.get("server_id");
+            *counts.entry(server_id).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
 }
 
 pub(crate) async fn create_server(
@@ -1107,6 +1160,55 @@ pub(crate) async fn delete_server_member(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Участник сам выходит с сервера. Владелец не может выйти: его сервер
+/// удаляется целиком, передачи владения в API пока нет.
+pub(crate) async fn leave_server(
+    AxumPath(server_id): AxumPath<String>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    AuthenticatedUser(auth_user): AuthenticatedUser,
+) -> impl IntoResponse {
+    let server = match get_server_accessibility(&state.db, &server_id).await {
+        Ok(Some(server)) => server,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            error!("Ошибка поиска сервера {}: {}", server_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if auth_user == server.owner {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Владелец не может покинуть сервер",
+        )
+            .into_response();
+    }
+
+    match get_server_member_role(&state.db, &server_id, &auth_user).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            error!("Ошибка проверки участника сервера {}: {}", server_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if let Err(e) = sqlx::query("DELETE FROM server_members WHERE server_id = ? AND username = ?")
+        .bind(&server_id)
+        .bind(&auth_user)
+        .execute(&state.db)
+        .await
+    {
+        error!(
+            "Ошибка выхода {} из сервера {}: {}",
+            auth_user, server_id, e
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub(crate) async fn delete_server(

@@ -52,7 +52,7 @@
     "web/src/interface/autographs.js|y|y",
     "web/src/interface/avatars.js|alt|safeAlt",
     "web/src/interface/avatars.js|class|classes",
-    "web/src/interface/cache.js|aria-pressed|mode.id === prefs.mode",
+    "web/src/interface/cache.js|aria-checked|mode.id === prefs.mode",
     "web/src/interface/cache.js|max|ZaliInterface.cacheLimitStops.length - 1",
     "web/src/interface/cache.js|style|fill",
     "web/src/interface/cache.js|value|index",
@@ -65,7 +65,7 @@
     "web/src/interface/message_list.js|style|Math.round(windowInfo.topSpacer)",
     "web/src/interface/message_render.js|class|mine",
     "web/src/interface/notifications.js|value|percent",
-    "web/src/interface/prefs.js|aria-pressed|mode.id === active",
+    "web/src/interface/prefs.js|aria-checked|mode.id === active",
     "web/src/interface/profile_ui.js|aria-pressed|option.value === value",
     "web/src/interface/profile_ui.js|aria-selected|tab.key === active",
     "web/src/interface/profile_ui.js|data-profile-link-index|index",
@@ -80,6 +80,8 @@
     "web/src/interface/voice_ui.js|id|id",
     "web/src/interface/zalicoin.js|data-zc-pct|pct.toFixed(2)",
     "web/src/interface/zalicoin.js|data-zc-value|seg.value",
-    "web/src/interface/zalicoin.js|style|seg.color"
+    "web/src/interface/zalicoin.js|style|seg.color",
+    "web/src/interface/server_modal.js|style|bannerStyle",
+    "web/src/interface/voice_ui.js|data-scene|scene.id"
   ]
 }
