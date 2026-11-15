@@ -11,21 +11,30 @@ ZaliMixin(ZaliInterface, class {
         // должны уехать вместе с карточкой или пропасть после неё.
         const systemText = typeof options?.systemText === 'string' ? options.systemText.trim() : '';
         const isSystemPost = !!systemText;
+        // `attachments` — готовые вложения, которые уходят своим сообщением мимо
+        // композера: стикер .tgs отправляется сразу, как в Telegram (handleFiles),
+        // и так же не трогает набранный текст, черновые вложения и цитату.
+        const directAttachments = Array.isArray(options?.attachments) && options.attachments.length
+            ? options.attachments
+            : null;
+        const isDirectPost = isSystemPost || !!directAttachments;
         // Editing takes over the composer, so the send control saves instead of
         // sending a new message.
-        if (this.S.editDraft && !isSystemPost) {
+        if (this.S.editDraft && !isDirectPost) {
             await this.submitMessageEdit();
             return;
         }
         const inp = document.getElementById('msgInput');
-        const textValue = isSystemPost ? systemText : ((inp && inp.value) || '');
+        const textValue = isSystemPost ? systemText : (directAttachments ? '' : ((inp && inp.value) || ''));
         const text = textValue.trim();
-        const attachments = isSystemPost ? [] : this.normalizeAttachments(this.S.draftAttachments);
+        const attachments = directAttachments
+            ? this.normalizeAttachments(directAttachments)
+            : (isSystemPost ? [] : this.normalizeAttachments(this.S.draftAttachments));
         if (!text && attachments.length === 0) return;
 
         // Snapshotted before the first await: the user can dismiss the reply bar
         // (or start another reply) while the key resolution below is in flight.
-        const replyQuote = isSystemPost ? null : this.S.replyDraft;
+        const replyQuote = isDirectPost ? null : this.S.replyDraft;
         const replyPayload = replyQuote ? JSON.stringify(replyQuote) : '';
 
         // Карточка перевода ZaliCoin приходит со своим clientId: сервер привязал к нему
@@ -159,7 +168,7 @@ ZaliMixin(ZaliInterface, class {
             this.scheduleRenderMessages();
             this.renderContacts();
             this.renderServerInterface();
-            if (!isSystemPost) this.resetComposerAfterSend(inp, replyQuote);
+            if (!isDirectPost) this.resetComposerAfterSend(inp, replyQuote);
 
             // No native shell (macOS/Windows) around this WebView — we're running as a
             // plain browser tab. Pack the .zali archive ourselves via the WASM build of
@@ -219,7 +228,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderContacts();
         this.renderServerInterface();
 
-        if (!isSystemPost) this.resetComposerAfterSend(inp, replyQuote);
+        if (!isDirectPost) this.resetComposerAfterSend(inp, replyQuote);
 
         this.cachePendingOutboxAttachments(clientId, payloadAttachments);
         this.enqueuePendingOutbox({
@@ -839,6 +848,7 @@ ZaliMixin(ZaliInterface, class {
         if (clientId) {
             const reconciled = this.finalizePendingMessage(clientId, id);
             if (reconciled) {
+                const statusChanged = this._finalizeChanged !== false;
                 this.dropPendingOutbox(clientId);
                 // The one thing reconciliation must still take from the incoming
                 // copy — see adoptAttachmentPayloads().
@@ -848,22 +858,28 @@ ZaliMixin(ZaliInterface, class {
                 const store = (serverId && channelId)
                     ? this.S.serverChats[`${serverId}:${channelId}`]
                     : this.S.chats[peer];
-                this.adoptAttachmentPayloads(store, {
+                const adopted = this.adoptAttachmentPayloads(store, {
                     msgId: id,
                     clientId,
                     attachments: this.normalizeAttachments(attachments),
                 });
                 // ...and an edit — see adoptEditedContent().
-                if (this.adoptEditedContent(store, { msgId: id, text, reply })) {
+                const edited = this.adoptEditedContent(store, { msgId: id, text, reply });
+                if (edited) {
                     this.scheduleSaveStoredMessageCache();
                 }
+                // Повторная доставка уже подтверждённого сообщения без правки и без
+                // новых вложений ничего не меняет — ни ленту, ни список, ни журнал.
+                if (!statusChanged && !adopted && !edited) return;
                 if (serverId && channelId) {
                     this.renderServerInterface();
                 } else {
                     this.scheduleRenderMessages();
                     this.renderContacts();
                 }
-                this.addLogEntry({ type: 'SUCCESS', msg: `Сообщение подтверждено сервером: ${sender}`, ts: new Date().toLocaleTimeString() });
+                if (statusChanged) {
+                    this.addLogEntry({ type: 'SUCCESS', msg: `Сообщение подтверждено сервером: ${sender}`, ts: new Date().toLocaleTimeString() });
+                }
                 return;
             }
         }

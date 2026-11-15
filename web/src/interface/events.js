@@ -382,6 +382,13 @@ ZaliMixin(ZaliInterface, class {
         };
         const update = () => {
             raf = 0;
+            // На телефоне ползунка нет (CSS показывает его только ≥761px), а этот
+            // обработчик на каждом кадре прокрутки читал три прямоугольника и писал
+            // три стиля — принудительная раскладка в кадре ради невидимого элемента.
+            if (this.isMobileLayout?.()) {
+                if (thumb.style.display !== 'none') thumb.style.display = 'none';
+                return;
+            }
             const { clientHeight, scrollHeight, scrollTop } = msgsEl;
             const g = geometry();
             if (scrollHeight <= clientHeight + 1 || g.height <= 0) {
@@ -640,8 +647,19 @@ ZaliMixin(ZaliInterface, class {
         const attachBtn = document.getElementById('attachBtn');
         const attachmentInput = document.getElementById('attachmentInput');
         if (attachBtn && attachmentInput) {
-            attachBtn.addEventListener('click', () => attachmentInput.click());
+            // Android — своя сетка галереи с камерой первой плиткой (media_sheet.js);
+            // остальные — системный выбор файла.
+            attachBtn.addEventListener('click', () => {
+                if (this.nativeSupports('mediaGallery')) this.openMediaSheet();
+                else attachmentInput.click();
+            });
             attachmentInput.addEventListener('change', (e) => {
+                this.handleFiles(e.target.files || []);
+                e.target.value = '';
+            });
+            // Плитка «Стикер» в листе галереи (media_sheet.js). Не-.tgs, если выбрали
+            // его в файловом менеджере, уходит обычным вложением — как из скрепки.
+            document.getElementById('stickerFileInput')?.addEventListener('change', (e) => {
                 this.handleFiles(e.target.files || []);
                 e.target.value = '';
             });
@@ -1098,7 +1116,6 @@ ZaliMixin(ZaliInterface, class {
         const avatarResetBtn = document.getElementById('avatarResetBtn');
         const meAva = document.getElementById('meAva');
         const inputUiV2Enabled = document.getElementById('inputUiV2Enabled');
-        const inputExperimentalDesign = document.getElementById('inputExperimentalDesign');
         const inputDecorArt = document.getElementById('inputDecorArt');
         const designModeOptions = document.getElementById('designModeOptions');
         const cacheSettings = document.getElementById('cacheSettings');
@@ -1247,10 +1264,9 @@ ZaliMixin(ZaliInterface, class {
                 this.saveDecorArt(!!inputDecorArt.checked);
             });
         }
-        if (inputExperimentalDesign) {
-            inputExperimentalDesign.addEventListener('change', () => {
-                this.saveExperimentalDesign(!!inputExperimentalDesign.checked);
-            });
+        const inputFpsMeter = document.getElementById('inputFpsMeter');
+        if (inputFpsMeter) {
+            inputFpsMeter.addEventListener('change', () => this.saveFpsMeter(!!inputFpsMeter.checked));
         }
         if (designModeOptions) {
             // Делегирование, а не слушатели на кнопках: renderDesignModeSettings()
@@ -1698,27 +1714,32 @@ ZaliMixin(ZaliInterface, class {
         if (mobileBackdrop) {
             mobileBackdrop.addEventListener('click', () => this.closeMobileSidebar());
         }
+        // Кнопки нижней панели: раздел въезжает
+        // лентой (mobileSwitchSection, mobile_pager.js), а не появляется скачком.
+        const switchSection = (section, doSwitch) => (this.mobileSwitchSection
+            ? this.mobileSwitchSection(section, doSwitch)
+            : doSwitch());
         const mobileChatsBtn = document.getElementById('mobileChatsBtn');
         if (mobileChatsBtn) {
-            mobileChatsBtn.addEventListener('click', () => {
+            mobileChatsBtn.addEventListener('click', () => switchSection('chats', () => {
                 this.setNavMode('dm');
                 this.openChatView({ showList: true });
-            });
+            }));
         }
         const mobileServersBtn = document.getElementById('mobileServersBtn');
         if (mobileServersBtn) {
-            mobileServersBtn.addEventListener('click', () => {
+            mobileServersBtn.addEventListener('click', () => switchSection('servers', () => {
                 this.setNavMode('servers');
                 this.openChatView({ showList: true });
-            });
+            }));
         }
         const mobileHubBtn = document.getElementById('mobileHubBtn');
         if (mobileHubBtn) {
-            mobileHubBtn.addEventListener('click', () => this.openHubView());
+            mobileHubBtn.addEventListener('click', () => switchSection('hub', () => this.openHubView()));
         }
         const mobileZaliCoinBtn = document.getElementById('mobileZaliCoinBtn');
         if (mobileZaliCoinBtn) {
-            mobileZaliCoinBtn.addEventListener('click', () => this.openZaliCoinView());
+            mobileZaliCoinBtn.addEventListener('click', () => switchSection('zalicoin', () => this.openZaliCoinView()));
         }
         const hubGrid = document.getElementById('hubGrid');
         if (hubGrid) {
@@ -1829,6 +1850,11 @@ ZaliMixin(ZaliInterface, class {
             btn.addEventListener('click', (e) => {
                 const themeName = e.currentTarget.getAttribute('data-theme');
                 this.bus.send('zali_styler:set_theme', themeName);
+            });
+        });
+        document.querySelectorAll('[data-appearance-option]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                this.bus.send('zali_styler:set_appearance', e.currentTarget.getAttribute('data-appearance-option'));
             });
         });
 
@@ -1979,9 +2005,10 @@ ZaliMixin(ZaliInterface, class {
                 const bgAlpha = Math.min(0.98, Math.max(0.72, 0.58 + (percent / 100) * 0.32));
                 const borderAlpha = Math.min(0.95, Math.max(0.18, 0.08 + (percent / 100) * 0.28));
                 const shadowAlpha = Math.min(0.65, Math.max(0.24, 0.12 + (percent / 100) * 0.5));
-                const bg = `rgba(8,10,14,${bgAlpha.toFixed(3)})`;
-                const border = `rgba(255,255,255,${borderAlpha.toFixed(3)})`;
-                const shadow = `0 22px 48px rgba(0,0,0,${shadowAlpha.toFixed(3)})`;
+                // Через токены темы (style.css :root), чтобы слайдер не красил подсказку в тёмное в светлой теме.
+                const bg = `rgba(var(--surface-rgb),${bgAlpha.toFixed(3)})`;
+                const border = `rgba(var(--ink-rgb),${borderAlpha.toFixed(3)})`;
+                const shadow = `0 22px 48px rgba(0,0,0,calc(${shadowAlpha.toFixed(3)} * var(--shadow-k)))`;
                 const out = document.getElementById('suggestContrastVal');
                 if (out) out.textContent = `${percent}%`;
                 this.bus.send('zali_styler:set_variable', '--contact-suggest-bg', bg);
@@ -2005,7 +2032,7 @@ ZaliMixin(ZaliInterface, class {
                 this.bus.send('zali_styler:set_variable', '--contact-suggest-item-pad-x', `${padX}px`);
                 this.bus.send('zali_styler:set_variable', '--contact-suggest-gap', `${gap}px`);
                 this.bus.send('zali_styler:set_variable', '--contact-suggest-font', `${font}px`);
-                this.bus.send('zali_styler:set_variable', '--contact-suggest-hint', `rgba(255,255,255,${hint.toFixed(3)})`);
+                this.bus.send('zali_styler:set_variable', '--contact-suggest-hint', `rgba(var(--ink-rgb),${hint.toFixed(3)})`);
             });
         }
 
@@ -2140,6 +2167,7 @@ ZaliMixin(ZaliInterface, class {
         this.applyUiV2Chrome();
         this.applyDesignMode();
         this.applyDecorArt();
+        this.applyFpsMeter();
         this.applyCalmBg();
         this.applyMsgOneSide();
         this.applySettingsSyncUi();
@@ -2178,64 +2206,7 @@ ZaliMixin(ZaliInterface, class {
                 this.closeMobileSidebar();
             }
         });
-        this.setupScrollInertia();
-    }
-
-    // Mouse-wheel scrolling has no native deceleration (unlike trackpad momentum,
-    // which the OS/compositor handles without extra wheel events) — each notch just
-    // jumps and stops dead. This adds a tiny residual glide after the wheel goes
-    // idle, capped and decaying fast on purpose: it should read as "less abrupt",
-    // never as a distinct animation. #msgs is included deliberately — the coast is
-    // a continuation of the user's own gesture, so it must NOT go through
-    // markProgrammaticScroll() (see the comment on that method): onMessagesScroll
-    // needs to see it as real scrolling so _bottomIntent still clears correctly if
-    // the glide carries the view away from the bottom.
-    setupScrollInertia() {
-        if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
-        // The server rail is not here: it runs its own physics (interface/server_rail.js).
-        const SELECTOR = '.msgs, .contacts, .sidebar, .settings-body, .server-modal-content, .color-picker-body';
-        const FRICTION = 0.72;
-        const MIN_VELOCITY = 0.5;
-        const MAX_VELOCITY = 6;
-        const IDLE_MS = 70;
-        const states = new WeakMap();
-
-        const coast = (el, st) => {
-            st.raf = requestAnimationFrame(() => {
-                st.velocity *= FRICTION;
-                if (Math.abs(st.velocity) < MIN_VELOCITY) {
-                    st.raf = 0;
-                    return;
-                }
-                const max = el.scrollHeight - el.clientHeight;
-                const next = Math.max(0, Math.min(max, el.scrollTop + st.velocity));
-                el.scrollTop = next;
-                if (next <= 0 || next >= max) {
-                    st.raf = 0;
-                    return;
-                }
-                coast(el, st);
-            });
-        };
-
-        document.addEventListener('wheel', (e) => {
-            const el = e.target.closest?.(SELECTOR);
-            if (!el || el.scrollHeight <= el.clientHeight) return;
-            let st = states.get(el);
-            if (!st) {
-                st = { velocity: 0, raf: 0, idleTimer: 0 };
-                states.set(el, st);
-            }
-            if (st.raf) {
-                cancelAnimationFrame(st.raf);
-                st.raf = 0;
-            }
-            const nudge = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, e.deltaY * 0.12));
-            st.velocity = st.velocity * 0.3 + nudge * 0.7;
-            clearTimeout(st.idleTimer);
-            st.idleTimer = setTimeout(() => {
-                if (Math.abs(st.velocity) >= MIN_VELOCITY) coast(el, st);
-            }, IDLE_MS);
-        }, { passive: true });
+        // Колесо мыши в WebKit — плавно, трекпад не трогаем (smooth_scroll.js).
+        this.setupSmoothWheel?.();
     }
 });

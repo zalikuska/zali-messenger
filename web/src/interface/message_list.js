@@ -136,6 +136,16 @@ ZaliMixin(ZaliInterface, class {
     _renderMessagesNow() {
         const box = document.getElementById('msgs');
         if (!box) return;
+        // Телефон: чат, уехавший за край (открыт список, Хаб, ZaliCoin или Настройки),
+        // не виден, а его лента перерисовывалась на каждое входящее сообщение и на
+        // каждое переключение вкладки — 15–35 мс при CPU ×12 (замер 2026-11-15), рывок
+        // прокрутки списка на каждом сообщении. Отрисуем в тот момент, когда чат начнёт
+        // выезжать (setMobileNavProgress) — синхронно, до первого кадра перехода.
+        if (this.isMobileChatOffscreen?.()) {
+            this._messagesRenderDeferred = true;
+            return;
+        }
+        this._messagesRenderDeferred = false;
         this.hideReactionMenu();
         const isServers = this.S.navMode === 'servers';
         const conversationKey = isServers ? this.currentServerChatKey() : String(this.S.current || '').trim();
@@ -237,6 +247,7 @@ ZaliMixin(ZaliInterface, class {
         const windowInfo = this.computeMessageWindow(msgs, box, {
             conversationChanged,
             stickToBottom,
+            conversationKey,
         });
         const renderedMsgs = windowInfo.useWindow ? msgs.slice(windowInfo.start, windowInfo.end) : msgs;
         // Одна строка массива = ровно один элемент верхнего уровня в #msgs (разделитель
@@ -247,14 +258,25 @@ ZaliMixin(ZaliInterface, class {
             rows.push(`<div class="msg-window-spacer" aria-hidden="true" style="height:${Math.round(windowInfo.topSpacer)}px"></div>`);
         }
         const GROUP_WINDOW_MS = 5 * 60 * 1000;
-        const items = renderedMsgs.map(msg => {
+        const toItem = (msg) => {
             const ts = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
             const dayKey = ts ? new Date(ts).toDateString() : '';
             return { msg, ts, dayKey, groupPos: 'single' };
-        });
+        };
+        // Края окна группируются так же, как в полной ленте: соседи за окном участвуют
+        // в группировке (и тут же отбрасываются). Иначе первая строка окна всегда
+        // начинала группу (подпись отправителя, другой отступ), последняя — заканчивала,
+        // высоты строк в окне не совпадали с полной лентой, и после каждого сдвига окна
+        // якорь писал scrollTop — а запись scrollTop обрывает инерцию трекпада и пальца.
+        const winStart = windowInfo.useWindow ? windowInfo.start : 0;
+        const winEnd = windowInfo.useWindow ? windowInfo.end : msgs.length;
+        const prevCtx = winStart > 0 ? toItem(msgs[winStart - 1]) : null;
+        const nextCtx = winEnd < msgs.length ? toItem(msgs[winEnd]) : null;
+        const items = renderedMsgs.map(toItem);
+        const groupItems = [...(prevCtx ? [prevCtx] : []), ...items, ...(nextCtx ? [nextCtx] : [])];
 
         let activeGroup = null;
-        items.forEach((item) => {
+        groupItems.forEach((item) => {
             const isGroupable = !this.detectSystemNotice(item.msg?.text) && !this.parseCoinCard(item.msg?.text) && !!item.ts && !!item.dayKey && !!String(item.msg?.sender || '').trim();
             const sameSender = !!(activeGroup && activeGroup.sender === item.msg.sender);
             const sameDay = !!(activeGroup && activeGroup.dayKey === item.dayKey);
@@ -285,7 +307,10 @@ ZaliMixin(ZaliInterface, class {
             }
         });
 
-        let lastDate = null;
+        // Разделитель дня над первой строкой окна (не первой в переписке) не рисуем: его
+        // высота уже входит в верхнюю заглушку (он часть строки перед ней). Появится,
+        // как только окно доедет до предыдущего сообщения.
+        let lastDate = winStart > 0 && renderedMsgs.length ? this.fmtDate(renderedMsgs[0].timestamp) : null;
         items.forEach(item => {
             const msg = item.msg;
             const isOut = this.isOutgoingMessage(msg);
@@ -297,6 +322,8 @@ ZaliMixin(ZaliInterface, class {
             const dateStr = this.fmtDate(msg.timestamp);
             const mediaCard = !isCall && this.messageHasMedia(msg) ? 'media-card' : '';
             const gifOnly = !isCall && this.messageIsGifOnly(msg);
+            // Одни стикеры — как в Telegram: прямо на фоне чата, время плашкой в углу.
+            const stickerOnly = gifOnly && this.normalizeAttachments(msg.attachments).every(att => this.isStickerAttachment(att));
             const isSending = isOut && msg.status === 'sending';
             const isFailed = isOut && (msg.status === 'error' || !!msg.error);
             const messageId = String(msg.id || '').trim();
@@ -404,7 +431,7 @@ ZaliMixin(ZaliInterface, class {
             // внутри только своя строка: иконка, заголовок, длительность.
             const bubbleClass = isCall ? 'bubble call-bubble msg-time-anchor' : (gifOnly ? 'media-only msg-time-anchor' : `bubble ${mediaCard} msg-time-anchor`);
 
-            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${gifOnly ? 'gif-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
+            let html = `<div class="msg ${dir} ${isCall ? 'call-msg ' : ''}group-${item.groupPos} ${isSending ? 'sending' : ''}${isFailed ? ' failed' : ''} ${gifOnly ? 'gif-only' : ''}${stickerOnly ? ' sticker-only' : ''} ${showInlineTime ? 'time-visible' : 'time-hidden'}"${messageId ? ` data-message-id="${this.esc(messageId)}"` : ''}>`;
             if (showAvatar) {
                 html += `<div class="msg-ava"${this.profileOpenAttrs(msg.sender)}>${this.renderAvatarHTML(msg.sender, 'avatar-img', msg.sender)}</div>`;
             } else if (hasAvatarSlot) {
@@ -444,27 +471,27 @@ ZaliMixin(ZaliInterface, class {
             this._lastMessagesHTML = html;
             this.hydrateGifMedia(box);
 
-            // Sampling the whole list meant one forced layout per message node on
-            // every render. A dozen evenly spread samples give the same running
-            // average for the virtual-window estimate at a fraction of the cost.
-            const msgNodes = box.querySelectorAll('.msg');
-            if (msgNodes.length) {
-                const SAMPLES = 12;
-                const step = Math.max(1, Math.floor(msgNodes.length / SAMPLES));
-                let total = 0;
-                let counted = 0;
-                for (let i = 0; i < msgNodes.length && counted < SAMPLES; i += step) {
-                    const height = Number(msgNodes[i].offsetHeight || 0);
-                    if (height > 0) {
-                        total += height;
-                        counted += 1;
-                    }
-                }
-                if (counted > 0) {
-                    const avgHeight = total / counted;
-                    const current = Number(this.messageWindow?.avgHeight || 92);
-                    this.messageWindow.avgHeight = Math.max(this.minMessageRowHeight(), Math.min(160, current * 0.7 + avgHeight * 0.3));
-                }
+            // Настоящие высоты отрисованных строк — для окна виртуализации (см.
+            // recordMessageRowHeights во viewport.js). Раскладка к этому моменту всё
+            // равно посчитана (якорь прокрутки ниже читает геометрию), offsetTop строк
+            // ничего не пересчитывает.
+            const msgNodes = box.querySelectorAll(':scope > .msg');
+            if (msgNodes.length && msgNodes.length === renderedMsgs.length) {
+                const tail = box.lastElementChild;
+                const lastNode = msgNodes[msgNodes.length - 1];
+                const endTop = tail && tail !== lastNode && tail.classList.contains('msg-window-spacer')
+                    ? tail.offsetTop
+                    : lastNode.offsetTop + lastNode.offsetHeight;
+                // Последняя строка окна (не последняя в переписке) не измеряется: в полной
+                // ленте её высота включает разделитель дня и отступ следующего сообщения,
+                // которых в окне нет.
+                const partial = windowInfo.useWindow && windowInfo.end < msgs.length;
+                this.recordMessageRowHeights(conversationKey,
+                    partial ? renderedMsgs.slice(0, -1) : renderedMsgs,
+                    partial ? Array.prototype.slice.call(msgNodes, 0, -1) : msgNodes,
+                    partial ? msgNodes[msgNodes.length - 1].offsetTop : endTop);
+                const store = this.messageHeightStore(conversationKey);
+                this.messageWindow.avgHeight = this.messageHeightAverage(store, Number(this.messageWindow?.avgHeight || 92));
             }
         }
         this.messageWindow.conversationKey = conversationKey;
@@ -477,12 +504,21 @@ ZaliMixin(ZaliInterface, class {
         if (preserveScroll && previousScrollHeight > 0 && htmlChanged) {
             // Holding a position in history is the opposite of following the bottom.
             this._bottomIntent = false;
-            this.markProgrammaticScroll();
-            const restored = this.restoreMessageScrollAnchor(box, scrollAnchor);
-            if (!restored) {
+            // Пока листают — сдвиг забирает заглушка, scrollTop не трогаем (инерция).
+            const anchorDelta = this.messageAnchorDelta(box, scrollAnchor);
+            const absorbed = anchorDelta !== null && (Math.abs(anchorDelta) < 1
+                || this.absorbMessageAnchorShift(box, anchorDelta, windowInfo, conversationKey));
+            if (!absorbed) this.markProgrammaticScroll();
+            const restored = absorbed || this.restoreMessageScrollAnchor(box, scrollAnchor);
+            // Якоря нет (быстрый бросок обогнал окно, на экране была заглушка): окно и так
+            // встало по накопленным высотам ровно под текущий scrollTop — грубая поправка
+            // по разнице scrollHeight здесь только сдёрнула бы ленту и оборвала инерцию.
+            const userScrolling = windowInfo.useWindow
+                && ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - Number(this._msgUserScrollAt || 0) < 400);
+            if (!restored && !userScrolling) {
                 const scrollDelta = box.scrollHeight - previousScrollHeight;
                 const nextScrollTop = Math.max(0, previousScrollTop + scrollDelta);
-                box.scrollTop = nextScrollTop;
+                if (Math.abs(box.scrollTop - nextScrollTop) >= 1) box.scrollTop = nextScrollTop;
             }
         }
 

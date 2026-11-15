@@ -14,6 +14,7 @@ import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
@@ -22,115 +23,72 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.MonetizationOn
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.clipPath
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-
-/**
- * Sections, mirroring the shared web dock buttons — все четыре. Настройки открываются из Хаба.
- *
- * Хаба здесь не было, а веб-док (в котором он есть) на Android скрыт инъекцией
- * CSS — то есть в Хаб можно было попасть только окольным путём, через
- * сегмент-контрол внутри Настроек.
- *
- * `id` — это и имя секции в MOBILE_NAV_PROGRESS от веба, и аргумент
- * `window.__zaliSelectTab`, так что строка одна на оба направления.
- */
-private enum class Tab(val id: String, val title: String, val icon: ImageVector) {
-    Chats("chats", "Чаты", Icons.Filled.Chat),
-    Servers("servers", "Сервера", Icons.Filled.Dns),
-    ZaliCoin("zalicoin", "ZaliCoin", Icons.Filled.MonetizationOn),
-    Hub("hub", "Хаб", Icons.Filled.Home);
-
-    companion object {
-        fun fromId(value: String): Tab? = entries.firstOrNull { it.id == value }
-    }
-}
 
 private const val ASSET_BASE_URL = "file:///android_asset/web/"
 
-private val Accent = Color(0xFFC7FA48)      // brand lime
-// Почти непрозрачное стекло: чат и список не должны просвечивать сквозь панель.
-private val BarGlass = Color(0xF50E1014)
-private val CapsuleShape = RoundedCornerShape(percent = 50)   // полностью круглые торцы, как у iOS
-private val BarPadding = 6.dp
-private val TabHeight = 48.dp
+private const val APPEARANCE_PREFS = "zali_appearance"
+private const val DARK_BACKGROUND = 0xFF0B0D12.toInt()
 
 /**
  * Thin native Android shell. Wraps the shared web UI (`Web/`, bundled by
- * `bundle_web.py`) in a WebView and draws a translucent bottom bar that mirrors
- * the web Liquid Glass bar (Android has no true Liquid Glass API; this
- * approximates it with translucency + a blurred backdrop on Android 12+).
+ * `bundle_web.py`) in a WebView. The bottom navigation is the web dock itself
+ * (`.mobile-dock`): the native Compose bar was removed 2026-11-15 — it duplicated
+ * the dock (gestures, theme, sections) and drifted from it.
  */
 class MainActivity : ComponentActivity() {
 
     private var bridge: NativeBridge? = null
+
+    /** Светлота темы веба — запоминается, чтобы следующий запуск сразу был в ней. */
+    private var uiLight by mutableStateOf(false)
+    private var uiBackground by mutableStateOf(DARK_BACKGROUND)
+    private var appWebView: WebView? = null
+
+    private fun applySystemBars(light: Boolean) {
+        val transparent = android.graphics.Color.TRANSPARENT
+        // light(): тёмные значки на светлом фоне; dark(): светлые на тёмном.
+        val style = if (light) SystemBarStyle.light(transparent, transparent) else SystemBarStyle.dark(transparent)
+        enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+    }
+
+    private fun applyAppearance(light: Boolean, background: Int) {
+        runOnUiThread {
+            if (uiLight != light) applySystemBars(light)
+            uiLight = light
+            uiBackground = background
+            appWebView?.setBackgroundColor(background)
+            getSharedPreferences(APPEARANCE_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("light", light)
+                .putInt("background", background)
+                .apply()
+        }
+    }
 
     /** Нажатие на уведомление, ждущее моста (MessageNotifier кладёт переписку в extras). */
     private var pendingNotificationIntent: Intent? = null
@@ -225,6 +183,135 @@ class MainActivity : ComponentActivity() {
         val callback = pendingFileChooser
         pendingFileChooser = null
         callback?.onReceiveValue(pickedFileUris(result.resultCode, result.data))
+    }
+
+    // Галерея внутри приложения (GALLERY_* в NativeBridge.kt, MediaGallery.kt):
+    // окно разрешения на фото, камера и настройки приложения — только через Activity.
+    private var pendingGalleryAccessId: String? = null
+    private val galleryPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        val requestId = pendingGalleryAccessId ?: return@registerForActivityResult
+        pendingGalleryAccessId = null
+        bridge?.emitGalleryList(requestId, 240, askedBefore = true)
+    }
+
+    private var pendingCapture: Pair<String, String>? = null // requestId → имя файла
+    private val cameraLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { saved ->
+        val (requestId, name) = pendingCapture ?: return@registerForActivityResult
+        pendingCapture = null
+        bridge?.onGalleryCapture(requestId, name, saved)
+    }
+
+    // Камера объявлена в манифесте (звонки), а при объявленном и не выданном CAMERA
+    // ACTION_IMAGE_CAPTURE падает SecurityException — сначала спрашиваем.
+    private var pendingCameraPermissionId: String? = null
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val requestId = pendingCameraPermissionId ?: return@registerForActivityResult
+        pendingCameraPermissionId = null
+        if (granted) launchCamera(requestId) else bridge?.onGalleryCapture(requestId, null, false)
+    }
+
+    private fun captureGalleryPhoto(requestId: String) {
+        val granted = ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            launchCamera(requestId)
+        } else {
+            pendingCameraPermissionId = requestId
+            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun launchCamera(requestId: String) {
+        val gallery = bridge?.mediaGallery ?: return
+        val (name, uri) = gallery.newCaptureTarget()
+        pendingCapture = requestId to name
+        try {
+            cameraLauncher.launch(uri)
+        } catch (e: ActivityNotFoundException) {
+            pendingCapture = null
+            bridge?.onGalleryCapture(requestId, name, false)
+        }
+    }
+
+    private fun openAppSettings() {
+        try {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", packageName, null))
+            )
+        } catch (e: ActivityNotFoundException) {
+            // Настроек нет — ничего не делаем.
+        }
+    }
+
+    /**
+     * Фото и видео — системный Photo Picker (сетка галереи и альбомы, без доступа к
+     * хранилищу), а не файловый менеджер `ACTION_GET_CONTENT`: тот открывал «Файлы»
+     * с папками, и найти снимок из камеры было делом нескольких экранов. Где пикера
+     * нет (старый Android без модуля из Google Play), androidx сам откатывается на
+     * `ACTION_OPEN_DOCUMENT` с тем же фильтром. Ответ — тот же колбэк вебвью.
+     */
+    private val singleMediaLauncher = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val callback = pendingFileChooser
+        pendingFileChooser = null
+        callback?.onReceiveValue(uri?.let { arrayOf(it) })
+    }
+
+    private val multipleMediaLauncher = registerForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        val callback = pendingFileChooser
+        pendingFileChooser = null
+        callback?.onReceiveValue(uris.takeIf { it.isNotEmpty() }?.toTypedArray())
+    }
+
+    /**
+     * Какие медиа показывать в Photo Picker, или null — поле не про фото/видео
+     * (`.zali`, `.zip`) и ему нужен файловый менеджер. Пикер берём, когда поле явно
+     * принимает картинки или видео целым классом (`image/` или `video/` со звёздочкой:
+     * `"image/" + "*"` — буквально здесь не пишется, Kotlin счёл бы это началом
+     * вложенного комментария). В пикере нет файлов, не являющихся медиа, поэтому
+     * стикеры `.tgs` веб выбирает отдельным полем без картинок в `accept`
+     * (`#stickerFileInput`, плитка «Стикер .tgs» в листе галереи) — оно попадает
+     * сюда с null и открывает файловый менеджер.
+     */
+    private fun photoPickerMediaType(
+        params: WebChromeClient.FileChooserParams,
+    ): ActivityResultContracts.PickVisualMedia.VisualMediaType? {
+        val accept = (params.acceptTypes ?: emptyArray())
+            .flatMap { it.split(',') }
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        val images = accept.any { it == "image/*" }
+        val videos = accept.any { it == "video/*" }
+        return when {
+            images && videos -> ActivityResultContracts.PickVisualMedia.ImageAndVideo
+            images -> ActivityResultContracts.PickVisualMedia.ImageOnly
+            videos -> ActivityResultContracts.PickVisualMedia.VideoOnly
+            else -> null
+        }
+    }
+
+    private fun launchFileChooser(params: WebChromeClient.FileChooserParams) {
+        val mediaType = photoPickerMediaType(params)
+        if (mediaType == null) {
+            fileChooserLauncher.launch(fileChooserIntent(params))
+            return
+        }
+        val request = PickVisualMediaRequest(mediaType)
+        if (params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            multipleMediaLauncher.launch(request)
+        } else {
+            singleMediaLauncher.launch(request)
+        }
     }
 
     private fun pickedFileUris(resultCode: Int, data: Intent?): Array<Uri>? {
@@ -344,12 +431,14 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Приложение тёмное всегда: значки статус-бара и навигации светлые, независимо от
-        // системной темы (иначе на светлой теме часы и батарея тёмные на тёмном фоне).
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-        )
+        // Значки статус-бара и навигации — по теме приложения, а не системы: тёмная
+        // тема — светлые значки, светлая — тёмные (иначе часы и батарея сливаются с
+        // фоном). Тема из прошлого запуска, потом её уточняет SET_APPEARANCE из веба.
+        getSharedPreferences(APPEARANCE_PREFS, MODE_PRIVATE).let { prefs ->
+            uiLight = prefs.getBoolean("light", false)
+            uiBackground = prefs.getInt("background", DARK_BACKGROUND)
+        }
+        applySystemBars(uiLight)
         pendingNotificationIntent = intent
         // Сессия, сохранённая на прошлом запуске, регистрирует FCM-токен и без нового входа.
         PushSession.syncRegistration(this)
@@ -364,9 +453,6 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            var selected by remember { mutableStateOf(Tab.Chats) }
-            // 0 = dialog list on screen (bar visible), 1 = chat (bar gone).
-            var navProgress by remember { mutableFloatStateOf(0f) }
             var webView by remember { mutableStateOf<WebView?>(null) }
 
             // System bars ∪ display cutout: the notch/front camera and the
@@ -414,7 +500,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Box(Modifier.fillMaxSize().background(Color(0xFF0B0D12))) {
+            Box(Modifier.fillMaxSize().background(Color(uiBackground))) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize().imePadding(),
                     factory = { ctx ->
@@ -449,24 +535,26 @@ class MainActivity : ComponentActivity() {
                         bridge = nativeBridge
                         nativeBridge.setAppVisible(PushSession.appVisible)
                         webView = wv
-                        nativeBridge.onMobileNavProgress = { progress, _ ->
-                            navProgress = progress
-                        }
-                        nativeBridge.onMobileNavSection = { section ->
-                            Tab.fromId(section)?.let { selected = it }
-                        }
+                        appWebView = wv
                         nativeBridge.requestScreenCapturePermission = { requestId ->
                             pendingScreenCaptureRequestId = requestId
                             val manager = getSystemService(MediaProjectionManager::class.java)
                             screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
                         }
+                        nativeBridge.requestGalleryAccess = { requestId, permissions ->
+                            pendingGalleryAccessId = requestId
+                            galleryPermissionLauncher.launch(permissions)
+                        }
+                        nativeBridge.captureGalleryPhoto = { requestId -> captureGalleryPhoto(requestId) }
+                        nativeBridge.openAppSettings = { openAppSettings() }
+                        nativeBridge.applyAppearance = { light, background -> applyAppearance(light, background) }
                         wv.apply {
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.databaseEnabled = true
                             settings.mediaPlaybackRequiresUserGesture = false
                             settings.allowFileAccess = true
-                            setBackgroundColor(0xFF0B0D12.toInt())
+                            setBackgroundColor(uiBackground)
 
                             addJavascriptInterface(nativeBridge, "ZaliAndroidBridge")
 
@@ -535,7 +623,7 @@ class MainActivity : ComponentActivity() {
                                     pendingFileChooser?.onReceiveValue(null)
                                     pendingFileChooser = filePathCallback
                                     return try {
-                                        fileChooserLauncher.launch(fileChooserIntent(fileChooserParams))
+                                        launchFileChooser(fileChooserParams)
                                         true
                                     } catch (e: ActivityNotFoundException) {
                                         // По контракту при false колбэк вызывать нельзя.
@@ -571,6 +659,16 @@ class MainActivity : ComponentActivity() {
                                     return true
                                 }
 
+                                // Превью и оригиналы галереи (MediaGallery.intercept):
+                                // https://zali-gallery.invalid/<token>/… — в сеть не уходит.
+                                override fun shouldInterceptRequest(
+                                    view: WebView,
+                                    request: WebResourceRequest,
+                                ): WebResourceResponse? {
+                                    val url = request.url ?: return null
+                                    return bridge?.mediaGallery?.intercept(url)
+                                }
+
                                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                                     if (!NativeBridge.documentStartScriptSupported) {
                                         view.evaluateJavascript(nativeBridge.documentStartScript(), null)
@@ -582,7 +680,8 @@ class MainActivity : ComponentActivity() {
                                 // screen (solid black), even though the page itself is fully
                                 // loaded and interactive (verified via chrome://inspect) — but
                                 // a real hardware tap on the (separate, Compose-rendered)
-                                // bottom bar makes it appear immediately. A layout bounds
+                                // bottom bar (removed 2026-11-15; the fix below never
+                                // depended on it) makes it appear immediately. A layout bounds
                                 // nudge, an in-process synthetic MotionEvent on the WebView,
                                 // and a visibility toggle were all tried and confirmed live to
                                 // NOT fix it. Tapping the bottom bar changes Compose state,
@@ -614,16 +713,6 @@ class MainActivity : ComponentActivity() {
                             loadUrl(ASSET_BASE_URL + "index.html")
                         }
                     }
-                )
-
-                ZaliBottomBar(
-                    selected = selected,
-                    onSelect = { tab ->
-                        selected = tab
-                        bridge?.selectTab(tab.id)
-                    },
-                    navProgress = navProgress,
-                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
         }
@@ -703,229 +792,3 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
-
-/**
- * @param navProgress 0 = dialog list (bar shown), 1 = chat screen (bar slid off
- *   the bottom edge). Reported by the web UI through
- *   NativeBridge.onMobileNavProgress — the chat needs the full height for its
- *   message input, and the bar used to cover it.
- */
-@Composable
-private fun ZaliBottomBar(
-    selected: Tab,
-    onSelect: (Tab) -> Unit,
-    navProgress: Float,
-    modifier: Modifier = Modifier,
-) {
-    // Панель — нативный слой НАД вебвью: чат её не перекрывает и «под него» она
-    // уйти не может. Поэтому она не следит за пальцем 1:1: на отменённом свайпе
-    // она бы выехала поверх поля ввода и упала обратно.
-    //
-    // Решает не то, где сейчас палец, а куда ведёт жест: на отпускании веб присылает
-    // конечное значение (0 или 1), порог — 0.5. Отменённый свайп оставляет панель
-    // спрятанной, а переход в чат (тап по диалогу, кнопка «назад», свайп) — это
-    // один и тот же плавный выезд за нижний край. Гасить альфой нельзя: панель
-    // «просто пропадала».
-    //
-    // Кривая — стандартная Material, не `cubic-bezier(.2,.8,.2,1)` чата: у той
-    // ~90% пути проходится за первые 100 мс, и на коротком ходе панели (≈80dp)
-    // это читается как резкий сброс, а не выезд. 300 мс — чат (240 мс) уже
-    // перекрывает область панели, когда она ещё доезжает.
-    val hidden = navProgress >= 0.5f
-    val slide by animateFloatAsState(
-        targetValue = if (hidden) 1f else 0f,
-        animationSpec = tween(300, easing = FastOutSlowInEasing),
-        label = "zaliBottomBarSlide",
-    )
-    var barHeightPx by remember { mutableFloatStateOf(0f) }
-    val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
-    val currentSelected by rememberUpdatedState(selected)
-    val currentOnSelect by rememberUpdatedState(onSelect)
-
-    val padPx = with(density) { BarPadding.toPx() }
-    val tabCount = Tab.entries.size
-    var barWidthPx by remember { mutableFloatStateOf(0f) }
-    // Ширина слота под один пункт: капсула занимает ровно его.
-    val slotPx = if (barWidthPx > 0f) (barWidthPx - 2 * padPx) / tabCount else 0f
-    val selectedIndex = Tab.entries.indexOf(selected)
-
-    // Пока палец тащит капсулу — её ведёт dragX; иначе settledX (пружина к пункту).
-    var dragging by remember { mutableStateOf(false) }
-    var dragX by remember { mutableFloatStateOf(0f) }
-    val settledX = remember { Animatable(0f) }
-    val capsuleScale = remember { Animatable(1f) }
-    val settle = spring<Float>(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow)
-
-    // Выбор извне (тап, переход из веба) — капсула пружиной встаёт на пункт.
-    LaunchedEffect(selectedIndex, slotPx) {
-        if (!dragging && slotPx > 0f) settledX.animateTo(padPx + selectedIndex * slotPx, settle)
-    }
-
-    fun finishDrag() {
-        dragging = false
-        val index = if (slotPx > 0f) ((dragX - padPx) / slotPx).roundToInt().coerceIn(0, tabCount - 1) else selectedIndex
-        val from = dragX
-        scope.launch {
-            settledX.snapTo(from)
-            launch { capsuleScale.animateTo(1f, settle) }
-            settledX.animateTo(padPx + index * slotPx, settle)
-        }
-        val tab = Tab.entries[index]
-        if (tab != currentSelected) currentOnSelect(tab)
-    }
-
-    // Целиком уехавшая панель не должна ловить касания, предназначенные полю ввода
-    // чата, поэтому её убираем из композиции. Возврат — после всех remember выше,
-    // чтобы позиция капсулы переживала скрытие (иначе она каждый раз пружинила бы
-    // слева).
-    if (hidden && slide >= 0.999f) return
-
-    Box(
-        modifier
-            .fillMaxWidth()
-            .onSizeChanged { barHeightPx = it.height.toFloat() }
-            .graphicsLayer {
-                // Высота включает отступ под системную навигацию: сдвиг на неё целиком
-                // выводит панель за нижний край окна.
-                translationY = slide * barHeightPx
-            }
-            .navigationBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .widthIn(max = 460.dp)
-                .fillMaxWidth()
-                .height(TabHeight + BarPadding * 2)
-                .onSizeChanged { barWidthPx = it.width.toFloat() }
-                .clip(CapsuleShape)
-                .background(BarGlass, CapsuleShape)
-                .pointerInput(slotPx) {
-                    // Палец по панели двигает капсулу; короткий тап проходит к пункту.
-                    detectDragGestures(
-                        onDragStart = {
-                            dragging = true
-                            dragX = settledX.value
-                            scope.launch { capsuleScale.animateTo(1.08f, tween(160)) }
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            val maxX = padPx + (tabCount - 1) * slotPx
-                            dragX = (dragX + dragAmount.x).coerceIn(padPx, maxX)
-                        },
-                        onDragEnd = { finishDrag() },
-                        onDragCancel = { finishDrag() },
-                    )
-                },
-        ) {
-            if (slotPx > 0f) {
-                // Сама капсула — первой, под подписями. Её позиция и масштаб — из тех же
-                // значений, что и у тёмной копии ниже, поэтому они не расходятся.
-                //
-                // Анимируемые значения читаются ВНУТРИ лямбд (фаза раскладки/отрисовки), а не
-                // в теле композиции: иначе пружина (≈0.7 с после каждого тапа) заставляла
-                // перекомпоновать всю панель — два ряда TabItem с пересозданными onClick —
-                // на каждом кадре, и главный поток не укладывался в бюджет (gfxinfo: до 44%
-                // «медленных» кадров на переключении вкладок).
-                Box(
-                    Modifier
-                        .offset {
-                            val x = if (dragging) dragX else settledX.value
-                            IntOffset(x.roundToInt(), padPx.roundToInt())
-                        }
-                        .size(with(density) { slotPx.toDp() }, TabHeight)
-                        .graphicsLayer {
-                            val s = capsuleScale.value
-                            scaleX = s
-                            scaleY = s
-                        }
-                        .clip(CapsuleShape)
-                        .background(Brush.verticalGradient(listOf(Accent, Accent.copy(alpha = 0.82f))), CapsuleShape)
-                )
-            }
-            // Светлые подписи — основа панели.
-            androidx.compose.foundation.layout.Row(
-                Modifier
-                    .fillMaxSize()
-                    .padding(BarPadding),
-            ) {
-                Tab.entries.forEach { tab ->
-                    TabItem(
-                        tab = tab,
-                        fg = Color.White.copy(alpha = 0.62f),
-                        modifier = Modifier.weight(1f),
-                        onClick = { onSelect(tab) },
-                    )
-                }
-            }
-            if (slotPx > 0f) {
-                // Тёмная копия подписей — тот же ряд, что и белый (те же отступы и веса), но
-                // обрезанный скруглённой формой капсулы: подпись под капсулой темнеет, остальные
-                // остаются светлыми — как фильтр. Координаты совпадают, смещений нет.
-                // Касания сюда не попадают: у TabItem без onClick нет pointer input.
-                androidx.compose.foundation.layout.Row(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(BarPadding)
-                        .drawWithContent {
-                            val capsuleX = if (dragging) dragX else settledX.value
-                            val scale = capsuleScale.value
-                            val h = size.height
-                            val cx = (capsuleX - padPx) + slotPx / 2f
-                            val halfW = slotPx / 2f * scale
-                            val halfH = h / 2f * scale
-                            val path = Path().apply {
-                                addRoundRect(
-                                    RoundRect(
-                                        cx - halfW, h / 2f - halfH, cx + halfW, h / 2f + halfH,
-                                        CornerRadius(halfH),
-                                    )
-                                )
-                            }
-                            clipPath(path) { this@drawWithContent.drawContent() }
-                        },
-                ) {
-                    Tab.entries.forEach { tab ->
-                        TabItem(
-                            tab = tab,
-                            fg = Color(0xFF05210B),
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TabItem(
-    tab: Tab,
-    fg: Color,
-    modifier: Modifier = Modifier,
-    onClick: (() -> Unit)? = null,
-) {
-    Column(
-        modifier
-            .then(if (onClick != null) Modifier.clickableNoRipple(onClick) else Modifier)
-            .height(TabHeight)
-            .padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-    ) {
-        Icon(tab.icon, contentDescription = tab.title, tint = fg, modifier = Modifier.height(22.dp))
-        Text(tab.title, color = fg, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier =
-    this.then(
-        Modifier.clickable(
-            indication = null,
-            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-            onClick = onClick
-        )
-    )

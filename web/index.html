@@ -20,10 +20,22 @@
         document.write('<base href="/">');
     }
     </script>
+    <script>
+    // Светлая тема — до первой отрисовки, иначе заставка и каркас мигают тёмным,
+    // пока не загрузится app.js (styler.js потом выставит то же самое и палитру).
+    (function () {
+        try {
+            var mode = localStorage.getItem('zali_appearance_v1') || 'dark';
+            var light = mode === 'light' || (mode === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+            document.documentElement.setAttribute('data-appearance', light ? 'light' : 'dark');
+            document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+        } catch (e) {}
+    })();
+    </script>
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261112-g1">
+    <link rel="stylesheet" href="style.css?v=20261115-pres2">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -242,6 +254,7 @@
                     <button class="me-ava-btn" id="meAvaBtn" type="button" title="Аватар и настройки профиля" aria-label="Аватар и настройки профиля">
                         <div class="ava me-ava" id="meAva">Z</div>
                         <span class="me-friend-badge" id="meFriendBadge" hidden>0</span>
+                        <span class="me-status-dot" id="meStatusDot" aria-hidden="true"></span>
                     </button>
                     <div class="me-info">
                         <div class="me-name" id="meName">Не вошли</div>
@@ -270,7 +283,10 @@
                         <button class="chat-back-btn" id="chatBackBtn" type="button" aria-label="Назад к чатам" title="Назад">
                             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </button>
-                        <div class="chat-hdr-ava" id="chatHdrAva">A</div>
+                        <div class="chat-hdr-ava-slot" id="chatHdrAvaSlot">
+                            <div class="chat-hdr-ava" id="chatHdrAva">A</div>
+                            <span class="presence-dot" id="chatHdrPresence" aria-hidden="true" hidden></span>
+                        </div>
                         <div class="chat-hdr-info">
                             <div class="chat-hdr-name" id="chatHdrName">Alice</div>
                             <div class="chat-hdr-sub" id="chatHdrSub">Личное сообщение</div>
@@ -328,6 +344,9 @@
                                 </svg>
                             </button>
                             <input id="attachmentInput" type="file" accept="image/*,video/*,.gif,.webp,.png,.jpg,.jpeg,.mp4,.webm,.tgs" multiple hidden>
+                            <!-- Стикеры .tgs из листа галереи на Android (media_sheet.js): без image/* в
+                                 accept оболочка открывает файловый менеджер, а не Photo Picker. -->
+                            <input id="stickerFileInput" type="file" accept=".tgs,application/x-tgsticker" multiple hidden>
                             <button class="attach-btn coin-transfer-btn" id="coinTransferBtn" type="button" title="Перевести ZaliCoin" aria-label="Перевести ZaliCoin">
                                 <svg class="ui-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.8"/>
@@ -808,6 +827,25 @@
                                 </div>
                             </section>
 
+                            <section class="settings-card" data-settings-section="perf">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Debug</span>
+                                        <h3 class="settings-card-title">Производительность</h3>
+                                    </div>
+                                    <span class="settings-card-note">dev</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputFpsMeter" type="checkbox">
+                                        <span>
+                                            <strong>Счётчик FPS</strong>
+                                            <small>Плашка в углу экрана: частота кадров, самый долгий кадр и подвисания с момента включения (выключите и включите, чтобы обнулить). Касания проходят сквозь неё. Только на этом устройстве</small>
+                                        </span>
+                                    </label>
+                                </div>
+                            </section>
+
                             <section class="settings-card" data-settings-section="voice-trace">
                                 <div class="settings-card-head">
                                     <div>
@@ -865,6 +903,13 @@
                                                 <h3 class="settings-card-title">Цветовая схема</h3>
                                             </div>
                                             <span class="settings-card-note">zali_styler</span>
+                                        </div>
+                                        <!-- Светлота — отдельная ось поверх схемы: у каждой схемы есть
+                                             тёмный и светлый вариант (styler.js: lightThemes). -->
+                                        <div class="appearance-seg" role="radiogroup" aria-label="Тема">
+                                            <button type="button" data-appearance-option="dark" role="radio" aria-checked="false">Тёмная</button>
+                                            <button type="button" data-appearance-option="light" role="radio" aria-checked="false">Светлая</button>
+                                            <button type="button" data-appearance-option="system" role="radio" aria-checked="false">Как в системе</button>
                                         </div>
                                         <div class="theme-buttons settings-theme-grid">
                                             <button class="btn-theme theme-lime" data-theme="lime" type="button">Lime</button>
@@ -1705,6 +1750,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261112-g1"></script>
+    <script src="app.js?v=20261115-pres2"></script>
 </body>
 </html>

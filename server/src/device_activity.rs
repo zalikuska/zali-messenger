@@ -1,16 +1,20 @@
 //! Активность устройств и маршрут уведомлений: на какие устройства пользователя слать
 //! уведомление о новом сообщении.
 //!
-//! **Правило.** Устройство активно, если человек что-то делал на нём меньше
-//! `ACTIVE_WINDOW` назад: на компьютере — любой ввод в системе вообще (мышь,
-//! клавиатура, не только в окне мессенджера), на телефоне — касание приложения,
-//! его открытие, сворачивание или закрытие. Если активные устройства есть,
+//! **Правило.** Устройство активно, если человек что-то делал на нём недавно: на
+//! компьютере — любой ввод в системе вообще (мышь, клавиатура, не только в окне
+//! мессенджера) за последние 5 минут, на телефоне — касание приложения, его
+//! открытие, сворачивание или закрытие, в браузере — ввод во вкладке, за последнюю
+//! минуту (`DeviceKind::active_window_secs`). Компьютер ждёт дольше: за ним читают,
+//! думают, смотрят в соседнее окно — не трогая мышь; телефон кладут в карман, и
+//! минута без касаний значит, что его уже не держат в руках. Если активные устройства есть,
 //! уведомление (пуш и локальное) уходит только на них; если бездельничают все —
 //! на все. Раньше уведомление приходило на каждое устройство разом: человек за
 //! компьютером получал ещё и вибрацию телефона в кармане.
 //!
 //! **Кто сообщает.** Каждый клиент шлёт по своему WebSocket `client_idle
-//! {deviceId, idleSeconds}`: macOS и Windows — из нативного таймера по системному
+//! {deviceId, idleSeconds, kind}` (`kind`: `desktop` / `mobile` / `browser`; клиенты
+//! до 0.2b57 его не шлют — им прежнее окно в две минуты): macOS и Windows — из нативного таймера по системному
 //! простою (`CGEventSource` / `GetLastInputInfo`), Android — из нативного слоя по
 //! касаниям и переходам жизненного цикла, браузер — из вкладки по своим событиям
 //! ввода (системного простоя ему не узнать). Пока человек активен, отчёт идёт раз в
@@ -40,8 +44,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
-/// «Что-то делал меньше двух минут назад».
-pub(crate) const ACTIVE_WINDOW_SECS: i64 = 120;
+/// Окно активности устройства, чей клиент не сообщил свой тип (до 0.2b57): прежние
+/// две минуты, чтобы маршрут уведомлений у необновлённых клиентов не менялся.
+pub(crate) const LEGACY_ACTIVE_WINDOW_SECS: i64 = 120;
 /// Сокет годится в путь до устройства, только если входящий кадр был не позже этого.
 /// Клиенты отвечают на Ping сервера (раз в 20 с), активные ещё и шлют `client_idle`
 /// раз в ~30 с.
@@ -54,12 +59,62 @@ const PERSIST_STEP_SECS: i64 = 60;
 /// Простой больше этого — «давно»: клиенту незачем присылать точнее.
 const MAX_IDLE_SECS: u64 = 365 * 24 * 3600;
 
+/// Что за устройство — от этого зависит, сколько без действий оно ещё «активно».
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DeviceKind {
+    /// macOS / Windows: системный простой, любой ввод в системе.
+    Desktop,
+    /// Android: касания и жизненный цикл приложения.
+    Mobile,
+    /// Вкладка браузера (в том числе на телефоне): ввод во вкладке.
+    Browser,
+    /// Клиент тип не сообщил.
+    #[default]
+    Unknown,
+}
+
+impl DeviceKind {
+    pub(crate) fn parse(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("desktop") => Self::Desktop,
+            Some("mobile") => Self::Mobile,
+            Some("browser") => Self::Browser,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn as_str(self) -> Option<&'static str> {
+        match self {
+            Self::Desktop => Some("desktop"),
+            Self::Mobile => Some("mobile"),
+            Self::Browser => Some("browser"),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Сколько секунд после последнего действия устройство ещё активно.
+    pub(crate) fn active_window_secs(self) -> i64 {
+        match self {
+            Self::Desktop => 300,
+            Self::Mobile | Self::Browser => 60,
+            Self::Unknown => LEGACY_ACTIVE_WINDOW_SECS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeviceActivity {
     /// Unix-время последнего действия, секунды.
     pub(crate) last_active: i64,
     /// Что из этого уже лежит в базе.
     persisted: i64,
+    pub(crate) kind: DeviceKind,
+}
+
+impl DeviceActivity {
+    fn is_active(&self, now: i64) -> bool {
+        self.last_active > now - self.kind.active_window_secs()
+    }
 }
 
 /// Логин → устройство → активность.
@@ -71,18 +126,19 @@ fn now_secs() -> i64 {
 
 pub(crate) async fn load_device_activity(pool: &sqlx::SqlitePool) -> DeviceActivityMap {
     let map = DeviceActivityMap::new();
-    let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT username, device_id, last_active_at FROM device_activity",
+    let rows = sqlx::query_as::<_, (String, String, i64, Option<String>)>(
+        "SELECT username, device_id, last_active_at, kind FROM device_activity",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default();
-    for (username, device_id, last_active) in rows {
+    for (username, device_id, last_active, kind) in rows {
         map.entry(username).or_default().insert(
             device_id,
             DeviceActivity {
                 last_active,
                 persisted: last_active,
+                kind: DeviceKind::parse(kind.as_deref()),
             },
         );
     }
@@ -90,50 +146,69 @@ pub(crate) async fn load_device_activity(pool: &sqlx::SqlitePool) -> DeviceActiv
 }
 
 /// Отчёт клиента: на устройстве `device_id` последнее действие было `idle_secs` назад.
-/// Время считает сервер — часам клиента верить незачем.
+/// Время считает сервер — часам клиента верить незачем. `kind` — тип устройства из
+/// кадра; не сообщённый тип не стирает уже известный.
 pub(crate) fn note_device_activity(
     state: &Arc<AppState>,
     username: &str,
     device_id: &str,
     idle_secs: u64,
+    kind: Option<&str>,
 ) {
     let device_id = device_id.trim();
     if username.is_empty() || device_id.is_empty() || device_id.len() > 128 {
         return;
     }
     let last_active = now_secs() - idle_secs.min(MAX_IDLE_SECS) as i64;
+    // Вернулся после долгого простоя — собеседники снимают луну сразу, не дожидаясь
+    // своего опроса (presence.rs).
+    let was_away = state.device_activity.contains_key(username)
+        && user_idle_minutes(state, username) >= crate::presence::IDLE_NOTICE_MINUTES;
     let persist = {
         let mut devices = state.device_activity.entry(username.to_string()).or_default();
         let entry = devices.entry(device_id.to_string()).or_insert(DeviceActivity {
             last_active: i64::MIN,
             persisted: i64::MIN,
+            kind: DeviceKind::Unknown,
         });
+        let kind = DeviceKind::parse(kind);
+        let kind_changed = kind != DeviceKind::Unknown && kind != entry.kind;
+        if kind_changed {
+            entry.kind = kind;
+        }
         // Отчёты по двум сокетам одного устройства и очередь реконнекта могут прийти
         // не по порядку — назад время не идёт.
-        if last_active <= entry.last_active {
+        if last_active <= entry.last_active && !kind_changed {
             return;
         }
-        entry.last_active = last_active;
-        if entry.persisted == i64::MIN || last_active - entry.persisted >= PERSIST_STEP_SECS {
-            entry.persisted = last_active;
-            true
+        entry.last_active = entry.last_active.max(last_active);
+        if kind_changed || entry.persisted == i64::MIN || entry.last_active - entry.persisted >= PERSIST_STEP_SECS {
+            entry.persisted = entry.last_active;
+            Some((entry.last_active, entry.kind.as_str()))
         } else {
-            false
+            None
         }
     };
-    if persist {
+    if was_away && user_idle_minutes(state, username) == 0 {
+        let state = Arc::clone(state);
+        let username = username.to_string();
+        tokio::spawn(async move { crate::presence::publish_presence(&state, &username).await });
+    }
+    if let Some((last_active, kind)) = persist {
         let state = Arc::clone(state);
         let username = username.to_string();
         let device_id = device_id.to_string();
         tokio::spawn(async move {
             if let Err(e) = sqlx::query(
-                "INSERT INTO device_activity (username, device_id, last_active_at) VALUES (?, ?, ?)
+                "INSERT INTO device_activity (username, device_id, last_active_at, kind) VALUES (?, ?, ?, ?)
                  ON CONFLICT(username, device_id) DO UPDATE SET
-                    last_active_at = MAX(last_active_at, excluded.last_active_at)",
+                    last_active_at = MAX(last_active_at, excluded.last_active_at),
+                    kind = COALESCE(excluded.kind, kind)",
             )
             .bind(&username)
             .bind(&device_id)
             .bind(last_active)
+            .bind(kind)
             .execute(&state.db)
             .await
             {
@@ -149,15 +224,30 @@ pub(crate) fn device_idle_minutes(state: &AppState, username: &str, device_id: &
     Some((now_secs() - last_active).max(0) / 60)
 }
 
+/// Простой человека в целых минутах: 0, пока хоть одно его устройство активно (окно —
+/// по типу устройства), иначе — с последнего действия на любом устройстве. Устройства,
+/// которые ни разу не отчитывались, — тоже 0: «неактивен» утверждает факт.
+pub(crate) fn user_idle_minutes(state: &AppState, username: &str) -> i64 {
+    let now = now_secs();
+    let Some(devices) = state.device_activity.get(username) else {
+        return 0;
+    };
+    if devices.is_empty() || devices.values().any(|activity| activity.is_active(now)) {
+        return 0;
+    }
+    let last = devices.values().map(|activity| activity.last_active).max().unwrap_or(now);
+    (now - last).max(0) / 60
+}
+
 fn active_devices(state: &AppState, username: &str) -> HashSet<String> {
-    let cutoff = now_secs() - ACTIVE_WINDOW_SECS;
+    let now = now_secs();
     state
         .device_activity
         .get(username)
         .map(|devices| {
             devices
                 .iter()
-                .filter(|(_, activity)| activity.last_active > cutoff)
+                .filter(|(_, activity)| activity.is_active(now))
                 .map(|(device, _)| device.clone())
                 .collect()
         })
@@ -192,7 +282,7 @@ async fn push_devices(state: &AppState, username: &str) -> HashSet<String> {
 pub(crate) enum NotifyRoute {
     /// Активных (и достижимых) устройств нет — на все.
     All,
-    /// Только на эти: на них человек что-то делал меньше двух минут назад. Пусто —
+    /// Только на эти: на них человек что-то делал недавно (окно — по типу устройства). Пусто —
     /// ни на какие: переписка открыта у человека перед глазами.
     Only(HashSet<String>),
 }
@@ -287,10 +377,16 @@ pub(crate) async fn get_device_activity(
         .into_iter()
         .filter_map(|device_id| {
             let idle_minutes = device_idle_minutes(&state, &username, &device_id)?;
+            let kind = state
+                .device_activity
+                .get(&username)
+                .and_then(|devices| devices.get(&device_id).map(|activity| activity.kind.as_str()))
+                .flatten();
             Some(serde_json::json!({
                 "deviceId": device_id,
                 "idleMinutes": idle_minutes,
                 "active": active.contains(&device_id),
+                "kind": kind,
             }))
         })
         .collect();
@@ -353,8 +449,8 @@ mod tests {
         let state = test_state().await;
         connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", 600);
-        note_device_activity(&state, "alice", "phone", 3600);
+        note_device_activity(&state, "alice", "mac", 600, None);
+        note_device_activity(&state, "alice", "phone", 3600, None);
         assert_eq!(notify_route_for(&state, "alice", None).await, NotifyRoute::All);
     }
 
@@ -363,8 +459,8 @@ mod tests {
         let state = test_state().await;
         connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", 5);
-        note_device_activity(&state, "alice", "phone", 3600);
+        note_device_activity(&state, "alice", "mac", 5, None);
+        note_device_activity(&state, "alice", "phone", 3600, None);
         let route = notify_route_for(&state, "alice", None).await;
         assert_eq!(route, only(&["mac"]));
         assert!(!route.allows(Some("phone")));
@@ -376,9 +472,9 @@ mod tests {
         let state = test_state().await;
         connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", 900);
+        note_device_activity(&state, "alice", "mac", 900, None);
         // Свернули приложение минуту назад — сокета уже нет, FCM есть.
-        note_device_activity(&state, "alice", "phone", 60);
+        note_device_activity(&state, "alice", "phone", 60, None);
         assert_eq!(notify_route_for(&state, "alice", None).await, only(&["phone"]));
     }
 
@@ -387,7 +483,7 @@ mod tests {
         let state = test_state().await;
         connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", ACTIVE_WINDOW_SECS as u64);
+        note_device_activity(&state, "alice", "mac", LEGACY_ACTIVE_WINDOW_SECS as u64, None);
         assert_eq!(notify_route_for(&state, "alice", None).await, NotifyRoute::All);
     }
 
@@ -396,7 +492,7 @@ mod tests {
         let state = test_state().await;
         let mac = connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", 10);
+        note_device_activity(&state, "alice", "mac", 10, None);
         // Крышку закрыли: сокет полуоткрыт и молчит.
         state.push_presence.get_mut(&mac).unwrap().last_inbound =
             Instant::now().checked_sub(SOCKET_FRESH * 2).unwrap();
@@ -404,12 +500,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_desktop_stays_active_five_minutes_a_phone_and_a_browser_one() {
+        let state = test_state().await;
+        connect(&state, "alice", "mac");
+        connect(&state, "alice", "tab");
+        fcm(&state, "alice", "phone").await;
+        // Четыре минуты без ввода: компьютер ещё активен, телефон и вкладка — уже нет.
+        note_device_activity(&state, "alice", "mac", 240, Some("desktop"));
+        note_device_activity(&state, "alice", "phone", 61, Some("mobile"));
+        note_device_activity(&state, "alice", "tab", 61, Some("browser"));
+        assert_eq!(notify_route_for(&state, "alice", None).await, only(&["mac"]));
+        // Пять минут без ввода — компьютер уже нет, а телефон в руках минуту — да.
+        let state = test_state().await;
+        connect(&state, "alice", "mac");
+        fcm(&state, "alice", "phone").await;
+        note_device_activity(&state, "alice", "mac", 300, Some("desktop"));
+        note_device_activity(&state, "alice", "phone", 59, Some("mobile"));
+        assert_eq!(notify_route_for(&state, "alice", None).await, only(&["phone"]));
+    }
+
+    #[tokio::test]
+    async fn a_report_without_kind_keeps_the_known_kind() {
+        let state = test_state().await;
+        connect(&state, "alice", "mac");
+        fcm(&state, "alice", "phone").await;
+        note_device_activity(&state, "alice", "mac", 600, Some("desktop"));
+        note_device_activity(&state, "alice", "mac", 200, None);
+        assert_eq!(state.device_activity.get("alice").unwrap().get("mac").unwrap().kind, DeviceKind::Desktop);
+        assert_eq!(notify_route_for(&state, "alice", None).await, only(&["mac"]));
+    }
+
+    #[tokio::test]
     async fn activity_never_goes_back_and_reports_whole_minutes() {
         let state = test_state().await;
-        note_device_activity(&state, "alice", "mac", 30);
-        note_device_activity(&state, "alice", "mac", 3000);
+        note_device_activity(&state, "alice", "mac", 30, None);
+        note_device_activity(&state, "alice", "mac", 3000, None);
         assert_eq!(device_idle_minutes(&state, "alice", "mac"), Some(0));
-        note_device_activity(&state, "bob", "pc", 179);
+        note_device_activity(&state, "bob", "pc", 179, None);
         assert_eq!(device_idle_minutes(&state, "bob", "pc"), Some(2));
         assert_eq!(device_idle_minutes(&state, "bob", "phone"), None);
     }
@@ -417,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn activity_survives_a_restart() {
         let state = test_state().await;
-        note_device_activity(&state, "alice", "mac", 30);
+        note_device_activity(&state, "alice", "mac", 30, None);
         // Запись в базу — фоновая задача.
         for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -432,6 +559,28 @@ mod tests {
         let reloaded = load_device_activity(&state.db).await;
         let last = reloaded.get("alice").unwrap().get("mac").unwrap().last_active;
         assert!((now_secs() - last - 30).abs() <= 2);
+        assert_eq!(reloaded.get("alice").unwrap().get("mac").unwrap().kind, DeviceKind::Unknown);
+    }
+
+    #[tokio::test]
+    async fn the_device_kind_survives_a_restart() {
+        let state = test_state().await;
+        note_device_activity(&state, "alice", "mac", 30, Some("desktop"));
+        let mut kind = None;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            kind = sqlx::query_scalar::<_, Option<String>>("SELECT kind FROM device_activity WHERE device_id = 'mac'")
+                .fetch_optional(&state.db)
+                .await
+                .unwrap()
+                .flatten();
+            if kind.is_some() {
+                break;
+            }
+        }
+        assert_eq!(kind.as_deref(), Some("desktop"));
+        let reloaded = load_device_activity(&state.db).await;
+        assert_eq!(reloaded.get("alice").unwrap().get("mac").unwrap().kind, DeviceKind::Desktop);
     }
 
     #[tokio::test]
@@ -440,11 +589,11 @@ mod tests {
         connect(&state, "alice", "mac");
         connect(&state, "bob", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "bob", "mac", 1);
+        note_device_activity(&state, "bob", "mac", 1, None);
         assert_eq!(notify_route_for(&state, "alice", None).await, NotifyRoute::All);
         let attended = connect(&state, "alice", "laptop");
         update_connection_presence(&state, attended, true, Some("laptop"));
-        note_device_activity(&state, "alice", "laptop", 1);
+        note_device_activity(&state, "alice", "laptop", 1, None);
         assert_eq!(notify_route_for(&state, "alice", None).await, only(&["laptop"]));
     }
 
@@ -453,8 +602,8 @@ mod tests {
         let state = test_state().await;
         let mac = connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", 5);
-        note_device_activity(&state, "alice", "phone", 30);
+        note_device_activity(&state, "alice", "mac", 5, None);
+        note_device_activity(&state, "alice", "phone", 30, None);
         update_connection_view(&state, mac, Some("dm:bob"));
 
         let route = notify_route_for(&state, "alice", Some("dm:bob")).await;
@@ -469,8 +618,8 @@ mod tests {
         let state = test_state().await;
         let mac = connect(&state, "alice", "mac");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "mac", 900);
-        note_device_activity(&state, "alice", "phone", 10);
+        note_device_activity(&state, "alice", "mac", 900, None);
+        note_device_activity(&state, "alice", "phone", 10, None);
         update_connection_view(&state, mac, Some("dm:bob"));
         assert_eq!(notify_route_for(&state, "alice", Some("dm:bob")).await, only(&["phone"]));
     }
@@ -482,7 +631,7 @@ mod tests {
         let webview = connect(&state, "alice", "phone");
         let native = connect(&state, "alice", "phone");
         fcm(&state, "alice", "phone").await;
-        note_device_activity(&state, "alice", "phone", 1);
+        note_device_activity(&state, "alice", "phone", 1, None);
         update_connection_view(&state, webview, Some("s1:c1"));
         assert_eq!(notify_route_for(&state, "alice", Some("s1:c1")).await, only(&[]));
 
@@ -494,7 +643,7 @@ mod tests {
     async fn an_unconfirmed_open_chat_expires() {
         let state = test_state().await;
         let mac = connect(&state, "alice", "mac");
-        note_device_activity(&state, "alice", "mac", 1);
+        note_device_activity(&state, "alice", "mac", 1, None);
         update_connection_view(&state, mac, Some("dm:bob"));
         state.push_presence.get_mut(&mac).unwrap().last_inbound =
             Instant::now().checked_sub(VIEW_FRESH * 2).unwrap();

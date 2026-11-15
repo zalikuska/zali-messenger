@@ -14,6 +14,8 @@ const mobile = read('web/src/interface/mobile.js');
 const viewport = read('web/src/interface/viewport.js');
 const events = read('web/src/interface/events.js');
 const kotlin = read('apps/android/app/src/main/java/org/zalikus/messenger/MainActivity.kt');
+const pager = read('web/src/interface/mobile_pager.js');
+const bridgeKt = read('apps/android/app/src/main/java/org/zalikus/messenger/NativeBridge.kt');
 
 let failures = 0;
 const check = (name, ok, detail = '') => {
@@ -96,6 +98,54 @@ console.log('\n──────── системное «назад»');
 check('веб отдаёт обработчик оболочке', /window\.__zaliHandleBack\s*=/.test(events));
 check('Android спрашивает веб и уходит в фон, а не завершается',
     /BackHandler\(/.test(kotlin) && /__zaliHandleBack/.test(kotlin) && /moveTaskToBack\(true\)/.test(kotlin));
+
+console.log('\n──────── нижняя панель и переключение разделов (2026-11-15)');
+// Переход на Хаб/ZaliCoin/Настройки ждал «парковки» списка до конца выезда чата,
+// которого при таком переходе нет: через 340 мс список уезжал вниз с уже открытого экрана.
+for (const view of ['openHubView', 'openZaliCoinView', 'openSettingsView']) {
+    check(`${view}: список убирается сразу, а не уезжает вниз`, /closeMobileSidebar\(\{\s*parkNow:\s*true\s*\}\)/.test(method(mobile, view)));
+}
+// Капсула ехала transition'ом transform, тёмная копия подписей — прыжком по --tx:
+// подписи двоились. Теперь анимируются сами зарегистрированные переменные.
+check('--tx/--tw/--tg зарегистрированы (@property)',
+    ['--tx', '--tw', '--tg'].every((v) => new RegExp(`@property ${v} \\{`).test(css)));
+check('капсула анимирует переменные, а не transform/scale',
+    /\.mobile-dock-thumb\s*\{[^}]*transition:\s*--tx[^;]*,\s*--tw[^;]*,\s*--tg/.test(css)
+    && !/\.mobile-dock-thumb\s*\{[^}]*\n\s*scale:/.test(css));
+check('копия подписей стоит по тем же --tx/--tg', /\.mobile-dock-ink\s*\{[^}]*left:\s*calc\(var\(--ink-x[^)]*\)\s*-\s*var\(--tx[^)]*\)\s*\+\s*var\(--tg/.test(css));
+// Граница по скрытому пункту (offsetLeft = 0) выпускала капсулу за док.
+check('граница капсулы — по видимым пунктам', /filter\(\(b\) => b\.offsetWidth > 0\)/.test(method(mobile, 'setupMobileDockDrag')));
+check('разделы едут за капсулой (веб-док)', /mobilePagerStart\?\.\(/.test(mobile) && /mobilePagerMove\?\.\(/.test(mobile) && /mobilePagerEnd\?\.\(/.test(mobile));
+check('лента не линейна (магнит к месту)', /Math\.sin\(2 \* Math\.PI \* t\)/.test(pager));
+check('в снимке нет копии панели', /DROP = new Set\(\['mobileDock'/.test(pager));
+check('касание по разделу тоже едет лентой: снимок старого экрана + настоящий новый',
+    /switchSection\('chats'/.test(events) && /switchSection\('hub'/.test(events) && /mobileSwitchSection\(target, doSwitch\)/.test(pager)
+    && /mobilePagerSlideTap\(before, real, forward\)/.test(pager) && /real\.animate\(/.test(pager));
+// Второй снимок (нового экрана) сразу после переключения заставлял браузер синхронно
+// считать стили и раскладку нового экрана в обработчике касания — 40–58 мс при CPU ×12.
+check('касание не снимает новый экран клоном', !/const after = this\.mobilePagerCapture\(\)/.test(pager));
+// transform в процентах вычисляется только после раскладки: чтение его ради старта
+// CSS-перехода было синхронной раскладкой всей ленты снимков.
+check('доводка ленты — Web Animations, без чтения стиля', !/getComputedStyle\(active\.track\)/.test(pager) && /active\.track\.animate\(/.test(pager));
+// offsetLeft/offsetWidth в клике по вкладке — синхронная раскладка всей страницы
+// (26–48 мс при CPU ×12): с удалением нативной панели Android веб-док снова на экране.
+check('капсула дока берёт геометрию из кеша ResizeObserver',
+    /new ResizeObserver\(measure\)/.test(mobile) && /__dockGeom\?\.byEl\.get\(active\)/.test(method(mobile, 'syncMobileDockThumb'))
+    && !/offset(Left|Width)/.test(method(mobile, 'syncMobileDockThumb').replace(/\/\/.*$/gm, '')));
+check('лента чата за краем телефона не перерисовывается (откладывается до показа)',
+    /isMobileChatOffscreen\?\.\(\)/.test(read('web/src/interface/message_list.js'))
+    && /this\._messagesRenderDeferred\) this\._renderMessagesNow/.test(mobile));
+check('Хаб и ZaliCoin рисуются в ленте, даже если там ещё не были', /mobilePagerSynthetic\(section\)/.test(pager));
+check('недостающий режим списка рисуется без setNavMode (счётчики непрочитанного не трогаются)',
+    /mobilePagerCaptureListMode\(section\)/.test(pager) && !/setNavMode\(/.test(pager));
+check('кеш ленты догоняется в простое, а не на первом жесте', /warmMobilePagerCache\(\)/.test(pager));
+// Своя Compose-панель Android дублировала веб-док (жесты, тема, разделы) и расходилась
+// с ним; с 2026-11-15 на Android работает сам веб-док.
+check('Android не прячет веб-док и не рисует свою панель',
+    !/mobileNav:\s*true/.test(bridgeKt) && !/mobile-dock\{display:none/.test(bridgeKt)
+    && !/ZaliBottomBar/.test(kotlin) && !/__zaliDockPager/.test(pager));
+check('веб-док на Android почти сплошной (размытия там нет)',
+    /html\.is-android-shell body\[data-design-mode\] \.mobile-dock \{\s*background: color-mix\(in srgb, var\(--bg\) 96%/.test(css));
 
 console.log('');
 console.log(failures === 0 ? '  итог: все проверки пройдены' : `  итог: нарушено ${failures}`);

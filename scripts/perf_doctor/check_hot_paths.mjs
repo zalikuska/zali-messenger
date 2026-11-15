@@ -428,6 +428,78 @@ function envelopeDecryptionIsOutsideTheLock() {
         'ECDH по всей пачке выполняется под замком — запись нового ключа ждёт всю пачку');
 }
 
+// Прокрутка ленты и повторная доставка (2026-11-15, CPU ×12, 211 сообщений):
+// окно виртуализации искало видимую строку как scrollTop / средняя высота, заглушки
+// считало «строки × средняя», средняя менялась на каждой отрисовке — сдвиг окна
+// менял высоту ленты, поправка якоря дёргала scrollTop, окно снова сдвигалось:
+// ~90 перерисовок за прокрутку. Повторно доставленные свои сообщения (запуск,
+// переподключение) перерисовывали ленту и список на каждое, ничего не меняя.
+function scrollAndRedeliveryDoNotRerender() {
+    console.log('\n──────── прокрутка ленты и повторная доставка\n');
+    const viewport = src('interface/viewport.js');
+    const list = src('interface/message_list.js');
+    const render = src('interface/message_render.js');
+    const send = src('interface/message_send.js');
+    const events = src('interface/events.js');
+    const fps = src('interface/fps_meter.js');
+    const manifest = src('manifest.json');
+    check('окно виртуализации идёт по запомненным высотам строк',
+        /messageRowOffsets\(msgs, store, avg\)/.test(viewport) && /messageRowAt\(tops, box\.scrollTop - fix\)/.test(viewport)
+        && !/Math\.floor\(box\.scrollTop \/ baseAvg\)/.test(viewport) && /recordMessageRowHeights\(conversationKey/.test(list),
+        'видимая строка снова считается делением scrollTop на среднюю высоту');
+    // Любая запись scrollTop обрывает инерцию трекпада/пальца (WebKit и Chromium):
+    // пока листают, сдвиг якоря забирает верхняя заглушка, в scrollTop — после затишья.
+    check('пока листают, сдвиг якоря забирает заглушка, а не scrollTop',
+        /absorbMessageAnchorShift\(box, anchorDelta, windowInfo, conversationKey\)/.test(list)
+        && /rebaseMessageSpacer\(conversationKey\)/.test(viewport) && /if \(Math\.abs\(delta\) >= 1\) box\.scrollTop \+= delta;/.test(viewport)
+        && /if \(!restored && !userScrolling\)/.test(list),
+        'перерисовка окна снова пишет scrollTop посреди прокрутки');
+    check('края окна группируются и разделяются по дням как в полной ленте',
+        /const groupItems = \[\.\.\.\(prevCtx/.test(list) && /let lastDate = winStart > 0/.test(list),
+        'первая строка окна снова начинает группу/день — её высота не совпадает с полной лентой');
+    check('гистерезис окна — по тем же высотам', /const firstVisible = nextWindow\.firstVisible;/.test(viewport),
+        'onMessagesScroll считает видимую строку иначе, чем computeMessageWindow');
+    check('повторно доставленное подтверждённое сообщение не перерисовывает ленту',
+        /this\._finalizeChanged = updated && changed;/.test(render) && /if \(updated && changed && render\)/.test(render)
+        && /if \(!statusChanged && !adopted && !edited\) return;/.test(send),
+        'finalizePendingMessage снова рисует на каждое найденное сообщение');
+    check('ползунок ленты не читает геометрию на телефоне', /if \(this\.isMobileLayout\?\.\(\)\) \{\s*if \(thumb\.style\.display !== 'none'\)/.test(events),
+        'bindChatScrollThumb читает прямоугольники на каждом кадре прокрутки и на телефоне');
+    const auth = src('interface/auth.js');
+    // Скрытый экран входа (opacity 0 + visibility hidden) держал в раскладке картинку
+    // со своими бесконечными анимациями auth-art-*: WebKit (macOS) обсчитывает их
+    // каждый кадр всё время работы приложения — фон под любой прокруткой.
+    check('скрытый экран входа уходит из раскладки (display: none)',
+        /overlay\.hidden = true/.test(auth) && /if \(overlay\.hidden\) \{\s*overlay\.hidden = false;/.test(auth),
+        'updateAuthView прячет #authOverlay только классом — его анимации крутятся после входа');
+    const smooth = src('interface/smooth_scroll.js');
+    // Прежний «докат» после 70 мс без wheel срабатывал и на трекпаде — посреди жеста и
+    // поверх системной инерции, которую WebKit прерывает при записи scrollTop из JS.
+    check('колесо: трекпад не перехватывается, докат по таймеру убран',
+        !/setupScrollInertia/.test(events) && /gesture\.wheel = magnitude >= WHEEL_START_MIN/.test(smooth)
+        && /if \(!gesture\.wheel \|\| e\.defaultPrevented/.test(smooth) && /interface\/smooth_scroll\.js/.test(manifest),
+        'обработчик колеса снова трогает трекпад или вернулся докат по таймеру');
+    check('сглаживание колеса подхватывает чужой сдвиг прокрутки и уважает reduced-motion',
+        /const shift = actual - a\.lastSet;/.test(smooth) && /prefersReducedMotion\(\)\) return false/.test(smooth),
+        'анимация колеса тянет ленту назад после якоря/прилипания или игнорирует reduced-motion');
+    const attachments = src('interface/attachments.js');
+    // Картинка без известного размера стояла в рамке 16:9 (кеш размеров жил в памяти
+    // и наполнялся после декодирования), а с width: 100% в подстраивающемся пузыре
+    // до загрузки схлопывалась в полоску — строка прыгала, окно виртуализации сбивалось.
+    check('размер картинки известен до загрузки (заголовок файла → рамка и width/height)',
+        /size = this\.imageSizeFromBytes\(bytes\)/.test(attachments) && /this\.mediaSizeCache\.set\(url, size\)/.test(attachments)
+        && /sizeAttrs = ` width="\$\{this\.esc\(String\(w\)\)\}" height="\$\{this\.esc\(String\(h\)\)\}" style="width: \$\{this\.esc\(width\)\};"`/.test(attachments),
+        'картинка снова получает размер только после декодирования');
+    check('картинка из памяти грузится сразу (без loading=lazy)',
+        /const loadAttrs = inMemory \? '' : ' loading="lazy"/.test(attachments),
+        'data:/blob:-картинки снова ленивые — проявляются уже на экране');
+    check('счётчик FPS выключен по умолчанию и без цикла в выключенном виде',
+        /=== '1'/.test(fps) && /cancelAnimationFrame\(meter\.raf\)/.test(fps) && /observer\?\.disconnect\(\)/.test(fps) && /interface\/fps_meter\.js/.test(manifest)
+        // Тумблер — в категории «Для разработчиков» (карточка без категории падала в «Приложение»).
+        && /id: 'dev'[^\n]*sections: \['perf'/.test(src('interface/sidebar_settings.js')),
+        'fps_meter.js включается без явного выбора или не останавливает rAF/наблюдатель');
+}
+
 avatarDuplication();
 nativeAttachmentsRenderAsBlob();
 videoPlaybackIsBounded();
@@ -440,5 +512,6 @@ decryptedCacheIsBounded();
 keyEventDoesNotReloadWhenNothingIsBroken();
 keyStoreReadDoesNotWrite();
 envelopeDecryptionIsOutsideTheLock();
+scrollAndRedeliveryDoNotRerender();
 console.log(`\n  итог: ${checks} проверок, ${failures} нарушено`);
 process.exit(failures > 0 ? 1 : 0);

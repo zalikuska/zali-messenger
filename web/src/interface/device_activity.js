@@ -143,11 +143,149 @@ ZaliMixin(ZaliInterface, class {
         if (!socket || typeof WebSocket === 'undefined' || socket.readyState !== WebSocket.OPEN) return;
         const idleSeconds = Math.max(0, Math.floor((Date.now() - lastActivity) / 1000));
         try {
-            socket.send(JSON.stringify({ type: 'client_idle', deviceId, idleSeconds }));
+            // Окно активности сервер выбирает по типу: вкладке — минута (DeviceKind).
+            socket.send(JSON.stringify({ type: 'client_idle', deviceId, idleSeconds, kind: 'browser' }));
             this._lastReportedActivityAt = lastActivity;
         } catch (e) {}
+    }
+
+    // ------------------------------------------------------------
+    // Статус на своей аватарке: в сети / неактивен (фазы луны) / нет соединения
+    // ------------------------------------------------------------
+    //
+    // «Неактивен» — то же правило, по которому сервер выбирает, куда слать
+    // уведомления: ни одно моё устройство не активно (server/src/device_activity.rs,
+    // DeviceKind: компьютер — 5 минут после последнего действия, телефон и браузер —
+    // минута). Спрашиваем сервер, потому что только он видит все устройства, а
+    // вебвью в нативной оболочке не видит даже системного простоя своей машины.
+    // Ввод в самом окне — активность этого устройства по определению: луна
+    // снимается сразу, не дожидаясь отчёта оболочки и следующего опроса.
+    //
+    // Луна — с 15 минут простоя (с последнего действия на любом устройстве), и чем
+    // он дольше, тем толще серп: ME_MOON_PHASES.
+
+    updateMeStatusDot() {
+        this.installMeStatusPolling();
+        const dot = document.getElementById('meStatusDot');
+        if (!dot) return;
+        const known = typeof this.S.wsOn === 'boolean';
+        let state = '';
+        let phase = 0;
+        if (known && !this.S.wsOn) state = 'off';
+        else if (known) {
+            const idleMinutes = this.meIdleMinutes();
+            // Фаза — сколько порогов ME_MOON_PHASES пройдено; до первого (15 мин) луны нет.
+            phase = idleMinutes === null
+                ? 0
+                : ZaliInterface.ME_MOON_PHASES.filter(minutes => idleMinutes >= minutes).length;
+            state = phase > 0 ? 'idle' : 'on';
+        }
+        const cls = 'me-status-dot' + (state ? ` ${state}` : '');
+        if (dot.className !== cls) dot.className = cls;
+        const phaseAttr = state === 'idle' ? String(phase) : '';
+        if ((dot.dataset.phase || '') !== phaseAttr) {
+            if (phaseAttr) dot.dataset.phase = phaseAttr;
+            else delete dot.dataset.phase;
+        }
+        const btn = document.getElementById('meAvaBtn');
+        const label = state === 'idle'
+            ? `неактивен ${this.formatMeIdle(this.meIdleMinutes())}`
+            : { on: 'в сети', off: 'нет соединения' }[state];
+        if (btn) btn.title = 'Аватар и настройки профиля' + (label ? ` · ${label}` : '');
+        // Своя строка в участниках сервера показывает то же (presence.js).
+        this.updatePresenceSlots?.(document.getElementById('serverMembersList'));
+    }
+
+    // Окно активности этого устройства — то же, что сервер берёт по его типу.
+    meActiveWindowMs() {
+        const transport = this.nativeBridge?.()?.transport;
+        if (transport === 'android' || !this.hasNativeBridge()) return ZaliInterface.MOBILE_ACTIVE_WINDOW_MS;
+        return ZaliInterface.DESKTOP_ACTIVE_WINDOW_MS;
+    }
+
+    // Сколько минут я ничего не делаю, или null — активен (или неизвестно: старый
+    // сервер, ошибка запроса; «неактивен» утверждает факт). Простой — от последнего
+    // действия на любом устройстве: сервер отдаёт его по каждому, своё окно — точнее.
+    meIdleMinutes() {
+        const activity = this._meDeviceActivity;
+        if (!activity || activity.anyActive) return null;
+        const sinceInput = Date.now() - Number(this._meLocalInputAt || 0);
+        if (sinceInput < this.meActiveWindowMs()) return null;
+        const localMinutes = Math.floor(sinceInput / 60000);
+        return Math.min(localMinutes, activity.minIdleMinutes ?? localMinutes);
+    }
+
+    formatMeIdle(minutes) {
+        if (!Number.isFinite(minutes)) return '';
+        if (minutes < 60) return `${Math.max(1, minutes)} мин`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours} ч`;
+        return `${Math.floor(hours / 24)} д`;
+    }
+
+    // Ввод засчитывается, только пока на окно смотрят: mousemove над фоновым окном
+    // на Mac приходит и без фокуса.
+    noteMeActivity() {
+        if (!this.isAppAttended()) return;
+        const wasIdle = this.meIdleMinutes() !== null;
+        this._meLocalInputAt = Date.now();
+        if (wasIdle) this.updateMeStatusDot();
+    }
+
+    async refreshMeDeviceActivity() {
+        if (this._meActivityInFlight) return;
+        if (!this.S.session?.token || !this.S.wsOn) return;
+        this._meActivityInFlight = true;
+        try {
+            const res = await this.apiFetch(this.apiRoutes.devices.activity);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            const devices = Array.isArray(data?.devices) ? data.devices : null;
+            if (!devices) throw new Error('no devices');
+            const idle = devices.map(device => Number(device?.idleMinutes)).filter(Number.isFinite);
+            this._meDeviceActivity = {
+                anyActive: devices.some(device => device?.active === true),
+                minIdleMinutes: idle.length ? Math.min(...idle) : null,
+            };
+        } catch (e) {
+            this._meDeviceActivity = null;
+        } finally {
+            this._meActivityInFlight = false;
+        }
+        this.updateMeStatusDot();
+    }
+
+    installMeStatusPolling() {
+        if (this._meStatusPollingInstalled) return;
+        if (typeof window === 'undefined' || typeof document === 'undefined') return;
+        this._meStatusPollingInstalled = true;
+        this._meLocalInputAt = Date.now();
+        let lastMove = 0;
+        const note = () => this.noteMeActivity();
+        const options = { capture: true, passive: true };
+        for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+            document.addEventListener(type, note, options);
+        }
+        document.addEventListener('pointermove', () => {
+            const now = Date.now();
+            if (now - lastMove < 5000) return;
+            lastMove = now;
+            note();
+        }, options);
+        window.addEventListener('focus', note);
+        document.addEventListener('visibilitychange', note);
+        setInterval(() => void this.refreshMeDeviceActivity(), ZaliInterface.ME_STATUS_POLL_MS);
+        void this.refreshMeDeviceActivity();
     }
 });
 
 ZaliInterface.DEVICE_IDLE_REPORT_MS = 30 * 1000;
+// Зеркало DeviceKind::active_window_secs (server/src/device_activity.rs).
+ZaliInterface.DESKTOP_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+ZaliInterface.MOBILE_ACTIVE_WINDOW_MS = 60 * 1000; // телефон и браузер
+ZaliInterface.ME_STATUS_POLL_MS = 30 * 1000;
+// С каких минут простоя на аватарке луна и её следующие фазы: с 15 мин — тонкий
+// серп, дальше толще, с 6 часов — полный серп (data-phase 1–4). Раньше 15 мин
+// простоя — точка «в сети», хотя для маршрута уведомлений устройство уже неактивно.
+ZaliInterface.ME_MOON_PHASES = [15, 30, 120, 360];
 ZaliInterface.CONVERSATION_VIEW_HEARTBEAT_MS = 25 * 1000;

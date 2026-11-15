@@ -109,12 +109,15 @@ CLAIMS = [
 
 # То же для дизайн-гайдлайнов: (фрагмент в docs/UI_GUIDELINES.md, файл кода, regex).
 UI_CLAIMS = [
-    ("`--f-surface` | `.032`", "web/style.css", r"--f-surface: rgba\(255,255,255,\.032\)"),
-    ("`--f-fill` | `.065`", "web/style.css", r"--f-fill: rgba\(255,255,255,\.065\)"),
-    ("`--f-fill-hover` | `.095`", "web/style.css", r"--f-fill-hover: rgba\(255,255,255,\.095\)"),
-    ("`--f-fill-strong` | `.11`", "web/style.css", r"--f-fill-strong: rgba\(255,255,255,\.11\)"),
-    ("`--f-hairline` | `.07`", "web/style.css", r"--f-hairline: rgba\(255,255,255,\.07\)"),
-    ("`--f-on-accent` | `#050505`", "web/style.css", r"--f-on-accent: #050505"),
+    ("`--f-surface` | `.032`", "web/style.css", r"--f-surface: rgba\(var\(--ink-rgb\),\.032\)"),
+    ("`--f-fill` | `.065`", "web/style.css", r"--f-fill: rgba\(var\(--ink-rgb\),\.065\)"),
+    ("`--f-fill-hover` | `.095`", "web/style.css", r"--f-fill-hover: rgba\(var\(--ink-rgb\),\.095\)"),
+    ("`--f-fill-strong` | `.11`", "web/style.css", r"--f-fill-strong: rgba\(var\(--ink-rgb\),\.11\)"),
+    ("`--f-hairline` | `.07`", "web/style.css", r"--f-hairline: rgba\(var\(--ink-rgb\),\.07\)"),
+    ("`--f-on-accent` | `var(--on-accent)`", "web/style.css", r"--f-on-accent: var\(--on-accent\)"),
+    ("`--meta-45/50/55` | .45/.5/.55 | .62/.66/.7", "web/style.css", r"--meta-45: \.62;\s*--meta-50: \.66;\s*--meta-55: \.7;"),
+    ("заливка глубже (`#b6ea00`)", "web/src/styler.js", r"lime:\s*\{[^}]*fill: '182,234,0'"),
+    ("кромка `--accent-edge` (5 % чернил", "web/style.css", r"--accent-edge: rgba\(var\(--ink-rgb\),\.05\)"),
     ("`--f-ctl` | `36px`", "web/style.css", r"--f-ctl: 36px"),
     ("`10px` / `16px` (телефон: 12 / 16)", "web/style.css", r"--f-radius: 10px;\s*--f-radius-l: 16px"),
     ("`--tr-ctl: 44px` у казны", "web/style.css", r"--tr-ctl: 44px"),

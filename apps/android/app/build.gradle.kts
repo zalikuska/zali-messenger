@@ -29,8 +29,8 @@ android {
         // (MAJOR.MINOR{a|b|r}BUILD) в него не укладывается — считаем как
         // MAJOR*10000 + MINOR*1000 + BUILD: 0.2b33 → 2033. Порядок сохраняется, пока
         // BUILD < 1000, чего с запасом хватает.
-        versionCode = 2057
-        versionName = "0.2b57"
+        versionCode = 2058
+        versionName = "0.2b58"
     }
 
     buildTypes {
@@ -56,7 +56,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
 
     // Native API/WebSocket bridge (NativeBridge.kt) — HTTP client + WS client to
     // sidestep the WebView's CORS enforcement on file:// pages (see class doc).

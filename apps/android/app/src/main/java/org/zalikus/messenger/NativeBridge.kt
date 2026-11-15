@@ -157,29 +157,20 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
      * only an Activity can own. */
     var requestScreenCapturePermission: ((requestId: String) -> Unit)? = null
 
-    /**
-     * Mobile list↔chat navigation progress reported by the web UI
-     * (`setMobileNavProgress` in interface.js): 0 = dialog list, 1 = chat.
-     *
-     * The native bottom bar has to follow it, because `documentStartScript()`
-     * hides the web `.mobile-dock` and draws that bar over the WebView instead —
-     * so the web transform that slides the dock away on the chat screen is
-     * invisible to it, and without this the bar just sat on top of the message
-     * input. `animate` is false while a swipe is tracking the finger (follow it
-     * frame by frame) and true for a committed transition (run our own slide).
-     */
-    var onMobileNavProgress: ((progress: Float, animate: Boolean) -> Unit)? = null
-
-    /**
-     * Активная секция по версии веба: `chats` / `servers` / `hub` / `settings`.
-     *
-     * Нативная панель рисуется поверх вебвью и прячет веб-док, поэтому её
-     * подсветка — локальное состояние Compose, меняющееся только от тапа по ней
-     * самой. А уйти в Хаб или Настройки можно и другим путём (сегмент-контрол
-     * внутри настроек), после чего подсветка начинала врать. Веб сообщает секцию
-     * тем же сообщением, что и прогресс навигации.
-     */
-    var onMobileNavSection: ((section: String) -> Unit)? = null
+    // MARK: - Галерея внутри приложения (GALLERY_*, MediaGallery.kt)
+    //
+    // Лист с плитками фото рисует веб (media_sheet.js); здесь — доступ к MediaStore,
+    // камера и ответы. Системные окна (разрешение, камера, настройки) открывает только
+    // Activity — она ставит эти колбэки сразу после создания моста.
+    val mediaGallery = MediaGallery(context)
+    var requestGalleryAccess: ((requestId: String, permissions: Array<String>) -> Unit)? = null
+    var captureGalleryPhoto: ((requestId: String) -> Unit)? = null
+    var openAppSettings: (() -> Unit)? = null
+    /** Светлота темы из веба (SET_APPEARANCE): светлая ли и цвет фона ARGB. */
+    var applyAppearance: ((light: Boolean, background: Int) -> Unit)? = null
+    private val galleryExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "zali-gallery").apply { isDaemon = true }
+    }
 
     init {
         val lastUser = prefs.getString(LAST_USERNAME_KEY, null)
@@ -245,6 +236,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             sendMessage: true,
             sessionSync: false,
             saveStyle: false,
+            // Светлота окна за темой (SET_APPEARANCE → MainActivity.applyAppearance).
+            appearance: true,
             saveMessageCache: false,
             downloadAttachment: true,
             // История канала расшифровывается ЗДЕСЬ, тем же нативным конвейером,
@@ -263,7 +256,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             voice: false,
             windowDrag: false,
             screenCapture: true,
-            mobileNav: true,
+            // Галерея внутри приложения: лист плиток с камерой (GALLERY_*, MediaGallery.kt).
+            mediaGallery: true,
             // Кружок на значке в режиме «в игре»: тихое уведомление на канале LOW
             // (SHOW_NOTIFICATION с quiet, MessageNotifier.showQuiet).
             quietBadge: true,
@@ -275,41 +269,16 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             // Хранилище аддонов (ADDON_REQUEST, AddonStore.kt). IndexedDB на file:// нет.
             addonStore: true
           };
-          window.__zaliSelectTab = function (name) {
-            var map = { chats: 'mobileChatsBtn', servers: 'mobileServersBtn',
-                        zalicoin: 'mobileZaliCoinBtn', hub: 'mobileHubBtn' };
-            var el = document.getElementById(map[name]);
-            if (el) { el.click(); }
-          };
           // Метка оболочки для CSS (web/style.css, `.is-android-shell`): на Android
-          // отключается размытие фона. Именно documentElement — на document-start
+          // отключается размытие фона, а у веб-дока (нижняя панель — своей нативной
+          // с 2026-11-15 нет) плашка почти сплошная. Именно documentElement — на document-start
           // body ещё нет.
           document.documentElement.classList.add('is-android-shell');
-          var hide = function () {
-            if (document.getElementById('__zaliNativeBarCss')) return;
-            var st = document.createElement('style');
-            st.id = '__zaliNativeBarCss';
-            st.textContent = '.mobile-dock{display:none !important;}';
-            (document.head || document.documentElement).appendChild(st);
-          };
-          if (document.readyState !== 'loading') hide();
-          document.addEventListener('DOMContentLoaded', hide);
           // Здесь стояло document.body.classList.add('zali-native-android') — мёртвый
           // код с двух сторон: на document-start document.body ещё null, а в CSS этот
           // класс не используется нигде.
         })();
         """.trimIndent()
-    }
-
-    /** Switch the visible section by driving the shared web UI. */
-    fun selectTab(name: String) {
-        // Через JSONObject.quote, а не интерполяцией: имя приходит из перечисления и
-        // сейчас безопасно, но строка, собираемая для evaluateJavascript вручную, —
-        // это ровно тот шов, на котором такие вещи потом и ломаются.
-        val quoted = JSONObject.quote(name)
-        mainHandler.post {
-            webView.evaluateJavascript("window.__zaliSelectTab && window.__zaliSelectTab($quoted);", null)
-        }
     }
 
     /** Entry point for every `postNativeMessage(...)` call from `Web/src/interface.js`. */
@@ -326,6 +295,17 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                     PushSession.update(context, apiBaseUrl = base)
                     if (wsAuthToken.isNotEmpty()) connectWebSocket()
                 }
+            }
+            "SET_APPEARANCE" -> {
+                // Значки статус-бара/навигации, фон под вебвью и нативная панель
+                // вкладок — за темой веба (styler.js). Иначе в светлой теме часы и
+                // батарея белые на светлом.
+                val light = dict.optString("appearance", "dark") == "light"
+                val hex = dict.optString("background", "").removePrefix("#")
+                val color = hex.takeIf { it.length == 6 }?.toLongOrNull(16)
+                    ?.let { (0xFF000000L or it).toInt() }
+                    ?: if (light) 0xFFE7E7E0.toInt() else 0xFF0B0D12.toInt()
+                applyAppearance?.invoke(light, color)
             }
             "API_REQUEST" -> handleApiRequest(dict)
             "ADDON_REQUEST" -> handleAddonRequest(dict)
@@ -352,16 +332,24 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "LOAD_AVATAR_REQUEST" -> handleLoadAvatarRequest(dict)
             "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
             "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
-            "MOBILE_NAV_PROGRESS" -> {
-                val progress = dict.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
-                val animate = dict.optBoolean("animate", true)
-                val section = dict.optString("section", "").trim()
-                mainHandler.post {
-                    onMobileNavProgress?.invoke(progress, animate)
-                    if (section.isNotEmpty()) onMobileNavSection?.invoke(section)
-                }
-            }
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
+            "GALLERY_LIST" -> emitGalleryList(dict.optString("requestId", ""), dict.optInt("limit", 240))
+            "GALLERY_REQUEST_ACCESS" -> {
+                val requestId = dict.optString("requestId", "")
+                val launcher = requestGalleryAccess
+                if (launcher == null) emitGalleryList(requestId, 240)
+                else mainHandler.post { launcher(requestId, mediaGallery.requiredPermissions()) }
+            }
+            "GALLERY_CAPTURE" -> {
+                val requestId = dict.optString("requestId", "")
+                val launcher = captureGalleryPhoto
+                if (launcher == null) emitGalleryEvent(JSONObject().apply {
+                    put("event", "capture_failed")
+                    put("requestId", requestId)
+                })
+                else mainHandler.post { launcher(requestId) }
+            }
+            "GALLERY_OPEN_SETTINGS" -> openAppSettings?.let { mainHandler.post { it() } }
             "STOP_SCREEN_CAPTURE" -> handleStopScreenCapture()
             "SHOW_NOTIFICATION" -> if (dict.optBoolean("quiet", false)) {
                 // Режим «в игре»: тихое уведомление ради кружка на значке (или его снятие).
@@ -1189,6 +1177,41 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             if (message != null) put("message", message)
         }
         val js = "window.loader && window.loader.bus.send('zali_interface:screen_capture_error', $payload);"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
+    // MARK: - Галерея: ответы вебу
+
+    /** Список плиток и состояние доступа. `askedBefore` — ответ пришёл после
+     * системного окна разрешения: веб по нему отличает «ещё не спрашивали» от
+     * «запретили» (второй раз Android окно уже может не показать). */
+    fun emitGalleryList(requestId: String, limit: Int, askedBefore: Boolean = false) {
+        galleryExecutor.execute {
+            val access = mediaGallery.access()
+            val items = mediaGallery.list(limit.coerceIn(1, 1000))
+            emitGalleryEvent(JSONObject().apply {
+                put("event", "list")
+                put("requestId", requestId)
+                put("access", access)
+                put("asked", askedBefore)
+                put("items", items)
+            })
+        }
+    }
+
+    /** Снимок с камеры готов (или отменён) — MainActivity, TakePicture. */
+    fun onGalleryCapture(requestId: String, name: String?, success: Boolean) {
+        val item = if (success && name != null) mediaGallery.captureItem(name) else null
+        if (item == null && name != null) mediaGallery.discardCapture(name)
+        emitGalleryEvent(JSONObject().apply {
+            put("event", if (item != null) "captured" else "capture_cancelled")
+            put("requestId", requestId)
+            if (item != null) put("item", item)
+        })
+    }
+
+    private fun emitGalleryEvent(payload: JSONObject) {
+        val js = "window.loader && window.loader.bus.send('zali_interface:gallery_event', $payload);"
         mainHandler.post { webView.evaluateJavascript(js, null) }
     }
 
@@ -2212,6 +2235,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             put("type", "client_idle")
             put("deviceId", wsDeviceId)
             put("idleSeconds", idleSeconds)
+            // Окно активности сервер выбирает по типу: телефону — минута
+            // (server/src/device_activity.rs, DeviceKind).
+            put("kind", "mobile")
         }
         if (socket.send(payload.toString())) lastReportedActivityAt = lastUserActivityAt
     }

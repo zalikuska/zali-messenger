@@ -42,6 +42,9 @@
         // Нативный захват микрофона/камеры/экрана (interface/native_media.js):
         // ответы на MEDIA_REQUEST и события потоков — {event, requestId?, stream?, …}.
         MEDIA_EVENT: 'media_event',
+        // Галерея внутри приложения на Android (interface/media_sheet.js, MediaGallery.kt):
+        // {event: 'list' | 'captured' | 'capture_cancelled' | 'capture_failed', requestId, …}.
+        GALLERY_EVENT: 'gallery_event',
     });
 
     window.ZaliBusEvents = ZaliBusEvents;

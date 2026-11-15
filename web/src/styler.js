@@ -4,7 +4,9 @@ class ZaliStyler {
         this.name = 'zali_styler';
         this.currentKey = '';
         
-        // Custom premium themes matching rich aesthetics
+        // Тёмные схемы — исходные (2026-11-15 пользователь вернул их «к самому
+        // началу» после попытки «тёмной бумаги»: тонированный холст, графитовый лист,
+        // приглушённый акцент — не понравилось). Не перестраивать без запроса.
         this.themes = {
             lime: {
                 '--accent-rgb': '203,255,0',
@@ -138,6 +140,45 @@ class ZaliStyler {
             }
         };
 
+        // Светлые варианты тех же схем. Тёмные выше — как были, к ним только
+        // добавляются служебные токены (_darkPalette).
+        //
+        // Светлая тема — «бумага», а не белый экран: холст (bg) — приглушённый
+        // каменный тон со своим оттенком у каждой схемы (лён у ember, сиреневый
+        // у violet…), поверхности (surface: панель чата, карточки, меню) —
+        // молочные, на ступень светлее, чистого #fff нет нигде. Текст — тёплый
+        // графит (ink), не чёрный. Поэтому экран не слепит и схемы различаются
+        // не одной точкой акцента.
+        //   fill   — акцент-заливка для мелких мест (кнопки, бейджи, отправка);
+        //   fg     — акцент как текст/иконка, ≥4,8:1 и на холсте, и на поверхности;
+        //   on     — текст на fill (у mono/graphite/violet fill тёмный — текст светлый);
+        //   bubble — исходящий пузырь: плотная пастель акцента (не прозрачность!),
+        //            большие пятна флуоресцентного лайма на светлом режут глаз;
+        //            у mono/graphite — тёмный графит со светлым текстом (bubbleOn).
+        this.lightThemes = {
+            // Лайм на светлой бумаге почти той же яркости, что фон (1,1:1): пятна
+            // растворялись («крайне низко контрастная»). Роли не переворачиваем —
+            // бренд это лаймовая заливка с чёрным знаком, — а берём лайм насыщеннее
+            // и глубже (#b6ea00 вместо #cbff00), исходящие — тот же плотный лайм, не
+            // пастель. Край пятен — еле заметная кромка (edge, style.css → --accent-edge).
+            lime:     { bg: '#e7e7e0', surface: '246,246,241', ink: '36,38,30', fill: '182,234,0',   fg: '58,104,0',   on: '18,22,0', bubble: '190,240,20', edge: .05 },
+            cyber:    { bg: '#ebe3ea', surface: '248,243,247', ink: '42,22,46', fill: '255,0,85',    fg: '196,0,72',   on: '26,4,14', bubbleMix: .3 },
+            matrix:   { bg: '#e0e8e1', surface: '242,247,242', ink: '16,44,22', fill: '0,214,56',    fg: '0,112,40',   on: '2,22,8', bubbleMix: .32 },
+            ocean:    { bg: '#e0e7ec', surface: '243,246,248', ink: '18,36,50', fill: '0,168,222',   fg: '0,98,145',   on: '2,22,34', bubbleMix: .32 },
+            mono:     { bg: '#e6e6e5', surface: '246,246,245', ink: '30,30,30', fill: '38,38,37',    fg: '30,30,30',   on: '246,246,245', bubble: '46,46,45', bubbleOn: '244,244,243' },
+            ember:    { bg: '#ece4dc', surface: '249,244,239', ink: '46,30,20', fill: '240,104,32',  fg: '166,64,6',   on: '34,14,2', bubbleMix: .36 },
+            aurora:   { bg: '#dfe9e5', surface: '242,247,245', ink: '18,40,33', fill: '20,200,140',  fg: '0,112,78',   on: '1,24,16', bubbleMix: .34 },
+            graphite: { bg: '#e3e6e9', surface: '244,245,247', ink: '28,32,38', fill: '70,81,98',    fg: '64,74,90',   on: '244,245,247', bubble: '70,81,98', bubbleOn: '243,245,248' },
+            rose:     { bg: '#ece2e6', surface: '249,243,245', ink: '48,24,34', fill: '232,64,116',  fg: '184,36,82',  on: '34,6,16', bubbleMix: .34 },
+            violet:   { bg: '#e6e2ee', surface: '246,244,250', ink: '34,24,56', fill: '128,58,240',  fg: '108,44,214', on: '255,255,255', bubbleMix: .3 },
+        };
+
+        // 'dark' | 'light' | 'system' — что выбрал пользователь; resolvedAppearance()
+        // — что на экране сейчас (system разворачивается по prefers-color-scheme).
+        this.appearance = 'dark';
+        this.currentTheme = 'lime';
+        this._systemQuery = null;
+
         // CSS variable defaults that can be modified by the styler
         this.currentVars = {};
         this.currentRadius = 18;
@@ -153,6 +194,13 @@ class ZaliStyler {
         this.bus.registerCommand('zali_styler', 'get_themes',        ()          => Object.keys(this.themes));
         this.bus.registerCommand('zali_styler', 'save_style',        ()          => this.saveStyleToNative());
         this.bus.registerCommand('zali_styler', 'set_key',           (key)       => this.setKey(key));
+        this.bus.registerCommand('zali_styler', 'set_appearance',    (mode)      => this.setAppearance(mode));
+        this.bus.registerCommand('zali_styler', 'get_appearance',    ()          => ({ mode: this.appearance, resolved: this.resolvedAppearance() }));
+        // Фон окна оболочки сменился без смены схемы (подкраска фона, prefs.js).
+        this.bus.registerCommand('zali_styler', 'sync_native_appearance', () => this._applyAppearanceAttrs());
+
+        this.appearance = this.loadStoredAppearance();
+        this._watchSystemAppearance();
 
         // Load saved style from UserDefaults if available
         const restoredSavedStyle = this._loadSavedStyle();
@@ -165,11 +213,204 @@ class ZaliStyler {
         const storedTheme = this.loadStoredThemeName();
         if (storedTheme && this.themes[storedTheme]) {
             this.setTheme(storedTheme, { persist: false, remember: false });
-        } else if (!restoredSavedStyle) {
+        } else if (!restoredSavedStyle || this.resolvedAppearance() === 'light') {
+            // Сохранённый CSS без имени схемы — тёмная lime из старых сборок;
+            // в светлой теме он не годится, поэтому ставим схему явно.
             this.setTheme('lime', { persist: false, remember: false });
         } else {
             this.markActiveThemeButton(storedTheme || '');
+            this._applyAppearanceAttrs();
         }
+        this.markActiveAppearanceButton();
+    }
+
+    // ── Светлота ────────────────────────────────────────────────────────────
+
+    appearanceStorageKey() {
+        return 'zali_appearance_v1';
+    }
+
+    loadStoredAppearance() {
+        try {
+            const raw = String(localStorage.getItem(this.appearanceStorageKey()) || '').trim();
+            return ['dark', 'light', 'system'].includes(raw) ? raw : 'dark';
+        } catch (e) {
+            return 'dark';
+        }
+    }
+
+    resolvedAppearance() {
+        if (this.appearance === 'light') return 'light';
+        if (this.appearance === 'system') {
+            try {
+                return window.matchMedia?.('(prefers-color-scheme: light)')?.matches ? 'light' : 'dark';
+            } catch (e) { return 'dark'; }
+        }
+        return 'dark';
+    }
+
+    _watchSystemAppearance() {
+        try {
+            this._systemQuery = window.matchMedia?.('(prefers-color-scheme: light)') || null;
+            const onChange = () => {
+                if (this.appearance === 'system') this.setTheme(this.currentTheme, { remember: false });
+            };
+            if (this._systemQuery?.addEventListener) this._systemQuery.addEventListener('change', onChange);
+            else if (this._systemQuery?.addListener) this._systemQuery.addListener(onChange);
+        } catch (e) {}
+    }
+
+    setAppearance(mode) {
+        const next = ['dark', 'light', 'system'].includes(mode) ? mode : 'dark';
+        this.appearance = next;
+        try { localStorage.setItem(this.appearanceStorageKey(), next); } catch (e) {}
+        this.setTheme(this.currentTheme, { remember: false });
+        this.markActiveAppearanceButton();
+        return true;
+    }
+
+    markActiveAppearanceButton() {
+        try {
+            document.querySelectorAll('[data-appearance-option]').forEach(btn => {
+                const active = btn.getAttribute('data-appearance-option') === this.appearance;
+                btn.classList.toggle('is-active', active);
+                btn.setAttribute('aria-checked', String(active));
+            });
+        } catch (e) {}
+    }
+
+    /** Палитра светлой «бумаги»: холст, поверхность, чернила, акцент-заливка,
+     *  акцент-текст, текст на акценте, исходящий пузырь. Ключи те же, что у
+     *  _darkPalette, чтобы при переключении инлайн-значения не оставались на <html>.
+     *  (Параметр light и тёмные ветки — след попытки «тёмной бумаги», которую
+     *  пользователь отверг; сейчас вызывается только с light = true.) */
+    _paperPalette(p, light) {
+        const hex = p.bg.replace('#', '');
+        const bg = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16) || 0);
+        const rgb = (str) => str.split(',').map(Number);
+        // «Ниже фона» (панель ввода, низ модалки, подложка обложки) живёт внутри листа.
+        // В тёмной — от листа (нейтральный графит), иначе поле ввода красилось в тон
+        // холста; в светлой — как было, от холста.
+        const deep = light
+            ? bg.map(c => Math.max(0, c - 8)).join(',')
+            : rgb(p.surface).map(c => Math.round(c * 0.72)).join(',');
+        const toHex = (str) => '#' + rgb(str).map(c => c.toString(16).padStart(2, '0')).join('');
+        // Пастель — смесь акцента с поверхностью, а не альфа: плотный цвет без
+        // просвечивания, на любом подложенном фоне одинаковый.
+        const mixRgb = (a, b, t) => rgb(a).map((c, i) => Math.round(c * t + rgb(b)[i] * (1 - t))).join(',');
+        // Исходящий: в светлой — пастель (большие пятна флуоресцентного цвета на
+        // светлом режут глаз), в тёмной — заливка на тон глубже (92% акцента).
+        const bubble = p.bubble || mixRgb(p.fill, p.surface, p.bubbleMix ?? (light ? .4 : .92));
+        const bubbleOn = p.bubbleOn || (light ? p.ink : p.on);
+        return {
+            '--accent-rgb': p.fill,
+            '--lime': toHex(p.fill),
+            '--lime-dim': `rgba(${p.fill},${light ? .18 : .14})`,
+            '--lime-glow': `rgba(${p.fill},${light ? .32 : .3})`,
+            '--lime-soft': `rgba(${p.fill},${light ? .1 : .07})`,
+            '--bg': p.bg,
+            '--sidebar': `rgba(${bg.join(',')},.94)`,
+            '--text': `rgb(${p.ink})`,
+            // Серые. Светлая: .7 ≈ 6:1, .62 ≈ 4,3:1 на поверхности.
+            // Тёмная: .68 ≈ 8:1, .54 ≈ 5:1 на поверхности (прежние .65/.5 на чёрном).
+            '--text2': `rgba(${p.ink},${light ? .7 : .68})`,
+            '--text3': `rgba(${p.ink},${light ? .62 : .54})`,
+            '--border': `rgba(${p.ink},${light ? .1 : .08})`,
+            '--ink-rgb': p.ink,
+            '--accent-fg': `rgb(${p.fg})`,
+            '--accent-fg-rgb': p.fg,
+            '--on-accent': `rgb(${p.on})`,
+            '--on-accent-rgb': p.on,
+            '--bg-rgb': bg.join(','),
+            '--surface-rgb': p.surface,
+            '--deep-rgb': deep,
+            '--bubble-out': `rgb(${bubble})`,
+            '--bubble-out-on': `rgb(${bubbleOn})`,
+            '--bubble-out-on-rgb': bubbleOn,
+            // Еле заметная кромка сплошных акцентных пятен — только светлой: там
+            // заливка по яркости почти как бумага (лайм — чуть заметнее).
+            '--accent-edge': light ? `rgba(${p.ink},${p.edge ?? .035})` : 'transparent',
+        };
+    }
+
+    /** Тёмная схема — исходные значения плюс служебные токены светлоты, равные
+     *  прежним литералам style.css (белые чернила, поверхность 17,19,24, текст на
+     *  акценте #050505), — тёмная выглядит ровно как до появления светлой. Те же
+     *  имена ключей, что у светлой, чтобы её инлайн-значения не оставались на <html>. */
+    _darkPalette(name) {
+        const t = this.themes[name] || this.themes.lime;
+        const hex = String(t['--bg'] || '#090b0e').replace('#', '');
+        const bg = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16) || 0);
+        return {
+            ...t,
+            '--ink-rgb': '255,255,255',
+            '--accent-fg': t['--lime'],
+            '--accent-fg-rgb': t['--accent-rgb'],
+            '--on-accent': '#050505',
+            '--on-accent-rgb': '5,5,5',
+            '--bg-rgb': bg.join(','),
+            '--surface-rgb': '17,19,24',
+            '--deep-rgb': '10,12,16',
+            '--bubble-out': t['--lime'],
+            '--bubble-out-on': '#050505',
+            '--bubble-out-on-rgb': '5,5,5',
+            '--accent-edge': 'transparent',
+        };
+    }
+
+    _lightPalette(name) {
+        return this._paperPalette(this.lightThemes[name] || this.lightThemes.lime, true);
+    }
+
+    themePalette(name, appearance = this.resolvedAppearance()) {
+        return appearance === 'light' ? this._lightPalette(name) : this._darkPalette(name);
+    }
+
+    _applyAppearanceAttrs() {
+        const resolved = this.resolvedAppearance();
+        const root = document.documentElement;
+        root.setAttribute('data-appearance', resolved);
+        root.style.colorScheme = resolved;
+        try {
+            document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', this.currentVars['--bg'] || (resolved === 'light' ? '#e7e7e0' : '#090b0e')));
+            document.querySelectorAll('meta[name="color-scheme"]').forEach(m => m.setAttribute('content', resolved));
+        } catch (e) {}
+        // Окно оболочки (фон под WebView, кнопки заголовка, полосы Android) —
+        // иначе светлое приложение сидит в тёмной раме и мигает тёмным при ресайзе.
+        if (this.nativeSupports('appearance')) this._scheduleNativeAppearance();
+    }
+
+    // Фон окна читается из вычисленного стиля body (в «спокойном фоне» он не равен
+    // --bg схемы). Чтение — через кадр, когда браузер сам уже пересчитал стили после
+    // смены переменных: прочитать сразу значило бы принудительно пересчитать стили
+    // всего документа внутри клика. Повтор отсекается по фактическому фону, а не по
+    // схеме: «Подкраска фона» меняет фон без смены схемы.
+    _scheduleNativeAppearance() {
+        if (this._nativeAppearanceQueued) return;
+        this._nativeAppearanceQueued = true;
+        const run = () => {
+            if (!this._nativeAppearanceQueued) return;
+            this._nativeAppearanceQueued = false;
+            const resolved = this.resolvedAppearance();
+            const background = this.nativeBackgroundColor(resolved);
+            const key = `${resolved}|${background}`;
+            if (key === this._lastNativeAppearance) return;
+            this._lastNativeAppearance = key;
+            this.postNativeMessage({ type: 'SET_APPEARANCE', appearance: resolved, background });
+        };
+        // rAF не идёт в свёрнутом/скрытом окне — запасной таймер.
+        try { requestAnimationFrame(() => setTimeout(run, 0)); } catch (e) {}
+        setTimeout(run, 120);
+    }
+
+    /** Цвет фона окна, как его видит пользователь (body в «спокойном фоне»). */
+    nativeBackgroundColor(resolved = this.resolvedAppearance()) {
+        try {
+            const c = getComputedStyle(document.body || document.documentElement).backgroundColor;
+            const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c || '');
+            if (m) return '#' + [m[1], m[2], m[3]].map(v => Number(v).toString(16).padStart(2, '0')).join('');
+        } catch (e) {}
+        return this.currentVars['--bg'] || (resolved === 'light' ? '#e7e7e0' : '#090b0e');
     }
 
     _cryptoKeyStorageKey() {
@@ -286,11 +527,12 @@ class ZaliStyler {
     }
 
     setTheme(themeName, options = {}) {
-        const theme = this.themes[themeName];
-        if (!theme) {
+        if (!this.themes[themeName]) {
             console.warn(`[zali_styler] Тема "${themeName}" не найдена`);
             return false;
         }
+        this.currentTheme = themeName;
+        const theme = this.themePalette(themeName);
 
         for (const [key, val] of Object.entries(theme)) {
             this.setVariable(key, val, { persist: false });
@@ -301,7 +543,8 @@ class ZaliStyler {
             this.saveStoredThemeName(themeName);
         }
         this.markActiveThemeButton(themeName);
-        console.log(`[zali_styler] Установлена цветовая схема "${themeName}"`);
+        this._applyAppearanceAttrs();
+        console.log(`[zali_styler] Установлена цветовая схема "${themeName}" (${this.resolvedAppearance()})`);
         if (options.persist !== false) this.saveStyleToNative();
         return true;
     }

@@ -47,7 +47,7 @@ check('меню строится через DOM API, без innerHTML', !/\.inne
 check('скрытый select не показывается (display:none !important)', /\.zs-native\s*\{\s*display:\s*none\s*!important/.test(css));
 check('меню поверх модалок (z-index ≥ 10000)', /\.zs-menu\s*\{[^}]*z-index:\s*10000/.test(css));
 check('модуль в манифесте до интерфейса', manifest.modules.includes('modules/ui_select.js'));
-check('ползунок в «Фокусе» заметен (≥ .3 альфы)', /--sb-thumb:\s*rgba\(255,255,255,\.34\)/.test(css));
+check('ползунок в «Фокусе» заметен (≥ .3 альфы чернил темы)', /--sb-thumb:\s*rgba\(var\(--ink-rgb\),\.34\)/.test(css));
 check('scrollbar-color задан вместе с ::-webkit-scrollbar', /scrollbar-color:\s*var\(--sb-thumb\)/.test(css));
 
 console.log('');

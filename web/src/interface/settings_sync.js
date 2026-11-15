@@ -42,6 +42,14 @@ ZaliMixin(ZaliInterface, class {
                 apply: (raw) => this.saveDesignMode(raw),
             },
             {
+                // Светлота: dark | light | system. «Как в системе» на каждом
+                // устройстве разворачивается по его собственной системной теме.
+                name: 'appearance',
+                storageKey: 'zali_appearance_v1',
+                read: () => lsGet('zali_appearance_v1'),
+                apply: (raw) => this.bus?.send?.('zali_styler:set_appearance', raw),
+            },
+            {
                 name: 'decor_art',
                 storageKey: 'zali_decor_art_v1',
                 read: () => lsGet('zali_decor_art_v1'),

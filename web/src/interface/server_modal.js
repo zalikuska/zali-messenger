@@ -103,7 +103,7 @@ ZaliMixin(ZaliInterface, class {
                 </select>
             `;
             return `<div class="server-member-row ${isOwner ? 'owner' : ''}">
-                <span class="sm-member-ava" aria-hidden="true">${this.esc(String(member.username || '?').trim().charAt(0).toUpperCase() || '?')}</span>
+                ${this.presenceAvatarSlotHTML(member.username, `<span class="sm-member-ava" aria-hidden="true">${this.esc(String(member.username || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)}
                 <div class="server-member-info">
                     <div class="server-member-name">${this.esc(member.username)}</div>
                     <div class="server-member-meta">${this.esc(this.serverRoleLabel(role))}${joined ? ` · ${this.esc(joined)}` : ''}${this.gameActivityFor(member.username) ? ` · ${this.gameActivityLineHTML(member.username, { withDuration: false })}` : ''}</div>

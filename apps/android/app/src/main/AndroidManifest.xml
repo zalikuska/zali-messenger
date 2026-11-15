@@ -1,11 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Галерея внутри приложения (MediaGallery.kt, лист плиток при «скрепке»):
+         Android 13+ — фото и видео отдельно, 14+ — ещё «только выбранные»;
+         до 13 — общее чтение хранилища. Без них лист предлагает системный пикер. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <!-- Screen-share (START_SCREEN_CAPTURE in NativeBridge.kt, see
          ScreenCaptureService) — Android 14+ (targetSdk 35) requires both the
          foreground-service permission and the mediaProjection-specific one
@@ -81,5 +91,21 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- Photo Picker на Android 11–12 (и 8–10, где есть Google Play): модуль
+             пикера ставится из Play по этому объявлению. Без него androidx
+             откатывается на системный выбор документов (MainActivity,
+             photoPickerMediaType). Шаблон — из документации Android. -->
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            android:enabled="false"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
+            </intent-filter>
+            <meta-data
+                android:name="photopicker_activity:0:required"
+                android:value="" />
+        </service>
     </application>
 </manifest>

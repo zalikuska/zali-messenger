@@ -8,10 +8,12 @@
     const API_ROUTES = Object.freeze({
         devices: {
             list: apiRoute('/devices'),
+            activity: apiRoute('/devices/activity'),
             byId: (id) => apiRoute(`/devices/${encodeURIComponent(id)}`),
             approve: apiRoute('/devices/approve'),
             publicByUser: (username) => apiRoute(`/users/${encodeURIComponent(username)}/devices`),
         },
+        presence: apiRoute('/presence'),
         vault: {
             events: apiRoute('/vault/events'),
         },

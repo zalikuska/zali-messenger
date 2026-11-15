@@ -286,8 +286,11 @@ pub(crate) async fn handle_socket(
         .or_default()
         .push(tx.clone());
     // Для решения «слать ли Web Push на это устройство» — см. push.rs::push_suppressed_for.
+    let was_online = crate::presence::is_online(&state, &username);
     let presence_id = crate::register_connection_presence(&state, &username);
     crate::set_connection_device(&state, presence_id, device_id.as_deref());
+    // «В сети» у собеседников загорается сразу (presence.rs).
+    crate::presence::connection_opened(&state, &username, was_online);
 
     info!(
         "[WS] '{}' подключился (voice_rooms={}, active_ws={})",
@@ -415,6 +418,7 @@ pub(crate) async fn handle_socket(
                                             &username,
                                             &device,
                                             idle.max(0.0) as u64,
+                                            value["kind"].as_str(),
                                         );
                                     }
                                 } else if event_type == "client_activity" {
@@ -469,6 +473,7 @@ pub(crate) async fn handle_socket(
 
     // Вместе с записью присутствия уходит и игровой статус этого соединения.
     crate::activity::connection_closed(&state, presence_id, &username).await;
+    crate::presence::connection_closed(&state, &username);
 
     // Clean up closed senders
     if let Some(mut conns) = state.user_connections.get_mut(&username) {

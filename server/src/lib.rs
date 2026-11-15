@@ -74,6 +74,8 @@ mod raffles;
 mod fcm;
 pub(crate) use fcm::*;
 mod device_activity;
+// «В сети» у собеседников — без glob-реэкспорта.
+mod presence;
 pub(crate) use device_activity::{note_device_activity, notify_route_for, send_notify_route, NotifyRoute};
 mod coins;
 pub(crate) use coins::*;
@@ -556,6 +558,8 @@ pub struct AppState {
     // Связи пользователя для подсказок имён (contacts.rs): считаются агрегатами по
     // messages/friend_links, а подсказки просят на каждый ввод — держим секунд десять.
     suggest_relations: DashMap<String, (Instant, Arc<std::collections::HashMap<String, contacts::Relation>>)>,
+    // Кто видит «в сети» пользователя (presence.rs) — на минуту.
+    presence_audience: presence::AudienceCache,
     // Throttles the full-map sweep in login() to once per rate-limit window instead
     // of on every request — see the comment at its call site for why.
     login_attempts_last_swept: std::sync::Mutex<Instant>,
@@ -1417,6 +1421,12 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы device_activity");
+    // Тип устройства (desktop / mobile / browser) — от него окно активности; NULL —
+    // клиент до 0.2b57 тип не сообщал.
+    sqlx::query("ALTER TABLE device_activity ADD COLUMN kind TEXT")
+        .execute(&pool)
+        .await
+        .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS client_diagnostic_reports (
@@ -2115,6 +2125,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         key_envelope_notified_at: DashMap::new(),
         login_attempts: DashMap::new(),
         suggest_relations: DashMap::new(),
+        presence_audience: DashMap::new(),
         login_attempts_last_swept: std::sync::Mutex::new(Instant::now()),
         config,
     })
@@ -2304,6 +2315,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/push/fcm/register", post(register_fcm_token))
         .route("/api/push/device/unregister", post(unregister_push_device))
         .route("/api/devices/activity", get(device_activity::get_device_activity))
+        .route("/api/presence", get(presence::get_presence))
         .route(
             "/api/diagnostics/decrypt-failure",
             post(report_decrypt_failure),

@@ -16,21 +16,15 @@ ZaliMixin(ZaliInterface, class {
         return 'zali_ui_v2_segments_v1';
     }
 
-    experimentalDesignStorageKey() {
-        return 'zali_experimental_design_v1';
-    }
-
     // ============================================================
-    // DESIGN MODE — оформление интерфейса целиком: classic | flat | focus.
+    // DESIGN MODE — оформление интерфейса: focus | focus-glow.
     //
-    // Раньше это был одиночный чекбокс «плоский режим»
-    // (`zali_experimental_design_v1`, атрибут `data-experimental-design`).
-    // Режимов стало три, и они взаимоисключающие, поэтому источник правды —
-    // `zali_design_mode_v1`, а старый ключ остаётся ЗЕРКАЛОМ: его продолжают
-    // читать CSS-правила плоской темы (`body[data-experimental-design="on"]`,
-    // ~66 селекторов) и старые сборки нативных шеллов, у которых в
-    // localStorage уже лежит выбор пользователя. Поэтому saveDesignMode()
-    // пишет оба ключа, а loadDesignMode() умеет поднять старый выбор.
+    // Источник правды — `zali_design_mode_v1`. Прежние «Классический» и «Плоский»
+    // удалены 2026-11-15 (вместе с CSS плоского режима
+    // `body[data-experimental-design="on"]`): сохранённые `classic`/`flat` и
+    // старый ключ чекбокса `zali_experimental_design_v1` молча становятся «Фокусом»
+    // через normalizeDesignMode(). Светлота (тёмная/светлая) — отдельная ось,
+    // её ведёт styler.js, а не этот режим.
     // ============================================================
 
     designModeStorageKey() {
@@ -38,8 +32,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     designModeCatalog() {
-        // Порядок = порядок в настройках: сначала «Фокус» (он же по умолчанию) и его
-        // вариант со свечением, затем прежние оформления.
+        // Порядок = порядок в настройках: «Фокус» (он же по умолчанию) и его
+        // вариант со свечением.
         return [
             // «Фокус» — не очередная перекраска, а другая иерархия: акцент
             // остаётся только у «моего» (исходящие, мой аватар), «нового»
@@ -53,8 +47,6 @@ ZaliMixin(ZaliInterface, class {
             // каждое правило «Фокуса» работает и здесь без копий; слой свечения — в
             // конце web/style.css, раздел «DESIGN MODE: FOCUS GLOW».
             { id: 'focus-glow', label: 'Фокус со свечением', note: '', hint: 'Тот же «Фокус», но акценты светятся мягким ореолом, а фон — рассеянным светом.' },
-            { id: 'classic', label: 'Классический', note: '', hint: 'Исходное оформление: градиенты, свечения, стеклянные панели.' },
-            { id: 'flat', label: 'Плоский', note: '', hint: 'Тот же интерфейс без градиентов и свечений — матовые поверхности.' },
         ];
     }
 
@@ -73,14 +65,7 @@ ZaliMixin(ZaliInterface, class {
     loadDesignMode() {
         try {
             const stored = localStorage.getItem(this.designModeStorageKey());
-            if (stored) return this.normalizeDesignMode(stored);
-            // Миграция с одиночного чекбокса «плоский режим»: он хранил явный выбор
-            // — '1' это 'flat', '0' — возврат на классический. Нет ключа вовсе —
-            // выбора не было, действует оформление по умолчанию.
-            const legacy = localStorage.getItem(this.experimentalDesignStorageKey());
-            if (legacy === '1') return 'flat';
-            if (legacy === '0') return 'classic';
-            return this.defaultDesignMode();
+            return stored ? this.normalizeDesignMode(stored) : this.defaultDesignMode();
         } catch (e) {
             return this.defaultDesignMode();
         }
@@ -88,17 +73,14 @@ ZaliMixin(ZaliInterface, class {
 
     saveDesignMode(mode) {
         this.designMode = this.normalizeDesignMode(mode);
-        this.experimentalDesign = this.designMode === 'flat';
         try {
             localStorage.setItem(this.designModeStorageKey(), this.designMode);
-            localStorage.setItem(this.experimentalDesignStorageKey(), this.experimentalDesign ? '1' : '0');
         } catch (e) {}
         this.applyDesignMode();
     }
 
     applyDesignMode() {
         this.designMode = this.normalizeDesignMode(this.designMode || this.loadDesignMode());
-        this.experimentalDesign = this.designMode === 'flat';
         const body = document.body;
         if (body) {
             // «Фокус со свечением» — это «Фокус» + флаг свечения, а не отдельная
@@ -106,11 +88,7 @@ ZaliMixin(ZaliInterface, class {
             const glow = this.designMode === 'focus-glow';
             body.setAttribute('data-design-mode', glow ? 'focus' : this.designMode);
             body.setAttribute('data-design-glow', glow ? 'on' : 'off');
-            body.setAttribute('data-experimental-design', this.experimentalDesign ? 'on' : 'off');
         }
-        // Легаси-чекбокс мог остаться в чужой сборке HTML — держим его в курсе.
-        const legacyToggle = document.getElementById('inputExperimentalDesign');
-        if (legacyToggle) legacyToggle.checked = !!this.experimentalDesign;
         // Высоту поля ввода resizeComposer() пишет инлайном по scrollHeight,
         // а отступы поля у режимов разные: при старте он отрабатывает раньше
         // applyDesignMode(), и без пересчёта поле оставалось на 3px ниже
@@ -224,6 +202,8 @@ ZaliMixin(ZaliInterface, class {
         document.body?.setAttribute('data-calm-tint', this.calmTint ? 'on' : 'off');
         const tintToggle = document.getElementById('inputCalmTint');
         if (tintToggle) tintToggle.checked = this.calmTint;
+        // Подкраска меняет цвет холста — окно оболочки (фон под WebView) за ним.
+        this.bus?.send?.('zali_styler:sync_native_appearance');
     }
 
     applyDecorArt() {
@@ -231,20 +211,6 @@ ZaliMixin(ZaliInterface, class {
         document.body?.setAttribute('data-decor-art', this.decorArt ? 'on' : 'off');
         const toggle = document.getElementById('inputDecorArt');
         if (toggle) toggle.checked = this.decorArt;
-    }
-
-    // Обратная совместимость: старый API продолжает работать, но теперь это
-    // просто «переключить между classic и flat» поверх designMode.
-    loadExperimentalDesign() {
-        return this.loadDesignMode() === 'flat';
-    }
-
-    saveExperimentalDesign(enabled) {
-        this.saveDesignMode(enabled ? 'flat' : 'classic');
-    }
-
-    applyExperimentalDesign() {
-        this.applyDesignMode();
     }
 
     voiceTraceStorageKey() {

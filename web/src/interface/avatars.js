@@ -457,7 +457,7 @@ ZaliMixin(ZaliInterface, class {
         return URL.createObjectURL(blob);
     }
 
-    dataUrlToBlob(dataUrl) {
+    dataUrlToBlob(dataUrl, { onBytes = null } = {}) {
         const value = String(dataUrl || '').trim();
         if (!value.startsWith('data:')) return null;
 
@@ -476,6 +476,11 @@ ZaliMixin(ZaliInterface, class {
                 const bytes = new Uint8Array(binary.length);
                 for (let i = 0; i < binary.length; i += 1) {
                     bytes[i] = binary.charCodeAt(i);
+                }
+                // Байты уже раскодированы — тот, кому нужен заголовок файла (размер
+                // картинки, attachmentDisplayUrl), читает его отсюда, без второго atob.
+                if (typeof onBytes === 'function') {
+                    try { onBytes(bytes, mimeType); } catch (e) { /* не критично */ }
                 }
                 return new Blob([bytes], { type: mimeType });
             }
@@ -692,10 +697,17 @@ ZaliMixin(ZaliInterface, class {
             avatarPreview.title = `Ваш аватар: ${username}`;
         }
         this.ensureAvatarLoaded(username);
+        // Подпись под своим именем — только когда она что-то сообщает (гайдлайны §2
+        // п. 3). Прежнее «В сети» стояло при любой сессии, даже без сокета, и
+        // повторяло точку #wsPill — а та честно подписывается, когда связи нет.
+        // Статус соединения — точкой на аватарке (state_sync.js, setConnectionStatus);
+        // у гостя сокета нет, и подпись «Гостевой режим» говорит сама.
+        const meDot = document.getElementById('meStatusDot');
+        if (meDot) meDot.hidden = !this.S.session?.token;
         if (meSub) {
-            meSub.innerHTML = this.S.session?.token
-                ? '<span class="online-dot"></span> В сети'
-                : '<span class="online-dot guest"></span> Гостевой режим';
+            this.setHTMLIfChanged(meSub, this.S.session?.token
+                ? ''
+                : '<span class="online-dot guest"></span> Гостевой режим');
         }
         this.updateContactControls();
         this.renderContactSuggestions();

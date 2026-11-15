@@ -19,7 +19,7 @@
 //
 // Модуль не трогает DOM и Web Audio — только считает. Проверка:
 // scripts/notify_doctor/check_sounds.mjs (NaN, пики, шов цикла, громкость).
-(function (root) {
+(function zaliSoundSynthModule(root) {
     'use strict';
 
     const TAU = Math.PI * 2;
@@ -1167,5 +1167,11 @@
         return finalize(mix, spec);
     }
 
-    root.ZaliSoundSynth = Object.freeze({ list, has: (kind, id) => !!find(kind, id), render });
+    // Исходник модуля для Web Worker (interface/sounds.js: soundWorker): рендер
+    // рингтона — сотни миллисекунд чистого счёта на слабом телефоне, на главном
+    // потоке это фриз интерфейса. Модуль самодостаточен (без DOM и Web Audio),
+    // поэтому тот же текст исполняется в воркере как есть.
+    const workerSource = () => `(${zaliSoundSynthModule.toString()})(self);`;
+
+    root.ZaliSoundSynth = Object.freeze({ list, has: (kind, id) => !!find(kind, id), render, workerSource });
 })(typeof window !== 'undefined' ? window : globalThis);

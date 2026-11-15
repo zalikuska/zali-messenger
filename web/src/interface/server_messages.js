@@ -597,6 +597,8 @@ ZaliMixin(ZaliInterface, class {
         // сервера (ПКМ / долгое нажатие) — теперь у них есть и видимая кнопка.
         const serverMenuBtn = document.getElementById('serverMenuBtn');
         if (serverMenuBtn) serverMenuBtn.hidden = !(isServers && server);
+        // Точка «в сети» на аватарке шапки — только у лички (presence.js).
+        this.updateChatHeaderPresence?.();
         if (!isServers) {
             if (chatHdrAva) {
                 this.clearServerAvatarPaint(chatHdrAva);

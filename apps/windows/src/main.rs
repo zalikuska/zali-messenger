@@ -597,7 +597,14 @@ fn main() -> wry::Result<()> {
         wry::WebContext::new(Some(dir))
     };
 
+    // Фон под страницей — цвет темы из прошлого запуска (светлая/тёмная), а не
+    // белый WebView2 по умолчанию: виден до первой отрисовки и при ресайзе.
+    let (bg_r, bg_g, bg_b) = native_state
+        .lock()
+        .map(|guard| guard.startup_background_rgb())
+        .unwrap_or((9, 11, 14));
     let webview_builder = WebViewBuilder::new(&window)
+        .with_background_color((bg_r, bg_g, bg_b, 255))
         .with_initialization_script(&init_script)
         // Lets F12 / right-click → Inspect open WebView2 DevTools so JS-side
         // trace()/console logs (e.g. publishConversationKeyToPeer failures) are
@@ -750,6 +757,9 @@ fn main() -> wry::Result<()> {
                 window.set_visible(true);
                 window.set_focus();
                 webview.focus();
+            }
+            Event::UserEvent(AppEvent::SetWindowBackground((r, g, b))) => {
+                let _ = webview.set_background_color((r, g, b, 255));
             }
             Event::UserEvent(AppEvent::SetTaskbarBadge(count)) => {
                 #[cfg(target_os = "windows")]
@@ -910,6 +920,9 @@ fn spawn_windows_idle_reporter(state: Arc<Mutex<NativeState>>, voice_bridge: Arc
                 "type": "client_idle",
                 "deviceId": device_id,
                 "idleSeconds": idle_ms / 1000,
+                // Окно активности сервер выбирает по типу: компьютеру — 5 минут
+                // (server/src/device_activity.rs, DeviceKind).
+                "kind": "desktop",
             }));
             last_reported = Some((device_id, last_activity));
         }

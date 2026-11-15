@@ -85,6 +85,10 @@ ZaliMixin(ZaliInterface, class {
     // чата; сервер узнаёт о смене из client_presence (браузер) или от самого шелла.
     onNativeAppFocusChange() {
         this.clearAttendedConversationUnread();
+        this.noteMeActivity?.(); // точка статуса на своей аватарке (device_activity.js)
+        // Вернулись из системных настроек или окна «выбрать ещё» — доступ к фото мог
+        // измениться (media_sheet.js).
+        if (this.isAppAttended()) this.refreshMediaSheet?.();
         this.reportClientPresence?.();
         // Открытый чат перед глазами глушит уведомления на всех устройствах
         // (device_activity.js) — ушедшее с экрана окно обязано снять это сразу.

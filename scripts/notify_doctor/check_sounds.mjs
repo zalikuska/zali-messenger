@@ -169,8 +169,9 @@ function fakeParam() {
     };
 }
 
-function makeClient({ withSynth = true, prefs = {}, synthModule = synth, contextState = 'running' } = {}) {
-    const { ZaliInterface, sandbox } = loadZaliInterface();
+function makeClient({ withSynth = true, prefs = {}, synthModule = synth, contextState = 'running', extraGlobals = null } = {}) {
+    const { ZaliInterface, sandbox } = loadZaliInterface(extraGlobals || {});
+    if (extraGlobals) sandbox.window.URL = { createObjectURL: () => 'blob:sound-worker', revokeObjectURL() {} };
     const log = { sources: [], oscillators: 0, stopped: 0 };
     class FakeAudioContext {
         constructor() { this.sampleRate = 48000; this.currentTime = 0; this.state = contextState; this.destination = {}; }
@@ -297,9 +298,58 @@ function makeClient({ withSynth = true, prefs = {}, synthModule = synth, context
     } catch (error) {
         threw = true;
     }
+    // Запасной путь асинхронный: выбранный звук сначала ждут (локальный кеш /
+    // рендер), «Классика» — только когда его посчитать не удалось.
+    for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     check('сбой рендера → звучит «Классика», а не тишина',
         !threw && log.sources.length === 0 && log.oscillators > 0 && api.sound.ringing === true && !!api.sound.ringTimer);
     api.stopRingtone();
+}
+
+{
+    // Рендер — в воркере, не на главном потоке: звук, которого нет в памяти, не
+    // считается синхронно внутри playMessageChime()/startRingtone() (фриз в момент
+    // сообщения или звонка; рингтон — сотни миллисекунд на слабом телефоне), а
+    // играет выбранным, когда воркер вернёт сэмплы. «Классика» не подменяет его.
+    let syncRenders = 0;
+    const spy = { list: synth.list, has: synth.has, workerSource: () => '', render(...a) { syncRenders += 1; return synth.render(...a); } };
+    class FakeWorker {
+        constructor() { this.onmessage = null; }
+        postMessage(msg) {
+            setTimeout(() => {
+                const r = synth.render(msg.kind, msg.id, msg.sampleRate);
+                this.onmessage?.({ data: { seq: msg.seq, ok: !!r, left: r?.left, right: r?.right, sampleRate: r?.sampleRate } });
+            }, 0);
+        }
+        terminate() {}
+    }
+    const { api, log } = makeClient({ synthModule: spy, extraGlobals: { Worker: FakeWorker, Blob: class { constructor() {} } } });
+    api.playMessageChime();
+    const syncAtCall = syncRenders;
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    check('звук не рендерится на главном потоке, когда есть воркер', syncAtCall === 0 && syncRenders === 0, `синхронных рендеров ${syncRenders}`);
+    check('не готовый звук сообщения играет выбранным, а не «Классикой»',
+        log.sources.length === 1 && log.sources[0].started && log.oscillators === 0, `буферов ${log.sources.length}, осцилляторов ${log.oscillators}`);
+    api.startRingtone();
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    check('не готовый рингтон звонит выбранным, когда дозреет', !!api.sound.ringLoop && !api.sound.ringTimer && syncRenders === 0, `ringLoop ${!!api.sound.ringLoop}`);
+    api.stopRingtone();
+}
+
+{
+    // Воркер сломался (оболочка не дала создать его из blob:) — ждущий звук
+    // досчитывается синхронно тем же выбранным, а не «Классикой».
+    class BrokenWorker {
+        constructor() { this.onerror = null; }
+        postMessage() { setTimeout(() => this.onerror?.({ message: 'blocked' }), 0); }
+        terminate() {}
+    }
+    const spy = { ...synth, workerSource: () => '' };
+    const { api, log } = makeClient({ synthModule: spy, extraGlobals: { Worker: BrokenWorker, Blob: class { constructor() {} } } });
+    api.playMessageChime();
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    check('сломанный воркер → выбранный звук досчитан синхронно, не «Классика»',
+        log.sources.length === 1 && log.oscillators === 0 && api.sound.worker === null, `буферов ${log.sources.length}, осцилляторов ${log.oscillators}`);
 }
 
 // ── 3. Голосовой канал ───────────────────────────────────────────────────────

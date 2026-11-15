@@ -78,7 +78,7 @@ ZaliMixin(ZaliInterface, class {
             // has-unread — чтобы строку с новым можно было выделить целиком
             // (имя, превью), а не только бейджем в углу.
             return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
-                <div class="ava"${this.profileOpenAttrs(contact)}>${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>
+                ${this.presenceAvatarSlotHTML(contact, `<div class="ava"${this.profileOpenAttrs(contact)}>${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>`)}
                 <div class="contact-info">
                     <div class="contact-name">${this.esc(contact)}${gameBadge}</div>
                     <div class="contact-prev">${preview}</div>

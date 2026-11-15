@@ -50,6 +50,12 @@
         "css"
       ]
     },
+    "SET_APPEARANCE": {
+      "fields": [
+        "appearance",
+        "background"
+      ]
+    },
     "SAVE_MESSAGE_CACHE": {
       "fields": [
         "cache"
@@ -280,6 +286,28 @@
         "requestId",
         "op"
       ]
+    },
+    "GALLERY_LIST": {
+      "fields": [
+        "requestId",
+        "limit"
+      ],
+      "optional": [
+        "limit"
+      ]
+    },
+    "GALLERY_REQUEST_ACCESS": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "GALLERY_CAPTURE": {
+      "fields": [
+        "requestId"
+      ]
+    },
+    "GALLERY_OPEN_SETTINGS": {
+      "fields": []
     }
   }
 }

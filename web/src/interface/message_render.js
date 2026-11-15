@@ -971,14 +971,29 @@ ZaliMixin(ZaliInterface, class {
         if (!pendingId) return false;
         const serverId = String(messageId || '').trim();
         let updated = false;
+        // Найдено ≠ изменилось. После загрузки истории clientId есть у любого своего
+        // сообщения, и каждое повторно доставленное (переподключение, запуск) снова
+        // попадало сюда: перерисовка ленты на каждое, хотя запись давно подтверждена.
+        // На 108 таких сообщениях после входа — перерисовка ленты в каждом кадре
+        // (замер 2026-11-15). Возвращаемое значение прежнее («найдено»: дубль не
+        // добавлять), а «изменилось» — в this._finalizeChanged.
+        let changed = false;
+        const mark = (msg) => {
+            // Видно в ленте только «отправляется» / «не отправлено» (renderMessageState):
+            // запись из истории без статуса → 'sent' — не изменение.
+            const was = msg.status === 'sending' || msg.status === 'error' || !!msg.error || !!msg.stalled
+                || (serverId && String(msg.id || '') !== serverId);
+            msg.status = 'sent';
+            delete msg.error;
+            delete msg.stalled;
+            if (serverId) msg.id = serverId;
+            return !!was;
+        };
         for (const peer of Object.keys(this.S.chats)) {
             const msgs = this.S.chats[peer];
             for (let i = msgs.length - 1; i >= 0; i--) {
                 if (String(msgs[i].clientId || '').trim() === pendingId) {
-                    msgs[i].status = 'sent';
-                    delete msgs[i].error;
-                    delete msgs[i].stalled;
-                    if (serverId) msgs[i].id = serverId;
+                    changed = mark(msgs[i]);
                     updated = true;
                     break;
                 }
@@ -990,10 +1005,7 @@ ZaliMixin(ZaliInterface, class {
                 const msgs = this.S.serverChats[key];
                 for (let i = msgs.length - 1; i >= 0; i--) {
                     if (String(msgs[i].clientId || '').trim() === pendingId) {
-                        msgs[i].status = 'sent';
-                        delete msgs[i].error;
-                        delete msgs[i].stalled;
-                        if (serverId) msgs[i].id = serverId;
+                        changed = mark(msgs[i]);
                         updated = true;
                         break;
                     }
@@ -1001,7 +1013,8 @@ ZaliMixin(ZaliInterface, class {
                 if (updated) break;
             }
         }
-        if (updated && render) {
+        this._finalizeChanged = updated && changed;
+        if (updated && changed && render) {
             this.scheduleRenderMessages();
         }
         return updated;

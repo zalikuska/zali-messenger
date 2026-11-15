@@ -1566,7 +1566,27 @@ ZaliMixin(ZaliInterface, class {
         const overlay = document.getElementById('authOverlay');
         if (overlay) {
             const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;
-            overlay.classList.toggle('visible', shouldShow);
+            // Скрытый экран входа уходил только в opacity: 0 + visibility: hidden и
+            // оставался в раскладке со всей картинкой (127 узлов SVG) и её бесконечными
+            // анимациями (auth-art-*). Chromium невидимое не обсчитывает, WebKit (macOS)
+            // гоняет такие анимации каждый кадр, всё время работы приложения — фон под
+            // любой прокруткой. После затухания — display: none (hidden), перед показом
+            // снимаем и даём браузеру кадр, чтобы появление осталось плавным.
+            clearTimeout(this._authOverlayHideTimer);
+            if (shouldShow) {
+                if (overlay.hidden) {
+                    overlay.hidden = false;
+                    void overlay.offsetWidth;
+                }
+                overlay.classList.add('visible');
+            } else {
+                overlay.classList.remove('visible');
+                if (!overlay.hidden) {
+                    this._authOverlayHideTimer = setTimeout(() => {
+                        if (!overlay.classList.contains('visible')) overlay.hidden = true;
+                    }, 320);
+                }
+            }
             // Пока нет сессии, в заголовке окна не показываем чужое состояние
             // (имя чата, индикатор соединения): см. body.auth-open в style.css.
             document.body.classList.toggle('auth-open', shouldShow);

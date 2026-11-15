@@ -915,6 +915,7 @@ ZaliMixin(ZaliInterface, class {
             // Индикатор ключа тоже убран: у канала ключ выводится из его scope и есть
             // всегда, сообщать тут было бы не о чем.
             chatHdrSub.textContent = desc;
+            this.updateChatHeaderPresence?.();
             return;
         }
         // Имя собеседника уже в заголовке, а «Ключ: задан» — нормальное состояние,
@@ -922,8 +923,10 @@ ZaliMixin(ZaliInterface, class {
         // только предупреждение, когда ключа нет.
         // Пока ключ в порядке, строка свободна — в ней показывается «Играет в …»
         // собеседника (game_activity.js).
+        // Нет игры — «в сети» / «неактивен 20 мин» (presence.js).
+        this.updateChatHeaderPresence?.();
         chatHdrSub.innerHTML = key
-            ? (peer ? this.gameActivityLineHTML(peer) : '')
+            ? (peer ? (this.gameActivityLineHTML(peer) || this.chatHeaderPresenceHTML(peer)) : '')
             : `<span class="chat-hdr-key is-missing">Ключ не задан: сообщения не расшифруются</span>`;
     }
 

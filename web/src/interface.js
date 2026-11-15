@@ -138,6 +138,7 @@ const apiRoute = (path) => `${API_VERSION_PREFIX}${path}`;
 const DefaultApiRoutes = Object.freeze({
     devices: {
         list: apiRoute('/devices'),
+        activity: apiRoute('/devices/activity'),
         byId: (id) => apiRoute(`/devices/${encodeURIComponent(id)}`),
         approve: apiRoute('/devices/approve'),
         publicByUser: (username) => apiRoute(`/users/${encodeURIComponent(username)}/devices`),
@@ -200,6 +201,7 @@ const DefaultApiRoutes = Object.freeze({
         channelMessages: (serverId, channelId, limit, offset, { inlineArchives = false } = {}) => apiRoute(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}&offset=${offset}${inlineArchives ? '&inlineArchives=true' : ''}`),
         assets: (serverId, kind) => apiRoute(`/servers/${encodeURIComponent(serverId)}/assets/${kind}`),
         members: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members`),
+        membership: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/membership`),
         member: (serverId, username) => apiRoute(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(username)}`),
         roles: (serverId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles`),
         role: (serverId, roleId) => apiRoute(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`),
@@ -446,7 +448,6 @@ class ZaliInterface {
         this.uiV2Enabled = this.loadUiV2Enabled();
         this.uiV2Segments = this.loadUiV2Segments();
         this.designMode = this.loadDesignMode();
-        this.experimentalDesign = this.designMode === 'flat';
         this.voiceTraceEnabled = this.loadVoiceTraceEnabled();
     }
 
@@ -497,6 +498,7 @@ class ZaliInterface {
         this.bus.registerCommand('zali_interface', E.SCREEN_CAPTURE_ERROR || 'screen_capture_error', (payload) => this.onNativeScreenCaptureError(payload));
         this.bus.registerCommand('zali_interface', E.ADDON_EVENT || 'addon_event', (payload) => this.onNativeAddonEvent?.(payload));
         this.bus.registerCommand('zali_interface', E.MEDIA_EVENT || 'media_event', (payload) => this.onNativeMediaEvent?.(payload));
+        this.bus.registerCommand('zali_interface', E.GALLERY_EVENT || 'gallery_event', (payload) => this.onNativeGalleryEvent?.(payload));
 
         // Bind events after DOM is loaded
         if (document.readyState === 'loading') {

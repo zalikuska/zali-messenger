@@ -58,7 +58,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b57";
+const APP_DISPLAY_VERSION: &str = "0.2b58";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -95,6 +95,36 @@ pub enum AppEvent {
     /// Управление из терминала (native/control.rs): выполнить скрипт в странице и
     /// вернуть его значение (строку JSON, как её отдаёт WRY) в канал.
     ControlEval(String, std::sync::mpsc::Sender<String>),
+    /// Светлота темы сменилась (SET_APPEARANCE из styler.js): фон WebView2 под
+    /// страницей — тот, что виден при ресайзе и до первой отрисовки.
+    SetWindowBackground((u8, u8, u8)),
+}
+
+/// "#rrggbb" → (r, g, b).
+pub fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
+    let hex = raw.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let value = u32::from_str_radix(hex, 16).ok()?;
+    Some(((value >> 16) as u8, (value >> 8) as u8, value as u8))
+}
+
+/// Фон окна при старте — из сохранённого стиля (SAVE_STYLE кладёт туда все
+/// переменные темы, среди них `--bg-rgb: r,g,b`), чтобы светлая тема не
+/// открывалась тёмным (или белым WebView2) прямоугольником до загрузки страницы.
+pub fn saved_background_rgb(css: &str) -> Option<(u8, u8, u8)> {
+    let start = css.find("--bg-rgb:")? + "--bg-rgb:".len();
+    let rest = &css[start..];
+    let value = &rest[..rest.find(';')?];
+    let mut parts = value.split(',').map(|p| p.trim().parse::<u8>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
+impl NativeState {
+    pub fn startup_background_rgb(&self) -> (u8, u8, u8) {
+        saved_background_rgb(&self.saved_css).unwrap_or((9, 11, 14))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -283,6 +313,8 @@ struct NativeCapabilities {
     set_reaction: bool,
     avatar_fetch: bool,
     save_style: bool,
+    /// Фон окна за светлотой темы (SET_APPEARANCE).
+    appearance: bool,
     download_attachment: bool,
     open_external_url: bool,
     server_history: bool,
@@ -343,6 +375,7 @@ impl Default for NativeCapabilities {
             set_reaction: true,
             avatar_fetch: true,
             save_style: true,
+            appearance: true,
             download_attachment: true,
             open_external_url: true,
             server_history: true,
@@ -1146,6 +1179,15 @@ pub fn handle_ipc_message(
                     guard.saved_css = css.to_string();
                     guard.persist_css();
                 }
+            }
+        }
+        BridgeProtocolMessageType::SetAppearance => {
+            if let Some(rgb) = payload
+                .get("background")
+                .and_then(Value::as_str)
+                .and_then(parse_hex_rgb)
+            {
+                let _ = proxy.send_event(AppEvent::SetWindowBackground(rgb));
             }
         }
         BridgeProtocolMessageType::DownloadAttachment => {
@@ -2704,6 +2746,13 @@ pub fn handle_ipc_message(
         BridgeProtocolMessageType::MobileNavProgress => {
             // Android-only (drives the system back-gesture progress indicator via
             // MainActivity's OnBackAnimationCallback). No desktop equivalent.
+        }
+        BridgeProtocolMessageType::GalleryList
+        | BridgeProtocolMessageType::GalleryRequestAccess
+        | BridgeProtocolMessageType::GalleryCapture
+        | BridgeProtocolMessageType::GalleryOpenSettings => {
+            // Android-only: галерея внутри приложения (MediaGallery.kt). Веб шлёт
+            // их только при возможности `mediaGallery`, которой здесь нет.
         }
     }
 }

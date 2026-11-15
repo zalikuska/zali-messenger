@@ -92,6 +92,12 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // «В сети» у собеседников (server/src/presence.rs).
+        if (type === 'user_presence') {
+            this.handlePresenceRealtime(payload);
+            return true;
+        }
+
         // На какие устройства уведомлять о сообщении (server/src/device_activity.rs).
         if (type === 'notify_route') {
             this.rememberNotifyRoute(payload);
@@ -499,6 +505,11 @@ ZaliMixin(ZaliInterface, class {
         const lbl  = document.getElementById('wsLabel');
         if (pill) pill.className = 'ws-pill' + (connected ? ' on' : '');
         if (lbl)  lbl.textContent = connected ? 'Подключено' : 'Переподключение...';
+        // Точка статуса на своей аватарке в сайдбаре (device_activity.js).
+        this.updateMeStatusDot();
+        if (connected && !wasOn) void this.refreshMeDeviceActivity();
+        // Точки «в сети» у собеседников (presence.js).
+        if (connected !== wasOn) this.onPresenceConnectionChange(!!connected);
         // Body-level flag so the mobile shell can surface a slim reconnect strip
         // (the desktop #wsPill is hidden on mobile). Only marks "not connected"
         // once a first status has arrived, so the strip doesn't flash on boot.

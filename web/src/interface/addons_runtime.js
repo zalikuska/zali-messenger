@@ -383,12 +383,18 @@ ZaliMixin(ZaliInterface, class {
         };
         const get = (name, fallback) => safe(root.getPropertyValue(name), fallback);
         const font = safe(getComputedStyle(document.body || document.documentElement).fontFamily, 'system-ui, sans-serif');
+        // Светлота темы (styler.js): аддон получает те же чернила и поверхность, что
+        // приложение, — иначе в светлой теме у него белые-альфа линии и тёмные формы.
+        const light = document.documentElement.getAttribute('data-appearance') === 'light';
+        const ink = get('--ink-rgb', '255,255,255');
         return [
-            ':root{color-scheme:dark;',
+            `:root{color-scheme:${light ? 'light' : 'dark'};`,
             `--zali-accent:${get('--lime', '#cbff00')};`,
             `--zali-accent-rgb:${get('--accent-rgb', '203,255,0')};`,
             `--zali-bg:${get('--bg', '#090b0e')};`,
-            '--zali-surface:rgba(255,255,255,.04);',
+            light ? `--zali-surface:rgb(${get('--surface-rgb', '246,246,241')});` : `--zali-surface:rgba(${ink},.04);`,
+            `--zali-accent-text:${get('--accent-fg', '#cbff00')};`,
+            `--zali-on-accent:${get('--on-accent', '#050505')};`,
             `--zali-text:${get('--text', '#f2f2f2')};`,
             `--zali-text2:${get('--text2', 'rgba(255,255,255,.65)')};`,
             `--zali-text3:${get('--text3', 'rgba(255,255,255,.5)')};`,
@@ -610,6 +616,7 @@ ZaliMixin(ZaliInterface, class {
                 accent: root.getPropertyValue('--lime').trim() || '#cbff00',
                 background: root.getPropertyValue('--bg').trim() || '#090b0e',
                 text: root.getPropertyValue('--text').trim() || '#f2f2f2',
+                appearance: document.documentElement.getAttribute('data-appearance') === 'light' ? 'light' : 'dark',
             },
         };
     }

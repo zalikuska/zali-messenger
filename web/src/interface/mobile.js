@@ -22,7 +22,29 @@ ZaliMixin(ZaliInterface, class {
         if (sidebar) sidebar.style.transform = parked ? 'translateY(115%)' : 'translateY(0)';
     }
 
-    setMobileSidebarOpen(open, { animate = true } = {}) {
+    // Список уходит сразу, без анимации «вниз». Нужен при переходе на полный экран
+    // (Хаб, ZaliCoin, Настройки): список лежит поверх .main (z-index 20), а обычная
+    // парковка (scheduleMobileListPark) ждёт конца выезда экрана чата — которого при
+    // таком переходе нет, — и через 340 мс список на глазах уезжал вниз с уже
+    // открытого Хаба: «интерфейс предыдущего окна съезжает вниз».
+    parkMobileListNow() {
+        if (!this.isMobileLayout()) return;
+        document.body?.classList.remove('mobile-list-visible');
+        const sidebar = document.querySelector('.sidebar');
+        if (!sidebar) return;
+        sidebar.style.transition = 'none';
+        this.setMobileListParked(true);
+        clearTimeout(this._listParkRestoreTimer);
+        const restore = () => {
+            clearTimeout(this._listParkRestoreTimer);
+            // Только если за это время список снова не показали с собственным правилом.
+            if (sidebar.style.transition === 'none') sidebar.style.transition = '';
+        };
+        try { requestAnimationFrame(() => requestAnimationFrame(restore)); } catch (e) {}
+        this._listParkRestoreTimer = setTimeout(restore, 80);
+    }
+
+    setMobileSidebarOpen(open, { animate = true, parkNow = false } = {}) {
         const isOpen = !!open;
         document.body?.classList.toggle('mobile-sidebar-open', isOpen);
         // isOpen === list/picker screen visible (--mnav 0); closed === chat screen visible (--mnav 1)
@@ -37,7 +59,8 @@ ZaliMixin(ZaliInterface, class {
         }
         this.setMobileNavProgress(isOpen ? 0 : 1, { animate });
         if (!isOpen) {
-            this.scheduleMobileListPark();
+            if (parkNow) this.parkMobileListNow();
+            else this.scheduleMobileListPark();
         }
         const btn = document.getElementById('mobileMenuBtn');
         if (btn) btn.setAttribute('aria-expanded', String(isOpen));
@@ -105,6 +128,9 @@ ZaliMixin(ZaliInterface, class {
         const clamped = Math.max(0, Math.min(1, Number(p) || 0));
         const moved = clamped !== this._mobileNavProgress;
         this._mobileNavProgress = clamped;
+        // Лента, отложенная, пока чат был за краем (см. _renderMessagesNow), — до того,
+        // как он покажется хоть на пиксель.
+        if (clamped > 0 && this._messagesRenderDeferred) this._renderMessagesNow?.();
         body.classList.toggle('mobile-nav-instant', !animate);
         // Доводка перехода (тап по диалогу, «назад», отпущенный свайп) двигает
         // #viewChat с обеими матовыми поверхностями внутри ровно так же, как
@@ -112,6 +138,10 @@ ZaliMixin(ZaliInterface, class {
         // перетаскивания: все 240 мс анимации каждый кадр заново размывал полосу
         // во всю ширину. На время доводки — тот же режим, что и при жесте.
         if (animate && moved && this.isMobileLayout()) {
+            // Капля размытия в движении на выезде чата (длительность — как у перехода
+            // #viewChat в style.css, 240 мс).
+            const chatView = document.getElementById('viewChat');
+            if (chatView?.classList.contains('active')) this.motionBlurAnimate?.(chatView, { duration: 240, peak: 0.8 });
             body.classList.add('mobile-nav-animating');
             clearTimeout(this._mobileNavAnimTimer);
             this._mobileNavAnimTimer = setTimeout(() => {
@@ -126,8 +156,8 @@ ZaliMixin(ZaliInterface, class {
 
     // Док уезжает вниз только на экране чата (там под ним поле ввода). Хаб,
     // ZaliCoin и Настройки — полные экраны, между которыми переходят этим же
-    // доком; нативная панель Android с самого начала оставляет себя видимой на
-    // них (см. notifyNativeMobileNav), а веб-док прятался вместе с чатом и
+    // доком; нативная панель (iOS) оставляет себя видимой на них (см.
+    // notifyNativeMobileNav), а веб-док прятался вместе с чатом и
     // оставлял Хаб без пути назад.
     applyMobileDockTransform(progress) {
         const dock = document.querySelector('.mobile-dock');
@@ -137,7 +167,7 @@ ZaliMixin(ZaliInterface, class {
         dock.style.transform = `translate(-50%, ${(value * 140).toFixed(4)}%)`;
     }
 
-    // The Android shell hides the web .mobile-dock and draws its own native bar
+    // The iOS shell hides the web .mobile-dock and draws its own native bar
     // over the WebView, so that bar can't see the transform above — it has to be
     // told, or it keeps sitting on top of the chat's message input. `animate`
     // separates a finger-tracked drag (native must follow instantly, frame by
@@ -171,7 +201,7 @@ ZaliMixin(ZaliInterface, class {
             && !!document.getElementById('viewChat')?.classList.contains('active');
         const value = chatScreen ? (Number(progress) || 0) : 0;
         const flag = !!animate;
-        // Какая секция активна сейчас. Нативная панель (Android) рисуется поверх
+        // Какая секция активна сейчас. Нативная панель (iOS) рисуется поверх
         // вебвью и прячет веб-док, поэтому подсветку своей активной вкладки она
         // взять неоткуда не может: её собственный `selected` — это локальное
         // состояние, меняющееся только от тапа по ней самой. А в Хаб и Настройки
@@ -205,26 +235,34 @@ ZaliMixin(ZaliInterface, class {
         return this.S.navMode === 'servers' ? 'servers' : 'chats';
     }
 
+    /** Раздел кнопки веб-дока: 'chats' | 'servers' | 'zalicoin' | 'hub'. */
+    mobileDockSectionOf(button) {
+        return ({ mobileChatsBtn: 'chats', mobileServersBtn: 'servers', mobileZaliCoinBtn: 'zalicoin', mobileHubBtn: 'hub' })[button?.id] || '';
+    }
+
     /** Ставит капсулу под активную кнопку дока. Во время перетаскивания не трогает —
      *  там её ведёт setupMobileDockDrag. */
     syncMobileDockThumb() {
-        // Нативная панель (Android/iOS) рисует свою и прячет веб-док. Чтение
-        // offsetWidth/offsetLeft у скрытого дока принудительно пересчитывало
-        // раскладку всей страницы синхронно в обработчике клика: ~40 мс на каждое
-        // переключение вкладки на телефоне (замер CPU-профилем, 2026-10-11).
+        // Нативная панель (iOS) рисует свою и прячет веб-док.
         if (this.nativeSupports('mobileNav')) return;
-        // На десктопной раскладке док скрыт: чтение его геометрии — та же
-        // принудительная раскладка страницы на каждом переключении экрана
-        // (до 7 мс в WKWebView macOS), а результат никому не виден. Переход
-        // в мобильную раскладку пересинхронизирует капсулу обработчиком resize.
+        // На десктопной раскладке док скрыт; переход в мобильную раскладку
+        // пересинхронизирует капсулу (ResizeObserver дока в setupMobileDockDrag).
         if (!this.isMobileLayout()) return;
         const dock = document.getElementById('mobileDock');
         const thumb = dock?.querySelector('.mobile-dock-thumb');
         const active = dock?.querySelector('.mobile-dock-btn.active');
         if (!thumb || !active || dock.classList.contains('is-dragging')) return;
-        thumb.style.width = `${active.offsetWidth}px`;
-        thumb.style.setProperty('--tx', `${active.offsetLeft}px`);
-        dock.__syncDockInk?.();
+        // Геометрия — только из кеша, который снимает ResizeObserver дока (после
+        // раскладки, бесплатно). Прямое чтение offsetLeft/offsetWidth здесь идёт
+        // сразу после перерисовки экрана (клик по вкладке) и заставляло браузер
+        // синхронно пересчитать раскладку всей страницы: 26–48 мс на переключение при
+        // CPU ×12 (замер 2026-11-15) — фриз на каждом касании, как только на Android
+        // вместо нативной панели стал работать веб-док. Кеша ещё нет — первый же
+        // замер наблюдателя поставит капсулу сам.
+        const slot = dock.__dockGeom?.byEl.get(active);
+        if (!slot) return;
+        thumb.style.setProperty('--tw', `${slot.width}px`);
+        thumb.style.setProperty('--tx', `${slot.left}px`);
     }
 
     /**
@@ -243,7 +281,8 @@ ZaliMixin(ZaliInterface, class {
         const buttons = [...dock.querySelectorAll('.mobile-dock-btn')];
         if (!thumb || buttons.length < 2) return;
         const DRAG_SLOP = 6;
-        const GROW = 1.08;
+        // «Рост» капсулы под пальцем — px с каждой стороны (вмещается в поля дока).
+        const GROW = '3px';
         let drag = null;
 
         // Тёмная копия подписей внутри капсулы: капсула лежит над кнопками и обрезает
@@ -257,38 +296,72 @@ ZaliMixin(ZaliInterface, class {
         ink.innerHTML = buttons.map((b) => `<span class="mobile-dock-btn mobile-dock-ink-item">${b.innerHTML}</span>`).join('');
         thumb.appendChild(ink);
         const inkItems = [...ink.children];
+        // Геометрия кнопок снимается в одном месте — в ResizeObserver: он срабатывает
+        // после раскладки, и чтение offset* там ничего не пересчитывает. Всё остальное
+        // (капсула на переключении, начало жеста, копия подписей) берёт её из кеша и
+        // раскладку не трогает. Положение кнопок меняется только вместе с размером
+        // (ширина дока, скрытый пункт — у остальных меняется ширина), поэтому наблюдать
+        // размеры дока и кнопок достаточно.
+        const measure = () => {
+            const slots = buttons
+                .filter((b) => b.offsetWidth > 0)
+                .map((b) => ({ el: b, left: b.offsetLeft, width: b.offsetWidth, top: b.offsetTop, height: b.offsetHeight }));
+            dock.__dockGeom = { slots, byEl: new Map(slots.map((slot) => [slot.el, slot])), thumbTop: thumb.offsetTop };
+            syncInk();
+            this.syncMobileDockThumb();
+        };
         const syncInk = () => {
-            const shown = buttons.filter((b) => b.offsetWidth > 0);
-            if (!shown.length) return;
-            const first = shown[0];
-            const last = shown[shown.length - 1];
-            buttons.forEach((b, i) => { inkItems[i].style.display = b.offsetWidth > 0 ? '' : 'none'; });
-            ink.style.setProperty('--ink-x', `${first.offsetLeft}px`);
-            ink.style.setProperty('--ink-y', `${first.offsetTop - thumb.offsetTop}px`);
-            ink.style.setProperty('--ink-w', `${last.offsetLeft + last.offsetWidth - first.offsetLeft}px`);
-            ink.style.setProperty('--ink-h', `${first.offsetHeight}px`);
+            const geom = dock.__dockGeom;
+            if (!geom || !geom.slots.length) return;
+            const first = geom.slots[0];
+            const last = geom.slots[geom.slots.length - 1];
+            buttons.forEach((b, i) => { inkItems[i].style.display = geom.byEl.has(b) ? '' : 'none'; });
+            ink.style.setProperty('--ink-x', `${first.left}px`);
+            ink.style.setProperty('--ink-y', `${first.top - geom.thumbTop}px`);
+            ink.style.setProperty('--ink-w', `${last.left + last.width - first.left}px`);
+            ink.style.setProperty('--ink-h', `${first.height}px`);
             ink.style.gap = getComputedStyle(dock).columnGap;
         };
         dock.__syncDockInk = syncInk;
-        syncInk();
+        if (typeof ResizeObserver === 'function') {
+            const observer = new ResizeObserver(measure);
+            observer.observe(dock);
+            buttons.forEach((b) => observer.observe(b));
+        } else {
+            measure();
+            window.addEventListener('resize', measure);
+        }
 
-        const clampX = (x) => Math.min(Math.max(x, buttons[0].offsetLeft), buttons[buttons.length - 1].offsetLeft);
-        const nearestButton = (x) => {
-            const center = x + thumb.offsetWidth / 2;
-            let best = buttons[0];
+        // Только видимые пункты: у скрытого (Хаб при выключенном новом интерфейсе)
+        // offsetLeft = 0, и граница «последнего» пункта уезжала к левому краю —
+        // капсулу можно было вывести за док. Список — из кеша геометрии.
+        const visibleSlots = () => dock.__dockGeom?.slots || [];
+        const clampX = (x, slots) => Math.min(Math.max(x, slots[0].left), slots[slots.length - 1].left);
+        const nearestSlot = (x, slots) => {
+            const center = x + slots[0].width / 2;
+            let best = slots[0];
             let bestDist = Infinity;
-            for (const b of buttons) {
-                const dist = Math.abs(b.offsetLeft + b.offsetWidth / 2 - center);
-                if (dist < bestDist) { best = b; bestDist = dist; }
+            for (const slot of slots) {
+                const dist = Math.abs(slot.left + slot.width / 2 - center);
+                if (dist < bestDist) { best = slot; bestDist = dist; }
             }
             return best;
+        };
+        // Непрерывный индекс раздела под капсулой: 0 — первый пункт, n−1 — последний.
+        const progressOf = (x, slots) => {
+            if (slots.length < 2) return 0;
+            const step = (slots[slots.length - 1].left - slots[0].left) / (slots.length - 1);
+            return step > 0 ? (x - slots[0].left) / step : 0;
         };
 
         dock.addEventListener('pointerdown', (e) => {
             if (e.pointerType === 'mouse' && e.button !== 0) return;
             if (!e.target.closest('.mobile-dock-btn')) return;
-            const active = dock.querySelector('.mobile-dock-btn.active') || buttons[0];
-            drag = { id: e.pointerId, startX: e.clientX, startTx: active.offsetLeft, moved: false };
+            const slots = visibleSlots();
+            if (slots.length < 2) return;
+            const activeEl = dock.querySelector('.mobile-dock-btn.active');
+            const startTx = (slots.find((slot) => slot.el === activeEl) || slots[0]).left;
+            drag = { id: e.pointerId, startX: e.clientX, startTx, moved: false, slots, x: startTx };
         });
 
         dock.addEventListener('pointermove', (e) => {
@@ -299,25 +372,31 @@ ZaliMixin(ZaliInterface, class {
                 drag.moved = true;
                 try { dock.setPointerCapture(e.pointerId); } catch (err) { /* не критично */ }
                 dock.classList.add('is-dragging');
-                thumb.style.setProperty('--ts', String(GROW));
+                thumb.style.setProperty('--tg', GROW);
+                // Разделы едут за капсулой (mobile_pager.js).
+                this.mobilePagerStart?.(drag.slots.map((slot) => this.mobileDockSectionOf(slot.el)));
             }
-            const x = clampX(drag.startTx + dx);
+            const x = clampX(drag.startTx + dx, drag.slots);
+            drag.x = x;
             thumb.style.setProperty('--tx', `${x}px`);
-            const target = nearestButton(x);
+            const target = nearestSlot(x, drag.slots).el;
             buttons.forEach((b) => b.classList.toggle('is-target', b === target));
+            this.mobilePagerMove?.(progressOf(x, drag.slots));
         });
 
         const finishDrag = (e, cancelled) => {
             if (!drag || e.pointerId !== drag.id) return;
-            const moved = drag.moved;
+            const { moved, slots, x } = drag;
             drag = null;
             if (!moved) return;
             dock.classList.remove('is-dragging');
-            thumb.style.setProperty('--ts', '1');
+            thumb.style.setProperty('--tg', '0px');
             buttons.forEach((b) => b.classList.remove('is-target'));
-            const x = parseFloat(thumb.style.getPropertyValue('--tx')) || 0;
             const current = dock.querySelector('.mobile-dock-btn.active');
-            const target = cancelled ? current : nearestButton(x);
+            const target = cancelled ? current : nearestSlot(x, slots).el;
+            // Лента разделов доезжает до выбранного; настоящий экран под ней
+            // переключается кликом ниже, сразу.
+            this.mobilePagerEnd?.(Math.max(0, slots.findIndex((slot) => slot.el === target)));
             if (target && target !== current) {
                 // Кнопка сама вызовет переход и обновит подсветку через syncMobileDock().
                 target.click();
@@ -338,8 +417,16 @@ ZaliMixin(ZaliInterface, class {
             e.preventDefault();
         }, true);
 
-        window.addEventListener('resize', () => { syncInk(); this.syncMobileDockThumb(); });
-        this.syncMobileDockThumb();
+    }
+
+    /** Телефон: чат целиком за краем экрана — под списком или под другим экраном. */
+    isMobileChatOffscreen() {
+        if (!this.isMobileLayout?.()) return false;
+        const vc = typeof document !== 'undefined' ? document.getElementById('viewChat') : null;
+        if (!vc) return false;
+        if (!vc.classList.contains('active')) return true;
+        if (document.body?.classList.contains('mobile-nav-dragging')) return false;
+        return this.currentMobileNavProgress() <= 0;
     }
 
     currentMobileNavProgress() {
@@ -786,6 +873,7 @@ ZaliMixin(ZaliInterface, class {
         const closers = [
             // Видео звонка на весь экран (voice_ui.js openVoiceFocus) — поверх всего.
             ['#voiceFocus', () => this.closeVoiceFocus?.()],
+            ['#mediaSheet', () => this.closeMediaSheet?.()],
             ['#reactionMenu, .reaction-menu', () => this.hideReactionMenu?.()],
             ['.contact-context-menu, #contactContextMenu', () => this.closeContactContextMenu?.()],
             ['.server-rail-menu, #serverRailContextMenu', () => this.closeServerRailContextMenu?.()],
@@ -1071,10 +1159,13 @@ ZaliMixin(ZaliInterface, class {
 
         const backdrop = document.getElementById('mobileBackdrop');
         if (backdrop) backdrop.hidden = !(isMobile && document.body?.classList.contains('mobile-sidebar-open'));
+
+        // Снимок раздела для ленты под капсулой (mobile_pager.js) — в простое.
+        if (isMobile) this.scheduleMobilePagerCapture?.();
     }
 
-    closeMobileSidebar() {
-        this.setMobileSidebarOpen(false);
+    closeMobileSidebar(options = {}) {
+        this.setMobileSidebarOpen(false, options);
     }
 
     openMobileSidebar() {
@@ -1161,7 +1252,8 @@ ZaliMixin(ZaliInterface, class {
         // не мигало) и ещё раз, когда база ответит.
         this.renderCacheSettings();
         void this.ensureCacheReady().then(() => this.renderCacheSettings());
-        this.closeMobileSidebar();
+        // Полный экран: список убирается сразу, а не уезжает вниз поверх него.
+        this.closeMobileSidebar({ parkNow: true });
         this.renderHubSegmentNav();
         this.syncMobileChrome();
         // Whether the call strip shows depends on which tab is on screen.
@@ -1185,7 +1277,8 @@ ZaliMixin(ZaliInterface, class {
         this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'Хаб';
-        this.closeMobileSidebar();
+        // Полный экран: список убирается сразу, а не уезжает вниз поверх него.
+        this.closeMobileSidebar({ parkNow: true });
         this.renderHub();
         this.renderHubSegmentNav();
         this.syncMobileChrome();
@@ -1210,7 +1303,8 @@ ZaliMixin(ZaliInterface, class {
         this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
         if (tbChat) tbChat.textContent = 'ZaliCoin';
-        this.closeMobileSidebar();
+        // Полный экран: список убирается сразу, а не уезжает вниз поверх него.
+        this.closeMobileSidebar({ parkNow: true });
         this.renderHubSegmentNav();
         this.syncMobileChrome();
         // Whether the call strip shows depends on which tab is on screen.

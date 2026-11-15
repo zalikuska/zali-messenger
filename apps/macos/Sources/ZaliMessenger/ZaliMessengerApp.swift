@@ -180,8 +180,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.minSize = NSSize(width: 900, height: 700)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(srgbRed: 0x09 / 255.0, green: 0x0a / 255.0, blue: 0x0c / 255.0, alpha: 1)
+        // Светлота и фон — как в прошлый раз (SET_APPEARANCE из styler.js), чтобы
+        // окно не открывалось тёмным, пока грузится светлая страница.
+        window.appearance = NSAppearance(named: WindowAppearance.storedIsLight ? .aqua : .darkAqua)
+        window.backgroundColor = WindowAppearance.storedBackground
         // Restoration would otherwise reopen whatever size the window was left at, and
         // maximizeMainWindow() below already picks the frame on every launch.
         window.isRestorable = false

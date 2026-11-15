@@ -2093,6 +2093,20 @@ struct WebView {
                     }
                 }
 
+                case .setAppearance: do {
+                    // Светлота окна за веб-темой: «светофоры», системные меню и фон
+                    // под WebView (виден при ресайзе). Запоминаем для следующего запуска.
+                    let light = (dict["appearance"] as? String) == "light"
+                    // "#rrggbb" — длиннее не бывает; обрезка, чтобы в UserDefaults не лёг мусор.
+                    let background = String((dict["background"] as? String ?? "").prefix(16))
+                    WindowAppearance.persist(mode: light ? "light" : "dark", background: background)
+                    DispatchQueue.main.async {
+                        let color = WindowAppearance.color(fromHex: background)
+                            ?? (light ? WindowAppearance.lightBackground : WindowAppearance.darkBackground)
+                        WindowAppearance.apply(to: self.webView?.window, light: light, background: color)
+                    }
+                }
+
                 case .showNotification: do {
                     let sender = (dict["sender"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     let text = dict["text"] as? String ?? ""
@@ -2190,6 +2204,11 @@ struct WebView {
                     // ScreenCaptureService.kt). macOS shares the screen through
                     // MEDIA_REQUEST (ScreenCaptureKit, Services/Media) instead. No-op
                     // kept only for switch exhaustiveness.
+                    break
+
+                case .galleryList, .galleryRequestAccess, .galleryCapture, .galleryOpenSettings:
+                    // Android-only: галерея внутри приложения (MediaGallery.kt). Веб шлёт
+                    // их только при возможности `mediaGallery`, которой здесь нет.
                     break
 
                 case .mobileNavProgress:
@@ -2439,6 +2458,8 @@ struct WebView {
             "networkConfig": true,
             "setKey": true,
             "saveStyle": true,
+            // Светлота окна за темой (SET_APPEARANCE, Services/WindowAppearance.swift).
+            "appearance": true,
             "saveMessageCache": true,
             "downloadAttachment": true,
             "openExternalUrl": true,

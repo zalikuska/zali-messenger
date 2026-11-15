@@ -70,7 +70,12 @@ ZaliMixin(ZaliInterface, class {
         if (!this._attachmentBlobPayloads) this._attachmentBlobPayloads = new Map();
         const cached = this._attachmentBlobUrls.get(value);
         if (cached) return cached;
-        const blob = this.dataUrlToBlob(value);
+        let size = null;
+        const blob = this.dataUrlToBlob(value, {
+            onBytes: (bytes, mimeType) => {
+                if (/^image\//i.test(mimeType)) size = this.imageSizeFromBytes(bytes);
+            },
+        });
         if (!blob) return value;
         let url;
         try {
@@ -79,6 +84,11 @@ ZaliMixin(ZaliInterface, class {
             return value;
         }
         this._attachmentBlobUrls.set(value, url);
+        // Размер картинки известен до её загрузки: рамка (mediaShellStyle) и <img>
+        // (width/height) с первой же отрисовки нужной формы. Раньше кеш размеров
+        // заполнялся только после декодирования и жил в памяти — после каждого запуска
+        // любая картинка сначала стояла в рамке 16:9, а потом прыгала до своей формы.
+        if (size) this.mediaSizeCache.set(url, size);
         // Reverse lookup: the native download bridge needs the payload back — see
         // downloadAttachmentFromHref().
         this._attachmentBlobPayloads.set(url, value);
@@ -168,8 +178,11 @@ ZaliMixin(ZaliInterface, class {
     }
 
     inferMimeType(file) {
-        if (file && file.type) return file.type;
         const name = (file && file.name || '').toLowerCase();
+        // .tgs — раньше file.type: файловые провайдеры Android отдают его как
+        // application/octet-stream или application/gzip, и стикер уходил бы файлом.
+        if (name.endsWith('.tgs')) return window.ZaliTgs?.TGS_MIME || 'application/x-tgsticker';
+        if (file && file.type) return file.type;
         if (name.endsWith('.png')) return 'image/png';
         if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
         if (name.endsWith('.webp')) return 'image/webp';
@@ -206,7 +219,21 @@ ZaliMixin(ZaliInterface, class {
     }
 
     async handleFiles(fileList) {
-        const files = Array.from(fileList || []);
+        const all = Array.from(fileList || []);
+        if (all.length === 0) return;
+        // Стикер .tgs — как в Telegram: уходит сразу отдельным сообщением, без
+        // карточки над полем ввода и кнопки «Отправить». Остальное — в черновик.
+        const isSticker = (file) => this.isStickerAttachment({ name: file?.name, mimeType: file?.type });
+        const stickers = all.filter(isSticker);
+        const files = all.filter(file => !isSticker(file));
+        for (const file of stickers) {
+            try {
+                const attachment = await this.fileToAttachment(file);
+                await this.sendInputMessage({ attachments: [attachment] });
+            } catch (e) {
+                this.addLogEntry?.({ type: 'WARN', msg: `Стикер не отправлен: ${e?.message || e}`, ts: new Date().toLocaleTimeString() });
+            }
+        }
         if (files.length === 0) return;
         const attachments = await Promise.all(files.map(file => this.fileToAttachment(file)));
         this.S.draftAttachments = this.S.draftAttachments.concat(attachments);
@@ -356,6 +383,82 @@ ZaliMixin(ZaliInterface, class {
         });
     }
 
+    /**
+     * Размер картинки из заголовка файла, без декодирования: PNG, GIF, WebP, BMP и JPEG
+     * (с поворотом из EXIF — браузер рисует снимок с телефона повёрнутым, и
+     * naturalWidth/naturalHeight тоже уже повёрнутые). { width, height } или null.
+     */
+    imageSizeFromBytes(b) {
+        if (!b || b.length < 24) return null;
+        const ok = (w, h) => (w > 0 && h > 0 && w < 100000 && h < 100000 ? { width: w, height: h } : null);
+        const u16be = (i) => (b[i] << 8) | b[i + 1];
+        const u32be = (i) => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
+        const ascii = (i, n) => String.fromCharCode(...b.subarray(i, i + n));
+        // PNG: подпись + IHDR.
+        if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return ok(u32be(16), u32be(20));
+        // GIF87a/89a.
+        if (ascii(0, 4) === 'GIF8') return ok(b[6] | (b[7] << 8), b[8] | (b[9] << 8));
+        // BMP.
+        if (b[0] === 0x42 && b[1] === 0x4D) {
+            const w = b[18] | (b[19] << 8) | (b[20] << 16) | (b[21] << 24);
+            const h = b[22] | (b[23] << 8) | (b[24] << 16) | (b[25] << 24);
+            return ok(Math.abs(w), Math.abs(h));
+        }
+        // WebP: VP8 / VP8L / VP8X.
+        if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP' && b.length >= 30) {
+            const chunk = ascii(12, 4);
+            if (chunk === 'VP8 ') return ok((b[26] | (b[27] << 8)) & 0x3FFF, (b[28] | (b[29] << 8)) & 0x3FFF);
+            if (chunk === 'VP8L') {
+                return ok(1 + (((b[22] & 0x3F) << 8) | b[21]), 1 + (((b[24] & 0x0F) << 10) | (b[23] << 2) | ((b[22] & 0xC0) >> 6)));
+            }
+            if (chunk === 'VP8X') return ok(1 + (b[24] | (b[25] << 8) | (b[26] << 16)), 1 + (b[27] | (b[28] << 8) | (b[29] << 16)));
+            return null;
+        }
+        // JPEG: идём по сегментам до SOFn, по пути читаем ориентацию из EXIF (APP1).
+        if (b[0] === 0xFF && b[1] === 0xD8) {
+            let i = 2;
+            let orientation = 1;
+            while (i + 9 < b.length) {
+                if (b[i] !== 0xFF) { i += 1; continue; }
+                const marker = b[i + 1];
+                if (marker === 0xFF) { i += 1; continue; }
+                if (marker === 0xD8 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) { i += 2; continue; }
+                const len = u16be(i + 2);
+                if (len < 2) return null;
+                if (marker === 0xE1 && ascii(i + 4, 4) === 'Exif') orientation = this.jpegExifOrientation(b, i + 10, len - 8) || orientation;
+                if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+                    const h = u16be(i + 5);
+                    const w = u16be(i + 7);
+                    return orientation >= 5 && orientation <= 8 ? ok(h, w) : ok(w, h);
+                }
+                if (marker === 0xDA) return null;
+                i += 2 + len;
+            }
+        }
+        return null;
+    }
+
+    /** Ориентация из TIFF-блока EXIF (тег 0x0112), начинающегося с байта start. */
+    jpegExifOrientation(b, start, length) {
+        const end = Math.min(b.length, start + Math.max(0, length));
+        if (start + 8 > end) return 0;
+        const little = b[start] === 0x49 && b[start + 1] === 0x49;
+        if (!little && !(b[start] === 0x4D && b[start + 1] === 0x4D)) return 0;
+        const u16 = (i) => (little ? b[i] | (b[i + 1] << 8) : (b[i] << 8) | b[i + 1]);
+        const u32 = (i) => (little
+            ? (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16)) + (b[i + 3] << 24 >>> 0)
+            : ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3]);
+        const ifd = start + u32(start + 4);
+        if (ifd + 2 > end) return 0;
+        const count = u16(ifd);
+        for (let k = 0; k < count; k += 1) {
+            const entry = ifd + 2 + k * 12;
+            if (entry + 12 > end) return 0;
+            if (u16(entry) === 0x0112) return u16(entry + 8);
+        }
+        return 0;
+    }
+
     mediaShellStyle(src, { gifLike = false, fallbackAspectRatio = '16 / 9' } = {}) {
         if (gifLike) return '';
         const cached = src ? this.mediaSizeCache.get(src) : null;
@@ -451,8 +554,31 @@ ZaliMixin(ZaliInterface, class {
             const gifClass = gifLike ? ' media-gif-like' : '';
             const shellGifClass = gifLike ? ' discord-media-shell-gif' : '';
             const shellStyle = this.mediaShellStyle(src, { gifLike });
+            // width/height — пропорции до загрузки: и у рамки фото, и у GIF без рамки
+            // (там размер задаёт сама картинка, и до загрузки она была 0×0).
+            const known = this.mediaSizeCache.get(src);
+            let sizeAttrs = '';
+            if (known) {
+                const w = Math.round(known.width);
+                const h = Math.round(known.height);
+                // Ширина задаётся явно: пузырь подстраивается под содержимое, а CSS даёт
+                // картинке width: 100% от него же — до загрузки ширину брать было неоткуда,
+                // строка схлопывалась в полоску (26 px вместо 640) и прыгала при загрузке.
+                // Натуральная ширина + max-width: 100% дают ровно ту ширину, что и после
+                // загрузки. GIF без рамки — тот же предел, что в CSS (360 px / 72vw по
+                // ширине, 340 px по высоте), иначе ограничение по высоте исказило бы рамку.
+                const width = gifLike
+                    ? `min(${w}px, 360px, 72vw, ${(340 * w / h).toFixed(1)}px)`
+                    : `${w}px`;
+                sizeAttrs = ` width="${this.esc(String(w))}" height="${this.esc(String(h))}" style="width: ${this.esc(width)};"`;
+            }
+            // Картинка из памяти (data:/blob:) — без ленивой загрузки и пониженного
+            // приоритета: качать нечего, а «лениво» значило «нарисую, когда доскроллишь» —
+            // фото проявлялись уже на экране.
+            const inMemory = /^(blob|data):/i.test(src);
+            const loadAttrs = inMemory ? '' : ' loading="lazy" decoding="async" fetchpriority="low"';
             return `<div class="discord-media-shell discord-media-shell-image${shellGifClass}${compact ? ' compact' : ''}"${shellStyle}>
-                <img class="media media-img${compact ? ' compact' : ''}${gifClass}" src="${this.esc(src)}" alt="${this.esc(attachment.name)}" loading="lazy" decoding="async" fetchpriority="low">
+                <img class="media media-img${compact ? ' compact' : ''}${gifClass}" src="${this.esc(src)}" alt="${this.esc(attachment.name)}"${sizeAttrs}${loadAttrs}>
             </div>`;
         }
 

@@ -42,6 +42,7 @@ ZaliMixin(ZaliInterface, class {
         if (!this.isProgrammaticScroll()) {
             this.pendingMessagesScroll = null;
             this._bottomIntent = false;
+            this._msgUserScrollAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
         }
         if (this.messageScrollRaf) return;
         this.messageScrollRaf = requestAnimationFrame(() => {
@@ -54,6 +55,7 @@ ZaliMixin(ZaliInterface, class {
             const nextWindow = this.computeMessageWindow(msgs, box, {
                 conversationChanged: conversationKey !== (this.messageWindow?.conversationKey || ''),
                 stickToBottom: this.isMessagesNearBottom(box),
+                conversationKey,
             });
             const current = this.messageWindow || {};
             const sameList = current.conversationKey === conversationKey
@@ -70,8 +72,8 @@ ZaliMixin(ZaliInterface, class {
             // были рывки. Край списка (начало/конец переписки) — без запаса.
             if (sameList && nextWindow.useWindow && Number.isFinite(nextWindow.overscan)) {
                 const margin = Math.max(4, Math.floor(nextWindow.overscan / 3));
-                const firstVisible = Math.floor(box.scrollTop / nextWindow.avgHeight);
-                const lastVisible = firstVisible + nextWindow.viewportCount;
+                const firstVisible = nextWindow.firstVisible;
+                const lastVisible = nextWindow.lastVisible;
                 const topOk = current.start === 0 || current.start <= firstVisible - margin;
                 const bottomOk = current.end >= msgs.length || current.end >= lastVisible + margin;
                 const edgeShift = (nextWindow.start === 0) !== (current.start === 0)
@@ -90,7 +92,98 @@ ZaliMixin(ZaliInterface, class {
         return this.isMobileLayout() ? 36 : 56;
     }
 
-    computeMessageWindow(msgs, box, { conversationChanged = false, stickToBottom = false } = {}) {
+    // ── Высоты строк окна виртуализации ───────────────────────────────────────
+    // Раньше окно искало видимую строку как scrollTop / средняя высота, а заглушки
+    // за окном считало как «число строк × средняя». Средняя пересчитывалась на
+    // каждой отрисовке (70 → 62 → 54 → 60 px), настоящие строки не совпадали с ней,
+    // и каждый сдвиг окна менял высоту ленты на сотни пикселей: поправка якоря
+    // дёргала scrollTop, окно по новому scrollTop снова сдвигалось — около 90
+    // перерисовок ленты за одну прокрутку (замер 2026-11-15, 211 сообщений), каждая
+    // 10–19 мс при CPU ×12. Теперь у каждого уже отрисованного сообщения запомнена
+    // его настоящая высота (от верха строки до верха следующей — с разделителем дня
+    // и отступом группы), и заглушки, и поиск видимой строки идут по одним и тем же
+    // накопленным высотам. Сдвиг окна заменяет заглушку строками той же высоты —
+    // лента не меняет размер, якорь не дёргается, петли нет. Средняя — только для
+    // ещё ни разу не отрисованных строк.
+    messageHeightKey(msg) {
+        return String(msg?.id || msg?.clientId || `${msg?.timestamp || ''}|${msg?.sender || ''}`);
+    }
+
+    messageHeightStore(conversationKey) {
+        const key = String(conversationKey || '');
+        let store = this._msgHeights;
+        if (!store || store.key !== key) {
+            store = this._msgHeights = { key, map: new Map(), sum: 0, version: 0, tops: null, topsFor: null, topsLen: -1, topsVersion: -1, topsFallback: 0, fix: 0 };
+        }
+        return store;
+    }
+
+    /** Средняя измеренная высота строки (или запасная, пока ничего не измерено). */
+    messageHeightAverage(store, fallback) {
+        const avg = store && store.map.size ? store.sum / store.map.size : fallback;
+        return Math.max(this.minMessageRowHeight(), Math.min(160, Number(avg) || 92));
+    }
+
+    /** tops[i] — верх i-й строки от начала ленты; tops[n] — высота всех строк. */
+    messageRowOffsets(msgs, store, fallback) {
+        const n = msgs.length;
+        if (store.tops && store.topsFor === msgs && store.topsLen === n
+            && store.topsVersion === store.version && store.topsFallback === fallback) {
+            return store.tops;
+        }
+        const tops = new Float64Array(n + 1);
+        for (let i = 0; i < n; i += 1) {
+            const h = store.map.get(this.messageHeightKey(msgs[i]));
+            tops[i + 1] = tops[i] + (h > 0 ? h : fallback);
+        }
+        store.tops = tops;
+        store.topsFor = msgs;
+        store.topsLen = n;
+        store.topsVersion = store.version;
+        store.topsFallback = fallback;
+        return tops;
+    }
+
+    /** Индекс строки, которая лежит на высоте y (двоичный поиск по tops). */
+    messageRowAt(tops, y) {
+        const n = tops.length - 1;
+        if (n <= 0) return 0;
+        let lo = 0;
+        let hi = n - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (tops[mid] <= y) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
+    }
+
+    /**
+     * Запоминает настоящие высоты только что отрисованных строк окна. nodes — элементы
+     * .msg верхнего уровня #msgs в порядке rendered; endTop — верх того, что идёт
+     * после последней строки (нижняя заглушка), или её низ.
+     */
+    recordMessageRowHeights(conversationKey, rendered, nodes, endTop) {
+        if (!Array.isArray(rendered) || !nodes || nodes.length !== rendered.length || !nodes.length) return;
+        const store = this.messageHeightStore(conversationKey);
+        let nextTop = Number(endTop) || 0;
+        let changed = false;
+        for (let i = nodes.length - 1; i >= 0; i -= 1) {
+            const top = nodes[i].offsetTop;
+            const h = nextTop - top;
+            nextTop = top;
+            if (!(h > 0 && h < 4000)) continue;
+            const key = this.messageHeightKey(rendered[i]);
+            const old = store.map.get(key) || 0;
+            if (Math.abs(old - h) < 1) continue;
+            store.map.set(key, h);
+            store.sum += h - old;
+            changed = true;
+        }
+        if (changed) store.version += 1;
+    }
+
+    computeMessageWindow(msgs, box, { conversationChanged = false, stickToBottom = false, conversationKey = null } = {}) {
         const total = Array.isArray(msgs) ? msgs.length : 0;
         const baseAvg = Math.max(this.minMessageRowHeight(), Math.min(160, Number(this.messageWindow?.avgHeight || 92)));
         // Windowing threshold by tier. Every mounted bubble costs layout, paint and
@@ -99,7 +192,9 @@ ZaliMixin(ZaliInterface, class {
         // below reproduce the exact scroll geometry of the unmounted rows, so the
         // list looks and scrolls identically no matter where the threshold sits.
         const tier = this.perfTier();
-        const windowThreshold = tier === 'weak' ? 100 : tier === 'mid' ? 140 : 180;
+        // Компьютер ('high') держит смонтированными больше: каждый сдвиг окна — перерисовка
+        // посреди прокрутки, а лишние строки вне экрана ему почти ничего не стоят.
+        const windowThreshold = tier === 'weak' ? 100 : tier === 'mid' ? 140 : 320;
         if (total <= windowThreshold || !box) {
             return {
                 useWindow: false,
@@ -111,20 +206,31 @@ ZaliMixin(ZaliInterface, class {
             };
         }
 
-        const viewportCount = Math.max(18, Math.ceil(Math.max(1, box.clientHeight) / baseAvg) + 8);
+        const key = conversationKey != null ? conversationKey
+            : (this.S.navMode === 'servers' ? this.currentServerChatKey() : String(this.S.current || '').trim());
+        const store = this.messageHeightStore(key);
+        const avg = this.messageHeightAverage(store, baseAvg);
+        const tops = this.messageRowOffsets(msgs, store, avg);
+        const viewportCount = Math.max(18, Math.ceil(Math.max(1, box.clientHeight) / avg) + 8);
         // Overscan is deliberately NOT cut hard on weak devices. It is what keeps a
         // fast fling from outrunning the render and exposing bare spacer — trimming
         // it to save paint would trade a frame-rate win for visible blank gaps on
         // exactly the devices least able to refill them. 0.55/24 is a modest trim,
         // still well over a screenful either side of the viewport.
         const overscanFactor = tier === 'weak' ? 0.55 : 0.7;
-        const overscanFloor = tier === 'weak' ? 24 : 30;
+        const overscanFloor = tier === 'weak' ? 24 : tier === 'mid' ? 30 : 60;
         const overscan = Math.max(overscanFloor, Math.floor(viewportCount * overscanFactor));
         const windowSize = Math.min(total, viewportCount + overscan * 2);
-        const nearTop = box.scrollTop <= baseAvg * 4;
-        const nearBottom = this.isMessagesNearBottom(box, baseAvg * 2);
+        const nearTop = box.scrollTop <= avg * 4;
+        const nearBottom = this.isMessagesNearBottom(box, avg * 2);
+        // store.fix — поправка верхней заглушки, которой лента поглотила сдвиг якоря во
+        // время прокрутки (absorbMessageAnchorShift): строки ниже заглушки стоят на fix
+        // ниже своей расчётной высоты.
+        const fix = Number(store.fix) || 0;
+        const firstVisible = this.messageRowAt(tops, box.scrollTop - fix);
+        const lastVisible = this.messageRowAt(tops, box.scrollTop - fix + box.clientHeight);
 
-        let start = Math.max(0, Math.floor(box.scrollTop / baseAvg) - overscan);
+        let start = Math.max(0, firstVisible - overscan);
         let end = Math.min(total, start + windowSize);
 
         if (conversationChanged || stickToBottom || nearBottom) {
@@ -143,15 +249,19 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
+        // В начале переписки заглушки нет — поправке негде жить (её снимет якорь).
+        if (start === 0) store.fix = 0;
         return {
             useWindow: true,
             start,
             end,
-            topSpacer: start * baseAvg,
-            bottomSpacer: Math.max(0, (total - end) * baseAvg),
-            avgHeight: baseAvg,
+            topSpacer: Math.max(0, tops[start] + (start > 0 ? fix : 0)),
+            bottomSpacer: Math.max(0, tops[total] - tops[end]),
+            avgHeight: avg,
             overscan,
             viewportCount,
+            firstVisible,
+            lastVisible,
         };
     }
 
@@ -305,6 +415,66 @@ ZaliMixin(ZaliInterface, class {
         return null;
     }
 
+    /** Насколько якорная строка ушла от своего места после перерисовки (px) или null. */
+    messageAnchorDelta(box, anchor) {
+        if (!box || !anchor?.messageId) return null;
+        let node = null;
+        try {
+            const escaped = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') ? CSS.escape(anchor.messageId) : null;
+            if (escaped) node = box.querySelector(`.msg[data-message-id="${escaped}"]`);
+        } catch (e) { node = null; }
+        if (!node) return null;
+        const boxRect = box.getBoundingClientRect?.();
+        const rect = node.getBoundingClientRect?.();
+        if (!boxRect || !rect) return null;
+        return (rect.top - boxRect.top) - Number(anchor.topOffset || 0);
+    }
+
+    // Пока пользователь листает, сдвиг якоря после перерисовки окна забирает верхняя
+    // заглушка (меняется её высота), а не scrollTop: любая запись scrollTop обрывает
+    // идущую инерцию трекпада и пальца — и WebKit, и Chromium. Сдвиг возникает при первом
+    // проходе по истории: высоты ещё не отрисованных строк окно знает только по средней.
+    // Когда прокрутка затихнет, rebaseMessageSpacer перенесёт поправку в scrollTop.
+    absorbMessageAnchorShift(box, delta, windowInfo, conversationKey) {
+        if (!windowInfo?.useWindow || !(windowInfo.start > 0)) return false;
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        if (!(now - Number(this._msgUserScrollAt || 0) < 400)) return false;
+        const spacer = box.firstElementChild;
+        if (!spacer || !spacer.classList?.contains('msg-window-spacer')) return false;
+        const current = parseFloat(spacer.style.height) || 0;
+        const next = current - delta;
+        if (next < 0) return false;
+        spacer.style.height = `${next}px`;
+        const store = this.messageHeightStore(conversationKey);
+        store.fix = (Number(store.fix) || 0) - delta;
+        clearTimeout(this._msgRebaseTimer);
+        this._msgRebaseTimer = setTimeout(() => this.rebaseMessageSpacer(conversationKey), 450);
+        return true;
+    }
+
+    rebaseMessageSpacer(conversationKey) {
+        const store = this._msgHeights;
+        if (!store || store.key !== String(conversationKey || '') || !store.fix) return;
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        if (now - Number(this._msgUserScrollAt || 0) < 400) {
+            clearTimeout(this._msgRebaseTimer);
+            this._msgRebaseTimer = setTimeout(() => this.rebaseMessageSpacer(conversationKey), 300);
+            return;
+        }
+        const box = document.getElementById('msgs');
+        const spacer = box?.firstElementChild;
+        if (!box || !spacer || !spacer.classList?.contains('msg-window-spacer')) { store.fix = 0; return; }
+        const current = parseFloat(spacer.style.height) || 0;
+        const next = Math.max(0, current - store.fix);
+        const applied = current - next;
+        store.fix = 0;
+        spacer.style.height = `${next}px`;
+        if (Math.abs(applied) >= 1) {
+            this.markProgrammaticScroll();
+            box.scrollTop -= applied;
+        }
+    }
+
     restoreMessageScrollAnchor(box, anchor) {
         if (!box || !anchor?.messageId) return false;
         // Selector lookup instead of materialising every .msg node and comparing
@@ -327,7 +497,10 @@ ZaliMixin(ZaliInterface, class {
         const boxRect = box.getBoundingClientRect?.();
         const rect = node.getBoundingClientRect?.();
         if (!boxRect || !rect) return false;
-        box.scrollTop += (rect.top - boxRect.top) - Number(anchor.topOffset || 0);
+        // Сдвиг меньше пикселя — не писать: любая запись scrollTop обрывает идущую
+        // инерцию трекпада/пальца (WebKit и Chromium), а раньше здесь писался и ноль.
+        const delta = (rect.top - boxRect.top) - Number(anchor.topOffset || 0);
+        if (Math.abs(delta) >= 1) box.scrollTop += delta;
         return true;
     }
 

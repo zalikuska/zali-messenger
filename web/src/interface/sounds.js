@@ -54,31 +54,262 @@ ZaliMixin(ZaliInterface, class {
     // неё — без пересчёта на проигрывании). Кеш в памяти: звуки сообщений — все, что
     // запрашивали (сотни килобайт), рингтонов — выбранный и последний прослушанный
     // (каждый — пара мегабайт).
+    soundBufferKey(kind, id, ctx) {
+        return `${kind}:${id}:${ctx.sampleRate}`;
+    }
+
+    soundBufferCached(kind, id, ctx) {
+        if (!ctx) return null;
+        return this.sound.buffers?.get(this.soundBufferKey(kind, id, ctx)) || null;
+    }
+
+    // Готовые сэмплы → AudioBuffer в кеше. Копирование — доли миллисекунды; дорогой
+    // сам рендер, и он идёт в воркере (soundBufferAsync), а здесь только при его
+    // отсутствии.
+    storeSoundBuffer(kind, id, ctx, rendered) {
+        const cache = this.sound.buffers || (this.sound.buffers = new Map());
+        const buffer = ctx.createBuffer(2, rendered.left.length, rendered.sampleRate);
+        buffer.getChannelData(0).set(rendered.left);
+        buffer.getChannelData(1).set(rendered.right);
+        if (kind === 'ring') {
+            const keep = `ring:${this.selectedSound('ring')}:`;
+            for (const other of [...cache.keys()]) {
+                if (other.startsWith('ring:') && !other.startsWith(keep)) cache.delete(other);
+            }
+        }
+        cache.set(this.soundBufferKey(kind, id, ctx), buffer);
+        return buffer;
+    }
+
+    // Синхронный рендер на главном потоке — только если воркер недоступен (нет
+    // Worker/Blob). С воркером звук, которого нет в кеше, сразу не играет: рендер
+    // рингтона — сотни миллисекунд на слабом телефоне, это фриз интерфейса в момент
+    // звонка или прихода сообщения. Вызывающие получают null и идут в свой запасной
+    // путь (classic), а буфер дозревает в фоне.
     soundBuffer(kind, id, ctx) {
         const synth = window.ZaliSoundSynth;
         if (!synth || !ctx) return null;
-        const cache = this.sound.buffers || (this.sound.buffers = new Map());
-        const key = `${kind}:${id}:${ctx.sampleRate}`;
-        const cached = cache.get(key);
+        const cached = this.soundBufferCached(kind, id, ctx);
         if (cached) return cached;
+        if (this.soundWorker()) {
+            this.soundBufferAsync(kind, id, ctx);
+            return null;
+        }
         try {
             const rendered = synth.render(kind, id, ctx.sampleRate);
             if (!rendered) return null;
-            const buffer = ctx.createBuffer(2, rendered.left.length, rendered.sampleRate);
-            buffer.getChannelData(0).set(rendered.left);
-            buffer.getChannelData(1).set(rendered.right);
-            if (kind === 'ring') {
-                const keep = `ring:${this.selectedSound('ring')}:`;
-                for (const other of [...cache.keys()]) {
-                    if (other.startsWith('ring:') && !other.startsWith(keep)) cache.delete(other);
-                }
-            }
-            cache.set(key, buffer);
+            const buffer = this.storeSoundBuffer(kind, id, ctx, rendered);
+            this.soundDbPut(kind, id, rendered);
             return buffer;
         } catch (error) {
             this.trace?.(`sound: render failed ${kind}/${id}: ${error?.message || error}`);
             return null;
         }
+    }
+
+    // Воркер рендера: тот же модуль ZaliSoundSynth, исходник берётся у него самого
+    // (workerSource), отдельного файла нет — бандл один на все оболочки. null — если
+    // воркеры недоступны или создать не вышло; тогда рендер синхронный, как раньше.
+    soundWorker() {
+        if (this.sound.worker !== undefined) return this.sound.worker;
+        this.sound.worker = null;
+        try {
+            const synth = window.ZaliSoundSynth;
+            if (!synth?.workerSource || typeof Worker !== 'function' || typeof Blob !== 'function' || !window.URL?.createObjectURL) return null;
+            const source = synth.workerSource() + `
+self.onmessage = (event) => {
+    const { seq, kind, id, sampleRate } = event.data || {};
+    try {
+        const r = self.ZaliSoundSynth.render(kind, id, sampleRate);
+        if (!r) { self.postMessage({ seq, ok: false }); return; }
+        self.postMessage({ seq, ok: true, left: r.left, right: r.right, sampleRate: r.sampleRate }, [r.left.buffer, r.right.buffer]);
+    } catch (error) {
+        self.postMessage({ seq, ok: false, error: String(error && error.message || error) });
+    }
+};`;
+            const url = window.URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+            const worker = new Worker(url);
+            window.URL.revokeObjectURL(url);
+            this.sound.workerSeq = 0;
+            this.sound.workerWaiters = new Map();
+            worker.onmessage = (event) => {
+                const msg = event.data || {};
+                const waiter = this.sound.workerWaiters.get(msg.seq);
+                if (!waiter) return;
+                this.sound.workerWaiters.delete(msg.seq);
+                waiter(msg);
+            };
+            worker.onerror = (event) => {
+                this.trace?.(`sound: worker failed: ${event?.message || 'error'}`);
+                // Воркер не работает (например, оболочка не дала создать его из blob:):
+                // ждущие досчитываются синхронно — тем же выбранным звуком, не «Классикой».
+                const waiters = [...this.sound.workerWaiters.values()];
+                this.sound.workerWaiters.clear();
+                try { worker.terminate(); } catch (e) {}
+                this.sound.worker = null;
+                for (const waiter of waiters) waiter({ ok: false, workerFailed: true });
+            };
+            this.sound.worker = worker;
+        } catch (error) {
+            this.trace?.(`sound: worker unavailable: ${error?.message || error}`);
+            this.sound.worker = null;
+        }
+        return this.sound.worker;
+    }
+
+    // ── Локальный кеш отрендеренных звуков (IndexedDB) ───────────────────────
+    // После первого рендера звук лежит на устройстве: следующий запуск берёт готовые
+    // сэмплы за миллисекунды и не считает их заново. Версия — хеш исходника
+    // синтезатора: правка звуков в коде сама делает старые записи чужими (их чистит
+    // soundDb() при открытии). На диск идут только используемые звуки — выбранные
+    // «сообщение» и «рингтон» и звуки голосового канала; прослушанные в настройках
+    // не копятся (рингтон — несколько МБ сэмплов).
+    soundCacheVersion() {
+        if (this.sound.cacheVersion) return this.sound.cacheVersion;
+        const src = window.ZaliSoundSynth?.workerSource?.() || '';
+        let h = 5381;
+        for (let i = 0; i < src.length; i++) h = ((h << 5) + h + src.charCodeAt(i)) | 0;
+        this.sound.cacheVersion = `${(h >>> 0).toString(36)}-${src.length.toString(36)}`;
+        return this.sound.cacheVersion;
+    }
+
+    soundCacheKey(kind, id, sampleRate) {
+        return `${this.soundCacheVersion()}|${kind}:${id}:${sampleRate}`;
+    }
+
+    soundDb() {
+        if (this.sound.dbPromise) return this.sound.dbPromise;
+        this.sound.dbPromise = new Promise((resolve) => {
+            try {
+                if (typeof indexedDB === 'undefined') { resolve(null); return; }
+                const req = indexedDB.open('zali_sound_cache_v1', 1);
+                req.onupgradeneeded = () => {
+                    if (!req.result.objectStoreNames.contains('renders')) req.result.createObjectStore('renders');
+                };
+                req.onerror = () => resolve(null);
+                req.onblocked = () => resolve(null);
+                req.onsuccess = () => {
+                    const db = req.result;
+                    // Записи прошлых версий синтезатора — мусор.
+                    try {
+                        const version = this.soundCacheVersion();
+                        const tx = db.transaction('renders', 'readwrite');
+                        const store = tx.objectStore('renders');
+                        const keysReq = store.getAllKeys();
+                        keysReq.onsuccess = () => {
+                            for (const key of keysReq.result || []) {
+                                if (!String(key).startsWith(`${version}|`)) store.delete(key);
+                            }
+                        };
+                    } catch (e) {}
+                    resolve(db);
+                };
+            } catch (e) {
+                resolve(null);
+            }
+        });
+        return this.sound.dbPromise;
+    }
+
+    soundDbGet(kind, id, sampleRate) {
+        return this.soundDb().then((db) => new Promise((resolve) => {
+            if (!db) { resolve(null); return; }
+            try {
+                const req = db.transaction('renders', 'readonly').objectStore('renders').get(this.soundCacheKey(kind, id, sampleRate));
+                req.onsuccess = () => {
+                    const v = req.result;
+                    resolve(v && v.left instanceof Float32Array && v.right instanceof Float32Array && v.sampleRate ? v : null);
+                };
+                req.onerror = () => resolve(null);
+            } catch (e) {
+                resolve(null);
+            }
+        }));
+    }
+
+    soundDbPut(kind, id, rendered) {
+        if (kind !== 'voice' && id !== this.selectedSound(kind)) return;
+        this.soundDb().then((db) => {
+            if (!db || !rendered?.left || !rendered?.right) return;
+            try {
+                const store = db.transaction('renders', 'readwrite').objectStore('renders');
+                const sr = rendered.sampleRate;
+                store.put({ left: rendered.left, right: rendered.right, sampleRate: sr }, this.soundCacheKey(kind, id, sr));
+                // Прежний выбор того же вида больше не нужен.
+                if (kind !== 'voice') {
+                    const prefix = `${this.soundCacheVersion()}|${kind}:`;
+                    const keep = this.soundCacheKey(kind, id, sr);
+                    const keysReq = store.getAllKeys();
+                    keysReq.onsuccess = () => {
+                        for (const key of keysReq.result || []) {
+                            const k = String(key);
+                            if (k.startsWith(prefix) && k !== keep) store.delete(key);
+                        }
+                    };
+                }
+            } catch (e) {}
+        });
+    }
+
+    // Проиграть выбранный звук всегда — «Классика» здесь не подменяет его. Готов —
+    // сразу; нет в памяти — когда дозреет (локальный кеш, иначе воркер: доли секунды).
+    // maxDelayMs — для звуков-событий, которые после долгого ожидания уже не к месту.
+    playSoundWhenReady(kind, id, { loop = false, maxDelayMs = 0 } = {}) {
+        const ready = this.playSoundBuffer(kind, id, { loop });
+        if (ready) return Promise.resolve(ready);
+        const ctx = this.sound.ctx || this.ensureSoundContext?.();
+        if (!ctx) return Promise.resolve(null);
+        const asked = Date.now();
+        return this.soundBufferAsync(kind, id, ctx).then((buffer) => {
+            if (!buffer) return null;
+            if (maxDelayMs && Date.now() - asked > maxDelayMs) return null;
+            return this.playSoundBuffer(kind, id, { loop });
+        });
+    }
+
+    // → Promise<AudioBuffer|null>. Один рендер на звук: повторный запрос того же
+    // звука ждёт уже идущий.
+    soundBufferAsync(kind, id, ctx) {
+        if (!ctx || !window.ZaliSoundSynth) return Promise.resolve(null);
+        const cached = this.soundBufferCached(kind, id, ctx);
+        if (cached) return Promise.resolve(cached);
+        const key = this.soundBufferKey(kind, id, ctx);
+        const pending = this.sound.pendingRenders || (this.sound.pendingRenders = new Map());
+        if (pending.has(key)) return pending.get(key);
+        const worker = this.soundWorker();
+        let promise;
+        if (!worker) {
+            promise = this.soundDbGet(kind, id, ctx.sampleRate)
+                .then(saved => saved ? this.storeSoundBuffer(kind, id, ctx, saved) : this.soundBuffer(kind, id, ctx));
+        } else {
+            promise = this.soundDbGet(kind, id, ctx.sampleRate).then(saved => saved
+                ? this.storeSoundBuffer(kind, id, ctx, saved)
+                : new Promise((resolve) => {
+                const seq = ++this.sound.workerSeq;
+                this.sound.workerWaiters.set(seq, (msg) => {
+                    if (msg.workerFailed) {
+                        resolve(this.soundBuffer(kind, id, ctx));
+                        return;
+                    }
+                    if (!msg.ok) {
+                        if (msg.error) this.trace?.(`sound: render failed ${kind}/${id}: ${msg.error}`);
+                        resolve(null);
+                        return;
+                    }
+                    try {
+                        resolve(this.storeSoundBuffer(kind, id, ctx, msg));
+                        this.soundDbPut(kind, id, msg);
+                    } catch (error) {
+                        this.trace?.(`sound: buffer failed ${kind}/${id}: ${error?.message || error}`);
+                        resolve(null);
+                    }
+                });
+                worker.postMessage({ seq, kind, id, sampleRate: ctx.sampleRate });
+            }));
+        }
+        promise = promise.finally(() => pending.delete(key));
+        pending.set(key, promise);
+        return promise;
     }
 
     // Выход для готовых буферов. Они уже сведены по громкости, поэтому идут мимо
@@ -196,8 +427,12 @@ ZaliMixin(ZaliInterface, class {
             this.sound.heldChime = false;
         }
         const id = this.selectedSound('message');
-        if (id !== 'classic' && this.playSoundBuffer('message', id)) return;
-        this.playClassicMessageChime();
+        if (id === 'classic') { this.playClassicMessageChime(); return; }
+        // Всегда выбранный звук: не готов — проиграется, когда дозреет. «Классика» —
+        // только если синтезатор не смог его посчитать вовсе (иначе тишина).
+        this.playSoundWhenReady('message', id).then((handle) => {
+            if (!handle && !this.soundBufferCached('message', id, this.sound.ctx)) this.playClassicMessageChime();
+        });
     }
 
     // Рингтон входящего звонка — включается и выключается из одной точки,
@@ -211,6 +446,19 @@ ZaliMixin(ZaliInterface, class {
         const loop = id !== 'classic' ? this.playSoundBuffer('ring', id, { loop: true }) : null;
         if (loop) {
             this.sound.ringLoop = loop;
+        } else if (id !== 'classic' && this.sound.ctx) {
+            // Рингтон ещё не в памяти: звоним выбранным, как только буфер готов
+            // (локальный кеш или воркер) — без фриза на рендер в момент звонка.
+            // «Классика» — только если посчитать его не удалось вовсе.
+            this.sound.ringing = true;
+            const ctx = this.sound.ctx;
+            this.soundBufferAsync('ring', id, ctx).then((buffer) => {
+                if (!this.sound.ringing || this.sound.ringLoop || this.sound.ringTimer) return;
+                const late = buffer ? this.playSoundBuffer('ring', id, { loop: true }) : null;
+                if (late) this.sound.ringLoop = late;
+                else this.startClassicRingtone();
+            });
+            return;
         } else if (!this.startClassicRingtone()) {
             return;
         }
@@ -229,10 +477,10 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    // Выбранные звуки рендерятся заранее, в простое после первого жеста: рингтон —
-    // до 0,1 с счёта на компьютере и в разы дольше на слабом телефоне, тратить их в
-    // момент звонка незачем. По одному звуку за проход простоя, чтобы не подвешивать
-    // интерфейс одним длинным куском сразу после первого касания.
+    // Выбранные звуки готовятся заранее, после первого жеста: из локального кеша
+    // (IndexedDB) или рендером в воркере, чтобы в момент звонка или сообщения не
+    // ждать и не считать. Без воркера рендер синхронный — тогда по одному звуку за
+    // проход простоя, чтобы не подвешивать интерфейс одним длинным куском.
     scheduleSoundPrewarm() {
         if (this.sound.prewarmScheduled) return;
         this.sound.prewarmScheduled = true;
@@ -252,8 +500,15 @@ ZaliMixin(ZaliInterface, class {
                 return;
             }
             const [kind, id] = next;
-            if (id !== 'classic') this.soundBuffer(kind, id, ctx);
-            idle(step, 8000);
+            if (id === 'classic') { step(); return; }
+            // Звук берётся из локального кеша (IndexedDB) или считается в воркере —
+            // главный поток тратит только копирование готовых сэмплов, поэтому идём
+            // цепочкой без пауз на простой: чем раньше всё готово, тем реже звук ждёт.
+            // Раньше soundBuffer() считал здесь же синхронно — 50+ мс на компьютере и в
+            // разы больше на телефоне, длинная задача после первого касания (замер
+            // 2026-11-15: 56 мс). Без воркера — как прежде, по звуку на простой.
+            const next2 = () => (this.sound.worker ? step() : idle(step, 8000));
+            this.soundBufferAsync(kind, id, ctx).then(next2, next2);
         };
         idle(step, 5000);
     }
@@ -292,12 +547,19 @@ ZaliMixin(ZaliInterface, class {
         const started = clock();
         const cached = !!this.sound.buffers?.has?.(`voice:${id}:${ctx.sampleRate}`);
         const ok = !!this.playSoundBuffer('voice', id);
+        // Не в памяти — дозреет из локального кеша или воркера; позже 1,5 с звук
+        // события уже не к месту.
+        if (!ok) {
+            this.playSoundWhenReady('voice', id, { maxDelayMs: 1500 }).then((late) => {
+                this.voiceTrace?.('ui-sound-late', { id, ok: !!late, ms: Math.round(clock() - started) });
+            });
+        }
         this.voiceTrace?.('ui-sound', {
             id, ok, cached,
             ms: Math.round(clock() - started),
             outputLatencyMs: Math.round(((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000),
         });
-        return ok;
+        return ok || !!this.sound.worker;
     }
 
     // Свой заход в канал: звук — в момент клика (joinVoiceChannel), а не когда сервер
@@ -353,12 +615,23 @@ ZaliMixin(ZaliInterface, class {
     // ещё пара секунд следующего оборота (слышно, как он замыкается), повторный клик
     // по играющему останавливает. Настоящий звонок прослушивание перебивает.
     previewSound(kind, id) {
+        // Звук ещё не отрендерен — дождаться воркера и проиграть, если пользователь
+        // не успел выбрать другой (без фриза на рендер по клику).
+        const ctx = this.sound.ctx || this.ensureSoundContext?.();
+        if (id !== 'classic' && ctx && this.soundWorker() && !this.soundBufferCached(kind, id, ctx)) {
+            const token = this.sound.previewToken = (this.sound.previewToken || 0) + 1;
+            this.soundBufferAsync(kind, id, ctx).then((buffer) => {
+                if (buffer && this.sound.previewToken === token) this.previewSound(kind, id);
+            });
+            return;
+        }
+        this.sound.previewToken = (this.sound.previewToken || 0) + 1;
         const current = this.sound.preview;
         const same = !!current && current.kind === kind && current.id === id;
         this.stopSoundPreview();
         if (this.sound.ringing) return;
         if (kind === 'voice') {
-            this.playSoundBuffer('voice', id);
+            this.playSoundWhenReady('voice', id);
             return;
         }
         if (kind !== 'ring') {

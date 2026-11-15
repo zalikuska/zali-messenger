@@ -961,6 +961,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 "type": "client_idle",
                 "deviceId": self.currentDeviceId,
                 "idleSeconds": Int(idle),
+                // Окно активности сервер выбирает по типу: компьютеру — 5 минут
+                // (server/src/device_activity.rs, DeviceKind).
+                "kind": "desktop",
             ]
             guard let text = zaliJSONString(payload) else { return }
             self.lastReportedActivityAt = lastActivity
