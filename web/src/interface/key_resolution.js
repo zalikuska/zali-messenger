@@ -314,7 +314,9 @@ ZaliMixin(ZaliInterface, class {
             // fresh one (which the server would treat as a brand-new, unapproved
             // device with no key envelopes), check for an identity exported by another
             // shell on the same machine (see native.rs's injected_device_identity).
-            const injected = this.loadInjectedDeviceIdentity();
+            // После отказа сервера (отозвано / чужой секрет) нативная копия
+            // identity — тот же негодный deviceId, её не подхватываем.
+            const injected = this._deviceIdentityReminted ? null : this.loadInjectedDeviceIdentity();
             if (injected?.deviceId && injected?.publicKey) {
                 try { localStorage.setItem(this.deviceIdentityStorageKey(), JSON.stringify(injected)); } catch (e) {}
                 this.trace(`loadDeviceIdentity adopted injected identity deviceId=${injected.deviceId}`);
@@ -326,6 +328,7 @@ ZaliMixin(ZaliInterface, class {
             label: this.defaultDeviceLabel(),
             publicKey: this.randomBase64(32),
             signingKey: this.randomBase64(32),
+            deviceSecret: this.newDeviceSecret(),
             keyPackage: {
                 version: 1,
                 kind: 'zali-device-key-package',
@@ -415,8 +418,25 @@ ZaliMixin(ZaliInterface, class {
         return String(this.S.deviceTrust?.current?.deviceId || this.loadDeviceIdentity()?.deviceId || '').trim();
     }
 
-    async ensureDeviceCryptoIdentity() {
+    /** Секрет устройства — только из локальной identity (ответ сервера его не содержит). */
+    currentDeviceSecret() {
         const identity = this.loadDeviceIdentity();
+        if (!identity?.deviceId || identity.deviceId !== this.currentDeviceId()) return '';
+        return String(identity.deviceSecret || '').trim();
+    }
+
+    newDeviceSecret() {
+        return this.randomBase64(32).replace(/[+/=]/g, '');
+    }
+
+    async ensureDeviceCryptoIdentity() {
+        let identity = this.loadDeviceIdentity();
+        if (identity?.deviceId && !identity.deviceSecret) {
+            // Устройства, заведённые до появления секрета: сервер закрепит его при
+            // первом предъявлении (verify_device_secret, TOFU).
+            identity = { ...identity, deviceSecret: this.newDeviceSecret() };
+            this.saveDeviceIdentity(identity);
+        }
         const e2ee = identity?.keyPackage?.e2ee;
         if (e2ee?.publicJwk && identity?.privateKeyJwk && e2ee?.alg === 'ECDH-P-256+A256GCM') {
             return identity;

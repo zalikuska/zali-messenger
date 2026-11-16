@@ -304,11 +304,53 @@ pub(crate) async fn get_user_public_devices(
 pub(crate) async fn register_device(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
     Json(payload): Json<RegisterDevicePayload>,
 ) -> impl IntoResponse {
     let device_id = trim_limited(payload.deviceId, 128);
     if device_id.len() < 8 || device_id.chars().any(char::is_whitespace) {
         return (StatusCode::BAD_REQUEST, "Некорректный deviceId").into_response();
+    }
+
+    // Отозванное устройство не возвращается повторной регистрацией: раньше
+    // ON CONFLICT ставил revoked = 0, и отзыв чужого устройства длился до его
+    // следующего входа. Устройство с закреплённым секретом перерегистрирует
+    // (и меняет ему ключи) только тот, кто этот секрет знает. В обоих случаях
+    // клиент заводит себе новое устройство (новый deviceId).
+    let presented_secret = header_device_secret_hash(&headers).unwrap_or_default();
+    match sqlx::query_as::<_, (i64, String)>(
+        "SELECT revoked, secret_hash FROM account_devices WHERE owner = ? AND device_id = ?",
+    )
+    .bind(&owner)
+    .bind(&device_id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some((revoked, _))) if revoked != 0 => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "code": "device_revoked", "error": "Устройство отозвано" })),
+            )
+                .into_response();
+        }
+        Ok(Some((_, stored)))
+            if !stored.is_empty()
+                && !crate::util::constant_time_eq(stored.as_bytes(), presented_secret.as_bytes()) =>
+        {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "code": "device_secret_mismatch",
+                    "error": "Это устройство зарегистрировано с другим секретом",
+                })),
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(e) => {
+            error!("Ошибка чтения устройства {}: {}", device_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
 
     let label = trim_limited(
@@ -328,9 +370,11 @@ pub(crate) async fn register_device(
     let db = state.db.clone();
     let task_owner = owner.clone();
     let task_device_id = device_id.clone();
+    let task_secret = presented_secret.clone();
     let result: Result<(bool, i64, bool), sqlx::Error> = tokio::spawn(async move {
         let owner = task_owner;
         let device_id = task_device_id;
+        let secret_hash = task_secret;
         let mut conn = db.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
         let result: Result<(bool, i64, bool), sqlx::Error> = async {
@@ -414,9 +458,11 @@ pub(crate) async fn register_device(
 
         sqlx::query(
             "INSERT INTO account_devices
-             (owner, device_id, label, public_key, signing_key, key_package, group_epoch, approved, revoked, approved_by, approved_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)
+             (owner, device_id, label, public_key, signing_key, key_package, group_epoch, approved, revoked, approved_by, approved_at, secret_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, ?)
              ON CONFLICT(owner, device_id) DO UPDATE SET
+                secret_hash = CASE WHEN account_devices.secret_hash = '' THEN excluded.secret_hash
+                    ELSE account_devices.secret_hash END,
                 label = excluded.label,
                 public_key = excluded.public_key,
                 signing_key = excluded.signing_key,
@@ -425,12 +471,10 @@ pub(crate) async fn register_device(
                     WHEN account_devices.approved = 1 AND ? = 0 THEN 1
                     ELSE excluded.approved
                 END,
-                revoked = 0,
                 approved_by = CASE WHEN ? = 1 THEN excluded.approved_by
                     ELSE COALESCE(account_devices.approved_by, excluded.approved_by) END,
                 approved_at = CASE WHEN ? = 1 THEN excluded.approved_at
                     ELSE COALESCE(approved_at, excluded.approved_at) END,
-                revoked_at = NULL,
                 history_days = CASE
                     WHEN account_devices.approved = 1 THEN COALESCE(account_devices.history_days, 30)
                     ELSE COALESCE(account_devices.history_days, 30)
@@ -450,6 +494,7 @@ pub(crate) async fn register_device(
         .bind(approved)
         .bind(approved_by.as_deref())
         .bind(approved)
+        .bind(&secret_hash)
         .bind(demote)
         .bind(demote)
         .bind(demote)
@@ -607,9 +652,12 @@ pub(crate) async fn approve_device(
             .into_response();
     }
 
-    if require_approved_device(&state.db, &owner, &header_actor_id)
+    if !verify_device_secret(&state.db, &owner, &header_actor_id, &headers)
         .await
-        .is_err()
+        .unwrap_or(false)
+        || require_approved_device(&state.db, &owner, &header_actor_id)
+            .await
+            .is_err()
     {
         return (
             StatusCode::FORBIDDEN,
@@ -722,9 +770,12 @@ pub(crate) async fn revoke_device(
                 .into_response()
         }
     };
-    if require_approved_device(&state.db, &owner, &actor_id)
+    if !verify_device_secret(&state.db, &owner, &actor_id, &headers)
         .await
-        .is_err()
+        .unwrap_or(false)
+        || require_approved_device(&state.db, &owner, &actor_id)
+            .await
+            .is_err()
     {
         return (
             StatusCode::FORBIDDEN,
@@ -1163,6 +1214,7 @@ pub(crate) async fn get_key_envelopes(
     Query(query): Query<KeyEnvelopeQuery>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     AuthenticatedUser(owner): AuthenticatedUser,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let target_device = query
         .deviceId
@@ -1170,6 +1222,32 @@ pub(crate) async fn get_key_envelopes(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    // Конверты устройства отдаются только ему самому (знающему секрет) и не
+    // отдаются отозванному. Конверты запечатаны его ECDH-ключом, но список
+    // (кто, в каких переписках, когда) — уже метаданные.
+    // Без deviceId раньше отдавались конверты всех устройств аккаунта сразу;
+    // клиенты всегда называют своё устройство.
+    let Some(device) = target_device.as_deref() else {
+        return (StatusCode::BAD_REQUEST, "Нужен deviceId").into_response();
+    };
+    {
+        let revoked: Option<i64> = sqlx::query_scalar(
+            "SELECT revoked FROM account_devices WHERE owner = ? AND device_id = ?",
+        )
+        .bind(&owner)
+        .bind(device)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+        if revoked.unwrap_or(0) != 0
+            || (revoked.is_some()
+                && !verify_device_secret(&state.db, &owner, device, &headers)
+                    .await
+                    .unwrap_or(false))
+        {
+            return (StatusCode::FORBIDDEN, "Нет доступа к конвертам этого устройства").into_response();
+        }
+    }
     // Bounded. Rows are upserted per (owner, scope, sender_device, recipient_device),
     // so the count is normally scopes × senders' devices — but nothing deletes an
     // envelope, and a client re-fetches and re-opens (one ECDH derive apiece) the
@@ -1363,6 +1441,65 @@ pub(crate) fn push_history_access_predicate(
     }
 
     builder.push(")");
+}
+
+/// SHA-256 (hex) секрета из `X-Zali-Device-Secret`; секрет короче 16 символов не принимается.
+pub(crate) fn header_device_secret_hash(headers: &HeaderMap) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let secret = headers
+        .get("x-zali-device-secret")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| value.len() >= 16 && value.len() <= 256)?;
+    Some(
+        Sha256::digest(secret.as_bytes())
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect(),
+    )
+}
+
+/// Доказательство владения устройством. ID устройства публичен (`/api/devices`,
+/// `/api/users/:u/devices`), поэтому одного заголовка `X-Zali-Device-ID` мало:
+/// с украденным паролем можно было одобрить своё устройство «от имени» чужого.
+///
+/// Секрет закрепляется при первом предъявлении (TOFU) — устройства, созданные
+/// до появления секрета, переходят на него сами при следующем входе. Пока
+/// устройство секрет не предъявляло ни разу, проверка его пропускает:
+/// иначе старые клиенты потеряли бы одобрение и отзыв совсем.
+pub(crate) async fn verify_device_secret(
+    pool: &SqlitePool,
+    owner: &str,
+    device_id: &str,
+    headers: &HeaderMap,
+) -> Result<bool, sqlx::Error> {
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT secret_hash FROM account_devices WHERE owner = ? AND device_id = ?",
+    )
+    .bind(owner)
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(stored) = stored else {
+        return Ok(false);
+    };
+    let presented = header_device_secret_hash(headers);
+    if stored.is_empty() {
+        if let Some(hash) = presented {
+            sqlx::query(
+                "UPDATE account_devices SET secret_hash = ? WHERE owner = ? AND device_id = ? AND secret_hash = ''",
+            )
+            .bind(&hash)
+            .bind(owner)
+            .bind(device_id)
+            .execute(pool)
+            .await?;
+        }
+        return Ok(true);
+    }
+    Ok(presented
+        .map(|hash| crate::util::constant_time_eq(hash.as_bytes(), stored.as_bytes()))
+        .unwrap_or(false))
 }
 
 pub(crate) fn header_device_id(headers: &HeaderMap) -> Option<String> {

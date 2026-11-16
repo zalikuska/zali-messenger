@@ -36,7 +36,8 @@ final class H264Encoder {
     init(width: Int, height: Int, fps: Int, bitsPerPixel: Double = 0.1) throws {
         self.width = max(2, width & ~1)
         self.height = max(2, height & ~1)
-        self.fps = max(1, min(fps, 60))
+        // До 240: «Общий браузер» идёт с частотой экрана (120/144 Гц); экран и камера сами ≤ 60.
+        self.fps = max(1, min(fps, 240))
         let spec: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
         ]

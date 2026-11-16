@@ -91,6 +91,37 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    // Закреплённые диалоги: { имя: время закрепления }. Читаются лениво и
+    // кешируются по ключу хранилища — ключ зависит от аккаунта (_userSuffix),
+    // поэтому смена аккаунта сама подхватывает его собственный набор.
+    pinnedChats() {
+        const key = this.pinnedChatsStorageKey();
+        if (this._pinnedChatsKey === key && this._pinnedChats) return this._pinnedChats;
+        let map = {};
+        try {
+            const parsed = JSON.parse(localStorage.getItem(key) || '{}');
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                for (const [name, at] of Object.entries(parsed)) {
+                    const ts = Number(at);
+                    if (name && Number.isFinite(ts) && ts > 0) map[name] = ts;
+                }
+            }
+        } catch (e) {
+            map = {};
+        }
+        this._pinnedChatsKey = key;
+        this._pinnedChats = map;
+        return map;
+    }
+
+    saveStoredPinnedChats() {
+        try {
+            localStorage.setItem(this.pinnedChatsStorageKey(), JSON.stringify(this.pinnedChats()));
+        } catch (e) {
+            // ignore storage failures
+        }
+    }
+
     loadStoredNetworkConfig() {
         try {
             const raw = localStorage.getItem(this.networkConfigStorageKey());

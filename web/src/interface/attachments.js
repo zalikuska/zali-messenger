@@ -288,16 +288,65 @@ ZaliMixin(ZaliInterface, class {
         for (let i = value.indexOf('\n'); i !== -1; i = value.indexOf('\n', i + 1)) breaks += 1;
         // «Вырос» — стало не короче и не меньше переносов (замена выделенных
         // пустых строк текстом длиннее их самих делает поле ниже).
-        const grew = typing && !!inp.style.height
+        // Пустое поле всегда меряется заново: иначе высота, оставшаяся от прошлого текста
+        // (62 px от двух строк), держится на пустом поле — плейсхолдер уезжает вверх.
+        const grew = typing && length > 0 && !!inp.style.height
             && length >= (this._composerTextLength || 0)
             && breaks >= (this._composerTextBreaks || 0);
         this._composerTextLength = length;
         this._composerTextBreaks = breaks;
         if (!grew) inp.style.height = 'auto';
-        const h = Math.min(inp.scrollHeight, 140);
+        const scrollHeight = inp.scrollHeight;
+        const cap = this.composerMaxHeight(inp);
+        const h = Math.min(scrollHeight, cap);
         inp.style.height = `${h}px`;
         // Прокрутка только когда текст реально не влезает (иначе 1px-округление даёт лишний скролл).
-        inp.style.overflowY = inp.scrollHeight > 140 ? 'auto' : 'hidden';
+        inp.style.overflowY = scrollHeight > cap + 1 ? 'auto' : 'hidden';
+        this.alignComposerScroll(inp);
+    }
+
+    // Прокрутка поля: без переполнения — к началу; с переполнением — к началу строки.
+    // Текст начинается после padding-top, поэтому границы строк — padTop + k·lineHeight.
+    // Браузер двигает scrollTop на каретку уже после обработчика input (Backspace
+    // давал 11,5 px и текст уходил вверх), поэтому выравнивание повторяется в следующем кадре.
+    alignComposerScroll(inp) {
+        const snap = () => {
+            const max = inp.scrollHeight - inp.clientHeight;
+            if (max <= 0) {
+                if (inp.scrollTop) inp.scrollTop = 0;
+                return;
+            }
+            const cs = getComputedStyle(inp);
+            const lineHeight = parseFloat(cs.lineHeight);
+            const padTop = parseFloat(cs.paddingTop) || 0;
+            const top = Math.min(inp.scrollTop, max);
+            if (lineHeight > 0) {
+                const target = top < padTop ? 0 : padTop + Math.floor((top - padTop) / lineHeight) * lineHeight;
+                if (target !== inp.scrollTop) inp.scrollTop = target;
+            }
+        };
+        snap();
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(snap);
+    }
+
+    // Потолок поля — целое число строк. Жёсткие 140px при строке 22px и отступах
+    // 9+9 на телефоне давали 5,5 строки: на шестой строке поле упиралось в
+    // потолок с полосой прокрутки и обрезанной посередине строкой (на десктопе —
+    // 6,2 строки). Стили к этому моменту уже посчитаны чтением scrollHeight,
+    // так что getComputedStyle лишней раскладки не добавляет.
+    composerMaxHeight(inp) {
+        const fallback = 140;
+        let cs;
+        try { cs = getComputedStyle(inp); } catch (e) { return fallback; }
+        const lineHeight = parseFloat(cs.lineHeight);
+        const limit = parseFloat(cs.maxHeight) || fallback;
+        if (!(lineHeight > 0)) return limit;
+        const chrome = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+            + (cs.boxSizing === 'border-box'
+                ? (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+                : 0);
+        const lines = Math.max(1, Math.floor((limit - chrome + 0.5) / lineHeight));
+        return chrome + lines * lineHeight;
     }
 
     extractUrls(text) {

@@ -543,6 +543,7 @@ ZaliMixin(ZaliInterface, class {
         const screenAudio = this.voice.localScreenStream.getAudioTracks()[0];
         if (screenAudio) entry.screenAudioSender = entry.pc.addTrack(screenAudio, this.voice.localScreenStream);
         this.sendScreenShareMeta(peer, 'start');
+        this.onSharedBrowserPeerAttached?.(peer);
         this.voiceTrace('screen-track-attached', { peer, streamId: this.voice.localScreenStream.id || '' });
         return true;
     }
@@ -600,7 +601,23 @@ ZaliMixin(ZaliInterface, class {
             const isDisplay = choice.sourceKind === 'display' || String(choice.sourceId || '').startsWith('display:');
             const ownWindow = !!choice.own;
             let appAudio = false;
-            if (choice.sourceId && this.nativeCaptureAvailable?.('screen')) {
+            // Номер нативного потока: к нему оболочка привязывает разрешение на
+            // удалённое управление (смесь со звуком приложения его теряет).
+            let nativeScreenStream = 0;
+            if (choice.browser) {
+                // «Общий браузер» (shared_browser.js): кадры — со скрытого встроенного
+                // браузера оболочки, а не с экрана; звука у него пока нет.
+                stream = await this.openNativeMediaStream({
+                    kind: 'browser',
+                    options: choice.browser,
+                    firstFrameTimeoutMs: 15000,
+                });
+                nativeScreenStream = Number(stream?.__zaliNativeStream) || 0;
+                // Частота экрана запустившего (оболочка выбрала сама) — её держит и отправка.
+                this.voice.screenFps = Number(stream?.__zaliNativeInfo?.fps) || 60;
+                const browserTrack = stream.getVideoTracks()[0];
+                if (browserTrack) { try { browserTrack.contentHint = 'motion'; } catch (e) {} }
+            } else if (choice.sourceId && this.nativeCaptureAvailable?.('screen')) {
                 appAudio = wantAudio && (isDisplay || ownWindow);
                 // Источник выбран в нашем окне с превью (openVoiceScreenPicker) — захват
                 // в оболочке: ScreenCaptureKit / Windows.Graphics.Capture, звук системы
@@ -618,6 +635,7 @@ ZaliMixin(ZaliInterface, class {
                     },
                     firstFrameTimeoutMs: 8000,
                 });
+                nativeScreenStream = Number(stream?.__zaliNativeStream) || 0;
             } else {
                 try {
                     stream = await navigator.mediaDevices.getDisplayMedia(request);
@@ -647,11 +665,14 @@ ZaliMixin(ZaliInterface, class {
                 this.voiceTrace('screen-share-app-audio', { mixed: !!mixed, system: !!systemAudio, own: ownWindow, display: isDisplay });
             }
             this.voice.localScreenStream = stream;
+            this.voice.screenNativeStream = nativeScreenStream;
+            this.voice.screenIsDisplay = !!nativeScreenStream && isDisplay && !choice.browser;
+            this.voice.screenActivity = choice.browser ? 'browser' : '';
             // Аудиодорожки может не быть: платформа не умеет (macOS WKWebView),
             // не отдан системный звук, или в системном окне не отмечено «Поделиться
             // звуком». Тогда демонстрация идёт как раньше — только картинка.
             this.voice.screenAudioShared = stream.getAudioTracks().length > 0;
-            if (wantAudio && !this.voice.screenAudioShared) {
+            if (wantAudio && !this.voice.screenAudioShared && !choice.browser) {
                 this.addLogEntry({ type: 'INFO', msg: 'Звук демонстрации недоступен — передаётся только картинка', ts: new Date().toLocaleTimeString() });
             }
             this.voice.screenSharing = true;
@@ -692,6 +713,10 @@ ZaliMixin(ZaliInterface, class {
 
     stopScreenShare() {
         if (!this.voice.screenSharing) return;
+        // Без экрана нечем управлять: разрешение снимается раньше остановки захвата.
+        this.revokeRemoteControlHost?.('screen-stop');
+        // «Общий браузер» закрывается вместе со своей трансляцией.
+        this.onSharedBrowserShareStopping?.('screen-stop');
         // Свой выход из канала гасит демонстрацию через resetVoiceState, не через этот
         // метод, — поэтому здесь только намеренная остановка, и звук не двоится с выходом.
         this.playVoiceEventSound?.('stream-stop');
@@ -708,6 +733,10 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.voice.localScreenStream = null;
+        this.voice.screenNativeStream = 0;
+        this.voice.screenIsDisplay = false;
+        this.voice.screenActivity = '';
+        this.voice.screenFps = 0;
         this.stopShareAppAudio?.('screen-stop');
         this.voice.screenSharing = false;
         this.voice.screenAudioShared = false;
@@ -991,6 +1020,8 @@ ZaliMixin(ZaliInterface, class {
                     this.renegotiateVoicePeer(name).catch(() => {});
                 }
             };
+            // Канал удалённого управления от зрителя (interface/remote_control.js).
+            entry.pc.ondatachannel = (event) => this.onVoiceDataChannel?.(name, event.channel);
             entry.pc.ontrack = (event) => {
                 const stream = event.streams?.[0] || new MediaStream([event.track]);
                 const track = event.track;
@@ -1644,6 +1675,10 @@ ZaliMixin(ZaliInterface, class {
     // mostly still and unreadable when downscaled, so it gives up frame rate instead.
     voiceVideoBudget(kind = 'camera') {
         const peers = Math.max(1, this.voice.peerConnections.size || 1);
+        // «Общий браузер»: плавность важнее — на 60+ к/с 720p нужно больше, чем демонстрации.
+        if (kind === 'screen' && this.voice.screenActivity === 'browser') {
+            return Math.max(1000000, Math.min(6000000, Math.floor(12000000 / peers)));
+        }
         const total = kind === 'screen' ? 3000000 : 2500000;
         const ceiling = kind === 'screen' ? 2000000 : 1200000;
         const floor = kind === 'screen' ? 250000 : 150000;
@@ -1658,6 +1693,12 @@ ZaliMixin(ZaliInterface, class {
             const maxBitrate = this.voiceVideoBudget(kind);
             params.encodings[0].maxBitrate = maxBitrate;
             params.degradationPreference = kind === 'screen' ? 'maintain-resolution' : 'balanced';
+            if (kind === 'screen' && this.voice.screenActivity === 'browser') {
+                // Частота экрана запустившего без потолка WebRTC по умолчанию (60), а при
+                // нехватке канала или процессора падает разрешение, не плавность.
+                params.encodings[0].maxFramerate = Math.max(30, Math.min(240, Number(this.voice.screenFps) || 60));
+                params.degradationPreference = 'maintain-framerate';
+            }
             await sender.setParameters(params);
             this.voiceTrace('video-bitrate-limit', { kind, maxBitrate, peers: this.voice.peerConnections.size });
         } catch (error) {

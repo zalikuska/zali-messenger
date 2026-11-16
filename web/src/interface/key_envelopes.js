@@ -638,6 +638,17 @@ ZaliMixin(ZaliInterface, class {
             }));
             if (res.ok) {
                 this.S.deviceTrust.current = await res.json();
+            } else if (res.status === 403 && !this._deviceIdentityReminted) {
+                // device_revoked / device_secret_mismatch: этим deviceId больше
+                // пользоваться нельзя — заводим новое устройство и регистрируем его.
+                const body = await res.json().catch(() => ({}));
+                if (body?.code === 'device_revoked' || body?.code === 'device_secret_mismatch') {
+                    this._deviceIdentityReminted = true;
+                    this.trace(`bootstrapDeviceTrust remint identity reason=${body.code}`);
+                    try { localStorage.removeItem(this.deviceIdentityStorageKey()); } catch (e) {}
+                    this.S.deviceTrust.current = null;
+                    return this.bootstrapDeviceTrust();
+                }
             }
             // Neither the device-trust panel refresh nor a key-envelope sync is needed
             // before the chat can render, and postAuthSetup already syncs envelopes on

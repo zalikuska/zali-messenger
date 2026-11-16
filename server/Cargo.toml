@@ -69,6 +69,10 @@ path = "../tests/voice.rs"
 name = "settings_sync"
 path = "../tests/settings_sync.rs"
 
+[[test]]
+name = "browser_profiles"
+path = "../tests/browser_profiles.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1.0", features = ["full"] }

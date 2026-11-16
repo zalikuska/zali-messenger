@@ -173,6 +173,21 @@ pub(crate) fn rate_allow(state: &AppState, key: String, max: usize) -> bool {
     true
 }
 
+/// Бюджет с весом и своим окном: `weight` обращений разом (например, мегабайты
+/// загрузки). Хранится в тех же счётчиках, что и `rate_allow`, ключи с префиксом.
+pub(crate) fn rate_allow_weighted(state: &AppState, key: String, weight: usize, max: usize, window: Duration) -> bool {
+    let now = Instant::now();
+    let mut attempts = state.login_attempts.entry(key).or_default();
+    attempts.retain(|t| now.duration_since(*t) < window);
+    if attempts.len().saturating_add(weight) > max {
+        return false;
+    }
+    for _ in 0..weight {
+        attempts.push_back(now);
+    }
+    true
+}
+
 /// Адрес для счётчиков частоты: IPv6 сводится к своей /64. Один человек обычно
 /// владеет всей подсетью, и смена младших 64 бит иначе давала бы ему новый
 /// «адрес» на каждый запрос.
@@ -880,7 +895,10 @@ pub(crate) fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) ->
             )
         })
         .unwrap_or(false);
-    if trusted {
+    // Заголовкам прокси верим, только если соединение пришло от самого прокси
+    // (nginx на той же машине). Иначе, при открытом наружу порте, любой клиент
+    // присылал свой X-Real-IP и обходил лимиты входа и регистрации.
+    if trusted && remote_addr.ip().is_loopback() {
         // X-Real-IP первым: наш nginx ставит его сам (`$remote_addr`), подделать его
         // клиент не может. X-Forwarded-For nginx лишь ДОПИСЫВАЕТ
         // (`$proxy_add_x_forwarded_for`), поэтому первым в нём стоит то, что прислал

@@ -401,3 +401,37 @@ fn bytes_multi_chunk_file_roundtrips_exactly() {
     let extracted = sdk.extract_all_bytes(&archive).unwrap();
     assert_eq!(extracted, vec![("big.bin".to_string(), big)]);
 }
+
+/// Заголовок архива не доверенный: e_size больше остатка — ошибка, а не
+/// попытка выделить эксабайт (раньше — panic через FFI у получателя сообщения).
+fn crafted_header(flags: u8, e_size: u64) -> Vec<u8> {
+    let mut a = Vec::new();
+    a.extend_from_slice(b"ZALIMSSG");
+    a.push(1); // PROTOCOL_VERSION
+    a.push(0); // id
+    a.push(0); // dom
+    a.push(flags);
+    a.extend_from_slice(&1u32.to_le_bytes());
+    if flags & 1 != 0 {
+        a.extend_from_slice(&[0u8; 16]); // salt
+        a.extend_from_slice(&[0u8; 12]); // nonce
+    }
+    a.extend_from_slice(&12u16.to_le_bytes());
+    a.extend_from_slice(b"message.json");
+    a.extend_from_slice(&10u64.to_le_bytes());
+    a.extend_from_slice(&e_size.to_le_bytes());
+    a.extend_from_slice(&[0u8; 32]);
+    a
+}
+
+#[test]
+fn oversized_entry_is_rejected_without_allocating() {
+    let session = ZaliSession::new(Some("k"), Some(b"ZALIMSSG"));
+    assert!(session.extract_all_bytes(&crafted_header(1, u64::MAX / 2)).is_err());
+}
+
+#[test]
+fn plaintext_archive_is_rejected_when_a_key_is_expected() {
+    let session = ZaliSession::new(Some("k"), Some(b"ZALIMSSG"));
+    assert!(session.extract_all_bytes(&crafted_header(0, 4)).is_err());
+}

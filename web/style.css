@@ -2403,6 +2403,11 @@ body[data-nav-mode="servers"] .contacts {
     background: #000;
 }
 
+/* Свою камеру показываем зеркально, как в зеркале (собеседнику уходит как есть). */
+.voice-tile.mine .voice-tile-media video {
+    transform: scaleX(-1);
+}
+
 .voice-tile-avatar {
     position: relative;
     display: grid;
@@ -6701,6 +6706,22 @@ span.msg-sender:hover {
     object-fit: cover;
 }
 
+/* Картинка (не видео): чёрная подложка оболочки просвечивала тонкой кривой
+   обводкой — у вложенной .media свой радиус, а срез по углам и так делает
+   overflow:hidden оболочки. Подложка прозрачна, радиус внутри — 0, а тень
+   `0 1px 0` не утолщает низ рамки. Селектор по специфичности равен мобильному
+   правилу про `> .media` (ниже по файлу) и стоит после него. */
+.discord-media-shell.discord-media-shell-image {
+    background: transparent;
+    box-shadow: none;
+}
+
+.discord-media-shell.discord-media-shell-image > .media,
+.discord-media-shell.discord-media-shell-image > img {
+    border-radius: 0;
+    background: transparent;
+}
+
 .discord-media-shell-video video {
     background: #000;
 }
@@ -7403,15 +7424,22 @@ span.msg-sender:hover {
     margin: 8px 10px;
 }
 
+/* Скелетон ленты повторяет настоящие пузыри: их радиус (--r-msg, на телефоне
+   --m-bubble-r ниже), однострочную высоту и шаг между строками. Раньше это были
+   прямоугольники 38px с радиусом 8px и отступом 10px — рядом с пузырями
+   читались чужеродными плашками. */
 .sk-bubble {
-    height: 38px;
-    margin: 10px 0;
+    height: 36px;
+    margin: 6px 0;
+    border-radius: var(--r-msg, 16px);
 }
 
 .sk-w1 { width: 34%; }
 .sk-w2 { width: 52%; }
 .sk-w3 { width: 66%; }
 .sk-self { margin-left: auto; }
+/* «Все сообщения с одной стороны»: свои стоят слева — и скелетон тоже. */
+body[data-msg-side="one"] .sk-self { margin-left: 0; }
 
 .auth-overlay {
     position: fixed;
@@ -10167,7 +10195,10 @@ span.msg-sender:hover {
         border-radius: 50%;
         border: 2px solid rgba(var(--on-accent-rgb),.35);
         border-top-color: var(--on-accent);
-        animation: m-net-rot .7s linear infinite;
+        /* Finite: a forever-running spinner kept the compositor busy (~50-65% of a
+           core on Android) for as long as the socket stayed down. Four turns, then
+           it rests as a static ring. */
+        animation: m-net-rot .7s linear 4;
     }
 }
 @keyframes m-net-slide { from { transform: translateY(-100%); } to { transform: translateY(0); } }
@@ -10511,48 +10542,67 @@ span.msg-sender:hover {
    «нет связи». Пока первого статуса нет (загрузка) и у гостя — точки нет.
    Состояние пишет updateMeStatusDot (device_activity.js). */
 .me-status-dot {
+    --pd: 12px;
+    --pd-gap: 2.5px;
     position: absolute;
     z-index: 2;
     right: -1px;
     bottom: -1px;
-    width: 12px;
-    height: 12px;
+    width: var(--pd);
+    height: var(--pd);
     border-radius: 50%;
     background: var(--lime);
-    box-shadow: 0 0 0 2.5px var(--bg);
     pointer-events: none;
-    transition: background-color .15s var(--ease-out), box-shadow .15s var(--ease-out);
 }
 
+/* Зазор вокруг точки — настоящий вырез в аватарке (mask), как у .presence-dot:
+   кольцо цвета --bg читалось тёмным пятном на плитке .me другого цвета. Центр
+   выреза = центр точки (right/bottom -1px, диаметр --pd). */
+.me-ava-btn:has(.me-status-dot:is(.on, .off, .idle)) > .me-ava {
+    -webkit-mask: radial-gradient(circle at calc(100% - var(--pd, 12px) / 2 + 1px) calc(100% - var(--pd, 12px) / 2 + 1px),
+        transparent calc(var(--pd, 12px) / 2 + 2.5px), #000 calc(var(--pd, 12px) / 2 + 3px));
+    mask: radial-gradient(circle at calc(100% - var(--pd, 12px) / 2 + 1px) calc(100% - var(--pd, 12px) / 2 + 1px),
+        transparent calc(var(--pd, 12px) / 2 + 2.5px), #000 calc(var(--pd, 12px) / 2 + 3px));
+}
+
+/* Маска срезала бы кольцо наведения у самой аватарки — оно переехало на подложку. */
+.me-ava-btn:has(.me-status-dot:is(.on, .off, .idle)) > .me-ava:hover { box-shadow: none; }
+.me-ava-btn:has(.me-status-dot:is(.on, .off, .idle)):hover::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    box-shadow: var(--f-ring, 0 0 0 1px rgba(var(--ink-rgb),.08), 0 0 0 6px rgba(var(--accent-rgb),calc(.08 * var(--glow-k))));
+    pointer-events: none;
+}
+
+/* Нет соединения — пустое кольцо: центр прозрачный (вырез в самой точке). */
 .me-status-dot.off {
-    background: var(--bg);
-    box-shadow: 0 0 0 2.5px var(--bg), inset 0 0 0 2.75px var(--text2);
+    background: var(--text2);
+    -webkit-mask: radial-gradient(circle at 50% 50%, transparent 3.25px, #000 3.75px);
+    mask: radial-gradient(circle at 50% 50%, transparent 3.25px, #000 3.75px);
 }
 
 /* Неактивен — луна (ни одно моё устройство не активно: компьютер 5 мин без ввода,
    телефон и браузер — минуту; server/src/device_activity.rs). Серп — жёлтый диск с
-   вырезом цвета фона сверху слева; вырез тот же, что кольцо-зазор вокруг точки, и
-   серп читается вырезанным из аватарки. Чем дольше простой, тем толще серп: вырез
-   отходит от центра — фазу (data-phase 0–4) пишет updateMeStatusDot по
-   ME_MOON_PHASES (1–4: 15 мин, 30 мин, 2 ч, 6 ч). Простой короче 15 минут луны
-   не показывает — точка «в сети». Форма, а не цвет, отличает луну от «в сети» в любой схеме. */
+   вырезом сверху слева (mask — серп прозрачный, как у .presence-dot). Чем дольше
+   простой, тем толще серп: вырез отходит от центра — фазу (data-phase 0–4) пишет
+   updateMeStatusDot по ME_MOON_PHASES (1–4: 15 мин, 30 мин, 2 ч, 6 ч). Простой
+   короче 15 минут луны не показывает — точка «в сети». Форма, а не цвет, отличает
+   луну от «в сети» в любой схеме. */
 .me-status-dot.idle {
     --moon-at: 2.5px;
     --moon-cut: 4.6px;
-    background: radial-gradient(circle at var(--moon-at) var(--moon-at),
-        var(--bg) var(--moon-cut), var(--f-warn, var(--warn-fg)) calc(var(--moon-cut) + .5px));
+    background: var(--f-warn, var(--warn-fg));
+    -webkit-mask: radial-gradient(circle at var(--moon-at) var(--moon-at),
+        transparent var(--moon-cut), #000 calc(var(--moon-cut) + .5px));
+    mask: radial-gradient(circle at var(--moon-at) var(--moon-at),
+        transparent var(--moon-cut), #000 calc(var(--moon-cut) + .5px));
 }
 
-/* от 15 минут — тонкий серп */
 .me-status-dot.idle[data-phase="1"] { --moon-at: 4.4px; --moon-cut: 5.35px; }
-
-/* от 30 минут */
 .me-status-dot.idle[data-phase="2"] { --moon-at: 3.9px; --moon-cut: 5.15px; }
-
-/* от 2 часов */
 .me-status-dot.idle[data-phase="3"] { --moon-at: 3.4px; --moon-cut: 4.95px; }
-
-/* от 6 часов — полный серп */
 .me-status-dot.idle[data-phase="4"] { --moon-at: 2.5px; --moon-cut: 4.6px; }
 
 .me-status-dot:not(.on):not(.off):not(.idle),
@@ -11938,7 +11988,13 @@ body[data-design-mode="focus"] .ws-pill.on {
     color: var(--text3);
 }
 
-body[data-design-mode="focus"] .ws-pill.on:not(:hover) #wsLabel {
+/* Подпись при нормальном соединении не раскрывается ни по наведению, ни иначе:
+   подробности — попапом по клику (connection_info.js). */
+body[data-design-mode="focus"] .ws-pill {
+    cursor: pointer;
+}
+
+body[data-design-mode="focus"] .ws-pill.on #wsLabel {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -11946,6 +12002,46 @@ body[data-design-mode="focus"] .ws-pill.on:not(:hover) #wsLabel {
     clip: rect(0 0 0 0);
     white-space: nowrap;
 }
+
+.conn-info-menu {
+    min-width: 232px;
+    gap: 2px;
+    padding: 10px 12px;
+}
+
+.conn-info-title {
+    padding-bottom: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text3);
+}
+
+.conn-info-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 5px 0;
+    font-size: 13px;
+    color: var(--text2);
+}
+
+.conn-info-row[hidden] {
+    display: none;
+}
+
+.conn-info-row strong {
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.conn-info-row strong[data-tone="good"] { color: var(--lime); }
+.conn-info-row strong[data-tone="warn"] { color: var(--amber, #f5b942); }
+.conn-info-row strong[data-tone="bad"]  { color: var(--red); }
 
 /* ── Каркас (десктоп): список на фоне, переписка — одна панель ───────── */
 
@@ -19349,6 +19445,7 @@ body[data-sidebar-panel] .sidebar .mode-switch {
 #viewSettings[data-settings-cat="sound"] [data-settings-section]:not([data-settings-cat="sound"]),
 #viewSettings[data-settings-cat="account"] [data-settings-section]:not([data-settings-cat="account"]),
 #viewSettings[data-settings-cat="app"] [data-settings-section]:not([data-settings-cat="app"]),
+#viewSettings[data-settings-cat="components"] [data-settings-section]:not([data-settings-cat="components"]),
 #viewSettings[data-settings-cat="dev"] [data-settings-section]:not([data-settings-cat="dev"]) {
     display: none !important;
 }
@@ -19475,6 +19572,18 @@ body[data-sidebar-panel] .sidebar .mode-switch {
     margin-left: 6px;
     color: var(--accent-fg);
     vertical-align: middle;
+}
+.contact-pin-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    color: var(--text3);
+    vertical-align: middle;
+    flex: 0 0 auto;
+}
+.contact-pin-badge .ui-icon {
+    width: 13px;
+    height: 13px;
 }
 .profile-game { margin-top: 6px; }
 .server-member-meta .game-activity-line { font-size: inherit; }
@@ -22997,6 +23106,9 @@ body[data-design-mode="focus"] .settings-shell {
         border-radius: var(--m-bubble-r);
         padding: 7px 12px 7px;
     }
+    html body[data-design-mode] #viewChat .sk-bubble {
+        border-radius: var(--m-bubble-r);
+    }
     html body[data-design-mode] #viewChat .msg.in.group-start  .bubble,
     html body[data-design-mode] #viewChat .msg.in.group-single .bubble { border-bottom-left-radius: var(--m-bubble-join); }
     html body[data-design-mode] #viewChat .msg.in.group-mid    .bubble,
@@ -23298,6 +23410,11 @@ body[data-design-mode="focus"] .settings-shell {
         border-top-right-radius: var(--m-bubble-join);
         margin-top: 3px;
     }
+}
+
+/* Внутри оболочки картинки радиус делает сама оболочка (см. .discord-media-shell-image). */
+html body[data-design-mode] #viewChat .discord-media-shell.discord-media-shell-image > .media {
+    border-radius: 0;
 }
 
 
@@ -25677,3 +25794,379 @@ html[data-appearance="light"] .auth-art .aa-hole { fill: rgba(var(--ink-rgb),.7)
 .fps-meter[data-level="warn"] .fps-meter-value { color: #ffd34d; }
 .fps-meter[data-level="bad"] .fps-meter-value { color: #ff6b5e; }
 .fps-meter-freeze { color: #ffb3a8; }
+
+/* --- Удалённое управление (web/src/interface/remote_control.js) --- */
+.voice-focus-rc {
+    flex: 0 0 auto;
+    margin-left: auto;
+    height: 40px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .55);
+    color: #fff;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.voice-focus-rc:hover {
+    background: rgba(0, 0, 0, .75);
+}
+
+/* Сплошной лайм + тёмный текст: управление идёт — это должно быть видно сразу. */
+.voice-focus-rc.is-active {
+    background: rgb(var(--accent-rgb));
+    color: #111;
+}
+
+/* В режиме управления кадр — чужой рабочий стол: обычный курсор, без жестов прокрутки. */
+.voice-focus.is-rc {
+    cursor: default;
+}
+
+.voice-focus.is-rc .voice-focus-media {
+    touch-action: none;
+}
+
+.voice-focus.is-rc .voice-focus-media video {
+    cursor: default;
+}
+
+.rc-host-banner {
+    position: fixed;
+    top: calc(var(--m-safe-top, 0px) + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10060;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100vw - 32px);
+    padding: 6px 6px 6px 14px;
+    border-radius: 999px;
+    background: #111;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .35);
+}
+
+.rc-host-banner-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #ff4d4d;
+    animation: rcHostPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes rcHostPulse {
+    50% { opacity: .35; }
+}
+
+.rc-host-banner-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rc-host-banner-stop {
+    flex: 0 0 auto;
+    height: 30px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 999px;
+    background: rgb(var(--accent-rgb));
+    color: #111;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+/* «Отдать управление» на плитке своей демонстрации. */
+.voice-stage-tile .rc-stage-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+    max-width: calc(100% - 20px);
+    height: 32px;
+    padding: 0 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .6);
+    color: #fff;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.voice-stage-tile .rc-stage-btn:hover {
+    background: rgba(0, 0, 0, .8);
+}
+
+.voice-stage-tile .rc-stage-btn:disabled {
+    opacity: .75;
+    cursor: default;
+}
+
+/* Управление отдано: сплошной лайм + тёмный текст — видно сразу. */
+.voice-stage-tile .rc-stage-btn.is-active {
+    background: rgb(var(--accent-rgb));
+    color: #111;
+}
+
+/* ── «Общий браузер» (interface/shared_browser.js) ─────────────────────────
+   Панель адреса над кадром, курсоры участников поверх области кадра.
+   Кадр — чужая страница: обычный курсор, без жестов прокрутки и «свернуть по клику». */
+.voice-focus.is-shared-browser {
+    cursor: default;
+}
+
+.voice-focus.is-shared-browser .voice-focus-media {
+    top: calc(var(--m-safe-top, 0px) + 64px);
+    touch-action: none;
+}
+
+.voice-focus.is-shared-browser .voice-focus-media video {
+    cursor: default;
+}
+
+.voice-focus.is-shared-browser.is-sb-readonly .voice-focus-media video {
+    cursor: not-allowed;
+}
+
+.voice-focus.is-shared-browser .voice-focus-name {
+    display: none;
+}
+
+.sb-bar {
+    position: absolute;
+    z-index: 2;
+    top: calc(var(--m-safe-top, 0px) + 14px);
+    left: 14px;
+    right: 68px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 40px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+    border: 1px solid rgba(255, 255, 255, .06);
+    color: #fff;
+    cursor: default;
+}
+
+.sb-btn {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.sb-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, .1);
+}
+
+.sb-btn:disabled {
+    opacity: .35;
+    cursor: default;
+}
+
+.sb-btn[hidden] {
+    display: none;
+}
+
+.sb-allow.is-active {
+    background: rgb(var(--accent-rgb));
+    color: #111;
+}
+
+.sb-close {
+    background: rgba(255, 255, 255, .1);
+}
+
+.sb-url-form {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+}
+
+.sb-url {
+    width: 100%;
+    min-width: 0;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .45);
+    color: #fff;
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+}
+
+.sb-url:focus {
+    box-shadow: 0 0 0 2px rgb(var(--accent-rgb));
+}
+
+.sb-url:disabled {
+    opacity: .6;
+}
+
+.sb-bar.is-loading .sb-url {
+    background-image: linear-gradient(90deg, rgba(var(--accent-rgb), .0), rgba(var(--accent-rgb), .55), rgba(var(--accent-rgb), .0));
+    background-size: 40% 2px;
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    animation: sbLoading 1.1s linear infinite;
+}
+
+@keyframes sbLoading {
+    from { background-position: -40% 100%; }
+    to { background-position: 140% 100%; }
+}
+
+.sb-profile {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 6px;
+    color: rgba(255, 255, 255, .6);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.sb-cursors {
+    position: absolute;
+    z-index: 1;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.sb-cursor {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 2px;
+    /* Сглаживание между пакетами курсоров (~20 Гц). */
+    transition: transform 60ms linear, opacity .4s ease;
+    will-change: transform;
+}
+
+.sb-cursor-arrow {
+    flex: 0 0 auto;
+    margin: -3px 0 0 -4px;
+    fill: var(--sb-cursor, #b6ff3b);
+    stroke: #fff;
+    stroke-width: 1.6;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .45));
+    transition: transform .12s ease;
+}
+
+.sb-cursor.is-down .sb-cursor-arrow {
+    transform: scale(.85);
+}
+
+.sb-cursor-name {
+    margin-top: 14px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--sb-cursor, #b6ff3b);
+    color: #fff;
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 16px;
+    white-space: nowrap;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, .35);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+}
+
+.sb-cursor.is-idle {
+    opacity: .45;
+}
+
+.voice-stage-tile .sb-tile-badge {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    z-index: 2;
+    max-width: calc(100% - 20px);
+    padding: 5px 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .6);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    pointer-events: none;
+}
+
+.voice-stage-tile .sb-cursors .sb-cursor-name {
+    display: none;
+}
+
+/* Скрытое поле: в него браузер вставляет буфер обмена участника (Cmd/Ctrl+V). */
+.sb-paste-sink {
+    position: fixed;
+    left: -9999px;
+    top: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sb-launch-url {
+    width: 100%;
+    height: 38px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .1);
+    background: rgba(0, 0, 0, .25);
+    color: inherit;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+}
+
+.sb-launch-url:focus {
+    border-color: rgb(var(--accent-rgb));
+}
+
+.voice-picker-field .sb-launch-url {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+}
+
+/* Подпись скрыта — «Свернуть» остаётся справа, а не налезает на «Назад». */
+.voice-focus.is-shared-browser .voice-focus-close {
+    margin-left: auto;
+}

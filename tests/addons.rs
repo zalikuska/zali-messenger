@@ -363,7 +363,8 @@ async fn a_person_takes_back_only_what_they_sent_and_without_the_developers_week
     assert_eq!(manage["paidOut"], 120);
     assert_supply_conserved(&app, &rich).await;
 
-    // Официальный аддон может платить и сверх внесённого человеком (призы).
+    // У официального аддона особого права больше нет: «аддон решил выплатить» —
+    // код на клиенте, и раньше любой аккаунт без взноса забирал всю казну.
     assert_eq!(
         post(&app, &dev, "/api/addons/register-official",
             json!({ "signature": official_signature("org.example.arcade", "1.0.0", "paydev0001", now_ms()) })).await.0,
@@ -372,11 +373,37 @@ async fn a_person_takes_back_only_what_they_sent_and_without_the_developers_week
     assert_eq!(post(&app, &player, "/api/addons/org.example.arcade/deposit", dep(40, "a1")).await.0, 201);
     let before = balance(&app, &alt).await;
     let (status, body) = post(&app, &alt, "/api/addons/org.example.arcade/payout", dep(25, "a2")).await;
-    assert_eq!(status, 201, "{}", body);
-    assert_eq!(balance(&app, &alt).await, before + 25);
-    // …но не больше, чем есть в казне.
-    assert_eq!(post(&app, &alt, "/api/addons/org.example.arcade/payout", dep(16, "a3")).await.0, 400);
+    assert_eq!(status, 400, "{}", body);
+    assert_eq!(body["available"], 0);
+    assert_eq!(balance(&app, &alt).await, before);
+    // Своё вложивший забирает как обычно.
+    assert_eq!(post(&app, &player, "/api/addons/org.example.arcade/payout", dep(40, "a3")).await.0, 201);
     assert_supply_conserved(&app, &rich).await;
+}
+
+#[tokio::test]
+async fn an_older_official_signature_cannot_take_an_addon_back() {
+    use_test_official_key();
+    let app = spawn_app().await;
+    let dev = register_user(&app, "olddev00001", PASSWORD).await;
+    let _new_owner = register_user(&app, "newdev00001", PASSWORD).await;
+    let stranger = register_user(&app, "replayer001", PASSWORD).await;
+    let t0 = now_ms() - 60_000;
+    let old_sig = official_signature("org.example.moved", "1.0.0", "olddev00001", t0);
+    let new_sig = official_signature("org.example.moved", "1.1.0", "newdev00001", t0 + 1_000);
+    let register = |sig: Value| json!({ "signature": sig });
+
+    assert_eq!(post(&app, &dev, "/api/addons/register-official", register(old_sig.clone())).await.0, 200);
+    assert_eq!(post(&app, &dev, "/api/addons/register-official", register(new_sig.clone())).await.0, 200);
+    // Повтор давней подписи (кем угодно) не возвращает прежнего владельца и не
+    // стирает облако нынешнего.
+    let (status, body) = post(&app, &stranger, "/api/addons/register-official", register(old_sig)).await;
+    assert_eq!(status, 409, "{}", body);
+    assert_eq!(body["code"], "stale_signature");
+    let (_, info) = get(&app, &stranger, "/api/addons/org.example.moved").await;
+    assert_eq!(info["owner"], "newdev00001", "{}", info);
+    // Повтор текущей подписи безвреден.
+    assert_eq!(post(&app, &stranger, "/api/addons/register-official", register(new_sig)).await.0, 200);
 }
 
 #[tokio::test]
@@ -596,4 +623,30 @@ async fn a_release_is_served_with_its_signature_and_a_forged_one_is_refused() {
         .await
         .unwrap();
     assert_eq!(served["signature"], "");
+}
+
+#[tokio::test]
+async fn an_android_release_is_published_and_served_per_platform() {
+    use_test_official_key();
+    let app = spawn_app_with_admin_token(OPERATOR_TOKEN).await;
+    let sha = "ef".repeat(32);
+    let url = "https://msgs.zalikus.org/releases/ZaliMessenger-9.9b1.apk";
+    let signature = release_signature("android", "9.9b1", &sha, url);
+    let body = json!({ "platform": "android", "version": "9.9b1", "notes": "", "downloadUrl": url, "sha256": sha, "signature": signature });
+    assert_eq!(operator(&app, Method::POST, "/api/version", Some(body)).await.0, 204);
+    let served: Value = app
+        .http
+        .get(app.url("/api/version?platform=android&channels=b,r"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(served["version"], "9.9b1");
+    assert_eq!(served["downloadUrl"], url);
+    assert_eq!(served["signature"], signature);
+    // Подпись привязана к платформе: та же подпись для windows не принимается.
+    let cross = json!({ "platform": "windows", "version": "9.9b1", "notes": "", "downloadUrl": url, "sha256": sha, "signature": signature });
+    assert_eq!(operator(&app, Method::POST, "/api/version", Some(cross)).await.0, 400);
 }

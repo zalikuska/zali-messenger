@@ -295,7 +295,8 @@ class ZaliNativeVideoSink {
             this.canvas.width = 2;
             this.canvas.height = 2;
             this.ctx2d = this.canvas.getContext('2d');
-            this.track = this.canvas.captureStream(30).getVideoTracks()[0] || null;
+            // Без числа: кадр на каждую отрисовку — «Общий браузер» идёт с частотой экрана (до 120+).
+            this.track = this.canvas.captureStream().getVideoTracks()[0] || null;
             this.mode = 'canvas';
             return !!this.track;
         })();
@@ -410,7 +411,8 @@ ZaliMixin(ZaliInterface, class {
 
     /** Можно ли брать `kind` ('mic' | 'camera' | 'screen') у оболочки. */
     nativeCaptureAvailable(kind) {
-        const cap = { mic: 'nativeMic', camera: 'nativeCamera', screen: 'nativeScreen' }[kind];
+        // browser — скрытый встроенный браузер оболочки («Общий браузер», shared_browser.js).
+        const cap = { mic: 'nativeMic', camera: 'nativeCamera', screen: 'nativeScreen', browser: 'nativeSharedBrowser' }[kind];
         if (!cap || !this.nativeSupports(cap) || !this.nativeMediaBridgeInfo()) return false;
         if (this.voice?.nativeCaptureDisabled?.[kind]) return false;
         // Оболочка сообщила, что кадры в страницу не доставить (Windows: старый WebView2
@@ -541,6 +543,12 @@ ZaliMixin(ZaliInterface, class {
             for (const id of Array.from(state.streams.keys())) this.endNativeMediaStream(id, 'transport-unavailable');
         } else if (event === 'devices_changed') {
             this.onNativeMediaDevicesChanged?.(payload);
+        } else if (event === 'browser_state') {
+            // Адрес/заголовок/история скрытого браузера «Общего браузера».
+            this.onNativeSharedBrowserState?.(payload);
+        } else if (event === 'rc_revoked') {
+            // Оболочка сама сняла разрешение на удалённое управление (поток экрана кончился).
+            this.onNativeRemoteControlRevoked?.(payload);
         } else if (event === 'stats' && payload.processing) {
             this.voiceDiag?.('mic-processing-native', { stream, ...payload.processing, ...this.nativeMediaPageCounters(entry) });
         } else if (event === 'stats' && payload.video) {
@@ -618,7 +626,7 @@ ZaliMixin(ZaliInterface, class {
         const trace = (stage, details, level) => this.voiceDiag?.(stage, { stream, kind, ...details }, level);
         const entry = { stream, kind, codec: '', label: '', ended: false, audio: null, video: null, tracks: [], info: null };
         const wantsAudio = kind === 'mic' || (kind === 'screen' && !!options.audio);
-        const wantsVideo = kind === 'camera' || kind === 'screen';
+        const wantsVideo = kind === 'camera' || kind === 'screen' || kind === 'browser';
         if (wantsAudio) entry.audio = new ZaliNativeAudioSink(kind === 'mic' ? firstFrame : null);
         if (wantsVideo) {
             entry.video = new ZaliNativeVideoSink({

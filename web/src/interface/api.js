@@ -12,6 +12,10 @@ ZaliMixin(ZaliInterface, class {
         const deviceId = includeDeviceId ? this.currentDeviceId() : '';
         if (deviceId) {
             headers['X-Zali-Device-ID'] = deviceId;
+            // ID устройства публичен; одобрять, отзывать, перерегистрировать его и
+            // читать его конверты сервер разрешает только знающему этот секрет.
+            const secret = this.currentDeviceSecret?.();
+            if (secret) headers['X-Zali-Device-Secret'] = secret;
         }
         return headers;
     }

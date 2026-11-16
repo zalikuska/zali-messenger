@@ -2,7 +2,9 @@
 //! что трогает устройства, уходит в свои потоки (COM MTA), поток окна не ждёт.
 
 use super::format::Processing;
-use super::{camera, devices, mic, screen, EventSink, FrameSink, MediaRequest};
+use super::{camera, devices, mic, remote_control, screen, shared_browser, EventSink, FrameSink, MediaRequest};
+use crate::native::AppEvent;
+use tao::event_loop::EventLoopProxy;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,7 +85,13 @@ impl StartContext {
         let mut sessions = sessions();
         if sessions.get(&self.stream).map(|s| Arc::ptr_eq(s, &self.stop)).unwrap_or(false) {
             sessions.remove(&self.stream);
+            drop(sessions);
+            screen_sources().remove(&self.stream);
+            // Нет экрана — нет удалённого управления.
+            remote_control::stream_ended(self.stream, "stream-ended", Some(&self.events));
         }
+        // Захват «Общего браузера» кончился (окно закрылось, страница остановила) — закрыть и браузер.
+        shared_browser::stream_finished(self.stream, self.events.proxy());
     }
 }
 
@@ -94,7 +102,26 @@ fn sessions() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<AtomicBool>>> {
     lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// stream → id источника идущей демонстрации (`display:…`/`window:…`) — к экрану
+/// привязывается разрешение на удалённое управление (remote_control.rs).
+fn screen_sources() -> std::sync::MutexGuard<'static, HashMap<u32, String>> {
+    static SOURCES: OnceLock<Mutex<HashMap<u32, String>>> = OnceLock::new();
+    let lock = SOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Прокси цикла событий для `stop_all` (у него нет запроса, через который он пришёл бы).
+fn event_proxy() -> &'static Mutex<Option<EventLoopProxy<AppEvent>>> {
+    static PROXY: OnceLock<Mutex<Option<EventLoopProxy<AppEvent>>>> = OnceLock::new();
+    PROXY.get_or_init(|| Mutex::new(None))
+}
+
 pub fn stop_all() {
+    remote_control::stop_all();
+    if let Some(proxy) = event_proxy().lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+        shared_browser::close_all(proxy);
+    }
+    screen_sources().clear();
     let stopped: Vec<Arc<AtomicBool>> = sessions().drain().map(|(_, stop)| stop).collect();
     for stop in stopped {
         stop.store(true, Ordering::Release);
@@ -115,13 +142,46 @@ fn with_request_id(mut payload: Value, request_id: &Option<String>) -> Value {
 }
 
 pub fn handle(request: MediaRequest, events: EventSink) {
+    // rc_input — до 60 событий в секунду: без журнала и без лишней работы.
+    if request.op == "rc_input" {
+        if let Some(stream) = request.stream {
+            remote_control::input(stream, &request.options);
+        }
+        return;
+    }
+    // Ввод «Общего браузера» — тоже без журнала: в поток окна, к WebView2.
+    if request.op == "browser_input" {
+        if let Some(stream) = request.stream {
+            let _ = events.proxy().send_event(AppEvent::SharedBrowser(shared_browser::Command::Input {
+                stream,
+                event: request.options,
+            }));
+        }
+        return;
+    }
+    {
+        let mut proxy = event_proxy().lock().unwrap_or_else(|p| p.into_inner());
+        if proxy.is_none() {
+            *proxy = Some(events.proxy().clone());
+        }
+    }
     devices::watch_device_changes(&events);
     if request.op != "request_keyframe" {
         // id устройства — укороченный: отличить устройства хватает, журнал не пухнет.
         let device: String = request.device_id.chars().take(24).collect();
+        // Куки и адреса «Общего браузера» в журнал не попадают — только их число.
+        let mut logged = request.options.clone();
+        if let Some(map) = logged.as_object_mut() {
+            if let Some(n) = map.get("cookies").and_then(Value::as_array).map(Vec::len) {
+                map.insert("cookies".into(), json!(n));
+            }
+            if map.contains_key("url") {
+                map.insert("url".into(), json!("…"));
+            }
+        }
         tracing::info!(
             "[ZALI][WIN] media request op={} stream={:?} kind={} device={} source={} options={}",
-            request.op, request.stream, request.kind, device, request.source_id, request.options
+            request.op, request.stream, request.kind, device, request.source_id, logged
         );
     }
     match request.op.as_str() {
@@ -147,6 +207,51 @@ pub fn handle(request: MediaRequest, events: EventSink) {
                 if let Some(stop) = stop {
                     stop.store(true, Ordering::Release);
                 }
+                screen_sources().remove(&stream);
+                remote_control::stream_ended(stream, "page-stop", Some(&events));
+                shared_browser::stream_finished(stream, events.proxy());
+            }
+        }
+        "browser_nav" => {
+            if let Some(stream) = request.stream {
+                let text = |k: &str| request.options.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                let _ = events.proxy().send_event(AppEvent::SharedBrowser(shared_browser::Command::Nav {
+                    stream,
+                    action: text("action"),
+                    url: text("url"),
+                }));
+            }
+        }
+        "browser_cookies" => {
+            let Some(stream) = request.stream.filter(|s| shared_browser::is_browser_stream(*s)) else {
+                events.error(request.request_id.as_deref(), None, "not_found", "общий браузер не открыт");
+                return;
+            };
+            let proxy = events.proxy().clone();
+            let _ = proxy.send_event(AppEvent::SharedBrowser(shared_browser::Command::Cookies {
+                stream,
+                request_id: request.request_id.clone(),
+                events,
+            }));
+        }
+        // Удалённое управление: согласие — системным окном, только для живого потока экрана.
+        "rc_grant" => {
+            let Some(stream) = request.stream else {
+                events.error(request.request_id.as_deref(), None, "failed", "rc_grant без stream");
+                return;
+            };
+            let Some(source_id) = screen_sources().get(&stream).cloned() else {
+                events.error(request.request_id.as_deref(), None, "not_found", "демонстрация экрана не идёт");
+                return;
+            };
+            let peer = request.options.get("peer").and_then(Value::as_str).unwrap_or("").to_string();
+            remote_control::request_grant(stream, source_id, peer, request.request_id.clone(), events, |stream, source| {
+                screen_sources().get(&stream).map(|s| s == source).unwrap_or(false)
+            });
+        }
+        "rc_revoke" => {
+            if let Some(stream) = request.stream {
+                remote_control::revoke(stream, "page");
             }
         }
         "set_processing" => {
@@ -177,6 +282,9 @@ fn start(request: MediaRequest, events: EventSink) {
         }
         sessions.insert(stream, Arc::clone(&stop));
     }
+    if request.kind == "screen" {
+        screen_sources().insert(stream, request.source_id.clone());
+    }
     let ctx = StartContext {
         request_id: request.request_id.clone(),
         stream,
@@ -191,6 +299,27 @@ fn start(request: MediaRequest, events: EventSink) {
         "mic" => spawn("zali-media-mic", move || mic::run(ctx)),
         "camera" => spawn("zali-media-camera", move || camera::run(ctx)),
         "screen" => spawn("zali-media-screen", move || screen::run(ctx)),
+        // Окно и WebView2 создаются в потоке окна; захват (screen::run) запустит уже он.
+        "browser" => {
+            let opt = |k: &str, d: u64| ctx.options.get(k).and_then(Value::as_u64).unwrap_or(d);
+            let request = shared_browser::OpenRequest {
+                url: ctx.options.get("url").and_then(Value::as_str).unwrap_or("").to_string(),
+                profile: ctx.options.get("profile").and_then(Value::as_str).unwrap_or("own").to_string(),
+                cookies: ctx.options.get("cookies").and_then(Value::as_array).cloned().unwrap_or_default(),
+                width: opt("width", 1280) as u32,
+                height: opt("height", 720) as u32,
+                // 0 — частота экрана запустившего (до 240).
+                fps: match opt("fps", 0) {
+                    0 => shared_browser::display_refresh_rate(),
+                    n => n.clamp(5, 240),
+                },
+                ctx: ctx.clone(),
+            };
+            shared_browser::mark_browser_stream(stream);
+            if ctx.events.proxy().send_event(AppEvent::SharedBrowser(shared_browser::Command::Open(Box::new(request)))).is_err() {
+                ctx.fail("failed", "цикл событий окна закрыт");
+            }
+        }
         other => ctx.fail("unsupported", format!("неизвестный вид захвата {other}")),
     }
 }

@@ -155,6 +155,24 @@ ZaliMixin(ZaliInterface, class {
         this.renderContacts();
     }
 
+    isPeerPinned(peer) {
+        return !!this.pinnedChats()[String(peer || '').trim()];
+    }
+
+    // Закреплённый диалог всегда стоит над остальными (renderContacts);
+    // последний закреплённый — первым, как в привычных мессенджерах.
+    togglePinPeer(peer) {
+        const key = String(peer || '').trim();
+        if (!key) return;
+        const pinned = this.pinnedChats();
+        if (pinned[key]) delete pinned[key];
+        // Строго больше любого прежнего: два закрепления в одну миллисекунду
+        // (или со сбитыми часами) не должны давать ничью в порядке.
+        else pinned[key] = Math.max(Date.now(), ...Object.values(pinned).map(v => v + 1));
+        this.saveStoredPinnedChats();
+        this.renderContacts();
+    }
+
     ensureContactRelationCache() {
         if (!this._contactRelationCache) this._contactRelationCache = new Map();
         return this._contactRelationCache;
@@ -321,6 +339,7 @@ ZaliMixin(ZaliInterface, class {
         const name = String(peer || '').trim();
         if (!name) return;
         const muted = !!(this.S.mutedChats || {})[name];
+        const pinned = this.isPeerPinned(name);
         const percent = this.getPeerVolumePercent(name);
         const isSelf = name === this.myName();
         // Известное по кешу отношение (уже видели этот профиль/меню/действие
@@ -348,7 +367,13 @@ ZaliMixin(ZaliInterface, class {
                 ${this.uiIcon('user-plus')}<span id="contactFriendLabel">${this.contactFriendLabel(relation)}</span>
             </button>`}
             <div class="peer-context-menu-sep" aria-hidden="true"></div>`;
-        menu.innerHTML = `${profileItems}
+        // Закрепление — только для диалогов из списка: не для себя и не для
+        // случайного человека из голосового канала.
+        const pinItem = (isSelf || fromVoice) ? '' : `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="pin">
+                ${this.uiIcon(pinned ? 'pin-off' : 'pin')}<span>${pinned ? 'Открепить' : 'Закрепить'}</span>
+            </button>`;
+        menu.innerHTML = `${profileItems}${pinItem}
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
                 ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
@@ -403,6 +428,10 @@ ZaliMixin(ZaliInterface, class {
             }
             this.closeContactContextMenu();
             void this.requestFriendship(name);
+        });
+        menu.querySelector('[data-action="pin"]')?.addEventListener('click', () => {
+            this.togglePinPeer(name);
+            this.closeContactContextMenu();
         });
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);

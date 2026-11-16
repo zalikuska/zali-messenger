@@ -40,7 +40,8 @@ enum ScreenSources {
     /// (звук приложения без звонка, web/src/interface/share_audio.js), не оболочка.
     static func pickableWindows(_ content: SCShareableContent) -> [SCWindow] {
         return content.windows.filter { w in
-            guard w.windowLayer == 0, w.isOnScreen,
+            // Скрытое окно «Общего браузера» (за пределами экранов) — не источник для показа.
+            guard w.windowLayer == 0, w.isOnScreen, !SharedBrowser.isHiddenWindow(Int(w.windowID)),
                   w.frame.width >= 80, w.frame.height >= 60,
                   let app = w.owningApplication else { return false }
             if app.bundleIdentifier == "com.apple.WindowManager" || app.bundleIdentifier == "com.apple.dock" { return false }
@@ -159,6 +160,8 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var encoder: H264Encoder?
     let sender: VideoStreamSender
     private(set) var label = ""
+    /// `display:<id>` / `window:<id>` — к экрану привязывается удалённое управление.
+    private(set) var sourceId = ""
     /// Звук системы в этом потоке не содержит звука самого приложения (tap без его
     /// процессов). false — SCStream (macOS < 14.2 или отказ тапа): процесс WebKit с
     /// голосами и уведомлениями там слышен, и страница не подмешивает звук приложения
@@ -204,6 +207,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     func start(sourceId: String, fps: Int, maxHeight: Int, audio: Bool, cursor: Bool) async throws {
         let (filter, title, px) = try await ScreenSources.filter(for: sourceId)
         label = title
+        self.sourceId = sourceId
         var (w, h) = fitVideoSize(sourceWidth: Int(px.width), sourceHeight: Int(px.height), maxWidth: 0, maxHeight: maxHeight)
         // Предел H.264 у VideoToolbox — 4096×2304.
         (w, h) = fitVideoSize(sourceWidth: w, sourceHeight: h, maxWidth: 4096, maxHeight: 2304)

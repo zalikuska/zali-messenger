@@ -57,10 +57,25 @@ pub(crate) fn sanitize_file_name(name: &str, fallback_extension: &str) -> String
     if trimmed.is_empty() {
         return format!("attachment.{fallback_extension}");
     }
-    let cleaned = trimmed.trim_start_matches('.').to_string();
+    // Windows молча отрезает хвостовые точки и пробелы, а имена устройств
+    // (CON, NUL, COM1…, в т. ч. «NUL.png») уводят запись в устройство — файл
+    // пропадал без ошибки. Управляющие символы недопустимы в именах вовсе.
+    let cleaned: String = trimmed
+        .trim_start_matches('.')
+        .trim_end_matches(|c: char| c == '.' || c == ' ')
+        .chars()
+        .map(|ch| if ch.is_control() { '_' } else { ch })
+        .collect();
+    let stem = cleaned.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit());
 
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "attachment".to_string()
+    } else if reserved {
+        format!("_{cleaned}")
     } else {
         cleaned
     }
@@ -137,10 +152,25 @@ pub(crate) fn sanitize_download_name(name: &str, fallback_extension: &str) -> St
     if trimmed.is_empty() {
         return format!("attachment.{fallback_extension}");
     }
-    let cleaned = trimmed.trim_start_matches('.').to_string();
+    // Windows молча отрезает хвостовые точки и пробелы, а имена устройств
+    // (CON, NUL, COM1…, в т. ч. «NUL.png») уводят запись в устройство — файл
+    // пропадал без ошибки. Управляющие символы недопустимы в именах вовсе.
+    let cleaned: String = trimmed
+        .trim_start_matches('.')
+        .trim_end_matches(|c: char| c == '.' || c == ' ')
+        .chars()
+        .map(|ch| if ch.is_control() { '_' } else { ch })
+        .collect();
+    let stem = cleaned.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit());
 
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "attachment".to_string()
+    } else if reserved {
+        format!("_{cleaned}")
     } else {
         cleaned
     }

@@ -31,6 +31,10 @@ run "negotiation (real client code, simulated server, virtual time)" \
     node scripts/voice_doctor/check_negotiation.mjs
 run "call records sync to the peer and to own devices" \
     node scripts/voice_doctor/check_call_records.mjs
+run "remote control: consent, input filtering, revoke (real client code)" \
+    node scripts/voice_doctor/check_remote_control.mjs
+run "shared browser: input filter, cursors, community profile (real client code)" \
+    node scripts/voice_doctor/check_shared_browser.mjs
 
 if [ "$WITH_TURN" = "1" ]; then
   run "live TURN relay path" python3 scripts/voice_doctor/check_turn.py

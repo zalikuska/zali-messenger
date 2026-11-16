@@ -326,6 +326,8 @@ pub(crate) async fn get_vapid_public_key(
     }
 }
 
+const MAX_PUSH_SUBSCRIPTIONS_PER_USER: i64 = 20;
+
 pub(crate) async fn subscribe_push(
     AuthenticatedUser(username): AuthenticatedUser,
     State(state): State<Arc<AppState>>,
@@ -342,6 +344,40 @@ pub(crate) async fn subscribe_push(
     if !is_acceptable_push_endpoint(endpoint) {
         warn!("Push subscription отклонена: endpoint не публичный https username={}", username);
         return (StatusCode::BAD_REQUEST, "Некорректный push endpoint").into_response();
+    }
+    // Чужую подписку (тот же endpoint) забрать себе можно только с её же ключами:
+    // браузер, сменивший аккаунт, присылает тот же p256dh/auth, а знающий лишь
+    // endpoint — свои. Раньше ON CONFLICT молча переписывал владельца и ключи.
+    match sqlx::query_as::<_, (String, String, String)>(
+        "SELECT username, p256dh, auth FROM push_subscriptions WHERE endpoint = ?",
+    )
+    .bind(endpoint)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some((owner, p256dh, auth)))
+            if owner != username
+                && (p256dh != body.keys.p256dh.trim() || auth != body.keys.auth.trim()) =>
+        {
+            warn!("Push subscription отклонена: endpoint принадлежит другому аккаунту username={}", username);
+            return StatusCode::CONFLICT.into_response();
+        }
+        Ok(None) => {
+            // Потолок подписок на аккаунт: каждая — исходящий POST на каждое сообщение.
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM push_subscriptions WHERE username = ?")
+                .bind(&username)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(0);
+            if count >= MAX_PUSH_SUBSCRIPTIONS_PER_USER {
+                return (StatusCode::TOO_MANY_REQUESTS, "Слишком много push-подписок").into_response();
+            }
+        }
+        Ok(Some(_)) => {}
+        Err(e) => {
+            tracing::error!("Ошибка чтения push subscription: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     let device_id = header_device_id(&headers).or_else(|| {
         body.device_id
@@ -525,12 +561,29 @@ pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
             if let Some(mapped) = v6.to_ipv4_mapped() {
                 return is_public_ip(std::net::IpAddr::V4(mapped));
             }
-            let first = v6.segments()[0];
+            let seg = v6.segments();
+            let first = seg[0];
+            // Адреса, встраивающие IPv4: NAT64 (64:ff9b::/96), 6to4 (2002::/16) и
+            // устаревшие IPv4-compatible (::a.b.c.d) — судим по вложенному IPv4.
+            if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0] {
+                let o = v6.octets();
+                return is_public_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::new(o[12], o[13], o[14], o[15])));
+            }
+            if first == 0x2002 {
+                let o = v6.octets();
+                return is_public_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::new(o[2], o[3], o[4], o[5])));
+            }
+            if seg[..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback() && !v6.is_unspecified() {
+                let o = v6.octets();
+                return is_public_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::new(o[12], o[13], o[14], o[15])));
+            }
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80)
+                || (first & 0xffc0) == 0xfe80
+                || (first & 0xffc0) == 0xfec0
+                || (first == 0x2001 && seg[1] == 0x0db8))
         }
     }
 }
@@ -539,24 +592,29 @@ pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
 /// не спасает: домен злоумышленника может указывать на внутренний адрес :443.
 /// Окно между проверкой и соединением остаётся, поэтому это второй слой, а не
 /// замена `is_acceptable_push_endpoint`.
-async fn endpoint_resolves_public(endpoint: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(endpoint) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let Ok(addrs) = tokio::net::lookup_host((host, 443)).await else {
-        return false;
-    };
-    let mut any = false;
-    for addr in addrs {
-        any = true;
-        if !is_public_ip(addr.ip()) {
-            return false;
-        }
+/// Возвращает имя и проверенный адрес: соединение затем идёт ровно на него
+/// (`pinned_push_client`), а не на результат второго резолва — иначе DNS
+/// rebinding отвечал «публичный» проверке и «внутренний» соединению.
+async fn endpoint_resolves_public(endpoint: &str) -> Option<(String, std::net::SocketAddr)> {
+    let url = reqwest::Url::parse(endpoint).ok()?;
+    let host = url.host_str()?.to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port)).await.ok()?.collect();
+    if addrs.is_empty() || addrs.iter().any(|addr| !is_public_ip(addr.ip())) {
+        return None;
     }
-    any
+    Some((host, addrs[0]))
+}
+
+/// Клиент, который соединяется только с уже проверенным адресом endpoint'а.
+fn pinned_push_client(host: &str, addr: std::net::SocketAddr) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(host, addr)
+        .build()
+        .unwrap_or_else(|_| web_push_client())
 }
 
 /// Every push channel of `username`: Web Push subscriptions of their browsers and FCM
@@ -642,10 +700,10 @@ async fn send_one_web_push(state: &Arc<AppState>, username: &str, payload: &str,
         warn!("Push endpoint отклонён (не публичный https) id={}", id);
         return;
     }
-    if !endpoint_resolves_public(&endpoint).await {
+    let Some((pinned_host, pinned_addr)) = endpoint_resolves_public(&endpoint).await else {
         warn!("Push endpoint отклонён (резолвится во внутренний адрес или не резолвится) id={}", id);
         return;
-    }
+    };
     let subscription_info = SubscriptionInfo {
         endpoint: endpoint.clone(),
         keys: SubscriptionKeys { p256dh, auth },
@@ -675,7 +733,7 @@ async fn send_one_web_push(state: &Arc<AppState>, username: &str, payload: &str,
         }
     };
 
-    let http_client = web_push_client();
+    let http_client = pinned_push_client(&pinned_host, pinned_addr);
     let mut request = http_client.post(message.endpoint.to_string()).header("TTL", message.ttl.to_string());
     if let Some(urgency) = message.urgency {
         request = request.header("Urgency", urgency.to_string());

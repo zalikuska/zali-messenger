@@ -125,12 +125,15 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
         fetch(event.request)
             .then((response) => {
-                if (response.ok) {
+                // Кешируем только сам каркас: URL с query (`/?open={"sender":…}` из
+                // уведомлений и т. п.) копили в CacheStorage имена собеседников и
+                // росли без предела; офлайн их отдаст каркас по пути без query.
+                if (response.ok && !url.search && response.type === 'basic') {
                     const clone = response.clone();
                     caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
                 }
                 return response;
             })
-            .catch(() => caches.match(event.request).then((cached) => cached || Promise.reject(new Error('offline'))))
+            .catch(() => caches.match(event.request, { ignoreSearch: true }).then((cached) => cached || Promise.reject(new Error('offline'))))
     );
 });

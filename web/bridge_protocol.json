@@ -201,6 +201,8 @@
       "fields": [
         "url",
         "sha256",
+        "version",
+        "signature",
         "requestId"
       ]
     },

@@ -33,7 +33,7 @@ import addon_sign  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KEY = ROOT / "ops" / "keys" / "addon-official-private.pem"
-PLATFORMS = ("macos", "windows")
+PLATFORMS = ("macos", "windows", "android")
 
 
 def release_message(platform, version, sha256, url):

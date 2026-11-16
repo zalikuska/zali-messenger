@@ -531,9 +531,21 @@ pub(crate) async fn set_message_reaction(
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    let allowed = can_access_message(&state, &message, &auth_user)
+    let mut allowed = can_access_message(&state, &message, &auth_user)
         .await
         .unwrap_or(false);
+    // Реакция — запись: в канале сервера нужна возможность писать, а не только
+    // читать (читать публичный канал может и не участник).
+    if allowed {
+        if let (Some(sid), Some(cid)) = (message.server_id.as_deref(), message.channel_id.as_deref()) {
+            allowed = can_access_channel(&state.db, sid, cid, &auth_user, "send")
+                .await
+                .unwrap_or(false);
+        }
+    }
+    if allowed && !crate::rate_allow(&state, format!("reaction:{}", auth_user.to_lowercase()), 120) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     if !allowed {
         warn!(
             "Попытка поставить реакцию к чужому сообщению: {} → {}",
@@ -671,6 +683,8 @@ pub(crate) async fn upload_server_message(
     )
     .await
 }
+
+const UPLOAD_MIB_PER_HOUR: usize = 2048;
 
 pub(crate) async fn upload_message_with_context(
     auth_user: String,
@@ -815,6 +829,19 @@ pub(crate) async fn upload_message_with_context(
                             let _ = fs::remove_file(&temp_path).await;
                             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                         }
+                        // Объём на человека: 2 ГиБ в час. Одного счётчика сообщений
+                        // мало — 300 загрузок по 10 МиБ в минуту заполняли диск.
+                        let mib = file_bytes.div_ceil(1024 * 1024).max(1) as usize;
+                        if !crate::rate_allow_weighted(
+                            &state,
+                            format!("upload-mib:{}", auth_user.to_lowercase()),
+                            mib,
+                            UPLOAD_MIB_PER_HOUR,
+                            std::time::Duration::from_secs(3600),
+                        ) {
+                            let _ = fs::remove_file(&temp_path).await;
+                            return (StatusCode::TOO_MANY_REQUESTS, "Превышен объём загрузок за час").into_response();
+                        }
                         wrote_file = true;
                     }
                     _ => {} // Ignore unknown fields
@@ -889,11 +916,17 @@ pub(crate) async fn upload_message_with_context(
             )
                 .into_response();
         }
+        // Канал обязан принадлежать названному серверу: иначе права канала чужого
+        // сервера проверялись по ролям этого. Чужой канал — то же, что запрет.
+        let channel_in_server = crate::channel_belongs_to_server(&state.db, &sid, &cid)
+            .await
+            .unwrap_or(false);
         match get_server_access_context(&state.db, &sid, &auth_user).await {
             Ok(Some((_server, _role))) => {
-                if !can_access_channel(&state.db, &sid, &cid, &auth_user, "send")
-                    .await
-                    .unwrap_or(false)
+                if !channel_in_server
+                    || !can_access_channel(&state.db, &sid, &cid, &auth_user, "send")
+                        .await
+                        .unwrap_or(false)
                 {
                     let receiver_is_user = sqlx::query_scalar::<_, String>(
                         "SELECT username FROM users WHERE username = ? LIMIT 1",

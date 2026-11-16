@@ -4,7 +4,7 @@
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
-    // --- App updates (macOS/Windows native shells only — see nativeSupports('appUpdate')) ---
+    // --- App updates (нативные оболочки macOS/Windows/Android — см. nativeSupports('appUpdate')) ---
 
     updateDeclinedStorageKey() {
         return 'zali_update_declined_version';
@@ -43,6 +43,17 @@ ZaliMixin(ZaliInterface, class {
         };
         try {
             localStorage.setItem(this.updateInstallAttemptsStorageKey(), JSON.stringify(next));
+        } catch (e) {}
+    }
+
+    // Установка не началась вовсе (Android: нет разрешения ставить приложения, и
+    // открылись настройки) — такая попытка не должна приближать «установка не
+    // срабатывает» после второго раза.
+    forgetUpdateInstallAttempt(version) {
+        const previous = this.loadUpdateInstallAttempts();
+        if (previous.version !== String(version || '').trim() || previous.count <= 0) return;
+        try {
+            localStorage.setItem(this.updateInstallAttemptsStorageKey(), JSON.stringify({ ...previous, count: previous.count - 1 }));
         } catch (e) {}
     }
 
@@ -309,7 +320,9 @@ ZaliMixin(ZaliInterface, class {
                 error: !releaseSigned
                     ? `Обновление ${latestVersion} не подписано разработчиками, поэтому не будет установлено автоматически. Дождитесь исправленной сборки или скачайте приложение заново с официального сайта.`
                     : installKeepsFailing
-                    ? `Обновление ${latestVersion} уже устанавливалось, но версия не сменилась. Установите его вручную (на Windows — запустите приложение от имени администратора либо скачайте .exe по ссылке ниже).`
+                    ? (platform === 'android'
+                        ? `Обновление ${latestVersion} уже устанавливалось, но версия не сменилась. Если установщик сообщил «Приложение не установлено», APK подписан другим ключом — установите его вручную.`
+                        : `Обновление ${latestVersion} уже устанавливалось, но версия не сменилась. Установите его вручную (на Windows — запустите приложение от имени администратора либо скачайте .exe по ссылке ниже).`)
                     : '',
             };
             this.renderHub();
@@ -414,6 +427,10 @@ ZaliMixin(ZaliInterface, class {
                 type: NativeMessageTypes.DOWNLOAD_UPDATE_REQUEST,
                 url: status.downloadUrl,
                 sha256: status.sha256,
+                // Оболочки macOS/Windows сверяют подпись сами: проверке в JS одной
+                // верить нельзя — мост принял бы любой адрес от любого скрипта.
+                version: status.version,
+                signature: status.signature,
             }, 10 * 60 * 1000);
             this.S.updateStatus = { ...this.S.updateStatus, downloading: false, progress: 1, readyToInstall: true };
         } catch (e) {
@@ -426,7 +443,20 @@ ZaliMixin(ZaliInterface, class {
     }
 
     handleUpdateEvent(payload) {
-        if (String(payload?.kind || '') !== 'progress') return;
+        const kind = String(payload?.kind || '');
+        if (kind === 'install_error') {
+            // Установщик не открылся (Android, AppUpdater.install): ответ на
+            // INSTALL_UPDATE_REQUEST никто не ждёт, поэтому причина приходит событием.
+            const current = this.S.updateStatus || {};
+            if (!current.available) return;
+            this.forgetUpdateInstallAttempt(current.version);
+            this.S.updateStatus = { ...current, error: String(payload?.message || 'Не удалось начать установку.') };
+            this.renderUpdateModal();
+            this.renderHub();
+            this.openUpdateModal();
+            return;
+        }
+        if (kind !== 'progress') return;
         const status = this.S.updateStatus || {};
         if (!status.downloading) return;
         this.S.updateStatus = { ...status, progress: Number(payload?.progress || 0) };

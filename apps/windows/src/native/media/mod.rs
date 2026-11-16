@@ -47,6 +47,9 @@ mod loopback;
 mod mf;
 #[cfg(target_os = "windows")]
 mod mic;
+pub(crate) mod remote_control;
+// «Общий браузер»: чистые правила — везде, скрытый WebView2 — только Windows.
+pub(crate) mod shared_browser;
 #[cfg(target_os = "windows")]
 mod screen;
 #[cfg(target_os = "windows")]

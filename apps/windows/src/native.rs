@@ -58,7 +58,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b58";
+const APP_DISPLAY_VERSION: &str = "0.2b59";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -98,6 +98,10 @@ pub enum AppEvent {
     /// Светлота темы сменилась (SET_APPEARANCE из styler.js): фон WebView2 под
     /// страницей — тот, что виден при ресайзе и до первой отрисовки.
     SetWindowBackground((u8, u8, u8)),
+    /// «Общий браузер» (native/media/shared_browser.rs): скрытый WebView2 создаётся и
+    /// управляется из потока окна — вне обработчиков событий WebView2 основного окна.
+    #[cfg(target_os = "windows")]
+    SharedBrowser(media::shared_browser::Command),
 }
 
 /// "#rrggbb" → (r, g, b).
@@ -360,6 +364,10 @@ struct NativeCapabilities {
     native_camera: bool,
     native_screen: bool,
     native_screen_audio: bool,
+    /// Удалённое управление по разрешению (native/media/remote_control.rs).
+    native_remote_control: bool,
+    /// «Общий браузер» — скрытый WebView2 (native/media/shared_browser.rs).
+    native_shared_browser: bool,
     /// Управление из терминала по токену (native/control.rs), включается в настройках.
     control_server: bool,
 }
@@ -397,6 +405,8 @@ impl Default for NativeCapabilities {
             native_camera: media::NATIVE_MEDIA,
             native_screen: media::NATIVE_MEDIA,
             native_screen_audio: media::NATIVE_MEDIA,
+            native_remote_control: media::NATIVE_MEDIA,
+            native_shared_browser: media::NATIVE_MEDIA,
             control_server: true,
         }
     }
@@ -1138,6 +1148,29 @@ fn dispatch_ui_event(proxy: &EventLoopProxy<AppEvent>, event: UiBusEvent, payloa
     )));
 }
 
+/// Адрес сервера приходит из JS, а с ним уходит Bearer-токен. Открытый http/ws
+/// допустим только для локальной/частной сети (свой сервер в LAN).
+fn acceptable_base_url(value: &str, secure: &str, plain: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value.trim()) else {
+        return false;
+    };
+    let scheme = url.scheme();
+    if scheme == secure {
+        return url.host_str().is_some();
+    }
+    if scheme != plain {
+        return false;
+    }
+    let Some(host) = url.host_str().map(|h| h.trim_matches(|c| c == '[' || c == ']').to_lowercase()) else {
+        return false;
+    };
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_private() || ip.is_loopback(),
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback(),
+        Err(_) => host == "localhost" || host.ends_with(".local") || host.ends_with(".localhost"),
+    }
+}
+
 pub fn handle_ipc_message(
     message: String,
     state: Arc<Mutex<NativeState>>,
@@ -1505,10 +1538,21 @@ pub fn handle_ipc_message(
                 );
                 return;
             }
+            let field = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if !crate::native::updates::verify_release_signature(&field("version"), &sha256, &url, &field("signature")) {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::NativeResponse,
+                    json!({ "requestId": request_id, "ok": false, "error": "Обновление не подписано разработчиками — загрузка отменена" }),
+                );
+                return;
+            }
             let proxy_for_task = proxy.clone();
+            let sha_for_install = sha256.clone();
             runtime.spawn(async move {
                 match download_update(url, sha256, proxy_for_task.clone()).await {
                     Ok(path) => {
+                        crate::native::updates::set_pending_update_sha(Some(sha_for_install));
                         set_pending_update_path(Some(path));
                         dispatch_ui_event(
                             &proxy_for_task,
@@ -2176,16 +2220,31 @@ pub fn handle_ipc_message(
         }
         BridgeProtocolMessageType::NetworkConfig => {
             if let Ok(mut guard) = state.lock() {
+                let previous_host = reqwest::Url::parse(&guard.api_base_url())
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_lowercase));
                 guard.api_base_url = payload
                     .get("apiBaseUrl")
                     .and_then(Value::as_str)
                     .map(|value| value.to_string())
-                    .filter(|value| !value.trim().is_empty());
+                    .filter(|value| !value.trim().is_empty())
+                    .filter(|value| acceptable_base_url(value, "https", "http"));
                 guard.ws_base_url = payload
                     .get("wsBaseUrl")
                     .and_then(Value::as_str)
                     .map(|value| value.to_string())
-                    .filter(|value| !value.trim().is_empty());
+                    .filter(|value| !value.trim().is_empty())
+                    .filter(|value| acceptable_base_url(value, "wss", "ws"));
+                // Токен выдан конкретным сервером: сменился хост — старый токен
+                // новому не отдаём (иначе JS одной командой перенаправлял все
+                // запросы с токеном на свой адрес, и это переживало перезапуск).
+                let next_host = reqwest::Url::parse(&guard.api_base_url())
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_lowercase));
+                if previous_host != next_host && guard.auth_token.is_some() {
+                    trace(format!("NETWORK_CONFIG host changed {:?} -> {:?}; dropping session token", previous_host, next_host));
+                    guard.auth_token = None;
+                }
                 guard.persist_config();
                 trace(format!(
                     "NETWORK_CONFIG api={:?} ws={:?}",

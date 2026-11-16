@@ -211,7 +211,19 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             return
         }
         let scheme = url.scheme?.lowercased() ?? ""
-        if scheme == "file" || scheme == "about" || scheme == "blob" {
+        // file: — только каталог веба внутри бандла: любой другой file://-документ
+        // в главном фрейме получил бы мост (токен, ключи).
+        if scheme == "file" {
+            let webDir = Bundle.main.resourceURL?.appendingPathComponent("Web", isDirectory: true).standardizedFileURL.path ?? ""
+            let path = url.standardizedFileURL.path
+            if !webDir.isEmpty && (path == webDir || path.hasPrefix(webDir + "/")) {
+                decisionHandler(.allow)
+            } else {
+                decisionHandler(.cancel)
+            }
+            return
+        }
+        if scheme == "about" || scheme == "blob" {
             decisionHandler(.allow)
             return
         }
@@ -245,6 +257,10 @@ final class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     /// `iOS/README.md`.
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
+        // Мост — только главному фрейму (как на macOS): обработчик зарегистрирован
+        // для всех фреймов, и дочерний (песочница аддона и т. п.) иначе слал бы
+        // SET_KEY / SEND_MESSAGE / API_REQUEST от имени человека.
+        guard message.frameInfo.isMainFrame else { return }
         guard let dict = message.body as? [String: Any] else { return }
         handleNativeMessage(dict)
     }

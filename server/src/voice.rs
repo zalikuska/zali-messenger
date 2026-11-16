@@ -672,6 +672,20 @@ fn dm_room_participants(room_id: &str) -> Option<(String, String)> {
     if a.is_empty() || b.is_empty() || a.eq_ignore_ascii_case(b) {
         return None;
     }
+    // Необязательный третий сегмент — метка звонка (короткая, без двоеточий);
+    // больше сегментов не бывает. Иначе каждый произвольный суффикс давал новую
+    // комнату, таймер и звонок на устройства адресата.
+    if let Some(stamp) = parts.next() {
+        if stamp.is_empty()
+            || stamp.len() > 40
+            || !stamp.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return None;
+        }
+    }
+    if parts.next().is_some() {
+        return None;
+    }
     Some((a.to_string(), b.to_string()))
 }
 
@@ -794,6 +808,21 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
             sender, room_id, room_type, call_state
         );
         return;
+    }
+    // Пока личный звонок звонит, согласования ещё нет: звонящий шлёт offer только
+    // после voice_call_accepted. Ретранслировать SDP/ICE раньше — значит дать
+    // изменённому клиенту вызываемого поднять соединение и слушать микрофон
+    // звонящего во время гудков, до того как трубку взяли.
+    if room_type == "dm" && call_state == "ringing" {
+        let signal = &payload["signal"];
+        let kind = signal["type"].as_str().unwrap_or_default();
+        if matches!(kind, "offer" | "answer") || !signal["candidate"].is_null() {
+            warn!(
+                "[VOICE][ROUTE] reject pre-accept signal sender={} roomId={} type={}",
+                sender, room_id, kind
+            );
+            return;
+        }
     }
     // The account is in the room, but through another device. Offers from here are
     // what left a peer applying descriptions from two machines to one connection:
@@ -1176,6 +1205,21 @@ pub(crate) async fn handle_voice_event(
                     sender, target, room_key
                 );
                 send_voice_error(state, sender, &device, &room_key, "bad_request", "Некорректная комната звонка")
+                    .await;
+                return;
+            }
+            // Не больше трёх одновременно звонящих исходящих звонков с аккаунта.
+            let ringing_out = state
+                .voice_rooms
+                .iter()
+                .filter(|room| {
+                    room.key() != &room_key
+                        && room.call_state == "ringing"
+                        && room.initiator.as_deref() == Some(sender)
+                })
+                .count();
+            if ringing_out >= 3 {
+                send_voice_error(state, sender, &device, &room_key, "rate_limited", "Слишком много звонков одновременно")
                     .await;
                 return;
             }

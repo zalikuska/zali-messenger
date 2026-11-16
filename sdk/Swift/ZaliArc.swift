@@ -45,7 +45,11 @@ class ZaliArc {
     private func isPathSafe(outputDir: String, relPath: String) -> Bool {
         let baseURL = URL(fileURLWithPath: outputDir).standardized
         let fullURL = baseURL.appendingPathComponent(relPath).standardized
-        return fullURL.path.hasPrefix(baseURL.path)
+        // Сравнение по компонентам пути: строковый hasPrefix пропускал
+        // `../out_evil/f` при каталоге `/x/out` (совпадает префикс `/x/out`).
+        let base = baseURL.pathComponents
+        let full = fullURL.pathComponents
+        return full.count > base.count && Array(full.prefix(base.count)) == base
     }
 
     func pack(files: [(path: String, arcPath: String)], outputPath: String, zaliId: String, domain: String, password: String?) throws {
@@ -117,6 +121,8 @@ class ZaliArc {
         
         let flags = try readExact(handle, count: 1)[0]
         let isEnc = (flags & 1) != 0
+        // Как в sdk/Rust: при заданном пароле незашифрованный архив — подделка.
+        if !isEnc && password != nil { throw NSError(domain: "Z", code: 4, userInfo: nil) }
         let count = try readLE32(handle)
 
         var masterKey: SymmetricKey?, baseNonce: Data?
@@ -167,7 +173,9 @@ class ZaliArc {
     private func deriveKeyPBKDF2(password: String, salt: Data) -> SymmetricKey {
         var key = [UInt8](repeating: 0, count: 32)
         _ = salt.withUnsafeBytes { sPtr in
-            CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), password, password.count, sPtr.baseAddress!.assumingMemoryBound(to: UInt8.self), salt.count, CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), 100_000, &key, 32)
+            CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), password, password.utf8.count, sPtr.baseAddress!.assumingMemoryBound(to: UInt8.self), salt.count, CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), 210_000, &key, 32)
+            // Как в sdk/Rust (PBKDF2_ITERS = 210_000, длина пароля в байтах UTF-8):
+            // `password.count` — число символов, не байтов, и обрезал не-ASCII пароль.
         }
         return SymmetricKey(data: key)
     }

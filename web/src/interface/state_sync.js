@@ -507,6 +507,7 @@ ZaliMixin(ZaliInterface, class {
         if (lbl)  lbl.textContent = connected ? 'Подключено' : 'Переподключение...';
         // Точка статуса на своей аватарке в сайдбаре (device_activity.js).
         this.updateMeStatusDot();
+        this.refreshConnectionInfo?.();
         if (connected && !wasOn) void this.refreshMeDeviceActivity();
         // Точки «в сети» у собеседников (presence.js).
         if (connected !== wasOn) this.onPresenceConnectionChange(!!connected);

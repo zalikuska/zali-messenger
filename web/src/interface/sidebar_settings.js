@@ -29,6 +29,8 @@ ZaliMixin(ZaliInterface, class {
               icon: ico('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>') },
             { id: 'app', label: 'Приложение', sections: ['updates', 'autostart', 'cache'],
               icon: ico('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6M12 9v6"/>') },
+            { id: 'components', label: 'Компоненты', sections: ['remote-control'],
+              icon: ico('<path d="M9 4h4v2.5a1.5 1.5 0 0 0 3 0V4h4v6h-2.5a1.5 1.5 0 0 0 0 3H20v7h-6v-2.5a1.5 1.5 0 0 0-3 0V20H4v-7h2.5a1.5 1.5 0 0 0 0-3H4V4z"/>') },
             { id: 'dev', label: 'Для разработчиков', sections: ['perf', 'voice-trace', 'control', 'logs'],
               icon: ico('<path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/>') },
         ];

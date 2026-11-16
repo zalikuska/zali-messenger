@@ -359,6 +359,26 @@ pub(crate) async fn get_server_roles(
     }
 }
 
+
+/// Права, дающие власть над другими менеджерами и деньгами сервера, раздаёт
+/// только владелец (см. is_server_owner в servers.rs).
+async fn role_change_needs_owner(
+    pool: &SqlitePool,
+    server_id: &str,
+    role_id: Option<&str>,
+    payload: Option<&ServerRolePayload>,
+) -> bool {
+    if let Some(p) = payload {
+        if p.can_manage == Some(true) || p.can_manage_roles == Some(true) || p.can_manage_treasury == Some(true) {
+            return true;
+        }
+    }
+    match role_id {
+        Some(role) => crate::role_grants_manage(pool, server_id, role).await.unwrap_or(true),
+        None => false,
+    }
+}
+
 pub(crate) async fn create_server_role(
     AxumPath(server_id): AxumPath<String>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
@@ -370,6 +390,12 @@ pub(crate) async fn create_server_role(
         .unwrap_or(false)
     {
         return StatusCode::FORBIDDEN.into_response();
+    }
+
+if !crate::is_server_owner(&state.db, &server_id, &auth_user).await.unwrap_or(false)
+        && role_change_needs_owner(&state.db, &server_id, None.map(|r: &String| r.as_str()), Some(&payload)).await
+    {
+        return (StatusCode::FORBIDDEN, "Роли с «Управлением» меняет только владелец").into_response();
     }
 
     match create_server_role_record(&state.db, &server_id, &payload).await {
@@ -394,6 +420,12 @@ pub(crate) async fn update_server_role(
         return StatusCode::FORBIDDEN.into_response();
     }
 
+if !crate::is_server_owner(&state.db, &server_id, &auth_user).await.unwrap_or(false)
+        && role_change_needs_owner(&state.db, &server_id, Some(&role_id).map(|r: &String| r.as_str()), Some(&payload)).await
+    {
+        return (StatusCode::FORBIDDEN, "Роли с «Управлением» меняет только владелец").into_response();
+    }
+
     match update_server_role_record(&state.db, &server_id, &role_id, &payload).await {
         Ok(role) => Json(role).into_response(),
         Err(e) => {
@@ -416,6 +448,12 @@ pub(crate) async fn delete_server_role(
         .unwrap_or(false)
     {
         return StatusCode::FORBIDDEN.into_response();
+    }
+
+if !crate::is_server_owner(&state.db, &server_id, &auth_user).await.unwrap_or(false)
+        && role_change_needs_owner(&state.db, &server_id, Some(&role_id).map(|r: &String| r.as_str()), None).await
+    {
+        return (StatusCode::FORBIDDEN, "Роли с «Управлением» меняет только владелец").into_response();
     }
 
     match delete_server_role_record(&state.db, &server_id, &role_id).await {

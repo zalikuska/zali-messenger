@@ -312,19 +312,22 @@ pub(crate) async fn apply_to_delivery(
         }),
     )
     .await;
-    // Отправителю — только факт «получатель сейчас в игре», без названия игры:
-    // название он увидит сам, если получатель ему его показывает.
-    send_json_to_user(
-        state,
-        sender,
-        json!({
-            "type": "delivery_note",
-            "messageId": message_id,
-            "to": recipient,
-            "mode": mode.as_str(),
-        }),
-    )
-    .await;
+    // Отправителю — только факт «получатель сейчас в игре», без названия игры,
+    // и только если получатель вообще показывает свой игровой статус: при
+    // скрытом статусе эта заметка раскрывала, что он играет.
+    if crate::activity::public_activity(state, recipient).is_some() {
+        send_json_to_user(
+            state,
+            sender,
+            json!({
+                "type": "delivery_note",
+                "messageId": message_id,
+                "to": recipient,
+                "mode": mode.as_str(),
+            }),
+        )
+        .await;
+    }
     info!(
         "[FOCUS] message={} {} -> {} mode={}",
         message_id,
@@ -641,7 +644,10 @@ mod tests {
     async fn the_recipient_hears_the_policy_before_the_message_and_the_sender_gets_a_note() {
         let state = test_state().await;
         save(&state, "bob", json!({ "mode": "defer" })).await;
-        play(&state, "bob", "Dota 2");
+        let conn = play(&state, "bob", "Dota 2");
+        // Статус показывается — отправитель получает заметку (скрытый — см. ниже).
+        state.push_presence.get_mut(&conn).unwrap().activity.as_mut().unwrap()
+            .activity.as_mut().unwrap().shared = true;
         let (bob_tx, mut bob_rx) = tokio::sync::mpsc::channel(8);
         let (alice_tx, mut alice_rx) = tokio::sync::mpsc::channel(8);
         state.user_connections.entry("bob".into()).or_default().push(bob_tx);
@@ -659,6 +665,21 @@ mod tests {
         assert_eq!(note["to"], "bob");
         assert!(note.get("game").is_none(), "the game name must not leak to the sender");
         assert!(state.focus_pending.contains_key("m1"));
+    }
+
+    #[tokio::test]
+    async fn a_hidden_game_status_gives_the_sender_no_note() {
+        let state = test_state().await;
+        save(&state, "bob", json!({ "mode": "defer" })).await;
+        play(&state, "bob", "Dota 2"); // shared: false
+        let (bob_tx, mut bob_rx) = tokio::sync::mpsc::channel(8);
+        let (alice_tx, mut alice_rx) = tokio::sync::mpsc::channel(8);
+        state.user_connections.entry("bob".into()).or_default().push(bob_tx);
+        state.user_connections.entry("alice".into()).or_default().push(alice_tx);
+
+        assert_eq!(apply_to_delivery(&state, "alice", "bob", "m2").await, Some(FocusMode::Defer));
+        assert!(bob_rx.try_recv().is_ok(), "the recipient still gets the policy");
+        assert!(alice_rx.try_recv().is_err(), "a hidden status must not be revealed to the sender");
     }
 
     #[tokio::test]

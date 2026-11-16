@@ -1034,7 +1034,9 @@ pub(crate) async fn payout_from_treasury(
                         "Нельзя перевести казну самой себе",
                     ));
                 }
-                let Some(target) = get_server_accessibility(&state.db, &to).await? else {
+                // Как и у пополнения: получатель — сервер, в котором человек состоит
+                // (или публичный). Иначе 404/успех был оракулом id приватных серверов.
+                let Some((target, _role)) = crate::get_server_access_context(&state.db, &to, &actor).await? else {
                     return Ok(treasury_error(StatusCode::NOT_FOUND, "not_found", "Сервер не найден"));
                 };
                 TreasuryTarget::Server { id: target.id, name: target.name }

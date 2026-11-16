@@ -71,6 +71,7 @@ ZaliMixin(ZaliInterface, class {
             this.voice.remoteVideos.delete(name);
         }
         this.detachRemoteScreenStream(name);
+        this.onRemoteControlPeerClosed?.(name);
         if (this.voice.meterRemote.has(name)) {
             const meter = this.voice.meterRemote.get(name);
             try {

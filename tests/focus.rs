@@ -104,11 +104,16 @@ async fn send_dm(app: &TestApp, from: &RegisteredUser, to: &str) -> String {
 }
 
 async fn start_playing(ws: &mut Ws, game: &str) {
-    // share:false — игру получатель никому не показывает, но режим «в игре» её видит.
+    start_playing_shared(ws, game, false).await;
+}
+
+/// share:false — игру получатель никому не показывает, но режим «в игре» её видит;
+/// тогда и отправитель не получает delivery_note (иначе она раскрывала бы, что он играет).
+async fn start_playing_shared(ws: &mut Ws, game: &str, share: bool) {
     ws.send(WsMessage::Text(
         serde_json::json!({
             "type": "client_activity",
-            "activity": { "kind": "game", "name": game, "share": false }
+            "activity": { "kind": "game", "name": game, "share": share }
         })
         .to_string(),
     ))
@@ -172,7 +177,7 @@ async fn a_deferred_message_announces_itself_in_order_and_notify_now_releases_it
     let mut alice_ws = connect_ws(&app, &alice).await;
     let mut bob_ws = connect_ws(&app, &bob).await;
     let mut eve_ws = connect_ws(&app, &eve).await;
-    start_playing(&mut bob_ws, "Dota 2").await;
+    start_playing_shared(&mut bob_ws, "Dota 2", true).await;
     let _ = drain(&mut alice_ws, 100).await;
     let _ = drain(&mut bob_ws, 100).await;
     let _ = drain(&mut eve_ws, 100).await;

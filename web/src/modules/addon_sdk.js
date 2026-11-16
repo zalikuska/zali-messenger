@@ -6,7 +6,7 @@
 // ссылок на внешние переменные, только то, что есть в окне фрейма.
 //
 // Протокол: postMessage к window.parent.
-//   фрейм → хост   {channel: 'zali-addon-rpc', id, method, params}
+//   фрейм → хост   {channel: 'zali-addon-rpc', id, token, method, params}
 //   хост → фрейм   {channel: 'zali-addon-rpc', id, ok, result | error: {code, message}}
 //   хост → фрейм   {channel: 'zali-addon-event', event, data}
 // Байты ходят ArrayBuffer'ами с передачей владения. Разрешения проверяет хост;
@@ -14,8 +14,12 @@
 (function () {
     'use strict';
 
-    function zaliAddonSdk() {
+    function zaliAddonSdk(rpcToken) {
         'use strict';
+        // Токен экземпляра живёт только в этом замыкании, а сам <script> с ним
+        // удаляется до запуска кода аддона: документ, на который фрейм уйдёт
+        // навигацией (data:, без CSP аддона), вызвать хост уже не сможет.
+        try { if (document.currentScript) document.currentScript.remove(); } catch (e) { /* без разницы */ }
         if (window.zali) return;
         // WebRTC не подчиняется CSP (`connect-src` его не касается): через
         // ICE/TURN-адрес и учётные данные аддон без разрешения `network` мог бы
@@ -52,7 +56,7 @@
                 var id = seq;
                 pending.set(id, { resolve: resolve, reject: reject });
                 try {
-                    host.postMessage({ channel: RPC, id: id, method: method, params: params || {} }, '*', transfer || []);
+                    host.postMessage({ channel: RPC, id: id, token: rpcToken, method: method, params: params || {} }, '*', transfer || []);
                 } catch (e) {
                     pending.delete(id);
                     reject(ZaliAddonError('bad_params', (e && e.message) || String(e)));
@@ -294,8 +298,8 @@
 
     window.ZaliAddonSdk = Object.freeze({
         /** Исходник SDK, готовый для вставки в <script> песочницы. */
-        source() {
-            return `(${zaliAddonSdk.toString()})();`;
+        source(rpcToken) {
+            return `(${zaliAddonSdk.toString()})(${JSON.stringify(String(rpcToken || ''))});`;
         },
     });
 })();

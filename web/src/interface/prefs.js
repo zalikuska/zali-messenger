@@ -561,7 +561,7 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (!supported) {
-            statusText.textContent = 'Проверка версии доступна в приложении для macOS и Windows.';
+            statusText.textContent = 'Проверка версии доступна в приложении для macOS, Windows и Android.';
             return;
         }
         const status = this.S.updateStatus || {};

@@ -167,7 +167,7 @@ struct WebView {
                 try? FileManager.default.removeItem(at: path)
                 return
             }
-            try? value.write(to: path, atomically: true, encoding: .utf8)
+            try? writeSecretFile(value, to: path)
         }
 
         static func loadLegacyCryptoKey() -> String {
@@ -216,8 +216,26 @@ struct WebView {
             }
             let dir = base.appendingPathComponent("ZaliMessenger", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            // Здесь лежат ключ шифрования и приватный ключ устройства открытым
+            // текстом (без Keychain — см. выше). Каталог и эти файлы создавались
+            // 0755/0644: читать их мог любой пользователь этого Mac, которому
+            // открыт путь. Ужимаем права и у уже существующих файлов.
+            let fm = FileManager.default
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+            if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
+                for name in names where name == "legacy_crypto_key.txt"
+                    || (name.hasPrefix("shared_device_identity_") && name.hasSuffix(".json")) {
+                    try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dir.appendingPathComponent(name).path)
+                }
+            }
             return dir
         }()
+
+        /// Запись файла с секретом: сразу с правами 0600.
+        static func writeSecretFile(_ value: String, to path: URL) throws {
+            try value.write(to: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        }
 
         /// Appends a line to zali-debug.log under the shared app-support dir. Fed by the
         /// injected console hook (all JS console.* output) so the full in-app journal is
@@ -280,7 +298,7 @@ struct WebView {
                 guard error == nil, let raw = result as? String, !raw.isEmpty else { return }
                 let path = dir.appendingPathComponent("shared_device_identity_\(username).json")
                 do {
-                    try raw.write(to: path, atomically: true, encoding: .utf8)
+                    try WebView.Coordinator.writeSecretFile(raw, to: path)
                 } catch {
                     print("[ZALI][WEBVIEW] exportDeviceIdentity write failed err=\(error.localizedDescription)")
                 }
@@ -664,6 +682,12 @@ struct WebView {
             let sha256 = (dict["sha256"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !url.isEmpty, sha256.count == 64 else {
                 self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Некорректные параметры обновления"])
+                return
+            }
+            let version = (dict["version"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let signature = (dict["signature"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard UpdateService.verifyReleaseSignature(version: version, sha256: sha256, url: url, signatureB64: signature) else {
+                self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Обновление не подписано разработчиками — загрузка отменена"])
                 return
             }
             UpdateService.shared.downloadUpdate(

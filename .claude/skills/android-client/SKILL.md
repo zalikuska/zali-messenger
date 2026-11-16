@@ -111,5 +111,14 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   - `send_push` на сервере шлёт по обоим каналам (Web Push + FCM) сразу; то же
     решение «показывать ли пуш» по устройству, что и в вебе — скилл `notifications`.
 
+- **Автообновление — `AppUpdater.kt`** (возможность `appUpdate`, общий веб
+  `updates.js`). Платформу и версию вебу отдаёт `documentStartScript`
+  (`__ZALI_NATIVE_PLATFORM = "android"`, `__ZALI_NATIVE_APP_VERSION`). Версия —
+  **из PackageManager, не `BuildConfig.VERSION_NAME`**: та вклеивается в байткод
+  как константа, и инкрементальная сборка после бампа оставляла старую (проверено
+  живьём) — апдейтер предлагал бы ту же версию вечно. Ответ на
+  `INSTALL_UPDATE_REQUEST` веб не ждёт, поэтому отказ (нет разрешения ставить
+  приложения) дублируется событием `update_event` `kind: install_error`.
+
 Origin pin для навигации в `MainActivity.kt` — таблица в скилле
 `security-invariants`. Для правил дублирования `core/` под Android — `CLAUDE.md`.

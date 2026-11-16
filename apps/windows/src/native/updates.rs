@@ -35,6 +35,62 @@ pub(crate) fn pending_update_path() -> Option<PathBuf> {
     PENDING_UPDATE_PATH.lock().ok().and_then(|guard| guard.clone())
 }
 
+/// SHA-256 скачанного обновления: файл в %APPDATA% доступен на запись тому же
+/// пользователю, поэтому перед установкой хэш сверяется ещё раз.
+static PENDING_UPDATE_SHA: Mutex<Option<String>> = Mutex::new(None);
+
+pub(crate) fn set_pending_update_sha(sha: Option<String>) {
+    if let Ok(mut guard) = PENDING_UPDATE_SHA.lock() {
+        *guard = sha.map(|value| value.to_lowercase());
+    }
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn verify_pending_update(path: &std::path::Path) -> Result<(), String> {
+    let expected = PENDING_UPDATE_SHA
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .ok_or_else(|| "Обновление не проверено".to_string())?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{:02x}", b)).collect();
+    if actual != expected {
+        let _ = std::fs::remove_file(path);
+        return Err("Файл обновления изменился после проверки — установка отменена".to_string());
+    }
+    Ok(())
+}
+
+/// Публичная часть официального ключа (та же, что `OFFICIAL_PUBLIC_KEY` в
+/// web/src/modules/addon_format.js): несжатая точка P-256.
+const OFFICIAL_RELEASE_PUBLIC_KEY_B64: &str =
+    "BDUcWsKrt/KoOeUnExrEScgAqUD3JEPCDLS5OqWmER0pm+FXwhzClXxkEh0KG4WdLkm9czOJXgXSuMuYlOcrMWw=";
+
+/// Подпись релиза (формат `release_signature_message` в server/src/updates.rs и
+/// scripts/release_sign.py). Раньше её проверял только JS, а мост принимал любой
+/// https-адрес с любым SHA-256 — то есть доверял тому, кто прислал команду.
+pub(crate) fn verify_release_signature(version: &str, sha256: &str, url: &str, signature_b64: &str) -> bool {
+    use base64::Engine;
+    let platform = if cfg!(target_os = "macos") { "macos" } else { "windows" };
+    let message = format!(
+        "zali-release-sig:v1\n{platform}\n{version}\n{}\n{url}",
+        sha256.trim().to_lowercase()
+    );
+    let engine = base64::engine::general_purpose::STANDARD;
+    let (Ok(public), Ok(signature)) = (
+        engine.decode(OFFICIAL_RELEASE_PUBLIC_KEY_B64),
+        engine.decode(signature_b64.trim()),
+    ) else {
+        return false;
+    };
+    if signature.len() != 64 {
+        return false;
+    }
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_FIXED, public)
+        .verify(message.as_bytes(), &signature)
+        .is_ok()
+}
+
 pub(crate) async fn download_update(
     url: String,
     expected_sha256: String,
@@ -128,6 +184,7 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
     // alone cmd gets a console that has no window, and children inherit it.
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+    verify_pending_update(&new_exe_path)?;
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = updates_dir();
     let script_path = dir.join(format!("relaunch-{}.cmd", uuid::Uuid::new_v4()));
@@ -213,4 +270,25 @@ pub(crate) fn install_and_relaunch(new_exe_path: PathBuf, proxy: EventLoopProxy<
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn install_and_relaunch(_new_exe_path: PathBuf, _proxy: EventLoopProxy<AppEvent>) -> Result<(), String> {
     Err("Автообновление не поддерживается на этой платформе".to_string())
+}
+
+#[cfg(test)]
+mod release_signature_tests {
+    use super::verify_release_signature;
+
+    // Подписано официальным ключом через scripts/release_sign.py (платформа этой
+    // сборки — macos: тесты гоняются на машине разработчика).
+    const SIG: &str = "NjLWioJB9O/HFOvKHHEa751SuvcDHrzT7Glhpz259+Ja7/dumDeP45GYPvjup7tCzis0y/BmZXqNmFDYJOf/3A==";
+    const URL: &str = "https://msgs.zalikus.org/releases/x.exe";
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_official_signature_and_rejects_tampering() {
+        let sha = "ab".repeat(32);
+        assert!(verify_release_signature("0.2b99", &sha, URL, SIG));
+        assert!(!verify_release_signature("0.2b98", &sha, URL, SIG));
+        assert!(!verify_release_signature("0.2b99", &sha, "https://evil.example/x.exe", SIG));
+        assert!(!verify_release_signature("0.2b99", &"cd".repeat(32), URL, SIG));
+        assert!(!verify_release_signature("0.2b99", &sha, URL, ""));
+    }
 }

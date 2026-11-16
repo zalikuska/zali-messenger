@@ -50,9 +50,13 @@ ZaliMixin(ZaliInterface, class {
     // Ключи, токены, base64 — длинные непрерывные строки. Id сообщений (uuid с
     // дефисами) короче порога и остаются: без них отчёт нельзя сопоставить.
     scrubDiagnosticText(value) {
+        // base64url содержит «-»: без него в классе токен рвался на короткие
+        // куски и проходил. uuid (36 символов с дефисами) короче порога.
         return String(value || '')
             .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]')
-            .replace(/[A-Za-z0-9+/_=]{40,}/g, '[redacted]');
+            .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[redacted-jwt]')
+            .replace(/\b(zali_auth|ticket|token|secret|password)=[^\s&;"']+/gi, '$1=[redacted]')
+            .replace(/[A-Za-z0-9+/_=-]{40,}/g, '[redacted]');
     }
 
     diagnosticPlatform() {

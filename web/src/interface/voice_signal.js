@@ -4,6 +4,25 @@
 // поэтому поведение и неперечисляемость методов те же, что у class-тела.
 ZaliMixin(ZaliInterface, class {
 
+    /**
+     * Сигнал одному участнику текущего звонка в общем конверте `voice_signal`
+     * (сервер проставляет `from` и сигнал не разбирает). Им пользуются удалённое
+     * управление (`rc-*`) и «Общий браузер» (`sb-*`).
+     */
+    sendVoicePeerSignal(peer, signal) {
+        if (!peer || !this.voice?.roomId) return false;
+        return this.sendVoiceEvent({
+            type: 'voice_signal',
+            roomId: this.voice.roomId,
+            roomType: this.voice.roomType,
+            serverId: this.voice.serverId,
+            channelId: this.voice.channelId,
+            to: peer,
+            signal,
+        });
+    }
+
+
     // handleVoiceEvent is dispatched fire-and-forget from both sockets, so signal
     // application used to interleave freely across its awaits (ensureVoiceLocalStream,
     // setRemoteDescription, createAnswer). With one peer that is mostly survivable;
@@ -77,7 +96,13 @@ ZaliMixin(ZaliInterface, class {
         // voice_call_accepted has arrived, and by then this side set 'connecting'
         // inside performAcceptIncomingCall. So refusing outright costs nothing and
         // needs no queue — after the accept, syncVoicePeers negotiates from scratch.
-        if (String(this.voice.status || '') === 'incoming') {
+        //
+        // Same for the caller while its own call is still ringing ('calling'): the
+        // mic is already captured, and answering an offer that the callee's
+        // (modified) client sent before accepting handed it our live audio during
+        // the ring. voice_call_accepted moves the caller to 'connected' first.
+        const ringingStatus = String(this.voice.status || '');
+        if (ringingStatus === 'incoming' || ringingStatus === 'calling') {
             this.voiceDiag('signal-before-accept-refused', {
                 roomId,
                 from,
@@ -381,6 +406,17 @@ ZaliMixin(ZaliInterface, class {
                 this.scheduleVoiceNegotiationRetry('answer-apply-failed');
             }
             this.renderVoicePanel();
+            return;
+        }
+
+        // Удалённое управление (interface/remote_control.js): запрос, разрешение, ввод.
+        if (typeof signalPayload.type === 'string' && signalPayload.type.startsWith('rc-')) {
+            this.handleRemoteControlSignal?.(from, signalPayload);
+            return;
+        }
+        // «Общий браузер» (interface/shared_browser.js): состояние, конец, ввод без канала.
+        if (typeof signalPayload.type === 'string' && signalPayload.type.startsWith('sb-')) {
+            this.handleSharedBrowserSignal?.(from, signalPayload);
             return;
         }
 

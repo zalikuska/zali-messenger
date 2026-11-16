@@ -26,14 +26,18 @@ ZaliMixin(ZaliInterface, class {
         if (this.S.chatListFilter === 'unread' && unreadCount === 0) this.S.chatListFilter = 'all';
         const onlyUnread = this.S.chatListFilter === 'unread';
         this.renderChatFilter(all.length ? unreadCount : null);
+        // Закреплённые — над всеми, между собой по времени закрепления
+        // (свежезакреплённый выше); остальные — по последнему сообщению.
+        const pinnedAt = this.pinnedChats();
         const list = all
             .filter(contact => (!q || contact.toLowerCase().includes(q)) && (!onlyUnread || (this.S.unread[contact] || 0) > 0))
             .map((contact, index) => ({
                 name: contact,
+                pinnedAt: pinnedAt[contact] || 0,
                 lastMessageAt: this.conversationLastMessageAt(contact),
                 index,
             }))
-            .sort((a, b) => b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
+            .sort((a, b) => b.pinnedAt - a.pinnedAt || b.lastMessageAt - a.lastMessageAt || this.compareContactNames(a.name, b.name) || a.index - b.index)
             .map(item => item.name);
 
         if (list.length === 0) {
@@ -57,6 +61,7 @@ ZaliMixin(ZaliInterface, class {
             const badge = cnt > 0 ? `<div class="badge">${cnt > 99 ? '99+' : cnt}</div>` : '';
             const active = contact === this.S.current ? 'active' : '';
             const muted = this.isPeerMuted(contact);
+            const pinned = !!pinnedAt[contact];
             // Last-message time for the row's right column (hidden on desktop via
             // CSS, shown on the mobile Telegram-style list). Today → time,
             // otherwise a short date — same helpers the message list uses.
@@ -77,10 +82,13 @@ ZaliMixin(ZaliInterface, class {
                 : '';
             // has-unread — чтобы строку с новым можно было выделить целиком
             // (имя, превью), а не только бейджем в углу.
-            return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}" data-name="${this.esc(contact)}">
+            const pinBadge = pinned
+                ? `<span class="contact-pin-badge" title="Закреплён" aria-label="Закреплён">${this.uiIcon('pin')}</span>`
+                : '';
+            return `<div class="contact ${active}${cnt > 0 ? ' has-unread' : ''}${pinned ? ' is-pinned' : ''}" data-name="${this.esc(contact)}">
                 ${this.presenceAvatarSlotHTML(contact, `<div class="ava"${this.profileOpenAttrs(contact)}>${this.renderAvatarHTML(contact, 'avatar-img', contact)}</div>`)}
                 <div class="contact-info">
-                    <div class="contact-name">${this.esc(contact)}${gameBadge}</div>
+                    <div class="contact-name">${this.esc(contact)}${gameBadge}${pinBadge}</div>
                     <div class="contact-prev">${preview}</div>
                 </div>
                 <div class="contact-actions">

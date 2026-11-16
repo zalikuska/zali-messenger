@@ -185,6 +185,13 @@ impl ZaliSession {
         }
 
         let is_enc = flags & 1 != 0;
+        // Упаковщик шифрует всегда, когда задан пароль (pack: is_enc = password.is_some()).
+        // Незашифрованный архив при заданном ключе — подделка: флаг лежит в открытом
+        // заголовке, и без этой проверки любой (включая сервер) подсовывал в
+        // E2E-переписку открытый message.json от имени любого участника.
+        if !is_enc && self.password.is_some() {
+            return Err(ZaliError::AuthFailed);
+        }
         let mut key = [0u8; 32];
         let mut base_nonce = [0u8; 12];
         if is_enc {
@@ -228,11 +235,19 @@ impl ZaliSession {
                 return Err(ZaliError::PathTraversal);
             }
 
+            // Размеры из заголовка не доверенные: e_size больше остатка архива —
+            // подделка. Раньше vec![0; e_size] выделялся до любой проверки, и
+            // e_size ≈ 2^63 в присланном сообщении ронял получателя (panic через FFI).
+            let remaining = (archive.len() as u64).saturating_sub(cur.position());
+            if e_size > remaining {
+                return Err(ZaliError::FormatMismatch);
+            }
             let mut encoded = vec![0u8; e_size as usize];
             cur.read_exact(&mut encoded)?;
 
             let content = if is_enc {
-                let mut plain = Vec::with_capacity(o_size as usize);
+                // Открытый текст не длиннее шифротекста.
+                let mut plain = Vec::with_capacity(o_size.min(e_size) as usize);
                 for enc_chunk in encoded.chunks(CHUNK_SIZE + 16) {
                     let mut n_b = base_nonce;
                     let counter = u32::from_le_bytes(n_b[8..12].try_into().unwrap_or([0u8; 4]));
@@ -418,6 +433,13 @@ impl ZaliSession {
         }
 
         let is_enc = flags & 1 != 0;
+        // Упаковщик шифрует всегда, когда задан пароль (pack: is_enc = password.is_some()).
+        // Незашифрованный архив при заданном ключе — подделка: флаг лежит в открытом
+        // заголовке, и без этой проверки любой (включая сервер) подсовывал в
+        // E2E-переписку открытый message.json от имени любого участника.
+        if !is_enc && self.password.is_some() {
+            return Err(ZaliError::AuthFailed);
+        }
         let mut key = [0u8; 32];
         let mut base_nonce = [0u8; 12];
         if is_enc {

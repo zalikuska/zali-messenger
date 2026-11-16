@@ -698,6 +698,10 @@ fn main() -> wry::Result<()> {
     // Управление из терминала: поднимается, только если включено в настройках.
     native::control::init(proxy.clone());
 
+    // «Общий браузер» (native/media/shared_browser.rs): его окна живут в этом потоке.
+    #[cfg(target_os = "windows")]
+    let mut shared_browsers = native::media::shared_browser::Browsers::default();
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -734,6 +738,10 @@ fn main() -> wry::Result<()> {
                 }
                 #[cfg(not(target_os = "windows"))]
                 drop(frame);
+            }
+            #[cfg(target_os = "windows")]
+            Event::UserEvent(AppEvent::SharedBrowser(command)) => {
+                shared_browsers.handle(command);
             }
             Event::UserEvent(AppEvent::StartDrag) => {
                 if let Err(error) = window.drag_window() {

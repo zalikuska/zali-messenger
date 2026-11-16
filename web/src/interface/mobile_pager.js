@@ -271,6 +271,8 @@ ZaliMixin(ZaliInterface, class {
     /** Начало жеста: sections — разделы в порядке панели. */
     mobilePagerStart(sections) {
         if (!this.isMobileLayout?.() || !Array.isArray(sections) || sections.length < 2) return;
+        // Жест по панели начался с нажатия на кнопку — снимок касания больше не нужен.
+        this.mobilePagerDropPrepared();
         if (this.mobilePagerOnChatScreen()) return;
         const state = this.mobilePagerState();
         this.mobilePagerTeardown(true);
@@ -421,37 +423,81 @@ ZaliMixin(ZaliInterface, class {
         const state = this.mobilePagerState();
         const sections = this.isMobileLayout?.() ? this.mobilePagerSections() : [];
         const from = this.activeMobileNavSection?.();
-        let reduce = false;
-        try { reduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches; } catch (e) {}
-        const animate = !reduce && !state.active && from && from !== target
-            && sections.includes(from) && sections.includes(target)
-            && !this.mobilePagerOnChatScreen();
+        const animate = this.mobilePagerCanSlide(from, target, sections);
+        // Снимок, подготовленный ещё на нажатии (mobilePagerPrepareTap), — только для
+        // этого же перехода; иначе убрать, чтобы он не закрывал экран.
+        let prepared = state.prepared;
+        if (prepared && (!animate || prepared.from !== from || prepared.target !== target)) {
+            this.mobilePagerDropPrepared();
+            prepared = null;
+        }
         if (!animate) { doSwitch(); return; }
-        const before = this.mobilePagerCapture();
+        state.prepared = null;
+        const before = prepared ? prepared.before : this.mobilePagerCapture();
         doSwitch();
-        if (this.mobilePagerOnChatScreen() || this.activeMobileNavSection?.() !== target || !before) return;
         const real = this.mobilePagerRealScreen(target);
-        if (!real || typeof real.animate !== 'function') return;
+        if (this.mobilePagerOnChatScreen() || this.activeMobileNavSection?.() !== target || !before
+            || !real || typeof real.animate !== 'function') {
+            if (prepared) prepared.overlay.remove();
+            return;
+        }
         state.snaps[from] = before;
         // Снимок нового раздела устарел (его только что перерисовали) — свежий снимет
         // простой после перехода (scheduleMobilePagerCapture в teardown).
         delete state.snaps[target];
         const forward = sections.indexOf(target) > sections.indexOf(from);
-        this.mobilePagerSlideTap(before, real, forward);
+        this.mobilePagerSlideTap(before, real, forward, prepared);
     }
 
-    /** Контейнер настоящего экрана раздела, который въезжает при касании. */
-    mobilePagerRealScreen(section) {
-        if (section === 'chats' || section === 'servers') return document.querySelector('.sidebar');
-        return document.getElementById(({ hub: 'viewHub', zalicoin: 'viewZaliCoin' })[section] || '');
+    /** Переход касанием анимируется: оба раздела в панели, не экран чата, лента не стоит. */
+    mobilePagerCanSlide(from, target, sections) {
+        let reduce = false;
+        try { reduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches; } catch (e) {}
+        return !reduce && !this.mobilePagerState().active && !!from && from !== target
+            && sections.includes(from) && sections.includes(target)
+            && !this.mobilePagerOnChatScreen();
     }
 
-    // Касание: одна страница со снимком старого экрана уезжает, настоящий новый экран
-    // въезжает следом вплотную — вместе это та же лента. Подложка ленты прозрачная
-    // (.m-pager.is-tap): справа/слева от снимка виден настоящий экран под ней.
-    mobilePagerSlideTap(before, real, forward) {
+    // Нажатие на кнопку панели (pointerdown): снимок старого экрана снимается и ставится
+    // поверх него сразу, пока палец ещё лежит (~80–100 мс до click). Снимок совпадает с
+    // экраном, поэтому его появление не видно, а клон успевает посчитать стили, раскладку
+    // и растр в обычных кадрах. Без этого всё это шло одной задачей в обработчике click
+    // вместе с переключением раздела — 45–50 мс + 12–18 мс растра первого кадра
+    // (замер на телефоне 2026-11-16), переключение отставало от касания на ~100 мс.
+    // Если click не придёт (палец увели, начался жест по панели) — снимок убирается.
+    mobilePagerPrepareTap(target) {
         const state = this.mobilePagerState();
-        this.mobilePagerTeardown(true);
+        this.mobilePagerDropPrepared();
+        if (!this.isMobileLayout?.()) return;
+        const from = this.activeMobileNavSection?.();
+        if (!this.mobilePagerCanSlide(from, target, this.mobilePagerSections())) return;
+        const before = this.mobilePagerCapture();
+        if (!before) return;
+        const { overlay, track } = this.mobilePagerTapOverlay(before);
+        state.prepared = { from, target, before, overlay, track, timer: 0 };
+    }
+
+    /** Отпускание без click: подготовленный снимок живёт ещё немного — click идёт следом. */
+    mobilePagerReleasePrepared() {
+        const prepared = this.mobilePagerState().prepared;
+        if (!prepared) return;
+        clearTimeout(prepared.timer);
+        prepared.timer = setTimeout(() => {
+            if (this.mobilePagerState().prepared === prepared) this.mobilePagerDropPrepared();
+        }, 400);
+    }
+
+    mobilePagerDropPrepared() {
+        const state = this.mobilePagerState();
+        const prepared = state.prepared;
+        if (!prepared) return;
+        state.prepared = null;
+        clearTimeout(prepared.timer);
+        prepared.overlay.remove();
+    }
+
+    /** Лента касания: одна страница со снимком старого экрана, поверх интерфейса. */
+    mobilePagerTapOverlay(before) {
         const overlay = document.createElement('div');
         overlay.className = 'm-pager is-tap';
         overlay.setAttribute('aria-hidden', 'true');
@@ -465,13 +511,29 @@ ZaliMixin(ZaliInterface, class {
         overlay.appendChild(track);
         document.body.appendChild(overlay);
         // Прокрутка снимка — в кадре, а не здесь: запись scrollTop сразу после вставки
-        // посчитала бы раскладку (и всего нового экрана) синхронно. rAF идёт до
-        // отрисовки кадра, так что снимок ни разу не покажется непрокрученным.
+        // посчитала бы раскладку синхронно. rAF идёт до отрисовки кадра, так что снимок
+        // ни разу не покажется непрокрученным.
         try {
             requestAnimationFrame(() => {
                 for (const [el, top, left] of before.scrolls) { el.scrollTop = top; el.scrollLeft = left; }
             });
         } catch (e) { /* без rAF — снимок сверху */ }
+        return { overlay, track };
+    }
+
+    /** Контейнер настоящего экрана раздела, который въезжает при касании. */
+    mobilePagerRealScreen(section) {
+        if (section === 'chats' || section === 'servers') return document.querySelector('.sidebar');
+        return document.getElementById(({ hub: 'viewHub', zalicoin: 'viewZaliCoin' })[section] || '');
+    }
+
+    // Касание: одна страница со снимком старого экрана уезжает, настоящий новый экран
+    // въезжает следом вплотную — вместе это та же лента. Подложка ленты прозрачная
+    // (.m-pager.is-tap): справа/слева от снимка виден настоящий экран под ней.
+    mobilePagerSlideTap(before, real, forward, prepared = null) {
+        const state = this.mobilePagerState();
+        this.mobilePagerTeardown(true);
+        const { overlay, track } = prepared || this.mobilePagerTapOverlay(before);
         const dir = forward ? -1 : 1;
         const timing = { duration: PAGER_SETTLE_MS, easing: PAGER_EASING };
         const active = { overlay, track, sections: [], index: 0, p: 0, applied: 0, raf: 0, settling: true, anims: [] };
@@ -487,11 +549,9 @@ ZaliMixin(ZaliInterface, class {
             active.anims.push(track.animate([{ transform: 'translate3d(0, 0, 0)' }, { transform: `translate3d(${dir * 100}%, 0, 0)` }], timing));
             active.anims.push(real.animate([{ transform: `translate3d(${-dir * 100}%, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }], timing));
         } catch (e) { finish(); return; }
-        // Капля размытия в движении (smooth_scroll.js) — на обеих половинах ленты.
-        for (const el of [track, real]) {
-            const blur = this.motionBlurAnimate?.(el, { duration: PAGER_SETTLE_MS, peak: 1 });
-            if (blur) active.anims.push(blur);
-        }
+        // Размытия в движении (motionBlurAnimate) здесь нет и не должно быть: filter на
+        // живом экране перерисовывается каждый кадр, и на телефоне вся доводка шла
+        // ~30 fps (запись экрана 2026-11-16: медиана 32 мс между кадрами, без него — 17).
         active.anims[0].onfinish = finish;
         active.anims[0].oncancel = finish;
         setTimeout(finish, 420);

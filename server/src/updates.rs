@@ -214,8 +214,11 @@ pub(crate) async fn init_release_channels(pool: &sqlx::SqlitePool) {
     }
 }
 
+/// `android` — APK с апдейтером в `NativeBridge.kt` (скачивание, сверка SHA-256 и
+/// подписи APK, системный установщик). Новая платформа здесь — новая и в
+/// `scripts/release_sign.py::PLATFORMS`.
 fn is_supported_platform(platform: &str) -> bool {
-    matches!(platform, "macos" | "windows")
+    matches!(platform, "macos" | "windows" | "android")
 }
 
 /// Strict allowlist for `/releases/:filename`. This route is unauthenticated, so

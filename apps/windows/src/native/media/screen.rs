@@ -645,7 +645,8 @@ pub fn run(ctx: StartContext) {
         }
     }
     let opt_u = |key: &str, default: u64| ctx.options.get(key).and_then(Value::as_u64).unwrap_or(default);
-    let fps = opt_u("fps", 30).clamp(1, 60);
+    // До 240: «Общий браузер» идёт с частотой экрана; демонстрация экрана просит ≤ 60.
+    let fps = opt_u("fps", 30).clamp(1, 240);
     let max_height = opt_u("maxHeight", 0).min(4320) as u32;
     let cursor = ctx.options.get("cursor").and_then(Value::as_bool).unwrap_or(true);
     let want_audio = ctx.options.get("audio").and_then(Value::as_bool).unwrap_or(false);
@@ -682,6 +683,7 @@ pub fn run(ctx: StartContext) {
     let (w0, h0) = fit_even(size.Width.max(0) as u32, size.Height.max(0) as u32, max_height);
     ctx.started(json!({
         "codec": "nv12",
+        "fps": fps,
         "label": source_title(source),
         "sourceId": source.id(),
         "width": w0,

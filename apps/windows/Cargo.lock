@@ -5715,7 +5715,7 @@ dependencies = [
 
 [[package]]
 name = "zali_messenger_win"
-version = "0.2.57"
+version = "0.2.59"
 dependencies = [
  "base64 0.22.1",
  "block",
@@ -5727,6 +5727,7 @@ dependencies = [
  "objc",
  "raw-window-handle",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
@@ -5737,6 +5738,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "url",
  "uuid",
  "webview2-com",
  "windows 0.52.0",

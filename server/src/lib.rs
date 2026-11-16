@@ -66,6 +66,8 @@ mod activity;
 // Режим «в игре»: откладывание уведомлений о сообщениях. Тоже без glob-реэкспорта.
 mod focus;
 mod settings_sync;
+// Общий профиль «Общего браузера» сообщества (куки).
+mod browser_profiles;
 // Подпись аддонов, реестр авторов и казна аддонов (ZaliCoin).
 mod addon_cloud;
 mod addons;
@@ -744,6 +746,13 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .execute(&pool)
     .await
     .expect("Ошибка создания таблицы account_devices");
+    // SHA-256 секрета устройства (заголовок X-Zali-Device-Secret). ID устройства
+    // публичен, поэтому одобрять, отзывать, перерегистрировать устройство и читать
+    // его конверты можно только зная секрет, который есть лишь у самого устройства.
+    sqlx::query("ALTER TABLE account_devices ADD COLUMN secret_hash TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await
+        .ok();
     sqlx::query("ALTER TABLE account_devices ADD COLUMN history_days INTEGER NOT NULL DEFAULT 30")
         .execute(&pool)
         .await
@@ -1708,6 +1717,13 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    // Время официальной подписи, по которой аддон сейчас зарегистрирован:
+    // register_official не принимает подписи старше неё (иначе любой мог бы
+    // повторить давнюю подпись, вернуть прежнего владельца и стереть облако).
+    sqlx::query("ALTER TABLE addon_registry ADD COLUMN official_signed_at INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await
+        .ok();
     // Облако аддонов (addon_cloud.rs): один пул 10 МБ на аддон; область —
     // `shared` или `u:<имя>`. Прежняя таблица addon_cloud_data (по аккаунтам) не
     // выходила за разработку — стираем её, чтобы не путать.
@@ -1950,6 +1966,7 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .expect("Ошибка создания таблицы game_focus_settings");
 
     settings_sync::init_table(&pool).await;
+    browser_profiles::init_table(&pool).await;
 
     // Две зеркальные строки пришлось бы держать согласованными при каждом
     // удалении, а рассинхрон дал бы "друг у одного, не друг у другого".
@@ -2150,6 +2167,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             axum::http::header::CONTENT_TYPE,
             axum::http::header::COOKIE,
             HeaderName::from_static("x-zali-device-id"),
+            HeaderName::from_static("x-zali-device-secret"),
             // Web client's apiFetch() stamps every request with this for log
             // correlation (see loadStoredMessageCache-adjacent apiHeaders() in
             // interface.js). Missing here made the browser's CORS preflight silently
@@ -2382,6 +2400,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/game-focus",
             get(focus::get_settings).put(focus::put_settings),
+        )
+        .route(
+            "/api/servers/:server_id/browser-profile",
+            get(browser_profiles::get_profile).put(browser_profiles::put_profile),
         )
         .route(
             "/api/settings-sync",

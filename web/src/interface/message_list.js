@@ -445,7 +445,11 @@ ZaliMixin(ZaliInterface, class {
             rows.push(html);
         });
 
-        if (this.S.loading) {
+        // Скелетон — только для пустой ленты. Нативные шеллы держат S.loading всё
+        // время стартовой загрузки истории (setLoading), и раньше четыре серых
+        // «пузыря» дорисовывались ПОД уже показанной из кеша перепиской — при
+        // каждом открытии приложения последними в чате стояли пустые псевдосообщения.
+        if (this.S.loading && msgs.length === 0) {
             rows.push(
                 `<div class="sk sk-bubble sk-w2"></div>`,
                 `<div class="sk sk-bubble sk-w3 sk-self"></div>`,

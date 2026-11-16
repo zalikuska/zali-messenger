@@ -67,6 +67,30 @@ final class UpdateService: NSObject {
         session.dataTask(with: url).resume()
     }
 
+    /// Публичная часть официального ключа (та же, что `OFFICIAL_PUBLIC_KEY` в
+    /// web/src/modules/addon_format.js) — несжатая точка P-256.
+    private static let officialReleasePublicKeyB64 =
+        "BDUcWsKrt/KoOeUnExrEScgAqUD3JEPCDLS5OqWmER0pm+FXwhzClXxkEh0KG4WdLkm9czOJXgXSuMuYlOcrMWw="
+
+    /// Подпись релиза (формат `release_signature_message` в server/src/updates.rs).
+    /// Раньше её проверял только JS, а мост скачивал и ставил любой https-адрес
+    /// с SHA-256 из той же команды — то есть верил тому, кто её прислал.
+    static func verifyReleaseSignature(version: String, sha256: String, url: String, signatureB64: String) -> Bool {
+        let message = "zali-release-sig:v1\nmacos\n\(version)\n\(sha256.lowercased())\n\(url)"
+        guard let keyData = Data(base64Encoded: officialReleasePublicKeyB64),
+              let sigData = Data(base64Encoded: signatureB64.trimmingCharacters(in: .whitespacesAndNewlines)),
+              sigData.count == 64,
+              let key = try? P256.Signing.PublicKey(x963Representation: keyData),
+              let signature = try? P256.Signing.ECDSASignature(rawRepresentation: sigData) else {
+            return false
+        }
+        return key.isValidSignature(signature, for: Data(message.utf8))
+    }
+
+    /// SHA-256 проверенного архива: между проверкой и установкой файл лежит в
+    /// каталоге, доступном на запись, поэтому перед установкой сверяется снова.
+    private var verifiedSha256: String?
+
     private func verify(archivePath: URL, expectedSha256: String, completion: @escaping (Bool, URL?, String?) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             guard let data = try? Data(contentsOf: archivePath, options: .mappedIfSafe) else {
@@ -80,7 +104,10 @@ final class UpdateService: NSObject {
                 DispatchQueue.main.async { completion(false, nil, "Контрольная сумма обновления не совпадает") }
                 return
             }
-            DispatchQueue.main.async { completion(true, archivePath, nil) }
+            DispatchQueue.main.async {
+                self.verifiedSha256 = expectedSha256.lowercased()
+                completion(true, archivePath, nil)
+            }
         }
     }
 
@@ -92,6 +119,13 @@ final class UpdateService: NSObject {
     func installAndRelaunch(archivePath: URL, completion: @escaping (Bool, String?) -> Void) {
         guard let dir = Self.updatesDir else {
             completion(false, "Нет доступа к директории обновлений")
+            return
+        }
+        guard let expected = verifiedSha256,
+              let archiveData = try? Data(contentsOf: archivePath, options: .mappedIfSafe),
+              SHA256.hash(data: archiveData).map({ String(format: "%02x", $0) }).joined() == expected else {
+            try? FileManager.default.removeItem(at: archivePath)
+            completion(false, "Файл обновления изменился после проверки — установка отменена")
             return
         }
         let extractDir = dir.appendingPathComponent("extract-\(UUID().uuidString)", isDirectory: true)
@@ -132,34 +166,38 @@ final class UpdateService: NSObject {
         // recorded in install.log next to this script.
         let backupPath = currentAppPath + ".update-backup"
         let logPath = dir.appendingPathComponent("install.log").path
+        // Пути передаются аргументами ("$1"…), а не подставляются в текст скрипта:
+        // имя .app берётся из содержимого архива, и `$(…)` или кавычка в нём
+        // выполнились бы в shell.
         let script = """
         #!/bin/sh
-        log() { echo "[$(date -u +%FT%TZ)] $*" >> "\(logPath)"; }
-        while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do
+        LOG="$1"; PARENT_PID="$2"; STAGED="$3"; BACKUP="$4"; NEW_APP="$5"; CURRENT="$6"; EXTRACT="$7"; ARCHIVE="$8"; SELF="$9"
+        log() { echo "[$(date -u +%FT%TZ)] $*" >> "$LOG"; }
+        while kill -0 "$PARENT_PID" 2>/dev/null; do
             sleep 0.3
         done
-        rm -rf "\(stagedAppPath)" "\(backupPath)"
-        if ! ditto "\(newAppPath.path)" "\(stagedAppPath)"; then
+        rm -rf "$STAGED" "$BACKUP"
+        if ! ditto "$NEW_APP" "$STAGED"; then
             log "staging failed, keeping current version"
-            rm -rf "\(stagedAppPath)"
-            open "\(currentAppPath)"
-        elif ! mv "\(currentAppPath)" "\(backupPath)"; then
+            rm -rf "$STAGED"
+            open "$CURRENT"
+        elif ! mv "$CURRENT" "$BACKUP"; then
             log "could not move current app aside, keeping current version"
-            rm -rf "\(stagedAppPath)"
-            open "\(currentAppPath)"
-        elif mv "\(stagedAppPath)" "\(currentAppPath)"; then
+            rm -rf "$STAGED"
+            open "$CURRENT"
+        elif mv "$STAGED" "$CURRENT"; then
             log "updated"
-            rm -rf "\(backupPath)"
-            open "\(currentAppPath)"
+            rm -rf "$BACKUP"
+            open "$CURRENT"
         else
             log "swap failed, restoring previous version"
-            mv "\(backupPath)" "\(currentAppPath)"
-            rm -rf "\(stagedAppPath)"
-            open "\(currentAppPath)"
+            mv "$BACKUP" "$CURRENT"
+            rm -rf "$STAGED"
+            open "$CURRENT"
         fi
-        rm -rf "\(extractDir.path)"
-        rm -f "\(archivePath.path)"
-        rm -f "\(scriptPath.path)"
+        rm -rf "$EXTRACT"
+        rm -f "$ARCHIVE"
+        rm -f "$SELF"
         """
         do {
             try script.write(to: scriptPath, atomically: true, encoding: .utf8)
@@ -171,7 +209,11 @@ final class UpdateService: NSObject {
 
         let relaunch = Process()
         relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
-        relaunch.arguments = [scriptPath.path]
+        relaunch.arguments = [
+            scriptPath.path, logPath, String(ProcessInfo.processInfo.processIdentifier),
+            stagedAppPath, backupPath, newAppPath.path, currentAppPath,
+            extractDir.path, archivePath.path, scriptPath.path,
+        ]
         do {
             try relaunch.run()
             completion(true, nil)

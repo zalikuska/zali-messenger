@@ -48,7 +48,7 @@ query/explain/path` перед каждым Read/Grep по исходникам 
 - `APP_VERSION` в `scripts/build_app.sh` (macOS)
 - `APP_DISPLAY_VERSION` в `apps/windows/src/native.rs` (Windows — отображаемая/сравниваемая версия)
 - `version` в `apps/windows/Cargo.toml` (отдельное SemVer-значение только для Cargo: `0.2b22` → `0.2.22`, его никто не сравнивает)
-- `versionName`/`versionCode` в `apps/android/app/build.gradle.kts` (`versionCode = MAJOR*10000 + MINOR*1000 + BUILD`; у Android нет канала автообновления, номер только для опознания сборки)
+- `versionName`/`versionCode` в `apps/android/app/build.gradle.kts` (`versionCode = MAJOR*10000 + MINOR*1000 + BUILD`; по `versionCode` апдейтер Android проверяет, что скачанный APK новее установленного)
 
 Серверные коммиты идут тем же номером в `zali-server` — история обоих
 репозиториев должна читаться как один ряд версий. Публикация релиза

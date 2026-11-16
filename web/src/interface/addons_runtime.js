@@ -134,6 +134,9 @@ ZaliMixin(ZaliInterface, class {
             title: '',
             loadCount: 0,
             inflight: 0,
+            // Случайный токен RPC: проверка event.source одна не спасает — WindowProxy
+            // фрейма переживает навигацию, и документ data: слал вызовы до load.
+            rpcToken: this.randomBase64(24).replace(/[+/=]/g, ''),
             kv: null,
             kvWrite: Promise.resolve(),
             startedAt: Date.now(),
@@ -475,7 +478,7 @@ ZaliMixin(ZaliInterface, class {
         const theme = doc.createElement('style');
         theme.textContent = this.addonThemeCss();
         const sdk = doc.createElement('script');
-        sdk.textContent = escapeClosing(window.ZaliAddonSdk.source(), 'script');
+        sdk.textContent = escapeClosing(window.ZaliAddonSdk.source(instance.rpcToken), 'script');
         doc.head.prepend(csp, theme, sdk);
         return `<!doctype html>\n${doc.documentElement.outerHTML}`;
     }
@@ -518,6 +521,7 @@ ZaliMixin(ZaliInterface, class {
         if (!msg || typeof msg !== 'object' || msg.channel !== ZALI_ADDON_RPC) return;
         const instance = this.addonInstanceBySource(event.source);
         if (!instance) return;
+        if (!instance.rpcToken || msg.token !== instance.rpcToken) return;
         const id = Number(msg.id);
         if (!Number.isSafeInteger(id) || id <= 0) return;
         const method = String(msg.method || '');

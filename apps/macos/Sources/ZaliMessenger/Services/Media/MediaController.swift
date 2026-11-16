@@ -27,6 +27,7 @@ final class MediaController {
         case mic(MicCapture)
         case camera(CameraHub)
         case screen(ScreenCapture)
+        case browser(SharedBrowser)
         case starting(String)
     }
 
@@ -39,6 +40,9 @@ final class MediaController {
     private var deviceObservers: [NSObjectProtocol] = []
     private var devicesChangedPending = false
     private var keyframeRequests = 0
+    /// «Общий браузер»: тот же объект, что в `entries`, но для главного потока —
+    /// ввод (до 60 событий/с) идёт в WKWebView без прыжка через `queue`.
+    private var browsersOnMain: [UInt32: SharedBrowser] = [:]
 
     /// Поднимает транспорт кадров. Звать до создания WKWebView (порт уходит в user-скрипт).
     @discardableResult
@@ -63,7 +67,10 @@ final class MediaController {
     /// Флаги для `__ZALI_NATIVE_CAPS__` — только реализованное и только при живом мосте.
     var capabilities: [String: Bool] {
         guard bridgeReady else { return [:] }
-        return ["nativeMic": true, "nativeCamera": true, "nativeScreen": true, "nativeScreenAudio": true]
+        // nativeRemoteControl — удалённое управление по разрешению (RemoteControl.swift).
+        // nativeSharedBrowser — «Общий браузер» (SharedBrowser.swift).
+        return ["nativeMic": true, "nativeCamera": true, "nativeScreen": true, "nativeScreenAudio": true,
+                "nativeRemoteControl": true, "nativeSharedBrowser": true]
     }
 
     // MARK: - Запросы
@@ -76,9 +83,24 @@ final class MediaController {
         let deviceId = dict["deviceId"] as? String ?? ""
         let sourceId = dict["sourceId"] as? String ?? ""
         let kind = dict["kind"] as? String ?? ""
+        // rc_input — до 60 событий в секунду, в журнал не пишется (счётчик — в RemoteControl).
+        if op == "rc_input" {
+            RemoteControl.shared.input(stream: stream, options)
+            return
+        }
+        // Ввод «Общего браузера» — тоже без журнала; handle зовётся с главного потока.
+        if op == "browser_input" {
+            let run: () -> Void = { self.browsersOnMain[stream]?.input(options) }
+            if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
+            return
+        }
         if op != "request_keyframe" {
+            // Куки и адреса «Общего браузера» в журнал не пишутся — только их число.
+            var logged = options
+            if let cookies = logged["cookies"] as? [Any] { logged["cookies"] = cookies.count }
+            if logged["url"] != nil { logged["url"] = "…" }
             // deviceId — укороченный: в журнале достаточно отличить устройства.
-            mediaLog("request op=\(op) stream=\(stream) kind=\(kind) device=\(deviceId.prefix(12)) source=\(sourceId) options=\(options)")
+            mediaLog("request op=\(op) stream=\(stream) kind=\(kind) device=\(deviceId.prefix(12)) source=\(sourceId) options=\(logged)")
         }
         queue.async { [self] in
             switch op {
@@ -108,11 +130,44 @@ final class MediaController {
                 processing = (aec, ns, agc)
                 for case let .mic(mic) in entries.values { mic.setProcessing(aec: aec, ns: ns, agc: agc) }
                 if let requestId { reply(requestId, ["event": "processing", "aec": aec, "ns": ns, "agc": agc]) }
+            case "rc_grant":
+                // Согласие — нативным диалогом, только для живого потока ВСЕГО экрана.
+                guard case .screen(let capture) = entries[stream] else {
+                    return fail(requestId, stream: nil, MediaError.notFound("демонстрация экрана \(stream) не идёт"))
+                }
+                let peer = options["peer"] as? String ?? ""
+                RemoteControl.shared.requestGrant(stream: stream, sourceId: capture.sourceId, peer: peer) { error in
+                    self.queue.async {
+                        if let error { return self.fail(requestId, stream: nil, error) }
+                        // Пока висел диалог, демонстрация могла кончиться.
+                        guard case .screen(let current) = self.entries[stream], current === capture else {
+                            RemoteControl.shared.revoke(stream: stream, reason: "stream-gone")
+                            return self.fail(requestId, stream: nil, MediaError.notFound("демонстрация экрана закончилась"))
+                        }
+                        self.reply(requestId, ["event": "rc_granted", "stream": stream])
+                    }
+                }
+            case "rc_revoke":
+                RemoteControl.shared.revoke(stream: stream, reason: "page")
+            case "browser_nav":
+                let action = options["action"] as? String ?? ""
+                let url = options["url"] as? String ?? ""
+                DispatchQueue.main.async { self.browsersOnMain[stream]?.navigate(action: action, url: url) }
+            case "browser_cookies":
+                guard case .browser(let browser) = entries[stream] else {
+                    return fail(requestId, stream: nil, MediaError.notFound("общий браузер \(stream) не открыт"))
+                }
+                DispatchQueue.main.async {
+                    browser.exportCookies { cookies in
+                        self.reply(requestId, ["event": "browser_cookies", "stream": stream, "cookies": cookies])
+                    }
+                }
             case "request_keyframe":
                 keyframeRequests += 1
                 switch entries[stream] {
                 case .camera(let hub): hub.requestKeyframe(stream)
                 case .screen(let screen): screen.requestKeyframe()
+                case .browser(let browser): browser.requestKeyframe()
                 default: break
                 }
             default:
@@ -170,6 +225,8 @@ final class MediaController {
             }
         case "screen":
             startScreen(stream: stream, sourceId: sourceId, options: options, requestId: requestId)
+        case "browser":
+            startBrowser(stream: stream, options: options, requestId: requestId)
         default:
             entries.removeValue(forKey: stream)
             fail(requestId, stream: stream, MediaError.unsupported("неизвестный вид \(kind)"))
@@ -313,6 +370,52 @@ final class MediaController {
         }
     }
 
+    /// «Общий браузер»: скрытый WKWebView создаётся на главном потоке, кадры — как у экрана.
+    private func startBrowser(stream: UInt32, options: [String: Any], requestId: String?) {
+        guard let url = (options["url"] as? String).flatMap(URL.init(string:)), SharedBrowserPolicy.allows(url) else {
+            return fail(requestId, stream: stream, MediaError.failed("недопустимый адрес"))
+        }
+        let profile = options["profile"] as? String ?? "own"
+        let cookies = (options["cookies"] as? [[String: Any]]) ?? []
+        let viewWidth = (options["width"] as? NSNumber)?.intValue ?? 1280
+        let viewHeight = (options["height"] as? NSNumber)?.intValue ?? 720
+        // 0 — частота экрана запустившего.
+        let fps = (options["fps"] as? NSNumber)?.intValue ?? 0
+        let browser = SharedBrowser(stream: stream, bridge: bridge)
+        browser.onState = { [weak self] state in
+            var payload = state
+            payload["event"] = "browser_state"
+            payload["stream"] = stream
+            self?.send(payload)
+        }
+        browser.sender.onFirstKeyframe = { [weak self, weak browser] in
+            self?.queue.async {
+                guard let self, let browser, case .browser(let current) = self.entries[stream], current === browser else { return }
+                self.reply(requestId, ["event": "started", "stream": stream, "codec": browser.encoder?.currentCodec ?? "",
+                                       "label": browser.label, "deviceId": "browser", "fps": browser.fps,
+                                       "width": browser.width, "height": browser.height]) { [weak browser] in
+                    browser?.sender.openGate()
+                }
+            }
+        }
+        entries[stream] = .browser(browser)
+        ensureStatsTimer()
+        DispatchQueue.main.async { [self] in
+            do {
+                try browser.start(url: url, profile: profile, cookies: cookies, viewWidth: viewWidth, viewHeight: viewHeight, fps: fps)
+                browsersOnMain[stream] = browser
+                queue.async { self.failIfNoFrame(stream: stream, requestId: requestId, sender: browser.sender, seconds: 15) }
+            } catch {
+                browser.stop()
+                queue.async {
+                    guard case .browser(let current) = self.entries[stream], current === browser else { return }
+                    self.entries.removeValue(forKey: stream)
+                    self.fail(requestId, stream: stream, error)
+                }
+            }
+        }
+    }
+
     private func failIfNoFrame(stream: UInt32, requestId: String?, sender: VideoStreamSender, seconds: Double) {
         queue.asyncAfter(deadline: .now() + seconds) { [weak self, weak sender] in
             guard let self, let sender, !sender.started, self.entries[stream] != nil else { return }
@@ -332,6 +435,11 @@ final class MediaController {
             }
         case .screen(let screen):
             screen.stop()
+        case .browser(let browser):
+            browser.stop()
+            DispatchQueue.main.async { [self] in
+                if browsersOnMain[stream] === browser { browsersOnMain.removeValue(forKey: stream) }
+            }
         case .starting:
             break
         }
@@ -340,6 +448,10 @@ final class MediaController {
             statsTimer = nil
         }
         mediaLog("stream \(stream) ended reason=\(reason)")
+        // Нет экрана — нет управления (и при перезагрузке страницы: stopAll).
+        RemoteControl.shared.streamEnded(stream) { [weak self] in
+            self?.send(["event": "rc_revoked", "stream": stream, "reason": reason])
+        }
         if notify { send(["event": "ended", "stream": stream, "reason": reason]) }
     }
 
@@ -369,6 +481,11 @@ final class MediaController {
                 case .screen(let screen):
                     var video = screen.takeStats()
                     video["kind"] = "screen"
+                    self.logVideoStats(stream, video)
+                    self.send(["event": "stats", "stream": stream, "video": video])
+                case .browser(let browser):
+                    var video = browser.takeStats()
+                    video["kind"] = "browser"
                     self.logVideoStats(stream, video)
                     self.send(["event": "stats", "stream": stream, "video": video])
                 case .starting:

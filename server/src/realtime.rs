@@ -345,9 +345,11 @@ pub(crate) async fn handle_socket(
                     crate::note_connection_inbound(&state, presence_id);
                 }
                 match result {
-                    Some(Ok(WsMessage::Text(_))) if {
+                    Some(Ok(WsMessage::Text(_) | WsMessage::Binary(_) | WsMessage::Ping(_))) if {
                         // Скользящее окно на соединение: заливка событиями не должна
-                        // гонять сервер по обработчикам и по базе.
+                        // гонять сервер по обработчикам и по базе. Бинарные кадры и
+                        // ping тоже считаются: раньше они шли мимо окна без предела
+                        // (каждый ping — pong, каждый бинарный кадр — строка в логе).
                         if inbound_window_start.elapsed() >= WS_INBOUND_WINDOW {
                             inbound_window_start = Instant::now();
                             inbound_in_window = 0;
@@ -449,7 +451,7 @@ pub(crate) async fn handle_socket(
                         }
                     }
                     Some(Ok(WsMessage::Binary(data))) => {
-                        warn!("WS inbound binary frame username={} bytes={}", username, data.len());
+                        trace!("WS inbound binary frame ignored username={} bytes={}", username, data.len());
                     }
                     Some(Ok(WsMessage::Ping(data))) => {
                         trace!("WS ping username={} bytes={}", username, data.len());

@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Автообновление (AppUpdater.kt): без него системный установщик не откроется,
+         а canRequestPackageInstalls() всегда false. Само разрешение человек даёт в
+         настройках («Установка неизвестных приложений») при первой установке. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Галерея внутри приложения (MediaGallery.kt, лист плиток при «скрепке»):
          Android 13+ — фото и видео отдельно, 14+ — ещё «только выбранные»;
          до 13 — общее чтение хранилища. Без них лист предлагает системный пикер. -->

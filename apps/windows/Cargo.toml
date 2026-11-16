@@ -5,7 +5,7 @@ name = "zali_messenger_win"
 # APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
 # compares against the server's app_releases.version). This field only needs to
 # keep incrementing for Cargo's own bookkeeping; it is not shown to users.
-version = "0.2.58"
+version = "0.2.59"
 edition = "2021"
 
 [dependencies]
@@ -14,6 +14,7 @@ serde_json = "1.0"
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 sha2 = "0.10"
+ring = "0.17"
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 wry = { version = "0.35", features = ["devtools"] }
@@ -31,6 +32,9 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 # native/taskbar_badge.rs) — same 0.5.x already resolved transitively via tao's
 # "rwh_05" feature, so this doesn't add a new version to the dependency tree.
 raw-window-handle = "0.5"
+# Разбор адресов «Общего браузера» (native/media/shared_browser.rs) — та же 2.x,
+# что уже тянет wry; нового в дереве зависимостей нет.
+url = "2"
 muda = "0.12"
 # Windows-only: system tray icon + minimize-to-tray, backing the installer's
 # "launch at login" task (see apps/windows/installer/). Not used on macOS —
@@ -101,7 +105,7 @@ webview2-com = "0.28"
 # раскрывается в пути `::windows_core::…` — нужен прямой зависимостью; та же 0.61,
 # что уже тянет `windows`.
 windows-core = "0.61"
-windows052 = { package = "windows", version = "0.52", features = ["Win32_Foundation"] }
+windows052 = { package = "windows", version = "0.52", features = ["Win32_Foundation", "Win32_System_WinRT", "Win32_System_Com"] }
 # Эхо/шум/громкость микрофона (core/src/audio_processing.rs) — только Windows-сборке;
 # экспериментальный macOS Rust-шелл нативный захват не делает.
 zali_messenger_core = { path = "../../core", features = ["apm"] }

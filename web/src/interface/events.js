@@ -24,6 +24,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindStyleSliderEvents();                     // слайдеры оформления
         this.bindCryptoKeyEvents();                       // ручной ввод ключа шифрования
         this.bindWindowChromeEvents();                    // перетаскивание окна, ресайз, горячие клавиши
+        this.bindConnectionInfoEvents();                  // клик по точке соединения: попап со статусом, пингом и скоростью
         this.bindProfileEvents();                         // оверлей профиля: вкладки, комментарии, стена автографов
         this.bindAddonEvents();                           // аддоны хаба и «Свернуть» в верхней полосе (после кнопок окна)
         this.bindAddonStoreEvents();                      // магазин аддонов во вкладке «Аддоны»
@@ -204,6 +205,11 @@ ZaliMixin(ZaliInterface, class {
                 const cameraBtn = e.target.closest('#voiceCameraBtn');
                 if (cameraBtn) {
                     await this.onVoiceCameraButton();
+                    return;
+                }
+                const sharedBrowserBtn = e.target.closest('#voiceSharedBrowserBtn');
+                if (sharedBrowserBtn) {
+                    this.onSharedBrowserButton?.();
                     return;
                 }
                 const screenShareBtn = e.target.closest('#voiceScreenShareBtn');
@@ -781,6 +787,9 @@ ZaliMixin(ZaliInterface, class {
                 this.resizeComposer({ typing: true });
                 this.updateSendButtonState();
             });
+            // Высота могла остаться от прошлого текста, если поле очистили без пересчёта:
+            // при фокусе меряем заново, до первого символа.
+            msgInput.addEventListener('focus', () => this.resizeComposer());
             msgInput.addEventListener('keydown', (e) => {
                 // Escape backs out of a reply/edit without sending anything. Only
                 // when one is active, so it keeps its usual meaning otherwise.
@@ -1225,6 +1234,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this.bindGameActivitySettings();
         this.bindGameFocusSettings();
+        this.bindRemoteControlSettings?.();
         this.bindComposerFocusNote();
         const inputAutostart = document.getElementById('inputAutostart');
         if (inputAutostart) {

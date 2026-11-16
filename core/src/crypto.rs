@@ -69,6 +69,11 @@ fn decrypt_aes_gcm_v3(payload: &str, key: &str) -> Result<String, String> {
     if iterations < 50_000 {
         return Err("PBKDF2 iteration count too low".to_string());
     }
+    // Число итераций приходит в самом сообщении: без потолка участник переписки
+    // присылал `:4000000000:` и вешал поток получателя на часы ещё до проверки AEAD.
+    if iterations > 1_000_000 {
+        return Err("PBKDF2 iteration count too high".to_string());
+    }
     let (salt_b64, rest) = rest
         .split_once(':')
         .ok_or_else(|| "Malformed AES-GCM v3 payload".to_string())?;

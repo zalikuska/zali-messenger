@@ -386,9 +386,11 @@ pub(crate) async fn create_server_invite_record(
     // 64 бита: 32 бита перебирались бы за часы на одном аккаунте. Принимаются и
     // прежние 8-символьные коды — длина нигде не проверяется.
     let code = Uuid::new_v4().simple().to_string()[..16].to_lowercase();
+    // Потолок — год: без него огромное значение роняло обработчик
+    // (переполнение в chrono::Duration::hours).
     let expires_at = expires_hours
         .filter(|hours| *hours > 0)
-        .map(|hours| Utc::now() + chrono::Duration::hours(hours));
+        .map(|hours| Utc::now() + chrono::Duration::hours(hours.min(24 * 365)));
     sqlx::query(
         "INSERT INTO server_invites (code, server_id, created_by, max_uses, uses, expires_at, created_at)
          VALUES (?, ?, ?, ?, 0, ?, ?)",
@@ -566,6 +568,33 @@ pub(crate) async fn can_manage_server(
     }
 
     Ok(false)
+}
+
+/// Даёт ли роль «Управление» (встроенные owner/admin или флаг can_manage).
+pub(crate) async fn role_grants_manage(
+    pool: &SqlitePool,
+    server_id: &str,
+    role_id: &str,
+) -> Result<bool, sqlx::Error> {
+    if can_manage_by_role(Some(role_id)) {
+        return Ok(true);
+    }
+    let (_view, _send, manage) = load_server_role_permissions(pool, server_id, role_id).await?;
+    Ok(manage)
+}
+
+/// Иерархия менеджеров: над теми, у кого есть «Управление», и над правами,
+/// которые его дают, властен только владелец. Раньше любой админ выгонял и
+/// понижал других админов и мог выдать «Управление» встроенной роли «Участник».
+pub(crate) async fn is_server_owner(
+    pool: &SqlitePool,
+    server_id: &str,
+    username: &str,
+) -> Result<bool, sqlx::Error> {
+    Ok(get_server_accessibility(pool, server_id)
+        .await?
+        .map(|server| server.owner == username)
+        .unwrap_or(false))
 }
 
 /// Право «Приглашения»: владелец, админ, любая роль с «Управлением» и любая
@@ -1084,6 +1113,27 @@ pub(crate) async fn update_server_member(
     if role == "owner" {
         return (StatusCode::BAD_REQUEST, "Нельзя назначить роль владельца").into_response();
     }
+    // Менять роль можно только тем, кто уже в сервере: раньше этот PATCH добавлял
+    // в приватный сервер любого пользователя (и несуществующего) без приглашения.
+    match get_server_member_role(&state.db, &server_id, target).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (StatusCode::NOT_FOUND, "Такого участника в сервере нет").into_response(),
+        Err(e) => {
+            error!("Ошибка чтения участника {} сервера {}: {}", target, server_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    if server.owner != auth_user {
+        let target_manages = can_manage_server(&state.db, &server_id, target).await.unwrap_or(true);
+        let role_manages = role_grants_manage(&state.db, &server_id, &role).await.unwrap_or(true);
+        if target_manages || role_manages {
+            return (
+                StatusCode::FORBIDDEN,
+                "Назначать и снимать «Управление» может только владелец",
+            )
+                .into_response();
+        }
+    }
     if let Err(e) = upsert_server_member(&state.db, &server_id, target, &role).await {
         error!(
             "Ошибка обновления роли участника {} в сервере {}: {}",
@@ -1135,6 +1185,15 @@ pub(crate) async fn delete_server_member(
     }
     if target == server.owner {
         return (StatusCode::BAD_REQUEST, "Владельца нельзя удалить").into_response();
+    }
+    if server.owner != auth_user
+        && can_manage_server(&state.db, &server_id, target).await.unwrap_or(true)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Участника с «Управлением» может удалить только владелец",
+        )
+            .into_response();
     }
 
     if let Err(e) = sqlx::query("DELETE FROM server_members WHERE server_id = ? AND username = ?")
@@ -1277,6 +1336,16 @@ pub(crate) async fn delete_server(
     {
         let _ = tx.rollback().await;
         error!("Ошибка удаления сообщений сервера {}: {}", server_id, e);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    // Куки общего браузера сообщества не должны пережить само сообщество.
+    if let Err(e) = sqlx::query("DELETE FROM server_browser_profiles WHERE server_id = ?")
+        .bind(&server_id)
+        .execute(&mut *tx)
+        .await
+    {
+        let _ = tx.rollback().await;
+        error!("Ошибка удаления профиля браузера сервера {}: {}", server_id, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     // Казна не сгорает вместе с сервером: остаток уходит владельцу в этой же
@@ -1517,6 +1586,16 @@ pub(crate) async fn join_server_invite(
             let _ = tx.rollback().await;
             return (StatusCode::GONE, "Срок действия инвайта истёк").into_response();
         }
+    }
+
+    // Инвайт живёт, пока его автор может приглашать: раньше выгнанный участник
+    // (бана нет) возвращался по собственному бессрочному инвайту.
+    if !can_invite_to_server(&state.db, &invite.server_id, &invite.created_by)
+        .await
+        .unwrap_or(false)
+    {
+        let _ = tx.rollback().await;
+        return (StatusCode::GONE, "Инвайт больше не действует").into_response();
     }
 
     // Уже участник: приглашение не расходуется (ссылки кликают и те, кто уже внутри).

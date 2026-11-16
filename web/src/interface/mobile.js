@@ -164,7 +164,15 @@ ZaliMixin(ZaliInterface, class {
         if (!dock) return;
         const chatScreen = !!document.getElementById('viewChat')?.classList.contains('active');
         const value = chatScreen ? Math.max(0, Math.min(1, Number(progress) || 0)) : 0;
-        dock.style.transform = `translate(-50%, ${(value * 140).toFixed(4)}%)`;
+        // Уехать надо на собственную высоту ПЛЮС отступ от низа (CSS: bottom =
+        // 10–12px + --m-safe-bottom) и тень. Раньше было 140 % высоты: в
+        // Android-оболочке --m-safe-bottom = 48px (кнопочная навигация), и 140 %
+        // от 57px не хватало — на экране чата из-под низа торчали ~35px дока
+        // поверх системных кнопок, под полем ввода.
+        const v = value.toFixed(4);
+        dock.style.transform = value
+            ? `translate(-50%, calc(${v} * (100% + var(--m-safe-bottom, 0px) + 28px)))`
+            : 'translate(-50%, 0)';
     }
 
     // The iOS shell hides the web .mobile-dock and draws its own native bar
@@ -356,12 +364,22 @@ ZaliMixin(ZaliInterface, class {
 
         dock.addEventListener('pointerdown', (e) => {
             if (e.pointerType === 'mouse' && e.button !== 0) return;
-            if (!e.target.closest('.mobile-dock-btn')) return;
+            const pressed = e.target.closest('.mobile-dock-btn');
+            if (!pressed) return;
             const slots = visibleSlots();
             if (slots.length < 2) return;
             const activeEl = dock.querySelector('.mobile-dock-btn.active');
             const startTx = (slots.find((slot) => slot.el === activeEl) || slots[0]).left;
             drag = { id: e.pointerId, startX: e.clientX, startTx, moved: false, slots, x: startTx };
+            // Снимок старого экрана для въезда по касанию — пока палец лежит (mobile_pager.js).
+            if (pressed !== activeEl) this.mobilePagerPrepareTap?.(this.mobileDockSectionOf(pressed));
+        });
+        // Нажатие на кнопку не должно забирать фокус и ставить каретку выделения:
+        // каретка в документе пересчитывается каждым кадром (VisibleUnits ~3 мс на
+        // кадр всей доводки), смена фокуса — лишний пересчёт стилей в обработчике click.
+        // click от этого не отменяется.
+        dock.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.mobile-dock-btn')) e.preventDefault();
         });
 
         dock.addEventListener('pointermove', (e) => {
@@ -388,7 +406,12 @@ ZaliMixin(ZaliInterface, class {
             if (!drag || e.pointerId !== drag.id) return;
             const { moved, slots, x } = drag;
             drag = null;
-            if (!moved) return;
+            if (!moved) {
+                // Касание: click придёт следом и заберёт снимок; если нет — он уберётся сам.
+                if (cancelled) this.mobilePagerDropPrepared?.();
+                else this.mobilePagerReleasePrepared?.();
+                return;
+            }
             dock.classList.remove('is-dragging');
             thumb.style.setProperty('--tg', '0px');
             buttons.forEach((b) => b.classList.remove('is-target'));

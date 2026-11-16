@@ -33,6 +33,10 @@ ZaliMixin(ZaliInterface, class {
         return `zali_muted_chats_v1${this._userSuffix()}`;
     }
 
+    pinnedChatsStorageKey() {
+        return `zali_pinned_chats_v1${this._userSuffix()}`;
+    }
+
     // Server-side reset boundary: the production database, uploads and assets were
     // wiped at this moment, so every locally cached account, message, attachment
     // reference and E2E key from before it is dangling. Bumping this string performs

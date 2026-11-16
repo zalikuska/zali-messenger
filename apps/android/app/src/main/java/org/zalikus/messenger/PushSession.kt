@@ -83,6 +83,11 @@ object PushSession {
         syncRegistration(context)
     }
 
+    /** Сменился сервер: токен прежнего сервера новому не уходит. */
+    fun dropToken(context: Context) {
+        prefs(context).edit().remove(KEY_TOKEN).apply()
+    }
+
     /** Выход из аккаунта: пуши ушедшего аккаунта больше не расшифровываются и не показываются. */
     fun clear(context: Context) {
         prefs(context).edit().clear().apply()

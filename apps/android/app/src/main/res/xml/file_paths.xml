@@ -4,4 +4,6 @@
      never a raw file:// Uri (FileUriExposedException on targetSdk 24+). -->
 <paths>
     <cache-path name="attachments" path="attachments/" />
+    <!-- Скачанный APK обновления (AppUpdater.kt) — системному установщику. -->
+    <cache-path name="updates" path="updates/" />
 </paths>

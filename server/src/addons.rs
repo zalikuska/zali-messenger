@@ -653,12 +653,16 @@ pub(crate) struct RegisterOfficialRequest {
     signature: Value,
 }
 
-/// Исход записи в реестр: коммитится всегда (отказы возвращаются до транзакции).
-struct Registered;
+/// Исход записи в реестр. `Stale` — подпись не новее той, по которой аддон уже
+/// зарегистрирован: транзакция откатывается.
+enum Registered {
+    Done,
+    Stale,
+}
 
 impl CoinTxOutcome for Registered {
     fn commits(&self) -> bool {
-        true
+        matches!(self, Registered::Done)
     }
 }
 
@@ -719,22 +723,38 @@ pub(crate) async fn register_official(
         // владелец не успевает прочитать данные людей, собранные прежним автором.
         let (tx_id, tx_owner, tx_name, tx_fp, tx_key) =
             (id.clone(), owner.clone(), name.clone(), key_fp.clone(), B64.encode(&official));
-        run_immediate_tx(state.db.clone(), move |mut conn| async move {
+        let outcome = run_immediate_tx(state.db.clone(), move |mut conn| async move {
             let result = async {
-                let previous_owner: Option<String> =
-                    sqlx::query_scalar("SELECT owner FROM addon_registry WHERE addon_id = ?")
-                        .bind(&tx_id)
-                        .fetch_optional(&mut *conn)
-                        .await?;
+                let previous: Option<(String, String, i64)> = sqlx::query_as(
+                    "SELECT owner, kind, official_signed_at FROM addon_registry WHERE addon_id = ?",
+                )
+                .bind(&tx_id)
+                .fetch_optional(&mut *conn)
+                .await?;
+                // Подпись не привязана к состоянию реестра, и принести её может кто
+                // угодно. Без этой проверки давнюю официальную подпись можно было
+                // повторить после смены владельца: id возвращался прежнему автору,
+                // а облако нынешнего стиралось. Та же подпись повторно (тот же
+                // владелец, то же время) — безвредный повтор, его пропускаем.
+                if let Some((prev_owner, prev_kind, prev_signed_at)) = &previous {
+                    if prev_kind == "official"
+                        && (signed_at < *prev_signed_at
+                            || (signed_at == *prev_signed_at && *prev_owner != tx_owner))
+                    {
+                        return Ok(Registered::Stale);
+                    }
+                }
+                let previous_owner = previous.map(|(owner, _, _)| owner);
                 // Официальная подпись перехватывает id у самоподписи и меняет владельца:
                 // решение принимает владелец ключа разработчиков, а не очередь заявок.
                 sqlx::query(
                     "INSERT INTO addon_registry
-                        (addon_id, owner, kind, public_key, key_fp, name, claimed_at, updated_at)
-                     VALUES (?, ?, 'official', ?, ?, ?, ?, ?)
+                        (addon_id, owner, kind, public_key, key_fp, name, claimed_at, updated_at, official_signed_at)
+                     VALUES (?, ?, 'official', ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(addon_id) DO UPDATE SET
                         owner = excluded.owner, kind = 'official', public_key = excluded.public_key,
                         key_fp = excluded.key_fp, updated_at = excluded.updated_at,
+                        official_signed_at = excluded.official_signed_at,
                         name = CASE WHEN excluded.name = '' THEN addon_registry.name ELSE excluded.name END",
                 )
                 .bind(&tx_id)
@@ -744,18 +764,26 @@ pub(crate) async fn register_official(
                 .bind(&tx_name)
                 .bind(now)
                 .bind(now)
+                .bind(signed_at)
                 .execute(&mut *conn)
                 .await?;
                 if previous_owner.as_deref().map_or(false, |prev| prev != tx_owner) {
                     // Данные пользователей собраны на условиях прежнего автора и новому не переходят.
                     crate::addon_cloud::wipe_addon(&mut *conn, &tx_id).await?;
                 }
-                Ok(Registered)
+                Ok(Registered::Done)
             }
             .await;
             (conn, result)
         })
         .await?;
+        if matches!(outcome, Registered::Stale) {
+            return Ok(addon_error(
+                StatusCode::CONFLICT,
+                "stale_signature",
+                "Аддон уже зарегистрирован по более новой официальной подписи",
+            ));
+        }
         info!("[ADDON] official registered id={} owner={}", id, owner);
         Ok(Json(json!({
             "registry": { "id": id, "owner": owner, "kind": "official", "keyFingerprint": key_fp },
@@ -1493,30 +1521,45 @@ impl CoinTxOutcome for PayoutOutcome {
     }
 }
 
-/// Сколько человек может забрать из аддона прямо сейчас: переведённое им самим
-/// за вычетом уже полученного. У официального аддона — любая сумма из казны
-/// (призы), у остальных чужие деньги достаться не могут.
+/// Сколько человек может забрать из аддона прямо сейчас: собственные взносы,
+/// которые ещё не «созрели» (моложе удержания), за вычетом уже полученного.
+///
+/// Созревший взнос принадлежит разработчику — его забирает `withdraw`. Раньше
+/// предел был `min(все свои взносы, казна)`: после вывода разработчика казну
+/// пополнял следующий человек, и первый забирал уже его монеты. Выплаты
+/// списываются со старых взносов первыми (как и в `treasury_summary`), поэтому
+/// сумма «разработчику + людям» не превышает казну.
+///
+/// У официального аддона особого права больше нет: «аддон решил выплатить» —
+/// это код на клиенте, сервер не может отличить его от запроса злоумышленника,
+/// и любой аккаунт забирал всю казну. Призы требуют серверного источника права.
 async fn user_payout_allowance(
     conn: &mut SqliteConnection,
     addon_id: &str,
     username: &str,
-    official: bool,
+    _official: bool,
 ) -> Result<(i64, i64), sqlx::Error> {
     let treasury: i64 = sqlx::query_scalar("SELECT balance FROM addon_treasuries WHERE addon_id = ?")
         .bind(addon_id)
         .fetch_optional(&mut *conn)
         .await?
         .unwrap_or(0);
-    let net: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(CASE kind WHEN 'deposit' THEN amount WHEN 'payout' THEN -amount ELSE 0 END), 0)
+    let cutoff = now_ms() - hold_ms();
+    let (matured, fresh, paid): (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+            COALESCE(SUM(CASE WHEN kind = 'deposit' AND created_ms <= ? THEN amount ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN kind = 'deposit' AND created_ms > ? THEN amount ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN kind = 'payout' THEN amount ELSE 0 END), 0)
          FROM addon_coin_ops WHERE addon_id = ? AND username = ? AND kind IN ('deposit', 'payout')",
     )
+    .bind(cutoff)
+    .bind(cutoff)
     .bind(addon_id)
     .bind(username)
     .fetch_one(&mut *conn)
     .await?;
-    let own = net.max(0);
-    let allowed = if official { treasury } else { own.min(treasury) };
+    let own = (fresh - (paid - matured).max(0)).max(0);
+    let allowed = own.min(treasury);
     Ok((own, allowed.max(0)))
 }
 

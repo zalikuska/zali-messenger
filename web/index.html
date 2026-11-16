@@ -35,7 +35,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261115-pres2">
+    <link rel="stylesheet" href="style.css?v=20261116-shared-browser">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -712,6 +712,26 @@
                                 </div>
                             </section>
 
+                            <section class="settings-card" id="remoteControlSettingsCard" data-settings-section="remote-control">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Компонент</span>
+                                        <h3 class="settings-card-title">Удалённое управление</h3>
+                                    </div>
+                                    <span class="settings-card-note">remote</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputRemoteControlComponent" type="checkbox">
+                                        <span>
+                                            <strong>Включить удалённое управление</strong>
+                                            <small>На своей демонстрации экрана появится кнопка «Отдать управление»: вы сами выбираете участника звонка и подтверждаете в системном окне, а право действует, пока идёт эта демонстрация. Тоже нужно, чтобы управлять, когда управление отдали вам. Выключено — кнопки нет, а отданное вам управление сразу возвращается</small>
+                                        </span>
+                                    </label>
+                                    <p class="settings-help" id="remoteControlComponentNote"></p>
+                                </div>
+                            </section>
+
                             <section class="settings-card" id="gameActivitySettingsCard" data-settings-section="game-activity">
                                 <div class="settings-card-head">
                                     <div>
@@ -800,7 +820,7 @@
                                     <span class="settings-card-note" id="appVersionNote">—</span>
                                 </div>
                                 <div class="settings-stack">
-                                    <p class="settings-help" id="appUpdateStatusText">Проверка версии доступна в приложении для macOS и Windows.</p>
+                                    <p class="settings-help" id="appUpdateStatusText">Проверка версии доступна в приложении для macOS, Windows и Android.</p>
                                     <button class="btn-flat" id="checkForUpdatesBtn" type="button">Проверить обновления</button>
                                     <label class="server-toggle settings-toggle">
                                         <input id="inputUpdateAlpha" type="checkbox">
@@ -1750,6 +1770,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261115-pres2"></script>
+    <script src="app.js?v=20261116-shared-browser"></script>
 </body>
 </html>

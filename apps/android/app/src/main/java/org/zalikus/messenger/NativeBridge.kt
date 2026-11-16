@@ -172,6 +172,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         Thread(runnable, "zali-gallery").apply { isDaemon = true }
     }
 
+    // MARK: - Автообновление (DOWNLOAD_UPDATE_REQUEST / INSTALL_UPDATE_REQUEST, AppUpdater.kt)
+    private val appUpdater = AppUpdater(context)
+    private val updateExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "zali-update").apply { isDaemon = true }
+    }
+
     init {
         val lastUser = prefs.getString(LAST_USERNAME_KEY, null)
         if (!lastUser.isNullOrEmpty()) {
@@ -229,6 +235,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
           $injectedForUserLine
           $identityLine
           $conversationKeysLine
+          // Платформа и версия сборки: по ним веб спрашивает /api/version?platform=android
+          // (updates.js) и подписывает диагностику. Раньше Android их не задавал вовсе.
+          window.__ZALI_NATIVE_PLATFORM = "android";
+          window.__ZALI_NATIVE_APP_VERSION = ${JSONObject.quote(installedVersionName())};
           window.__ZALI_NATIVE_CAPS__ = {
             apiRequest: true,
             networkConfig: true,
@@ -267,7 +277,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             // фрейма выше) — веб может запускать песочницу аддонов.
             addonFrames: true,
             // Хранилище аддонов (ADDON_REQUEST, AddonStore.kt). IndexedDB на file:// нет.
-            addonStore: true
+            addonStore: true,
+            // Автообновление APK (DOWNLOAD/INSTALL_UPDATE_REQUEST, AppUpdater.kt).
+            appUpdate: true
           };
           // Метка оболочки для CSS (web/style.css, `.is-android-shell`): на Android
           // отключается размытие фона, а у веб-дока (нижняя панель — своей нативной
@@ -281,6 +293,19 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         """.trimIndent()
     }
 
+    /**
+     * Версия установленного APK — у PackageManager, а не `BuildConfig.VERSION_NAME`:
+     * та — compile-time константа, Kotlin вклеивает её в байткод этого класса, и
+     * инкрементальная сборка после бампа версии оставляла здесь СТАРУЮ (проверено
+     * живьём: APK 0.2b57 отдавал вебу 0.2b58). Апдейтер тогда видел бы «новую»
+     * версию после каждой установки и предлагал её бесконечно.
+     */
+    private fun installedVersionName(): String = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    } catch (e: Exception) {
+        ""
+    }
+
     /** Entry point for every `postNativeMessage(...)` call from `Web/src/interface.js`. */
     @JavascriptInterface
     fun postMessage(json: String) {
@@ -290,8 +315,17 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         when (dict.optString("type", "")) {
             "NETWORK_CONFIG" -> {
                 val base = normalizeApiBaseUrl(dict.optString("apiBaseUrl", ""))
-                if (base.isNotEmpty() && base != apiBaseUrl) {
+                if (base.isNotEmpty() && base != apiBaseUrl && isAcceptableApiBaseUrl(base)) {
+                    // Токен выдан прежним сервером: новому хосту его не отдаём — ни
+                    // сокетом, ни фоновым FCM (PushSession хранит адрес и токен вместе).
+                    // Иначе JS одной командой уводил все запросы с токеном на свой адрес.
+                    val hostChanged = runCatching { java.net.URI(base).host } .getOrNull()?.lowercase() !=
+                        runCatching { java.net.URI(apiBaseUrl).host }.getOrNull()?.lowercase()
                     apiBaseUrl = base
+                    if (hostChanged) {
+                        wsAuthToken = ""
+                        PushSession.dropToken(context)
+                    }
                     PushSession.update(context, apiBaseUrl = base)
                     if (wsAuthToken.isNotEmpty()) connectWebSocket()
                 }
@@ -333,6 +367,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
             "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
+            "DOWNLOAD_UPDATE_REQUEST" -> handleDownloadUpdate(dict)
+            "INSTALL_UPDATE_REQUEST" -> handleInstallUpdate(dict)
             "GALLERY_LIST" -> emitGalleryList(dict.optString("requestId", ""), dict.optInt("limit", 240))
             "GALLERY_REQUEST_ACCESS" -> {
                 val requestId = dict.optString("requestId", "")
@@ -477,7 +513,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             }
         }
 
-        val forbidden = listOf("..", "%2F", "%2f", "%5C", "%5c")
+        // %2e — закодированная точка: OkHttp нормализует `%2e%2e` как `..`.
+        val forbidden = listOf("..", "%2F", "%2f", "%5C", "%5c", "%2e", "%2E")
         if (!path.startsWith("/api/") || forbidden.any { path.contains(it) }) {
             sendNativeResponse(requestId, ok = false, error = "Некорректный путь запроса")
             return
@@ -505,6 +542,19 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
      * Схему подставляем сами: `http://` для localhost и частных адресов (LAN, dev-сервер),
      * иначе `https://`. Адрес с уже указанной схемой не трогаем.
      */
+    /** https — любой хост; http — только локальная/частная сеть (свой сервер в LAN). */
+    private fun isAcceptableApiBaseUrl(url: String): Boolean {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        return when (uri.scheme?.lowercase()) {
+            "https" -> true
+            "http" -> host == "localhost" || host.endsWith(".local") || host.startsWith("127.") ||
+                host.startsWith("10.") || host.startsWith("192.168.") ||
+                Regex("""172\.(1[6-9]|2\d|3[01])\..*""").matches(host)
+            else -> false
+        }
+    }
+
     private fun normalizeApiBaseUrl(raw: String): String {
         val trimmed = raw.trim().trimEnd('/')
         if (trimmed.isEmpty() || trimmed.contains("://")) return trimmed
@@ -1180,6 +1230,53 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         mainHandler.post { webView.evaluateJavascript(js, null) }
     }
 
+    // MARK: - Автообновление: ответы вебу
+
+    private fun handleDownloadUpdate(dict: JSONObject) {
+        val requestId = dict.optString("requestId", UUID.randomUUID().toString())
+        val url = dict.optString("url", "")
+        val sha256 = dict.optString("sha256", "")
+        updateExecutor.execute {
+            try {
+                appUpdater.download(url, sha256) { progress ->
+                    emitUpdateEvent(JSONObject().apply {
+                        put("kind", "progress")
+                        put("progress", progress)
+                    })
+                }
+                sendNativeResponse(requestId, true)
+            } catch (e: AppUpdater.UpdateException) {
+                sendNativeResponse(requestId, false, error = e.message)
+            } catch (e: Exception) {
+                sendNativeResponse(requestId, false, error = "Не удалось скачать обновление: ${e.message}")
+            }
+        }
+    }
+
+    /** Веб не ждёт ответа на установку (на десктопе процесс к этому моменту уже
+     * выходит), поэтому причина, по которой установщик не открылся, уходит ещё и
+     * событием `install_error` — его показывает handleUpdateEvent. */
+    private fun handleInstallUpdate(dict: JSONObject) {
+        val requestId = dict.optString("requestId", UUID.randomUUID().toString())
+        mainHandler.post {
+            val error = appUpdater.install()
+            if (error == null) {
+                sendNativeResponse(requestId, true)
+            } else {
+                sendNativeResponse(requestId, false, error = error)
+                emitUpdateEvent(JSONObject().apply {
+                    put("kind", "install_error")
+                    put("message", error)
+                })
+            }
+        }
+    }
+
+    private fun emitUpdateEvent(payload: JSONObject) {
+        val js = "window.loader && window.loader.bus.send('zali_interface:update_event', $payload);"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
     // MARK: - Галерея: ответы вебу
 
     /** Список плиток и состояние доступа. `askedBefore` — ответ пришёл после
@@ -1243,7 +1340,20 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             }
             override fun onResponse(call: Call, response: Response) {
                 response.use {
-                    val html = try { it.body?.string() ?: "" } catch (e: IOException) { "" }
+                    // Редирект мог увести за пределы tenor.com, а тело читалось без предела.
+                    val finalHost = it.request.url.host
+                    val body = it.body
+                    val html = if (!(finalHost == "tenor.com" || finalHost.endsWith(".tenor.com")) ||
+                        (body?.contentLength() ?: 0L) > 2L * 1024 * 1024) {
+                        ""
+                    } else {
+                        try {
+                            body?.source()?.let { src ->
+                                src.request(2L * 1024 * 1024)
+                                src.buffer.snapshot(minOf(src.buffer.size, 2L * 1024 * 1024).toInt()).utf8()
+                            } ?: ""
+                        } catch (e: IOException) { "" }
+                    }
                     if (html.isEmpty()) {
                         emitTenorResolution(requestId, url, null, null, null)
                         return

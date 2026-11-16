@@ -1039,6 +1039,8 @@ pub(crate) async fn perform_reaction_request(
         .map_err(|error| error.to_string())
 }
 
+const TENOR_MAX_HTML_BYTES: u64 = 2 * 1024 * 1024;
+
 pub(crate) async fn resolve_tenor_url(
     url: String,
     request_id: String,
@@ -1091,7 +1093,35 @@ pub(crate) async fn resolve_tenor_url(
         }
     };
 
-    let html = match response.text().await {
+    // Редирект мог увести за пределы tenor.com (общий клиент им следует), а тело
+    // читалось целиком без предела. Чужой хост или больше 2 МБ — не разбираем.
+    let final_host = response.url().host_str().unwrap_or("").to_string();
+    let still_allowed = allowed
+        .iter()
+        .any(|&h| final_host == h || final_host.ends_with(&format!(".{}", h)));
+    if !still_allowed || response.content_length().unwrap_or(0) > TENOR_MAX_HTML_BYTES {
+        dispatch_ui_event(
+            &proxy,
+            UiBusEvent::TenorResolved,
+            json!({ "requestId": request_id, "sourceUrl": source_url }),
+        );
+        return;
+    }
+    let mut response = response;
+    let mut body: Vec<u8> = Vec::new();
+    let html: Result<String, reqwest::Error> = loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                body.extend_from_slice(&chunk);
+                if body.len() as u64 > TENOR_MAX_HTML_BYTES {
+                    break Ok(String::from_utf8_lossy(&body).into_owned());
+                }
+            }
+            Ok(None) => break Ok(String::from_utf8_lossy(&body).into_owned()),
+            Err(error) => break Err(error),
+        }
+    };
+    let html = match html {
         Ok(text) => text,
         Err(error) => {
             trace(format!(

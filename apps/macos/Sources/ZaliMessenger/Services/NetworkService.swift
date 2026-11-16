@@ -506,9 +506,44 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         connectVoiceWebSocket()
     }
 
+    /// Адрес сервера приходит из JS (NETWORK_CONFIG), а с ним уходит Bearer-токен.
+    /// Открытый http допустим только для локальной/частной сети (свой сервер в LAN).
+    static func isAcceptableBaseURL(_ value: String, secureScheme: String, plainScheme: String) -> Bool {
+        guard let url = URL(string: value), let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        if scheme == secureScheme { return true }
+        guard scheme == plainScheme else { return false }
+        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".localhost") || host == "::1" { return true }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        return parts[0] == 10 || parts[0] == 127
+            || (parts[0] == 192 && parts[1] == 168)
+            || (parts[0] == 172 && (16...31).contains(parts[1]))
+    }
+
     func configure(apiBaseURL: String?, wsBaseURL: String?) {
-        let normalizedAPI = normalizedBaseURL(apiBaseURL)
-        let normalizedWS = normalizedWebSocketURL(wsBaseURL)
+        var normalizedAPI = normalizedBaseURL(apiBaseURL)
+        var normalizedWS = normalizedWebSocketURL(wsBaseURL)
+        if let api = normalizedAPI, !Self.isAcceptableBaseURL(api, secureScheme: "https", plainScheme: "http") {
+            trace("configure rejected api=\(api)")
+            normalizedAPI = nil
+        }
+        if let ws = normalizedWS, !Self.isAcceptableBaseURL(ws, secureScheme: "wss", plainScheme: "ws") {
+            trace("configure rejected ws=\(ws)")
+            normalizedWS = nil
+        }
+        // Токен выдан конкретным сервером. Сменился хост — старый токен новому
+        // серверу не отдаём: иначе JS (в т. ч. внедрённый) одной командой
+        // перенаправлял все запросы с токеном на свой адрес, и это переживало
+        // перезапуск. Новый сервер — новый вход.
+        let previousHost = URL(string: serverURL)?.host?.lowercased()
+        let nextHost = normalizedAPI.flatMap { URL(string: $0)?.host?.lowercased() }
+            ?? URL(string: "https://msgs.zalikus.org")?.host
+        if previousHost != nextHost, authToken != nil {
+            trace("configure host changed \(previousHost ?? "nil") -> \(nextHost ?? "nil"); dropping session token")
+            authToken = nil
+            UserDefaults.standard.removeObject(forKey: sessionTokenStorageKey)
+        }
         trace("configure api=\(normalizedAPI ?? "nil") ws=\(normalizedWS ?? "nil")")
         let changed = configQueue.sync {
             configuredServerURL != normalizedAPI || configuredWSBaseURL != normalizedWS

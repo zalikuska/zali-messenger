@@ -24,6 +24,7 @@ ZaliMixin(ZaliInterface, class {
         const chevronDown = '<path d="m6 9 6 6 6-6"/>';
         const chevronUp = '<path d="m6 15 6-6 6 6"/>';
         const windowIcon = '<rect x="2" y="4" width="20" height="16" rx="2.5"/><path d="M2 9h20"/>';
+        const globe = '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/>';
         // Положенная трубка — знак «сбросить»: горизонтальная трубка, симметричная
         // относительно x = 12 и по высоте занимающая 7,8…16,2, то есть с центром ровно
         // в центре сетки; с обводкой — x 1,4…22,6, внутри сетки. Раньше это была обычная трубка, повёрнутая на 135°: её контур
@@ -47,6 +48,7 @@ ZaliMixin(ZaliInterface, class {
             'chevron-down': chevronDown,
             'chevron-up': chevronUp,
             window: windowIcon,
+            globe,
         };
         return `<svg class="call-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icons[kind] || ''}</svg>`;
     }
@@ -646,6 +648,7 @@ ZaliMixin(ZaliInterface, class {
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
                 actionButtons.push(this.cameraCtrlSplit({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
+                if (this.sharedBrowserButtonHtml) actionButtons.push(this.sharedBrowserButtonHtml());
             } else {
                 actionButtons.push(`<button class="voice-btn voice-join-big" type="button" id="voiceJoinBtn">${this.voiceIcon('phone')}<span>Зайти в канал</span></button>`);
             }
@@ -656,6 +659,7 @@ ZaliMixin(ZaliInterface, class {
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceDeafenBtn', kind: this.voice.deafened ? 'headphones-off' : 'headphones', label: this.voice.deafened ? 'Включить звук' : 'Выключить звук', short: 'Звук', active: !this.voice.deafened, danger: this.voice.deafened }));
                 actionButtons.push(this.cameraCtrlSplit({ id: 'voiceCameraBtn', kind: this.voice.cameraOn ? 'cam' : 'cam-off', label: this.voice.cameraOn ? 'Выключить камеру' : 'Включить камеру', short: 'Камера', active: this.voice.cameraOn }));
                 actionButtons.push(this.callCtrlBtn({ id: 'voiceScreenShareBtn', kind: this.voice.screenSharing ? 'screen' : 'screen-off', label: this.voice.screenSharing ? 'Остановить показ экрана' : 'Показать экран', short: 'Экран', active: this.voice.screenSharing }));
+                if (this.sharedBrowserButtonHtml) actionButtons.push(this.sharedBrowserButtonHtml());
             } else if (this.voice.status === 'incoming' && this.voice.incomingInvite?.from) {
                 actionButtons.push(`<button class="voice-btn" type="button" id="voiceAcceptBtn">${this.voiceIcon('phone')}<span>Принять</span></button>`);
                 actionButtons.push(`<button class="voice-btn danger" type="button" id="voiceRejectBtn">${this.voiceIcon('phone-down')}<span>Отклонить</span></button>`);
@@ -809,10 +813,17 @@ ZaliMixin(ZaliInterface, class {
         // Часы в разметку не входят (data-voice-timer, fillVoiceCallTimers): с ними HTML
         // менялся каждую секунду, и любая перерисовка шла сюда — каждый <video> камеры
         // вынимался из документа и вставлялся заново, плитка мигала чёрным.
-        const videos = panel.querySelectorAll('video').length;
-        if (videos) this.voiceDiag?.('voice-panel-rebuild', { videos });
-        this._voicePanelHtml = html;
-        panel.innerHTML = html;
+        // Разметка изменилась (микрофон, звук, значок на плитке…): правим на месте
+        // только отличия — <video> и остальные узлы остаются в документе. Полная
+        // пересборка — запасной путь, когда структура разошлась.
+        if (this._voicePanelHtml && panel.firstElementChild && this.patchVoiceHtml(panel, this._voicePanelHtml, html)) {
+            this._voicePanelHtml = html;
+        } else {
+            const videos = panel.querySelectorAll('video').length;
+            if (videos) this.voiceDiag?.('voice-panel-rebuild', { videos });
+            this._voicePanelHtml = html;
+            panel.innerHTML = html;
+        }
         this.fillVoiceCallTimers();
         // The fullscreen DM grid is an overlay over the whole chat; a voice
         // channel's embedded call just fills the panel's own grid row.
@@ -820,6 +831,92 @@ ZaliMixin(ZaliInterface, class {
         panel.classList.toggle('call-expanded-mode', !!panel.querySelector('#voiceCallExpanded:not(.embedded)'));
         panel.classList.toggle('call-room-mode', !!panel.querySelector('#voiceCallExpanded.embedded'));
         this.mountVoiceVideoElements();
+    }
+
+    // Применяет к живому DOM только разницу между прошлой и новой разметкой.
+    // Полная замена innerHTML выбрасывала каждый <video> из документа (кадр-два
+    // чёрного), перезапускала анимацию точки в компактном звонке и сбрасывала hover
+    // кнопки под курсором — это и было «мигание» при выключении микрофона/звука.
+    // Сравниваются ДВЕ разметки (прошлая и новая), а не живой DOM с новой: классы
+    // и стили, которые JS ставит сам (has-video, speaking, --voice-level), так
+    // остаются нетронутыми. Узлы, чьё содержимое ведёт JS (видео плитки, сцена,
+    // таймер), не трогаем. Возвращает false, если структура разошлась — тогда
+    // вызывающий пересобирает разметку целиком.
+    patchVoiceHtml(host, prevHtml, nextHtml) {
+        if (!host || !prevHtml || !nextHtml || typeof document === 'undefined') return false;
+        const parse = (html) => {
+            const tpl = document.createElement('template');
+            tpl.innerHTML = html;
+            return tpl.content;
+        };
+        const MANAGED = '.voice-tile-media, #voiceStage, [data-voice-timer]';
+        const holdsLive = (node) => node.nodeType === 1 && (node.matches(MANAGED) || !!node.querySelector(`${MANAGED}, video`));
+        const sameShape = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || a.localName === b.localName);
+        const tokens = (value) => new Set(String(value || '').split(/\s+/).filter(Boolean));
+
+        const syncAttrs = (live, prev, next) => {
+            const names = new Set([...prev.getAttributeNames(), ...next.getAttributeNames()]);
+            for (const name of names) {
+                const a = prev.getAttribute(name);
+                const b = next.getAttribute(name);
+                if (a === b) continue;
+                // Инлайновый style у разметки звонка не бывает; если появился —
+                // это незнакомый случай, пусть перестроится целиком.
+                if (name === 'style') return false;
+                if (name === 'class') {
+                    const was = tokens(a);
+                    const now = tokens(b);
+                    for (const t of was) if (!now.has(t)) live.classList.remove(t);
+                    for (const t of now) if (!was.has(t)) live.classList.add(t);
+                } else if (b === null) {
+                    live.removeAttribute(name);
+                } else {
+                    live.setAttribute(name, b);
+                }
+            }
+            return true;
+        };
+
+        const syncChildren = (live, prevKids, nextKids) => {
+            const liveKids = live.childNodes;
+            // Живых детей должно быть ровно столько, сколько их дала прошлая
+            // разметка; иначе кто-то дописал DOM помимо неё.
+            if (liveKids.length !== prevKids.length) return false;
+            const common = Math.min(prevKids.length, nextKids.length);
+            for (let i = 0; i < common; i++) {
+                const liveKid = liveKids[i];
+                if (sameShape(prevKids[i], nextKids[i]) && sameShape(liveKid, prevKids[i])) {
+                    if (!walk(liveKid, prevKids[i], nextKids[i])) return false;
+                } else {
+                    if (holdsLive(liveKid)) return false;
+                    live.replaceChild(document.importNode(nextKids[i], true), liveKid);
+                }
+            }
+            for (let i = prevKids.length - 1; i >= nextKids.length; i--) {
+                if (holdsLive(liveKids[i])) return false;
+                live.removeChild(liveKids[i]);
+            }
+            for (let i = prevKids.length; i < nextKids.length; i++) {
+                live.appendChild(document.importNode(nextKids[i], true));
+            }
+            return true;
+        };
+
+        const walk = (live, prev, next) => {
+            if (prev.nodeType !== 1) {
+                if (prev.nodeValue !== next.nodeValue) live.nodeValue = next.nodeValue;
+                return true;
+            }
+            if (!syncAttrs(live, prev, next)) return false;
+            if (live.matches(MANAGED)) return true;
+            return syncChildren(live, prev.childNodes, next.childNodes);
+        };
+
+        try {
+            return syncChildren(host, parse(prevHtml).childNodes, parse(nextHtml).childNodes);
+        } catch (e) {
+            return false;
+        }
     }
 
     voiceCallClockLabel() {
@@ -914,7 +1011,7 @@ ZaliMixin(ZaliInterface, class {
         if (titleCall) {
             const html = type ? this.renderVoiceCompactCall({ title: this.voiceLiveCallTitle(type) }) : '';
             if (html !== this._voiceTitleCallHtml) {
-                titleCall.innerHTML = html;
+                if (!this.patchVoiceHtml(titleCall, this._voiceTitleCallHtml, html)) titleCall.innerHTML = html;
                 this._voiceTitleCallHtml = html;
             }
             titleCall.hidden = !type;
@@ -930,7 +1027,7 @@ ZaliMixin(ZaliInterface, class {
             if (kind) strip.dataset.kind = kind;
             else delete strip.dataset.kind;
             if (html !== this._voiceStripHtml) {
-                strip.innerHTML = html;
+                if (!this.patchVoiceHtml(strip, this._voiceStripHtml, html)) strip.innerHTML = html;
                 this._voiceStripHtml = html;
             }
             strip.hidden = !kind;
@@ -1134,6 +1231,10 @@ ZaliMixin(ZaliInterface, class {
             media.replaceChildren(video);
             video.play?.().catch(() => {});
         }
+        // Кнопка «Управлять» и захват ввода (interface/remote_control.js).
+        this.syncRemoteControlFocus?.(root);
+        // Панель адреса, захват ввода и курсоры «Общего браузера» (shared_browser.js).
+        this.syncSharedBrowserFocus?.(root);
     }
 
     mountVoiceVideoElements() {
@@ -1208,6 +1309,9 @@ ZaliMixin(ZaliInterface, class {
                     stage.appendChild(wrap);
                 }
             }
+            // «Отдать управление» на своей демонстрации (interface/remote_control.js).
+            this.syncRemoteControlStage?.(stage);
+            this.syncSharedBrowserStage?.(stage);
         }
         const tiles = document.getElementById('voiceTiles');
         if (!tiles) {
