@@ -81,6 +81,9 @@ query/explain/path` перед каждым Read/Grep по исходникам 
 cargo check --manifest-path server/Cargo.toml -p zali_server
 cargo run --manifest-path server/Cargo.toml   # http://localhost:3000
 
+# Сервер в Docker (контекст — корень репо, подробности — docs/DOCKER.md)
+docker compose up -d --build
+
 # Archiver SDK (Rust)
 cargo check --manifest-path sdk/Rust/Cargo.toml
 

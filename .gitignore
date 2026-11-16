@@ -16,6 +16,8 @@ graphify-out/
 # Local env and runtime data
 .env
 *.env.local
+# Секреты docker-compose (scripts/docker_init_secrets.sh)
+secrets/
 zali_messenger.db
 # Серверный ключ «свободной» подписи аддонов (server/src/addons.rs): лежит в data dir, который локально — корень репозитория
 addon_signing_key.pem

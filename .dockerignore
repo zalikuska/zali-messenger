@@ -1,0 +1,42 @@
+# Контекст сборки — корень репозитория (server/ зависит от ../sdk/Rust и ../core),
+# поэтому всё лишнее надо отсечь: иначе в демон уходят гигабайты.
+
+# Артефакты сборки
+**/target/
+**/.build/
+**/node_modules/
+dist/
+releases/
+apps/
+assets/
+web/
+scripts/
+docs/
+examples/
+graphify-out/
+zali-windows-source/
+tests/voice_e2e/
+
+# Секреты и данные рабочей копии — в образ попадать не должны никогда
+.env
+.env.*
+secrets/
+!.env.example
+*.pem
+*.db
+*.db-shm
+*.db-wal
+uploads/
+ops/
+CLAUDE.local.md
+.claude/
+
+# Архивы и бинарники клиентов
+*.zip
+*.exe
+*.app
+*.log
+
+.git/
+.gitignore
+.DS_Store

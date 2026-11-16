@@ -886,6 +886,93 @@ pub(crate) async fn change_password(
     }
 }
 
+/// Подсеть из `TRUSTED_PROXY_CIDRS`: `addr/prefix` или одиночный адрес.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cidr {
+    network: std::net::IpAddr,
+    prefix: u8,
+}
+
+impl Cidr {
+    pub(crate) fn parse(raw: &str) -> Option<Cidr> {
+        let raw = raw.trim();
+        let (addr, prefix) = match raw.split_once('/') {
+            Some((addr, prefix)) => (addr.trim(), Some(prefix.trim().parse::<u8>().ok()?)),
+            None => (raw, None),
+        };
+        let network: std::net::IpAddr = addr.parse().ok()?;
+        let max = if network.is_ipv4() { 32 } else { 128 };
+        let prefix = prefix.unwrap_or(max);
+        if prefix > max {
+            return None;
+        }
+        Some(Cidr { network, prefix })
+    }
+
+    pub(crate) fn contains(&self, ip: std::net::IpAddr) -> bool {
+        use std::net::IpAddr;
+        // IPv4-mapped (`::ffff:a.b.c.d`) считаем обычным IPv4: так выглядит пир,
+        // если сокет двойного стека.
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+            other => other,
+        };
+        match (self.network, ip) {
+            (IpAddr::V4(net), IpAddr::V4(ip)) => {
+                let mask = if self.prefix == 0 { 0 } else { u32::MAX << (32 - self.prefix) };
+                (u32::from(net) & mask) == (u32::from(ip) & mask)
+            }
+            (IpAddr::V6(net), IpAddr::V6(ip)) => {
+                let mask = if self.prefix == 0 { 0 } else { u128::MAX << (128 - self.prefix) };
+                (u128::from(net) & mask) == (u128::from(ip) & mask)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Разбор `TRUSTED_PROXY_CIDRS` (через запятую). Некорректные записи
+/// возвращаются отдельно, чтобы их можно было показать оператору, а не молча
+/// потерять: молча потерянная запись выглядела бы как «лимиты не работают».
+pub(crate) fn parse_trusted_proxy_cidrs(raw: &str) -> (Vec<Cidr>, Vec<String>) {
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
+    for part in raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match Cidr::parse(part) {
+            Some(cidr) => good.push(cidr),
+            None => bad.push(part.to_string()),
+        }
+    }
+    (good, bad)
+}
+
+/// Пишет в лог предупреждение о нераспознанных записях `TRUSTED_PROXY_CIDRS` —
+/// один раз при старте.
+pub(crate) fn warn_invalid_trusted_proxy_cidrs() {
+    let Ok(raw) = std::env::var("TRUSTED_PROXY_CIDRS") else { return };
+    let (good, bad) = parse_trusted_proxy_cidrs(&raw);
+    for entry in &bad {
+        warn!("TRUSTED_PROXY_CIDRS: запись {:?} не разобрана и игнорируется", entry);
+    }
+    if !good.is_empty() {
+        info!("TRUSTED_PROXY_CIDRS: доверенных подсетей прокси — {}", good.len());
+    }
+}
+
+/// Пришло ли соединение от нашего обратного прокси. Loopback — nginx на той же
+/// машине без Docker. В контейнере nginx приходит с адреса шлюза или соседнего
+/// контейнера, а не с 127.0.0.1, поэтому такие подсети перечисляются явно в
+/// `TRUSTED_PROXY_CIDRS`. По умолчанию список пуст — поведение прежнее.
+fn is_trusted_proxy_peer(peer: std::net::IpAddr) -> bool {
+    if peer.is_loopback() {
+        return true;
+    }
+    let Ok(raw) = std::env::var("TRUSTED_PROXY_CIDRS") else {
+        return false;
+    };
+    parse_trusted_proxy_cidrs(&raw).0.iter().any(|cidr| cidr.contains(peer))
+}
+
 pub(crate) fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) -> std::net::IpAddr {
     let trusted = std::env::var("TRUSTED_PROXY_MODE")
         .map(|v| {
@@ -898,7 +985,7 @@ pub(crate) fn extract_client_ip(remote_addr: SocketAddr, headers: &HeaderMap) ->
     // Заголовкам прокси верим, только если соединение пришло от самого прокси
     // (nginx на той же машине). Иначе, при открытом наружу порте, любой клиент
     // присылал свой X-Real-IP и обходил лимиты входа и регистрации.
-    if trusted && remote_addr.ip().is_loopback() {
+    if trusted && is_trusted_proxy_peer(remote_addr.ip()) {
         // X-Real-IP первым: наш nginx ставит его сам (`$remote_addr`), подделать его
         // клиент не может. X-Forwarded-For nginx лишь ДОПИСЫВАЕТ
         // (`$proxy_add_x_forwarded_for`), поэтому первым в нём стоит то, что прислал
@@ -933,4 +1020,58 @@ pub(crate) fn login_rate_key(ip: std::net::IpAddr, username: &str) -> String {
 /// bucket with every failure from the same address.
 pub(crate) fn failed_login_ip_rate_key(ip: std::net::IpAddr) -> String {
     format!("failed-ip:{}", ip)
+}
+
+#[cfg(test)]
+mod trusted_proxy_tests {
+    use super::{parse_trusted_proxy_cidrs, Cidr};
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn subnet_contains_only_its_own_addresses() {
+        let c = Cidr::parse("172.29.77.0/24").unwrap();
+        assert!(c.contains(ip("172.29.77.1")));
+        assert!(c.contains(ip("172.29.77.254")));
+        assert!(!c.contains(ip("172.29.78.1")));
+        assert!(!c.contains(ip("10.0.0.1")));
+    }
+
+    #[test]
+    fn bare_address_is_a_single_host() {
+        let c = Cidr::parse("172.29.77.1").unwrap();
+        assert!(c.contains(ip("172.29.77.1")));
+        assert!(!c.contains(ip("172.29.77.2")));
+    }
+
+    #[test]
+    fn prefix_zero_matches_everything_of_its_family_only() {
+        let c = Cidr::parse("0.0.0.0/0").unwrap();
+        assert!(c.contains(ip("8.8.8.8")));
+        assert!(!c.contains(ip("2001:db8::1")));
+    }
+
+    #[test]
+    fn ipv4_mapped_peer_matches_ipv4_subnet() {
+        let c = Cidr::parse("172.29.77.0/24").unwrap();
+        assert!(c.contains(ip("::ffff:172.29.77.1")));
+        assert!(!c.contains(ip("::ffff:8.8.8.8")));
+    }
+
+    #[test]
+    fn ipv6_subnet_matches() {
+        let c = Cidr::parse("fd00::/8").unwrap();
+        assert!(c.contains(ip("fd12::1")));
+        assert!(!c.contains(ip("fe80::1")));
+    }
+
+    #[test]
+    fn invalid_entries_are_reported_not_trusted() {
+        let (good, bad) = parse_trusted_proxy_cidrs("172.29.77.0/24, nonsense, 10.0.0.0/33, ,::1/129");
+        assert_eq!(good.len(), 1);
+        assert_eq!(bad, vec!["nonsense", "10.0.0.0/33", "::1/129"]);
+    }
 }

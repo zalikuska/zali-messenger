@@ -2552,6 +2552,8 @@ pub async fn run() {
         });
     }
 
+    auth::warn_invalid_trusted_proxy_cidrs();
+
     let app = build_router(Arc::clone(&state));
 
     let addr: SocketAddr = std::env::var("BIND_ADDR")

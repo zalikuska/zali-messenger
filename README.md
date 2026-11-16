@@ -42,7 +42,7 @@
 | `apps/ios/` | iOS-клиент (Swift) |
 | `sdk/` | Archiver SDK формата `.zali` (Rust и Swift) |
 | `scripts/` | Сборка, бандл веб-ассетов, проверки областей (`*_doctor`) |
-| `docs/` | Архитектура, разработка, дизайн интерфейса |
+| `docs/` | Архитектура, разработка, дизайн интерфейса, [Docker](docs/DOCKER.md) |
 
 ## Сборка
 
@@ -58,6 +58,17 @@ cp .env.example .env    # для любого не-локального запу
 cargo run --manifest-path server/Cargo.toml
 ```
 Сервер слушает `http://localhost:3000`.
+
+### Сервер в Docker
+```bash
+cp .env.example .env              # ALLOWED_ORIGINS и прочие несекретные настройки
+./scripts/docker_init_secrets.sh  # JWT_SECRET и RELEASE_ADMIN_TOKEN → ./secrets/, не в .env
+docker compose up -d --build
+```
+TLS и WebSocket-прокси (nginx) остаются на хосте — наружу публикуется только
+`127.0.0.1`. Полный гайд, более жёсткий режим с секретами на диске зашифрованными
+(`docker-compose.age.yml`), nginx-конфиг, FCM и устранение проблем —
+[docs/DOCKER.md](docs/DOCKER.md).
 
 ### macOS
 ```bash

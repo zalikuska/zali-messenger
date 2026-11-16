@@ -1,0 +1,36 @@
+# Более жёсткий режим хранения секретов: JWT_SECRET и RELEASE_ADMIN_TOKEN на
+# диске лежат ЗАШИФРОВАННЫМИ (age), а не открытым текстом в Docker secret.
+# Ключ расшифровки передаётся файлом, который существует на диске только на
+# момент старта контейнера — docker-entrypoint.sh стирает его сразу после
+# использования. Подробности, команды и цена этого режима — docs/DOCKER.md.
+#
+#   ./scripts/docker_init_secrets.sh --age
+#   umask 077; printf '%s\n' "<приватный ключ из вывода выше>" > secrets/.age-identity
+#   docker compose -f docker-compose.yml -f docker-compose.age.yml up -d --build
+#   rm -f secrets/.age-identity   # entrypoint уже стёр содержимое, но проверьте сами
+#
+# Плата: без свежего secrets/.age-identity контейнер не поднимется — в том
+# числе сам, после перезагрузки хоста (restart: unless-stopped не помогает,
+# когда файла с ключом уже нет). Поднимать руками, с ключом под рукой.
+
+name: zali
+
+services:
+  zali-server:
+    # Базовый compose примонтировал бы /run/secrets/* из обычных секретов —
+    # их тут нет (в --age режиме лежат только *.age), поэтому список для этого
+    # сервиса заменяем целиком, а не добавляем к нему.
+    secrets: !override []
+    environment:
+      # Пустая строка — это «источника нет» для entrypoint (как если бы
+      # переменная вовсе не была задана); переопределяет путь к обычному
+      # Docker secret из базового docker-compose.yml.
+      JWT_SECRET_FILE: ""
+      RELEASE_ADMIN_TOKEN_FILE: ""
+      JWT_SECRET_FILE_AGE: /run/secrets-age/jwt_secret.age
+      RELEASE_ADMIN_TOKEN_FILE_AGE: /run/secrets-age/release_admin_token.age
+      AGE_IDENTITY_FILE: /run/secrets-age/identity
+    volumes:
+      - ./secrets/jwt_secret.age:/run/secrets-age/jwt_secret.age:ro
+      - ./secrets/release_admin_token.age:/run/secrets-age/release_admin_token.age:ro
+      - ./secrets/.age-identity:/run/secrets-age/identity

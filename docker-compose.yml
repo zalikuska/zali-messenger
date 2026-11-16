@@ -1,0 +1,89 @@
+# ZaliMessenger Server в Docker.
+#
+#   cp .env.example .env            # ALLOWED_ORIGINS и прочие НЕсекретные настройки
+#   ./scripts/docker_init_secrets.sh  # JWT_SECRET и RELEASE_ADMIN_TOKEN → ./secrets/ (не в .env)
+#   docker compose up -d --build
+#
+# Наружу порт отдаётся только на loopback хоста: TLS и WebSocket-прокси
+# (nginx) остаются на хосте, как и раньше. coturn в этот compose НЕ входит —
+# его UDP-диапазон через Docker NAT работает плохо, держите его на хосте.
+# Подробности: docs/DOCKER.md
+
+name: zali
+
+services:
+  zali-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+    image: zali-server:local
+    container_name: zali-server
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    # Настройки сервера — те же переменные, что в .env.example.
+    env_file: .env
+    environment:
+      ZALI_DATA_DIR: /data
+      BIND_ADDR: 0.0.0.0:3000
+      # Секреты — файлами (Docker secrets), не переменными: значение переменной
+      # видно в `docker inspect` и `docker compose config`. Читает точка входа.
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      RELEASE_ADMIN_TOKEN_FILE: /run/secrets/release_admin_token
+      # Гостевой режим отключает аутентификацию целиком — в контейнере его
+      # включить нельзя, даже если в .env осталось true от локальной отладки.
+      ALLOW_GUEST_MODE: "false"
+      # nginx на хосте приходит в контейнер с адреса шлюза сети ниже, а не с
+      # 127.0.0.1, поэтому без этой строки сервер не верит X-Real-IP и все
+      # клиенты попадают в одну корзину rate limit. Подсеть — та, что объявлена
+      # в `networks` ниже; менять только вместе с ней.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-172.29.77.0/24}
+    ports:
+      - "127.0.0.1:${ZALI_HOST_PORT:-3001}:3000"
+    volumes:
+      # Именованный том по умолчанию. Чтобы взять существующие данные с хоста
+      # (например /var/lib/zali), задайте ZALI_DATA_HOST=/var/lib/zali и
+      # отдайте каталог пользователю контейнера: chown -R 10001:10001 /var/lib/zali
+      - ${ZALI_DATA_HOST:-zali-data}:/data
+      # Android-пуши (FCM): положите ключ сервисного аккаунта в ./secrets/fcm.json
+      # (chmod 644: каталог secrets/ закрыт 700), раскомментируйте строку и
+      # добавьте в .env FCM_SERVICE_ACCOUNT_FILE=/run/secrets/fcm.json
+      # - ./secrets/fcm.json:/run/secrets/fcm.json:ro
+    secrets:
+      - jwt_secret
+      - release_admin_token
+    # Файловая система контейнера — только для чтения: записывать можно лишь /data
+    # и /tmp. Взломанный процесс не сможет подложить бинарник или поправить образ.
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    # Серверу хватает малого; лимит нужен, чтобы утечка не доводила общую
+    # машину до OOM-killer'а (соседний Minecraft держит ~5,7 ГБ).
+    mem_limit: ${ZALI_MEM_LIMIT:-1g}
+    networks:
+      - zali
+
+# Файлы создаёт scripts/docker_init_secrets.sh; каталог secrets/ — вне git и вне
+# контекста сборки образа.
+secrets:
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  release_admin_token:
+    file: ./secrets/release_admin_token
+
+volumes:
+  zali-data:
+
+networks:
+  zali:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.77.0/24
