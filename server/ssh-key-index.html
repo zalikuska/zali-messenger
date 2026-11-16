@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ключ для входа по SSH</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem}
+a.b{display:inline-block;padding:.7rem 1.2rem;background:#111;color:#fff;border-radius:8px;text-decoration:none}
+code{background:#eee;padding:.1rem .3rem;border-radius:4px}pre{background:#eee;padding:.8rem;border-radius:8px;overflow:auto}</style>
+</head><body>
+<h1>Ключ для входа по SSH</h1>
+<p>Ключ выдаётся <b>один раз</b>: после скачивания он навсегда удаляется из контейнера.</p>
+<p><a class="b" href="/cgi-bin/ssh-key" download="zali_docker_key">Скачать ключ</a></p>
+<p>Сам ключ защищён паролем, поэтому передача по HTTP безопасна: без пароля файл бесполезен.
+Пароль — значение <code>RELEASE_ADMIN_TOKEN</code> (файл <code>secrets/release_admin_token</code>
+на сервере; если секретов нет, он записан в <code>docker compose logs zali-ssh</code>).</p>
+<p>Дальше (файл лежит в «Загрузках»):</p>
+<pre>chmod 600 ~/Downloads/zali_docker_key
+ssh -i ~/Downloads/zali_docker_key -p 2222 zali@АДРЕС-СЕРВЕРА</pre>
+<p>Чтобы не вводить пароль каждый раз: <code>ssh-keygen -p -f ~/Downloads/zali_docker_key</code>
+(новый пароль пустой) или <code>ssh-add</code>.</p>
+<p>Если страница пишет «410», ключ уже забрали. Новый:
+<code>docker compose exec zali-ssh rm /hostkeys/client_issued &amp;&amp; docker compose restart zali-ssh</code></p>
+</body></html>

@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+#
+# Необязательный SSH-вход в окружение сервера (compose-профиль `ssh`).
+#
+# Отдельный образ, а не sshd внутри образа zali_server: у того в рантайме нет
+# ни шелла-для-людей, ни лишних утилит, и это сделано намеренно (docs/DOCKER.md).
+# Здесь sshd работает БЕЗ root — под тем же uid 10001, что и сервер, — поэтому
+# контейнер живёт с read_only, cap_drop: ALL и no-new-privileges, как основной.
+#
+# Контекст сборки — корень репозитория:
+#   docker build -f server/Dockerfile.ssh -t zali-ssh .
+
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+FROM ${RUNTIME_IMAGE}
+
+# busybox — httpd для одноразовой выдачи ключа; openssh-server — сам sshd; ca-certificates + curl — подтягивать публичные ключи
+# по HTTPS; sqlite3 — смотреть БД из сессии (в образе сервера его нет нарочно).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        openssh-server ca-certificates curl sqlite3 busybox \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /etc/ssh/ssh_host_*_key* \
+ && groupadd --system --gid 10001 zali \
+ && useradd --system --uid 10001 --gid zali --home-dir /data --shell /bin/bash zali \
+ && install -d -o zali -g zali -m 0700 /data /hostkeys
+
+# Без COPY --chmod: образ собирается и обычным builder'ом, без BuildKit.
+COPY server/sshd_config /etc/ssh/sshd_config_zali
+COPY server/ssh-entrypoint.sh /usr/local/bin/ssh-entrypoint.sh
+# Эндпоинт GET /cgi-bin/ssh-key (порт 2223): отдаёт приватный ключ один раз.
+COPY server/ssh-key-cgi.sh /srv/www/cgi-bin/ssh-key
+COPY server/ssh-key-index.html /srv/www/index.html
+RUN chmod 0644 /etc/ssh/sshd_config_zali /srv/www/index.html \
+ && chmod 0755 /usr/local/bin/ssh-entrypoint.sh /srv/www/cgi-bin/ssh-key
+
+# Хост-ключи живут в томе: иначе при каждом пересоздании контейнера у сервера
+# новый отпечаток и клиенты ругаются на «REMOTE HOST IDENTIFICATION HAS CHANGED».
+VOLUME ["/hostkeys"]
+EXPOSE 2222 2223
+USER zali
+WORKDIR /data
+
+ENTRYPOINT ["/usr/local/bin/ssh-entrypoint.sh"]

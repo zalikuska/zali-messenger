@@ -70,6 +70,66 @@ services:
     networks:
       - zali
 
+  # SSH-вход с полным доступом к окружению сервера. Поднимается ВМЕСТЕ с
+  # сервером обычным `docker compose up`, ничего готовить не нужно: при первом
+  # старте контейнер сам создаёт ключ для входа, а приватную часть отдаёт ОДИН раз:
+  #   http://<адрес-хоста>:2223/  → «Скачать ключ» (пароль ключа = RELEASE_ADMIN_TOKEN)
+  #   ssh -i zali_docker_key -p 2222 zali@<адрес-хоста>
+  # Дополнительные ключи — SSH_KEYS_GITHUB / SSH_KEYS_URLS. Порты открыты наружу.
+  # Подробности: docs/DOCKER.md, раздел «SSH».
+  zali-ssh:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.ssh
+    image: zali-ssh:local
+    container_name: zali-ssh
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - zali-server
+    environment:
+      SSH_KEYS_GITHUB: ${SSH_KEYS_GITHUB:-}
+      SSH_KEYS_URLS: ${SSH_KEYS_URLS:-}
+      SSH_KEYS_REFRESH: ${SSH_KEYS_REFRESH:-600}
+    ports:
+      # Порты открыты наружу: вход только по ключу. Docker публикует порты в обход
+      # ufw/firewalld, так что ограничивайте доступ на уровне облачного файрвола,
+      # либо ZALI_SSH_BIND=127.0.0.1 — тогда ходить через `ssh -J` / туннель.
+      - "${ZALI_SSH_BIND:-0.0.0.0}:${ZALI_SSH_PORT:-2222}:2222"
+      # Одноразовая выдача приватного ключа: GET /cgi-bin/ssh-key. Ключ в файле
+      # зашифрован парольной фразой (RELEASE_ADMIN_TOKEN), поэтому по открытому HTTP
+      # его можно передавать: без пароля он бесполезен. Опередивший вас может лишь
+      # «сжечь» выдачу — тогда перевыпустите ключ (docs/DOCKER.md).
+      - "${ZALI_SSH_KEY_BIND:-0.0.0.0}:${ZALI_SSH_KEY_PORT:-2223}:2223"
+    volumes:
+      # Данные сервера (БД, uploads, releases, ключ подписи) — те же, что у
+      # zali-server, с правом записи. ZALI_SSH_DATA_MODE=ro оставит только чтение.
+      - ${ZALI_DATA_HOST:-zali-data}:/data:${ZALI_SSH_DATA_MODE:-rw}
+      # Постоянный отпечаток хоста между пересозданиями контейнера.
+      - zali-ssh-hostkeys:/hostkeys
+      # Необязательно: свои публичные ключи в ./ssh/authorized_keys.
+      - ./ssh:/etc/zali-ssh:ro
+    # Те же секреты, что у сервера (JWT_SECRET, RELEASE_ADMIN_TOKEN) —
+    # читаются в /run/secrets/. Это и есть «полный доступ»: кто вошёл по SSH,
+    # владеет сервером целиком.
+    secrets:
+      - jwt_secret
+      - release_admin_token
+    # Раскомментируйте, чтобы видеть и останавливать процесс zali_server из
+    # SSH-сессии (общее пространство PID):
+    # pid: "service:zali-server"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    networks:
+      - zali
+
 # Файлы создаёт scripts/docker_init_secrets.sh; каталог secrets/ — вне git и вне
 # контекста сборки образа.
 secrets:
@@ -80,6 +140,7 @@ secrets:
 
 volumes:
   zali-data:
+  zali-ssh-hostkeys:
 
 networks:
   zali:

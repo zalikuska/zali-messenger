@@ -40,3 +40,6 @@ CLAUDE.local.md
 .git/
 .gitignore
 .DS_Store
+
+# Ключи SSH-входа не нужны в образах
+ssh/

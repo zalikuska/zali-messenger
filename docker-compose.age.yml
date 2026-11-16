@@ -34,3 +34,8 @@ services:
       - ./secrets/jwt_secret.age:/run/secrets-age/jwt_secret.age:ro
       - ./secrets/release_admin_token.age:/run/secrets-age/release_admin_token.age:ro
       - ./secrets/.age-identity:/run/secrets-age/identity
+
+  # SSH-сервис в этом режиме секретов не получает: открытых файлов secrets/
+  # здесь нет (лежат только *.age), а расшифровывать их в SSH-сессии незачем.
+  zali-ssh:
+    secrets: !override []

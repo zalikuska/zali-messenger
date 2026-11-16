@@ -85,3 +85,6 @@ ops/
 # Python bytecode инструментов scripts/
 __pycache__/
 *.pyc
+
+# Публичные ключи для SSH-входа в Docker (docs/DOCKER.md)
+ssh/
