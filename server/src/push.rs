@@ -220,7 +220,15 @@ pub(crate) struct PushNotification {
     /// Показать, но без звука и вибрации (режим «в игре», focus.rs). Service
     /// worker передаёт это в `showNotification({silent})`, Android — в канал.
     silent: bool,
+    /// Зашифрованный архив сообщения (base64), если он маленький, — только для FCM, см.
+    /// `with_inline_archive`. В Web Push не сериализуется: service worker сообщения не
+    /// расшифровывает, а лимит пуш-сервиса на тело тот же ~4 КБ.
+    #[serde(skip)]
+    inline_archive: Option<Arc<str>>,
 }
+
+/// Потолок FCM на `data` целиком (ключи + значения) — 4096 байт; запас на служебное.
+const FCM_DATA_MAX_BYTES: usize = 3900;
 
 impl PushNotification {
     pub(crate) fn direct_message(sender: &str, message_id: &str) -> Self {
@@ -235,7 +243,27 @@ impl PushNotification {
                 "messageId": message_id,
             }),
             silent: false,
+            inline_archive: None,
         }
+    }
+
+    /// Архив сообщения едет в самом FCM-пуше, если влезает в его лимит.
+    ///
+    /// Без него телефон, получив пуш, отдельно скачивал архив (`GET /api/download/:id`)
+    /// по холодному соединению из фона — это и было главной задержкой уведомления на
+    /// Android, а при плохой сети давало «Новое сообщение» без текста. Медиана архива —
+    /// ~300 байт, так что обычный текст влезает.
+    ///
+    /// **Только для личных сообщений.** Их ключ есть лишь у участников, и Google видит
+    /// шифротекст. Ключ канала выводится из id сервера и канала (`deriveServerChannelKey`,
+    /// см. скилл zali-ops-open-risks), а они лежат в том же пуше, — архив канала здесь
+    /// читался бы кем угодно на пути, включая сам FCM.
+    pub(crate) fn with_inline_archive(mut self, archive_base64: Option<String>) -> Self {
+        let is_direct = self.data.get("serverId").map_or(true, |value| value.is_null());
+        if is_direct {
+            self.inline_archive = archive_base64.filter(|value| !value.is_empty()).map(Arc::from);
+        }
+        self
     }
 
     /// Переписка уведомления — ключ, которым клиент называет открытый чат (`client_view`).
@@ -290,6 +318,15 @@ impl PushNotification {
         ] {
             data.insert(key.to_string(), serde_json::Value::String(value));
         }
+        if let Some(archive) = self.inline_archive.as_deref() {
+            let used: usize = data
+                .iter()
+                .map(|(key, value)| key.len() + value.as_str().map_or(0, str::len))
+                .sum();
+            if used + "inlineArchive".len() + archive.len() <= FCM_DATA_MAX_BYTES {
+                data.insert("inlineArchive".to_string(), serde_json::Value::String(archive.to_string()));
+            }
+        }
         data
     }
 
@@ -310,6 +347,7 @@ impl PushNotification {
                 "messageId": message_id,
             }),
             silent: false,
+            inline_archive: None,
         }
     }
 }
@@ -531,11 +569,18 @@ pub(crate) fn is_acceptable_push_endpoint(endpoint: &str) -> bool {
     if host.starts_with('[') || host.parse::<std::net::IpAddr>().is_ok() {
         return false;
     }
-    host.contains('.')
-        && !host.ends_with(".localhost")
-        && !host.ends_with(".local")
-        && !host.ends_with(".internal")
-        && !host.ends_with(".lan")
+    // Только известные пуш-сервисы браузеров. Любой публичный https-адрес делал
+    // сервер рефлектором: подписка на `https://жертва/` — POST туда на каждое
+    // сообщение аккаунта (аудит 2026-11-18).
+    is_known_push_service(&host)
+}
+
+/// Хосты пуш-сервисов: Chrome/Edge(Chromium)/Opera/Samsung — FCM, Firefox — Mozilla
+/// autopush, Safari — Apple, старый Edge — WNS.
+pub(crate) fn is_known_push_service(host: &str) -> bool {
+    const EXACT: &[&str] = &["fcm.googleapis.com", "android.googleapis.com"];
+    const SUFFIX: &[&str] = &[".push.services.mozilla.com", ".push.apple.com", ".notify.windows.com"];
+    EXACT.contains(&host) || SUFFIX.iter().any(|suffix| host.ends_with(suffix))
 }
 
 /// Публичный ли адрес: не частный, не loopback, не link-local, не CGNAT, не
@@ -607,14 +652,41 @@ async fn endpoint_resolves_public(endpoint: &str) -> Option<(String, std::net::S
 }
 
 /// Клиент, который соединяется только с уже проверенным адресом endpoint'а.
+///
+/// Переиспользуется для той же пары «имя + проверенный адрес». Раньше клиент
+/// создавался на каждый пуш, а с ним и пул: каждое уведомление платило новое TCP+TLS
+/// до пуш-сервиса. Защита от DNS rebinding от этого не слабеет: ключ — уже
+/// проверенный адрес, соединение по-прежнему идёт ровно на него, а резолв и проверка
+/// (`endpoint_resolves_public`) выполняются перед каждым пушем, как и раньше.
 fn pinned_push_client(host: &str, addr: std::net::SocketAddr) -> reqwest::Client {
-    reqwest::Client::builder()
+    static CLIENTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, std::net::SocketAddr), reqwest::Client>>> =
+        std::sync::OnceLock::new();
+    // Пуш-сервисов единицы (FCM, Mozilla, Apple), но адресов у них много — потолок,
+    // чтобы карта не росла бесконечно; при переполнении просто начинаем заново.
+    const MAX_CACHED_CLIENTS: usize = 64;
+    let clients = CLIENTS.get_or_init(Default::default);
+    let key = (host.to_ascii_lowercase(), addr);
+    if let Ok(cache) = clients.lock() {
+        if let Some(client) = cache.get(&key) {
+            return client.clone();
+        }
+    }
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
         .resolve(host, addr)
-        .build()
-        .unwrap_or_else(|_| web_push_client())
+        .build();
+    let Ok(client) = client else {
+        return web_push_client();
+    };
+    if let Ok(mut cache) = clients.lock() {
+        if cache.len() >= MAX_CACHED_CLIENTS {
+            cache.clear();
+        }
+        cache.insert(key, client.clone());
+    }
+    client
 }
 
 /// Every push channel of `username`: Web Push subscriptions of their browsers and FCM
@@ -675,18 +747,201 @@ pub(crate) async fn send_web_push(
             return;
         }
     };
+    send_web_push_payload(state, username, targets, payload, 3600).await;
+}
+
+/// Одно тело Web Push на перечисленные подписки, параллельно.
+async fn send_web_push_payload(
+    state: &Arc<AppState>,
+    username: &str,
+    targets: Vec<PushTarget>,
+    payload: String,
+    ttl_secs: u32,
+) {
     let payload: Arc<str> = Arc::from(payload);
     let mut sends = tokio::task::JoinSet::new();
     for target in targets {
         let state = Arc::clone(state);
         let username = username.to_string();
         let payload = Arc::clone(&payload);
-        sends.spawn(async move { send_one_web_push(&state, &username, &payload, target).await });
+        sends.spawn(async move { send_one_web_push(&state, &username, &payload, target, ttl_secs).await });
     }
     while sends.join_next().await.is_some() {}
 }
 
-async fn send_one_web_push(state: &Arc<AppState>, username: &str, payload: &str, target: PushTarget) {
+// MARK: - Звонки
+//
+// До этого о входящем звонке знал только открытый WebSocket: телефон в кармане, закрытая
+// вкладка, свёрнутое приложение не звонили вовсе, а о пропущенном звонке не узнавали
+// никогда. Теперь звонок идёт и пушем — на каждое устройство адресата, на которое никто
+// не смотрит (смотрят — звонит само приложение). Маршрут по активности (device_activity.rs)
+// здесь не применяется: ответить можно с любого устройства, и звонить должны все.
+
+/// Чем закончился звонок для того, кому звонили.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallPushEnd {
+    /// Принят на одном из устройств адресата.
+    Answered,
+    /// Отклонён адресатом.
+    Declined,
+    /// Звонивший сдался или вышло время.
+    Missed,
+}
+
+impl CallPushEnd {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Answered => "answered",
+            Self::Declined => "declined",
+            Self::Missed => "missed",
+        }
+    }
+}
+
+/// Звонить дольше этого бессмысленно: сервер сам снимает звонок через 60 с (voice.rs).
+const CALL_PUSH_TTL_SECS: u32 = 60;
+/// «Пропущенный звонок» полезен и через час.
+const MISSED_CALL_PUSH_TTL_SECS: u32 = 3600;
+
+fn call_tag(room_id: &str) -> String {
+    format!("zali:call:{}", room_id)
+}
+
+/// Входящий звонок пушем. `decline_token` позволяет отклонить звонок прямо из
+/// уведомления, без сессии (`POST /api/voice/call/decline`): у service worker токена
+/// входа нет, а Android-приёмнику кнопки незачем поднимать вебвью.
+pub(crate) async fn send_incoming_call_push(
+    state: &Arc<AppState>,
+    target: &str,
+    room_id: &str,
+    from: &str,
+    decline_token: &str,
+) {
+    let web = async {
+        if state.config.vapid_private_key.is_none() {
+            return;
+        }
+        let targets = match push_targets_for(state, target, &crate::NotifyRoute::All).await {
+            Ok(targets) => targets,
+            Err(e) => {
+                warn!("Ошибка чтения push subscriptions username={}: {}", target, e);
+                return;
+            }
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let payload = serde_json::json!({
+            "title": "Входящий звонок",
+            "body": from,
+            "tag": call_tag(room_id),
+            "data": {
+                "kind": "call",
+                "roomId": room_id,
+                "from": from,
+                "sender": from,
+                "declineToken": decline_token,
+            },
+        });
+        send_web_push_payload(state, target, targets, payload.to_string(), CALL_PUSH_TTL_SECS).await;
+    };
+    let fcm = async {
+        let Some(account) = state.config.fcm_service_account.as_ref() else {
+            return;
+        };
+        let targets = match crate::fcm_targets_for(state, target, &crate::NotifyRoute::All).await {
+            Ok(targets) => targets,
+            Err(e) => {
+                warn!("Ошибка чтения FCM-токенов username={}: {}", target, e);
+                return;
+            }
+        };
+        let data = serde_json::json!({
+            "kind": "call",
+            "recipient": target,
+            "roomId": room_id,
+            "from": from,
+            "declineToken": decline_token,
+        });
+        crate::send_fcm_data(state, account, target, targets, data, CALL_PUSH_TTL_SECS as u64).await;
+    };
+    tokio::join!(web, fcm);
+    info!("[VOICE][PUSH] incoming call push to={} roomId={}", target, room_id);
+}
+
+/// Звонок закончился — снять «Входящий звонок» там, куда он ушёл пушем.
+///
+/// FCM — на все токены адресата, без фильтра «смотрят»: телефон мог зазвонить, а потом
+/// его взяли в руки, и уведомление-звонок иначе висело бы и звенело до своего таймаута.
+/// Web Push обязан что-то показать (подписка userVisibleOnly), поэтому он заменяет
+/// уведомление звонка тем же tag: «Пропущенный звонок» — со звуком, остальное — молча.
+pub(crate) async fn send_call_end_push(
+    state: &Arc<AppState>,
+    target: &str,
+    room_id: &str,
+    from: &str,
+    end: CallPushEnd,
+) {
+    let ttl = if end == CallPushEnd::Missed { MISSED_CALL_PUSH_TTL_SECS } else { CALL_PUSH_TTL_SECS };
+    let web = async {
+        if state.config.vapid_private_key.is_none() {
+            return;
+        }
+        let targets = match push_targets_for(state, target, &crate::NotifyRoute::All).await {
+            Ok(targets) => targets,
+            Err(e) => {
+                warn!("Ошибка чтения push subscriptions username={}: {}", target, e);
+                return;
+            }
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let (title, silent) = match end {
+            CallPushEnd::Missed => ("Пропущенный звонок", false),
+            CallPushEnd::Answered => ("Звонок принят на другом устройстве", true),
+            CallPushEnd::Declined => ("Звонок отклонён", true),
+        };
+        let payload = serde_json::json!({
+            "title": title,
+            "body": from,
+            "tag": call_tag(room_id),
+            "silent": silent,
+            "data": {
+                "kind": "call_end",
+                "outcome": end.as_str(),
+                "roomId": room_id,
+                "from": from,
+                "sender": from,
+            },
+        });
+        send_web_push_payload(state, target, targets, payload.to_string(), ttl).await;
+    };
+    let fcm = async {
+        let Some(account) = state.config.fcm_service_account.as_ref() else {
+            return;
+        };
+        let targets = match crate::all_fcm_tokens(state, target).await {
+            Ok(targets) => targets,
+            Err(e) => {
+                warn!("Ошибка чтения FCM-токенов username={}: {}", target, e);
+                return;
+            }
+        };
+        let data = serde_json::json!({
+            "kind": "call_end",
+            "recipient": target,
+            "roomId": room_id,
+            "from": from,
+            "outcome": end.as_str(),
+        });
+        crate::send_fcm_data(state, account, target, targets, data, ttl as u64).await;
+    };
+    tokio::join!(web, fcm);
+    info!("[VOICE][PUSH] call end push to={} roomId={} outcome={}", target, room_id, end.as_str());
+}
+
+async fn send_one_web_push(state: &Arc<AppState>, username: &str, payload: &str, target: PushTarget, ttl_secs: u32) {
     let Some(private_key) = state.config.vapid_private_key.as_deref() else {
         return;
     };
@@ -721,7 +976,7 @@ async fn send_one_web_push(state: &Arc<AppState>, username: &str, payload: &str,
         // High: сообщение мессенджера ждут сейчас. С Normal пуш-сервисы на телефоне
         // вправе придержать доставку до выхода устройства из энергосбережения.
         builder.set_urgency(Urgency::High);
-        builder.set_ttl(3600);
+        builder.set_ttl(ttl_secs);
         builder.build()
     })();
 

@@ -62,6 +62,19 @@ pub async fn spawn_app_with_admin_token(token: &str) -> TestApp {
     spawn_app_with_config(data_dir, zali_server::Config::from_env().with_release_admin_token(token)).await
 }
 
+/// Сервер с классификатором жалоб: `base_url` — локальная заглушка Decisions API
+/// (tests/moderation.rs), лимиты OpenRouter — как задаст тест.
+#[allow(dead_code)]
+pub async fn spawn_app_with_moderation(base_url: &str, per_minute: u32, per_day: u32, admin_token: &str) -> TestApp {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let data_dir: PathBuf =
+        std::env::temp_dir().join(format!("zali-server-test-{}-{}", std::process::id(), n));
+    let config = zali_server::Config::from_env()
+        .with_release_admin_token(admin_token)
+        .with_moderation(base_url, "test-openrouter-key", per_minute, per_day);
+    spawn_app_with_config(data_dir, config).await
+}
+
 async fn spawn_app_with_config(data_dir: PathBuf, config: zali_server::Config) -> TestApp {
     let hash_chain_key = config.hash_chain_key().to_string();
     let state = zali_server::build_app_state(data_dir.clone(), config).await;

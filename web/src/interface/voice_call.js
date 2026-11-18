@@ -326,6 +326,90 @@ ZaliMixin(ZaliInterface, class {
         this.voice.callTrack = this.inviteCallTrack({ roomId, from, receivedAt: invite.receivedAt });
         this.voice.outgoingInvite = null;
         this.voice.status = 'incoming';
+        this.notifyIncomingCall({ roomId, from });
+    }
+
+    // Звонок, пока на приложение не смотрят, — системным уведомлением. Раньше о нём знали
+    // только панель звонка и рингтон внутри окна: свёрнутое приложение и фоновая вкладка
+    // звенели (если звук вообще разрешён), но ничего не показывали.
+    //  - macOS/Windows: SHOW_NOTIFICATION с attention — уведомление ОС плюс прыгающая
+    //    иконка в доке / мигающая кнопка на панели задач;
+    //  - браузер/PWA: уведомление с «Принять»/«Отклонить» (тот же tag, что у пуша звонка
+    //    из server/src/push.rs, — они склеиваются в одно);
+    //  - Android: ничего — там звонит уведомление-звонок из FCM (IncomingCall.kt), а это
+    //    дало бы второе, обычное.
+    notifyIncomingCall({ roomId, from }) {
+        if (!roomId || !from || this.isAppAttended()) return;
+        if (this._notifiedCallRoom === roomId) return;
+        this._notifiedCallRoom = roomId;
+        if (this.nativeBridge?.()?.transport === 'android') return;
+        if (this.hasNativeBridge()) {
+            this.postNativeMessage({
+                type: NativeMessageTypes.SHOW_NOTIFICATION,
+                sender: from,
+                text: 'Входящий звонок',
+                attachmentCount: 0,
+                serverId: null,
+                channelId: null,
+                messageId: `call:${roomId}`,
+                attention: true,
+            });
+            return;
+        }
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        if (!navigator.serviceWorker?.ready) return;
+        navigator.serviceWorker.ready
+            .then(registration => registration.showNotification('Входящий звонок', {
+                body: from,
+                icon: './icon-192.png',
+                badge: './icon-192.png',
+                tag: `zali:call:${roomId}`,
+                renotify: true,
+                requireInteraction: true,
+                vibrate: [400, 200, 400, 200, 400],
+                actions: [
+                    { action: 'accept', title: 'Принять' },
+                    { action: 'decline', title: 'Отклонить' },
+                ],
+                data: { kind: 'call', roomId, from, sender: from },
+            }))
+            .catch(e => this.trace(`notifyIncomingCall failed: ${e?.message || e}`));
+    }
+
+    // Звонок перестал звонить (ответили, отклонили, пропущен) — убрать его уведомление
+    // вкладки. Пуш звонка закрывает сам service worker, получив call_end.
+    closeIncomingCallNotification() {
+        const roomId = this._notifiedCallRoom;
+        if (!roomId) return;
+        this._notifiedCallRoom = null;
+        if (this.hasNativeBridge() || !navigator.serviceWorker?.ready) return;
+        navigator.serviceWorker.ready
+            .then(registration => registration.getNotifications?.({ tag: `zali:call:${roomId}` }))
+            .then(list => (list || []).forEach(notification => notification.close()))
+            .catch(() => {});
+    }
+
+    // Кнопка в уведомлении о звонке: Android (IncomingCall.kt → NativeBridge) или service
+    // worker (web/service-worker.js). Приложение могло только что запуститься: звонок
+    // приходит снимком комнаты после подключения сокета (send_voice_room_snapshot_to_user),
+    // поэтому ждём его, а не отвечаем на пустое место.
+    async handleCallNotificationAction({ action = '', roomId = '', from = '' } = {}) {
+        const room = String(roomId || '').trim();
+        const caller = String(from || '').trim();
+        if (caller && caller !== this.myName()) this.switchChat?.(caller);
+        if (action !== 'accept' && action !== 'decline') return;
+        this.voiceDiag('notification-action', { action, roomId: room });
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+            const invite = this.voice.incomingInvite;
+            if (invite?.roomId && (!room || invite.roomId === room) && this.hasRingingIncomingInvite()) {
+                if (action === 'accept') await this.acceptIncomingCall();
+                else await this.rejectIncomingCall();
+                return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        this.voiceDiag('notification-action-no-invite', { action, roomId: room }, 'WARN');
     }
 
     toggleVoiceMute() {

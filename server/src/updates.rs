@@ -364,8 +364,11 @@ pub(crate) async fn publish_version(
     let version = body.version.trim().to_string();
     let download_url = body.download_url.trim().to_string();
     let sha256 = body.sha256.trim().to_lowercase();
+    // Версия строго по схеме `MAJOR.MINOR{a|b|r}BUILD`: мусор попадал в канал `r`
+    // (`channel_of`) и затирал настоящий релиз этого канала (аудит 2026-11-18).
     if !is_supported_platform(&platform)
-        || version.is_empty()
+        || parse_version(&version).is_none()
+        || !download_url.starts_with("https://")
         || download_url.is_empty()
         || sha256.len() != 64
         || !sha256.chars().all(|c| c.is_ascii_hexdigit())

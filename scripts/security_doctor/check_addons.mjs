@@ -194,7 +194,10 @@ section('sandbox (web/src/interface/addons_runtime.js)');
         const sdk = loadSdkSource();
         const win = { RTCPeerConnection: function () {}, webkitRTCPeerConnection: function () {}, RTCDataChannel: function () {},
             addEventListener() {}, parent: { postMessage() {} } };
-        const box = { window: win, TextEncoder, TextDecoder, Blob, URL, Object, Map, Set, Promise, Uint8Array, ArrayBuffer, setTimeout };
+        // Заглушка MessageChannel: SDK шлёт весь RPC через порт (аудит 2026-11-18).
+        // Настоящий из node держал бы процесс живым открытым портом.
+        function MessageChannel() { this.port1 = { postMessage() {} }; this.port2 = {}; }
+        const box = { window: win, TextEncoder, TextDecoder, Blob, URL, Object, Map, Set, Promise, Uint8Array, ArrayBuffer, setTimeout, MessageChannel };
         win.window = win;
         vm.createContext(box);
         let ok = true;
@@ -202,6 +205,14 @@ section('sandbox (web/src/interface/addons_runtime.js)');
         record('WebRTC is removed from the sandbox before addon code runs',
             ok && win.RTCPeerConnection === undefined && win.webkitRTCPeerConnection === undefined && win.RTCDataChannel === undefined,
             'connect-src does not cover RTCPeerConnection; ICE/TURN credentials would exfiltrate data around the network permission');
+    }
+    {
+        const sdkSrc = stripLineComments(read('web/src/modules/addon_sdk.js'));
+        record('addon RPC replies and events go only through the SDK MessageChannel port',
+            /port\.postMessage\(message, transfer\)/.test(src) && !/contentWindow;?\s*\n?[\s\S]{0,80}?target\.postMessage\(message, '\*'/.test(src)
+                && /msg\.channel !== 'zali-addon-port'/.test(src) && /instance\.port\) return/.test(src)
+                && /new MessageChannel\(\)/.test(sdkSrc) && /port\.postMessage\(\{ channel: RPC/.test(sdkSrc),
+            'window.postMessage(…, "*") delivered results to whatever document the frame had navigated to');
     }
     record('the stored file is re-verified on every launch', /launchAddon[\s\S]{0,1500}?meta\.sha256 !== info\.sha256/.test(src));
 }

@@ -408,6 +408,11 @@ pub(crate) async fn add_contact(
     AuthenticatedUser(owner): AuthenticatedUser,
     Json(payload): Json<ContactPayload>,
 ) -> impl IntoResponse {
+    // Без лимита запись шла сколько угодно часто: спам хранилищем и уведомлениями
+    // (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("contact-add:{}", owner.to_lowercase()), 30) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком часто. Повторите через минуту.").into_response();
+    }
     let contact = payload.username.trim();
     info!("API add_contact start owner={} contact={}", owner, contact);
     if contact.is_empty() {

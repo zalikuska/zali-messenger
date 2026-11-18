@@ -893,11 +893,16 @@ ZaliMixin(ZaliInterface, class {
         // 1. Окна и меню. Сначала их собственные закрывающие методы, затем — для
         //    всего, что открыто как dialog/menu и здесь не перечислено, — Escape,
         //    который каждое такое окно уже обрабатывает.
+        // Приветствие нового аккаунта (welcome_tour.js): «назад» — предыдущий шаг,
+        // с первого — закрыть. Не через closers: шаг меняется, а окно остаётся.
+        if (shown(document.getElementById('welcomeTour')) && this.welcomeTourBack?.()) return true;
         const closers = [
             // Видео звонка на весь экран (voice_ui.js openVoiceFocus) — поверх всего.
             ['#voiceFocus', () => this.closeVoiceFocus?.()],
             ['#mediaSheet', () => this.closeMediaSheet?.()],
             ['#reactionMenu, .reaction-menu', () => this.hideReactionMenu?.()],
+            // Режим жалобы в ленте (moderation_report.js): «назад» его отменяет.
+            ['.report-bar', () => this.closeReportMode?.()],
             ['.contact-context-menu, #contactContextMenu', () => this.closeContactContextMenu?.()],
             ['.server-rail-menu, #serverRailContextMenu', () => this.closeServerRailContextMenu?.()],
             ['#coinTransferModal', () => this.closeCoinTransferModal?.()],

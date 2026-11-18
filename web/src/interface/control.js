@@ -33,6 +33,7 @@ ZaliMixin(ZaliInterface, class {
             messages: '{chat | server+channel, limit=20} — по умолчанию открытый разговор',
             send: '{text, chat? | server+channel?}',
             view: '{name: chat|settings|hub|coin}',
+            welcome: '— открыть приветствие нового аккаунта',
             'contact.add': '{user}',
             'server.create': '{name}',
             'channel.create': '{server, name, kind: text|voice}',
@@ -81,6 +82,8 @@ ZaliMixin(ZaliInterface, class {
             messages: (a) => this.controlMessages(a),
             send: (a) => this.controlSend(a),
             view: (a) => this.controlView(a),
+            // Приветствие нового аккаунта без регистрации (welcome_tour.js).
+            welcome: () => { this.openWelcomeTour(); return { open: !!this._welcome?.open }; },
             'contact.add': async (a) => {
                 await this.addContactFromInput(this.controlRequire(a.user, 'user'));
                 return { contacts: this.S.contacts.slice() };
@@ -631,6 +634,9 @@ ZaliMixin(ZaliInterface, class {
         if (as) {
             const res = await run('login', { user: as, password: params.get('pw') || ZALI_DEV_PASSWORD, register: true });
             if (!res.ok) { this.devBootResult = steps; return; }
+            // Вход ссылкой — через регистрацию, и на свежем тестовом аккаунте встало бы
+            // приветствие поверх всего. Нужно его проверить — &welcome=1.
+            if (params.get('welcome') !== '1') this.cancelWelcomeTour?.();
         }
         for (let i = 0; i < 20 && !(this.S.servers || []).length && this.S.session?.token; i += 1) await new Promise(r => setTimeout(r, 100));
         for (const peer of String(params.get('contact') || '').split(',').map(s => s.trim()).filter(Boolean)) {

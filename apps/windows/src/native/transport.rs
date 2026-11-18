@@ -3,24 +3,116 @@
 
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tao::event_loop::EventLoopProxy;
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 use futures_util::{Sink, SinkExt, StreamExt};
 use tokio_tungstenite::{
-    connect_async,
+    connect_async_with_config,
     tungstenite::{
         client::IntoClientRequest,
+        handshake::client::Response,
         http::{HeaderValue, Request},
         Message,
     },
+    MaybeTlsStream, WebSocketStream,
 };
 
 use crate::native::{
     candidate_message_keys, dispatch_ui_event, forget_decrypted_message, process_history_record,
     trace, ApiSession, AppEvent, MessageConfig, UiBusEvent, VoiceConfig,
 };
+
+/// Свой пинг клиента. Сервер пингует сам каждые 20 с (server/src/realtime.rs), так
+/// что на живом канале входящие кадры идут постоянно.
+const WS_PING_INTERVAL: Duration = Duration::from_secs(25);
+/// Сколько ждать хоть какого-то входящего кадра после своего пинга. Было 70 с —
+/// обрыв без FIN (смена Wi-Fi, VPN, NAT) держал зелёный значок и глотал входящие
+/// больше минуты. 20 с — как у macOS (`scheduleHeartbeat` в NetworkService.swift);
+/// на живом канале pong приходит за RTT.
+const WS_PONG_DEADLINE: Duration = Duration::from_secs(20);
+/// После сна машины — короткая проверка: старое соединение почти всегда мертво
+/// (NAT забыл трансляцию, nginx закрыл по keepalive), и ждать полный дедлайн незачем.
+const WS_WAKE_PROBE_DEADLINE: Duration = Duration::from_secs(5);
+/// Насколько настенные часы могут убежать за интервал пинга, прежде чем считать,
+/// что машина спала. Монотонные часы tokio во сне на одних платформах стоят, на
+/// других идут — настенные идут всегда.
+const WS_SLEEP_GAP: Duration = Duration::from_secs(15);
+/// TCP + TLS + апгрейд. Без предела хост, молча глотающий SYN, держал попытку до
+/// системного таймаута TCP (~21 с на Windows), и всё это время очередной реконнект
+/// не начинался. Тот же дедлайн, что у браузерного сокета (voice_transport.js).
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// Подключение WS с отключённым Нейглом и дедлайном.
+///
+/// `connect_async` оставляет TCP_NODELAY выключенным, а почти всё, что клиент шлёт
+/// в этот сокет, — мелкие кадры: ICE-кандидаты пачками, сигналинг, ping, события
+/// присутствия. С Нейглом каждый следующий кадр ждёт ACK предыдущего, а Windows
+/// задерживает ACK до 200 мс — ровно на пачке кандидатов при старте звонка.
+async fn connect_ws(request: Request<()>) -> Result<(WsStream, Response), String> {
+    match tokio::time::timeout(
+        WS_CONNECT_TIMEOUT,
+        connect_async_with_config(request, None, true),
+    )
+    .await
+    {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err(format!(
+            "connect timed out after {}s",
+            WS_CONNECT_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// Сторож ответа на пинг: дедлайн от САМОГО СТАРОГО неотвеченного пинга, который
+/// снимает любой входящий кадр, плюс детектор сна по настенным часам.
+struct PongWatchdog {
+    deadline: Option<Instant>,
+    last_tick_wall: SystemTime,
+}
+
+impl PongWatchdog {
+    fn new() -> Self {
+        Self {
+            deadline: None,
+            last_tick_wall: SystemTime::now(),
+        }
+    }
+
+    fn on_inbound(&mut self) {
+        self.deadline = None;
+    }
+
+    /// Зовётся на каждом тике пинга; `true` — между тиками машина спала.
+    fn note_tick(&mut self) -> bool {
+        let now = SystemTime::now();
+        let gap = now
+            .duration_since(self.last_tick_wall)
+            .unwrap_or_default();
+        self.last_tick_wall = now;
+        gap > WS_PING_INTERVAL + WS_SLEEP_GAP
+    }
+
+    /// Взводит дедлайн; уже взведённый более ранний не отодвигается.
+    fn arm(&mut self, within: Duration) {
+        let at = Instant::now() + within;
+        self.deadline = Some(self.deadline.map_or(at, |current| current.min(at)));
+    }
+}
+
+/// Дедлайн как ветка `select!`: без дедлайна не завершается никогда.
+async fn sleep_until_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
 
 pub(crate) fn websocket_request(
     ws_url: &str,
@@ -292,7 +384,7 @@ pub(crate) async fn run_voice_transport(
             current.auth_token.is_some()
         ));
 
-        let (ws_stream, _) = match connect_async(request).await {
+        let (ws_stream, _) = match connect_ws(request).await {
             Ok(result) => result,
             Err(error) => {
                 trace(format!(
@@ -334,50 +426,43 @@ pub(crate) async fn run_voice_transport(
         // idle timeout) looks "connected" forever — reader.next() just never resolves —
         // so an incoming call's signaling never arrives and nothing here would notice or
         // reconnect. Mirrors the Swift client's scheduleVoiceHeartbeat (25s sendPing).
-        let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
+        let mut ping_interval = tokio::time::interval(WS_PING_INTERVAL);
         ping_interval.tick().await; // first tick fires immediately; consume it
-        // Half-open detection, which this transport had no form of. Sending a Ping
-        // only proves the local TCP stack accepted the bytes; a path that dies
-        // without a FIN (Wi-Fi drop, VPN re-key, NAT eviction) keeps accepting them
-        // into a buffer for minutes, during which every send here "succeeds", the
-        // call believes it is signalling, and nothing reconnects. Whether a Pong
-        // came back is the only local evidence the far end is still there — the
-        // browser client and the Swift one both judge by it; this one did not.
-        //
-        // Tracked as "when did the OLDEST still-unanswered ping go out", not "when
-        // did the last ping go out". The difference is the whole watchdog: with the
-        // latter, every tick overwrites the timestamp it is about to judge, so on a
-        // 25 s interval the age measured is always ~25 s and a threshold above that
-        // can never be crossed — the check would run forever and never fire. Any
-        // inbound frame clears it (the server pings every 20 s of its own accord, so
-        // a healthy link clears this constantly).
-        let mut unanswered_ping_at: Option<tokio::time::Instant> = None;
+        // Half-open detection. Sending a Ping only proves the local TCP stack
+        // accepted the bytes; a path that dies without a FIN (Wi-Fi drop, VPN
+        // re-key, NAT eviction) keeps accepting them into a buffer for minutes,
+        // during which every send here "succeeds", the call believes it is
+        // signalling, and nothing reconnects. Whether anything came back is the only
+        // local evidence the far end is still there — see PongWatchdog.
+        let mut watchdog = PongWatchdog::new();
         let down_reason: &str;
 
         loop {
+            let pong_deadline = watchdog.deadline;
             tokio::select! {
+                _ = sleep_until_deadline(pong_deadline) => {
+                    trace("voice ws pong missing; assuming half-open");
+                    dispatch_voice_log(
+                        &proxy,
+                        "WARN",
+                        "Voice socket silent (no pong) — reconnecting".to_string(),
+                    );
+                    down_reason = "pong-timeout";
+                    break;
+                }
                 _ = ping_interval.tick() => {
-                    if let Some(since) = unanswered_ping_at {
-                        // Three ping intervals with nothing coming back at all.
-                        if since.elapsed() > Duration::from_secs(70) {
-                            trace("voice ws pong missing; assuming half-open");
-                            dispatch_voice_log(
-                                &proxy,
-                                "WARN",
-                                "Voice socket silent (no pong) — reconnecting".to_string(),
-                            );
-                            down_reason = "pong-timeout";
-                            break;
-                        }
-                    }
+                    let woke = watchdog.note_tick();
                     if let Err(error) = writer.send(Message::Ping(Vec::new())).await {
                         trace(format!("voice ws ping failed err={}", error));
                         dispatch_voice_log(&proxy, "WARN", format!("Voice ping failed: {}", error));
                         down_reason = "ping-failed";
                         break;
                     }
-                    if unanswered_ping_at.is_none() {
-                        unanswered_ping_at = Some(tokio::time::Instant::now());
+                    if woke {
+                        trace("voice ws woke from sleep; probing link");
+                        watchdog.arm(WS_WAKE_PROBE_DEADLINE);
+                    } else {
+                        watchdog.arm(WS_PONG_DEADLINE);
                     }
                     trace("voice ws ping ok");
                 }
@@ -405,7 +490,7 @@ pub(crate) async fn run_voice_transport(
                 maybe_msg = reader.next() => {
                     match maybe_msg {
                         Some(Ok(Message::Text(text))) => {
-                            unanswered_ping_at = None;
+                            watchdog.on_inbound();
                             if let Ok(raw) = serde_json::from_str::<Value>(&text) {
                                 if raw.get("type").and_then(Value::as_str).map(|value| value.starts_with("voice_")).unwrap_or(false) {
                                     dispatch_voice_event(&proxy, raw);
@@ -413,6 +498,7 @@ pub(crate) async fn run_voice_transport(
                             }
                         }
                         Some(Ok(Message::Binary(data))) => {
+                            watchdog.on_inbound();
                             if let Ok(text) = String::from_utf8(data.to_vec()) {
                                 if let Ok(raw) = serde_json::from_str::<Value>(&text) {
                                     if raw.get("type").and_then(Value::as_str).map(|value| value.starts_with("voice_")).unwrap_or(false) {
@@ -422,12 +508,16 @@ pub(crate) async fn run_voice_transport(
                             }
                         }
                         Some(Ok(Message::Ping(_))) => {
-                            // The server pings every 20 s; tungstenite queues the Pong
-                            // for us. Inbound traffic of any kind is proof of life.
-                            unanswered_ping_at = None;
+                            // The server pings every 20 s. Inbound traffic of any kind
+                            // is proof of life.
+                            watchdog.on_inbound();
+                            // tungstenite only QUEUES the Pong; with a split stream it
+                            // goes out on the next write, which here was the next own
+                            // ping up to 25 s later. Flush so the server sees it now.
+                            let _ = writer.flush().await;
                         }
                         Some(Ok(Message::Pong(_))) => {
-                            unanswered_ping_at = None;
+                            watchdog.on_inbound();
                         }
                         Some(Ok(Message::Frame(_))) => {}
                         Some(Ok(Message::Close(_))) => {
@@ -797,7 +887,7 @@ pub(crate) async fn run_message_transport(
             current.current_device_id
         ));
 
-        let (mut writer, mut reader) = match connect_async(request).await {
+        let (mut writer, mut reader) = match connect_ws(request).await {
             Ok((stream, response)) => {
                 trace(format!("message ws connected status={}", response.status()));
                 dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(true));
@@ -831,30 +921,31 @@ pub(crate) async fn run_message_transport(
         // reconnect path was never reached. Confirmed live: a session sat with
         // active_conns=0 server-side for minutes with zero client-side reconnect
         // attempts logged. Mirrors the Swift client's 25s sendPing heartbeat.
-        let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
+        let mut ping_interval = tokio::time::interval(WS_PING_INTERVAL);
         ping_interval.tick().await; // first tick fires immediately; consume it
         // Sending the Ping is not the liveness check — a path that died without a FIN
         // keeps accepting bytes into the kernel buffer for minutes, so the send above
         // "succeeds" and the socket sat half-open with the badge still green and no
-        // messages arriving. Same watchdog as run_voice_transport: the age of the
-        // OLDEST unanswered ping, cleared by any inbound frame (the server pings every
-        // 20 s itself, so a healthy link clears it constantly).
-        let mut unanswered_ping_at: Option<tokio::time::Instant> = None;
+        // messages arriving. Same watchdog as run_voice_transport (PongWatchdog).
+        let mut watchdog = PongWatchdog::new();
         loop {
+            let pong_deadline = watchdog.deadline;
             tokio::select! {
+                _ = sleep_until_deadline(pong_deadline) => {
+                    trace("message ws pong missing; assuming half-open");
+                    break;
+                }
                 _ = ping_interval.tick() => {
-                    if let Some(since) = unanswered_ping_at {
-                        if since.elapsed() > Duration::from_secs(70) {
-                            trace("message ws pong missing; assuming half-open");
-                            break;
-                        }
-                    }
+                    let woke = watchdog.note_tick();
                     if let Err(error) = writer.send(Message::Ping(Vec::new())).await {
                         trace(format!("message ws ping failed err={}", error));
                         break;
                     }
-                    if unanswered_ping_at.is_none() {
-                        unanswered_ping_at = Some(tokio::time::Instant::now());
+                    if woke {
+                        trace("message ws woke from sleep; probing link");
+                        watchdog.arm(WS_WAKE_PROBE_DEADLINE);
+                    } else {
+                        watchdog.arm(WS_PONG_DEADLINE);
                     }
                     trace("message ws ping ok");
                 }
@@ -884,7 +975,7 @@ pub(crate) async fn run_message_transport(
                 maybe_msg = reader.next() => {
                     if matches!(maybe_msg, Some(Ok(_))) {
                         // Inbound traffic of any kind is proof of life.
-                        unanswered_ping_at = None;
+                        watchdog.on_inbound();
                     }
                     match maybe_msg {
                         Some(Ok(Message::Text(text))) => {
@@ -907,7 +998,10 @@ pub(crate) async fn run_message_transport(
                                 }
                             }
                         }
-                        Some(Ok(Message::Ping(_))) => {}
+                        Some(Ok(Message::Ping(_))) => {
+                            // Pong is only queued by tungstenite; see run_voice_transport.
+                            let _ = writer.flush().await;
+                        }
                         Some(Ok(Message::Pong(_))) => {}
                         Some(Ok(Message::Frame(_))) => {}
                         Some(Ok(Message::Close(_))) => {
@@ -936,6 +1030,28 @@ pub(crate) async fn run_message_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pong_watchdog_keeps_the_oldest_deadline_and_any_inbound_clears_it() {
+        let mut watchdog = PongWatchdog::new();
+        assert!(watchdog.deadline.is_none());
+        watchdog.arm(WS_WAKE_PROBE_DEADLINE);
+        let first = watchdog.deadline.expect("armed");
+        // Следующий обычный пинг не отодвигает уже взведённый более ранний дедлайн.
+        watchdog.arm(WS_PONG_DEADLINE);
+        assert_eq!(watchdog.deadline, Some(first));
+        watchdog.on_inbound();
+        assert!(watchdog.deadline.is_none());
+    }
+
+    #[test]
+    fn pong_watchdog_detects_a_wall_clock_gap_as_sleep() {
+        let mut watchdog = PongWatchdog::new();
+        assert!(!watchdog.note_tick());
+        watchdog.last_tick_wall = SystemTime::now() - (WS_PING_INTERVAL + WS_SLEEP_GAP + Duration::from_secs(1));
+        assert!(watchdog.note_tick());
+        assert!(!watchdog.note_tick());
+    }
 
     #[test]
     fn notification_body_prefers_message_text_truncated_to_180_chars() {

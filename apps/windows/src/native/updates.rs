@@ -91,6 +91,37 @@ pub(crate) fn verify_release_signature(version: &str, sha256: &str, url: &str, s
         .is_ok()
 }
 
+/// Ключ порядка версий — зеркало `version_key` в server/src/updates.rs и
+/// `compareVersions` в web/src/interface/updates.js: major, minor, канал
+/// (r > b > a), сборка, подсборка; легаси `1.1.4` — release.
+fn version_key(version: &str) -> (u64, u64, u8, u64, u64) {
+    let v = version.trim();
+    if let Some((major, rest)) = v.split_once('.') {
+        if let Some(split) = rest.find(|c: char| c.is_ascii_alphabetic()) {
+            let (minor, tail) = rest.split_at(split);
+            let channel = tail.chars().next().unwrap_or('r').to_ascii_lowercase();
+            let rank = match channel { 'a' => 0, 'b' => 1, _ => 2 };
+            let tail = &tail[1..];
+            let (build, sub) = tail.split_once('.').unwrap_or((tail, "0"));
+            return (
+                major.parse().unwrap_or(0),
+                minor.parse().unwrap_or(0),
+                rank,
+                build.parse().unwrap_or(0),
+                sub.parse().unwrap_or(0),
+            );
+        }
+    }
+    let mut parts = v.split('.').map(|n| n.parse::<u64>().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0), 2, parts.next().unwrap_or(0), 0)
+}
+
+/// Подписанный, но старый релиз — не обновление: без этой проверки мост ставил
+/// любую когда-либо подписанную (в том числе уязвимую) сборку (аудит 2026-11-18).
+pub(crate) fn is_newer_version(candidate: &str, current: &str) -> bool {
+    version_key(candidate) > version_key(current)
+}
+
 pub(crate) async fn download_update(
     url: String,
     expected_sha256: String,
@@ -274,7 +305,7 @@ pub(crate) fn install_and_relaunch(_new_exe_path: PathBuf, _proxy: EventLoopProx
 
 #[cfg(test)]
 mod release_signature_tests {
-    use super::verify_release_signature;
+    use super::{is_newer_version, verify_release_signature};
 
     // Подписано официальным ключом через scripts/release_sign.py (платформа этой
     // сборки — macos: тесты гоняются на машине разработчика).
@@ -286,6 +317,10 @@ mod release_signature_tests {
     fn accepts_official_signature_and_rejects_tampering() {
         let sha = "ab".repeat(32);
         assert!(verify_release_signature("0.2b99", &sha, URL, SIG));
+        assert!(is_newer_version("0.2b62", "0.2b61"));
+        assert!(is_newer_version("0.2r1", "0.2b61"));
+        assert!(!is_newer_version("0.2b60", "0.2b61"));
+        assert!(!is_newer_version("0.2b61", "0.2b61"));
         assert!(!verify_release_signature("0.2b98", &sha, URL, SIG));
         assert!(!verify_release_signature("0.2b99", &sha, "https://evil.example/x.exe", SIG));
         assert!(!verify_release_signature("0.2b99", &"cd".repeat(32), URL, SIG));

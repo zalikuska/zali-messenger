@@ -56,6 +56,8 @@ ZaliMixin(ZaliInterface, class {
             .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]')
             .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[redacted-jwt]')
             .replace(/\b(zali_auth|ticket|token|secret|password)=[^\s&;"']+/gi, '$1=[redacted]')
+            // Коды приглашений короче порога ниже, а путь запроса пишется в трассу.
+            .replace(/\/invites\/[^\s/?#"']+/gi, '/invites/[redacted]')
             .replace(/[A-Za-z0-9+/_=-]{40,}/g, '[redacted]');
     }
 

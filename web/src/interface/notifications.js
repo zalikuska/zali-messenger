@@ -93,6 +93,9 @@ ZaliMixin(ZaliInterface, class {
         // Открытый чат перед глазами глушит уведомления на всех устройствах
         // (device_activity.js) — ушедшее с экрана окно обязано снять это сразу.
         this.reportConversationView?.();
+        // Рингтон звонка на Android зависит от фокуса (renderVoicePanel): в фоне звонит
+        // уведомление-звонок, на экране — само приложение.
+        if (this.hasRingingIncomingInvite?.()) this.renderVoicePanel?.();
     }
 
     // Входящее не требует уведомления, только если его чат на экране И пользователь

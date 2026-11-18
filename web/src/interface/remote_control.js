@@ -326,6 +326,15 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (rc.view?.peer === peer) return;
+        // Управление отдаёт только тот, чей экран мы сейчас видим. Сервер ретранслирует
+        // любой `rc-*` от любого участника звонка, и без этой проверки участник без
+        // демонстрации «отдавал управление», а клавиши зрителя уходили ему (аудит
+        // 2026-11-18).
+        if (!this.voice?.remoteScreens?.has?.(peer)) {
+            this.voiceTrace('rc-grant-ignored', { peer, reason: 'no-screen' }, 'WARN');
+            this.sendVoicePeerSignal(peer, { type: 'rc-release', reason: 'no-screen' });
+            return;
+        }
         if (rc.view) this.endRemoteControlView('switched', { notifyPeer: true });
         rc.view = { peer, since: Date.now(), pressedKeys: new Set(), pressedButtons: new Set() };
         this.ensureRemoteControlChannel();

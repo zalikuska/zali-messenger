@@ -233,7 +233,11 @@ final class ControlServer {
             guard let colon = line.firstIndex(of: ":") else { continue }
             req.headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
-        let length = Int(req.headers["content-length"] ?? "0") ?? 0
+        // Отрицательная длина давала недопустимый диапазон и падение процесса ещё до
+        // проверки токена (аудит 2026-11-18).
+        guard let length = Int(req.headers["content-length"] ?? "0"), length >= 0, length <= 16 << 20 else {
+            return Request(method: "BAD")
+        }
         let bodyStart = headEnd.upperBound
         if data.count - bodyStart < length { return nil }
         req.body = data[bodyStart..<(bodyStart + length)]

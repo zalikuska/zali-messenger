@@ -171,7 +171,10 @@ ZaliMixin(ZaliInterface, class {
             const banner = this.serverBannerUrl(server);
             const colors = this.serverAvatarColors(server);
             const bannerStyle = banner
-                ? `background-image:url('${this.esc(banner)}')`
+                // esc() превращает `'` в `&#039;`, а HTML-парсер внутри атрибута возвращает
+                // его обратно — строка CSS закрывалась. Кавычки, скобки и `\` кодируем
+                // процентами, как в URL.
+                ? `background-image:url('${this.esc(String(banner).replace(/['"()\\\s]/g, c => `%${c.charCodeAt(0).toString(16).padStart(2, '0')}`))}')`
                 : `background:${this.esc(colors.background)}`;
             const stats = [
                 hasOnline ? `<span class="server-card-stat is-online"><i aria-hidden="true"></i>${onlineCount} в сети</span>` : '',
@@ -720,7 +723,7 @@ ZaliMixin(ZaliInterface, class {
         }).join('');
         list.innerHTML = `<div class="sm-roles-layout">
             <div class="sm-role-bar">
-                <span class="server-role-chip" style="background:${this.safeCssColor(role.color) || '#cbff00'}"></span>
+                <span class="server-role-chip" style="background:${this.esc(color)}"></span>
                 <select class="settings-input sm-role-select" data-role-select-dd aria-label="Роль">${options}</select>
                 <button class="sm-role-add" type="button" data-role-add>＋ Новая роль</button>
             </div>

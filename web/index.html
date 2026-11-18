@@ -10,8 +10,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <!-- Фреймы приложения — только свои (srcdoc, blob:, data:). Политика
          родителя применяется и к навигации дочерних фреймов: аддон в песочнице
-         не может «уйти» своим фреймом на внешний адрес, унося данные в URL. -->
-    <meta http-equiv="Content-Security-Policy" content="frame-src about: blob: data:">
+         не может «уйти» своим фреймом на внешний адрес, унося данные в URL.
+         object-src/base-uri — без плагинов и без чужого <base>, переписывающего
+         адреса скриптов (аудит 2026-11-18). script-src сюда не добавлен: нативные
+         шеллы и аддоны пока опираются на inline-скрипты. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src about: blob: data:; object-src 'none'; base-uri 'self'">
     <script>
     // Страница, открытая по адресу …/server/<код> или …/profile/<имя>, лежит на
     // глубине в один сегмент: без <base> относительные style.css/app.js
@@ -25,7 +28,8 @@
     // пока не загрузится app.js (styler.js потом выставит то же самое и палитру).
     (function () {
         try {
-            var mode = localStorage.getItem('zali_appearance_v1') || 'dark';
+            // По умолчанию — как в системе (styler.js: loadStoredAppearance).
+            var mode = localStorage.getItem('zali_appearance_v1') || 'system';
             var light = mode === 'light' || (mode === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
             document.documentElement.setAttribute('data-appearance', light ? 'light' : 'dark');
             document.documentElement.style.colorScheme = light ? 'light' : 'dark';
@@ -35,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261116-shared-browser">
+    <link rel="stylesheet" href="style.css?v=20261118-rpsplit">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -434,6 +438,19 @@
                                 <div id="hubPackBody"></div>
                             </div>
                             <div id="hubSigningBody"></div>
+                        </div>
+                        <!-- Поддержка: состояние аккаунта, нарушения, жалобы (support_hub.js). -->
+                        <div class="hub-pane" data-hub-pane="support" id="hubSupport" hidden>
+                        <button class="hub-back" type="button" data-hub-tab="overview"><span class="hub-back-chevron" aria-hidden="true"></span>Назад в хаб</button>
+                        <header class="hub-page-head">
+                            <h2>Поддержка</h2>
+                            <p>Состояние аккаунта, нарушения и ваши жалобы.</p>
+                        </header>
+                            <div id="hubSupportBody" class="sup-body"></div>
+                        </div>
+                        <div class="hub-pane" data-hub-pane="violation" id="hubViolation" hidden>
+                        <button class="hub-back" type="button" data-hub-tab="support"><span class="hub-back-chevron" aria-hidden="true"></span>Назад в поддержку</button>
+                            <div id="hubViolationBody"></div>
                         </div>
                     </div>
                 </div>
@@ -1743,6 +1760,10 @@
             <form class="auth-form" id="authForm">
                 <input id="authUsername" class="auth-input" type="text" placeholder="Логин" aria-label="Логин" autocomplete="username" autocapitalize="none" spellcheck="false">
                 <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" aria-label="Пароль" autocomplete="current-password">
+                <div class="auth-rules" id="authRules" hidden>
+                    <input id="authRulesAccept" type="checkbox">
+                    <label for="authRulesAccept">Я принимаю <button id="authRulesLink" class="auth-rules-link" type="button">Правила сообщества</button></label>
+                </div>
                 <div class="auth-actions">
                     <button id="authLoginBtn" class="auth-btn primary" type="submit">Войти</button>
                 </div>
@@ -1770,6 +1791,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261116-shared-browser"></script>
+    <script src="app.js?v=20261118-rpsplit"></script>
 </body>
 </html>

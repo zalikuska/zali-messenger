@@ -470,8 +470,12 @@ ZaliMixin(ZaliInterface, class {
         const htmlChanged = this._lastMessagesHTML !== html || conversationChanged || box.childElementCount === 0;
         if (htmlChanged) {
             const rowState = this._messageRowState || (this._messageRowState = {});
+            // Точка отсчёта для анимации новых сообщений (motion.js): строки после неё,
+            // появившиеся этим проходом, — отправленное или только что пришедшее.
+            const tailBefore = conversationChanged ? null : this.messageTailBeforeRender?.(box);
             const patched = !conversationChanged && this.patchListRows(box, rowState, rows);
             if (!patched) this.writeListRows(box, rowState, rows, html);
+            if (patched && stickToBottom) this.animateArrivedMessages?.(box, tailBefore, { conversationChanged });
             this._lastMessagesHTML = html;
             this.hydrateGifMedia(box);
 

@@ -646,18 +646,20 @@ pub(crate) async fn cancel_raffle(
     let tx_user = username.clone();
     let outcome = run_immediate_tx(state.db.clone(), move |mut conn| async move {
         let result: Result<CancelOutcome, sqlx::Error> = async {
-            let row: Option<(String, String, i64)> =
-                sqlx::query_as("SELECT creator, status, escrow FROM raffles WHERE id = ?")
+            let row: Option<(String, String, i64, i64)> =
+                sqlx::query_as("SELECT creator, status, escrow, ends_at FROM raffles WHERE id = ?")
                     .bind(&tx_id)
                     .fetch_optional(&mut *conn)
                     .await?;
-            let Some((creator, status, escrow)) = row else {
+            let Some((creator, status, escrow, ends_at)) = row else {
                 return Ok(CancelOutcome::NotFound);
             };
             if creator != tx_user {
                 return Ok(CancelOutcome::NotCreator);
             }
-            if status != "active" {
+            // После срока розыгрыш принадлежит участникам: отмена между `ends_at` и
+            // жеребьёвкой забирала обещанные призы назад (аудит 2026-11-18).
+            if status != "active" || ends_at <= now_ms() {
                 return Ok(CancelOutcome::NotActive);
             }
             sqlx::query("UPDATE raffles SET status = 'cancelled', escrow = 0, refunded = ?, drawn_at = ? WHERE id = ?")

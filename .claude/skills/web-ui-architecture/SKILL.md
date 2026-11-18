@@ -191,6 +191,33 @@ description: Структура web/src/interface.js (ZaliMixin, manifest.json) 
   (`landMobileOnListIfEmpty()` из `updateAuthView`), кнопка «к последним
   сообщениям» — `#msgsJumpBtn` внутри `.input-area` (`syncJumpToBottom`).
 
+## Движение (2026-11-18)
+
+`interface/motion.js` + слой «ДВИЖЕНИЕ» в конце `style.css`; правила — `docs/UI_GUIDELINES.md` §5.
+Смена облика из любого места — только через `applyLookWave(event, change)` (настройки:
+`bindStylerEvents`, выбор стиля в `events.js`, приветствие). Новые сообщения —
+`animateArrivedMessages` из `_renderMessagesNow`: только после `patchListRows`, при ленте
+внизу, если прежняя последняя строка жива и новых строк 1–3. Ловушка: колбэк View Transition
+ждёт кадра — в нерисующем окне (фоновая панель браузера) смена висела, отсюда страховка 1,2 с.
+
+## Приветствие нового аккаунта (2026-11-18)
+
+`interface/welcome_tour.js` — слой `#welcomeTour` (`.wt-*`, стили в конце `style.css`,
+ореолы — в блоке «Фокус со свечением»). Шаги: логотип пузырями → тема → схема → разделы
+(`hubSegmentCatalog`) и компоненты (`welcomeComponents()` — то же, что «Настройки → Компоненты»;
+новый компонент вписать и туда) → стиль → «Всё готово». Каждый выбор применяется сразу теми же путями,
+что в настройках (`zali_styler:set_appearance`/`set_theme`, `saveDesignMode`,
+`saveUiV2Segments`), поэтому «Пропустить» оставляет выбранное. Показ — только после
+успешной регистрации (`queueWelcomeTour` в обеих ветках `executeAuth`/нативной); флаг
+`zali_welcome_pending_v1` = имя аккаунта переживает перезагрузку, `updateAuthView` зовёт
+`maybeShowWelcomeTour`. Вход ссылкой разработчика (`?as=`) идёт через регистрацию — там
+приветствие снимается (`cancelWelcomeTour`), включить — `&welcome=1`; открыть руками —
+`__zaliControl('welcome')`. Смена облика — круговая волна View Transitions
+(`welcomeApplyLook`); отметки выбора обновляются внутри колбэка перехода, он асинхронный.
+Системное «назад» на телефоне — предыдущий шаг (`welcomeTourBack`, до `closers`).
+Светлота по умолчанию — `system` (`styler.js: defaultAppearance()` + загрузочный скрипт
+`index.html`).
+
 ## Экран ошибки входа (2026-10-15)
 
 Сбой самого входа/регистрации (не проверки формы) показывает не строку под формой, а

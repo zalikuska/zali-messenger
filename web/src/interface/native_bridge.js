@@ -170,14 +170,17 @@ ZaliMixin(ZaliInterface, class {
                 this.syncActiveConversation({ force: !this.nativeSupports('sendMessage') });
                 if (this.voice.roomId || this.voice.localStream || this.voice.peerConnections.size > 0) {
                     this.ensureVoiceMeterLoop();
-                    // Timers were throttled while hidden, so the voice socket's own
-                    // ping is overdue and a link that died meanwhile hasn't been
-                    // noticed yet. Probe now instead of waiting out the next tick.
-                    this.probeVoiceSocketLiveness();
                 }
+                // Timers were throttled while hidden, so the browser socket's own ping
+                // is overdue and a link that died meanwhile hasn't been noticed yet.
+                // Probe now (with a short verdict) instead of waiting out the next tick
+                // — not only in a call: in the PWA this socket also carries messages.
+                this.kickBrowserVoiceSocket('visible');
             };
             document.addEventListener('visibilitychange', onVisibilityChange);
             window.addEventListener('focus', onVisibilityChange);
+            // Сеть вернулась: не ждать бэкоффа реконнекта и тика сторожа.
+            window.addEventListener('online', () => this.kickBrowserVoiceSocket('online'));
             // Debounced message-cache saves must land before the page goes away.
             window.addEventListener('pagehide', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); void this.flushCacheStats(); });
             window.addEventListener('beforeunload', () => { this.flushTrace(); this.flushPendingMessageCacheSave(); void this.flushCacheStats(); });

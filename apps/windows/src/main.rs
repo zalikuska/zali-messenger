@@ -144,18 +144,56 @@ fn register_windows_app_user_model_id() {
     }
 }
 
-/// Solid brand-lime (`--lime: #cbff00` in web/style.css) square — a placeholder tray
-/// glyph. Generated in-process instead of shipping a `.ico`/pulling in an image-decode
-/// crate just for one small icon; swap for a real multi-res `.ico` as a cosmetic
-/// follow-up (see `tray_icon::Icon::from_path` if/when one exists in the repo).
+/// App logo as raw RGBA, written by `brand/logo/gen_logo.py --export`: 16–32 are a
+/// hand-tuned pixel-grid drawing (the full logo scaled that small turns into a lime
+/// smear), 48/64 the rounded tile. Raw pixels instead of a PNG/`.ico`: both `tray_icon`
+/// and `tao` take `from_rgba`, so the binary needs no image decoder. The exe itself has
+/// no icon resource (the build has no rc compiler); the window/taskbar icon below and
+/// the installer's `.ico` cover it.
+#[cfg(target_os = "windows")]
+const APP_ICONS: [(u32, &[u8]); 6] = [
+    (16, include_bytes!("../assets/icon-16.rgba")),
+    (20, include_bytes!("../assets/icon-20.rgba")),
+    (24, include_bytes!("../assets/icon-24.rgba")),
+    (32, include_bytes!("../assets/icon-32.rgba")),
+    (48, include_bytes!("../assets/icon-48.rgba")),
+    (64, include_bytes!("../assets/icon-64.rgba")),
+];
+
+/// The drawing for an icon slot of `metric` (SM_CXSMICON / SM_CXICON — already
+/// DPI-scaled: tao makes the process DPI-aware when the event loop is built): the
+/// smallest one that is at least that big, so Windows shows the pixel grid 1:1 at
+/// 100/125/150% instead of resampling a bigger picture into mush.
+#[cfg(target_os = "windows")]
+fn app_icon_rgba(metric: i32, fallback: u32) -> (Vec<u8>, u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
+    let want = match unsafe { GetSystemMetrics(metric) } {
+        v if v > 0 => v as u32,
+        _ => fallback,
+    };
+    let (size, bytes) = APP_ICONS
+        .iter()
+        .find(|(size, _)| *size >= want)
+        .unwrap_or(&APP_ICONS[APP_ICONS.len() - 1]);
+    (bytes.to_vec(), *size)
+}
+
 #[cfg(target_os = "windows")]
 fn tray_icon_image() -> tray_icon::Icon {
-    const SIZE: u32 = 32;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for _ in 0..(SIZE * SIZE) {
-        rgba.extend_from_slice(&[0xcb, 0xff, 0x00, 0xff]);
-    }
-    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).expect("valid solid-color tray icon")
+    use windows_sys::Win32::UI::WindowsAndMessaging::SM_CXSMICON;
+    let (rgba, size) = app_icon_rgba(SM_CXSMICON, 16);
+    tray_icon::Icon::from_rgba(rgba, size, size).expect("valid RGBA app icon")
+}
+
+/// Small (Alt+Tab, window menu) and big (taskbar) window icons.
+#[cfg(target_os = "windows")]
+fn window_icons() -> (tao::window::Icon, tao::window::Icon) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SM_CXICON, SM_CXSMICON};
+    let (rgba, size) = app_icon_rgba(SM_CXSMICON, 16);
+    let small = tao::window::Icon::from_rgba(rgba, size, size).expect("valid RGBA app icon");
+    let (rgba, size) = app_icon_rgba(SM_CXICON, 32);
+    let big = tao::window::Icon::from_rgba(rgba, size, size).expect("valid RGBA app icon");
+    (small, big)
 }
 
 /// Builds the tray icon + its context menu, and starts a background thread that
@@ -352,10 +390,15 @@ const APP_JS: &str = include_str!("../../../web/app.js");
 /// so both spellings have to be accepted here.
 fn is_app_origin_url(url: &str) -> bool {
     let lowered = url.trim().to_lowercase();
-    lowered.starts_with("zali://localhost")
-        || lowered.starts_with("https://zali.localhost")
-        || lowered.starts_with("http://zali.localhost")
-        || lowered.starts_with("about:")
+    // Сравнивается origin целиком, а не префикс строки: `starts_with("https://zali.localhost")`
+    // пропускал `https://zali.localhost.attacker.example/` в главный фрейм вместе с
+    // `window.ipc` (аудит 2026-11-18).
+    const ORIGINS: [&str; 3] = ["zali://localhost", "https://zali.localhost", "http://zali.localhost"];
+    ORIGINS.iter().any(|origin| {
+        lowered
+            .strip_prefix(origin)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?', '#']))
+    }) || lowered.starts_with("about:")
         || lowered.starts_with("blob:")
 }
 
@@ -523,7 +566,12 @@ fn main() -> wry::Result<()> {
     // traffic-light buttons via titlebarAppearsTransparent instead.
     #[cfg(target_os = "windows")]
     {
-        window_builder = window_builder.with_decorations(false);
+        use tao::platform::windows::WindowBuilderExtWindows;
+        let (small_icon, taskbar_icon) = window_icons();
+        window_builder = window_builder
+            .with_decorations(false)
+            .with_window_icon(Some(small_icon))
+            .with_taskbar_icon(Some(taskbar_icon));
     }
     let window = window_builder.build(&event_loop).unwrap();
 
@@ -768,6 +816,11 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(AppEvent::SetWindowBackground((r, g, b))) => {
                 let _ = webview.set_background_color((r, g, b, 255));
+            }
+            Event::UserEvent(AppEvent::RequestAttention) => {
+                if !window.is_focused() {
+                    window.request_user_attention(Some(tao::window::UserAttentionType::Critical));
+                }
             }
             Event::UserEvent(AppEvent::SetTaskbarBadge(count)) => {
                 #[cfg(target_os = "windows")]

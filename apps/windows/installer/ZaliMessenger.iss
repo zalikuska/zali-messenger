@@ -12,8 +12,14 @@
 ;
 ; Build with: scripts\build_windows_app.ps1 -OnlineInstallerOnly
 ; (no local Rust build needed — just ISCC.exe on PATH, see
-; https://jrsoftware.org/isinfo.php, Inno Setup 6.1+ for the [Icons]
-; AppUserModelID parameter used below).
+; https://jrsoftware.org/isinfo.php). Needs Inno Setup 6.7+: the dark wizard
+; (WizardStyle dark — 6.6), its page color (WizardBackColor — 6.7) and the PNG
+; wizard images (6.5.2). Older compilers stop with the #error below instead of
+; failing on unknown directives.
+
+#if VER < EncodeVer(6,7,0)
+  #error Нужен Inno Setup 6.7 или новее (тёмная тема мастера, WizardBackColor, PNG-картинки)
+#endif
 
 #ifndef UpdateApiBaseUrl
   #define UpdateApiBaseUrl "https://msgs.zalikus.org"
@@ -52,25 +58,56 @@ OutputDir=..\..\dist\windows\installer
 OutputBaseFilename=ZaliMessengerOnlineSetup
 Compression=lzma2
 SolidCompression=yes
-WizardStyle=modern
-UninstallDisplayIcon={app}\{#MyAppExeName}
+; Оформление — тёмное, в цветах приложения (как «Фокус» в web/style.css): фон
+; страниц = --bg, без разделительных линий. Картинки генерирует
+; brand/logo/gen_logo.py --export: слева на «Добро пожаловать»/«Готово» — холст со
+; светом, логотип и силуэты переписки; в шапке остальных страниц — плитка-иконка.
+; Setup сам выбирает размер под DPI из набора по маске.
+WizardStyle=modern dark hidebevels
+WizardBackColor=#090b0e
+WizardImageFile=wizard\large-*.png
+WizardImageBackColor=#090b0e
+WizardSmallImageFile=wizard\small-*.png
+WizardSmallImageBackColor=#090b0e
+; Страница приветствия по умолчанию скрыта — показываем: на ней панель с логотипом.
+DisableWelcomePage=no
+; Иконка — apps/windows/assets/zali.ico (brand/logo/gen_logo.py --export). У самого
+; exe ресурса иконки нет (сборка без rc-компилятора), поэтому ярлыки, «Программы и
+; компоненты» и сам установщик берут её из этого .ico.
+SetupIconFile=..\assets\zali.ico
+UninstallDisplayIcon={app}\zali.ico
 ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Messages]
+; Свои тексты приветствия и финала вместо стандартных «Мастер установки…».
+russian.WelcomeLabel1=Zali Messenger
+russian.WelcomeLabel2=Переписка, голосовые звонки и серверы — в одном окне.%n%nУстановщик скачает с сервера актуальную версию и проверит её контрольную сумму. Права администратора не нужны: приложение ставится в вашу папку пользователя и обновляется само.
+russian.FinishedHeadingLabel=Готово
+russian.FinishedLabelNoIcons=Zali Messenger установлен.
+russian.FinishedLabel=Zali Messenger установлен. Его можно открыть из меню «Пуск».
+english.WelcomeLabel1=Zali Messenger
+english.WelcomeLabel2=Chats, voice calls and servers — in one window.%n%nSetup downloads the current version from the server and verifies its checksum. No administrator rights needed: the app installs into your user folder and updates itself.
+english.FinishedHeadingLabel=All set
+english.FinishedLabelNoIcons=Zali Messenger is installed.
+english.FinishedLabel=Zali Messenger is installed. You can open it from the Start menu.
+
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; Flags: unchecked
 Name: "autostart"; Description: "Запускать при входе в Windows (в свёрнутом виде, для уведомлений)"
 
-; No [Files] entry: ZaliMessenger.exe is downloaded at install time (see
-; NextButtonClick/CurStepChanged in [Code]) rather than bundled in the installer.
+; ZaliMessenger.exe is downloaded at install time (see NextButtonClick/CurStepChanged
+; in [Code]) rather than bundled in the installer. Only the icon ships inside it.
+[Files]
+Source: "..\assets\zali.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; AppUserModelID here is the actual notification fix — see comment above.
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\zali.ico"; AppUserModelID: "{#MyAppUserModelID}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\zali.ico"; AppUserModelID: "{#MyAppUserModelID}"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ZaliMessenger"; ValueData: """{app}\{#MyAppExeName}"" --start-minimized"; Tasks: autostart; Flags: uninsdeletevalue

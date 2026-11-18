@@ -85,6 +85,13 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Модерация (server/src/moderation.rs): изменилось состояние аккаунта или
+        // решение по вашей жалобе — раздел «Поддержка» и плашка над полем ввода.
+        if (type === 'moderation_standing' || type === 'moderation_report_update') {
+            this.handleModerationRealtime?.(payload);
+            return true;
+        }
+
         // Игровой статус: чужие (server/src/activity.rs) и свой, найденный оболочкой
         // (native_game_activity — оболочка отдаёт его тем же проходом, что кадры сервера).
         if (type === 'user_activity' || type === 'activity_snapshot' || type === 'native_game_activity') {

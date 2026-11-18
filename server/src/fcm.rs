@@ -229,8 +229,23 @@ pub(crate) async fn upsert_fcm_token(
         .bind(token)
         .execute(&mut *tx)
         .await?;
+    // Не больше MAX_FCM_TOKENS_PER_USER на аккаунт (как у Web Push): device id выбирает
+    // клиент, и тысячи мусорных токенов превращали каждое сообщение в тысячи запросов
+    // к FCM (аудит 2026-11-18). Вытесняются самые давние.
+    sqlx::query(
+        "DELETE FROM fcm_tokens WHERE username = ? AND token NOT IN (
+             SELECT token FROM fcm_tokens WHERE username = ? ORDER BY updated_at DESC LIMIT ?
+         )",
+    )
+    .bind(username)
+    .bind(username)
+    .bind(MAX_FCM_TOKENS_PER_USER)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await
 }
+
+pub(crate) const MAX_FCM_TOKENS_PER_USER: i64 = 20;
 
 /// Токены `username`, в которые пуш действительно надо слать.
 pub(crate) async fn fcm_targets_for(
@@ -348,6 +363,35 @@ pub(crate) async fn send_fcm_push(
     if targets.is_empty() {
         return;
     }
+    let data = serde_json::Value::Object(notification.native_data(username));
+    send_fcm_data(state, account, username, targets, data, 3600).await;
+}
+
+/// Все FCM-токены пользователя, без фильтра по присутствию и маршруту. Для пуша, который
+/// должен догнать уже показанное уведомление (`call_end` снимает звонок с экрана), —
+/// устройство могло стать «смотрят» уже после того, как зазвонило.
+pub(crate) async fn all_fcm_tokens(state: &Arc<AppState>, username: &str) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT token FROM fcm_tokens WHERE username = ?")
+        .bind(username)
+        .fetch_all(&state.db)
+        .await
+}
+
+/// Data-сообщение на перечисленные токены. `ttl_secs` — сколько FCM держит его для
+/// телефона вне сети: звонок через минуту уже бессмыслен, сообщение — нет.
+pub(crate) async fn send_fcm_data(
+    state: &Arc<AppState>,
+    account: &FcmServiceAccount,
+    username: &str,
+    targets: Vec<String>,
+    data: serde_json::Value,
+    ttl_secs: u64,
+) {
+    if targets.is_empty() {
+        return;
+    }
+    // Потолок параллельной рассылки — тот же, что у числа токенов на аккаунт.
+    let targets: Vec<String> = targets.into_iter().take(MAX_FCM_TOKENS_PER_USER as usize).collect();
     let access = match access_token(account).await {
         Ok(token) => token,
         Err(e) => {
@@ -359,7 +403,7 @@ pub(crate) async fn send_fcm_push(
         "https://fcm.googleapis.com/v1/projects/{}/messages:send",
         account.project_id
     );
-    let data = serde_json::Value::Object(notification.native_data(username));
+    let ttl = format!("{}s", ttl_secs);
 
     // Токены — параллельно: устройства пользователя не ждут друг друга.
     let mut sends = tokio::task::JoinSet::new();
@@ -369,6 +413,7 @@ pub(crate) async fn send_fcm_push(
         let url = url.clone();
         let access = access.clone();
         let data = data.clone();
+        let ttl = ttl.clone();
         sends.spawn(async move {
             let body = serde_json::json!({
                 "message": {
@@ -376,7 +421,7 @@ pub(crate) async fn send_fcm_push(
                     "data": data.clone(),
                     // high: только так FCM будит приложение в Doze сразу, а не в следующее
                     // окно обслуживания.
-                    "android": { "priority": "high", "ttl": "3600s" },
+                    "android": { "priority": "high", "ttl": ttl },
                 }
             });
             let response = http_client()
@@ -545,5 +590,39 @@ mod tests {
         let channel = PushNotification::channel_message("alice", "s1", "c1", "m2").native_data("bob");
         assert_eq!(channel["serverId"], "s1");
         assert_eq!(channel["channelId"], "c1");
+        assert!(!data.contains_key("inlineArchive"));
+    }
+
+    #[test]
+    fn a_small_direct_archive_rides_in_the_push_and_a_large_one_does_not() {
+        let small = PushNotification::direct_message("alice", "m1")
+            .with_inline_archive(Some("QUJD".to_string()))
+            .native_data("bob");
+        assert_eq!(small["inlineArchive"], "QUJD");
+
+        let large = PushNotification::direct_message("alice", "m1")
+            .with_inline_archive(Some("A".repeat(4000)))
+            .native_data("bob");
+        assert!(!large.contains_key("inlineArchive"));
+        let total: usize = large.iter().map(|(k, v)| k.len() + v.as_str().unwrap().len()).sum();
+        assert!(total <= 4096);
+    }
+
+    #[test]
+    fn a_channel_archive_never_rides_in_the_push() {
+        // Ключ канала выводится из id сервера и канала, а они лежат в том же пуше.
+        let channel = PushNotification::channel_message("alice", "s1", "c1", "m2")
+            .with_inline_archive(Some("QUJD".to_string()))
+            .native_data("bob");
+        assert!(!channel.contains_key("inlineArchive"));
+    }
+
+    #[test]
+    fn the_archive_never_reaches_the_web_push_body() {
+        let json = serde_json::to_string(
+            &PushNotification::direct_message("alice", "m1").with_inline_archive(Some("QUJD".to_string())),
+        )
+        .unwrap();
+        assert!(!json.contains("QUJD"), "{json}");
     }
 }

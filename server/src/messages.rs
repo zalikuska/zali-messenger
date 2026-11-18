@@ -1387,20 +1387,30 @@ pub(crate) async fn download_upload_file(
 /// поэтому вкладывать что угодно нельзя. Не влезло — клиент скачивает по-старому.
 const INLINE_ARCHIVE_MAX_BYTES: u64 = 32 * 1024;
 
+/// Архив в FCM-пуше (`PushNotification::with_inline_archive`): весь `data` пуша — 4 КБ,
+/// base64 раздувает в 4/3, и ещё ~300 байт занимают остальные поля.
+const PUSH_INLINE_ARCHIVE_MAX_BYTES: u64 = 2560;
+
+/// Архив сообщения в base64, если он не больше `max_bytes`.
+async fn small_archive_base64(state: &Arc<AppState>, msg: &Message, max_bytes: u64) -> Option<String> {
+    let path = state.uploads_dir.join(&msg.filename);
+    let meta = tokio::fs::metadata(&path).await.ok()?;
+    if !meta.is_file() || meta.len() > max_bytes {
+        return None;
+    }
+    let bytes = tokio::fs::read(&path).await.ok()?;
+    if bytes.len() as u64 > max_bytes {
+        return None;
+    }
+    use base64::Engine;
+    Some(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 async fn message_payload_with_inline_archive(state: &Arc<AppState>, msg: &Message) -> Option<String> {
     let mut value = serde_json::to_value(msg).ok()?;
-    let path = state.uploads_dir.join(&msg.filename);
-    let fits = tokio::fs::metadata(&path)
-        .await
-        .map(|meta| meta.is_file() && meta.len() <= INLINE_ARCHIVE_MAX_BYTES)
-        .unwrap_or(false);
-    if fits {
-        if let Ok(bytes) = tokio::fs::read(&path).await {
-            use base64::Engine;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            if let Some(map) = value.as_object_mut() {
-                map.insert("inlineArchive".to_string(), serde_json::Value::String(encoded));
-            }
+    if let Some(encoded) = small_archive_base64(state, msg, INLINE_ARCHIVE_MAX_BYTES).await {
+        if let Some(map) = value.as_object_mut() {
+            map.insert("inlineArchive".to_string(), serde_json::Value::String(encoded));
         }
     }
     Some(value.to_string())
@@ -1463,7 +1473,10 @@ pub(crate) async fn deliver_to_user(state: &Arc<AppState>, username: &str, msg: 
     if let Some(route) = route {
         let state = Arc::clone(state);
         let username = username.to_string();
-        let notification = crate::PushNotification::direct_message(&msg.sender, &msg.id);
+        // Маленький архив — прямо в FCM-пуш: телефону не нужно его скачивать.
+        let archive = small_archive_base64(&state, msg, PUSH_INLINE_ARCHIVE_MAX_BYTES).await;
+        let notification = crate::PushNotification::direct_message(&msg.sender, &msg.id)
+            .with_inline_archive(archive);
         match focus_mode {
             // Получатель в игре и просил не тревожить до её конца: пуш уйдёт одним
             // сводным уведомлением, когда сессия кончится (focus.rs).
@@ -1551,11 +1564,11 @@ pub(crate) async fn resolve_server_message_viewers(
             continue;
         };
 
-        let perms = channel_perm_map
+        let server_role = role_perm_map
             .get(role_id)
             .copied()
-            .or_else(|| role_perm_map.get(role_id).copied())
             .unwrap_or_else(|| fallback_role_permissions(role_id));
+        let perms = crate::resolve_channel_role_perms(Some(&channel_perm_map), role_id, server_role);
 
         if role_permissions_for_view("view", perms.0, perms.1, perms.2) {
             allowed.push(viewer.clone());
@@ -2049,6 +2062,11 @@ pub(crate) async fn edit_message(
         warn!("EDIT_MESSAGE forbidden id={} auth={}", id, auth_user);
         return (StatusCode::FORBIDDEN, "Редактировать может только автор").into_response();
     }
+    // Правка пишет новый архив и звено hash chain — те же лимиты, что у загрузки
+    // (общий счётчик МиБ ниже). Раньше правка шла без лимитов вовсе (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("edit:{}", auth_user.to_lowercase()), 120) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много правок. Повторите через минуту.").into_response();
+    }
 
     // A fresh name rather than an overwrite: a reader that is mid-download of
     // the old archive keeps reading a complete file instead of one that changes
@@ -2117,6 +2135,17 @@ pub(crate) async fn edit_message(
                             error!("EDIT_MESSAGE flush failed id={}: {}", id, e);
                             let _ = fs::remove_file(&temp_path).await;
                             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        }
+                        let mib = file_bytes.div_ceil(1024 * 1024).max(1) as usize;
+                        if !crate::rate_allow_weighted(
+                            &state,
+                            format!("upload-mib:{}", auth_user.to_lowercase()),
+                            mib,
+                            UPLOAD_MIB_PER_HOUR,
+                            std::time::Duration::from_secs(3600),
+                        ) {
+                            let _ = fs::remove_file(&temp_path).await;
+                            return (StatusCode::TOO_MANY_REQUESTS, "Превышен объём загрузок за час").into_response();
                         }
                         wrote_file = true;
                     }

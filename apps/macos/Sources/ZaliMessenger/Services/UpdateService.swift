@@ -87,6 +87,31 @@ final class UpdateService: NSObject {
         return key.isValidSignature(signature, for: Data(message.utf8))
     }
 
+    /// Ключ порядка версий — зеркало `version_key` (server/src/updates.rs) и
+    /// `compareVersions` (web/src/interface/updates.js).
+    static func versionKey(_ version: String) -> [Int] {
+        let v = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let dot = v.firstIndex(of: "."),
+           let letter = v[v.index(after: dot)...].firstIndex(where: { $0.isLetter }) {
+            let major = Int(v[..<dot]) ?? 0
+            let minor = Int(v[v.index(after: dot)..<letter]) ?? 0
+            let channel = v[letter].lowercased()
+            let rank = channel == "a" ? 0 : (channel == "b" ? 1 : 2)
+            let tail = v[v.index(after: letter)...].split(separator: ".", omittingEmptySubsequences: false)
+            let build = tail.first.flatMap { Int($0) } ?? 0
+            let sub = tail.count > 1 ? (Int(tail[1]) ?? 0) : 0
+            return [major, minor, rank, build, sub]
+        }
+        let parts = v.split(separator: ".").map { Int($0) ?? 0 }
+        return [parts.count > 0 ? parts[0] : 0, parts.count > 1 ? parts[1] : 0, 2, parts.count > 2 ? parts[2] : 0, 0]
+    }
+
+    /// Подписанный, но старый релиз — не обновление (аудит 2026-11-18).
+    static func isNewerVersion(_ candidate: String, than current: String) -> Bool {
+        versionKey(candidate).lexicographicallyPrecedes(versionKey(current)) == false
+            && versionKey(candidate) != versionKey(current)
+    }
+
     /// SHA-256 проверенного архива: между проверкой и установкой файл лежит в
     /// каталоге, доступном на запись, поэтому перед установкой сверяется снова.
     private var verifiedSha256: String?

@@ -14,11 +14,20 @@ pub(crate) fn new_request_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// TCP keepalive для соединений в пуле. Пул переживает смену сети и сон: соединение,
+/// чей путь умер без FIN, остаётся в нём «живым», и первый же запрос после этого
+/// уходит в мёртвый сокет и ждёт свой полный таймаут (12 с у API), — повторной
+/// попытки на свежем соединении, как у macOS (`attemptApiRequest`), здесь нет.
+/// Keepalive-пробы ядра находят такое соединение сами, и hyper выкидывает его из
+/// пула раньше, чем на него попадёт запрос.
+const POOLED_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
+
 pub(crate) fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
+            .tcp_keepalive(POOLED_TCP_KEEPALIVE)
             .build()
             .unwrap_or_else(|error| {
                 trace(format!(
@@ -98,6 +107,7 @@ pub(crate) fn api_http_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(12))
+            .tcp_keepalive(POOLED_TCP_KEEPALIVE)
             .build()
             .unwrap_or_else(|error| {
                 trace(format!(

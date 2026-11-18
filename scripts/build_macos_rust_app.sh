@@ -35,6 +35,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "apps/windows/target/release/$BIN_NAME" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+cp "apps/macos/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -45,6 +46,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
     <string>Zali Messenger (Rust)</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key>

@@ -770,6 +770,13 @@ pub(crate) async fn register_official(
                 if previous_owner.as_deref().map_or(false, |prev| prev != tx_owner) {
                     // Данные пользователей собраны на условиях прежнего автора и новому не переходят.
                     crate::addon_cloud::wipe_addon(&mut *conn, &tx_id).await?;
+                    // Листинг магазина — за новым владельцем: иначе прежний получал
+                    // доход с продаж и правил/скрывал листинг (аудит 2026-11-18).
+                    sqlx::query("UPDATE addon_store_listings SET owner = ? WHERE addon_id = ?")
+                        .bind(&tx_owner)
+                        .bind(&tx_id)
+                        .execute(&mut *conn)
+                        .await?;
                 }
                 Ok(Registered::Done)
             }
@@ -858,12 +865,14 @@ async fn sign_official_build(
     let key_fp = fingerprint(&official);
     sqlx::query(
         "UPDATE addon_registry
-         SET kind = 'official', public_key = ?, key_fp = ?, updated_at = ?,
+         SET kind = 'official', public_key = ?, key_fp = ?, updated_at = ?, official_signed_at = ?,
              name = CASE WHEN ? = '' THEN name ELSE ? END
          WHERE addon_id = ? AND owner = ?",
     )
     .bind(B64.encode(&official))
     .bind(&key_fp)
+    .bind(now)
+    // `stale_signature` в register_official опирается на этот штамп.
     .bind(now)
     .bind(name)
     .bind(name)

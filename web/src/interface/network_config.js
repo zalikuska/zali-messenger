@@ -561,12 +561,60 @@ ZaliMixin(ZaliInterface, class {
         return `${base}${nextPath.startsWith('/') ? nextPath : `/${nextPath}`}`;
     }
 
+    networkHostOf(url) {
+        try {
+            return new URL(String(url || '')).host.toLowerCase();
+        } catch (e) {
+            return '';
+        }
+    }
+
+    // Токен выдан конкретным сервером. Раньше смена адреса API молча отправляла его
+    // новому хосту («впишите адрес нашего сервера» = захват аккаунта), а отдельный
+    // адрес WS уносил токен в хендшейке на любой хост (аудит 2026-11-18). Теперь:
+    // WS только на том же хосте, что API, а смена хоста при входе — с подтверждением
+    // и выходом из аккаунта. Нативные шеллы проверяют то же самое у себя.
     setNetworkConfig(config = {}) {
+        // Нормализация и проверки — синхронно: вызывающие ловят исключение в try/catch
+        // и показывают текст ошибки.
         const next = {
             apiBaseUrl: this.normalizeApiBaseUrl(config.apiBaseUrl || ''),
             wsBaseUrl: this.normalizeWsBaseUrl(config.wsBaseUrl || ''),
             iceServers: this.normalizeIceServers(config.iceServers),
         };
+        const apiHost = this.networkHostOf(next.apiBaseUrl || this.getApiBaseUrl());
+        if (next.wsBaseUrl && this.networkHostOf(next.wsBaseUrl) !== apiHost) {
+            throw new Error('Адрес WebSocket должен быть на том же хосте, что и API');
+        }
+        if (this.networkHostChangeNeedsLogout(apiHost)) {
+            return this.confirmNetworkHostChange(apiHost, () => this.applyNetworkConfigNow(next));
+        }
+        this.applyNetworkConfigNow(next);
+        return true;
+    }
+
+    networkHostChangeNeedsLogout(nextHost) {
+        return nextHost !== this.networkHostOf(this.getApiBaseUrl())
+            && !!this.S.session?.token
+            && !this.S.session?.guest;
+    }
+
+    async confirmNetworkHostChange(nextHost, apply) {
+        const ok = await this.confirmAction({
+            title: 'Сменить сервер?',
+            message: `Новый адрес: ${nextHost || '—'}. Вы выйдете из аккаунта: токен этого сервера другому не передаётся. Меняйте адрес, только если сами знаете, зачем.`,
+            confirmLabel: 'Сменить и выйти',
+        });
+        if (!ok) {
+            this.applyNetworkConfigToInputs();
+            return false;
+        }
+        await this.logout();
+        apply();
+        return true;
+    }
+
+    applyNetworkConfigNow(next) {
         this.saveStoredNetworkConfig(next);
         this.applyNetworkConfigToInputs();
         this.syncNativeNetworkConfig({ force: true });
@@ -575,6 +623,20 @@ ZaliMixin(ZaliInterface, class {
     }
 
     resetNetworkConfig() {
+        let defaultHost = '';
+        try {
+            const saved = localStorage.getItem(this.networkConfigStorageKey());
+            localStorage.removeItem(this.networkConfigStorageKey());
+            defaultHost = this.networkHostOf(this.getApiBaseUrl());
+            if (saved !== null) localStorage.setItem(this.networkConfigStorageKey(), saved);
+        } catch (e) {}
+        if (defaultHost && this.networkHostChangeNeedsLogout(defaultHost)) {
+            return this.confirmNetworkHostChange(defaultHost, () => this.resetNetworkConfigNow());
+        }
+        return this.resetNetworkConfigNow();
+    }
+
+    resetNetworkConfigNow() {
         try {
             localStorage.removeItem(this.networkConfigStorageKey());
         } catch (e) {}

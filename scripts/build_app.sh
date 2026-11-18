@@ -14,7 +14,7 @@ APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
 # MAJOR.MINOR{a|b|r}BUILD (r > b > a, see compareVersions in interface.js);
 # unlike apps/windows/Cargo.toml, CFBundleShortVersionString isn't SemVer-locked
 # so this can hold the display version directly.
-APP_VERSION="0.2b61"
+APP_VERSION="0.2b62"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 
@@ -90,6 +90,10 @@ else
     exit 1
 fi
 
+# 4c. Иконка приложения — генерирует brand/logo/gen_logo.py --export (форма и тень
+# запечены: macOS, в отличие от iOS/Android, иконку не обрезает).
+cp "apps/macos/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
 # 4c. Rust-ядро внутрь бандла.
 #
 # `core` собирается сразу как cdylib+staticlib, и линкер по `-l` предпочитает
@@ -126,6 +130,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <string>com.zali.messenger</string>
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

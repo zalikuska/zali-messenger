@@ -194,6 +194,10 @@ ZaliMixin(ZaliInterface, class {
             clearTimeout(this.voiceSocketReconnectTimer);
             this.voiceSocketReconnectTimer = null;
         }
+        if (this.voiceSocketProbeTimer) {
+            clearTimeout(this.voiceSocketProbeTimer);
+            this.voiceSocketProbeTimer = null;
+        }
         if (this.voice.socket) {
             try {
                 this.voice.socket.onopen = null;
@@ -227,14 +231,58 @@ ZaliMixin(ZaliInterface, class {
 
     // Sends an immediate app-level ping so the half-open watchdog in the socket's
     // ping interval has fresh evidence to judge by. Safe to call at any time.
-    probeVoiceSocketLiveness() {
+    //
+    // With `deadlineMs` it also judges the answer itself instead of leaving that to
+    // the next 25 s tick: no inbound frame by the deadline → the socket is dropped and
+    // a new one opened straight away. Not via socket.close() + onclose: on a path that
+    // died without a FIN the closing handshake cannot complete either, and onclose
+    // can be a long time coming.
+    probeVoiceSocketLiveness({ deadlineMs = 0, reason = '' } = {}) {
         if (this.nativeSupports('voice')) return;
         const socket = this.voice.socket;
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        let pingAt = 0;
         try {
-            this.voiceSocketLastPingAt = Date.now();
+            pingAt = Date.now();
+            this.voiceSocketLastPingAt = pingAt;
             socket.send(JSON.stringify({ type: 'ping' }));
         } catch (e) {}
+        if (!(deadlineMs > 0) || !pingAt) return;
+        const generation = this.voiceSocketGeneration;
+        if (this.voiceSocketProbeTimer) clearTimeout(this.voiceSocketProbeTimer);
+        this.voiceSocketProbeTimer = setTimeout(() => {
+            this.voiceSocketProbeTimer = null;
+            if (generation !== this.voiceSocketGeneration || this.voice.socket !== socket) return;
+            if (socket.readyState !== WebSocket.OPEN) return;
+            if ((this.voiceSocketLastInboundAt || 0) >= pingAt) return;
+            this.voiceDiag('socket-probe-unanswered', { generation, reason, deadlineMs }, 'WARN');
+            this.disconnectBrowserVoiceSocket();
+            this.setConnectionStatus(false);
+            void this.connectBrowserVoiceSocket();
+        }, deadlineMs);
+    }
+
+    // Сеть вернулась (`online`) или вкладка снова перед глазами. Без этого браузерный
+    // сокет — единственный realtime-канал PWA и сигналинг звонков Android/iOS —
+    // узнавал об обрыве только на тике сторожа (до 25 с + 15 с), а реконнект, уже
+    // крутивший бэкофф, ждал до 30 с и в живой сети. Зеркало kickConnections в
+    // нативных оболочках.
+    kickBrowserVoiceSocket(reason = 'kick') {
+        if (this.nativeSupports('voice')) return;
+        if (typeof WebSocket === 'undefined' || !this.S?.session?.token) return;
+        const socket = this.voice.socket;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            this.probeVoiceSocketLiveness({ deadlineMs: 5000, reason });
+            return;
+        }
+        // Ждёт бэкоффа — подключиться сейчас. Без таймера сокета нет намеренно
+        // (выход) или идёт получение ws-ticket: тогда не мешаем.
+        if (!this.voiceSocketReconnectTimer) return;
+        clearTimeout(this.voiceSocketReconnectTimer);
+        this.voiceSocketReconnectTimer = null;
+        this.voiceSocketReconnectDelayMs = 1000;
+        this.voiceDiag('socket-kick-reconnect', { reason }, 'INFO');
+        void this.connectBrowserVoiceSocket();
     }
 
     async fetchBrowserVoiceSocketTicket() {

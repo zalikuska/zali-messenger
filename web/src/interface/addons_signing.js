@@ -116,7 +116,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     setHubTab(name) {
-        const tab = name === 'signing' ? 'signing' : ((name === 'addons' || name === 'pack') ? 'addons' : 'overview');
+        const known = { signing: 'signing', addons: 'addons', pack: 'addons', support: 'support', violation: 'violation' };
+        const tab = known[name] || 'overview';
         this._hubTab = tab;
         document.querySelectorAll('#hubTabs [data-hub-tab]').forEach((btn) => {
             const on = btn.getAttribute('data-hub-tab') === tab;
@@ -143,6 +144,12 @@ ZaliMixin(ZaliInterface, class {
             void this.loadMyAddons();
         } else if (tab === 'addons') {
             void this.loadStore?.();
+        } else if (tab === 'support') {
+            // Сначала то, что уже знаем (без мигания пустотой), затем свежее.
+            this.renderHubSupport?.();
+            void this.loadModerationStanding?.();
+        } else if (tab === 'violation') {
+            this.renderHubViolation?.();
         }
     }
 

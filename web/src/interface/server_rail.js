@@ -39,18 +39,30 @@ ZaliMixin(ZaliInterface, class {
     // changes) and renderServers. commitListHTML makes the common case a string
     // compare, and the track element itself is never replaced — so the scroll
     // offset, which lives in its transform, survives every re-render.
+    //
+    // Outside servers mode the rail is only hidden, its items stay. Clearing them
+    // made every «Чаты ↔ Сервера» tap rebuild all avatars and read scrollWidth right
+    // after — a forced layout inside the tap handler, ~27% of the tap's JS (measured
+    // 2026-11-18). Measuring after a show waits for the frame: wheel, pointerdown,
+    // revealActive and the mobile server bar all measure for themselves first.
     renderServerRails() {
         const isServers = this.S.navMode === 'servers';
-        const html = isServers ? this.serverRailHTML() : '';
+        const html = isServers ? this.serverRailHTML() : null;
         for (const rail of this.serverRailElements()) {
+            const wasHidden = rail.hidden;
             rail.hidden = !isServers;
             const track = rail.querySelector('.server-rail-track');
             if (!track) continue;
             this.setupServerRail(rail);
+            if (!isServers) continue;
             const changed = this.commitListHTML(track, `server-rail:${rail.id}`, html);
             const state = rail.__rail;
             if (!state) continue;
             if (changed) state.measure();
+            else if (wasHidden && !state.measurePending) {
+                state.measurePending = true;
+                requestAnimationFrame(() => { state.measurePending = false; state.measure(); });
+            }
             const activeKey = String(this.S.activeServer || '');
             if (isServers && state.lastActive !== activeKey) {
                 state.lastActive = activeKey;

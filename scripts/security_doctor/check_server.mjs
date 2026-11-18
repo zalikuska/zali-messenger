@@ -65,9 +65,11 @@ section('login rate limiting');
     record('per-IP failed-login budget exists',
         /fn failed_login_ip_rate_key\(/.test(auth),
         'without it a password spray across usernames is never throttled');
+    // С 2026-11-18 слот резервируется до bcrypt (иначе параллельные запросы проходили
+    // проверку разом) и возвращается при успехе — бюджет по-прежнему считает неудачи.
     record('the per-IP budget counts failures, not requests',
-        /let note_failure = \|\|/.test(auth)
-            && /Ok\(None\) => \{[\s\S]{0,300}?note_failure\(\)/.test(auth),
+        /let release_reservation = \|\|/.test(auth)
+            && /login_attempts\.remove\(&rate_key\);\s*release_reservation\(\);/.test(auth),
         'counting successes too would lock a NAT full of legitimate users out');
     record('the unknown-username path still costs a bcrypt verify',
         /Ok\(None\) => \{[\s\S]{0,200}?verify_password\([\s\S]{0,80}?DUMMY_BCRYPT_HASH/.test(auth),
@@ -181,8 +183,8 @@ section('audit 2026-10-11');
     record('IPv6 rate buckets collapse to the /64',
         /fn rate_bucket_ip/.test(auth) && /rate_bucket_ip\(extract_client_ip/.test(auth));
     record('invite codes are 64-bit and failed guesses are throttled per person',
-        /simple\(\)\.to_string\(\)\[\.\.16\]/.test(servers) && /invite_attempts_exhausted\(&state/.test(servers)
-            && /note_invite_miss\(&state/.test(servers));
+        /simple\(\)\.to_string\(\)\[\.\.16\]/.test(servers) && /invite_attempt_reserve\(&state/.test(servers)
+            && /invite_attempt_release\(&state/.test(servers));
     record('the WebSocket caps frame size, connections per person and inbound rate',
         /max_message_size\(WS_MAX_INBOUND_BYTES\)/.test(realtime) && /WS_MAX_CONNECTIONS_PER_USER/.test(realtime)
             && /WS_INBOUND_MAX_PER_WINDOW/.test(realtime));
@@ -195,6 +197,62 @@ section('audit 2026-10-11');
         /fn release_signature_message/.test(updates) && /verify_es256\(&crate::addons::official_public_key\(\)/.test(updates));
     record('release builds do not trust localhost origins by default',
         /let base = "https:\/\/msgs\.zalikus\.org,zali:\/\/localhost";/.test(lib));
+}
+
+section('audit 2026-11-18');
+{
+    const servers = stripLineComments(read('server/src/servers.rs'));
+    const push = stripLineComments(read('server/src/push.rs'));
+    const realtime = stripLineComments(read('server/src/realtime.rs'));
+    const util = stripLineComments(read('server/src/util.rs'));
+    const roles = stripLineComments(read('server/src/roles.rs'));
+    const channels = stripLineComments(read('server/src/channels.rs'));
+    const voice = stripLineComments(read('server/src/voice.rs'));
+    const moderation = stripLineComments(read('server/src/moderation.rs'));
+    const devices = stripLineComments(read('server/src/devices.rs'));
+    const fcm = stripLineComments(read('server/src/fcm.rs'));
+    const joinLink = rustFn(servers, 'join_server_link');
+    record('role and server colours are hex-only on the server',
+        /fn hex_color\(/.test(util) && /hex_color_or_default\(payload\.color/.test(roles)
+            && /hex_color_or_default/.test(rustFn(servers, 'update_server')),
+        'a role colour went raw into a style attribute: `rgb(1" onmouseover=…)` was XSS on the owner');
+    record('treasury and role-management rights are owner-only like «Управление»',
+        /can_manage_treasury != 0/.test(rustFn(servers, 'role_grants_manage'))
+            && /can_manage_roles != 0/.test(rustFn(servers, 'role_grants_manage'))
+            && /member_is_privileged\(&state\.db, &server_id, target\)/.test(servers));
+    record('a custom role inherits the channel row of its base role',
+        /fn resolve_channel_role_perms/.test(channels)
+            && /resolve_channel_role_perms\(channel_permissions\.get/.test(channels)
+            && /resolve_channel_role_perms\(Some\(&channel_perm_map\)/.test(messages)
+            && /let base = if can_manage \{ "admin" \} else \{ "member" \}/.test(rustFn(channels, 'can_access_channel')));
+    record('join_server_link finds only public servers and has no `OR id = ?`',
+        !/OR id = \?/.test(joinLink) && /is_public = 1/.test(joinLink));
+    record('losing access evicts from voice rooms',
+        /fn revalidate_server_voice/.test(voice)
+            && ['delete_server_member', 'leave_server', 'delete_server'].every(fn => /revalidate_server_voice/.test(rustFn(servers, fn)))
+            && /revalidate_server_voice/.test(rustFn(channels, 'delete_channel'))
+            && /revalidate_server_voice/.test(rustFn(channels, 'update_channel_permissions'))
+            && /revalidate_server_voice/.test(rustFn(roles, 'update_server_role')));
+    record('password change, logout, device revoke and suspension close live sockets',
+        /disconnect_user_sockets\(&state, &username\)/.test(rustFn(auth, 'change_password'))
+            && /disconnect_user_sockets/.test(rustFn(auth, 'logout'))
+            && /disconnect_user_sockets/.test(rustFn(devices, 'revoke_device'))
+            && /disconnect_user_sockets\(state, username\)/.test(moderation)
+            && /WS_CLOSE_SENTINEL/.test(realtime));
+    record('a DM report (reporter-supplied text) never auto-punishes',
+        /verification == "reporter"/.test(rustFn(moderation, 'apply_decision')));
+    record('failed-login slots are reserved before bcrypt, per IP and per account',
+        /failed_login_user_rate_key/.test(auth) && /release_reservation\(\)/.test(rustFn(auth, 'login')));
+    record('registration checks the lowercase name inside the INSERT',
+        /WHERE NOT EXISTS \(SELECT 1 FROM users WHERE lower\(username\) = \?\)/.test(rustFn(auth, 'register')));
+    record('message edits are rate-limited and count against the upload volume',
+        /format!\("edit:/.test(rustFn(messages, 'edit_message')) && /upload-mib:/.test(rustFn(messages, 'edit_message')));
+    record('FCM tokens are capped per account',
+        /MAX_FCM_TOKENS_PER_USER/.test(fcm));
+    record('web push goes only to known push services',
+        /fn is_known_push_service/.test(push));
+    record('the ws ticket is accepted on /ws only',
+        /parts\.uri\.path\(\) == "\/ws"/.test(auth));
 }
 
 finish('server');

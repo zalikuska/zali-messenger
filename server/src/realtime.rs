@@ -22,6 +22,23 @@ use std::{
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
 
+/// Служебное сообщение в канал сокета: «закройся». Не JSON, поэтому с реальным
+/// исходящим событием не совпадёт.
+pub(crate) const WS_CLOSE_SENTINEL: &str = "\u{0}zali:close";
+
+/// Закрывает все живые WebSocket пользователя. Авторизация WS проверяется только на
+/// хендшейке, поэтому без этого смена пароля, выход «везде», отзыв устройства и
+/// блокировка оставляли открытый сокет (с украденным токеном) рабочим навсегда
+/// (аудит 2026-11-18). Клиенты с действующим токеном сразу переподключаются.
+pub(crate) fn disconnect_user_sockets(state: &AppState, username: &str) {
+    if let Some((_, conns)) = state.user_connections.remove(username) {
+        info!("[WS] '{}': закрываю {} соединений (сессия отозвана)", username, conns.len());
+        for tx in conns {
+            let _ = tx.try_send(WS_CLOSE_SENTINEL.to_string());
+        }
+    }
+}
+
 pub(crate) async fn broadcast_json(state: &Arc<AppState>, payload: String) {
     let viewers: Vec<String> = state
         .user_connections
@@ -103,7 +120,16 @@ pub(crate) async fn broadcast_avatar_event(
         "deleted": deleted,
         "updated_at": updated_at.map(|dt| dt.to_rfc3339()),
     });
-    broadcast_json(state, payload.to_string()).await;
+    // Только тем, кто и так видит человека (контакты, собеседники, соседи по
+    // серверам — аудитория присутствия), и его собственным устройствам. Раньше
+    // событие уходило всем подключённым: любой узнавал, когда незнакомец меняет
+    // аватар (аудит 2026-11-18). Остальные увидят новый аватар при следующей загрузке.
+    let audience = crate::presence::presence_audience(state, username).await;
+    let payload = payload.to_string();
+    send_payload_to_user(state, username, payload.clone(), "avatar").await;
+    for viewer in audience.iter().filter(|viewer| viewer.as_str() != username) {
+        send_payload_to_user(state, viewer, payload.clone(), "avatar").await;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +273,22 @@ pub(crate) async fn ws_handler(
 ) -> impl IntoResponse {
     // Нативные оболочки называют устройство заголовком апгрейда; браузер — кадрами.
     let device_id = crate::header_device_id(&headers);
+    // Отозванное устройство не получает живой канал (его JWT аккаунтный и сам по себе
+    // не гаснет при отзыве).
+    if let Some(device) = device_id.as_deref() {
+        let revoked: Option<i64> = sqlx::query_scalar(
+            "SELECT revoked FROM account_devices WHERE owner = ? AND device_id = ? LIMIT 1",
+        )
+        .bind(&username)
+        .bind(device)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+        if revoked.unwrap_or(0) != 0 {
+            warn!("WS upgrade refused: revoked device username={} device={}", username, device);
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
     // Предел соединений на человека: нормальному пользователю хватает пары
     // вкладок и устройств, остальное — утечка либо попытка занять память.
     let open_connections = state
@@ -333,6 +375,10 @@ pub(crate) async fn handle_socket(
                 }
             }
             Some(msg) = rx.recv() => {
+                if msg == WS_CLOSE_SENTINEL {
+                    let _ = socket.send(WsMessage::Close(None)).await;
+                    break;
+                }
                 trace!("WS outbound username={} bytes={}", username, msg.len());
                 if socket.send(WsMessage::Text(msg)).await.is_err() {
                     warn!("WS outbound send failed username={}", username);

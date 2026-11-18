@@ -37,6 +37,21 @@
         var host = window.parent;
         var RPC = 'zali-addon-rpc';
         var EVENT = 'zali-addon-event';
+        var PORT = 'zali-addon-port';
+        // Весь RPC — через MessageChannel, порт которого уходит хосту ДО кода аддона.
+        // Порт привязан к этому документу: если фрейм навигируется на чужой адрес,
+        // ответы хоста туда уже не дойдут. Раньше хост отвечал window.postMessage(…, '*'),
+        // и документ, успевший сменить этот, получал результат вызова (аудит 2026-11-18).
+        var port = null;
+        if (typeof MessageChannel === 'function') {
+            var pair = new MessageChannel();
+            port = pair.port1;
+            try {
+                host.postMessage({ channel: PORT, token: rpcToken }, '*', [pair.port2]);
+            } catch (e) {
+                port = null;
+            }
+        }
         var seq = 0;
         var pending = new Map();
         var listeners = new Map();
@@ -56,7 +71,8 @@
                 var id = seq;
                 pending.set(id, { resolve: resolve, reject: reject });
                 try {
-                    host.postMessage({ channel: RPC, id: id, token: rpcToken, method: method, params: params || {} }, '*', transfer || []);
+                    if (!port) throw new Error('Канал связи с приложением недоступен');
+                    port.postMessage({ channel: RPC, id: id, token: rpcToken, method: method, params: params || {} }, transfer || []);
                 } catch (e) {
                     pending.delete(id);
                     reject(ZaliAddonError('bad_params', (e && e.message) || String(e)));
@@ -72,8 +88,7 @@
             });
         }
 
-        window.addEventListener('message', function (event) {
-            if (event.source !== host) return;
+        if (port) port.onmessage = function (event) {
             var msg = event.data;
             if (!msg || typeof msg !== 'object') return;
             if (msg.channel === RPC) {
@@ -85,7 +100,7 @@
             } else if (msg.channel === EVENT) {
                 emit(String(msg.event || ''), msg.data);
             }
-        });
+        };
 
         function on(name, fn) {
             if (typeof fn !== 'function') return function () {};

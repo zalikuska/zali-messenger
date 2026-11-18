@@ -55,6 +55,20 @@ pub(crate) fn trim_limited(value: impl AsRef<str>, max_len: usize) -> String {
         .collect::<String>()
 }
 
+/// Цвет только `#rgb`/`#rrggbb` (в нижнем регистре). Цвета ролей, серверов и профилей
+/// уходят на клиенте в inline-`style`: произвольная строка там — инъекция CSS, а без
+/// экранирования и выход из атрибута (XSS через цвет роли, аудит 2026-11-18).
+pub(crate) fn hex_color(value: &str) -> Option<String> {
+    let body = value.trim().strip_prefix('#')?;
+    let ok = (body.len() == 3 || body.len() == 6) && body.chars().all(|c| c.is_ascii_hexdigit());
+    ok.then(|| format!("#{}", body.to_lowercase()))
+}
+
+/// `hex_color` или цвет по умолчанию — для уже сохранённых значений и необязательных полей.
+pub(crate) fn hex_color_or_default(value: &str) -> String {
+    hex_color(value).unwrap_or_else(|| "#cbff00".to_string())
+}
+
 pub(crate) fn is_valid_username(value: &str) -> bool {
     let len = value.chars().count();
     (3..=32).contains(&len)

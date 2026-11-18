@@ -58,7 +58,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b61";
+const APP_DISPLAY_VERSION: &str = "0.2b62";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -80,6 +80,8 @@ pub enum AppEvent {
     /// Windows only: total unread count changed — update the taskbar overlay badge
     /// (see native/taskbar_badge.rs). Carries the raw count; 0 clears the overlay.
     SetTaskbarBadge(u32),
+    /// Входящий звонок при неактивном окне: мигание на панели задач / иконка в доке.
+    RequestAttention,
     /// Windows only: in-app titlebar minimize button (native OS decorations are
     /// switched off there — see NativeCapabilities::window_controls).
     MinimizeWindow,
@@ -1539,6 +1541,14 @@ pub fn handle_ipc_message(
                 return;
             }
             let field = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if !crate::native::updates::is_newer_version(&field("version"), APP_DISPLAY_VERSION) {
+                dispatch_ui_event(
+                    &proxy,
+                    UiBusEvent::NativeResponse,
+                    json!({ "requestId": request_id, "ok": false, "error": "Это не более новая версия — загрузка отменена" }),
+                );
+                return;
+            }
             if !crate::native::updates::verify_release_signature(&field("version"), &sha256, &url, &field("signature")) {
                 dispatch_ui_event(
                     &proxy,
@@ -2241,6 +2251,17 @@ pub fn handle_ipc_message(
                 let next_host = reqwest::Url::parse(&guard.api_base_url())
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_lowercase));
+                // WS — только на хосте API: отдельный `wsBaseUrl` уносил токен в
+                // хендшейке на любой хост мимо сброса выше (аудит 2026-11-18).
+                if let Some(ws) = guard.ws_base_url.clone() {
+                    let ws_host = reqwest::Url::parse(&ws)
+                        .ok()
+                        .and_then(|url| url.host_str().map(str::to_lowercase));
+                    if ws_host != next_host {
+                        trace(format!("NETWORK_CONFIG ws host {:?} != api host {:?}; ws ignored", ws_host, next_host));
+                        guard.ws_base_url = None;
+                    }
+                }
                 if previous_host != next_host && guard.auth_token.is_some() {
                     trace(format!("NETWORK_CONFIG host changed {:?} -> {:?}; dropping session token", previous_host, next_host));
                     guard.auth_token = None;
@@ -2769,6 +2790,11 @@ pub fn handle_ipc_message(
                 "channelId": channel_id,
             });
             show_message_notification(&rendered, &current_username);
+            // Входящий звонок (notifyIncomingCall в voice_call.js): кнопка на панели задач
+            // мигает, пока окно не активируют (на macOS-сборке — прыгает иконка в доке).
+            if payload.get("attention").and_then(Value::as_bool).unwrap_or(false) {
+                let _ = proxy.send_event(AppEvent::RequestAttention);
+            }
         }
         BridgeProtocolMessageType::PersistDeviceIdentity => {
             // Mirror the JS-side device identity to a per-user plain file so it survives a

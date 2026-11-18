@@ -142,6 +142,8 @@ ZaliMixin(ZaliInterface, class {
             startedAt: Date.now(),
             collapsedAt: 0,
             helloTimer: 0,
+            // MessageChannel от SDK (onAddonWindowMessage): весь RPC и события — только через него.
+            port: null,
         };
         this.addonInstances().set(id, instance);
         try {
@@ -282,6 +284,8 @@ ZaliMixin(ZaliInterface, class {
         const instance = this.addonInstances().get(id);
         if (!instance) return;
         clearTimeout(instance.helloTimer);
+        try { instance.port?.close(); } catch (e) { /* уже закрыт */ }
+        instance.port = null;
         this.addonInstances().delete(id);
         this.addonStopRecorder?.(instance);
         this.addonSessionEnd?.(instance);
@@ -499,15 +503,18 @@ ZaliMixin(ZaliInterface, class {
         return null;
     }
 
+    // Ответы и события — только в MessageChannel, который SDK передал при старте:
+    // порт привязан к исходному документу фрейма. window.postMessage(…, '*') доставлял
+    // их любому документу, на который фрейм успел навигироваться (аудит 2026-11-18).
     postToAddon(instance, message, transfer = []) {
-        const target = instance?.iframe?.contentWindow;
-        if (!target) return;
+        const port = instance?.port;
+        if (!port) return;
         try {
-            target.postMessage(message, '*', transfer);
+            port.postMessage(message, transfer);
         } catch (error) {
             // Непередаваемый результат — ответить ошибкой, а не оставить промис висеть.
             if (message.channel === ZALI_ADDON_RPC && message.ok) {
-                target.postMessage({ channel: ZALI_ADDON_RPC, id: message.id, ok: false, error: { code: 'failed', message: String(error?.message || error) } }, '*');
+                port.postMessage({ channel: ZALI_ADDON_RPC, id: message.id, ok: false, error: { code: 'failed', message: String(error?.message || error) } });
             }
         }
     }
@@ -516,11 +523,24 @@ ZaliMixin(ZaliInterface, class {
         this.postToAddon(instance, { channel: ZALI_ADDON_EVENT, event, data }, transfer);
     }
 
+    // Окно принимает только передачу порта — один раз на экземпляр, от его фрейма и с
+    // его токеном. Весь RPC дальше идёт через порт (onAddonPortMessage).
     onAddonWindowMessage(event) {
         const msg = event.data;
-        if (!msg || typeof msg !== 'object' || msg.channel !== ZALI_ADDON_RPC) return;
+        if (!msg || typeof msg !== 'object' || msg.channel !== 'zali-addon-port') return;
         const instance = this.addonInstanceBySource(event.source);
-        if (!instance) return;
+        if (!instance || instance.port) return;
+        if (!instance.rpcToken || msg.token !== instance.rpcToken) return;
+        const port = event.ports?.[0];
+        if (!port) return;
+        instance.port = port;
+        port.onmessage = (portEvent) => this.onAddonPortMessage(instance, portEvent);
+    }
+
+    onAddonPortMessage(instance, event) {
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object' || msg.channel !== ZALI_ADDON_RPC) return;
+        if (!this.addonInstances().has(instance.id) || this.addonInstances().get(instance.id) !== instance) return;
         if (!instance.rpcToken || msg.token !== instance.rpcToken) return;
         const id = Number(msg.id);
         if (!Number.isSafeInteger(id) || id <= 0) return;

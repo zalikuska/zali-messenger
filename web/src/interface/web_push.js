@@ -77,6 +77,28 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    async consumeCallActionFromUrl(call = {}) {
+        const target = { roomId: String(call?.roomId || ''), from: String(call?.from || '') };
+        const nonce = String(call?.nonce || '');
+        let trusted = false;
+        if (/^[0-9a-f]{32}$/.test(nonce) && typeof caches !== 'undefined') {
+            try {
+                const cache = await caches.open('zali-call-nonce');
+                const key = `/__zali_call_nonce/${nonce}`;
+                const hit = await cache.match(key);
+                if (hit) {
+                    const issuedAt = Number(await hit.text()) || 0;
+                    await cache.delete(key);
+                    trusted = Date.now() - issuedAt < 60000;
+                }
+            } catch (e) {
+                trusted = false;
+            }
+        }
+        const action = trusted && call?.action === 'accept' ? 'accept' : 'open';
+        return this.handleCallNotificationAction({ ...target, action });
+    }
+
     // Клик по уведомлению (web/service-worker.js, notificationclick): открытой вкладке
     // приходит postMessage, новая открывается с ?open=… в адресе.
     installWebPushClickRouting() {
@@ -87,20 +109,43 @@ ZaliMixin(ZaliInterface, class {
                 const data = event?.data;
                 if (data && data.type === 'zali:open-conversation') {
                     void this.openConversationFromNotification(data);
+                } else if (data && data.type === 'zali:call-action') {
+                    void this.handleCallNotificationAction(data);
                 }
             });
         } catch (e) {}
+        this.shareApiBaseWithServiceWorker();
         try {
             const params = new URLSearchParams(window.location.search);
-            const raw = params.get('open');
-            if (!raw) return;
+            const rawOpen = params.get('open');
+            const rawCall = params.get('call');
+            if (!rawOpen && !rawCall) return;
             params.delete('open');
+            params.delete('call');
             const query = params.toString();
             window.history?.replaceState?.(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`);
-            void this.openConversationFromNotification(JSON.parse(raw));
+            // «Принять» из уведомления, когда вкладки не было (web/service-worker.js).
+            // Адрес может прислать кто угодно, поэтому «принять»/«отклонить» из него —
+            // только с одноразовым nonce, выданным нашим service worker; иначе просто
+            // открываем чат звонящего (аудит 2026-11-18).
+            if (rawCall) void this.consumeCallActionFromUrl(JSON.parse(rawCall));
+            else void this.openConversationFromNotification(JSON.parse(rawOpen));
         } catch (e) {
             this.trace(`installWebPushClickRouting: bad open target: ${e?.message || e}`);
         }
+    }
+
+    // «Отклонить» в уведомлении о звонке при закрытой вкладке service worker отправляет
+    // сам (POST /api/voice/call/decline), а адрес API знает только страница: он в её
+    // настройках сети. Сообщаем его при каждом запуске — SW хранит у себя.
+    shareApiBaseWithServiceWorker() {
+        try {
+            const apiBaseUrl = String(this.getApiBaseUrl?.() || '').trim();
+            if (!apiBaseUrl || !navigator.serviceWorker?.ready) return;
+            navigator.serviceWorker.ready
+                .then(registration => registration.active?.postMessage({ type: 'zali:sw-config', apiBaseUrl }))
+                .catch(() => {});
+        } catch (e) {}
     }
 
     async openConversationFromNotification(target = {}) {

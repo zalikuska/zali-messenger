@@ -46,6 +46,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: NO
+        # ZaliMessenger/Assets.xcassets — brand/logo/gen_logo.py --export
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Copy the three web files into a `Web/` folder inside the bundle so the
     # subdirectory lookup in WebViewStore.loadBundledUI() resolves.
     postBuildScripts:

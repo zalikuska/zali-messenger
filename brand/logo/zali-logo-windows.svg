@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Точные значения из style.css (.app в «Фокусе со свечением»):
+         radial-gradient(circle at 12% 6%, accent .13, transparent 26%),
+         radial-gradient(circle at 90% 96%, accent .09, transparent 28%).
+         Размер круга по умолчанию — до дальнего угла, отсюда радиусы. -->
+    <radialGradient id="lightTL" gradientUnits="userSpaceOnUse" cx="122.9" cy="61.4" r="342.8">
+      <stop offset="0" stop-color="rgb(203, 255, 0)" stop-opacity=".13"/>
+      <stop offset="1" stop-color="rgb(203, 255, 0)" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lightBR" gradientUnits="userSpaceOnUse" cx="921.6" cy="983.0" r="377.3">
+      <stop offset="0" stop-color="rgb(203, 255, 0)" stop-opacity=".09"/>
+      <stop offset="1" stop-color="rgb(203, 255, 0)" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- .out .bubble: linear-gradient(180deg, accent .98, accent .90) -->
+    <linearGradient id="outBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c9fd00"/>
+      <stop offset="1" stop-color="#b6e402"/>
+    </linearGradient>
+    <!-- .bubble: linear-gradient(180deg, ink .08, ink .04) — светлее, чтобы читалось на иконке,
+         соотношение верх/низ то же -->
+    <linearGradient id="inBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3e3f42"/>
+      <stop offset="1" stop-color="#323336"/>
+    </linearGradient>
+
+    <!-- .bubble: border 1px var(border) — кромка входящего, светлее сверху: отделяет
+         серый от тёмного холста, не меняя заливку -->
+    <linearGradient id="inEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".30"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".07"/>
+    </linearGradient>
+    <!-- Та же кромка на лайме: белый поверх яркого лайма заметен слабее, поэтому плотнее -->
+    <linearGradient id="outEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".62"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".14"/>
+    </linearGradient>
+
+    <filter id="shadow" x="-30%" y="-100%" width="160%" height="320%">
+      <feGaussianBlur stdDeviation="38.9"/>
+    </filter>
+
+    <filter id="halo0" x="-60%" y="-250%" width="220%" height="600%">
+      <feGaussianBlur stdDeviation="19.4"/>
+    </filter>
+<clipPath id="c0"><path d="M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z"/></clipPath><clipPath id="c1"><path d="M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z"/></clipPath><clipPath id="c2"><path d="M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z"/></clipPath><clipPath id="c3"><path d="M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z"/></clipPath><clipPath id="c4"><path d="M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z"/></clipPath><clipPath id="tile"><path d="M214.4,32.0 H809.6 A182.4,182.4 0 0 1 992.0,214.4 V809.6 A182.4,182.4 0 0 1 809.6,992.0 H214.4 A182.4,182.4 0 0 1 32.0,809.6 V214.4 A182.4,182.4 0 0 1 214.4,32.0 Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+  <g transform="translate(32 32) scale(0.9375)">
+  <rect x="0.0" y="0.0" width="1024.0" height="1024.0" fill="#090b0e"/>
+  <rect x="0.0" y="0.0" width="1024.0" height="1024.0" fill="url(#lightTL)"/>
+  <rect x="0.0" y="0.0" width="1024.0" height="1024.0" fill="url(#lightBR)"/>
+  <g transform="translate(502.0 512.0) scale(0.8) translate(-512.0 -504.0)">
+  <path d="M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z" fill="#000" opacity="0.7" transform="translate(0 32.4)" filter="url(#shadow)"/>
+  <path d="M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z" fill="#000" opacity="0.42" transform="translate(0 32.4)" filter="url(#shadow)"/>
+  <path d="M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z" fill="#000" opacity="0.42" transform="translate(0 32.4)" filter="url(#shadow)"/>
+  <path d="M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z" fill="#000" opacity="0.42" transform="translate(0 32.4)" filter="url(#shadow)"/>
+  <path d="M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z" fill="#000" opacity="0.7" transform="translate(0 32.4)" filter="url(#shadow)"/>
+  <path d="M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z" fill="rgb(203, 255, 0)" opacity="0.3" filter="url(#halo0)"/>
+  <path d="M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z" fill="rgb(203, 255, 0)" opacity="0.3" filter="url(#halo0)"/>
+  <path d="M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z" fill="rgb(203, 255, 0)" opacity="0.3" filter="url(#halo0)"/>
+  <path d="M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z" fill="url(#inBody)"/>
+    <g clip-path="url(#c0)"><path d="M-50,-50 H1074 V1074 H-50 Z M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z" fill-rule="evenodd" fill="#fff" opacity="0.16" transform="translate(0 3.2)"/></g>
+    <g clip-path="url(#c0)"><path d="M-50,-50 H1074 V1074 H-50 Z M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z" fill-rule="evenodd" fill="#000" opacity="0.22" transform="translate(0 -3.2)"/></g>
+    <g clip-path="url(#c0)"><path d="M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z" fill="none" stroke="url(#inEdge)" stroke-width="6.5"/></g>
+  <path d="M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z" fill="url(#outBody)"/>
+    <g clip-path="url(#c1)"><path d="M-50,-50 H1074 V1074 H-50 Z M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z" fill-rule="evenodd" fill="#fff" opacity="0.24" transform="translate(0 3.2)"/></g>
+    <g clip-path="url(#c1)"><path d="M-50,-50 H1074 V1074 H-50 Z M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z" fill-rule="evenodd" fill="rgb(85,104,0)" opacity="0.22" transform="translate(0 -3.2)"/></g>
+    <g clip-path="url(#c1)"><path d="M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z" fill="none" stroke="url(#outEdge)" stroke-width="6.5"/></g>
+  <path d="M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z" fill="url(#outBody)"/>
+    <g clip-path="url(#c2)"><path d="M-50,-50 H1074 V1074 H-50 Z M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z" fill-rule="evenodd" fill="#fff" opacity="0.24" transform="translate(0 3.2)"/></g>
+    <g clip-path="url(#c2)"><path d="M-50,-50 H1074 V1074 H-50 Z M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z" fill-rule="evenodd" fill="rgb(85,104,0)" opacity="0.22" transform="translate(0 -3.2)"/></g>
+    <g clip-path="url(#c2)"><path d="M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z" fill="none" stroke="url(#outEdge)" stroke-width="6.5"/></g>
+  <path d="M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z" fill="url(#outBody)"/>
+    <g clip-path="url(#c3)"><path d="M-50,-50 H1074 V1074 H-50 Z M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z" fill-rule="evenodd" fill="#fff" opacity="0.24" transform="translate(0 3.2)"/></g>
+    <g clip-path="url(#c3)"><path d="M-50,-50 H1074 V1074 H-50 Z M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z" fill-rule="evenodd" fill="rgb(85,104,0)" opacity="0.22" transform="translate(0 -3.2)"/></g>
+    <g clip-path="url(#c3)"><path d="M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z" fill="none" stroke="url(#outEdge)" stroke-width="6.5"/></g>
+  <path d="M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z" fill="url(#inBody)"/>
+    <g clip-path="url(#c4)"><path d="M-50,-50 H1074 V1074 H-50 Z M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z" fill-rule="evenodd" fill="#fff" opacity="0.16" transform="translate(0 3.2)"/></g>
+    <g clip-path="url(#c4)"><path d="M-50,-50 H1074 V1074 H-50 Z M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z" fill-rule="evenodd" fill="#000" opacity="0.22" transform="translate(0 -3.2)"/></g>
+    <g clip-path="url(#c4)"><path d="M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z" fill="none" stroke="url(#inEdge)" stroke-width="6.5"/></g>
+  </g>
+  </g>
+  <path d="M214.4,32.0 H809.6 A182.4,182.4 0 0 1 992.0,214.4 V809.6 A182.4,182.4 0 0 1 809.6,992.0 H214.4 A182.4,182.4 0 0 1 32.0,809.6 V214.4 A182.4,182.4 0 0 1 214.4,32.0 Z" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width="4"/>
+  </g>
+</svg>

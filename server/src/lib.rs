@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 mod voice;
 use voice::{
-    get_turn_credentials, get_server_voice_presence, get_voice_channel_presence, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
+    decline_call_with_token, get_turn_credentials, revalidate_server_voice, get_server_voice_presence, get_voice_channel_presence, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
     VoiceLeave, VoiceRoom,
 };
 
@@ -91,6 +91,8 @@ mod hash_chain;
 pub(crate) use hash_chain::*;
 mod profiles;
 pub(crate) use profiles::*;
+// Жалобы на сообщения, классификатор Jev (OpenRouter), лестница наказаний.
+mod moderation;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -161,9 +163,28 @@ pub struct Config {
     turn_static_auth_secret: Option<String>,
     turn_urls: Vec<String>,
     turn_credential_ttl_secs: u64,
+    // Классификатор жалоб (moderation.rs). Ключ не задан (по умолчанию) —
+    // жалобы принимаются и копятся в очереди, классификатор не зовётся.
+    openrouter_api_key: Option<String>,
+    openrouter_base_url: String,
+    moderation_model: String,
+    // Ниже лимитов бесплатного тира OpenRouter (20/мин, 50/сутки без покупки
+    // $10) с запасом: тот же ключ может понадобиться оператору руками.
+    moderation_max_per_minute: u32,
+    moderation_max_per_day: u32,
 }
 
 impl Config {
+    /// Для интеграционных тестов модерации: классификатор — локальная заглушка
+    /// Decisions API вместо OpenRouter, лимиты — как задаст тест.
+    pub fn with_moderation(mut self, base_url: &str, api_key: &str, per_minute: u32, per_day: u32) -> Self {
+        self.openrouter_base_url = base_url.to_string();
+        self.openrouter_api_key = Some(api_key.to_string());
+        self.moderation_max_per_minute = per_minute;
+        self.moderation_max_per_day = per_day;
+        self
+    }
+
     /// The key the conversation hash-chain `.zali` exports are encrypted with.
     /// Exposed so integration tests can open a real export without re-deriving
     /// (and drifting from) the derivation rule, and so an operator tool can be
@@ -348,6 +369,33 @@ impl Config {
             .filter(|v| *v >= 300)
             .unwrap_or(43200);
 
+        let openrouter_api_key = std::env::var("OPENROUTER_API_KEY")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let openrouter_base_url = std::env::var("OPENROUTER_BASE_URL")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "https://openrouter.ai/api".to_string());
+        // Версия закреплена: пороги в moderation.rs подобраны под вероятности
+        // конкретной модели, алиас `~typesafe/jev-latest` сдвинул бы их молча.
+        let moderation_model = std::env::var("MODERATION_MODEL")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "typesafe/jev-1.14".to_string());
+        let moderation_max_per_minute = std::env::var("MODERATION_MAX_PER_MINUTE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(10);
+        let moderation_max_per_day = std::env::var("MODERATION_MAX_PER_DAY")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(40);
+
         Self {
             jwt_secret: jwt_secret.into_bytes(),
             allowed_origins,
@@ -367,6 +415,11 @@ impl Config {
             turn_static_auth_secret: turn_static_auth_secret.filter(|_| !turn_urls.is_empty()),
             turn_urls,
             turn_credential_ttl_secs,
+            openrouter_api_key,
+            openrouter_base_url,
+            moderation_model,
+            moderation_max_per_minute,
+            moderation_max_per_day,
         }
     }
 }
@@ -428,7 +481,7 @@ async fn security_headers(req: axum::http::Request<axum::body::Body>, next: Next
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         ),
     );
     response
@@ -565,6 +618,9 @@ pub struct AppState {
     // Throttles the full-map sweep in login() to once per rate-limit window instead
     // of on every request — see the comment at its call site for why.
     login_attempts_last_swept: std::sync::Mutex<Instant>,
+    // Действующие ограничения аккаунтов, лимиты OpenRouter и будильник очереди
+    // жалоб (moderation.rs).
+    moderation: moderation::ModerationRuntime,
     config: Config,
 }
 
@@ -2125,7 +2181,8 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     init_server_metrics();
     let addon_signer = addons::AddonSigner::load_or_create(&data_dir);
     let device_activity = device_activity::load_device_activity(&pool).await;
-    Arc::new(AppState {
+    let moderation = moderation::ModerationRuntime::load(&pool).await;
+    let state = Arc::new(AppState {
         db: pool,
         data_dir,
         uploads_dir,
@@ -2144,8 +2201,12 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         suggest_relations: DashMap::new(),
         presence_audience: DashMap::new(),
         login_attempts_last_swept: std::sync::Mutex::new(Instant::now()),
+        moderation,
         config,
-    })
+    });
+    // Очередь жалоб: без OPENROUTER_API_KEY задача не стартует, жалобы ждут.
+    moderation::spawn_worker(Arc::clone(&state));
+    state
 }
 
 /// Builds the full route table wired to `state`, minus binding/serving —
@@ -2327,6 +2388,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/ws", get(ws_handler))
         .route("/api/voice/turn-credentials", get(get_turn_credentials))
+        // Без сессии: секрет звонка из пуша (voice.rs, decline_call_with_token).
+        .route("/api/voice/call/decline", post(decline_call_with_token))
         .route("/api/push/vapid-public-key", get(get_vapid_public_key))
         .route("/api/push/subscribe", post(subscribe_push))
         .route("/api/push/unsubscribe", post(unsubscribe_push))
@@ -2344,6 +2407,28 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/diagnostics/reports", get(list_reports))
         .route("/api/diagnostics/reports/:id", get(get_report))
         .route("/api/diagnostics/metrics", get(get_metrics))
+        // Жалобы на сообщения и состояние аккаунта (moderation.rs); оператор —
+        // за RELEASE_ADMIN_TOKEN, как диагностика.
+        .route("/api/moderation/reports", post(moderation::submit_report))
+        .route("/api/moderation/standing", get(moderation::get_standing))
+        .route("/api/moderation/violations/:id", get(moderation::get_violation))
+        .route(
+            "/api/moderation/violations/:id/appeal",
+            post(moderation::appeal_violation),
+        )
+        .route("/api/admin/moderation/queue", get(moderation::admin_queue))
+        .route(
+            "/api/admin/moderation/reports/:id/decide",
+            post(moderation::admin_decide_report),
+        )
+        .route(
+            "/api/admin/moderation/violations/:id/revoke",
+            post(moderation::admin_revoke_violation),
+        )
+        .route(
+            "/api/admin/moderation/violations/:id/confirm",
+            post(moderation::admin_confirm_violation),
+        )
         // ---- Профили ----
         // Порядок важен: axum матчит по дереву, и статические сегменты
         // (`/api/profile/comments/:id`) должны стоять ДО параметрических
@@ -2500,6 +2585,58 @@ async fn shutdown_signal() {
     info!("Получен сигнал завершения, сервер останавливается gracefully");
 }
 
+/// Слушающий сокет, переданный systemd (socket activation, протокол `sd_listen_fds`).
+///
+/// Порт держит `zali-server.socket`, а не процесс: пока сервис перезапускается,
+/// ядро копит входящие соединения в очереди сокета, и клиенты видят задержку
+/// на время старта вместо отказа (nginx — вместо 502). Без переменных systemd
+/// (локальный запуск, Docker, тесты) возвращает `None`, и сервер сам делает
+/// `bind` на `BIND_ADDR`, как раньше.
+#[cfg(unix)]
+fn systemd_listener() -> Option<tokio::net::TcpListener> {
+    use std::os::unix::io::FromRawFd;
+
+    // Первый переданный дескриптор по протоколу всегда 3 (SD_LISTEN_FDS_START).
+    const SD_LISTEN_FDS_START: i32 = 3;
+
+    // LISTEN_PID защищает от дескрипторов, унаследованных не тем процессом
+    // (например, дочерним, которому systemd ничего не передавал). Переменные
+    // не удаляем: рантайм уже многопоточный, а setenv/unsetenv там — гонка;
+    // дочерний процесс всё равно отсеется по LISTEN_PID.
+    let pid: u32 = std::env::var("LISTEN_PID").ok()?.parse().ok()?;
+    if pid != std::process::id() {
+        return None;
+    }
+    let fds: i32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    if fds < 1 {
+        return None;
+    }
+    if fds > 1 {
+        tracing::warn!(
+            "systemd передал {} сокетов, используется только первый (fd {})",
+            fds,
+            SD_LISTEN_FDS_START
+        );
+    }
+
+    // SAFETY: по протоколу sd_listen_fds systemd передаёт процессу с LISTEN_PID
+    // открытые дескрипторы начиная с 3; владение ими переходит к нам, больше
+    // никто в процессе этот дескриптор не использует.
+    let std_listener = unsafe { std::net::TcpListener::from_raw_fd(SD_LISTEN_FDS_START) };
+    if let Err(err) = std_listener.set_nonblocking(true) {
+        panic!("сокет от systemd не переводится в неблокирующий режим: {err}");
+    }
+    match tokio::net::TcpListener::from_std(std_listener) {
+        Ok(listener) => Some(listener),
+        Err(err) => panic!("сокет от systemd не принимается tokio (ожидался TCP ListenStream): {err}"),
+    }
+}
+
+#[cfg(not(unix))]
+fn systemd_listener() -> Option<tokio::net::TcpListener> {
+    None
+}
+
 /// Production entry point: initializes tracing, builds state rooted at the
 /// canonical data dir, binds `BIND_ADDR`, and serves until shutdown.
 pub async fn run() {
@@ -2556,17 +2693,34 @@ pub async fn run() {
 
     let app = build_router(Arc::clone(&state));
 
-    let addr: SocketAddr = std::env::var("BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
-        .parse()
-        .expect("Неверный BIND_ADDR");
-    info!("🚀 Zali Server запущен на http://{}", addr);
-
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match systemd_listener() {
+        Some(listener) => {
+            match listener.local_addr() {
+                Ok(addr) => info!("🚀 Zali Server запущен на сокете от systemd: http://{}", addr),
+                Err(_) => info!("🚀 Zali Server запущен на сокете от systemd"),
+            }
+            listener
+        }
+        None => {
+            let addr: SocketAddr = std::env::var("BIND_ADDR")
+                .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
+                .parse()
+                .expect("Неверный BIND_ADDR");
+            info!("🚀 Zali Server запущен на http://{}", addr);
+            tokio::net::TcpListener::bind(addr).await.unwrap()
+        }
+    };
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    // Без TCP_NODELAY ядро придерживает мелкие записи (алгоритм Нейгла) до ACK
+    // предыдущих — а почти весь трафик сервера мелкий: WS-кадры сигналинга звонка,
+    // pong, уведомления, короткие JSON-ответы. В паре с delayed ACK на стороне
+    // клиента это до 40 мс (Linux) и до 200 мс (Windows) на кадр, идущий следом за
+    // неподтверждённым. За nginx это петля, но в Docker и при прямом подключении
+    // сокет смотрит прямо в интернет.
+    .tcp_nodelay(true)
     .with_graceful_shutdown(shutdown_signal())
     .await
     .unwrap();

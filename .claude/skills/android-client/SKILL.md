@@ -111,6 +111,16 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   - `send_push` на сервере шлёт по обоим каналам (Web Push + FCM) сразу; то же
     решение «показывать ли пуш» по устройству, что и в вебе — скилл `notifications`.
 
+- **Входящий звонок в фоне — уведомление-звонок, не полноэкранный экран** (решение
+  пользователя, 2026-11-18; `IncomingCall.kt`). Зелёную «Принять» и красную
+  «Отклонить» рисует `NotificationCompat.CallStyle`, а Android 12+ бросает исключение
+  на CallStyle без сервиса переднего плана или fullScreenIntent — поэтому
+  `IncomingCallService` типа `shortService` (без особых разрешений; старт из фона
+  разрешён пушем с высоким приоритетом). Не вышел сервис — обычное уведомление с
+  окрашенным текстом кнопок. Звук — канал `zali-call-v1` (рингтон) + `FLAG_INSISTENT`.
+  Снимается: `call_end`, кнопки, `onStart` активити (там звонит сам веб), 60 с.
+  Вебвью в фоне рингтон не играет (`renderVoicePanel`, `__zaliNativeAppFocus`).
+  «Отклонить» — `CallActionReceiver` с секретом звонка, без вебвью.
 - **Автообновление — `AppUpdater.kt`** (возможность `appUpdate`, общий веб
   `updates.js`). Платформу и версию вебу отдаёт `documentStartScript`
   (`__ZALI_NATIVE_PLATFORM = "android"`, `__ZALI_NATIVE_APP_VERSION`). Версия —

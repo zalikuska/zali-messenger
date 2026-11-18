@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import Network
 
 class NetworkService: NSObject, URLSessionWebSocketDelegate {
     static let shared = NetworkService()
@@ -6,6 +8,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private let connectionQueue = DispatchQueue(label: "zali.network.websocket")
     /// Таймер прогрева HTTP-пула — см. scheduleApiWarmup.
     private var warmupWorkItem: DispatchWorkItem?
+    /// Смена сети и пробуждение — см. startNetworkWatch.
+    private var pathMonitor: NWPathMonitor?
+    private var lastPathSignature: String?
+    private var wakeObserver: NSObjectProtocol?
+    private var lastKickAt: Date?
     private let configQueue = DispatchQueue(label: "zali.network.config")
     /// Кодирование и запись кэша сообщений — отдельная очередь, не connectionQueue:
     /// архив с вложениями весит десятки мегабайт, и пока он кодировался и писался,
@@ -182,6 +189,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             allConversationKeys = decoded
         }
         trace("init user=\(currentUsername) hasToken=\(authToken != nil) keySet=\(!currentKey.isEmpty) pendingBytes=\(pendingOutboxJSON.count)")
+        startNetworkWatch()
     }
 
     /// Drops every persisted per-account artifact of the pre-reset server: session,
@@ -539,6 +547,12 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         let previousHost = URL(string: serverURL)?.host?.lowercased()
         let nextHost = normalizedAPI.flatMap { URL(string: $0)?.host?.lowercased() }
             ?? URL(string: "https://msgs.zalikus.org")?.host
+        // WS — только на хосте API: отдельный `wsBaseUrl` уносил токен в хендшейке на
+        // любой хост мимо сброса ниже (аудит 2026-11-18). Тот же запрет в native.rs.
+        if let ws = normalizedWS, URL(string: ws)?.host?.lowercased() != nextHost {
+            trace("configure rejected ws=\(ws): host differs from api host")
+            normalizedWS = nil
+        }
         if previousHost != nextHost, authToken != nil {
             trace("configure host changed \(previousHost ?? "nil") -> \(nextHost ?? "nil"); dropping session token")
             authToken = nil
@@ -662,8 +676,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
 
         guard let url = URL(string: wsBaseURL) else { return }
         trace("ws connect generation=\(generation) url=\(wsBaseURL) token=\(authToken != nil)")
-        // Cancel the previous task, but keep the old session object alive until the system releases it.
+        // Cancel the previous task and let its session finish and release. A session
+        // retains its delegate (self) and its connection pool until invalidated, so
+        // every reconnect used to leak one — dozens over a day of sleep/wake cycles.
         webSocketTask?.cancel(with: .goingAway, reason: nil)
+        wsSession?.finishTasksAndInvalidate()
         let config = URLSessionConfiguration.default
         let newSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         wsSession = newSession
@@ -770,6 +787,139 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         // через apiSession, и у каждой свой пул соединений.
         for session in [httpSession, apiSession] {
             session.dataTask(with: request) { _, _, _ in }.resume()
+        }
+    }
+
+    // MARK: - Смена сети и пробуждение
+    //
+    // Без этого после сна или смены Wi-Fi сокеты висели на мёртвом пути, пока их не
+    // находил heartbeat: до 25 с до пинга плюс 20 с дедлайна, а если реконнект уже
+    // крутил бэкофф — ещё до 30 с ожидания. Всё это время значок «Подключено» и ни
+    // одного входящего. Теперь по событию: живой сокет получает пинг с коротким
+    // дедлайном (без ответа — переподключение сразу, без бэкоффа), ждущий бэкоффа —
+    // подключается немедленно, а HTTP-пулы сбрасываются: соединения старой сети
+    // мертвы, и первый запрос иначе сжигал бы на них свою первую попытку.
+
+    private static let kickProbeTimeout: TimeInterval = 5
+
+    private func startNetworkWatch() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            // Already on connectionQueue (monitor.start below).
+            guard let self else { return }
+            let signature = Self.pathSignature(path)
+            let previous = self.lastPathSignature
+            self.lastPathSignature = signature
+            // The first callback only reports the current state.
+            guard let previous, previous != signature else { return }
+            self.trace("network path changed \(previous) -> \(signature)")
+            guard path.status == .satisfied else { return }
+            self.kickConnections(reason: "network change")
+        }
+        monitor.start(queue: connectionQueue)
+        pathMonitor = monitor
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.connectionQueue.async {
+                self?.kickConnections(reason: "wake")
+            }
+        }
+    }
+
+    /// Status + interfaces + gateways: a switch to another Wi-Fi keeps the interface
+    /// name (en0) but changes the gateway.
+    private static func pathSignature(_ path: NWPath) -> String {
+        let interfaces = path.availableInterfaces.map(\.name).joined(separator: ",")
+        let gateways = path.gateways.map { "\($0)" }.sorted().joined(separator: ",")
+        return "\(path.status)|\(interfaces)|\(gateways)"
+    }
+
+    /// Must run on connectionQueue.
+    private func kickConnections(reason: String) {
+        guard authToken != nil else { return }
+        // Wake and the path change it causes arrive together; one kick is enough.
+        if let lastKickAt, Date().timeIntervalSince(lastKickAt) < 2 { return }
+        lastKickAt = Date()
+        trace("kick connections reason=\(reason)")
+        // flush: «ensures that future requests occur on a new TCP connection».
+        let warm = DispatchGroup()
+        for session in [httpSession, apiSession] {
+            warm.enter()
+            session.flush { warm.leave() }
+        }
+        warm.notify(queue: connectionQueue) { [weak self] in
+            // Re-open TCP+TLS right away so the user's next send doesn't pay for it.
+            self?.warmApiConnections()
+        }
+        kickMessageSocket(reason: reason)
+        kickVoiceSocket(reason: reason)
+    }
+
+    private func kickMessageSocket(reason: String) {
+        if reconnectWorkItem != nil {
+            trace("ws kick reason=\(reason): skipping backoff")
+            reconnectAttempt = 0
+            connectWebSocketLocked()
+            return
+        }
+        guard let task = webSocketTask else { return }
+        let generation = connectionGeneration
+        probeSocket(task, label: "ws", isCurrent: { [weak self] in
+            self?.connectionGeneration == generation
+        }) { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async { self.onWebSocketDisconnected?() }
+            self.reconnectAttempt = 0
+            self.connectWebSocketLocked()
+        }
+    }
+
+    private func kickVoiceSocket(reason: String) {
+        if voiceReconnectWorkItem != nil {
+            trace("voice ws kick reason=\(reason): skipping backoff")
+            voiceReconnectAttempt = 0
+            connectVoiceWebSocketLocked()
+            return
+        }
+        guard let task = voiceWebSocketTask else { return }
+        let generation = voiceConnectionGeneration
+        probeSocket(task, label: "voice ws", isCurrent: { [weak self] in
+            self?.voiceConnectionGeneration == generation
+        }) { [weak self] in
+            guard let self else { return }
+            self.emitVoiceTransportState("down", reason: "kick probe failed")
+            self.voiceReconnectAttempt = 0
+            self.connectVoiceWebSocketLocked()
+        }
+    }
+
+    /// Ping with a short deadline; `onDead` runs on connectionQueue only if the link
+    /// is still the current one and did not answer in time.
+    private func probeSocket(_ task: URLSessionWebSocketTask, label: String, isCurrent: @escaping () -> Bool, onDead: @escaping () -> Void) {
+        var settled = false
+        let timeout = DispatchWorkItem { [weak self] in
+            guard !settled, isCurrent() else { return }
+            settled = true
+            self?.trace("\(label) kick probe timed out; reconnecting now")
+            onDead()
+        }
+        connectionQueue.asyncAfter(deadline: .now() + Self.kickProbeTimeout, execute: timeout)
+        task.sendPing { [weak self] error in
+            self?.connectionQueue.async {
+                guard !settled, isCurrent() else { return }
+                settled = true
+                timeout.cancel()
+                if let error {
+                    self?.trace("\(label) kick probe failed err=\(error); reconnecting now")
+                    onDead()
+                } else {
+                    self?.trace("\(label) kick probe ok")
+                }
+            }
         }
     }
 
@@ -908,6 +1058,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         guard let url = URL(string: wsBaseURL) else { return }
         trace("voice ws connect generation=\(generation) url=\(wsBaseURL) token=\(authToken != nil)")
         voiceWebSocketTask?.cancel(with: .goingAway, reason: nil)
+        voiceSession?.finishTasksAndInvalidate()
         let config = URLSessionConfiguration.default
         let newSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         voiceSession = newSession
@@ -1931,7 +2082,12 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                     if let data = string.data(using: .utf8) { try handle.write(contentsOf: data) }
                 }
                 try write("--\(boundary)\r\n")
-                try write(#"Content-Disposition: form-data; name="file"; filename="\#(filename ?? "avatar.png")"\#r\#n"#)
+                // Имя из страницы: без кавычек и переводов строки, иначе они дописывали
+                // свои заголовки в часть multipart.
+                let safeFilename = (filename ?? "avatar.png").unicodeScalars
+                    .filter { $0 != "\"" && $0 != "\r" && $0 != "\n" && $0 != "\\" }
+                    .map(String.init).joined()
+                try write(#"Content-Disposition: form-data; name="file"; filename="\#(safeFilename.isEmpty ? "avatar.png" : safeFilename)"\#r\#n"#)
                 try write(#"Content-Type: \#(mimeType ?? "image/png")\#r\#n\#r\#n"#)
                 try handle.write(contentsOf: data)
                 try write("\r\n--\(boundary)--\r\n")
@@ -2067,6 +2223,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             session = URLSession(configuration: config)
         }
 
+        defer {
+            // The fresh-connection retry session is one-shot: release it once its
+            // task completes instead of leaking it (and its connection) forever.
+            if attempt > 1 { session.finishTasksAndInvalidate() }
+        }
         session.dataTask(with: attemptRequest) { data, response, error in
             if let error {
                 if attempt < maxAttempts {
@@ -2212,6 +2373,10 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             session = URLSession(configuration: config)
         }
 
+        defer {
+            // One-shot fresh-connection session — see attemptAvatarFetch.
+            if attempt > 1 { session.finishTasksAndInvalidate() }
+        }
         session.dataTask(with: attemptRequest) { [weak self] data, response, error in
             guard let self else { return }
             if let error {
@@ -2443,7 +2608,19 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     /// а на остывшем пуле ещё и TLS-рукопожатие поверх него (замер 2026-09-16: 155 мс
     /// по живому соединению против 390 мс по холодному). Файл кладём туда же, куда его
     /// положил бы загрузчик, и удаляет его тот же самый вызывающий код.
+    /// id сообщения приходит от сервера (в т. ч. «своего»), а идёт в путь временного
+    /// файла и в URL: только буквы, цифры, `-` и `_` (аудит 2026-11-18).
+    static func isSafeMessageId(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 128
+            && value.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" || $0 == "_" }
+    }
+
     func downloadMessageWithRetry(messageId: String, inlineArchive: String? = nil, attempt: Int = 1, completion: @escaping (URL?, Int?) -> Void) {
+        guard Self.isSafeMessageId(messageId) else {
+            trace("downloadMessage rejected unsafe id")
+            completion(nil, 400)
+            return
+        }
         if attempt == 1, let inlineURL = writeInlineArchive(messageId: messageId, inlineArchive: inlineArchive) {
             completion(inlineURL, nil)
             return

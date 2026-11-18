@@ -648,17 +648,7 @@ fn sanitize_links(input: Vec<ProfileLinkInput>) -> Vec<ProfileLink> {
 /// Только `#rgb`/`#rrggbb`. Значение уходит в inline-стиль на клиенте, где
 /// произвольная строка означала бы инъекцию CSS.
 fn sanitize_color(value: &str) -> String {
-    let value = value.trim();
-    if value.is_empty() {
-        return String::new();
-    }
-    let body = value.strip_prefix('#').unwrap_or("");
-    let ok = (body.len() == 3 || body.len() == 6) && body.chars().all(|c| c.is_ascii_hexdigit());
-    if ok {
-        format!("#{}", body.to_lowercase())
-    } else {
-        String::new()
-    }
+    crate::util::hex_color(value).unwrap_or_default()
 }
 
 pub(crate) async fn update_profile(
@@ -666,6 +656,11 @@ pub(crate) async fn update_profile(
     AuthenticatedUser(owner): AuthenticatedUser,
     Json(payload): Json<ProfileUpdatePayload>,
 ) -> impl IntoResponse {
+    // Без лимита запись шла сколько угодно часто: спам хранилищем и уведомлениями
+    // (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("profile-update:{}", owner.to_lowercase()), 30) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком часто. Повторите через минуту.").into_response();
+    }
     let current = match load_profile(&state.db, &owner).await {
         Ok(profile) => profile,
         Err(e) => {
@@ -787,6 +782,11 @@ pub(crate) async fn follow_user(
     State(state): State<Arc<AppState>>,
     AuthenticatedUser(follower): AuthenticatedUser,
 ) -> impl IntoResponse {
+    // Без лимита запись шла сколько угодно часто: спам хранилищем и уведомлениями
+    // (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("follow:{}", follower.to_lowercase()), 60) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком часто. Повторите через минуту.").into_response();
+    }
     let target = trim_limited(&username, 64);
     if target == follower {
         return (StatusCode::BAD_REQUEST, "Нельзя подписаться на себя").into_response();
@@ -959,6 +959,11 @@ pub(crate) async fn create_friend_request(
     AuthenticatedUser(requester): AuthenticatedUser,
     Json(payload): Json<FriendRequestPayload>,
 ) -> impl IntoResponse {
+    // Без лимита запись шла сколько угодно часто: спам хранилищем и уведомлениями
+    // (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("friend-request:{}", requester.to_lowercase()), 20) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком часто. Повторите через минуту.").into_response();
+    }
     let target = trim_limited(&payload.to, 64);
     let message = trim_limited(&payload.message, MAX_REQUEST_MESSAGE);
 
@@ -1219,6 +1224,11 @@ pub(crate) async fn create_profile_comment(
     AuthenticatedUser(author): AuthenticatedUser,
     Json(payload): Json<CommentPayload>,
 ) -> impl IntoResponse {
+    // Без лимита запись шла сколько угодно часто: спам хранилищем и уведомлениями
+    // (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("profile-comment:{}", author.to_lowercase()), 20) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком часто. Повторите через минуту.").into_response();
+    }
     let owner = trim_limited(&username, 64);
     let body = trim_limited(&payload.body, MAX_COMMENT);
     if body.is_empty() {
@@ -1484,6 +1494,11 @@ pub(crate) async fn create_autograph(
     AuthenticatedUser(author): AuthenticatedUser,
     Json(payload): Json<AutographPayload>,
 ) -> impl IntoResponse {
+    // Без лимита запись шла сколько угодно часто: спам хранилищем и уведомлениями
+    // (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("autograph:{}", author.to_lowercase()), 10) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком часто. Повторите через минуту.").into_response();
+    }
     let owner = trim_limited(&username, 64);
     match user_exists(&state.db, &owner).await {
         Ok(true) => {}

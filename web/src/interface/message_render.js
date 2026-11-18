@@ -682,6 +682,7 @@ ZaliMixin(ZaliInterface, class {
             + `<button class="reaction-menu-action" type="button" data-menu-reply>${this.uiIcon('reply')}<span>Ответить</span></button>`
             + `<button class="reaction-menu-action" type="button" data-menu-edit hidden>${this.uiIcon('pencil')}<span>Изменить</span></button>`
             + `<button class="reaction-menu-action is-danger" type="button" data-menu-delete hidden>${this.uiIcon('trash')}<span>Удалить</span></button>`
+            + `<button class="reaction-menu-action" type="button" data-menu-report hidden>${this.uiIcon('flag')}<span>Пожаловаться</span></button>`
             + `</div>`;
         document.body.appendChild(menu);
 
@@ -723,6 +724,13 @@ ZaliMixin(ZaliInterface, class {
                 if (messageId) this.startEditMessage(messageId);
                 return;
             }
+            const reportBtn = e.target.closest('[data-menu-report]');
+            if (reportBtn) {
+                const messageId = menu.getAttribute('data-message-id');
+                this.hideReactionMenu();
+                if (messageId) this.openReportDialog(messageId);
+                return;
+            }
             const deleteBtn = e.target.closest('[data-menu-delete]');
             if (deleteBtn) {
                 const messageId = menu.getAttribute('data-message-id');
@@ -746,6 +754,9 @@ ZaliMixin(ZaliInterface, class {
     }
 
     showReactionMenu(messageEl, messageId, x, y, { focus = false } = {}) {
+        // В режиме жалобы нажатие на сообщение двигает зону (moderation_report.js),
+        // а долгое нажатие на телефоне не должно поверх открывать меню.
+        if (this._report) return;
         const menu = this.ensureReactionMenu();
         if (!menu || !messageEl) return;
         this._reactionMenuOpener = focus ? document.activeElement : null;
@@ -764,6 +775,11 @@ ZaliMixin(ZaliInterface, class {
             // A call record is not something you can quote meaningfully, and a
             // message still in the outbox has no id for the quote to point at.
             replyBtn.hidden = !found?.msg || found.msg.kind === 'call';
+        }
+        const reportBtn = menu.querySelector('[data-menu-report]');
+        if (reportBtn) {
+            // Только чужое и уже записанное сервером: жалоба ссылается на id сообщения.
+            reportBtn.hidden = !this.canReportMessage?.(found?.msg);
         }
         menu.classList.add('visible');
         menu.setAttribute('aria-hidden', 'false');

@@ -91,6 +91,20 @@ def main():
             bundled_js += "\n\n"
     bundled_js = bundled_js.rstrip() + "\n"
 
+    # Правила сообщества — единственный источник docs/legal/RULES.md; экран
+    # регистрации показывает их и требует согласия (web/src/interface/rules.js).
+    # Встраиваются в бандл, а не грузятся по сети: регистрация должна работать и
+    # во всех нативных шеллах, где страница открыта из локального HTML.
+    rules_path = os.path.join(project_root, "docs", "legal", "RULES.md")
+    with open(rules_path, "r", encoding="utf-8") as f:
+        rules_md = f.read()
+    # ensure_ascii=True: в JS-строке не окажется U+2028/U+2029 и прочих сюрпризов.
+    bundled_js = (
+        "// --- GENERATED: docs/legal/RULES.md ---\n"
+        f"window.ZALI_RULES_MD = {json.dumps(rules_md, ensure_ascii=True)};\n\n"
+        + bundled_js
+    )
+
     # 3. Чтение CSS и HTML
     css_path = os.path.join(web_dir, "style.css")
     with open(css_path, "r", encoding="utf-8") as f:

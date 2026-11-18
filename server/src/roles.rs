@@ -66,7 +66,7 @@ pub(crate) async fn load_server_roles(
         .map(|row| ServerRoleResponse {
             role_id: row.role_id,
             name: row.name,
-            color: row.color,
+            color: crate::util::hex_color_or_default(&row.color),
             can_view: row.can_view != 0,
             can_send: row.can_send != 0,
             can_manage: row.can_manage != 0,
@@ -150,10 +150,7 @@ pub(crate) async fn create_server_role_record(
     let base_id = slug_role_id(name);
     let suffix = Uuid::new_v4().simple().to_string();
     let role_id = format!("{}-{}", base_id, &suffix[..6]);
-    let color = payload
-        .color
-        .clone()
-        .unwrap_or_else(|| "#cbff00".to_string());
+    let color = crate::util::hex_color_or_default(payload.color.as_deref().unwrap_or(""));
     let can_view = payload.can_view.unwrap_or(true) as i64;
     let can_send = payload.can_send.unwrap_or(true) as i64;
     let can_manage = payload.can_manage.unwrap_or(false) as i64;
@@ -243,7 +240,10 @@ pub(crate) async fn update_server_role_record(
     } else {
         payload.name.trim().to_string()
     };
-    let next_color = payload.color.clone().unwrap_or(current.color);
+    let next_color = match payload.color.as_deref() {
+        Some(value) => crate::util::hex_color_or_default(value),
+        None => crate::util::hex_color_or_default(&current.color),
+    };
     let next_view = payload.can_view.unwrap_or(current.can_view != 0) as i64;
     let next_send = payload.can_send.unwrap_or(current.can_send != 0) as i64;
     let next_manage = payload.can_manage.unwrap_or(current.can_manage != 0) as i64;
@@ -399,7 +399,10 @@ if !crate::is_server_owner(&state.db, &server_id, &auth_user).await.unwrap_or(fa
     }
 
     match create_server_role_record(&state.db, &server_id, &payload).await {
-        Ok(role) => Json(role).into_response(),
+        Ok(role) => {
+            crate::revalidate_server_voice(&state, &server_id).await;
+            Json(role).into_response()
+        }
         Err(e) => {
             error!("Ошибка создания роли сервера {}: {}", server_id, e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -427,7 +430,10 @@ if !crate::is_server_owner(&state.db, &server_id, &auth_user).await.unwrap_or(fa
     }
 
     match update_server_role_record(&state.db, &server_id, &role_id, &payload).await {
-        Ok(role) => Json(role).into_response(),
+        Ok(role) => {
+            crate::revalidate_server_voice(&state, &server_id).await;
+            Json(role).into_response()
+        }
         Err(e) => {
             error!(
                 "Ошибка обновления роли {} в сервере {}: {}",
@@ -457,7 +463,10 @@ if !crate::is_server_owner(&state.db, &server_id, &auth_user).await.unwrap_or(fa
     }
 
     match delete_server_role_record(&state.db, &server_id, &role_id).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            crate::revalidate_server_voice(&state, &server_id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             error!(
                 "Ошибка удаления роли {} в сервере {}: {}",

@@ -220,6 +220,8 @@ ZaliMixin(ZaliInterface, class {
     normalizeColorValue(value) {
         const raw = String(value || '').trim();
         if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase();
+        // Сервер отдаёт и короткую форму `#rgb` (util::hex_color).
+        if (/^#[0-9a-fA-F]{3}$/.test(raw)) return `#${raw.slice(1).split('').map(c => c + c).join('')}`.toLowerCase();
         return '#cbff00';
     }
 

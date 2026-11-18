@@ -719,7 +719,10 @@ enum SharedBrowserPolicy {
         // Числовые формы IPv4 без точек (2130706433, 0x7f000001) — не адрес сайта.
         if !host.contains("."), !host.contains(":"), host.allSatisfy({ $0.isHexDigit || $0 == "x" }) { return true }
         var v4 = in_addr()
-        if inet_pton(AF_INET, host, &v4) == 1 {
+        // inet_aton, а не inet_pton: WebKit, как и браузеры, читает и сокращённые и
+        // восьмеричные формы (`127.1`, `0177.0.0.1`, `0x7f.1` = 127.0.0.1), а inet_pton
+        // их не понимал или читал как публичный адрес (аудит 2026-11-18).
+        if inet_aton(host, &v4) == 1 {
             let b = withUnsafeBytes(of: v4.s_addr) { Array($0) }
             switch (b[0], b[1]) {
             case (0, _), (10, _), (127, _): return true

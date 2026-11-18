@@ -230,12 +230,19 @@ class ZaliStyler {
         return 'zali_appearance_v1';
     }
 
+    // Светлота по умолчанию — как в системе: кто ни разу не выбирал, получает тему
+    // своей ОС (и следует за её сменой). Выбор пользователя лежит в zali_appearance_v1.
+    // Тот же дефолт — в загрузочном скрипте index.html, до первой отрисовки.
+    defaultAppearance() {
+        return 'system';
+    }
+
     loadStoredAppearance() {
         try {
             const raw = String(localStorage.getItem(this.appearanceStorageKey()) || '').trim();
-            return ['dark', 'light', 'system'].includes(raw) ? raw : 'dark';
+            return ['dark', 'light', 'system'].includes(raw) ? raw : this.defaultAppearance();
         } catch (e) {
-            return 'dark';
+            return this.defaultAppearance();
         }
     }
 
@@ -261,7 +268,7 @@ class ZaliStyler {
     }
 
     setAppearance(mode) {
-        const next = ['dark', 'light', 'system'].includes(mode) ? mode : 'dark';
+        const next = ['dark', 'light', 'system'].includes(mode) ? mode : this.defaultAppearance();
         this.appearance = next;
         try { localStorage.setItem(this.appearanceStorageKey(), next); } catch (e) {}
         this.setTheme(this.currentTheme, { remember: false });

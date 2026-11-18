@@ -99,7 +99,11 @@ pub(crate) async fn put_settings(
     let mut doc = load(&state, &username).await;
     let mut changed = false;
     for (key, entry) in incoming {
-        let t = entry["t"].as_i64().unwrap_or(0);
+        // Метка из будущего «замораживала» ключ навсегда: всё последующее — старее.
+        let t = entry["t"]
+            .as_i64()
+            .unwrap_or(0)
+            .min(chrono::Utc::now().timestamp_millis() + 86_400_000);
         let newer = doc
             .get(key)
             .and_then(|old| old.get("t"))

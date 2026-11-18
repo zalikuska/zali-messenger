@@ -148,6 +148,7 @@ doctor-проверки и `bridge_check.sh`. От поиска все они с
 | `apps/android/` | Android-шелл — 4-я независимая реализация нативного слоя |
 | `core/` | Rust core, статическая `.a` для macOS FFI |
 | `sdk/Rust/` / `sdk/Swift/` | Зеркальные реализации формата `.zali` |
+| `brand/logo/` | Логотип и генератор иконок всех шеллов: `python3 brand/logo/gen_logo.py --export` пишет web/iOS/macOS `.icns`/Windows `.ico`+RGBA/Android mipmap — руками эти файлы не править |
 
 Подробнее об архитектуре — `docs/ARCHITECTURE.md`. Любой новый или переделываемый экран —
 по `docs/UI_GUIDELINES.md` (язык «Фокус», эталоны, токены, чек-лист); остальные дизайн-доки

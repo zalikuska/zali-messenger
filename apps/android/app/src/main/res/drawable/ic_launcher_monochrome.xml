@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Сгенерировано brand/logo/gen_logo.py, не править руками. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.057706"
+        android:scaleY="0.057706"
+        android:translateX="24.4544"
+        android:translateY="24.9161">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M160.0,102.0 H864.0 A68.0,68.0 0 0 1 932.0,170.0 V170.0 A68.0,68.0 0 0 1 864.0,238.0 H115.0 A23,23 0 0 1 92.0,215.0 V170.0 A68.0,68.0 0 0 1 160.0,102.0 Z"/>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M726.0,276.0 H864.0 A68.0,68.0 0 0 1 932.0,344.0 V389.0 A23,23 0 0 1 909.0,412.0 H726.0 A68.0,68.0 0 0 1 658.0,344.0 V344.0 A68.0,68.0 0 0 1 726.0,276.0 Z"/>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M548.0,436.0 H909.0 A23,23 0 0 1 932.0,459.0 V549.0 A23,23 0 0 1 909.0,572.0 H548.0 A68.0,68.0 0 0 1 480.0,504.0 V504.0 A68.0,68.0 0 0 1 548.0,436.0 Z"/>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M370.0,596.0 H909.0 A23,23 0 0 1 932.0,619.0 V664.0 A68.0,68.0 0 0 1 864.0,732.0 H370.0 A68.0,68.0 0 0 1 302.0,664.0 V664.0 A68.0,68.0 0 0 1 370.0,596.0 Z"/>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M160.0,770.0 H864.0 A68.0,68.0 0 0 1 932.0,838.0 V838.0 A68.0,68.0 0 0 1 864.0,906.0 H115.0 A23,23 0 0 1 92.0,883.0 V838.0 A68.0,68.0 0 0 1 160.0,770.0 Z"/>
+    </group>
+</vector>

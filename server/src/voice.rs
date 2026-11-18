@@ -102,6 +102,10 @@ pub(crate) struct VoiceRoom {
     /// The device that placed a DM call, so the ringing/accepted/rejected replies go
     /// to it and not to every device of the caller's account.
     initiator_device: Option<String>,
+    /// Одноразовый секрет звонящего звонка: уходит в пуш адресату и разрешает отклонить
+    /// звонок из уведомления без сессии (`decline_call_with_token`). Живёт, пока звонок
+    /// звонит: комната принята, отклонена или снята — секрета больше нет.
+    decline_token: Option<String>,
 }
 
 impl VoiceRoom {
@@ -118,6 +122,7 @@ impl VoiceRoom {
             states: HashMap::new(),
             devices: HashMap::new(),
             initiator_device: None,
+            decline_token: None,
         }
     }
 }
@@ -452,6 +457,78 @@ async fn broadcast_voice_room_state(state: &Arc<AppState>, room_id: &str) {
     }
 }
 
+/// Пуш «звонок закончился» (push.rs) — в фоне, обработчик события его не ждёт.
+fn spawn_call_end_push(
+    state: &Arc<AppState>,
+    target: &str,
+    room_id: &str,
+    from: &str,
+    end: crate::CallPushEnd,
+) {
+    let state = Arc::clone(state);
+    let target = target.to_string();
+    let room_id = room_id.to_string();
+    let from = from.to_string();
+    tokio::spawn(async move {
+        crate::send_call_end_push(&state, &target, &room_id, &from, end).await;
+    });
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct DeclineCallRequest {
+    #[serde(rename = "roomId")]
+    room_id: String,
+    token: String,
+}
+
+/// «Отклонить» прямо в уведомлении о звонке — без сессии, по секрету из пуша.
+///
+/// У service worker токена входа нет (он живёт в localStorage страницы), а Android-
+/// кнопке незачем поднимать вебвью и ждать сокет, чтобы сказать «нет». Секрет случаен
+/// на каждый звонок, годен только пока этот звонок звонит и только на отказ от имени
+/// адресата — тем же путём, что `voice_call_reject` с его устройства.
+pub(crate) async fn decline_call_with_token(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DeclineCallRequest>,
+) -> impl IntoResponse {
+    let room_id = body.room_id.trim().to_string();
+    let token = body.token.trim();
+    if room_id.is_empty() || token.is_empty() || token.len() > 128 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let ringing = state.voice_rooms.get(&room_id).and_then(|room| {
+        let matches = room.room_type == "dm"
+            && room.call_state == "ringing"
+            && room.decline_token.as_deref().is_some_and(|expected| {
+                expected.len() == token.len()
+                    && expected
+                        .bytes()
+                        .zip(token.bytes())
+                        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                        == 0
+            });
+        matches
+            .then(|| room.initiator.clone().zip(room.target.clone()))
+            .flatten()
+    });
+    let Some((inviter, target)) = ringing else {
+        // Уже принят, отклонён, снят или секрет чужой — для кнопки разницы нет.
+        return StatusCode::GONE.into_response();
+    };
+    info!("[VOICE][REJECT] via push token target={} roomId={}", target, room_id);
+    handle_voice_event(
+        &state,
+        &target,
+        &serde_json::json!({
+            "type": "voice_call_reject",
+            "roomId": room_id,
+            "inviter": inviter,
+        }),
+    )
+    .await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
 pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reason: VoiceLeave) {
     let room_id = match state.user_voice_rooms.remove(username) {
         Some((_, room_id)) => room_id,
@@ -463,7 +540,15 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
     let mut remaining_participants: Vec<String> = Vec::new();
     let mut devices: HashMap<String, String> = HashMap::new();
     let mut remove_room = false;
+    // Звонивший повесил трубку (или пропал), пока звонок ещё звонил.
+    let mut unanswered_call_target: Option<String> = None;
     if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
+        if room.room_type == "dm"
+            && room.call_state == "ringing"
+            && room.initiator.as_deref() == Some(username)
+        {
+            unanswered_call_target = room.target.clone();
+        }
         room_type = room.room_type.clone();
         room.participants.remove(username);
         room.joined_at.remove(username);
@@ -491,6 +576,9 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
     if remove_room {
         info!("[VOICE] removing room {} ({})", room_id, room_type);
         state.voice_rooms.remove(&room_id);
+        if let Some(target) = unanswered_call_target.as_deref() {
+            spawn_call_end_push(state, target, &room_id, username, crate::CallPushEnd::Missed);
+        }
         if room_type == "dm" {
             for participant in remaining_participants {
                 let device = devices.get(&participant).cloned().unwrap_or_default();
@@ -512,6 +600,62 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
     } else {
         broadcast_voice_room_state(state, &room_id).await;
     }
+}
+
+/// Выселяет из голосовых каналов сервера всех, кто больше не имеет туда доступа
+/// (`can_access_channel(.., "voice")`), и все комнаты удалённых каналов. Зовётся
+/// после kick/leave, смены роли, прав роли или канала, удаления канала или сервера.
+/// Раньше комнаты переживали всё это: выгнанный участник оставался в звонке и
+/// получал SDP/ICE остальных (аудит 2026-11-18).
+pub(crate) async fn revalidate_server_voice(state: &Arc<AppState>, server_id: &str) {
+    let prefix = format!("voice:channel:{}:", server_id);
+    let rooms: Vec<(String, String, Vec<String>)> = state
+        .voice_rooms
+        .iter()
+        .filter(|room| room.key().starts_with(&prefix))
+        .map(|room| {
+            (
+                room.key().clone(),
+                room.key()[prefix.len()..].to_string(),
+                room.participants.iter().cloned().collect(),
+            )
+        })
+        .collect();
+    for (room_id, channel_id, participants) in rooms {
+        let channel_alive = matches!(
+            crate::channel_belongs_to_server(&state.db, server_id, &channel_id).await,
+            Ok(true)
+        );
+        for user in participants {
+            let allowed = channel_alive
+                && match can_access_channel(&state.db, server_id, &channel_id, &user, "voice").await {
+                    Ok(allowed) => allowed,
+                    // Ошибка БД — не повод выкидывать из звонка.
+                    Err(_) => continue,
+                };
+            if !allowed {
+                evict_from_voice_room(state, &user, &room_id).await;
+            }
+        }
+    }
+}
+
+async fn evict_from_voice_room(state: &Arc<AppState>, username: &str, room_id: &str) {
+    if state.user_voice_rooms.get(username).map(|r| r.value().clone()).as_deref() != Some(room_id) {
+        return;
+    }
+    let device = member_device(state, room_id, username);
+    info!("[VOICE] '{}' evicted from {} — no access", username, room_id);
+    leave_voice_room(state, username, VoiceLeave::Explicit).await;
+    send_voice_error(
+        state,
+        username,
+        &device,
+        room_id,
+        "access_revoked",
+        "Доступ к голосовому каналу закрыт",
+    )
+    .await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -939,6 +1083,10 @@ pub(crate) async fn handle_voice_event(
 ) {
     let event_type = payload["type"].as_str().unwrap_or_default();
     let device = event_device(payload);
+    if event_type != "voice_leave" && crate::moderation::is_suspended(state, sender) {
+        warn!("[VOICE] '{}' suspended — event {} dropped", sender, event_type);
+        return;
+    }
     info!(
         "[VOICE][EVENT] user={} type={} roomId={} roomType={} target={} inviter={} from={} device={}",
         sender,
@@ -1279,7 +1427,13 @@ pub(crate) async fn handle_voice_event(
                 room.participants.insert(target.clone());
                 room.devices.clear();
                 room.initiator_device = (!device.is_empty()).then(|| device.clone());
+                room.decline_token = Some(uuid::Uuid::new_v4().simple().to_string());
             }
+            let decline_token = state
+                .voice_rooms
+                .get(&room_key)
+                .and_then(|room| room.decline_token.clone())
+                .unwrap_or_default();
             // join_voice_room() already broadcasts the current room state (call_state
             // is already "ringing" above, before this call) — a second identical
             // broadcast here just doubled every invite's room-state traffic.
@@ -1297,6 +1451,17 @@ pub(crate) async fn handle_voice_event(
                 }),
             )
             .await;
+            // И пушем — на устройства, где приложение не открыто (push.rs). В фоне: это
+            // HTTP до пуш-сервисов, а звонящий ждёт своего voice_call_outgoing.
+            {
+                let state = Arc::clone(state);
+                let target = target.clone();
+                let room_id = room_key.clone();
+                let from = sender.to_string();
+                tokio::spawn(async move {
+                    crate::send_incoming_call_push(&state, &target, &room_id, &from, &decline_token).await;
+                });
+            }
             // But only the device that dialled is "calling".
             send_json_to_user(
                 state,
@@ -1335,6 +1500,13 @@ pub(crate) async fn handle_voice_event(
                 }
                 timeout_state.voice_rooms.remove(&timeout_room_id);
                 mark_voice_room_ended(&timeout_state, timeout_room_id.clone());
+                spawn_call_end_push(
+                    &timeout_state,
+                    &timeout_target,
+                    &timeout_room_id,
+                    &timeout_inviter,
+                    crate::CallPushEnd::Missed,
+                );
                 for participant in participants {
                     let device = if participant == timeout_inviter {
                         initiator_device.as_str()
@@ -1412,6 +1584,7 @@ pub(crate) async fn handle_voice_event(
                 room.server_id = None;
                 room.channel_id = None;
                 room.call_state = "active".to_string();
+                room.decline_token = None;
                 room.initiator = Some(inviter.clone());
                 room.target = Some(sender.to_string());
                 room.participants.clear();
@@ -1463,6 +1636,8 @@ pub(crate) async fn handle_voice_event(
             });
             send_json_to_user(state, &inviter, targeted(connected_payload.clone(), &inviter_device)).await;
             send_json_to_user(state, sender, targeted(connected_payload, &device)).await;
+            // Остальные устройства адресата звонили пушем — снять.
+            spawn_call_end_push(state, sender, &room_id, &inviter, crate::CallPushEnd::Answered);
             info!(
                 "[VOICE][ACCEPT-DONE] room={} sender={} inviter={}",
                 room_id, sender, inviter
@@ -1534,6 +1709,7 @@ pub(crate) async fn handle_voice_event(
             // call that no longer exists (the room is gone, so not even the missed-call
             // timeout would stop them). The declining device has already reset.
             send_json_to_user(state, sender, rejected_payload).await;
+            spawn_call_end_push(state, sender, &room_id, &inviter, crate::CallPushEnd::Declined);
         }
         "voice_call_cancel" => {
             let target = payload["target"]
@@ -1594,6 +1770,7 @@ pub(crate) async fn handle_voice_event(
                 }),
             )
             .await;
+            spawn_call_end_push(state, &target, &room_id, sender, crate::CallPushEnd::Missed);
         }
         "voice_call_end" => {
             info!("[VOICE][END] from={} device={} explicit_end", sender, device);
@@ -1636,4 +1813,66 @@ async fn leave_voice_room_from_device(
         return;
     }
     leave_voice_room(state, sender, VoiceLeave::Explicit).await;
+}
+
+#[cfg(test)]
+mod decline_token_tests {
+    use super::*;
+    use crate::{build_app_state, Config};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    async fn state_with_ringing_call(token: &str) -> (Arc<AppState>, String) {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("zali-decline-token-test-{}-{}", std::process::id(), n));
+        let state = build_app_state(dir, Config::from_env()).await;
+        let room_id = "voice:dm:alice:bob:t".to_string();
+        let mut room = VoiceRoom::new("dm".to_string(), None, None);
+        room.call_state = "ringing".to_string();
+        room.initiator = Some("alice".to_string());
+        room.target = Some("bob".to_string());
+        room.participants.insert("alice".to_string());
+        room.participants.insert("bob".to_string());
+        room.decline_token = Some(token.to_string());
+        state.voice_rooms.insert(room_id.clone(), room);
+        (state, room_id)
+    }
+
+    async fn decline(state: &Arc<AppState>, room_id: &str, token: &str) -> StatusCode {
+        decline_call_with_token(
+            State(Arc::clone(state)),
+            Json(DeclineCallRequest { room_id: room_id.to_string(), token: token.to_string() }),
+        )
+        .await
+        .into_response()
+        .status()
+    }
+
+    #[tokio::test]
+    async fn the_token_from_the_push_declines_the_ringing_call() {
+        let (state, room_id) = state_with_ringing_call("secret-1").await;
+        assert_eq!(decline(&state, &room_id, "secret-1").await, StatusCode::NO_CONTENT);
+        assert!(state.voice_rooms.get(&room_id).is_none(), "declined call must be gone");
+        // Второй раз — звонка уже нет.
+        assert_eq!(decline(&state, &room_id, "secret-1").await, StatusCode::GONE);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_token_leaves_the_call_ringing() {
+        let (state, room_id) = state_with_ringing_call("secret-2").await;
+        assert_eq!(decline(&state, &room_id, "secret-X").await, StatusCode::GONE);
+        assert_eq!(decline(&state, &room_id, "").await, StatusCode::BAD_REQUEST);
+        assert_eq!(state.voice_rooms.get(&room_id).map(|room| room.call_state.clone()).as_deref(), Some("ringing"));
+    }
+
+    #[tokio::test]
+    async fn an_answered_call_cannot_be_declined_with_its_old_token() {
+        let (state, room_id) = state_with_ringing_call("secret-3").await;
+        if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
+            room.call_state = "active".to_string();
+        }
+        assert_eq!(decline(&state, &room_id, "secret-3").await, StatusCode::GONE);
+        assert!(state.voice_rooms.get(&room_id).is_some());
+    }
 }

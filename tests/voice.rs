@@ -1039,3 +1039,41 @@ async fn voice_state_is_broadcast_and_scoped_to_members() {
     let (_, body) = get_json(&app, &alice, &chan_path).await;
     assert!(body["states"].as_object().unwrap().is_empty(), "{body}");
 }
+
+/// «Отклонить» из уведомления (POST /api/voice/call/decline) открыт без сессии, поэтому
+/// без верного секрета звонка он не должен трогать звонок.
+#[tokio::test]
+async fn declining_from_a_notification_needs_the_calls_own_token() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    add_contact(&app, &alice, "bob").await;
+    add_contact(&app, &bob, "alice").await;
+    let mut alice_ws = connect_ws(&app, &alice).await;
+    let mut bob_ws = connect_ws(&app, &bob).await;
+
+    let room_id = "voice:dm:alice:bob:push";
+    send(
+        &mut alice_ws,
+        serde_json::json!({ "type": "voice_call_invite", "roomId": room_id, "roomType": "dm", "target": "bob" }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_ws, 500).await;
+    assert!(find_event(&bob_events, "voice_call_invite").is_some(), "{bob_events:?}");
+
+    let url = format!("http://{}/api/voice/call/decline", app.addr);
+    let res = app
+        .http
+        .post(&url)
+        .json(&serde_json::json!({ "roomId": room_id, "token": "guessed" }))
+        .send()
+        .await
+        .expect("decline request");
+    assert_eq!(res.status(), reqwest::StatusCode::GONE);
+
+    let alice_events = drain_voice_events(&mut alice_ws, 500).await;
+    assert!(
+        find_event(&alice_events, "voice_call_rejected").is_none(),
+        "a guessed token must not hang up the caller: {alice_events:?}"
+    );
+}

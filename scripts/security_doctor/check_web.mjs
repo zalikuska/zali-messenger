@@ -142,7 +142,8 @@ section('app frames and releases');
     const indexHtml = readFileSync('web/index.html', 'utf8');
     const updatesSrc = stripLineComments(read('web/src/interface/updates.js'));
     record('the page limits its own frames to srcdoc/blob/data',
-        /<meta http-equiv="Content-Security-Policy" content="frame-src about: blob: data:">/.test(indexHtml),
+        /<meta http-equiv="Content-Security-Policy" content="frame-src about: blob: data:[;"]/.test(indexHtml)
+            && /object-src 'none'/.test(indexHtml),
         'a sandboxed addon frame could otherwise navigate itself to an external URL carrying data in the query');
     record('an update is downloaded only with an official release signature',
         /verifyReleaseSignature\(/.test(updatesSrc) && /!status\.releaseSigned/.test(updatesSrc)
@@ -153,6 +154,33 @@ section('app frames and releases');
     record('a password change republishes the vault under the new passphrase',
         /changePassword\(\)/.test(stripLineComments(read('web/src/interface/auth.js')))
             && /force: true/.test(stripLineComments(read('web/src/interface/auth.js'))));
+}
+
+section('audit 2026-11-18');
+{
+    const { ZaliInterface } = loadZaliInterface();
+    const safe = (value) => ZaliInterface.prototype.safeCssColor.call({}, value);
+    record('safeCssColor refuses quotes, semicolons and braces',
+        ['rgb(1" onmouseover="alert(1)', "rgb(0;background:url(x))", 'linear-gradient(red;x:y)', 'hsl(1{}', "#fff'"]
+            .every(v => safe(v) === '')
+            && safe('rgb(1, 2, 3)') && safe('#cbff00') && safe('linear-gradient(90deg, #fff 0%, rgb(1,2,3) 100%)'),
+        'a role colour broke out of style="…" into an event handler');
+    record('safeCssColor output is always passed through esc() in markup',
+        !/\$\{this\.safeCssColor\(/.test(all),
+        'the escaper is the second fence; safeCssColor alone let a colour leave the attribute');
+    const webPush = stripLineComments(read('web/src/interface/web_push.js'));
+    record('a call is accepted from the URL only with a service-worker nonce',
+        /consumeCallActionFromUrl\(JSON\.parse\(rawCall\)\)/.test(webPush) && /zali-call-nonce/.test(webPush)
+            && /zali-call-nonce/.test(readFileSync('web/service-worker.js', 'utf8')));
+    const net = stripLineComments(read('web/src/interface/network_config.js'));
+    record('changing the API host while signed in needs confirmation and signs out',
+        /networkHostChangeNeedsLogout/.test(net) && /await this\.logout\(\)/.test(net)
+            && /Адрес WebSocket должен быть на том же хосте/.test(net));
+    const authSrc = stripLineComments(read('web/src/interface/auth.js'));
+    record('logout tells the native shell and can forget the quick login',
+        /syncNative: true, connectVoiceSocket: false/.test(authSrc) && /forgetRecentAccountEntry\(leaving\.username/.test(authSrc));
+    record('control is accepted only from a peer whose screen is on view',
+        /remoteScreens\?\.has\?\.\(peer\)/.test(stripLineComments(read('web/src/interface/remote_control.js'))));
 }
 
 finish('web UI');

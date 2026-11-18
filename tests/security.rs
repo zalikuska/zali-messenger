@@ -69,21 +69,29 @@ async fn ws_ticket_is_single_use() {
         body["ticket"].as_str().expect("ticket field").to_string()
     };
 
-    let first = app
+    // The ticket exists only for the WebSocket handshake: on any other route it
+    // is not a credential (audit 2026-11-18 — it used to open the whole REST API
+    // for its 30 seconds) and is not burned by the attempt.
+    let elsewhere = app
         .http
         .get(app.url(&format!("/api/auth/me?ticket={}", ticket)))
         .send()
         .await
-        .expect("first ticket use");
-    assert_eq!(first.status(), 200, "a fresh ticket should authenticate");
+        .expect("ticket on a REST route");
+    assert_eq!(elsewhere.status(), 401, "a ws ticket must not authenticate REST calls");
 
-    let replay = app
-        .http
-        .get(app.url(&format!("/api/auth/me?ticket={}", ticket)))
-        .send()
+    let (_first, response) = tokio_tungstenite::connect_async(app.ws_url(&format!("/ws?ticket={}", ticket)))
         .await
-        .expect("ticket replay");
-    assert_eq!(replay.status(), 401, "a consumed ticket must not work twice");
+        .expect("a fresh ticket should open the socket");
+    assert_eq!(response.status(), 101);
+
+    let replay = tokio_tungstenite::connect_async(app.ws_url(&format!("/ws?ticket={}", ticket))).await;
+    match replay {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status(), 401, "a consumed ticket must not work twice")
+        }
+        other => panic!("a consumed ticket must not work twice: {:?}", other.map(|(_, r)| r.status())),
+    }
 }
 
 /// A password spray — one guess against many different accounts from one

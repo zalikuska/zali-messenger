@@ -184,7 +184,8 @@ async fn join_server_link_rejects_private_servers() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 403);
+    // Приватный сервер по ссылке не находится вовсе — 404, без подтверждения, что он есть.
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
@@ -890,7 +891,7 @@ async fn server_links_use_the_public_web_url_and_accept_every_form() {
         .send()
         .await
         .unwrap();
-    assert_eq!(denied.status(), 403);
+    assert_eq!(denied.status(), 404);
 }
 
 async fn befriend(app: &TestApp, a: &RegisteredUser, b: &RegisteredUser) {

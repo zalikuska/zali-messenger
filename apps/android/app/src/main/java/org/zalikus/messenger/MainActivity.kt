@@ -758,6 +758,9 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         PushSession.appVisible = true
         bridge?.setAppVisible(true)
+        // Приложение на экране звонит само (панель звонка в вебе) — уведомление-звонок
+        // снимаем, иначе звенели бы оба.
+        CallNotifier.dismiss(this, null)
     }
 
     override fun onStop() {
@@ -778,6 +781,20 @@ class MainActivity : ComponentActivity() {
         val nativeBridge = bridge ?: return
         if (!webPageReady) return
         pendingNotificationIntent = null
+        // «Принять» в уведомлении-звонке (IncomingCall.kt): веб дождётся звонка из снимка
+        // комнаты после подключения сокета и ответит на него.
+        // Действие звонка — только из нашего же уведомления (секрет установки): иначе
+        // любое приложение могло прислать «accept» (CallNotifier.isTrustedCallIntent).
+        val callAction = intent.getStringExtra(CallNotifier.EXTRA_CALL_ACTION)
+            ?.takeIf { CallNotifier.isTrustedCallIntent(this, intent) }
+        if (!callAction.isNullOrBlank()) {
+            nativeBridge.handleCallNotificationAction(
+                callAction,
+                intent.getStringExtra(CallNotifier.EXTRA_CALL_ROOM).orEmpty(),
+                intent.getStringExtra(CallNotifier.EXTRA_CALL_FROM).orEmpty(),
+            )
+            return
+        }
         val sender = intent.getStringExtra(MessageNotifier.EXTRA_SENDER)
         val serverId = intent.getStringExtra(MessageNotifier.EXTRA_SERVER_ID)
         val channelId = intent.getStringExtra(MessageNotifier.EXTRA_CHANNEL_ID)

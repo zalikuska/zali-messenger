@@ -104,6 +104,31 @@ pub(crate) async fn load_channel_permissions_map(
     Ok(map)
 }
 
+/// Права роли в канале. Строки `channel_permissions` бывают только у встроенных ролей
+/// (`owner/admin/member`). Кастомная роль без своей строки раньше получала свои
+/// серверные права целиком и проходила в канал, закрытый от `member` (аудит
+/// 2026-11-18). Теперь она наследует строку базовой роли — `admin`, если у неё есть
+/// «Управление», иначе `member` — и не может получить больше, чем дают её серверные
+/// права. Одно правило для проверки доступа, списка каналов и живой доставки.
+pub(crate) fn resolve_channel_role_perms(
+    channel_rows: Option<&HashMap<String, (bool, bool, bool)>>,
+    role: &str,
+    server_role: (bool, bool, bool),
+) -> (bool, bool, bool) {
+    if let Some(rows) = channel_rows {
+        if let Some(perms) = rows.get(role) {
+            return *perms;
+        }
+        if !matches!(role, "owner" | "admin" | "member") {
+            let base = if server_role.2 { "admin" } else { "member" };
+            if let Some(b) = rows.get(base) {
+                return (b.0 && server_role.0, b.1 && server_role.1, b.2 && server_role.2);
+            }
+        }
+    }
+    server_role
+}
+
 pub(crate) fn channel_allows_action(
     channel_permissions: &HashMap<String, HashMap<String, (bool, bool, bool)>>,
     server_permissions: &HashMap<String, (bool, bool, bool)>,
@@ -111,25 +136,16 @@ pub(crate) fn channel_allows_action(
     channel_id: &str,
     action: &str,
 ) -> bool {
-    if let Some(perms) = channel_permissions.get(channel_id) {
-        if let Some((can_view, can_send, can_manage)) = perms.get(role) {
-            return match action {
-                "view" => *can_view,
-                "send" => *can_send,
-                "manage" => *can_manage,
-                _ => false,
-            };
-        }
-    }
-    let fallback = server_permissions
+    let server_role = server_permissions
         .get(role)
         .copied()
         .or_else(|| server_permissions.get("member").copied())
         .unwrap_or((true, true, false));
+    let perms = resolve_channel_role_perms(channel_permissions.get(channel_id), role, server_role);
     match action {
-        "view" => fallback.0,
-        "send" => fallback.1,
-        "manage" => fallback.2,
+        "view" => perms.0,
+        "send" => perms.1,
+        "manage" => perms.2,
         _ => false,
     }
 }
@@ -281,13 +297,21 @@ pub(crate) async fn can_access_channel(
 
     let role_key = role.as_deref().unwrap_or("member");
     if let Some(channel_role) = load_channel_permission_record(pool, channel_id, role_key).await? {
-        return Ok(match action {
-            "view" => channel_role.can_view != 0,
-            "send" => channel_role.can_send != 0,
-            "manage" => channel_role.can_manage != 0,
-            _ => false,
-        });
+        if action != "voice" {
+            return Ok(match action {
+                "view" => channel_role.can_view != 0,
+                "send" => channel_role.can_send != 0,
+                "manage" => channel_role.can_manage != 0,
+                _ => false,
+            });
+        }
+        // Голос: канал должен быть виден роли, а «Голос» берётся из прав роли ниже.
+        // Раньше строка канала давала здесь `false` всем, включая админов.
+        if channel_role.can_view == 0 {
+            return Ok(false);
+        }
     }
+    let builtin = matches!(role_key, "owner" | "admin" | "member");
     let role_record = load_server_role_record(pool, server_id, role_key).await?;
     let (can_view, can_send, can_manage, can_voice) = role_record
         .map(|role| {
@@ -307,6 +331,21 @@ pub(crate) async fn can_access_channel(
                 role_key == "owner" || role_key == "admin" || role_key == "member",
             )
         });
+    // Кастомная роль без своей строки канала наследует строку базовой роли
+    // (`resolve_channel_role_perms`): закрытое от `member` закрыто и для неё.
+    let (can_view, can_send, can_manage) = if builtin {
+        (can_view, can_send, can_manage)
+    } else {
+        let base = if can_manage { "admin" } else { "member" };
+        match load_channel_permission_record(pool, channel_id, base).await? {
+            Some(row) => (
+                row.can_view != 0 && can_view,
+                row.can_send != 0 && can_send,
+                row.can_manage != 0 && can_manage,
+            ),
+            None => (can_view, can_send, can_manage),
+        }
+    };
     Ok(match action {
         "view" => can_view,
         "send" => can_send,
@@ -658,6 +697,7 @@ pub(crate) async fn delete_channel(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    crate::revalidate_server_voice(&state, &server_id).await;
     match load_channels_for_server(&state.db, &server_id).await {
         Ok(channels) => Json(channels).into_response(),
         Err(e) => {
@@ -720,7 +760,10 @@ pub(crate) async fn update_channel_permissions(
     }
     match upsert_channel_permissions(&state.db, &channel_id, &payload.permissions).await {
         Ok(_) => match load_channel_permissions(&state.db, &channel_id).await {
-            Ok(permissions) => Json(serde_json::json!({ "serverId": server_id, "channelId": channel_id, "permissions": permissions })).into_response(),
+            Ok(permissions) => {
+                crate::revalidate_server_voice(&state, &server_id).await;
+                Json(serde_json::json!({ "serverId": server_id, "channelId": channel_id, "permissions": permissions })).into_response()
+            }
             Err(e) => {
                 error!("Ошибка перечитывания прав канала {}/{}: {}", server_id, channel_id, e);
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()

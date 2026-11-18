@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 BUNDLE = ROOT / "web" / "app.js"
 INPUT_FILES = [ROOT / "web" / n for n in ("style.css", "index.html", "bridge_protocol.json")]
+INPUT_FILES.append(ROOT / "docs" / "legal" / "RULES.md")  # встраивается в бандл
 
 
 def newest_source_mtime():

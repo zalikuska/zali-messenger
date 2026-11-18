@@ -101,6 +101,11 @@ sha1 = "0.10"
 # same SDK the clients use — so an auditor opens it with the tooling they
 # already have instead of a server-only one-off format.
 zali_sdk = { path = "../sdk/Rust" }
+# Жалобы на сообщения в канале (moderation.rs): сервер сверяет текст жалобы с
+# архивом той же распаковкой, что у клиентов (`unpack_message_bytes`) — текст
+# внутри message.json зашифрован ещё раз, и второй копии этого формата не нужно.
+# Без фич: ни wasm, ни jni, ни обработки звука.
+zali_messenger_core = { path = "../core" }
 web-push = { version = "0.11", default-features = false }
 jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
 ct-codecs = "1.1"
@@ -150,3 +155,7 @@ path = "../tests/addon_store.rs"
 [[test]]
 name = "addon_cloud"
 path = "../tests/addon_cloud.rs"
+
+[[test]]
+name = "moderation"
+path = "../tests/moderation.rs"

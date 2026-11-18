@@ -897,6 +897,7 @@ pub(crate) async fn revoke_device(
     )
     .await;
 
+    crate::disconnect_user_sockets(&state, &owner);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -935,10 +936,12 @@ pub(crate) async fn post_vault_event(
             .into_response();
     }
     let event_id = Uuid::new_v4().to_string();
+    // Эпоха — время клиента (мс), но не из будущего дальше суток: 24 события с
+    // `i64::MAX` навсегда вытесняли настоящие (храним топ-24 по эпохе; аудит 2026-11-18).
     let vault_epoch = payload
         .vaultEpoch
         .unwrap_or_else(|| Utc::now().timestamp())
-        .max(1);
+        .clamp(1, Utc::now().timestamp_millis() + 86_400_000);
     let target = payload
         .issuedToDeviceId
         .map(|value| trim_limited(value, 128))
@@ -1158,7 +1161,8 @@ pub(crate) async fn post_key_envelope(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(owner, scope_key, sender_device_id, recipient_device_id, key_id) DO UPDATE SET
              encrypted_key = excluded.encrypted_key,
-             created_at = CURRENT_TIMESTAMP",
+             created_at = CURRENT_TIMESTAMP
+         WHERE conversation_key_envelopes.sender = excluded.sender",
     )
     .bind(&envelope_id)
     .bind(&recipient)

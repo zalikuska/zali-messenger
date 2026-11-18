@@ -514,7 +514,7 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
-    // Хаб: три крупные кнопки быстрых переходов и, пока есть обновление, полоса
+    // Хаб: крупные кнопки быстрых переходов и, пока есть обновление, полоса
     // «Доступно обновление». Разметка — строка без чужих данных, кроме версии
     // (через esc); обработчик клика — на #hubGrid (events.js).
     renderHub() {
@@ -541,6 +541,12 @@ ZaliMixin(ZaliInterface, class {
                 art: 'coins',
                 title: 'ZaliCoin',
                 note: 'Баланс, переводы и карточки',
+            },
+            {
+                actionId: 'support',
+                art: 'support',
+                title: 'Поддержка',
+                note: 'Состояние аккаунта, нарушения и жалобы',
             },
         ];
         const status = this.S.updateStatus || {};

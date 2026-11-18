@@ -110,7 +110,7 @@ pub(crate) async fn build_server_response(
         name: server.name,
         description: server.description,
         icon: server.icon,
-        color: server.color,
+        color: crate::util::hex_color_or_default(&server.color),
         join_link,
         owner: server.owner,
         is_public: server.is_public != 0,
@@ -327,7 +327,7 @@ pub(crate) async fn build_server_responses_batch(
             name: server.name,
             description: server.description,
             icon: server.icon,
-            color: server.color,
+            color: crate::util::hex_color_or_default(&server.color),
             join_link: display_join_link(server.join_link, &server_id),
             owner: server.owner,
             is_public: server.is_public != 0,
@@ -571,6 +571,9 @@ pub(crate) async fn can_manage_server(
 }
 
 /// Даёт ли роль «Управление» (встроенные owner/admin или флаг can_manage).
+/// Роль даёт «властные» права: «Управление», «Управление ролями» или казну. Всё это
+/// назначает, снимает и правит только владелец. Раньше здесь смотрелся один
+/// `can_manage`, и админ выдавал кому угодно роль с `can_manage_treasury`.
 pub(crate) async fn role_grants_manage(
     pool: &SqlitePool,
     server_id: &str,
@@ -579,8 +582,27 @@ pub(crate) async fn role_grants_manage(
     if can_manage_by_role(Some(role_id)) {
         return Ok(true);
     }
+    if let Some(role) = load_server_role_record(pool, server_id, role_id).await? {
+        return Ok(role.can_manage != 0 || role.can_manage_roles != 0 || role.can_manage_treasury != 0);
+    }
     let (_view, _send, manage) = load_server_role_permissions(pool, server_id, role_id).await?;
     Ok(manage)
+}
+
+/// У участника роль с властными правами (`role_grants_manage`) — над ним властен
+/// только владелец.
+pub(crate) async fn member_is_privileged(
+    pool: &SqlitePool,
+    server_id: &str,
+    username: &str,
+) -> Result<bool, sqlx::Error> {
+    if can_manage_server(pool, server_id, username).await? {
+        return Ok(true);
+    }
+    match get_server_member_role(pool, server_id, username).await? {
+        Some(role) => role_grants_manage(pool, server_id, &role).await,
+        None => Ok(false),
+    }
 }
 
 /// Иерархия менеджеров: над теми, у кого есть «Управление», и над правами,
@@ -815,7 +837,7 @@ pub(crate) async fn create_server(
         name: name.to_string(),
         description: description.unwrap_or_default(),
         icon: icon.unwrap_or_else(|| name.chars().next().unwrap_or('S').to_string()),
-        color: color.unwrap_or_else(|| "#cbff00".to_string()),
+        color: crate::util::hex_color_or_default(color.as_deref().unwrap_or("")),
         join_link: join_link
             .as_deref()
             .map(str::trim)
@@ -951,8 +973,8 @@ pub(crate) async fn update_server(
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .unwrap_or(server.color);
+        .map(crate::util::hex_color_or_default)
+        .unwrap_or_else(|| crate::util::hex_color_or_default(&server.color));
     let next_join_link = payload
         .join_link
         .as_deref()
@@ -1062,6 +1084,7 @@ pub(crate) async fn get_server_members(
         _ => return StatusCode::FORBIDDEN.into_response(),
     }
 
+    crate::revalidate_server_voice(&state, &server_id).await;
     match load_server_members(&state.db, &server_id).await {
         Ok(members) => Json(serde_json::json!({ "members": members })).into_response(),
         Err(e) => {
@@ -1124,7 +1147,7 @@ pub(crate) async fn update_server_member(
         }
     }
     if server.owner != auth_user {
-        let target_manages = can_manage_server(&state.db, &server_id, target).await.unwrap_or(true);
+        let target_manages = member_is_privileged(&state.db, &server_id, target).await.unwrap_or(true);
         let role_manages = role_grants_manage(&state.db, &server_id, &role).await.unwrap_or(true);
         if target_manages || role_manages {
             return (
@@ -1142,6 +1165,7 @@ pub(crate) async fn update_server_member(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    crate::revalidate_server_voice(&state, &server_id).await;
     match load_server_members(&state.db, &server_id).await {
         Ok(members) => Json(serde_json::json!({ "members": members })).into_response(),
         Err(e) => {
@@ -1187,7 +1211,7 @@ pub(crate) async fn delete_server_member(
         return (StatusCode::BAD_REQUEST, "Владельца нельзя удалить").into_response();
     }
     if server.owner != auth_user
-        && can_manage_server(&state.db, &server_id, target).await.unwrap_or(true)
+        && member_is_privileged(&state.db, &server_id, target).await.unwrap_or(true)
     {
         return (
             StatusCode::FORBIDDEN,
@@ -1209,6 +1233,7 @@ pub(crate) async fn delete_server_member(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    crate::revalidate_server_voice(&state, &server_id).await;
     match load_server_members(&state.db, &server_id).await {
         Ok(members) => Json(serde_json::json!({ "members": members })).into_response(),
         Err(e) => {
@@ -1267,6 +1292,7 @@ pub(crate) async fn leave_server(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    crate::revalidate_server_voice(&state, &server_id).await;
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -1420,6 +1446,7 @@ pub(crate) async fn delete_server(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    crate::revalidate_server_voice(&state, &server_id).await;
     // Delete files only after DB transaction committed successfully
     for filename in &filenames {
         let path = state.uploads_dir.join(filename);
@@ -1517,7 +1544,11 @@ pub(crate) async fn create_server_invite(
 /// Счётчик неудачных вступлений по коду/ссылке на пользователя: перебор кодов
 /// приглашений упирается в него, а не в скорость сети. Окно и порог — те же, что
 /// у входа (`RATE_LIMIT_*`).
-fn invite_attempts_exhausted(state: &AppState, username: &str) -> bool {
+///
+/// Попытка резервирует место в бюджете ДО запроса к БД и возвращает его только при
+/// успешном вступлении: раньше промах записывался после await, и параллельные
+/// запросы проходили проверку все разом (аудит 2026-11-18).
+fn invite_attempt_reserve(state: &AppState, username: &str) -> Option<std::time::Instant> {
     let window = std::time::Duration::from_secs(state.config.rate_limit_window_secs);
     let now = std::time::Instant::now();
     let mut attempts = state
@@ -1525,15 +1556,19 @@ fn invite_attempts_exhausted(state: &AppState, username: &str) -> bool {
         .entry(format!("invite-miss:{}", username.to_lowercase()))
         .or_default();
     attempts.retain(|t| now.duration_since(*t) < window);
-    attempts.len() >= state.config.rate_limit_max_attempts
+    if attempts.len() >= state.config.rate_limit_max_attempts {
+        return None;
+    }
+    attempts.push_back(now);
+    Some(now)
 }
 
-fn note_invite_miss(state: &AppState, username: &str) {
-    state
-        .login_attempts
-        .entry(format!("invite-miss:{}", username.to_lowercase()))
-        .or_default()
-        .push_back(std::time::Instant::now());
+fn invite_attempt_release(state: &AppState, username: &str, reserved: std::time::Instant) {
+    if let Some(mut attempts) = state.login_attempts.get_mut(&format!("invite-miss:{}", username.to_lowercase())) {
+        if let Some(pos) = attempts.iter().rposition(|t| *t == reserved) {
+            attempts.remove(pos);
+        }
+    }
 }
 
 pub(crate) async fn join_server_invite(
@@ -1545,9 +1580,9 @@ pub(crate) async fn join_server_invite(
     if code.is_empty() {
         return (StatusCode::BAD_REQUEST, "Код приглашения обязателен").into_response();
     }
-    if invite_attempts_exhausted(&state, &auth_user) {
+    let Some(attempt) = invite_attempt_reserve(&state, &auth_user) else {
         return (StatusCode::TOO_MANY_REQUESTS, "Слишком много неверных кодов. Повторите через минуту.").into_response();
-    }
+    };
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
@@ -1571,7 +1606,6 @@ pub(crate) async fn join_server_invite(
         Ok(Some(invite)) => invite,
         Ok(None) => {
             let _ = tx.rollback().await;
-            note_invite_miss(&state, &auth_user);
             return StatusCode::NOT_FOUND.into_response();
         }
         Err(e) => {
@@ -1610,6 +1644,7 @@ pub(crate) async fn join_server_invite(
         Ok(0) => {}
         Ok(_) => {
             let _ = tx.rollback().await;
+            invite_attempt_release(&state, &auth_user, attempt);
             return Json(serde_json::json!({ "serverId": invite.server_id, "joined": true }))
                 .into_response();
         }
@@ -1670,6 +1705,7 @@ pub(crate) async fn join_server_invite(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    invite_attempt_release(&state, &auth_user, attempt);
     Json(serde_json::json!({ "serverId": invite.server_id, "joined": true })).into_response()
 }
 
@@ -1685,42 +1721,38 @@ pub(crate) async fn join_server_link(
 
     // Ссылка приходит в любом виде (`https://…/server/<id>`, `zali://server/<id>`,
     // свой код): сверяем и с сохранённой ссылкой как есть, и по id из неё.
-    if invite_attempts_exhausted(&state, &auth_user) {
+    let Some(attempt) = invite_attempt_reserve(&state, &auth_user) else {
         return (StatusCode::TOO_MANY_REQUESTS, "Слишком много неверных ссылок. Повторите через минуту.").into_response();
-    }
+    };
     let token = link_token(raw);
-    let server = match sqlx::query_as::<_, ServerRecord>(
-        "SELECT id, name, description, icon, color, join_link, owner, is_public, created_at
-         FROM servers
-         WHERE join_link IN (?, ?, ?) OR id = ?
-         ORDER BY (id = ?) DESC LIMIT 1",
-    )
-    .bind(raw)
-    .bind(format!("zali://server/{}", token))
-    .bind(server_link(&token))
-    .bind(&token)
-    .bind(&token)
-    .fetch_optional(&state.db)
-    .await
-    {
-        Ok(Some(server)) => server,
+    // Ищем только среди публичных: приватный сервер по ссылке не находится вовсе, и
+    // ответ «приватный» больше не выдаёт, что такой id или своя ссылка существуют.
+    // Сначала по сохранённой ссылке, потом по id — двумя запросами, без `OR`.
+    const SELECT_PUBLIC: &str = "SELECT id, name, description, icon, color, join_link, owner, is_public, created_at
+         FROM servers WHERE is_public = 1 AND ";
+    let by_id = sqlx::query_as::<_, ServerRecord>(&format!("{SELECT_PUBLIC}id = ? LIMIT 1"))
+        .bind(&token)
+        .fetch_optional(&state.db)
+        .await;
+    let lookup = match by_id {
         Ok(None) => {
-            note_invite_miss(&state, &auth_user);
-            return StatusCode::NOT_FOUND.into_response();
+            sqlx::query_as::<_, ServerRecord>(&format!("{SELECT_PUBLIC}join_link IN (?, ?, ?) LIMIT 1"))
+                .bind(raw)
+                .bind(format!("zali://server/{}", token))
+                .bind(server_link(&token))
+                .fetch_optional(&state.db)
+                .await
         }
+        other => other,
+    };
+    let server = match lookup {
+        Ok(Some(server)) if server.is_public != 0 => server,
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
             error!("Ошибка поиска сервера по ссылке {}: {}", raw, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-
-    if server.is_public == 0 {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Сервер приватный"})),
-        )
-            .into_response();
-    }
 
     if let Err(e) = ensure_server_member(&state.db, &server.id, &auth_user, "member").await {
         error!(
@@ -1730,5 +1762,6 @@ pub(crate) async fn join_server_link(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    invite_attempt_release(&state, &auth_user, attempt);
     Json(serde_json::json!({ "serverId": server.id, "joined": true })).into_response()
 }

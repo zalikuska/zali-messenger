@@ -686,6 +686,11 @@ struct WebView {
             }
             let version = (dict["version"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let signature = (dict["signature"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let currentVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0"
+            guard UpdateService.isNewerVersion(version, than: currentVersion) else {
+                self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Это не более новая версия — загрузка отменена"])
+                return
+            }
             guard UpdateService.verifyReleaseSignature(version: version, sha256: sha256, url: url, signatureB64: signature) else {
                 self.sendNativeResponse(["requestId": requestId, "ok": false, "error": "Обновление не подписано разработчиками — загрузка отменена"])
                 return
@@ -2146,6 +2151,14 @@ struct WebView {
                         channelId: channelId,
                         silent: silent
                     )
+                    // Входящий звонок (notifyIncomingCall в voice_call.js): иконка в доке
+                    // прыгает, пока приложение не активируют, — звонок не теряется за
+                    // другими окнами, даже если уведомления выключены.
+                    if (dict["attention"] as? Bool) == true {
+                        DispatchQueue.main.async {
+                            if !NSApp.isActive { NSApp.requestUserAttention(.criticalRequest) }
+                        }
+                    }
                 }
 
                 case .persistDeviceIdentity: do {
@@ -2373,8 +2386,11 @@ struct WebView {
         let scheme = url.scheme?.lowercased() ?? ""
         if scheme == "about" || scheme == "blob" { return true }
         guard scheme == "http" else { return false }
+        // Документ приложения — `loadHTMLString(baseURL: http://localhost)`: ровно этот
+        // origin, без порта. Раньше годился любой `http://localhost:*` и 127.0.0.1, и
+        // локальный сервер на другом порту получал бы мост целиком (аудит 2026-11-18).
         let host = url.host?.lowercased() ?? ""
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return host == "localhost" && (url.port == nil || url.port == 80)
     }
 
     /// pid процессов WebKit GPU и WebContent этого WKWebView (SPI, через responds(to:)).

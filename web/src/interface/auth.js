@@ -845,6 +845,8 @@ ZaliMixin(ZaliInterface, class {
                     ts: new Date().toLocaleTimeString()
                 });
                 this.clearAuthInputs();
+                // Новый аккаунт — приветствие с выбором темы и разделов (welcome_tour.js).
+                this.queueWelcomeTour?.(this.myName());
                 return true;
             }
 
@@ -973,6 +975,7 @@ ZaliMixin(ZaliInterface, class {
             resetVault: true,
         });
         this.clearAuthInputs();
+        if (mode === 'register') this.queueWelcomeTour?.(this.myName());
         this.addLogEntry({
             type: 'SUCCESS',
             msg: mode === 'register'
@@ -1053,6 +1056,14 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (mode === 'register') {
+            // Согласие с Правилами сообщества (rules.js) — до любых запросов.
+            if (!this.rulesAccepted()) {
+                const msg = this.rulesRequiredMessage();
+                this.S.auth.error = msg;
+                if (errorBox) errorBox.textContent = msg;
+                document.getElementById('authRulesAccept')?.focus();
+                return;
+            }
             if (username.length > 64) {
                 const msg = 'Логин слишком длинный: максимум 64 символа';
                 this.S.auth.error = msg;
@@ -1198,7 +1209,22 @@ ZaliMixin(ZaliInterface, class {
         this.updateAuthView();
     }
 
-    async logout() {
+    // `askQuickLogin` — кнопка «Выйти» в настройках. Раньше выход оставлял 7-дневный
+    // токен в «Недавних аккаунтах» молча, и следующий за этим устройством входил без
+    // пароля; нативный шелл токен тоже не забывал и после перезапуска вписывал его
+    // назад (аудит 2026-11-18). Теперь быстрый вход остаётся только по явному выбору.
+    async logout({ askQuickLogin = false, forgetQuickLogin = true } = {}) {
+        const leaving = { username: this.S.session?.username || '', token: this.S.session?.token || '' };
+        if (askQuickLogin && leaving.token && !this.S.session?.guest) {
+            const forget = await this.confirmAction({
+                title: 'Выйти из аккаунта',
+                message: `Оставить быстрый вход в ${leaving.username} на этом устройстве? Тогда любой, кто откроет здесь приложение, войдёт без пароля.`,
+                confirmLabel: 'Выйти и забыть вход',
+                cancelLabel: 'Оставить быстрый вход',
+                danger: false,
+            });
+            forgetQuickLogin = !!forget;
+        }
         // До стирания токена: отписке нужен Authorization (заголовки она берёт синхронно).
         // Сеть не должна держать выход дольше 3 с — не успела, и подписка этого браузера
         // перейдёт к следующему вошедшему, когда он оформит свою.
@@ -1210,7 +1236,10 @@ ZaliMixin(ZaliInterface, class {
         this.S.auth.error = '';
         this.setAuthMode('login', { clearInputs: true, focus: false });
         this.clearStoredSession();
-        this.applySession({ username: '', token: null, guest: true }, { persist: false, syncNative: false, connectVoiceSocket: false });
+        if (forgetQuickLogin && leaving.token) this.forgetRecentAccountEntry(leaving.username, leaving.token);
+        // syncNative: шелл обязан забыть токен, иначе держит WS старого аккаунта и
+        // подставляет его при следующем запуске (__ZALI_SAVED_SESSION).
+        this.applySession({ username: '', token: null, guest: true }, { persist: false, syncNative: true, connectVoiceSocket: false });
         this.S.contacts = [];
         this.S.users = [];
         this.S.current = null;
@@ -1594,6 +1623,8 @@ ZaliMixin(ZaliInterface, class {
             // native bottom bar must come back while it is up and re-hide once
             // it closes onto the chat screen (notifyNativeMobileNav reads it).
             if (!shouldShow) this.landMobileOnListIfEmpty?.();
+            // Приветствие, прерванное перезагрузкой, встаёт снова (флаг — welcome_tour.js).
+            if (!shouldShow) this.maybeShowWelcomeTour?.();
             this.syncNativeMobileNav();
         }
 
@@ -1625,6 +1656,7 @@ ZaliMixin(ZaliInterface, class {
         if (regBtn) regBtn.disabled = this.S.auth.loading;
         if (guestBtn) guestBtn.disabled = this.S.auth.loading;
         this.syncAuthNetworkInput();
+        this.renderAuthRulesControls();
         this.renderAuthFailure();
         this.renderVaultCloudSyncControls();
         if (!this.S.session?.token && overlay && overlay.classList.contains('visible') && !this.S.auth.fieldsCleared && !this.S.auth.loading) {

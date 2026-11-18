@@ -29,7 +29,19 @@
   macOS (`scheduleHeartbeat`, 20 с) и Windows (`run_message_transport`, 70 с
   без входящих кадров) висели полуоткрытыми с зелёным значком. Android закрыт
   OkHttp `pingInterval`, браузер/iOS — JS-сторожем в
-  `connectBrowserVoiceSocket`.
+  `connectBrowserVoiceSocket`. С 2026-11-18 у Windows 20 с (`WS_PONG_DEADLINE`).
+- **Смена сети и пробуждение — сразу проба, а не ожидание тика** (2026-11-18). macOS
+  (`kickConnections`: `NWPathMonitor` + `NSWorkspace.didWakeNotification`), Android
+  (`kickConnections`: `registerDefaultNetworkCallback`), браузер
+  (`kickBrowserVoiceSocket`: `online` и возврат вкладки), Windows (`PongWatchdog`:
+  скачок настенных часов между тиками = сон). Ждущий бэкоффа реконнект стартует
+  немедленно; открытый сокет получает ping с дедлайном 5 с — жив, значит остаётся
+  (без ложного false→true и лишней догрузки истории). Дедлайн ответа на обычный
+  пинг у Windows теперь 20 с, как у macOS (был 70 с). HTTP-пулы на событие
+  сбрасываются (`URLSession.flush`, `connectionPool.evictAll`).
+- **TCP_NODELAY везде, где ходят мелкие кадры**: сервер (`axum::serve(...).tcp_nodelay`)
+  и WS Windows (`connect_ws` → `connect_async_with_config(.., true)`). С Нейглом
+  пачка ICE-кандидатов ждала delayed ACK — до 200 мс на Windows.
 - **HTTP-пул держится тёплым, пока есть сессия** (`scheduleApiWarmup` на
   macOS, `warm_api_connections` в `native.rs`, `warmApiConnection` в
   `NativeBridge.kt` — на Android только пока приложение на экране). Раз в

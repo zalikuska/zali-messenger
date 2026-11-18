@@ -12,6 +12,8 @@ description: Windows-сборка и дистрибуция — кросс-ко�
 ```
 apps/windows/     — Rust-клиент (WRY/TAO)
 apps/windows/installer/ZaliMessenger.iss — Inno Setup скрипт установщика
+apps/windows/installer/wizard/ — картинки мастера (PNG, генерирует brand/logo/gen_logo.py --export)
+apps/windows/assets/ — иконка: zali.ico (установщик/ярлыки) + icon-{16,20,24,32,48,64}.rgba (трей, окно)
 core/             — Rust core library (зависимость apps/windows)
 sdk/Rust/         — архивный SDK (зависимость core)
 web/src/          — JS-модули и CSS/HTML
@@ -26,12 +28,12 @@ scripts/build_windows_app.ps1
 
 ```bash
 zip -r zali-windows-source.zip \
-  apps/windows/src apps/windows/Cargo.toml apps/windows/Cargo.lock apps/windows/build.rs \
+  apps/windows/src apps/windows/assets apps/windows/Cargo.toml apps/windows/Cargo.lock apps/windows/build.rs \
   core/src core/Cargo.toml core/Cargo.lock \
   sdk/Rust/src sdk/Rust/Cargo.toml sdk/Rust/Cargo.lock \
   web/src web/bridge_protocol.json web/style.css web/index.html \
   scripts/bundle_web.py scripts/build_windows_app.ps1 \
-  apps/windows/installer/ZaliMessenger.iss
+  apps/windows/installer/ZaliMessenger.iss apps/windows/installer/wizard
 ```
 
 ## Кросс-сборка с macOS через `cargo-xwin`
@@ -85,8 +87,19 @@ $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
 опубликованную версию — пересобирать инсталлятор на каждый релиз не нужно,
 только `POST /api/version`.
 
-Требуется [Inno Setup](https://jrsoftware.org/isinfo.php) (`ISCC.exe` в PATH).
+Требуется [Inno Setup](https://jrsoftware.org/isinfo.php) **6.7+** (`ISCC.exe` в PATH):
+тёмная тема мастера (`WizardStyle=modern dark hidebevels` — 6.6), цвет страниц
+`WizardBackColor=#090b0e` (= `--bg`, 6.7), PNG-картинки (6.5.2). Старый компилятор
+останавливается на `#error` в начале `.iss`, а не на непонятной директиве.
 Локальная сборка Rust не нужна.
+
+Оформление: страница приветствия включена (`DisableWelcomePage=no`) ради левой панели —
+холст со светом «Фокуса со свечением», логотип и силуэты переписки
+(`wizard/large-*.png`, 164:314 под 100–250% DPI); в шапке внутренних страниц —
+плитка-иконка (`wizard/small-*.png`). Тексты приветствия и финала — `[Messages]`.
+Кнопки и чекбоксы — встроенного тёмного стиля Inno (серые, акцент Windows): лаймовые
+можно сделать только своим VCL-стилем (`WizardStyleFile`, `.vsf` из VCL Style Designer
+на Windows). Как это выглядит вживую, на Windows ещё не проверялось.
 
 ```powershell
 .\scripts\build_windows_app.ps1 -OnlineInstallerOnly
@@ -145,10 +158,18 @@ Win32-приложений надёжно только если тот же AUMI
   **Не убирать запись отказа из установщика**: без неё первый же запуск
   молча включал бы автозапуск, который пользователь снял при установке.
 
-Иконка трея — сплошной квадрат брендового цвета (`--lime: #cbff00`),
-сгенерированный в коде (`tray_icon_image()` в `main.rs`), не настоящий `.ico`
-— осознанное упрощение, чтобы не тащить крейт декодирования изображений.
-Замена на многоразмерный `.ico` — косметическая доработка на будущее.
+Иконка — логотип из `brand/logo/gen_logo.py --export`, со скруглённой плиткой в духе
+Windows 11: система, как и macOS, иконки не скругляет. 16–32px — отдельный рисунок по
+пиксельной сетке (`SMALL_LAYOUTS` в генераторе): уменьшенная большая иконка на этих
+размерах превращается в лаймовое пятно. Трей и окно (малая иконка и `with_taskbar_icon`
+для панели задач) берут сырой RGBA из `apps/windows/assets/icon-{16,20,24,32,48,64}.rgba`
+через `include_bytes!` и `from_rgba`, без крейта декодирования картинок. `app_icon_rgba()`
+выбирает размер по `GetSystemMetrics(SM_CXSMICON / SM_CXICON)` (наименьший ≥ метрики), чтобы
+при 100/125/150% рисунок шёл 1:1, а не пережимался. Ресурса иконки у самого `.exe` нет
+(сборка без rc-компилятора, `cargo xwin` его не даёт): Проводник показывает exe без иконки,
+а ярлыки, «Программы и компоненты» и сам установщик берут `apps/windows/assets/zali.ico`
+(`SetupIconFile`, `[Files]` → `{app}\zali.ico`, `IconFilename` в `[Icons]`). Кто запускает
+голый `.exe` без установщика, видит иконку только у окна и в трее.
 
 **Ничего из трея/автозапуска/установщика не проверялось на реальной Windows.**
 Компиляция проходит (кросс-сборка через `cargo xwin`), но поведение — трей,

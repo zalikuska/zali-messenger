@@ -90,8 +90,14 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     // documents from the other direction in NetworkService.swift (it raised its API
     // pool to 16 after the same burst-timeout signature). Splitting the two pools
     // keeps iOS's deliberately narrow API cap while giving transfers their own.
+    //
+    // 4, not 2: over HTTP/2 (nginx in front of the server) every call shares ONE
+    // connection whatever this cap is, so it no longer limits connections at all —
+    // it only serializes calls. With 2, the login burst queued in pairs and each
+    // pair paid a full round trip before the next could start; the web layer already
+    // caps itself at 5 in-flight (`_acquireApiSlot` in web/src/interface/api.js).
     private val httpClient = OkHttpClient.Builder()
-        .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 2 })
+        .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 4 })
         .build()
 
     // Message uploads/downloads and avatars. Mirrors macOS's separate `httpSession`
@@ -124,6 +130,15 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     private var wsInstance: WebSocket? = null
     private var wsGeneration = 0
     private var wsReconnectAttempt = 0
+    /** Между onOpen и обрывом. */
+    @Volatile
+    private var wsOpen = false
+    /** Отложенный реконнект бэкоффа — хранится, чтобы смена сети могла его отменить. */
+    @Volatile
+    private var wsReconnectRunnable: Runnable? = null
+    private var wsProbeToken = 0
+    @Volatile
+    private var wsProbeAnswered = true
     @Volatile
     private var wsAuthToken = ""
     @Volatile
@@ -186,6 +201,99 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             }.orEmpty()
         }
         activeInstance = this
+    }
+
+    // MARK: - Смена сети
+    //
+    // Телефон меняет сеть постоянно (Wi-Fi ↔ мобильная, лифт, метро), а без этого
+    // сокет узнавал о мёртвом пути только от OkHttp pingInterval — до 25 с до пинга
+    // плюс ещё 25 с до вердикта, — а если реконнект уже крутил бэкофф, ждал до 30 с
+    // даже в новой сети. Всё это время ни одного входящего. Теперь при смене сети
+    // по умолчанию: ждущий бэкоффа подключается сразу; открытый получает пинг с
+    // коротким дедлайном (жив — остаётся, без лишней догрузки истории; нет —
+    // переподключение без бэкоффа); пулы HTTP сбрасывают соединения старой сети.
+    // Зеркало macOS (`kickConnections` в NetworkService.swift).
+    private val connectivityManager =
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+    private var defaultNetwork: android.net.Network? = null
+    private var networkCallbackPrimed = false
+
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) {
+            mainHandler.post {
+                val previous = defaultNetwork
+                defaultNetwork = network
+                // Первый вызов после регистрации лишь сообщает текущую сеть.
+                if (!networkCallbackPrimed) {
+                    networkCallbackPrimed = true
+                    return@post
+                }
+                if (previous != network) kickConnections("network change")
+            }
+        }
+
+        override fun onLost(network: android.net.Network) {
+            mainHandler.post {
+                networkCallbackPrimed = true
+                if (defaultNetwork == network) defaultNetwork = null
+            }
+        }
+    }
+
+    // Отдельный init ПОСЛЕ объявлений выше: свойства и init-блоки Kotlin
+    // инициализируются в порядке записи, и в первом init оба поля ещё null.
+    init {
+        try {
+            connectivityManager?.registerDefaultNetworkCallback(networkCallback)
+        } catch (e: RuntimeException) {
+            // SecurityException без ACCESS_NETWORK_STATE или лимит колбэков — работаем
+            // как раньше, только на OkHttp pingInterval.
+        }
+    }
+
+    /** Main thread. */
+    private fun kickConnections(reason: String) {
+        if (wsAuthToken.isEmpty()) return
+        android.util.Log.i("ZaliNative", "kick connections reason=$reason")
+        // Простаивающие соединения старой сети мертвы: следующий запрос иначе ушёл бы
+        // в одно из них и сжёг на нём первую попытку (attemptApiRequest).
+        httpClient.connectionPool.evictAll()
+        transferClient.connectionPool.evictAll()
+        if (PushSession.appVisible) warmApiConnection()
+
+        val pending = wsReconnectRunnable
+        if (pending != null) {
+            mainHandler.removeCallbacks(pending)
+            wsReconnectRunnable = null
+            wsReconnectAttempt = 0
+            connectWebSocket()
+            return
+        }
+        val socket = wsInstance ?: return
+        // Ещё подключается — ему хватит своего connectTimeout.
+        if (!wsOpen) return
+        val generation = wsGeneration
+        val token = ++wsProbeToken
+        wsProbeAnswered = false
+        // Сервер отвечает на {"type":"ping"} кадром {"type":"pong"} (server/src/realtime.rs);
+        // протокольный ping OkHttp вручную не отправить.
+        if (!socket.send("{\"type\":\"ping\"}")) {
+            reconnectWebSocketNow(generation)
+            return
+        }
+        mainHandler.postDelayed({
+            if (generation != wsGeneration || token != wsProbeToken || wsProbeAnswered) return@postDelayed
+            android.util.Log.i("ZaliNative", "ws kick probe unanswered; reconnecting now")
+            reconnectWebSocketNow(generation)
+        }, WS_KICK_PROBE_TIMEOUT_MS)
+    }
+
+    private fun reconnectWebSocketNow(generation: Int) {
+        if (generation != wsGeneration) return
+        wsOpen = false
+        setConnectionStatusJs(false)
+        wsReconnectAttempt = 0
+        connectWebSocket()
     }
 
     /**
@@ -1465,6 +1573,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val url = wsUrl() ?: return
         wsGeneration += 1
         val generation = wsGeneration
+        wsOpen = false
+        wsReconnectRunnable?.let { mainHandler.removeCallbacks(it) }
+        wsReconnectRunnable = null
         wsInstance?.cancel()
 
         val reqBuilder = Request.Builder().url(url).header("Authorization", "Bearer $wsAuthToken")
@@ -1475,6 +1586,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 mainHandler.post {
                     if (generation != wsGeneration) return@post
                     wsReconnectAttempt = 0
+                    wsOpen = true
                     setConnectionStatusJs(true)
                     sendClientPresence()
                     reportDeviceIdle(force = true)
@@ -1484,6 +1596,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 mainHandler.post {
                     if (generation != wsGeneration) return@post
+                    wsProbeAnswered = true
                     handleWsFrame(text)
                 }
             }
@@ -1500,13 +1613,18 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     private fun scheduleWsReconnect(generation: Int) {
         if (generation != wsGeneration) return
+        wsOpen = false
         setConnectionStatusJs(false)
         wsReconnectAttempt = min(wsReconnectAttempt + 1, 6)
         val baseDelay = min(2.0.pow((wsReconnectAttempt - 1).toDouble()) * 1.5, 30.0)
         val delay = baseDelay + Random.nextDouble(0.0, 0.75)
-        mainHandler.postDelayed({
+        wsReconnectRunnable?.let { mainHandler.removeCallbacks(it) }
+        val runnable = Runnable {
+            wsReconnectRunnable = null
             if (generation == wsGeneration) connectWebSocket()
-        }, (delay * 1000).toLong())
+        }
+        wsReconnectRunnable = runnable
+        mainHandler.postDelayed(runnable, (delay * 1000).toLong())
     }
 
     /**
@@ -1518,6 +1636,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val raw = try { JSONObject(text) } catch (e: Exception) { return }
         val type = raw.optString("type", "")
         when (type) {
+            // Ответ на пробу kickConnections — веб его не ждёт.
+            "pong" -> {}
             "avatar_updated", "avatar_deleted" -> {
                 val username = raw.optString("username", "")
                 if (username.isEmpty()) return
@@ -2383,6 +2503,26 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     }
 
     /** Нажатие на уведомление (MainActivity): открыть его переписку, как только веб поднимется. */
+    /** Кнопка уведомления-звонка — в веб (`handleCallNotificationAction`, voice_call.js). */
+    fun handleCallNotificationAction(action: String, roomId: String, from: String) {
+        val payload = JSONObject().apply {
+            put("action", action)
+            put("roomId", roomId)
+            put("from", from)
+        }
+        val js = """
+            (function act(attempt) {
+              var ui = window.__ZALI_INTERFACE;
+              if (ui && ui.S && ui.S.session && ui.S.session.token && ui.handleCallNotificationAction) {
+                ui.handleCallNotificationAction($payload);
+              } else if (attempt < 80) {
+                setTimeout(function () { act(attempt + 1); }, 250);
+              }
+            })(0);
+        """.trimIndent()
+        mainHandler.post { webView.evaluateJavascript(js, null) }
+    }
+
     fun openConversationFromNotification(sender: String?, serverId: String?, channelId: String?) {
         val target = JSONObject().apply {
             put("sender", sender.orEmpty())
@@ -2408,6 +2548,13 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     fun teardown() {
         cryptoExecutor.shutdown()
+        try {
+            connectivityManager?.unregisterNetworkCallback(networkCallback)
+        } catch (e: IllegalArgumentException) {
+            // Не был зарегистрирован (см. init).
+        }
+        wsReconnectRunnable?.let { mainHandler.removeCallbacks(it) }
+        wsReconnectRunnable = null
         wsInstance?.cancel()
         if (activeInstance === this) activeInstance = null
         context.stopService(android.content.Intent(context, ScreenCaptureService::class.java))
@@ -2415,6 +2562,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     companion object {
         private const val LAST_USERNAME_KEY = "last_username"
+
+        /** Сколько ждать ответа на пробу сокета после смены сети (kickConnections). */
+        private const val WS_KICK_PROBE_TIMEOUT_MS = 5_000L
 
         /** Пока человек активен, `client_idle` уходит не чаще (noteUserActivity). */
         private const val DEVICE_IDLE_REPORT_MS = 30_000L

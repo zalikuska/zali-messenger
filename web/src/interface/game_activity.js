@@ -325,6 +325,8 @@ ZaliMixin(ZaliInterface, class {
         // Настройки режима «в игре» живут на сервере: подтянуть их на каждом входе —
         // от них зависит, нужно ли вообще определять игру (game_focus.js).
         this.settingsSyncOnConnected?.();
+        // Состояние аккаунта (support_hub.js): ограничения видны до первой попытки отправить.
+        this.moderationOnConnected?.();
         const me = this.myName?.() || '';
         if (me && this._gameFocusLoadedFor !== me) void this.loadGameFocusSettings?.();
         this.syncGameDetector();

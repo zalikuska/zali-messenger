@@ -53,6 +53,10 @@ pub(crate) async fn report_decrypt_failure(
     if body.len() > MAX_PAYLOAD_BYTES {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
+    // Без квоты любой аккаунт заливал таблицу без предела (аудит 2026-11-18).
+    if !crate::rate_allow(&state, format!("decrypt-report:{}", username.to_lowercase()), 20) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     let report: DecryptFailureReport = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -150,6 +154,11 @@ pub(crate) async fn report_client_diagnostics(
 ) -> impl IntoResponse {
     if body.len() > MAX_CLIENT_REPORT_BYTES {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    // Атомарный предохранитель поверх часовой квоты «COUNT → INSERT», которую
+    // параллельные запросы превышали.
+    if !crate::rate_allow(&state, format!("client-report:{}", username.to_lowercase()), 10) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
     let report: ClientReport = match serde_json::from_slice(&body) {
         Ok(r) => r,

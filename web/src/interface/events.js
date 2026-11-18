@@ -952,6 +952,7 @@ ZaliMixin(ZaliInterface, class {
             });
         }
 
+        this.bindAuthRulesEvents();
         const authRegisterBtn = document.getElementById('authRegisterBtn');
         if (authRegisterBtn) authRegisterBtn.addEventListener('click', () => {
             this.setAuthMode(this.S.auth.mode === 'register' ? 'login' : 'register');
@@ -1284,7 +1285,8 @@ ZaliMixin(ZaliInterface, class {
             designModeOptions.addEventListener('click', (event) => {
                 const btn = event.target?.closest?.('[data-design-mode]');
                 if (!btn || !designModeOptions.contains(btn)) return;
-                this.saveDesignMode(btn.getAttribute('data-design-mode'));
+                const mode = btn.getAttribute('data-design-mode');
+                this.applyLookWave(event, () => this.saveDesignMode(mode));
             });
         }
         if (inputVoiceTrace) {
@@ -1624,7 +1626,7 @@ ZaliMixin(ZaliInterface, class {
                 }
             });
         }
-        if (settingsLogoutBtn) settingsLogoutBtn.addEventListener('click', () => this.logout());
+        if (settingsLogoutBtn) settingsLogoutBtn.addEventListener('click', () => this.logout({ askQuickLogin: true }));
         document.getElementById('changePasswordBtn')?.addEventListener('click', () => void this.changePassword());
         if (resetEncryptionKeysBtn) {
             const resetStatusEl = document.getElementById('resetEncryptionKeysStatus');
@@ -1761,6 +1763,8 @@ ZaliMixin(ZaliInterface, class {
                         this.handleHubUpdateAction();
                     } else if (action === 'addons') {
                         this.setHubTab('addons');
+                    } else if (action === 'support') {
+                        this.setHubTab('support');
                     }
                     return;
                 }
@@ -1859,12 +1863,14 @@ ZaliMixin(ZaliInterface, class {
         document.querySelectorAll('.btn-theme').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const themeName = e.currentTarget.getAttribute('data-theme');
-                this.bus.send('zali_styler:set_theme', themeName);
+                // Смена облика — волной от точки нажатия (motion.js).
+                this.applyLookWave(e, () => this.bus.send('zali_styler:set_theme', themeName));
             });
         });
         document.querySelectorAll('[data-appearance-option]').forEach(btn => {
             btn.addEventListener('click', (e) => {
-                this.bus.send('zali_styler:set_appearance', e.currentTarget.getAttribute('data-appearance-option'));
+                const mode = e.currentTarget.getAttribute('data-appearance-option');
+                this.applyLookWave(e, () => this.bus.send('zali_styler:set_appearance', mode));
             });
         });
 

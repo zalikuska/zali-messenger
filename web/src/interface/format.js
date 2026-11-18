@@ -90,11 +90,20 @@ ZaliMixin(ZaliInterface, class {
         return many;
     }
 
+    // Значение уходит в inline-`style`. Раньше `rgb\([^)]+\)` пропускал кавычки,
+    // `=` и `;`: `rgb(1" onmouseover="…)` выходил из атрибута (XSS через цвет роли,
+    // аудит 2026-11-18), а `rgb(0;background:url(…))` дописывал свои CSS-свойства.
+    // Теперь внутри функций — только цифры, буквы единиц, `.,%/+-` и пробелы; в
+    // градиенте допускается один уровень вложенных скобок. Кавычки, `;{}<>\` и
+    // обратный апостроф не проходят нигде. Всё равно оборачивать в esc() в разметке.
     safeCssColor(value) {
         if (!value) return '';
         const trimmed = String(value).trim();
-        if (/^(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|rgba\([^)]+\)|hsl\([^)]+\)|hsla\([^)]+\)|linear-gradient\([^<>"'`\n]+\)|[a-zA-Z]{2,30})$/.test(trimmed)) return trimmed;
-        return '';
+        if (trimmed.length > 200 || /["'`;{}<>\\\n]/.test(trimmed)) return '';
+        const fn = '(?:rgba?|hsla?)\\([0-9a-zA-Z.,%\\s/+\\-]+\\)';
+        const inner = `(?:${fn}|[0-9a-zA-Z#.,%\\s/+\\-])`;
+        const re = new RegExp(`^(?:#[0-9a-fA-F]{3,8}|${fn}|linear-gradient\\(${inner}+\\)|[a-zA-Z]{2,30})$`);
+        return re.test(trimmed) ? trimmed : '';
     }
 
     uiIcon(name, extraClass = '') {
@@ -129,6 +138,8 @@ ZaliMixin(ZaliInterface, class {
             sticker: `<svg ${attrs} fill="none"><path d="M5 7c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2v6.2L13.2 19H7c-1.1 0-2-.9-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 19v-3.8c0-1.1.9-2 2-2h4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.2 10.2h.01M14.6 10.2h.01M9.4 13.2c.9.8 2.3.9 3.3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             plus: `<svg ${attrs} fill="none"><path d="M12 5.5v13M5.5 12h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
             more: `<svg ${attrs} fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>`,
+            // «Пожаловаться» в меню сообщения (moderation_report.js).
+            flag: `<svg ${attrs} fill="none"><path d="M5.6 20.6V4.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M5.6 4.6h11.6l-2.6 4.1 2.6 4.1H5.6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
             trash: `<svg ${attrs} fill="none"><path d="M4.9 6.9h14.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.7 6.9V5.5a1.4 1.4 0 0 1 1.4-1.4h1.8a1.4 1.4 0 0 1 1.4 1.4v1.4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m6.8 6.9.75 11.5a1.6 1.6 0 0 0 1.6 1.5h5.7a1.6 1.6 0 0 0 1.6-1.5l.75-11.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
         };
         return icons[name] || '';

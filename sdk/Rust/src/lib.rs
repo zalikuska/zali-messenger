@@ -265,6 +265,11 @@ impl ZaliSession {
             } else {
                 encoded
             };
+            // Заголовок записи не аутентифицирован: длина обязана сойтись с
+            // расшифрованным, как это проверяет Swift (ZaliArc.swift; аудит 2026-11-18).
+            if content.len() as u64 != o_size {
+                return Err(ZaliError::Crypto("Entry size mismatch".to_string()));
+            }
 
             results.push((name, content));
         }
@@ -512,6 +517,7 @@ impl ZaliSession {
 
             let mut out_file = File::create(&target)?;
             let mut rem = e_size;
+            let mut written: u64 = 0;
             while rem > 0 {
                 if is_enc {
                     let c = (rem as usize).min(CHUNK_SIZE + 16);
@@ -527,13 +533,20 @@ impl ZaliSession {
                         .decrypt(Nonce::from_slice(&n_b), &buf[..c])
                         .map_err(|_| ZaliError::AuthFailed)?;
                     out_file.write_all(&decrypted)?;
+                    written += decrypted.len() as u64;
                     rem -= c as u64;
                 } else {
                     let n = (rem as usize).min(CHUNK_SIZE);
                     in_file.read_exact(&mut buf[..n])?;
                     out_file.write_all(&buf[..n])?;
+                    written += n as u64;
                     rem -= n as u64;
                 }
+            }
+            if written != o_size {
+                drop(out_file);
+                let _ = fs::remove_file(&target);
+                return Err(ZaliError::Crypto("Entry size mismatch".to_string()));
             }
             progress((i + 1) as f64 / count as f64, &name);
         }

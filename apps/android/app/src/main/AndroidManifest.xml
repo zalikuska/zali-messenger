@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Смена сети → немедленная проверка WebSocket (NativeBridge.networkCallback). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -48,6 +50,8 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
@@ -71,6 +75,19 @@
         <service
             android:name=".ScreenCaptureService"
             android:foregroundServiceType="mediaProjection"
+            android:exported="false" />
+
+        <!-- Входящий звонок, пока приложение не на экране (IncomingCall.kt): держит
+             уведомление-звонок с цветными «Принять»/«Отклонить». shortService — без
+             особых разрешений, звонок живёт 60 с. -->
+        <service
+            android:name=".IncomingCallService"
+            android:foregroundServiceType="shortService"
+            android:exported="false" />
+
+        <!-- «Отклонить» в уведомлении-звонке (IncomingCall.kt). -->
+        <receiver
+            android:name=".CallActionReceiver"
             android:exported="false" />
 
         <!-- Фоновые пуши FCM (server/src/fcm.rs): будит приложение, расшифровывает

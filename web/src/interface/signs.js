@@ -36,6 +36,15 @@ ZaliMixin(ZaliInterface, class {
             unassigned: `<circle cx="12" cy="12" r="8.6" stroke-dasharray="2.2 2.8"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" opacity=".4"/>`,
             display: `<rect x="3.4" y="4.6" width="17.2" height="11.6" rx="1.8" ${t}/><path d="M9 19.6h6M12 16.2v3.4"/><path d="M6.4 7.8h4.4" ${d}/>`,
             window: `<rect x="3.6" y="4.8" width="16.8" height="14.4" rx="2" ${t}/><path d="M3.6 8.6h16.8"/><circle cx="6.2" cy="6.7" r=".6" fill="currentColor" stroke="none"/><circle cx="8.2" cy="6.7" r=".6" fill="currentColor" stroke="none"/><path d="M6.8 12h6.4M6.8 15h4" ${d}/>`,
+            // Модерация (support_hub.js). Тяжесть меры читается формой ещё до цвета:
+            // круг — предупреждение, треугольник — нарушение, восьмиугольник «стоп» —
+            // серьёзное. Цвет задаёт плитка (тон тира), своих цветов в знаке нет.
+            'tier-warning': `<circle cx="12" cy="12" r="8.4" ${t}/><path d="M12 7.7v5.2" stroke-width="1.8"/><circle cx="12" cy="16.1" r="1.05" fill="currentColor" stroke="none"/>`,
+            'tier-violation': `<path d="M10.55 4.75a1.68 1.68 0 0 1 2.9 0l7.05 12.6A1.68 1.68 0 0 1 19.05 20H4.95a1.68 1.68 0 0 1-1.45-2.65z" ${t}/><path d="M12 9.4v4.5" stroke-width="1.8"/><circle cx="12" cy="16.75" r="1.05" fill="currentColor" stroke="none"/>`,
+            'tier-serious': `<path d="M8.4 3.6h7.2l5 5v6.8l-5 5H8.4l-5-5V8.6z" ${t}/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" stroke-width="1.8"/>`,
+            'shield-check': `<path d="M12 3.6l7 2.6v5.3c0 4.4-2.9 7.6-7 9-4.1-1.4-7-4.6-7-9V6.2z" ${t}/><path d="M8.8 12.1l2.3 2.3 4.2-4.5" stroke-width="1.7"/>`,
+            lock: `<rect x="5.2" y="10.4" width="13.6" height="9.6" rx="2" ${t}/><path d="M8.4 10.4V8a3.6 3.6 0 0 1 7.2 0v2.4"/><path d="M12 14.1v2.4" stroke-width="1.8"/>`,
+            flag: `<path d="M6.4 4.8h10.4l-2.3 3.7 2.3 3.7H6.4" ${t}/><path d="M6.4 20.4V3.8"/><path d="M8.8 8.5h3.6" ${d}/>`,
         };
     }
 

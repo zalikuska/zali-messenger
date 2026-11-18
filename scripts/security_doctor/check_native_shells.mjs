@@ -130,4 +130,34 @@ section('Frame isolation (addon sandbox)');
         (boot.match(/postMessage\(serializeWithNonce\(payload\)\)/g) || []).length >= 3);
 }
 
+section('audit 2026-11-18');
+{
+    const winMain = stripLineComments(read('apps/windows/src/main.rs'));
+    const winNative = stripLineComments(read('apps/windows/src/native.rs'));
+    const winUpdates = stripLineComments(read('apps/windows/src/native/updates.rs'));
+    const macWeb = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Views/WebView.swift'));
+    const macNet = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Services/NetworkService.swift'));
+    const macControl = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Services/ControlServer.swift'));
+    const macShared = stripLineComments(read('apps/macos/Sources/ZaliMessenger/Services/Media/SharedBrowser.swift'));
+    const androidMain = stripLineComments(read('apps/android/app/src/main/java/org/zalikus/messenger/MainActivity.kt'));
+    const androidCall = stripLineComments(read('apps/android/app/src/main/java/org/zalikus/messenger/IncomingCall.kt'));
+    record('WRY: the app origin is compared whole, not as a string prefix',
+        /strip_prefix\(origin\)/.test(winMain) && !/starts_with\("https:\/\/zali\.localhost"\)/.test(winMain),
+        '`https://zali.localhost.attacker.example/` passed a starts_with check with window.ipc attached');
+    record('macOS: the app origin is http://localhost without a port',
+        /host == "localhost" && \(url\.port == nil \|\| url\.port == 80\)/.test(macWeb));
+    record('WRY and macOS: the WebSocket host must equal the API host',
+        /ws host \{:\?\} != api host/.test(winNative) && /host differs from api host/.test(macNet));
+    record('WRY and macOS: an older signed release is not installed',
+        /is_newer_version\(&field\("version"\), APP_DISPLAY_VERSION\)/.test(winNative) && /fn is_newer_version/.test(winUpdates)
+            && /UpdateService\.isNewerVersion\(version/.test(macWeb));
+    record('macOS: the control server rejects a negative Content-Length',
+        /length >= 0/.test(macControl));
+    record('macOS: the shared browser parses IPv4 the way WebKit does',
+        /inet_aton\(host/.test(macShared));
+    record('Android: call actions only from our own notification (install secret)',
+        /fun isTrustedCallIntent/.test(androidCall) && /putExtra\(EXTRA_CALL_SECRET/.test(androidCall)
+            && /isTrustedCallIntent\(this, intent\)/.test(androidMain));
+}
+
 finish('native shells');

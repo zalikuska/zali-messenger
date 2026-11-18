@@ -42,6 +42,23 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         parts: &mut axum::http::request::Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
+        let username = authenticate_parts(parts, state).await?;
+        // Временные ограничения и приостановка аккаунта (moderation.rs): изменяющий
+        // запрос отклоняется здесь, до любого обработчика. Чтение не проверяется.
+        if let Some(code) =
+            crate::moderation::blocked_action(state, &username, &parts.method, parts.uri.path())
+        {
+            return Err((StatusCode::FORBIDDEN, code));
+        }
+        Ok(AuthenticatedUser(username))
+    }
+}
+
+async fn authenticate_parts(
+    parts: &mut axum::http::request::Parts,
+    state: &Arc<AppState>,
+) -> Result<String, (StatusCode, &'static str)> {
+    {
         async fn validate_token(token: &str, state: &Arc<AppState>) -> Result<String, StatusCode> {
             let validation = jwt_validation();
             let token_data = decode::<Claims>(
@@ -72,7 +89,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
             if let Ok(auth_str) = auth_header.to_str() {
                 if let Some(token) = auth_str.strip_prefix("Bearer ") {
                     match validate_token(token, state).await {
-                        Ok(username) => return Ok(AuthenticatedUser(username)),
+                        Ok(username) => return Ok(username),
                         Err(_) => {
                             warn!("Получен невалидный JWT-токен");
                             return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
@@ -100,7 +117,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
                         return Err((StatusCode::FORBIDDEN, "Origin not allowed"));
                     }
                     match validate_token(token, state).await {
-                        Ok(username) => return Ok(AuthenticatedUser(username)),
+                        Ok(username) => return Ok(username),
                         Err(_) => {
                             warn!("Получен невалидный JWT-cookie");
                             return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
@@ -126,12 +143,15 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         // browser build all use the header, the cookie or a ticket), so this is
         // removal of an unused path, not a behaviour change — see
         // tests/security.rs::jwt_in_query_string_is_rejected.
-        if let Some(query) = parts.uri.query() {
+        // Тикет — только для WS-хендшейка: на остальных маршрутах он попадал бы в
+        // access-лог прокси вместе с путём запроса (аудит 2026-11-18).
+        let ws_route = parts.uri.path() == "/ws";
+        if let Some(query) = parts.uri.query().filter(|_| ws_route) {
             for pair in query.split('&') {
                 if let Some((key, value)) = pair.split_once('=') {
                     if key == "ticket" && !value.trim().is_empty() {
                         if let Some(username) = take_valid_ws_ticket(state, value) {
-                            return Ok(AuthenticatedUser(username));
+                            return Ok(username);
                         }
                         warn!("Получен невалидный ws-ticket");
                         return Err((StatusCode::UNAUTHORIZED, "Invalid or expired token"));
@@ -142,7 +162,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for AuthenticatedUser {
 
         // 2. Guest fallback only when explicitly enabled
         if state.config.allow_guest_mode {
-            return Ok(AuthenticatedUser("Zalikus".to_string()));
+            return Ok("Zalikus".to_string());
         }
 
         Err((StatusCode::UNAUTHORIZED, "Authentication required"))
@@ -329,6 +349,8 @@ pub(crate) async fn logout(
         .await
     {
         Ok(_) => {
+            state.ws_tickets.retain(|_, record| record.username != auth_user);
+            crate::disconnect_user_sockets(&state, &auth_user);
             let mut response = StatusCode::NO_CONTENT.into_response();
             let expired_cookie = format!(
                 "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
@@ -588,12 +610,21 @@ pub(crate) async fn register(
         }
     };
 
-    match sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+    // Проверка регистра выше — до bcrypt, и два одновременных запроса `Alice`/`alice`
+    // проходили её оба. Окончательная проверка — в самой вставке, одним оператором.
+    match sqlx::query(
+        "INSERT INTO users (username, password_hash)
+         SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE lower(username) = ?)",
+    )
         .bind(username)
         .bind(&hashed)
+        .bind(username.to_lowercase())
         .execute(&state.db)
         .await
     {
+        Ok(done) if done.rows_affected() == 0 => {
+            (StatusCode::CONFLICT, "Такой логин уже занят").into_response()
+        }
         Ok(_) => {
             info!(
                 "Регистрация успешно завершена для пользователя '{}'",
@@ -681,14 +712,23 @@ pub(crate) async fn login(
     // user, so that list is not a secret either. This bucket counts only *failed*
     // attempts, so someone signing in to their own accounts is unaffected no
     // matter how often, while a spray run stops after `max_failed_per_ip` misses.
+    //
+    // Third budget, on the username across all IPs: the (username, IP) bucket does
+    // not slow down guessing one account's password from many addresses.
+    //
+    // Both failure buckets RESERVE a slot here, before bcrypt, and the slot is handed
+    // back on success. Recording the miss only after the await let hundreds of
+    // parallel requests pass the check before the first miss was written (audit
+    // 2026-11-18).
     let ip_rate_key = failed_login_ip_rate_key(client_ip);
-    {
-        let mut failures = state.login_attempts.entry(ip_rate_key.clone()).or_default();
+    let user_fail_key = failed_login_user_rate_key(&payload.username);
+    for (key, what) in [(&ip_rate_key, "ip"), (&user_fail_key, "user")] {
+        let mut failures = state.login_attempts.entry(key.clone()).or_default();
         failures.retain(|t| now.duration_since(*t) < window);
         if failures.len() >= max_failed_per_ip {
             warn!(
-                "Rate limit exceeded: слишком много неудачных входов с ip={}",
-                client_ip
+                "Rate limit exceeded: слишком много неудачных входов ({}) ip={}",
+                what, client_ip
             );
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -700,14 +740,21 @@ pub(crate) async fn login(
                 .into_response();
         }
     }
+    for key in [&ip_rate_key, &user_fail_key] {
+        state.login_attempts.entry(key.clone()).or_default().push_back(now);
+    }
 
-    // Records one miss against the per-IP budget. Called on every path that
-    // answers "неверный логин или пароль", including the unknown-username one —
-    // otherwise enumerating names would be the free way around the budget.
-    let note_failure = || {
-        let mut failures = state.login_attempts.entry(ip_rate_key.clone()).or_default();
-        failures.retain(|t| now.duration_since(*t) < window);
-        failures.push_back(now);
+    // The miss is already reserved in both failure buckets above; every path that
+    // answers "неверный логин или пароль" (the unknown-username one included) simply
+    // keeps it. Success hands the reservation back.
+    let release_reservation = || {
+        for key in [&ip_rate_key, &user_fail_key] {
+            if let Some(mut failures) = state.login_attempts.get_mut(key) {
+                if let Some(pos) = failures.iter().rposition(|t| *t == now) {
+                    failures.remove(pos);
+                }
+            }
+        }
     };
 
     let row =
@@ -733,13 +780,13 @@ pub(crate) async fn login(
                 }
             };
             if !valid {
-                note_failure();
                 warn!("Неверный пароль для пользователя '{}'", payload.username);
                 return (StatusCode::UNAUTHORIZED, "Неверный логин или пароль").into_response();
             }
 
             // Clear rate limit on success
             state.login_attempts.remove(&rate_key);
+            release_reservation();
 
             match issue_auth_response(
                 username.clone(),
@@ -763,7 +810,6 @@ pub(crate) async fn login(
         }
         Ok(None) => {
             let _ = verify_password(payload.password.clone(), DUMMY_BCRYPT_HASH.to_string()).await;
-            note_failure();
             (StatusCode::UNAUTHORIZED, "Неверный логин или пароль").into_response()
         }
         Err(e) => {
@@ -876,6 +922,8 @@ pub(crate) async fn change_password(
     };
     // Подписки на пуши и билеты WS прежних сеансов больше не нужны.
     state.ws_tickets.retain(|_, record| record.username != username);
+    // Живые сокеты прежних сеансов тоже гасим: WS проверяет токен только на хендшейке.
+    crate::disconnect_user_sockets(&state, &username);
     info!("Пароль изменён: {}", username);
     match issue_auth_response(username, new_version, cloud_vault_sync_enabled, &state.config.jwt_secret) {
         Ok(auth) => auth_response_with_cookie_and_secure(StatusCode::OK, auth, state.config.auth_cookie_secure),
@@ -1020,6 +1068,11 @@ pub(crate) fn login_rate_key(ip: std::net::IpAddr, username: &str) -> String {
 /// bucket with every failure from the same address.
 pub(crate) fn failed_login_ip_rate_key(ip: std::net::IpAddr) -> String {
     format!("failed-ip:{}", ip)
+}
+
+/// Failed-login budget for one account across every IP.
+pub(crate) fn failed_login_user_rate_key(username: &str) -> String {
+    format!("failed-user:{}", username.trim().to_lowercase())
 }
 
 #[cfg(test)]

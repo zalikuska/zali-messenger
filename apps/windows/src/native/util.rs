@@ -229,7 +229,22 @@ pub(crate) fn save_data_url_attachment(data_url: &str, filename: &str) -> Result
         return Err("Path traversal detected".to_string());
     }
     fs::write(&destination, data).map_err(|e| e.to_string())?;
+    mark_downloaded_from_internet(&destination);
     Ok(destination)
+}
+
+/// Mark-of-the-Web: вложение от собеседника — файл «из интернета». Без метки
+/// присланный `setup.exe`/`.lnk` открывался без предупреждения SmartScreen
+/// (аудит 2026-11-18). Ошибка записи потока не мешает самой загрузке.
+fn mark_downloaded_from_internet(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        let _ = fs::write(std::path::PathBuf::from(stream), b"[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+    #[cfg(not(windows))]
+    let _ = path;
 }
 
 /// Opens `url` in the OS's configured default browser — not whichever browser

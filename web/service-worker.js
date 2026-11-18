@@ -3,6 +3,10 @@
 // everything under /api and /ws always goes straight to the network — this is a
 // live messenger, not a static site, and stale cached API responses would be wrong.
 const CACHE_NAME = 'zali-shell-v3';
+// Настройки, которые страница сообщает SW (адрес API для «Отклонить» в уведомлении о
+// звонке). Отдельный кеш, переживающий смену версии каркаса.
+const CONFIG_CACHE = 'zali-sw-config';
+const CONFIG_KEY = './__zali-sw-config';
 const SHELL_FILES = [
     './',
     './index.html',
@@ -28,7 +32,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
     event.waitUntil(
         caches.keys()
-            .then((names) => Promise.all(names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name))))
+            .then((names) => Promise.all(names.filter((name) => name !== CACHE_NAME && name !== CONFIG_CACHE).map((name) => caches.delete(name))))
             .then(() => self.clients.claim())
     );
 });
@@ -54,11 +58,71 @@ async function showMessageNotification(title, options) {
     return self.registration.showNotification(title, options);
 }
 
+self.addEventListener('message', (event) => {
+    const data = event.data || {};
+    if (data.type !== 'zali:sw-config' || typeof data.apiBaseUrl !== 'string') return;
+    event.waitUntil(
+        caches.open(CONFIG_CACHE).then((cache) => cache.put(
+            CONFIG_KEY,
+            new Response(JSON.stringify({ apiBaseUrl: data.apiBaseUrl }), { headers: { 'Content-Type': 'application/json' } })
+        ))
+    );
+});
+
+async function storedApiBaseUrl() {
+    try {
+        const cache = await caches.open(CONFIG_CACHE);
+        const response = await cache.match(CONFIG_KEY);
+        const config = response ? await response.json() : null;
+        return config && typeof config.apiBaseUrl === 'string' ? config.apiBaseUrl.replace(/\/+$/, '') : '';
+    } catch (e) {
+        return '';
+    }
+}
+
+// Звонок (server/src/push.rs, send_incoming_call_push / send_call_end_push). Кнопки в
+// уведомлении браузер красит сам — цвет им не задать.
+function showCallNotification(data) {
+    const payload = data.data || {};
+    const tag = data.tag || `zali:call:${payload.roomId || ''}`;
+    if (payload.kind === 'call') {
+        return self.registration.showNotification(data.title || 'Входящий звонок', {
+            body: data.body || payload.from || '',
+            icon: './icon-192.png',
+            badge: './icon-192.png',
+            tag,
+            renotify: true,
+            requireInteraction: true,
+            vibrate: [400, 200, 400, 200, 400],
+            actions: [
+                { action: 'accept', title: 'Принять' },
+                { action: 'decline', title: 'Отклонить' },
+            ],
+            data: payload,
+        });
+    }
+    // Конец звонка заменяет его уведомление тем же tag: подписка userVisibleOnly, совсем
+    // ничего не показать нельзя.
+    return self.registration.showNotification(data.title || 'Звонок завершён', {
+        body: data.body || payload.from || '',
+        icon: './icon-192.png',
+        badge: './icon-192.png',
+        tag,
+        silent: !!data.silent,
+        data: payload,
+    });
+}
+
 self.addEventListener('push', (event) => {
     let data = {};
     try {
         data = event.data ? event.data.json() : {};
     } catch (e) {}
+    const kind = data.data && data.data.kind;
+    if (kind === 'call' || kind === 'call_end') {
+        event.waitUntil(showCallNotification(data));
+        return;
+    }
     const title = data.title || 'ZaliMessenger';
     const options = {
         body: data.body || '',
@@ -83,9 +147,66 @@ self.addEventListener('push', (event) => {
 // Клик ведёт в переписку уведомления, а не просто на главную: открытой вкладке уходит
 // postMessage (web/src/interface/web_push.js, installWebPushClickRouting), новая
 // открывается с ?open=… в адресе.
+// «Отклонить» без открытой вкладки: секретом звонка из пуша, без сессии
+// (server/src/voice.rs, decline_call_with_token). Не вышло — открытой вкладке.
+async function declineCall(data) {
+    const apiBaseUrl = await storedApiBaseUrl();
+    if (apiBaseUrl && data.declineToken) {
+        try {
+            const response = await fetch(`${apiBaseUrl}/api/voice/call/decline`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ roomId: data.roomId || '', token: data.declineToken }),
+            });
+            if (response.ok || response.status === 410) return;
+        } catch (e) {}
+    }
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clientList) {
+        client.postMessage({ type: 'zali:call-action', action: 'decline', roomId: data.roomId || '', from: data.from || '' });
+    }
+}
+
+async function openForCall(data, action) {
+    const message = { type: 'zali:call-action', action, roomId: data.roomId || '', from: data.from || '' };
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clientList) {
+        if ('focus' in client) {
+            client.postMessage(message);
+            return client.focus();
+        }
+    }
+    if (!self.clients.openWindow) return undefined;
+    const url = new URL(self.registration.scope);
+    // «Принять» через адрес — только с одноразовым nonce, который знает лишь этот
+    // service worker (Cache API того же origin). Без него страница считает `?call=`
+    // простым «открыть»: иначе ссылка `?call={"action":"accept"}` от звонящего
+    // поднимала трубку и включала микрофон без нажатия (аудит 2026-11-18).
+    let nonce = '';
+    if (action === 'accept') {
+        try {
+            nonce = Array.from(self.crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+            const cache = await caches.open(CALL_NONCE_CACHE);
+            await cache.put(`/__zali_call_nonce/${nonce}`, new Response(String(Date.now())));
+        } catch (e) {
+            nonce = '';
+        }
+    }
+    url.searchParams.set('call', JSON.stringify({ action: nonce ? action : 'open', roomId: message.roomId, from: message.from, nonce }));
+    return self.clients.openWindow(url.toString());
+}
+
+const CALL_NONCE_CACHE = 'zali-call-nonce';
+
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
     const data = event.notification.data || {};
+    if (data.kind === 'call') {
+        if (event.action === 'decline') event.waitUntil(declineCall(data));
+        // Само уведомление (не кнопка) — открыть приложение, звонок там со своими кнопками.
+        else event.waitUntil(openForCall(data, event.action === 'accept' ? 'accept' : 'open'));
+        return;
+    }
     const target = {
         sender: data.sender || '',
         serverId: data.serverId || '',

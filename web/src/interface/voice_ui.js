@@ -755,9 +755,15 @@ ZaliMixin(ZaliInterface, class {
         // each individual transition site — guarantees it always stops, including
         // paths that don't go through resetVoiceState (e.g. the caller cancelling).
         if (this.hasRingingIncomingInvite()) {
-            this.startRingtone();
+            // Android в фоне звонит уведомлением-звонком из FCM (IncomingCall.kt) —
+            // вебвью, живой и в фоне, звенел бы поверх него.
+            const androidInBackground = this.nativeBridge?.()?.transport === 'android'
+                && typeof window !== 'undefined' && window.__zaliNativeAppFocus === false;
+            if (androidInBackground) this.stopRingtone();
+            else this.startRingtone();
         } else {
             this.stopRingtone();
+            this.closeIncomingCallNotification();
         }
         this.renderVoicePanelBody();
         this.syncVoiceMemberState();
