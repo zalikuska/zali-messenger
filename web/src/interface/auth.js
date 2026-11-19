@@ -90,6 +90,8 @@ ZaliMixin(ZaliInterface, class {
                     reason: 'bootstrapSession',
                     restoreStoredUnlockSecret: true,
                 });
+                // Регистрацию прервали перезагрузкой на шаге с почтой — вернуть к нему.
+                void this.maybeResumeEmailOnboarding?.();
             } else {
                 this.S.contacts = [];
                 this.S.users = [];
@@ -377,6 +379,10 @@ ZaliMixin(ZaliInterface, class {
         const passwordInput = document.getElementById('authPassword');
         if (usernameInput) usernameInput.value = '';
         if (passwordInput) passwordInput.value = '';
+        for (const id of ['authEmail', 'authPasswordRepeat']) {
+            const input = document.getElementById(id);
+            if (input) input.value = '';
+        }
     }
 
     updateContactControls() {
@@ -666,6 +672,9 @@ ZaliMixin(ZaliInterface, class {
             // timeouts. Bail at each checkpoint if a newer run started.
             const superseded = () => this.postAuthSetupRunId !== runId;
             this.postAuthSetupInFlight = true;
+            // Запросы «Восстановить переписку» ждут, пока ключи этого входа не загружены:
+            // ответ «нечего прислать» до восстановления vault был бы ложным.
+            this._historyRecoveryReady = false;
             const tStart = this.nowMs();
             try {
                 let code = String(passphrase || this.S.auth?.vaultPassphrase || '').trim();
@@ -703,6 +712,7 @@ ZaliMixin(ZaliInterface, class {
                     uiLoads,
                 ]);
                 this.addLogEntry({ type: 'INFO', msg: `⏱ postAuthSetup ВСЕГО (reason=${reason}): ${Math.round(this.nowMs() - tStart)} мс`, ts: new Date().toLocaleTimeString() });
+                if (!superseded()) void this.processPendingHistoryRecovery?.();
                 this.trace(`postAuthSetup done reason=${reason} run=${runId}`);
                 // Background, OFF the critical path. These are slow (cloud vault backup
                 // POSTs a package + a history ticket per scope; key republish sends one
@@ -846,7 +856,9 @@ ZaliMixin(ZaliInterface, class {
                 });
                 this.clearAuthInputs();
                 // Новый аккаунт — приветствие с выбором темы и разделов (welcome_tour.js).
+                // Оно встанет после шага с почтой: пока открыт шаг, экран входа не уходит.
                 this.queueWelcomeTour?.(this.myName());
+                this.beginRegistrationEmailStep(password);
                 return true;
             }
 
@@ -975,7 +987,10 @@ ZaliMixin(ZaliInterface, class {
             resetVault: true,
         });
         this.clearAuthInputs();
-        if (mode === 'register') this.queueWelcomeTour?.(this.myName());
+        if (mode === 'register') {
+            this.queueWelcomeTour?.(this.myName());
+            this.beginRegistrationEmailStep(password);
+        }
         this.addLogEntry({
             type: 'SUCCESS',
             msg: mode === 'register'
@@ -1079,6 +1094,34 @@ ZaliMixin(ZaliInterface, class {
                 this.addLogEntry({ type: 'WARN', msg: `Регистрация отклонена для ${username}: ${msg}`, ts: new Date().toLocaleTimeString() });
                 return;
             }
+
+            // Второй ввод пароля: опечатка в новом пароле иначе обнаружилась бы
+            // только при следующем входе — когда исправить её уже нечем.
+            const repeatInput = document.getElementById('authPasswordRepeat');
+            if (repeatInput && password !== String(repeatInput.value || '')) {
+                const msg = 'Пароли не совпадают';
+                this.S.auth.error = msg;
+                if (errorBox) errorBox.textContent = msg;
+                repeatInput.focus();
+                return;
+            }
+
+            // Почта необязательна в форме: без неё после регистрации откроется
+            // экран «Оставить аккаунт без почты?». Окончательно адрес проверяет сервер.
+            const emailInput = document.getElementById('authEmail');
+            const email = this.emailEnabled() ? String(emailInput?.value || '').trim() : '';
+            if (email && !this.looksLikeEmail(email)) {
+                const msg = 'Проверьте адрес почты';
+                this.S.auth.error = msg;
+                if (errorBox) errorBox.textContent = msg;
+                emailInput?.focus();
+                return;
+            }
+            // Шаг с почтой — только для регистрации через эту форму: ссылка
+            // разработчика (?as=) и прочие программные вызовы executeAuth его не видят.
+            this._registrationEmail = { email };
+        } else {
+            this._registrationEmail = null;
         }
 
         const authApiBaseUrl = document.getElementById('authApiBaseUrl');
@@ -1234,6 +1277,8 @@ ZaliMixin(ZaliInterface, class {
         ]);
         this.S.auth.dismissed = false;
         this.S.auth.error = '';
+        this.S.auth.flow = null;
+        this.S.accountEmail = null;
         this.setAuthMode('login', { clearInputs: true, focus: false });
         this.clearStoredSession();
         if (forgetQuickLogin && leaving.token) this.forgetRecentAccountEntry(leaving.username, leaving.token);
@@ -1594,7 +1639,9 @@ ZaliMixin(ZaliInterface, class {
         this.scheduleDeepLinkConsume?.();
         const overlay = document.getElementById('authOverlay');
         if (overlay) {
-            const shouldShow = !this.S.session?.token && !this.S.auth.dismissed;
+            // Шаг с почтой после регистрации идёт уже с сессией — экран входа держится,
+            // пока шаг не закончен (account_email.js).
+            const shouldShow = (!this.S.session?.token && !this.S.auth.dismissed) || !!this.S.auth.flow;
             // Скрытый экран входа уходил только в opacity: 0 + visibility: hidden и
             // оставался в раскладке со всей картинкой (127 узлов SVG) и её бесконечными
             // анимациями (auth-art-*). Chromium невидимое не обсчитывает, WebKit (macOS)
@@ -1638,6 +1685,17 @@ ZaliMixin(ZaliInterface, class {
         // Менеджеры паролей различают вход и регистрацию по autocomplete.
         const registering = this.S.auth.mode === 'register';
         document.getElementById('authPassword')?.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
+        // Поля регистрации (почта, повтор пароля) и «Забыли пароль?» у входа. Почта —
+        // только если сервер умеет её отправлять (/api/auth/email/config).
+        if (this.S.emailConfig === undefined || this.S.emailConfig?.unknown) void this.loadEmailConfig?.();
+        const mailOn = this.emailEnabled();
+        const repeatInput = document.getElementById('authPasswordRepeat');
+        if (repeatInput) repeatInput.hidden = !registering;
+        const emailInput = document.getElementById('authEmail');
+        if (emailInput) emailInput.hidden = !(registering && mailOn);
+        const forgotBtn = document.getElementById('authForgotBtn');
+        if (forgotBtn) forgotBtn.hidden = registering || !mailOn || !!this.S.session?.token;
+        this.renderAuthFlow();
         if (authTitle) authTitle.textContent = this.S.auth.mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
         if (authHint) authHint.textContent = this.S.auth.mode === 'register'
             ? 'Зарегистрируйтесь, чтобы сохранить контакты и историю.'

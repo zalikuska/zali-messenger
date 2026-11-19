@@ -258,8 +258,22 @@ ZaliMixin(ZaliInterface, class {
         if (!this.isMobileLayout()) return;
         const dock = document.getElementById('mobileDock');
         const thumb = dock?.querySelector('.mobile-dock-thumb');
-        const active = dock?.querySelector('.mobile-dock-btn.active');
-        if (!thumb || !active || dock.classList.contains('is-dragging')) return;
+        if (!dock || !thumb) return;
+        const active = dock.querySelector('.mobile-dock-btn.active');
+        // Раздел без кнопки в доке (Хаб при выключенном новом интерфейсе, а настройки
+        // подсвечивают именно Хаб): капсула оставалась под прежним пунктом и врала,
+        // что мы всё ещё в нём. Нет активной кнопки — капсулы нет.
+        dock.classList.toggle('no-active', !active);
+        if (!active) return;
+        if (dock.classList.contains('is-dragging')) {
+            // Жест идёт — капсулу ведёт он. Но класс мог пережить жест: pointerup/cancel
+            // потерялся (свёрнули приложение, системный жест), и капсула навсегда
+            // застывала там, где её бросили, — а раздел при этом переключался.
+            if (dock.__dockDrag?.moved) return;
+            dock.classList.remove('is-dragging');
+            dock.querySelectorAll('.is-target').forEach((b) => b.classList.remove('is-target'));
+            thumb.style.setProperty('--tg', '0px');
+        }
         // Геометрия — только из кеша, который снимает ResizeObserver дока (после
         // раскладки, бесплатно). Прямое чтение offsetLeft/offsetWidth здесь идёт
         // сразу после перерисовки экрана (клик по вкладке) и заставляло браузер
@@ -268,7 +282,16 @@ ZaliMixin(ZaliInterface, class {
         // вместо нативной панели стал работать веб-док. Кеша ещё нет — первый же
         // замер наблюдателя поставит капсулу сам.
         const slot = dock.__dockGeom?.byEl.get(active);
-        if (!slot) return;
+        if (!slot) {
+            // Кеш не знает активную кнопку (снят, пока она была скрыта или док не
+            // был виден) — капсула иначе осталась бы под прежним пунктом. Один
+            // внеочередной замер; защита от рекурсии — measure сам зовёт нас.
+            if (dock.__measureDock && !dock.__measuring && dock.classList.contains('visible')) {
+                dock.__measuring = true;
+                try { dock.__measureDock(); } finally { dock.__measuring = false; }
+            }
+            return;
+        }
         thumb.style.setProperty('--tw', `${slot.width}px`);
         thumb.style.setProperty('--tx', `${slot.left}px`);
     }
@@ -331,6 +354,7 @@ ZaliMixin(ZaliInterface, class {
             ink.style.gap = getComputedStyle(dock).columnGap;
         };
         dock.__syncDockInk = syncInk;
+        dock.__measureDock = measure;
         if (typeof ResizeObserver === 'function') {
             const observer = new ResizeObserver(measure);
             observer.observe(dock);
@@ -366,11 +390,15 @@ ZaliMixin(ZaliInterface, class {
             if (e.pointerType === 'mouse' && e.button !== 0) return;
             const pressed = e.target.closest('.mobile-dock-btn');
             if (!pressed) return;
+            // Прежний жест не закончился (его pointerup потерялся) — закрыть его, иначе
+            // капсула и лента остались бы на полпути.
+            if (drag) finishDrag({ pointerId: drag.id }, true);
             const slots = visibleSlots();
             if (slots.length < 2) return;
             const activeEl = dock.querySelector('.mobile-dock-btn.active');
             const startTx = (slots.find((slot) => slot.el === activeEl) || slots[0]).left;
             drag = { id: e.pointerId, startX: e.clientX, startTx, moved: false, slots, x: startTx };
+            dock.__dockDrag = drag;
             // Снимок старого экрана для въезда по касанию — пока палец лежит (mobile_pager.js).
             if (pressed !== activeEl) this.mobilePagerPrepareTap?.(this.mobileDockSectionOf(pressed));
         });
@@ -406,6 +434,7 @@ ZaliMixin(ZaliInterface, class {
             if (!drag || e.pointerId !== drag.id) return;
             const { moved, slots, x } = drag;
             drag = null;
+            dock.__dockDrag = null;
             if (!moved) {
                 // Касание: click придёт следом и заберёт снимок; если нет — он уберётся сам.
                 if (cancelled) this.mobilePagerDropPrepared?.();
@@ -432,6 +461,18 @@ ZaliMixin(ZaliInterface, class {
         };
         dock.addEventListener('pointerup', (e) => finishDrag(e, false));
         dock.addEventListener('pointercancel', (e) => finishDrag(e, true));
+        // Захват указателя отобрали, а pointerup не пришёл (после обычного pointerup
+        // drag уже null, и это событие ничего не делает).
+        // Только потеря захвата САМОГО дока: у касания неявный захват на кнопке, а
+        // setPointerCapture(dock) при первом движении забирает его — кнопка теряет захват,
+        // событие всплывает (lostpointercapture всплывает) и без этой проверки отменяло бы
+        // жест в самом начале.
+        dock.addEventListener('lostpointercapture', (e) => {
+            if (e.target === dock) finishDrag(e, true);
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && drag) finishDrag({ pointerId: drag.id }, true);
+        });
 
         dock.addEventListener('click', (e) => {
             if (!dock.__suppressDockClick) return;
@@ -1274,6 +1315,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderGameFocusSettings();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
+        this.refreshEmailSettings();
         // Индекс сводок кеша поднимается лениво, первым обращением. Открытие
         // настроек — как раз такое обращение: без него карточка на свежем
         // запуске показала бы пустой кеш при полном диске. Рисуем сразу (чтобы

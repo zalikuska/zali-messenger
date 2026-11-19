@@ -120,7 +120,7 @@ check('лента не линейна (магнит к месту)', /Math\.sin\
 check('в снимке нет копии панели', /DROP = new Set\(\['mobileDock'/.test(pager));
 check('касание по разделу тоже едет лентой: снимок старого экрана + настоящий новый',
     /switchSection\('chats'/.test(events) && /switchSection\('hub'/.test(events) && /mobileSwitchSection\(target, doSwitch\)/.test(pager)
-    && /mobilePagerSlideTap\(before, real, forward\)/.test(pager) && /real\.animate\(/.test(pager));
+    && /mobilePagerSlideTap\(before, real, forward[,)]/.test(pager) && /real\.animate\(/.test(pager));
 // Второй снимок (нового экрана) сразу после переключения заставлял браузер синхронно
 // считать стили и раскладку нового экрана в обработчике касания — 40–58 мс при CPU ×12.
 check('касание не снимает новый экран клоном', !/const after = this\.mobilePagerCapture\(\)/.test(pager));

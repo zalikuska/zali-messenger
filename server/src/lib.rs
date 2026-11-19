@@ -93,6 +93,13 @@ mod profiles;
 pub(crate) use profiles::*;
 // Жалобы на сообщения, классификатор Jev (OpenRouter), лестница наказаний.
 mod moderation;
+// Почтовый сервер (исходящие письма), шаблоны писем, почта аккаунта и сброс
+// пароля по ней, восстановление переписки через собеседника.
+mod mail_templates;
+mod mailer;
+pub use mailer::MailSettings;
+mod account_email;
+mod history_recovery;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -172,9 +179,19 @@ pub struct Config {
     // $10) с запасом: тот же ключ может понадобиться оператору руками.
     moderation_max_per_minute: u32,
     moderation_max_per_day: u32,
+    // Почта (mailer.rs): MAIL_TRANSPORT и соседние переменные. В debug по умолчанию
+    // письма пишутся в каталог, в релизе без настройки почта выключена.
+    mail: mailer::MailSettings,
 }
 
 impl Config {
+    /// Для интеграционных тестов почты: письма — в заданный каталог (или почта
+    /// выключена), без переменных окружения, которые тесты делят между собой.
+    pub fn with_mail(mut self, mail: mailer::MailSettings) -> Self {
+        self.mail = mail;
+        self
+    }
+
     /// Для интеграционных тестов модерации: классификатор — локальная заглушка
     /// Decisions API вместо OpenRouter, лимиты — как задаст тест.
     pub fn with_moderation(mut self, base_url: &str, api_key: &str, per_minute: u32, per_day: u32) -> Self {
@@ -420,6 +437,7 @@ impl Config {
             moderation_model,
             moderation_max_per_minute,
             moderation_max_per_day,
+            mail: mailer::MailSettings::from_env(),
         }
     }
 }
@@ -621,6 +639,8 @@ pub struct AppState {
     // Действующие ограничения аккаунтов, лимиты OpenRouter и будильник очереди
     // жалоб (moderation.rs).
     moderation: moderation::ModerationRuntime,
+    // Очередь исходящей почты (mailer.rs); выключенная почта — пустая ручка.
+    mailer: mailer::Mailer,
     config: Config,
 }
 
@@ -665,6 +685,91 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
         .execute(&pool)
         .await
         .ok();
+    // Почта аккаунта (account_email.rs). В `email` — только подтверждённый кодом
+    // адрес, строчными; ждущий подтверждения живёт в email_challenges. Один адрес —
+    // один аккаунт.
+    sqlx::query("ALTER TABLE users ADD COLUMN email TEXT")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE users ADD COLUMN email_verified_at INTEGER")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email) WHERE email IS NOT NULL")
+        .execute(&pool)
+        .await
+        .expect("Ошибка создания индекса users.email");
+    // Заявка на код: привязка почты (`link`) или сброс пароля (`reset`), одна на
+    // аккаунт и назначение. code_hash — HMAC, не код; reset_token_hash — SHA-256
+    // одноразового токена сброса, выданного за верный код.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS email_challenges (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            email TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            sends INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            last_sent_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            reset_token_hash TEXT,
+            reset_token_expires_at INTEGER,
+            UNIQUE (username, purpose)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы email_challenges");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_email_challenges_reset_token
+         ON email_challenges (reset_token_hash) WHERE reset_token_hash IS NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    // Часовые бюджеты писем (на аккаунт, на адрес, запросы сброса на IP) — в базе,
+    // чтобы рестарт сервера не обнулял защиту от рассылки писем на чужой ящик.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS email_send_log (
+            key TEXT NOT NULL,
+            sent_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы email_send_log");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_email_send_log_key ON email_send_log (key, sent_at)")
+        .execute(&pool)
+        .await
+        .ok();
+    // Запросы «Восстановить переписку» (history_recovery.rs): ждут, пока собеседник
+    // появится в сети.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS history_recovery_requests (
+            id TEXT PRIMARY KEY,
+            requester TEXT NOT NULL,
+            peer TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            UNIQUE (requester, peer)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы history_recovery_requests");
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_history_recovery_peer
+         ON history_recovery_requests (peer, status, expires_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -2182,6 +2287,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     let addon_signer = addons::AddonSigner::load_or_create(&data_dir);
     let device_activity = device_activity::load_device_activity(&pool).await;
     let moderation = moderation::ModerationRuntime::load(&pool).await;
+    let mailer = mailer::Mailer::start(&config.mail, &data_dir);
     let state = Arc::new(AppState {
         db: pool,
         data_dir,
@@ -2202,6 +2308,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         presence_audience: DashMap::new(),
         login_attempts_last_swept: std::sync::Mutex::new(Instant::now()),
         moderation,
+        mailer,
         config,
     });
     // Очередь жалоб: без OPENROUTER_API_KEY задача не стартует, жалобы ждут.
@@ -2258,6 +2365,25 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/password", post(change_password))
         .route("/api/auth/me", get(me).patch(update_me))
+        .route("/api/auth/email/config", get(account_email::email_config))
+        .route(
+            "/api/auth/email",
+            get(account_email::email_status).post(account_email::start_email_link),
+        )
+        .route("/api/auth/email/resend", post(account_email::resend_email_link))
+        .route("/api/auth/email/confirm", post(account_email::confirm_email_link))
+        .route(
+            "/api/auth/email/pending",
+            axum::routing::delete(account_email::cancel_email_link),
+        )
+        .route("/api/auth/password-reset", post(account_email::start_password_reset))
+        .route("/api/auth/password-reset/verify", post(account_email::verify_password_reset))
+        .route("/api/auth/password-reset/complete", post(account_email::complete_password_reset))
+        .route(
+            "/api/history-recovery",
+            get(history_recovery::list_recovery).post(history_recovery::request_recovery),
+        )
+        .route("/api/history-recovery/:id/fulfill", post(history_recovery::fulfill_recovery))
         .route("/api/users", get(get_users))
         .route("/api/users/suggest", get(suggest_users))
         .route("/api/users/:username/devices", get(get_user_public_devices))
@@ -2637,6 +2763,12 @@ fn systemd_listener() -> Option<tokio::net::TcpListener> {
     None
 }
 
+/// `zali_server mail …` — проверка настройки почты, проверочное письмо, DKIM-ключ,
+/// превью писем (mailer.rs). Код возврата — для оболочки.
+pub async fn mail_cli(args: &[String]) -> i32 {
+    mailer::cli(args).await
+}
+
 /// Production entry point: initializes tracing, builds state rooted at the
 /// canonical data dir, binds `BIND_ADDR`, and serves until shutdown.
 pub async fn run() {
@@ -2672,6 +2804,19 @@ pub async fn run() {
                 cleanup_state
                     .ws_tickets
                     .retain(|_, record| record.expires_at > Instant::now());
+            }
+        });
+    }
+
+    // Просроченные коды почты, счётчики писем и запросы восстановления переписки.
+    {
+        let sweep_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                account_email::sweep_expired(&sweep_state).await;
+                history_recovery::sweep_expired(&sweep_state).await;
             }
         });
     }

@@ -39,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261118-rpsplit">
+    <link rel="stylesheet" href="style.css?v=20261119-email-dock3">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -1016,6 +1016,17 @@
                                         </div>
                                     </section>
 
+                                    <section class="settings-card" id="emailSettingsCard" data-settings-section="email">
+                                        <div class="settings-card-head">
+                                            <div>
+                                                <span class="settings-kicker">Account</span>
+                                                <h3 class="settings-card-title">Почта</h3>
+                                            </div>
+                                        </div>
+                                        <!-- Содержимое рисует account_email.js (renderEmailSettings). -->
+                                        <div class="email-settings" id="emailSettings"></div>
+                                    </section>
+
                                     <section class="settings-card settings-card--danger" data-settings-section="session">
                                         <div class="settings-card-head">
                                             <div>
@@ -1727,6 +1738,114 @@
                     <rect class="aa-txt aa-txt--dim" x="178" y="403" width="62" height="6" rx="3"/>
                 </g>
             </svg>
+            <!-- Почта: конверт с письмом, в письме — код. Показывается на шагах
+                 привязки почты после регистрации (.auth-overlay.is-flow[data-flow-kind="email"]);
+                 на экране «Оставить без почты?» галочка сменяется предупреждением. -->
+            <svg class="auth-art auth-art--mail" viewBox="28 16 520 408" role="presentation" focusable="false">
+                <ellipse class="aa-orbit" cx="288" cy="226" rx="250" ry="168"/>
+                <ellipse class="aa-orbit" cx="288" cy="226" rx="186" ry="122"/>
+                <g class="aa-spark">
+                    <path d="M92 70l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+                    <path d="M520 226l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                    <path d="M128 398l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                </g>
+                <g class="aa-dots">
+                    <circle cx="452" cy="30" r="4"/><circle cx="48" cy="200" r="5"/>
+                    <circle cx="540" cy="378" r="3"/><circle cx="232" cy="22" r="3"/>
+                </g>
+                <g class="aa-window">
+                    <!-- задняя стенка с откинутым клапаном — одной фигурой, чтобы
+                         полупрозрачная заливка не темнела на стыке -->
+                    <path class="aa-env-back" d="M140 228 270 74a24 24 0 0 1 36 0l130 154v130a22 22 0 0 1-22 22H162a22 22 0 0 1-22-22z"/>
+                    <path class="aa-env-fold" d="M146 228h284"/>
+                    <g class="aa-letter">
+                        <rect class="aa-card" x="192" y="124" width="192" height="214" rx="22"/>
+                        <circle class="aa-lime" cx="219" cy="153" r="13"/>
+                        <path class="aa-ink-line" d="M214 148h10l-10 10h10"/>
+                        <rect class="aa-txt" x="240" y="146" width="80" height="8" rx="4"/>
+                        <rect class="aa-txt aa-txt--dim" x="240" y="159" width="48" height="6" rx="3"/>
+                        <rect class="aa-txt" x="210" y="183" width="112" height="9" rx="4.5"/>
+                        <rect class="aa-lime" x="210" y="204" width="156" height="44" rx="14"/>
+                        <g class="aa-code">
+                            <circle class="aa-ink" cx="223" cy="226" r="5"/><circle class="aa-ink" cx="249" cy="226" r="5"/>
+                            <circle class="aa-ink" cx="275" cy="226" r="5"/><circle class="aa-ink" cx="301" cy="226" r="5"/>
+                            <circle class="aa-ink" cx="327" cy="226" r="5"/><circle class="aa-ink" cx="353" cy="226" r="5"/>
+                        </g>
+                    </g>
+                    <!-- передняя стенка: боковые клапаны сходятся острым углом, сгибы от
+                         нижних углов — в ту же точку, как у настоящего конверта -->
+                    <path class="aa-env-front" d="M140 236 276 314q12 7 24 0l136-78v122a22 22 0 0 1-22 22H162a22 22 0 0 1-22-22z"/>
+                    <path class="aa-env-crease" d="M152 371 277 319M424 371 299 319"/>
+                </g>
+                <g class="aa-float aa-float--a aa-mail-check">
+                    <circle class="aa-ring" cx="440" cy="104" r="54"/>
+                    <circle class="aa-lime" cx="440" cy="104" r="40"/>
+                    <path class="aa-ink-line" d="M423 105l11 11 22-24"/>
+                </g>
+                <g class="aa-float aa-float--a aa-mail-warn">
+                    <circle class="aa-ring aa-ring--warn" cx="440" cy="104" r="54"/>
+                    <circle class="aa-warn" cx="440" cy="104" r="40"/>
+                    <path class="aa-ink-line" d="M440 86v22M440 122v.5"/>
+                </g>
+                <g class="aa-float aa-float--b">
+                    <rect class="aa-pill" x="34" y="248" width="180" height="62" rx="31"/>
+                    <circle class="aa-lime" cx="67" cy="279" r="21"/>
+                    <rect class="aa-ink-line" x="56" y="271" width="22" height="16" rx="3"/>
+                    <path class="aa-ink-line" d="M57 273l10 7 10-7"/>
+                    <rect class="aa-txt" x="100" y="269" width="88" height="8" rx="4"/>
+                    <rect class="aa-txt aa-txt--dim" x="100" y="283" width="56" height="7" rx="3.5"/>
+                </g>
+                <g class="aa-float aa-float--c">
+                    <circle class="aa-ring" cx="476" cy="334" r="42"/>
+                    <circle class="aa-pill" cx="476" cy="334" r="29"/>
+                    <path class="aa-timer" d="M476 334v-15M476 334l10 7"/>
+                </g>
+            </svg>
+            <!-- Сброс пароля: замок с полем пароля, ключ и письмо с кодом. -->
+            <svg class="auth-art auth-art--reset" viewBox="28 16 520 408" role="presentation" focusable="false">
+                <ellipse class="aa-orbit" cx="288" cy="226" rx="250" ry="168"/>
+                <ellipse class="aa-orbit" cx="288" cy="226" rx="186" ry="122"/>
+                <g class="aa-spark">
+                    <path d="M478 46l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+                    <path d="M58 318l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                    <path d="M432 404l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+                </g>
+                <g class="aa-dots">
+                    <circle cx="118" cy="40" r="4"/><circle cx="530" cy="196" r="5"/>
+                    <circle cx="70" cy="400" r="3"/><circle cx="330" cy="20" r="3"/>
+                </g>
+                <g class="aa-window">
+                    <path class="aa-shackle" d="M226 204v-44a62 62 0 0 1 124 0v44"/>
+                    <rect class="aa-card" x="172" y="196" width="232" height="190" rx="34"/>
+                    <circle class="aa-lime" cx="288" cy="262" r="26"/>
+                    <circle class="aa-ink" cx="288" cy="255" r="6"/>
+                    <path class="aa-ink-line" d="M288 259v12"/>
+                    <rect class="aa-bubble" x="198" y="310" width="180" height="48" rx="17"/>
+                    <circle class="aa-txt" cx="222" cy="334" r="5.5"/><circle class="aa-txt" cx="242" cy="334" r="5.5"/>
+                    <circle class="aa-txt" cx="262" cy="334" r="5.5"/><circle class="aa-txt" cx="282" cy="334" r="5.5"/>
+                    <rect class="aa-lime aa-caret" x="300" y="322" width="4" height="24" rx="2"/>
+                </g>
+                <g class="aa-float aa-float--a">
+                    <circle class="aa-ring" cx="442" cy="112" r="54"/>
+                    <circle class="aa-lime" cx="442" cy="112" r="40"/>
+                    <circle class="aa-ink-line" cx="430" cy="104" r="10"/>
+                    <path class="aa-ink-line" d="M437 111l20 20M449 123l6-6M454 128l5-5"/>
+                </g>
+                <g class="aa-float aa-float--b">
+                    <rect class="aa-pill" x="30" y="150" width="186" height="62" rx="31"/>
+                    <circle class="aa-lime" cx="63" cy="181" r="21"/>
+                    <rect class="aa-ink-line" x="52" y="173" width="22" height="16" rx="3"/>
+                    <path class="aa-ink-line" d="M53 175l10 7 10-7"/>
+                    <rect class="aa-txt" x="96" y="176" width="14" height="10" rx="3"/><rect class="aa-txt" x="114" y="176" width="14" height="10" rx="3"/>
+                    <rect class="aa-txt" x="132" y="176" width="14" height="10" rx="3"/><rect class="aa-txt" x="152" y="176" width="14" height="10" rx="3"/>
+                    <rect class="aa-txt" x="170" y="176" width="14" height="10" rx="3"/><rect class="aa-txt" x="188" y="176" width="14" height="10" rx="3"/>
+                </g>
+                <g class="aa-float aa-float--c">
+                    <circle class="aa-ring" cx="478" cy="338" r="42"/>
+                    <circle class="aa-pill" cx="478" cy="338" r="29"/>
+                    <path class="aa-timer" d="M466.5 331a13 13 0 1 1 1.4 13.6M466.5 321.5v9.5h9.5"/>
+                </g>
+            </svg>
         </aside>
         <div class="auth-card">
             <div class="auth-brand">ZaliMessenger</div>
@@ -1754,12 +1873,19 @@
                     <p class="auth-fail-server-note" id="authFailServerNote"></p>
                 </div>
             </section>
+            <!-- Шаги после регистрации и сброса пароля: код из письма, «оставить без
+                 почты?», новый пароль. Показываются вместо формы, пока открыт
+                 .auth-overlay.is-flow (account_email.js: renderAuthFlow). -->
+            <section class="auth-flow" id="authFlow" aria-live="polite" hidden></section>
             <h1 id="authTitle">Вход в аккаунт</h1>
             <p id="authHint">Войдите, чтобы синхронизировать сообщения и контакты.</p>
             <p class="auth-vault-sync" id="authVaultSyncNote">Ключи переписки подгрузятся из облака при входе.</p>
             <form class="auth-form" id="authForm">
                 <input id="authUsername" class="auth-input" type="text" placeholder="Логин" aria-label="Логин" autocomplete="username" autocapitalize="none" spellcheck="false">
+                <input id="authEmail" class="auth-input auth-register-only" type="email" inputmode="email" placeholder="Почта — чтобы восстановить пароль" aria-label="Почта" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254" hidden>
                 <input id="authPassword" class="auth-input" type="password" placeholder="Пароль" aria-label="Пароль" autocomplete="current-password">
+                <input id="authPasswordRepeat" class="auth-input auth-register-only" type="password" placeholder="Повторите пароль" aria-label="Повторите пароль" autocomplete="new-password" maxlength="72" hidden>
+                <button id="authForgotBtn" class="auth-forgot" type="button" hidden>Забыли пароль?</button>
                 <div class="auth-rules" id="authRules" hidden>
                     <input id="authRulesAccept" type="checkbox">
                     <label for="authRulesAccept">Я принимаю <button id="authRulesLink" class="auth-rules-link" type="button">Правила сообщества</button></label>
@@ -1791,6 +1917,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261118-rpsplit"></script>
+    <script src="app.js?v=20261119-email"></script>
 </body>
 </html>

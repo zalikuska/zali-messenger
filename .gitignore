@@ -88,3 +88,6 @@ __pycache__/
 
 # Публичные ключи для SSH-входа в Docker (docs/DOCKER.md)
 ssh/
+
+# Письма почтового сервера в режиме MAIL_TRANSPORT=file (debug по умолчанию): внутри живые коды.
+mail-outbox/

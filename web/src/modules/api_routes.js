@@ -39,6 +39,20 @@
             login: apiRoute('/auth/login'),
             wsTicket: apiRoute('/auth/ws-ticket'),
             password: apiRoute('/auth/password'),
+            // Почта аккаунта и сброс пароля по ней (server/src/account_email.rs).
+            emailConfig: apiRoute('/auth/email/config'),
+            email: apiRoute('/auth/email'),
+            emailResend: apiRoute('/auth/email/resend'),
+            emailConfirm: apiRoute('/auth/email/confirm'),
+            emailPending: apiRoute('/auth/email/pending'),
+            passwordReset: apiRoute('/auth/password-reset'),
+            passwordResetVerify: apiRoute('/auth/password-reset/verify'),
+            passwordResetComplete: apiRoute('/auth/password-reset/complete'),
+        },
+        // «Восстановить переписку» через собеседника (server/src/history_recovery.rs).
+        historyRecovery: {
+            base: apiRoute('/history-recovery'),
+            fulfill: (id) => apiRoute(`/history-recovery/${encodeURIComponent(id)}/fulfill`),
         },
         contacts: {
             list: apiRoute('/contacts'),

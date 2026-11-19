@@ -99,6 +99,17 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // «Восстановить переписку» (server/src/history_recovery.rs): собеседник просит
+        // ключи нашей переписки — или ответил на наш запрос.
+        if (type === 'history_recovery_request') {
+            this.handleHistoryRecoveryRequest(payload);
+            return true;
+        }
+        if (type === 'history_recovery_update') {
+            void this.handleHistoryRecoveryUpdate(payload);
+            return true;
+        }
+
         // «В сети» у собеседников (server/src/presence.rs).
         if (type === 'user_presence') {
             this.handlePresenceRealtime(payload);

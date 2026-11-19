@@ -75,6 +75,28 @@ pub async fn spawn_app_with_moderation(base_url: &str, per_minute: u32, per_day:
     spawn_app_with_config(data_dir, config).await
 }
 
+/// Сервер, который пишет письма в `<data_dir>/mail-outbox` (`.json` рядом с
+/// каждым письмом) — для тестов почты и сброса пароля. Явно, а не по умолчанию
+/// debug-сборки: MAIL_TRANSPORT из окружения разработчика тест не меняет.
+#[allow(dead_code)]
+pub async fn spawn_app_with_mail_outbox() -> TestApp {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let data_dir: PathBuf =
+        std::env::temp_dir().join(format!("zali-server-test-{}-{}", std::process::id(), n));
+    let mail = zali_server::MailSettings::file_outbox(data_dir.join("mail-outbox"));
+    spawn_app_with_config(data_dir, zali_server::Config::from_env().with_mail(mail)).await
+}
+
+/// Сервер с выключенной почтой — как релиз без MAIL_TRANSPORT.
+#[allow(dead_code)]
+pub async fn spawn_app_without_mail() -> TestApp {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let data_dir: PathBuf =
+        std::env::temp_dir().join(format!("zali-server-test-{}-{}", std::process::id(), n));
+    let mail = zali_server::MailSettings::disabled();
+    spawn_app_with_config(data_dir, zali_server::Config::from_env().with_mail(mail)).await
+}
+
 async fn spawn_app_with_config(data_dir: PathBuf, config: zali_server::Config) -> TestApp {
     let hash_chain_key = config.hash_chain_key().to_string();
     let state = zali_server::build_app_state(data_dir.clone(), config).await;

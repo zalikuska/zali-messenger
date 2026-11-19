@@ -953,6 +953,9 @@ ZaliMixin(ZaliInterface, class {
         }
 
         this.bindAuthRulesEvents();
+        // Шаги почты и сброса пароля, «Забыли пароль?», карточка «Почта» в настройках.
+        this.bindAccountEmailEvents();
+        this.bindEmailSettingsEvents();
         const authRegisterBtn = document.getElementById('authRegisterBtn');
         if (authRegisterBtn) authRegisterBtn.addEventListener('click', () => {
             this.setAuthMode(this.S.auth.mode === 'register' ? 'login' : 'register');

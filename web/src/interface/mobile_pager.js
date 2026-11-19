@@ -69,7 +69,12 @@ ZaliMixin(ZaliInterface, class {
                     const main = child.cloneNode(false);
                     for (const view of child.children) {
                         const heavy = view.id === 'viewChat' && !chatScreen;
-                        const hidden = view.classList.contains('view') && !view.classList.contains('active');
+                        // Скрытые экраны И скрытые оверлеи/модалки (#serverOverlay, #treasuryModal…
+                        // — не .view, но в .main и тоже display:none): раньше копировались
+                        // целиком, ~370 лишних узлов из 495 на каждое касание (замер на V2036:
+                        // снимок 38 мс → 27 мс при инвалидированных стилях, 495 → 121 узел).
+                        const hidden = (view.classList.contains('view') && !view.classList.contains('active'))
+                            || getComputedStyle(view).display === 'none';
                         main.appendChild(view.cloneNode(!(heavy || hidden)));
                     }
                     copy.appendChild(main);
@@ -421,6 +426,11 @@ ZaliMixin(ZaliInterface, class {
     // делает mobilePagerEnd.
     mobileSwitchSection(target, doSwitch) {
         const state = this.mobilePagerState();
+        // Второе касание, пока едет лента первого (~340 мс; соседние вкладки жмут именно
+        // так), раньше шло мгновенно: state.active занят, и mobilePagerCanSlide говорил
+        // «нельзя». Ленту касания прерываем — экран под ней уже в конечном положении,
+        // новая лента стартует от него.
+        if (state.active?.tap) this.mobilePagerTeardown(true);
         const sections = this.isMobileLayout?.() ? this.mobilePagerSections() : [];
         const from = this.activeMobileNavSection?.();
         const animate = this.mobilePagerCanSlide(from, target, sections);
@@ -467,6 +477,7 @@ ZaliMixin(ZaliInterface, class {
     // Если click не придёт (палец увели, начался жест по панели) — снимок убирается.
     mobilePagerPrepareTap(target) {
         const state = this.mobilePagerState();
+        if (state.active?.tap) this.mobilePagerTeardown(true);
         this.mobilePagerDropPrepared();
         if (!this.isMobileLayout?.()) return;
         const from = this.activeMobileNavSection?.();
@@ -536,7 +547,7 @@ ZaliMixin(ZaliInterface, class {
         const { overlay, track } = prepared || this.mobilePagerTapOverlay(before);
         const dir = forward ? -1 : 1;
         const timing = { duration: PAGER_SETTLE_MS, easing: PAGER_EASING };
-        const active = { overlay, track, sections: [], index: 0, p: 0, applied: 0, raf: 0, settling: true, anims: [] };
+        const active = { overlay, track, sections: [], index: 0, p: 0, applied: 0, raf: 0, settling: true, anims: [], tap: true };
         state.active = active;
         let done = false;
         const finish = () => {

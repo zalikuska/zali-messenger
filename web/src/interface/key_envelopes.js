@@ -272,6 +272,17 @@ ZaliMixin(ZaliInterface, class {
             return false;
         }
         const peer = requester || this.peerFromConversationScope(scope);
+        // Ключи личной переписки — только её второму участнику (или своим устройствам).
+        // Сервер шлёт запрос лишь участникам scope, но клиент этого не проверял, и
+        // подменённый кадр «requester: mallory, scope: dm:me:bob» отправил бы mallory
+        // ключи переписки с bob — ровно то, от чего E2E должно защищать.
+        if (String(scope).startsWith('dm:') && peer && peer !== this.myName()) {
+            const counterpart = this.peerFromConversationScope(scope);
+            if (!counterpart || counterpart.toLowerCase() !== String(peer).toLowerCase()) {
+                this.trace(`handleKeyRepublishRequest rejected scope=${scope} requester=${peer} not_participant=true`);
+                return false;
+            }
+        }
         // A request from our own account is another of our devices asking for this
         // key. That used to be dropped on the floor here, which is precisely the
         // device that has no other way to obtain it.

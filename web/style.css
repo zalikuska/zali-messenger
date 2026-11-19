@@ -675,6 +675,11 @@ button {
     transition: --tg .18s ease-out;
 }
 
+/* Раздел без кнопки в доке — капсулы нет (syncMobileDockThumb). */
+.mobile-dock.no-active .mobile-dock-thumb {
+    opacity: 0;
+}
+
 .mobile-dock-btn.is-target {
     color: var(--text);
 }
@@ -29051,4 +29056,809 @@ html.look-vt::view-transition-new(root) { z-index: 2; }
     .settings-body .server-toggle.settings-toggle > input[type="checkbox"]::after { transition: none; }
     .hub-action:active, .f-choice:active, .btn-theme:active,
     .auth-btn.primary:active, .zc-send-btn:active { transform: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ПОЧТА АККАУНТА И СБРОС ПАРОЛЯ (2026-11-19)
+   Шаги внутри #authOverlay (.auth-flow, класс is-flow): код из письма после
+   регистрации, «Оставить аккаунт без почты?» с отказом через 5 секунд, сброс
+   пароля по почте; карточка «Почта» в настройках, её диалог и всплывающие
+   уведомления. Логика — interface/account_email.js, history_recovery.js.
+   Акцент сплошной и только по смыслу: главная кнопка, принятый код, «моё».
+   ════════════════════════════════════════════════════════════════════════ */
+
+.auth-register-only[hidden],
+.auth-forgot[hidden],
+.auth-flow[hidden],
+.email-settings-card[hidden],
+#emailSettingsCard[hidden] {
+    display: none !important;
+}
+
+[data-settings-section="email"] { order: 41; }
+body[data-design-mode="focus"] [data-settings-section="email"] { order: 41; }
+
+/* «Забыли пароль?» — тихая ссылка у поля пароля, не третья плитка в подвале. */
+.auth-forgot {
+    align-self: flex-end;
+    min-height: 32px;
+    margin: -4px 2px -2px 0;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--text2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .15s var(--ease-out), background .15s var(--ease-out);
+}
+
+.auth-forgot:hover { color: var(--text); background: var(--f-fill, rgba(var(--ink-rgb),.065)); }
+.auth-forgot:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+
+/* Шаг вместо формы: всё остальное в карточке скрыто, как у экрана ошибки. */
+.auth-flow {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.auth-overlay.is-flow .auth-flow:not([hidden]) { display: flex; }
+.auth-overlay.is-flow .auth-card > :not(.auth-flow) { display: none !important; }
+
+.auth-overlay.visible .auth-flow > * {
+    animation: auth-field-in .42s cubic-bezier(.2,.8,.2,1) backwards;
+}
+.auth-overlay.visible .auth-flow > *:nth-child(2) { animation-delay: .04s; }
+.auth-overlay.visible .auth-flow > *:nth-child(3) { animation-delay: .08s; }
+.auth-overlay.visible .auth-flow > *:nth-child(4) { animation-delay: .12s; }
+.auth-overlay.visible .auth-flow > *:nth-child(5) { animation-delay: .16s; }
+
+.auth-flow-step h1 { margin-bottom: 10px; }
+.auth-flow-step p { margin-bottom: 6px; }
+
+.auth-flow-kicker {
+    display: block;
+    margin-bottom: 10px;
+    color: var(--text);
+    opacity: var(--meta-50, .5);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.auth-flow-target {
+    color: var(--text);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.auth-flow-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.auth-flow-form .auth-actions { margin-top: 4px; }
+
+.auth-flow .auth-btn.primary:disabled {
+    background: var(--f-fill, rgba(var(--ink-rgb),.065));
+    color: var(--text);
+    opacity: .45;
+    cursor: default;
+    box-shadow: none;
+}
+
+.auth-flow .auth-btn.primary.is-busy:disabled { opacity: .7; }
+
+.auth-flow-error,
+.auth-flow-notice {
+    display: none;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.auth-flow-error.is-shown { display: block; color: var(--danger-fg, var(--red)); }
+.auth-flow-notice.is-shown { display: block; color: var(--text2); }
+
+.auth-flow-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.auth-flow-row .auth-link:disabled,
+.auth-flow-row .auth-link[disabled] {
+    opacity: .5;
+    cursor: default;
+}
+
+.auth-flow-row .auth-link:disabled:hover { background: var(--f-fill, rgba(var(--ink-rgb),.065)); }
+
+.auth-flow-row .auth-link { font-variant-numeric: tabular-nums; }
+
+.auth-flow-hint {
+    margin: 2px 0 0;
+    color: var(--text);
+    opacity: var(--meta-55, .55);
+    font-size: 13px;
+    line-height: 1.45;
+    text-align: center;
+}
+
+.auth-overlay .auth-card .auth-flow .auth-flow-hint {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.auth-flow-links {
+    display: flex;
+    justify-content: center;
+}
+
+.auth-flow-link {
+    min-height: 40px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 12px;
+    background: none;
+    color: var(--text2);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .15s var(--ease-out), background .15s var(--ease-out);
+}
+
+.auth-flow-link:hover { color: var(--text); background: var(--f-fill, rgba(var(--ink-rgb),.065)); }
+.auth-flow-link:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+
+/* ── Поле кода: шесть ячеек поверх одного настоящего поля ──────────────── */
+
+.otp {
+    position: relative;
+    width: 100%;
+}
+
+.otp-input {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    font-size: 16px;
+    letter-spacing: 2em;
+    opacity: 0;
+    cursor: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.otp-cells {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) 6px repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.otp-cell:nth-child(4) { grid-column: 5; }
+
+.otp-cell {
+    display: grid;
+    place-items: center;
+    height: 64px;
+    border-radius: 14px;
+    background: var(--f-fill, rgba(var(--ink-rgb),.065));
+    color: var(--text);
+    font-size: 30px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    transition: background .15s var(--ease-out), box-shadow .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.otp-cell.is-filled { background: var(--f-fill-hover, rgba(var(--ink-rgb),.095)); }
+
+.otp.is-focused .otp-cell.is-active {
+    box-shadow: inset 0 0 0 2px var(--f-ring-border, var(--accent-fg)), var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),.22));
+}
+
+.otp.is-focused .otp-cell.is-active:not(.is-filled)::after {
+    content: "";
+    width: 2px;
+    height: 28px;
+    border-radius: 1px;
+    background: var(--accent-fg);
+    animation: otp-caret 1.05s steps(1) infinite;
+}
+
+.otp.is-error .otp-cell { box-shadow: inset 0 0 0 2px var(--danger-fg, var(--red)); }
+.otp.is-error .otp-cells { animation: otp-shake .36s var(--ease-out); }
+
+/* Код принят — ячейки становятся сплошным акцентом: это и есть «верно». */
+.otp.is-success .otp-cell {
+    background: var(--lime);
+    color: var(--on-accent);
+    box-shadow: none;
+}
+
+.otp.is-disabled { opacity: .55; }
+/* Принятый код — в полную силу: полупрозрачный лайм читается мутной оливой. */
+.otp.is-success.is-disabled { opacity: 1; }
+.otp.is-disabled .otp-input { cursor: default; }
+
+@keyframes otp-caret {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+@keyframes otp-shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-7px); }
+    40% { transform: translateX(6px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(2px); }
+}
+
+/* ── «Оставить аккаунт без почты?» ─────────────────────────────────────── */
+
+.auth-flow-facts {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.auth-flow-fact {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: var(--f-surface, rgba(var(--ink-rgb),.032));
+}
+
+.auth-flow-fact-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(var(--ink-rgb),.065));
+    color: var(--text);
+}
+
+.auth-flow-fact-icon svg { width: 22px; height: 22px; }
+.auth-flow-fact.is-warn .auth-flow-fact-icon { color: var(--danger-fg, var(--red)); }
+
+/* Только текстовый блок: плитка иконки — тоже <span>, и общее `span` сбрасывало
+   ей display: grid — знак уезжал в левый верхний угол плитки. */
+.auth-flow-fact > div > strong {
+    display: block;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.auth-flow-fact > div > span {
+    display: block;
+    margin-top: 2px;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.auth-flow-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+/* Отказ от почты: пять секунд кнопка выключена, полоса внутри неё тает,
+   число считает вниз. Потом — опасная кнопка, подписанная действием. */
+.auth-btn--countdown {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    overflow: hidden;
+    isolation: isolate;
+    border: 0;
+    background: rgba(255,77,109,.14);
+    color: var(--danger-fg, var(--red));
+    font-weight: 700;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
+}
+
+.auth-btn--countdown:hover:not(:disabled) { background: rgba(255,77,109,.2); }
+
+.auth-btn--countdown:disabled {
+    background: var(--f-fill, rgba(var(--ink-rgb),.065));
+    color: var(--text);
+    cursor: not-allowed;
+}
+
+.auth-btn--countdown:disabled .auth-countdown-label { opacity: .55; }
+
+.auth-countdown-fill {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: rgba(var(--ink-rgb),.07);
+    transform: scaleX(0);
+    transform-origin: left center;
+}
+
+.auth-btn--countdown.is-counting .auth-countdown-fill {
+    animation: auth-countdown-drain 5s linear forwards;
+}
+
+.auth-countdown-num {
+    display: inline-grid;
+    place-items: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(var(--ink-rgb),.1);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.auth-countdown-num[hidden] { display: none; }
+
+@keyframes auth-countdown-drain {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+}
+
+body[data-design-mode="focus"] .auth-card .auth-btn--countdown {
+    min-height: 56px;
+    border-radius: 14px;
+    font-size: 16px;
+}
+
+/* ── Почта привязана ───────────────────────────────────────────────────── */
+
+.auth-flow-success {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    margin-bottom: 6px;
+    border-radius: 50%;
+    background: var(--lime);
+    color: var(--on-accent);
+    box-shadow: 0 0 0 1px var(--accent-edge, transparent);
+}
+
+.auth-overlay.visible .auth-flow > .auth-flow-success {
+    animation: auth-flow-pop .48s var(--ease-spring, cubic-bezier(.2,1.25,.35,1)) backwards;
+}
+
+.auth-flow-success svg { width: 36px; height: 36px; }
+
+@keyframes auth-flow-pop {
+    from { opacity: 0; transform: scale(.6); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+/* ── Витрина: письмо с кодом и замок сброса ────────────────────────────── */
+
+.auth-overlay .auth-art--mail,
+.auth-overlay .auth-art--reset,
+.auth-overlay.is-flow .auth-art--login,
+.auth-overlay.is-flow .auth-art--error {
+    display: none;
+}
+
+body[data-design-mode="focus"] .auth-overlay.is-flow[data-flow-kind="email"] .auth-art--mail,
+body[data-design-mode="focus"] .auth-overlay.is-flow[data-flow-kind="reset"] .auth-art--reset {
+    display: block;
+}
+
+.auth-art .aa-mail-warn { display: none; }
+.auth-overlay[data-flow-step="skip"] .auth-art .aa-mail-check { display: none; }
+.auth-overlay[data-flow-step="skip"] .auth-art .aa-mail-warn { display: inline; }
+/* Без почты письмо «гаснет»: код в нём больше ни к чему. Нейтральным тоном, а не
+   прозрачностью — полупрозрачный лайм читается мутной оливой. */
+.auth-overlay[data-flow-step="skip"] .auth-art .aa-letter .aa-lime { fill: rgba(var(--ink-rgb),.16); }
+.auth-overlay[data-flow-step="skip"] .auth-art .aa-letter .aa-ink { fill: rgba(var(--ink-rgb),.34); }
+.auth-overlay[data-flow-step="skip"] .auth-art .aa-letter .aa-ink-line { stroke: rgba(var(--ink-rgb),.5); }
+.auth-art .aa-letter .aa-lime,
+.auth-art .aa-letter .aa-ink { transition: fill .3s var(--ease-out); }
+
+/* Задняя стенка конверта и откинутый клапан: на тон глубже передней стенки
+   (.aa-card), чтобы конверт читался открытым, а не плоской карточкой. */
+.auth-art .aa-env-back {
+    fill: rgba(var(--ink-rgb),.075);
+    stroke: rgba(var(--ink-rgb),.12);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+}
+
+/* Передняя стенка — на ступень отличается от письма (.aa-card): одним тоном они
+   сливались, и письмо выглядело вырезанным снизу. */
+.auth-art .aa-env-front {
+    fill: color-mix(in srgb, rgb(var(--ink-rgb)) 6%, rgb(var(--surface-rgb)));
+    stroke: rgba(var(--ink-rgb),.14);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+}
+
+.auth-art .aa-env-crease {
+    fill: none;
+    stroke: rgba(var(--ink-rgb),.12);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-env-fold {
+    stroke: rgba(var(--ink-rgb),.1);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-timer {
+    fill: none;
+    stroke: var(--accent-fg);
+    stroke-width: 4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.auth-art .aa-shackle {
+    fill: none;
+    stroke: rgba(var(--ink-rgb),.16);
+    stroke-width: 20;
+    stroke-linecap: round;
+}
+
+.auth-art .aa-caret { animation: otp-caret 1.05s steps(1) infinite; }
+
+/* Узкое окно: как у входа, иллюстрации нет — форме нужна вся высота. Селекторы
+   той же специфичности, что у показа выше, иначе показ побеждал. */
+@media (max-width: 980px) {
+    body[data-design-mode="focus"] .auth-overlay.is-flow[data-flow-kind="email"] .auth-art--mail,
+    body[data-design-mode="focus"] .auth-overlay.is-flow[data-flow-kind="reset"] .auth-art--reset {
+        display: none;
+    }
+}
+
+@media (max-width: 760px) {
+    .otp-cells { gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)) 2px repeat(3, minmax(0, 1fr)); }
+    .otp-cell { height: 56px; font-size: 26px; border-radius: 12px; }
+    .auth-flow-row { grid-template-columns: 1fr; }
+}
+
+/* ── Настройки → «Почта» ───────────────────────────────────────────────── */
+
+.email-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.email-settings:empty { display: none; }
+
+.email-row {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    min-height: 58px;
+    padding: 10px 12px 10px 14px;
+    border-radius: 14px;
+    background: var(--f-fill, rgba(var(--ink-rgb),.065));
+}
+
+.email-row-icon {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: var(--f-fill-strong, rgba(var(--ink-rgb),.11));
+    color: var(--text2);
+}
+
+.email-row-icon svg { width: 20px; height: 20px; }
+.email-row-icon.is-mine { color: var(--accent-fg); }
+.email-row-icon.is-warn { color: var(--warn-fg); }
+
+.email-row-text { min-width: 0; }
+
+.email-row-text strong {
+    display: block;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.email-row-text span {
+    display: block;
+    margin-top: 2px;
+    color: var(--text2);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.email-settings .email-btn {
+    min-height: 40px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--f-fill-strong, rgba(var(--ink-rgb),.11));
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.email-settings .email-btn:hover { background: var(--f-fill-hover, rgba(var(--ink-rgb),.095)); }
+
+.email-pending {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 10px 12px 10px 14px;
+    border-radius: 14px;
+    background: var(--f-surface, rgba(var(--ink-rgb),.032));
+    color: var(--text2);
+    font-size: 13px;
+}
+
+.email-pending strong { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+
+.email-settings .email-link-btn {
+    width: 100%;
+    min-height: 44px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+/* ── Диалог смены почты (каркас .coin-transfer-modal) ──────────────────── */
+
+.email-dialog .email-dialog-box { width: min(100%, 440px); }
+
+.email-dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.email-dialog-text {
+    margin: 0 0 6px;
+    color: var(--text2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.email-dialog-text strong { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+
+.email-dialog-label {
+    margin-top: 4px;
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.email-dialog .email-dialog-input {
+    height: 44px;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(var(--ink-rgb),.065));
+    color: var(--text);
+    font-size: 14px;
+}
+
+.email-dialog .email-dialog-input:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--f-ring-border, var(--accent-fg)), var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),.22));
+}
+
+.email-dialog .otp-cell { height: 54px; font-size: 24px; border-radius: 12px; }
+.email-dialog .otp-cells { gap: 8px; }
+
+.email-dialog-error,
+.email-dialog-notice {
+    display: none;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.email-dialog-error.is-shown { display: block; color: var(--danger-fg, var(--red)); }
+.email-dialog-notice.is-shown { display: block; color: var(--text2); }
+
+.email-dialog-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 2px 0 6px;
+}
+
+.email-dialog-link {
+    min-height: 32px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--text2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+}
+
+.email-dialog-link:hover:not(:disabled) { color: var(--text); background: var(--f-fill, rgba(var(--ink-rgb),.065)); }
+.email-dialog-link:disabled { opacity: .5; cursor: default; }
+
+.email-dialog-done {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 0 4px;
+    text-align: center;
+}
+
+.email-dialog-done-mark {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: var(--lime);
+    color: var(--on-accent);
+    box-shadow: 0 0 0 1px var(--accent-edge, transparent);
+    animation: auth-flow-pop .48s var(--ease-spring, cubic-bezier(.2,1.25,.35,1)) backwards;
+}
+
+.email-dialog-done-mark svg { width: 28px; height: 28px; }
+
+/* ── Всплывающие уведомления (плавающий слой: только --menu-*) ─────────── */
+
+.zali-toasts {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    z-index: 10050;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: min(420px, calc(100vw - 32px));
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+
+.zali-toast {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr) 32px;
+    gap: 12px;
+    align-items: start;
+    padding: 14px 10px 14px 16px;
+    border-radius: var(--menu-radius, 14px);
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    pointer-events: auto;
+    transform-origin: bottom center;
+    animation: zali-toast-in .24s var(--ease-spring, cubic-bezier(.2,1.25,.35,1)) backwards;
+    transition: opacity .2s var(--ease-out), transform .2s var(--ease-out);
+}
+
+.zali-toast.is-leaving { opacity: 0; transform: translateY(6px) scale(.98); }
+
+.zali-toast-mark {
+    width: 8px;
+    height: 8px;
+    margin-top: 6px;
+    border-radius: 50%;
+    background: rgba(var(--ink-rgb),.35);
+}
+
+.zali-toast.is-success .zali-toast-mark { background: var(--lime); }
+.zali-toast.is-error .zali-toast-mark { background: var(--red); }
+
+.zali-toast-body { min-width: 0; }
+
+.zali-toast-body strong {
+    display: block;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.zali-toast-body span {
+    display: block;
+    margin-top: 2px;
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.zali-toast-close {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    margin: -6px 0 0;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: var(--text2);
+    cursor: pointer;
+}
+
+.zali-toast-close:hover { background: var(--menu-hover, rgba(var(--ink-rgb),.07)); color: var(--text); }
+.zali-toast-close .ui-icon { width: 16px; height: 16px; }
+
+@keyframes zali-toast-in {
+    from { opacity: 0; transform: translateY(10px) scale(.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 760px) {
+    .zali-toasts { bottom: calc(var(--m-safe-bottom, 0px) + 88px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .otp.is-error .otp-cells,
+    .otp.is-focused .otp-cell.is-active:not(.is-filled)::after,
+    .auth-art .aa-caret,
+    .auth-btn--countdown.is-counting .auth-countdown-fill,
+    .auth-overlay.visible .auth-flow > *,
+    .auth-flow-success,
+    .email-dialog-done-mark,
+    .zali-toast {
+        animation: none !important;
+    }
+    .zali-toast, .auth-art .aa-letter .aa-lime, .auth-art .aa-letter .aa-ink { transition: none; }
+}
+
+/* Телефон: .main занимает весь экран, его тень (в светлой теме — var(--l-shadow-2),
+   у «Фокуса» — своя) ложится за край окна и невидима, но перерисовывалась и
+   размывалась на GPU в каждом кадре лент разделов и переходов. Замер на V2036
+   (Adreno, 60 Гц, 2026-11-19): тап по доку — 42% рваных кадров, без этой тени — 16%,
+   99-й перцентиль 65 → 44 мс. Это единственное правило, которое отключает тень на
+   телефоне целиком, поэтому !important: десктопные правила светлой темы и режима
+   «Фокус» выше по специфичности. */
+body.is-mobile-layout .main {
+    box-shadow: none !important;
+}
+
+/* Телефон, светлая тема: Хаб, ZaliCoin и настройки лежат на .main, а светлая тема и
+   «Фокус» красят .main «листом» (--surface-rgb) — на десктопе это панель на холсте.
+   На телефоне .main — весь экран, и эти разделы выходили светлее Чатов/Серверов,
+   чата и дока, которые стоят на холсте var(--bg) (замер на V2036: #F9F4EF против
+   #ECE4DC). В мобильном правиле выше (.main { background: transparent }) задумано то
+   же самое, его перебивают десктопные правила по специфичности — отсюда !important. */
+html[data-appearance="light"] body.is-mobile-layout .main {
+    background: var(--bg) !important;
 }

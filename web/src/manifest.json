@@ -84,6 +84,8 @@
     "interface/avatars.js",
     "interface/api.js",
     "interface/auth.js",
+    "interface/account_email.js",
+    "interface/history_recovery.js",
     "interface/attachments.js",
     "interface/media_sheet.js",
     "interface/message_render.js",

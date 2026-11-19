@@ -376,7 +376,14 @@ ZaliMixin(ZaliInterface, class {
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="pin">
                 ${this.uiIcon(pinned ? 'pin-off' : 'pin')}<span>${pinned ? 'Открепить' : 'Закрепить'}</span>
             </button>`;
-        menu.innerHTML = `${profileItems}${pinItem}
+        // Ключи переписки потеряны (сброс пароля, новое устройство) — попросить их у
+        // собеседника; запрос дождётся, пока он появится в сети (history_recovery.js).
+        const recovery = this.historyRecoveryStatus?.(name);
+        const recoveryItem = (isSelf || fromVoice || !this.S.session?.token || this.S.session?.guest) ? '' : `
+            <button type="button" class="peer-context-menu-item" role="menuitem" data-action="recover-history">
+                ${this.uiIcon('history')}<span>${recovery?.status === 'pending' ? 'Восстановление: ждём собеседника' : 'Восстановить переписку'}</span>
+            </button>`;
+        menu.innerHTML = `${profileItems}${pinItem}${recoveryItem}
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
                 ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
             </button>
@@ -439,6 +446,10 @@ ZaliMixin(ZaliInterface, class {
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
             this.toggleMutePeer(name);
             this.closeContactContextMenu();
+        });
+        menu.querySelector('[data-action="recover-history"]')?.addEventListener('click', () => {
+            this.closeContactContextMenu();
+            void this.requestHistoryRecovery(name);
         });
         // Тот же removeContact(), что и у крестика в строке: в оформлении
         // «Фокус» крестик скрыт, и удаление живёт только здесь — рядом с

@@ -110,6 +110,16 @@ web-push = { version = "0.11", default-features = false }
 jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
 ct-codecs = "1.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Почтовый сервер (mailer.rs): письма с кодами подтверждения почты и сброса пароля.
+# Сам доставляет по MX получателя с DKIM-подписью (MAIL_TRANSPORT=direct) или отдаёт
+# через SMTP-relay (MAIL_TRANSPORT=smtp). TLS — тот же rustls, что у reqwest.
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls", "dkim", "hostname"] }
+# MX-записи домена получателя для прямой доставки. Без DoT/DoH — системный резолвер.
+hickory-resolver = { version = "0.25", default-features = false, features = ["tokio", "system-config"] }
+# Генерация DKIM-ключа (`zali_server mail dkim-keygen`); тот же крейт lettre берёт для подписи.
+rsa = "0.9"
+# Кириллические домены почты (`почта.рф`) — в punycode до проверки и отправки.
+idna = "1"
 # ece (a web-push dependency) only ships an OpenSSL-backed encryption backend — "vendored"
 # builds OpenSSL from source so the VPS doesn't need libssl-dev/pkg-config preinstalled.
 openssl = { version = "0.10", features = ["vendored"] }
@@ -159,3 +169,11 @@ path = "../tests/addon_cloud.rs"
 [[test]]
 name = "moderation"
 path = "../tests/moderation.rs"
+
+[[test]]
+name = "account_email"
+path = "../tests/account_email.rs"
+
+[[test]]
+name = "history_recovery"
+path = "../tests/history_recovery.rs"

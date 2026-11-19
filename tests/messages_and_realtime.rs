@@ -362,15 +362,23 @@ async fn sender_also_gets_a_websocket_echo_of_their_own_dm() {
     assert_eq!(resp.status(), 201);
 
     for ws in [&mut alice_ws, &mut bob_ws] {
-        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
-            .await
-            .expect("timed out waiting for delivery")
-            .expect("stream ended")
-            .expect("ws error");
-        let WsMessage::Text(text) = frame else {
-            panic!("expected text frame, got {:?}", frame);
+        // «bob в сети» рассылается фоновой задачей (presence.rs) тем, кто с ним связан;
+        // если она считает аудиторию уже после этого сообщения, alice получит кадр
+        // присутствия раньше эха — это верное поведение, его пропускаем.
+        let value = loop {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                .await
+                .expect("timed out waiting for delivery")
+                .expect("stream ended")
+                .expect("ws error");
+            let WsMessage::Text(text) = frame else {
+                panic!("expected text frame, got {:?}", frame);
+            };
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if value["type"] != "user_presence" {
+                break value;
+            }
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["sender"], "alice");
         assert_eq!(value["receiver"], "bob");
     }

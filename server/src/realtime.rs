@@ -344,6 +344,8 @@ pub(crate) async fn handle_socket(
     send_voice_room_snapshot_to_user(&state, &username).await;
     // Кто из друзей и соседей по серверам сейчас во что играет — см. activity.rs.
     crate::activity::send_activity_snapshot_to_user(&state, &username).await;
+    // Запросы «Восстановить переписку», ждавшие, пока этот человек появится в сети.
+    crate::history_recovery::send_pending_to_connection(&state, &username, &tx).await;
 
     // Server-initiated keepalive: a steady voice call generates no WebSocket
     // traffic of its own (media is P2P), and the client's own app-level ping is a

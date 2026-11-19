@@ -137,6 +137,8 @@ ZaliMixin(ZaliInterface, class {
             // Стикер — лист с загнутым уголком (плитка «Стикер .tgs» в листе галереи).
             sticker: `<svg ${attrs} fill="none"><path d="M5 7c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2v6.2L13.2 19H7c-1.1 0-2-.9-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 19v-3.8c0-1.1.9-2 2-2h4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.2 10.2h.01M14.6 10.2h.01M9.4 13.2c.9.8 2.3.9 3.3.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
             plus: `<svg ${attrs} fill="none"><path d="M12 5.5v13M5.5 12h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
+            // «Восстановить переписку» в меню собеседника: стрелка назад вокруг часов.
+            history: `<svg ${attrs} fill="none"><path d="M4.6 12a7.4 7.4 0 1 0 2.2-5.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M4.4 3.9v3.6H8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8.2V12l2.6 1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
             more: `<svg ${attrs} fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>`,
             // «Пожаловаться» в меню сообщения (moderation_report.js).
             flag: `<svg ${attrs} fill="none"><path d="M5.6 20.6V4.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M5.6 4.6h11.6l-2.6 4.1 2.6 4.1H5.6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,

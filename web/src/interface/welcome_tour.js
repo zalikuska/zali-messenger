@@ -41,6 +41,11 @@ ZaliMixin(ZaliInterface, class {
         if (this._welcome?.open) return;
         const session = this.S?.session;
         if (!session?.token || session.guest) return;
+        // Шаг с почтой после регистрации (account_email.js) идёт первым: приветствие
+        // встанет, когда он закроется (updateAuthView зовёт сюда снова).
+        if (this.S?.auth?.flow) return;
+        const meLower = String(this.myName?.() || session.username || '').trim().toLowerCase();
+        if (meLower && this.emailOnboardingPendingFor?.() === meLower) return;
         let pending = this._welcomeQueuedFor || '';
         try { pending = localStorage.getItem(this.welcomeTourPendingKey()) || pending; } catch (e) {}
         const me = String(this.myName?.() || session.username || '').trim().toLowerCase();
