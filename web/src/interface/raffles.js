@@ -455,7 +455,8 @@ ZaliMixin(ZaliInterface, class {
         let lastPayload = '';
         let busy = false;
         const $ = (id) => document.getElementById(id);
-        const toInt = (v) => Math.trunc(Number(String(v).replace(/\s+/g, '')));
+        // Тот же разбор, что у суммы перевода: «1,000» — тысяча, а не 1 ZC.
+        const toInt = (v) => this.coinAmountFromInput({ value: v });
         const grip = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
 
         $('raffleTarget').textContent = this.coinGiftChannelLabel({ serverId: ctx.serverId, channelId: ctx.channelId });
@@ -473,7 +474,7 @@ ZaliMixin(ZaliInterface, class {
                 const from = next;
                 const to = ok ? next + count - 1 : next;
                 if (ok) next = to + 1;
-                return { ...r, countN: ok ? count : 0, amountN: toInt(r.amount), from, to, countOk: ok };
+                return { ...r, countN: ok ? count : 0, amountN: toInt(r.amount) || 0, from, to, countOk: ok };
             });
         };
 

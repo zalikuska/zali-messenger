@@ -37,6 +37,10 @@ pub(crate) async fn get_turn_credentials(
     let Some(secret) = state.config.turn_static_auth_secret.as_deref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // Каждый вызов — свежие креды релея; клиенту хватает пары в минуту (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("turn-creds:{}", username.to_lowercase()), 60) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     let ttl = state.config.turn_credential_ttl_secs;
     let expiry = chrono::Utc::now().timestamp().saturating_add(ttl as i64);
     let turn_username = format!("{}:{}", expiry, username);

@@ -370,12 +370,15 @@ ZaliMixin(ZaliInterface, class {
         const status = document.getElementById('coinTransferStatus');
         if (title) title.textContent = isGift ? 'Отправить карточку' : 'Перевести ZaliCoin';
         if (target) {
-            target.hidden = !isGift;
+            // Перевод из чата прячет поле «Кому» — получатель обязан остаться на виду:
+            // перевод необратим, а без имени в окне нечем сверить, кому уходят монеты.
+            target.hidden = !isGift && !recipient;
             target.textContent = isGift
                 ? `Карточка появится в канале: ${this.coinGiftChannelLabel({ serverId, channelId })}`
-                : '';
+                : (recipient ? `Кому: ${recipient}` : '');
         }
-        if (recipientField) recipientField.hidden = isGift;
+        // Получатель уже известен (открыли из его чата) — поле «Кому» только отнимало бы место.
+        if (recipientField) recipientField.hidden = isGift || !!recipient;
         if (recipientInput) {
             recipientInput.value = recipient || '';
             // readOnly, а не disabled: значение видно, его можно выделить, а
@@ -395,7 +398,10 @@ ZaliMixin(ZaliInterface, class {
         if (status) { status.textContent = ''; status.hidden = true; }
         this.updateCoinModalSummary();
         modal.hidden = false;
-        (isGift || recipient ? amountInput : recipientInput)?.focus();
+        // Сумма — ползунок: на телефоне фокус в числовом поле сразу поднял бы
+        // клавиатуру. Курсор в поле — только когда получателя надо вписать.
+        if (!isGift && !recipient) recipientInput?.focus();
+        else (document.getElementById('coinTransferSlider') || modal.querySelector('button'))?.focus?.();
         // Баланс на экране мог устареть (его грузит только вкладка ZaliCoin).
         // Показываем, что есть, и уточняем; блокировать отправку по нему можно
         // только после свежего ответа.
@@ -462,9 +468,55 @@ ZaliMixin(ZaliInterface, class {
      * целые — дробная часть отбрасывается.
      */
     coinAmountFromInput(input) {
-        const raw = String(input?.value ?? '').trim().replace(',', '.');
+        let raw = String(input?.value ?? '').trim().replace(/[\s  ]/g, '');
+        // Монеты целые, поэтому «1,000» / «1.000» / «1 000» — разделитель тысяч,
+        // а не 1 ZC: раньше такая сумма молча превращалась в единицу (аудит 2026-11-19).
+        if (/^\d{1,3}([.,]\d{3})+$/.test(raw)) raw = raw.replace(/[.,]/g, '');
+        raw = raw.replace(',', '.');
         if (!raw || raw === '.') return NaN;
         return Math.trunc(Number(raw));
+    }
+
+    /**
+     * Шаг ползунка: круглые суммы вместо 437 и не больше ~250 положений на весь
+     * ход (1 250 ZC → шаг 10, 40 000 → 100). Точное число по-прежнему вписывается
+     * в поле у кнопки.
+     */
+    coinModalSliderStep(max) {
+        return max > 0 ? Math.max(1, 10 ** Math.floor(Math.log10(max / 50))) : 1;
+    }
+
+    /**
+     * Ползунок ходит в шагах (0…N), а не в монетах: у нативного range максимум,
+     * не кратный шагу, недостижим, а последний шаг здесь — ровно весь баланс.
+     * Ручка стоит по точной доле суммы, даже если число вписано руками.
+     */
+    syncCoinModalSlider(amount = 0) {
+        const slider = document.getElementById('coinTransferSlider');
+        if (!slider) return;
+        const max = this.coinModalMaxAmount();
+        const step = this.coinModalSliderStep(max);
+        const steps = Math.ceil(max / step);
+        const value = Math.max(0, Math.min(max, Math.trunc(Number(amount)) || 0));
+        slider.max = String(steps);
+        slider.disabled = max <= 0;
+        slider.value = String(value >= max ? steps : Math.round(value / step));
+        slider.setAttribute('aria-valuetext', `${this.formatCoinAmount(value)} ZC`);
+        // Ручку и заливку рисуют соседние элементы .zc-range — им и нужна доля.
+        (slider.closest('.zc-range') || slider).style.setProperty('--pn', String(max > 0 ? value / max : 0));
+    }
+
+    /** Движение ползунка → поле суммы. */
+    onCoinModalSlider() {
+        const slider = document.getElementById('coinTransferSlider');
+        const amountInput = document.getElementById('coinTransferAmountInput');
+        if (!slider || !amountInput) return;
+        const max = this.coinModalMaxAmount();
+        const steps = Math.trunc(Number(slider.max)) || 0;
+        const index = Math.trunc(Number(slider.value)) || 0;
+        const value = index >= steps ? max : Math.min(max, index * this.coinModalSliderStep(max));
+        amountInput.value = value > 0 ? String(value) : '';
+        this.updateCoinModalSummary();
     }
 
     fillCoinModalMax() {
@@ -494,8 +546,7 @@ ZaliMixin(ZaliInterface, class {
         const valid = Number.isFinite(amount) && amount > 0;
         const total = valid ? amount * claims : 0;
         if (available) available.textContent = known ? `Доступно: ${this.formatCoinAmount(balance)} ZC` : 'Доступно: …';
-        const maxBtn = document.getElementById('coinTransferMaxBtn');
-        if (maxBtn) maxBtn.disabled = known && this.coinModalMaxAmount() <= 0;
+        this.syncCoinModalSlider(valid ? amount : 0);
 
         // Блокируем только по свежему балансу: устаревшее число не должно
         // запретить перевод, на который монет на самом деле хватает.
@@ -506,10 +557,20 @@ ZaliMixin(ZaliInterface, class {
             `<div class="zc-sum-row${strong ? ' is-strong' : ''}"><span>${this.esc(label)}</span><span>${this.esc(value)}</span></div>`;
         let html = '';
         let tone = '';
-        if (short) {
+        if (!isGift) {
+            // Перевод: строка остатка на месте всегда — и при пустой сумме, и при
+            // нехватке (тогда одна такая же строка красным). Иначе окно меняло
+            // высоту на первом движении ползунка и прыгало под пальцем.
+            if (short) {
+                tone = 'is-error';
+                html = row('Не хватает', `${this.formatCoinAmount(total - balance)} ZC`);
+            } else {
+                html = row('Останется на балансе', known ? `${this.formatCoinAmount(Math.max(0, balance - total))} ZC` : '—');
+            }
+        } else if (short) {
             tone = 'is-error';
             html = `<div class="zc-sum-note">Не хватает ${this.esc(this.formatCoinAmount(total - balance))} ZC: нужно ${this.esc(this.formatCoinAmount(total))}, на балансе ${this.esc(this.formatCoinAmount(balance))}.</div>`;
-        } else if (isGift) {
+        } else {
             if (!valid) {
                 const people = this.coinPlural(claims, ['человек', 'человека', 'человек']);
                 html = `<div class="zc-sum-note">${claims > 1 ? `Карточку смогут получить ${claims} ${people}` : 'Карточку сможет получить один человек'} — по одному разу на аккаунт.</div>`;
@@ -518,11 +579,9 @@ ZaliMixin(ZaliInterface, class {
                     + row('Уйдёт на удержание', `${this.formatCoinAmount(total)} ZC`, true)
                     + '<div class="zc-sum-note">Неполученное вернётся, если отменить карточку.</div>';
             }
-        } else if (valid && known) {
-            html = row('Останется на балансе', `${this.formatCoinAmount(Math.max(0, balance - total))} ZC`);
         }
         summary.hidden = !html;
-        summary.className = `coin-gift-summary${tone ? ` ${tone}` : ''}`;
+        summary.className = `coin-gift-summary${isGift ? '' : ' is-transfer'}${tone ? ` ${tone}` : ''}`;
         summary.innerHTML = html;
         this.renderCoinModalSubmit(valid ? total : 0);
         // Ошибка отправки относилась к прежним значениям — после правки она не актуальна.

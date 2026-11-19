@@ -758,6 +758,32 @@ pub(crate) async fn update_channel_permissions(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
+    // «Управление» каналом (удаление чужих сообщений) — власть, которую не-владелец
+    // раздавать не может, как и роли с can_manage (servers.rs/roles.rs). Админ
+    // по-прежнему правит видимость и запись, но can_manage менять не вправе
+    // (аудит 2026-11-19: админ выдавал модерацию канала роли member).
+    let is_owner = get_server_member_role(&state.db, &server_id, &auth_user)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("owner");
+    if !is_owner {
+        let current: HashMap<String, bool> = load_channel_permissions(&state.db, &channel_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| (p.role, p.canManage))
+            .collect();
+        let changes_manage = payload.permissions.iter().any(|perm| {
+            let Some(role) = normalize_server_role(Some(&perm.role)) else { return false };
+            let requested = perm.can_manage.unwrap_or(false);
+            requested != current.get(role.as_str()).copied().unwrap_or(false)
+        });
+        if changes_manage {
+            return (StatusCode::FORBIDDEN, "Право управления каналом меняет только владелец").into_response();
+        }
+    }
     match upsert_channel_permissions(&state.db, &channel_id, &payload.permissions).await {
         Ok(_) => match load_channel_permissions(&state.db, &channel_id).await {
             Ok(permissions) => {

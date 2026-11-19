@@ -3,26 +3,47 @@
   "configurations": [
     {
       "name": "zali-server",
-      "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "--manifest-path", "server/Cargo.toml", "-p", "zali_server"],
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "k=\"$(grep -E '^KLIPY_APP_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2-)\"; [ -n \"$k\" ] && export KLIPY_APP_KEY=\"$k\"; exec cargo run --manifest-path server/Cargo.toml -p zali_server"
+      ],
       "port": 3000
     },
     {
       "name": "web-static",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "web"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8090",
+        "--directory",
+        "web"
+      ],
       "port": 8090
     },
     {
       "name": "web-static-mobile",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8092", "--directory", "web"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8092",
+        "--directory",
+        "web"
+      ],
       "port": 8092
     },
     {
       "name": "web-static-prod-origin",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "3000", "--directory", "web"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "3000",
+        "--directory",
+        "web"
+      ],
       "port": 3000
     }
   ]

@@ -460,6 +460,11 @@ pub(crate) async fn publish(
     AuthenticatedUser(username): AuthenticatedUser,
     Json(body): Json<PublishBody>,
 ) -> impl IntoResponse {
+    // До разбора 16 МБ и проверки подписи: лимит публикаций ниже считает только
+    // удачные, а неудачные (чужой аддон, битая подпись) жгли CPU даром (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("addon-publish-try:{}", username.to_lowercase()), 10) {
+        return addon_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Слишком много попыток публикации. Повторите через минуту.");
+    }
     if body.price < 0 || body.price > PRICE_MAX {
         return addon_error(
             StatusCode::BAD_REQUEST,

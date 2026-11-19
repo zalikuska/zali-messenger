@@ -435,6 +435,16 @@ fn backend_restart(host: Arc<dyn AddonHost>, root: &Path, payload: &Value) -> Re
     let dir = root.join(&addon_id);
     let bytes = fs::read(dir.join("addon.zali")).map_err(|_| "Файл аддона не найден".to_string())?;
     let sha256 = super::sha256_hex(&bytes);
+    // Файл мог смениться после запуска сессии (store.put без повышенных прав
+    // перезаписывает его молча и стирает grant.json). Новый бэкенд под старым
+    // согласием запускать нельзя — только файл, чьё согласие записано (аудит 2026-11-19).
+    let granted_sha = fs::read(grant_path(&dir))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|g| g.get("sha256").and_then(Value::as_str).map(str::to_string));
+    if granted_sha.as_deref() != Some(sha256.as_str()) {
+        return Err("Файл аддона изменился после запуска — запустите его заново".into());
+    }
     let archive = parse_addon_archive(bytes)?;
     let sid = session_field(payload);
     let handle = start_backend(host, &sid, &addon_id, &dir, &dir.join("data"), &archive, &sha256)?;

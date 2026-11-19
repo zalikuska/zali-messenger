@@ -941,6 +941,7 @@ ZaliMixin(ZaliInterface, class {
             // Видео звонка на весь экран (voice_ui.js openVoiceFocus) — поверх всего.
             ['#voiceFocus', () => this.closeVoiceFocus?.()],
             ['#mediaSheet', () => this.closeMediaSheet?.()],
+            ['#gifPicker', () => this.closeGifPicker?.()],
             ['#reactionMenu, .reaction-menu', () => this.hideReactionMenu?.()],
             // Режим жалобы в ленте (moderation_report.js): «назад» его отменяет.
             ['.report-bar', () => this.closeReportMode?.()],
@@ -980,6 +981,9 @@ ZaliMixin(ZaliInterface, class {
         }
 
         // 3. Вложенные экраны: настройки открываются из Хаба, вкладки Хаба — из обзора.
+        //    Верхний слой Хаба (настройки, панель) уезжает вправо, как чат.
+        const hubLayer = this.mobileHubTopLayer?.();
+        if (hubLayer && this.mobileHubClose(hubLayer)) return true;
         if (document.getElementById('viewSettings')?.classList.contains('active')) {
             this.openHubView();
             return true;
@@ -1186,6 +1190,12 @@ ZaliMixin(ZaliInterface, class {
         // (see setMobileListParked / setMobileNavProgress). Those are meaningless
         // on desktop and actively harmful — a parked translateY(115%) pushes the
         // always-visible desktop sidebar off-screen — so clear them on the way out.
+        // Раскладка сменилась: панели хаба показываются цепочкой (телефон) или по одной.
+        if (this._hubPaneMobile !== isMobile) {
+            this._hubPaneMobile = isMobile;
+            this.syncHubPaneVisibility?.();
+            if (!isMobile) this.mobileHubPushReset?.();
+        }
         if (!isMobile) {
             const sidebar = document.querySelector('.sidebar');
             if (sidebar) sidebar.style.transform = '';
@@ -1273,6 +1283,7 @@ ZaliMixin(ZaliInterface, class {
         const hv = document.getElementById('viewHub');
         const sv = document.getElementById('viewSettings');
         const zv = document.getElementById('viewZaliCoin');
+        this.mobileHubPushReset?.();
         if (sv) sv.classList.remove('active');
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
@@ -1296,9 +1307,21 @@ ZaliMixin(ZaliInterface, class {
         const sv = document.getElementById('viewSettings');
         const zv = document.getElementById('viewZaliCoin');
         this.collapseActiveCallView();
+        // Из Хаба на телефоне настройки въезжают справа поверх него (mobile_push.js),
+        // как чат поверх списка; из других мест открываются как раньше.
+        const mobile = !!this.isMobileLayout?.();
+        const alreadyPushed = !!sv?.classList.contains('active') && !!sv.classList.contains('is-push');
+        const fromHub = mobile && !!hv?.classList.contains('active');
+        const push = mobile && (fromHub || alreadyPushed);
+        if (!push) this.mobileHubPushReset?.();
         if (cv) cv.classList.remove('active');
         if (hv) hv.classList.remove('active');
         if (zv) zv.classList.remove('active');
+        if (push && hv && sv) {
+            hv.classList.add('is-under');
+            sv.classList.add('is-push');
+            if (fromHub) this.mobileHubMarkEnter(sv);
+        }
         if (sv) sv.classList.add('active');
         // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
         this.syncRingingCallPlacement?.();
@@ -1316,6 +1339,8 @@ ZaliMixin(ZaliInterface, class {
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         this.refreshEmailSettings();
+        // Полоса категорий построена, пока экран был скрыт, — подводим к выбранной.
+        this.revealActiveSettingsCategory?.();
         // Индекс сводок кеша поднимается лениво, первым обращением. Открытие
         // настроек — как раз такое обращение: без него карточка на свежем
         // запуске показала бы пустой кеш при полном диске. Рисуем сразу (чтобы
@@ -1339,10 +1364,15 @@ ZaliMixin(ZaliInterface, class {
         const sv = document.getElementById('viewSettings');
         const zv = document.getElementById('viewZaliCoin');
         this.collapseActiveCallView();
+        // Возврат из настроек, лежавших поверх: Хаб уже на экране, второй раз
+        // view-enter его не проигрывает (иначе он мигнул бы прозрачностью).
+        const wasUnder = !!hv?.classList.contains('is-under');
+        this.mobileHubPushReset?.();
         if (cv) cv.classList.remove('active');
         if (sv) sv.classList.remove('active');
         if (zv) zv.classList.remove('active');
         if (hv) hv.classList.add('active');
+        if (wasUnder && hv) hv.classList.add('view-noenter');
         // Звонящий звонок — в шапке открытого чата или строкой сверху: зависит от экрана.
         this.syncRingingCallPlacement?.();
         const tbChat = document.getElementById('tbChat');
@@ -1365,6 +1395,7 @@ ZaliMixin(ZaliInterface, class {
         const sv = document.getElementById('viewSettings');
         const zv = document.getElementById('viewZaliCoin');
         this.collapseActiveCallView();
+        this.mobileHubPushReset?.();
         if (cv) cv.classList.remove('active');
         if (hv) hv.classList.remove('active');
         if (sv) sv.classList.remove('active');

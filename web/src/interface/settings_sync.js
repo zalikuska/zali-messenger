@@ -74,6 +74,14 @@ ZaliMixin(ZaliInterface, class {
                 apply: (raw) => this.saveUiV2Segments(JSON.parse(raw)),
             },
             {
+                // Избранные GIF (gif_picker.js): ссылки KLIPY в сжатом виде, до 16 КБ —
+                // единственный ключ, которому сервер разрешает больше 4 КБ.
+                name: 'gif_favorites',
+                storageKey: this.gifFavoritesKey(),
+                read: () => this.gifSyncEncode(),
+                apply: (raw) => this.gifSyncApply(raw),
+            },
+            {
                 // Громкости и выбранные звуки; устройства и подавление эха остаются у машины.
                 name: 'audio_volumes',
                 storageKey: this.audioPrefsStorageKey(),

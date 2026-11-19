@@ -112,7 +112,10 @@ ZaliMixin(ZaliInterface, class {
         const dataUrl = att.dataUrl || att.data_url || att.url || '';
         const normalized = {
             id: att.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            name: att.name || 'attachment',
+            // Без bidi-переворотов и невидимых символов: имя с U+202E показало бы
+            // «.exe» как «.pdf» (аудит 2026-11-19).
+            // (строка ниже держит только \u-экранирование — сами символы в исходнике опасны)
+            name: String(att.name || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u061C]/g, '') || 'attachment',
             mimeType,
             kind,
             size: Number(att.size || 0),

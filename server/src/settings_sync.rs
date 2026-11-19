@@ -34,6 +34,18 @@ const MAX_KEYS: usize = 64;
 const MAX_KEY_LEN: usize = 48;
 const MAX_VALUE_BYTES: usize = 4 * 1024;
 const MAX_DOC_BYTES: usize = 64 * 1024;
+// Избранные GIF (web/src/interface/gif_picker.js) — до ~200 сжатых ссылок KLIPY.
+// Клиент шлёт больше 4 КБ, только видя, что сервер знает /api/gifs/config.
+const GIF_FAVORITES_KEY: &str = "gif_favorites";
+const MAX_GIF_FAVORITES_BYTES: usize = 16 * 1024;
+
+fn max_value_bytes(key: &str) -> usize {
+    if key == GIF_FAVORITES_KEY {
+        MAX_GIF_FAVORITES_BYTES
+    } else {
+        MAX_VALUE_BYTES
+    }
+}
 
 pub(crate) async fn init_table(pool: &sqlx::SqlitePool) {
     sqlx::query(
@@ -90,7 +102,7 @@ pub(crate) async fn put_settings(
             && entry
                 .get("v")
                 .and_then(Value::as_str)
-                .map(|v| v.len() <= MAX_VALUE_BYTES)
+                .map(|v| v.len() <= max_value_bytes(key))
                 .unwrap_or(false);
         if !ok {
             return (StatusCode::BAD_REQUEST, "bad entry").into_response();

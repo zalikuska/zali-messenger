@@ -385,6 +385,10 @@ struct ActiveRestriction {
     suspended: bool,
     /// `None` — бессрочно (только приостановка).
     until: Option<DateTime<Utc>>,
+    /// Ограничения от нарушений, которые останутся после конца приостановки.
+    /// Без этого по истечении приостановки снималось всё сразу, хотя три и больше
+    /// действующих нарушения продолжали ограничивать аккаунт (аудит 2026-11-19).
+    then_restricted_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Default)]
@@ -634,11 +638,45 @@ pub(crate) fn restricted_blocks(method: &Method, path: &str) -> bool {
         .any(|(m, pattern)| method.as_str() == *m && route_matches(path, pattern))
 }
 
+/// DELETE, которые трогают только своё: уйти с сервера, убрать контакт, друга,
+/// подписку, свой аватар. Остальные DELETE (сервер, каналы, роли, исключение
+/// участника, чужие сообщения в управляемом канале, снятие аддона) — это та же
+/// власть, что и запись, и приостановленному закрыты (аудит 2026-11-19: раньше
+/// любой DELETE проходил, и приостановленный владелец мог снести сервер).
+const SUSPENDED_ALLOWED_DELETES: &[&str] = &[
+    "/api/servers/*/membership",
+    "/api/contacts/*",
+    "/api/friends/*",
+    "/api/profile/*/follow",
+    "/api/avatar",
+    // Своё сообщение — да; чужое в управляемом канале delete_message отсекает сам.
+    "/api/message/*",
+];
+
 pub(crate) fn suspended_blocks(method: &Method, path: &str) -> bool {
-    if !matches!(*method, Method::POST | Method::PUT | Method::PATCH) {
+    if SUSPENDED_ALLOWED_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) {
         return false;
     }
-    !SUSPENDED_ALLOWED_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+    match *method {
+        Method::POST | Method::PUT | Method::PATCH => true,
+        Method::DELETE => !SUSPENDED_ALLOWED_DELETES.iter().any(|pattern| route_matches(path, pattern)),
+        _ => false,
+    }
+}
+
+/// На аккаунте действует приостановка или ограничения (те, что запрещают и новые
+/// приглашения). Нужна тем, кто действует от имени человека без его запроса —
+/// например, его старому инвайту.
+pub(crate) fn has_active_restriction(state: &AppState, username: &str) -> bool {
+    state
+        .moderation
+        .restrictions
+        .get(username)
+        .map(|entry| *entry)
+        .is_some_and(|active| {
+            let now = Utc::now();
+            !active.until.is_some_and(|until| until <= now) || active.then_restricted_until.is_some_and(|after| after > now)
+        })
 }
 
 /// Аккаунт сейчас заблокирован целиком. WS-события (звонки, инвайты, сигналинг)
@@ -663,16 +701,38 @@ pub(crate) fn blocked_action(
         return None;
     }
     // Копия значения: держать guard DashMap и удалять тот же ключ — взаимоблокировка.
-    let active = state.moderation.restrictions.get(username).map(|entry| *entry)?;
-    if active.until.is_some_and(|until| until <= Utc::now()) {
-        state.moderation.restrictions.remove(username);
-        return None;
+    let mut active = state.moderation.restrictions.get(username).map(|entry| *entry)?;
+    let now = Utc::now();
+    if active.until.is_some_and(|until| until <= now) {
+        match active.then_restricted_until.filter(|after| *after > now) {
+            Some(after) => {
+                active = ActiveRestriction { suspended: false, until: Some(after), then_restricted_until: None };
+                state.moderation.restrictions.insert(username.to_string(), active);
+            }
+            None => {
+                state.moderation.restrictions.remove(username);
+                return None;
+            }
+        }
     }
     if active.suspended {
         suspended_blocks(method, path).then_some("account_suspended")
     } else {
         restricted_blocks(method, path).then_some("account_restricted")
     }
+}
+
+/// Меры, которые действуют прямо сейчас. Автоматическая приостановка, ещё не
+/// подтверждённая человеком (`review_pending`), считается нарушением, а не блокировкой:
+/// одна жалоба с выдуманным текстом не должна снимать аккаунт до проверки
+/// (аудит 2026-11-19 — раньше флаг лишь ставился, а приостановка действовала сразу).
+fn enforced_pairs(active: &[(String, Tier, Option<DateTime<Utc>>, bool)]) -> Vec<(Tier, Option<DateTime<Utc>>)> {
+    active
+        .iter()
+        .map(|(_, tier, end, pending)| {
+            if *tier == Tier::Serious && *pending { (Tier::Violation, *end) } else { (*tier, *end) }
+        })
+        .collect()
 }
 
 /// Действующие меры: `(id, тир, истекает, ждёт проверки)`.
@@ -705,10 +765,19 @@ async fn active_measures(
 
 async fn load_active_restriction(pool: &SqlitePool, username: &str) -> Option<ActiveRestriction> {
     let active = active_measures(pool, username, Utc::now()).await;
-    let pairs: Vec<(Tier, Option<DateTime<Utc>>)> = active.iter().map(|(_, t, e, _)| (*t, *e)).collect();
+    let pairs = enforced_pairs(&active);
     match standing_level(&pairs) {
-        Level::Suspended(until) => Some(ActiveRestriction { suspended: true, until }),
-        Level::Restricted(until) => Some(ActiveRestriction { suspended: false, until: Some(until) }),
+        Level::Suspended(until) => {
+            let without_serious: Vec<_> = pairs.iter().copied().filter(|(tier, _)| *tier != Tier::Serious).collect();
+            let then_restricted_until = match standing_level(&without_serious) {
+                Level::Restricted(after) => Some(after),
+                _ => None,
+            };
+            Some(ActiveRestriction { suspended: true, until, then_restricted_until })
+        }
+        Level::Restricted(until) => {
+            Some(ActiveRestriction { suspended: false, until: Some(until), then_restricted_until: None })
+        }
         Level::Ok | Level::Warnings(_) => None,
     }
 }
@@ -1521,6 +1590,10 @@ async fn verify_channel_payload(
     let Some(list) = payload["messages"].as_array() else {
         return ChannelVerification::Done("reporter");
     };
+    let accused_red = list
+        .iter()
+        .filter(|m| m["zone"] == "red" && m["sender"] == accused)
+        .count();
     let targets: Vec<(usize, String)> = list
         .iter()
         .enumerate()
@@ -1578,7 +1651,9 @@ async fn verify_channel_payload(
     }
     ChannelVerification::Done(match verified {
         0 => "reporter",
-        n if n == targets.len() => "server",
+        // «server» — только когда сверены ВСЕ сообщения обвиняемого в красной зоне,
+        // а не первые MAX_VERIFY_MESSAGES: хвост сверх них был бы текстом жалобщика.
+        n if n == targets.len() && n == accused_red => "server",
         _ => "partial",
     })
 }
@@ -1998,7 +2073,10 @@ async fn apply_decision(
         // Текст ЛС сервер проверить не может (E2E): его прислал сам жалобщик. По такому
         // тексту авто-наказания нет — только ручная проверка. Раньше выдуманный текст
         // под реальными id сообщений давал жертве нарушение (аудит 2026-11-18).
-        Decision::Violation { .. } if source != "operator" && verification == "reporter" => {
+        // «partial» — сервер сверил лишь часть сообщений (первые MAX_VERIFY_MESSAGES),
+        // остальной текст по-прежнему от жалобщика: тоже только ручная проверка
+        // (аудит 2026-11-19). Автонаказание — лишь при полной сверке («server»).
+        Decision::Violation { .. } if source != "operator" && verification != "server" => {
             finish_report(state, report_id, "review", Some("unverified"), verdict.and_then(|v| v.rule.as_deref()), verdict, None).await;
             return;
         }
@@ -2153,7 +2231,7 @@ pub(crate) async fn get_standing(
     let now = Utc::now();
     let now_s = ts(now);
     let active = active_measures(&state.db, &username, now).await;
-    let pairs: Vec<(Tier, Option<DateTime<Utc>>)> = active.iter().map(|(_, t, e, _)| (*t, *e)).collect();
+    let pairs = enforced_pairs(&active);
     let level = standing_level(&pairs);
     let counted = pairs.iter().filter(|(t, _)| *t == Tier::Violation).count();
     let (key, title, until): (&str, String, Option<String>) = match &level {
@@ -2166,8 +2244,7 @@ pub(crate) async fn get_standing(
         ),
         Level::Ok => ("ok", "С аккаунтом все отлично!".to_string(), None),
     };
-    let review_pending = matches!(level, Level::Suspended(_))
-        && active.iter().any(|(_, t, _, pending)| *t == Tier::Serious && *pending);
+    let review_pending = active.iter().any(|(_, t, _, pending)| *t == Tier::Serious && *pending);
     let blocked: Vec<&str> = match level {
         Level::Suspended(_) => vec!["всё, кроме чтения, удаления своего и настроек безопасности"],
         Level::Restricted(_) => RESTRICTED_SUMMARY.to_vec(),
@@ -2528,6 +2605,8 @@ pub(crate) async fn admin_confirm_violation(
     let Some(username) = username else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // Подтверждённая приостановка начинает действовать только сейчас (enforced_pairs).
+    refresh_restriction_cache(&state, &username).await;
     send_json_to_user(&state, &username, json!({ "type": "moderation_standing" })).await;
     Json(json!({ "ok": true })).into_response()
 }
@@ -2562,6 +2641,11 @@ mod tests {
         assert!(!suspended_blocks(&Method::POST, "/api/auth/logout"));
         assert!(!suspended_blocks(&Method::POST, "/api/key-envelopes"));
         assert!(!suspended_blocks(&Method::DELETE, "/api/message/m1"));
+        assert!(!suspended_blocks(&Method::DELETE, "/api/servers/s1/membership"));
+        assert!(suspended_blocks(&Method::DELETE, "/api/servers/s1"));
+        assert!(suspended_blocks(&Method::DELETE, "/api/servers/s1/channels/c1"));
+        assert!(suspended_blocks(&Method::DELETE, "/api/servers/s1/members/bob"));
+        assert!(suspended_blocks(&Method::DELETE, "/api/addons/store/a1"));
         assert!(!suspended_blocks(&Method::GET, "/api/messages/bob"));
     }
 

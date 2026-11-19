@@ -399,6 +399,13 @@ enum AddonElevated {
             s.stopBackend()
             let dir = root.appendingPathComponent(s.addonId, isDirectory: true)
             let (archive, sha256) = try readArchive(dir)
+            // Файл мог смениться после запуска сессии (store.put без повышенных прав
+            // перезаписывает его молча и стирает grant.json). Новый бэкенд под старым
+            // согласием запускать нельзя — только файл, чьё согласие записано (аудит 2026-11-19).
+            let grant = (try? Data(contentsOf: grantURL(dir))).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+            guard (grant?["sha256"] as? String) == sha256 else {
+                throw AddonStore.Failure("Файл аддона изменился после запуска — запустите его заново")
+            }
             try startBackend(s, sessionId: dict["sessionId"] as? String ?? "", dir: dir, archive: archive, sha256: sha256)
             return true
 

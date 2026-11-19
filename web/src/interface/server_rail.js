@@ -601,7 +601,9 @@ ZaliMixin(ZaliInterface, class {
         });
         rail.addEventListener('focusin', (e) => {
             const item = e.target.closest?.('.server-rail-item');
-            if (item && e.target.matches?.(':focus-visible')) this.showServerRailTip(item);
+            // Подсказка по фокусу — только с клавиатуры (см. modules/focus_modality.js).
+            const keyboard = window.ZaliFocusModality ? window.ZaliFocusModality.isKeyboard() : true;
+            if (item && keyboard && e.target.matches?.(':focus-visible')) this.showServerRailTip(item);
         });
         rail.addEventListener('focusout', () => this.hideServerRailTip());
 

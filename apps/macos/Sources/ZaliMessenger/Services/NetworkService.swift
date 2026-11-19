@@ -1602,7 +1602,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                             // guard itself. Calling showMessageNotification directly here (as
                             // this used to) fired unconditionally for every incoming message
                             // regardless of visibility, duplicating/short-circuiting the JS gate.
-                            self?.onMessageReceived?(wsMsg.id, wsMsg.clientId ?? wsMsg.client_id, unpacked.sender, wsMsg.receiver, unpacked.text, unpacked.call, renderedAttachments, serverId, channelId)
+                            // Автор — тот, кого сервер проставил из JWT; `sender` внутри архива пишет
+                            // сам отправитель, им можно назваться кем угодно (аудит 2026-11-19).
+                            self?.onMessageReceived?(wsMsg.id, wsMsg.clientId ?? wsMsg.client_id, wsMsg.sender.isEmpty ? unpacked.sender : wsMsg.sender, wsMsg.receiver, unpacked.text, unpacked.call, renderedAttachments, serverId, channelId)
                         }
                     } else {
                         let keyPreview = candidateKeys
@@ -2317,7 +2319,9 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     }
 
     func performApiRequest(method: String, path: String, headers: [String: String], body: String?, timeoutMs: Double, completion: @escaping (Int, String?, String?, [String: String]?, String?) -> Void) {
-        let forbiddenPathTokens = ["..", "%2F", "%2f", "%5C", "%5c"]
+        // %2e: «/api/%2e%2e/…» после нормализации URL уходит за /api/ с тем же токеном
+        // (Android это уже отсекал; аудит 2026-11-19).
+        let forbiddenPathTokens = ["..", "%2F", "%2f", "%5C", "%5c", "%2E", "%2e"]
         guard path.hasPrefix("/api/"), !forbiddenPathTokens.contains(where: path.contains) else {
             completion(0, nil, nil, nil, "Некорректный путь запроса")
             return

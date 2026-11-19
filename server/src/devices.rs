@@ -918,6 +918,11 @@ pub(crate) async fn post_vault_event(
     AuthenticatedUser(owner): AuthenticatedUser,
     Json(payload): Json<VaultEventPayload>,
 ) -> impl IntoResponse {
+    // До 256 КБ записи и две чистки на запрос — без лимита это поток в единственный
+    // писатель SQLite (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("vault-event:{}", owner.to_lowercase()), 120) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     let device_id = trim_limited(payload.deviceId.unwrap_or_default(), 128);
     let encrypted = trim_limited(payload.encryptedVaultEvent, 262_144);
     if encrypted.len() < 16 {
@@ -1083,6 +1088,11 @@ pub(crate) async fn post_key_envelope(
     AuthenticatedUser(sender): AuthenticatedUser,
     Json(payload): Json<KeyEnvelopePayload>,
 ) -> impl IntoResponse {
+    // Клиент раскладывает ключ на все устройства собеседников — потолок щедрый,
+    // но он есть: каждое принятое письмо будит получателя по WS (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("key-envelope:{}", sender.to_lowercase()), 3000) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     let recipient = trim_limited(payload.recipient, 64);
     // Canonical form, so an envelope from a client that predates the fold still
     // lands in the same bucket its recipient reads from.

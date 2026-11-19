@@ -654,6 +654,10 @@ pub(crate) async fn perform_api_request_with_timeout(
         || path.contains("%2f")
         || path.contains("%5C")
         || path.contains("%5c")
+        // «/api/%2e%2e/…» после нормализации URL уходит за /api/ с тем же токеном
+        // (Android это уже отсекал; аудит 2026-11-19).
+        || path.contains("%2E")
+        || path.contains("%2e")
     {
         return Err("Некорректный API path".to_string());
     }

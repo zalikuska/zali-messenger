@@ -475,7 +475,9 @@ ZaliMixin(ZaliInterface, class {
 
         for (const item of pending) {
             if (!item || typeof item !== 'object') continue;
-            if (currentUser && String(item.sender || '').trim() !== currentUser) continue;
+            // Без имени текущего пользователя не шлём ничего: иначе очередь чужого
+            // аккаунта (общий ключ хранилища до входа) ушла бы от имени этого (аудит 2026-11-19).
+            if (!currentUser || String(item.sender || '').trim() !== currentUser) continue;
             if (Number(item.nextRetryAt || 0) > now) continue;
             if (item.inFlight) {
                 // A native send result can get lost (bridge reloaded mid-send, response

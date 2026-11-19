@@ -1344,6 +1344,14 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val requestId = dict.optString("requestId", UUID.randomUUID().toString())
         val url = dict.optString("url", "")
         val sha256 = dict.optString("sha256", "")
+        // Подпись сверяет сама оболочка, как на macOS/Windows: проверке в JS одной
+        // верить нельзя — мост принял бы любой адрес от любого скрипта (аудит 2026-11-19).
+        val version = dict.optString("version", "")
+        val signature = dict.optString("signature", "")
+        if (!ReleaseSignature.verify(version, sha256, url, signature)) {
+            sendNativeResponse(requestId, false, error = "Обновление не подписано официальным ключом — загрузка отменена")
+            return
+        }
         updateExecutor.execute {
             try {
                 appUpdater.download(url, sha256) { progress ->
@@ -2166,7 +2174,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     ): JSONObject = JSONObject().apply {
         put("id", messageId)
         put("clientId", record.optString("clientId", record.optString("client_id", "")))
-        put("sender", decrypted.optString("sender"))
+        // Автор — тот, кого сервер проставил из JWT; `sender` внутри архива пишет сам
+        // отправитель и может назваться кем угодно (аудит 2026-11-19).
+        put("sender", record.optString("sender", "").trim().ifEmpty { decrypted.optString("sender") })
         put("receiver", receiver)
         put("text", decrypted.optString("text"))
         put("attachments", decrypted.optJSONArray("attachments") ?: JSONArray())
@@ -2378,7 +2388,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
             val messagePayload = JSONObject().apply {
                 put("id", id)
-                put("sender", payload.sender)
+                // Автор от сервера (из JWT), не из архива — см. buildHistoryOutput.
+                put("sender", sender.trim().ifEmpty { payload.sender })
                 put("receiver", receiver)
                 put("text", payload.text)
                 put("attachments", decrypted.optJSONArray("attachments") ?: JSONArray())

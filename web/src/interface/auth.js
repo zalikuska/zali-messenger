@@ -1281,6 +1281,10 @@ ZaliMixin(ZaliInterface, class {
         this.S.accountEmail = null;
         this.setAuthMode('login', { clearInputs: true, focus: false });
         this.clearStoredSession();
+        // Запасная копия сессии тоже: bootstrapSession берёт её кандидатом наравне
+        // с основной, и без этого перезагрузка после «Выйти» снова входила в аккаунт
+        // (аудит 2026-11-19). Быстрый вход по явному выбору живёт в «Недавних».
+        this.clearLastStoredSession();
         if (forgetQuickLogin && leaving.token) this.forgetRecentAccountEntry(leaving.username, leaving.token);
         // syncNative: шелл обязан забыть токен, иначе держит WS старого аккаунта и
         // подставляет его при следующем запуске (__ZALI_SAVED_SESSION).

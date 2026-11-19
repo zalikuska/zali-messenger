@@ -1006,6 +1006,15 @@ pub(crate) async fn update_server(
     } else {
         server.is_public
     };
+    // Открыть приватный сервер всем — решение владельца, а не любого с «Управлением»:
+    // публичный сервер виден в каталоге, его каналы читает кто угодно (аудит 2026-11-19).
+    if next_public != server.is_public && server.owner != auth_user {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Сделать сервер публичным или закрыть его может только владелец"})),
+        )
+            .into_response();
+    }
 
     if let Err(e) = sqlx::query(
         "UPDATE servers
@@ -1624,9 +1633,12 @@ pub(crate) async fn join_server_invite(
 
     // Инвайт живёт, пока его автор может приглашать: раньше выгнанный участник
     // (бана нет) возвращался по собственному бессрочному инвайту.
-    if !can_invite_to_server(&state.db, &invite.server_id, &invite.created_by)
-        .await
-        .unwrap_or(false)
+    // И пока на авторе нет мер модерации: приостановленный или ограниченный не может
+    // создавать инвайты, значит и старые его коды не должны впускать (аудит 2026-11-19).
+    if crate::moderation::has_active_restriction(&state, &invite.created_by)
+        || !can_invite_to_server(&state.db, &invite.server_id, &invite.created_by)
+            .await
+            .unwrap_or(false)
     {
         let _ = tx.rollback().await;
         return (StatusCode::GONE, "Инвайт больше не действует").into_response();

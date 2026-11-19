@@ -779,6 +779,11 @@ pub(crate) async fn get_conversation_hash_chain(
     AuthenticatedUser(user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Response {
+    // Каждый вызов — полный проход по цепочке (а .zali ещё и пишет архив): без
+    // лимита участник большого канала гонял их в цикле (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("hash-chain:{}", user.to_lowercase()), 30) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     if let Err((status, message)) = authorize(&state, &query.scope, &user).await {
         return (status, message).into_response();
     }
@@ -808,6 +813,11 @@ pub(crate) async fn verify_conversation_hash_chain(
     AuthenticatedUser(user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Response {
+    // Каждый вызов — полный проход по цепочке (а .zali ещё и пишет архив): без
+    // лимита участник большого канала гонял их в цикле (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("hash-chain:{}", user.to_lowercase()), 30) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     if let Err((status, message)) = authorize(&state, &query.scope, &user).await {
         return (status, message).into_response();
     }
@@ -827,6 +837,11 @@ pub(crate) async fn download_conversation_hash_chain(
     AuthenticatedUser(user): AuthenticatedUser,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Response {
+    // Каждый вызов — полный проход по цепочке (а .zali ещё и пишет архив): без
+    // лимита участник большого канала гонял их в цикле (аудит 2026-11-19).
+    if !crate::rate_allow(&state, format!("hash-chain:{}", user.to_lowercase()), 30) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     if let Err((status, message)) = authorize(&state, &query.scope, &user).await {
         return (status, message).into_response();
     }

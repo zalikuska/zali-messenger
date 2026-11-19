@@ -673,7 +673,8 @@ pub(crate) async fn update_profile(
     // изменённую секцию формы, и полная замена стирала бы всё остальное.
     let display_name = payload
         .display_name
-        .map(|v| trim_limited(v, MAX_DISPLAY_NAME))
+        // Без bidi-переворотов и невидимых символов: ими имя выдавали за чужое (аудит 2026-11-19).
+        .map(|v| trim_limited(crate::util::strip_invisible_controls(&v), MAX_DISPLAY_NAME))
         .unwrap_or(current.display_name);
     let bio = payload
         .bio

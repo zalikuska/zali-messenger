@@ -79,6 +79,23 @@ ZaliMixin(ZaliInterface, class {
         if (!bar) return;
         const active = this.settingsActiveCategory();
         bar.innerHTML = this.settingsCategories().map(cat => `<button type="button" class="settings-cat${cat.id === active ? ' is-active' : ''}" data-settings-cat-btn="${this.esc(cat.id)}">${this.esc(cat.label)}</button>`).join('');
+        this.revealActiveSettingsCategory();
+    }
+
+    /**
+     * Выбранная категория — в видимой части полосы. Полоса перестраивается строкой
+     * HTML (scrollLeft обнуляется), а при открытии экрана настроек она скрыта и
+     * считать нечего: поэтому вызывается и из рендера, и из openSettingsView.
+     * Двигаем сам scrollLeft, а не scrollIntoView — тот потянул бы и вертикальные
+     * предки.
+     */
+    revealActiveSettingsCategory() {
+        const bar = document.getElementById('settingsCats');
+        const btn = bar?.querySelector('.settings-cat.is-active');
+        if (!bar || !btn || !bar.clientWidth) return;
+        const max = Math.max(0, bar.scrollWidth - bar.clientWidth);
+        const target = btn.offsetLeft - (bar.clientWidth - btn.offsetWidth) / 2;
+        bar.scrollLeft = Math.max(0, Math.min(max, target));
     }
 
     /** Что должна показывать левая панель сейчас: { kind, title, items, active, footer } | null. */

@@ -93,9 +93,17 @@ jobs:
 
   # Интеграционные тесты сервера (tests/*.rs в корне репо, подключены [[test]] в
   # server/Cargo.toml) и unit-тесты крейта; заодно серверная часть activity-doctor.
+  #
+  # Четыре параллельных шарда (состав — scripts/ci_server_tests.sh; `rest` собирает всё
+  # не назначенное другим, так что новый [[test]] не теряется). Каждый шард собирает
+  # сервер сам, зато общий `shared-key` даёт им один кэш зависимостей.
   server:
-    name: Server tests
+    name: Server tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [chain, security, core, rest]
     steps:
       - uses: actions/checkout@v7
 
@@ -104,9 +112,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "server -> target"
+          shared-key: server-tests
 
-      - name: Test server
-        run: cargo test --manifest-path server/Cargo.toml --locked
+      - name: Test server (${{ matrix.shard }})
+        run: ./scripts/ci_server_tests.sh ${{ matrix.shard }}
 
   # core (ядро .zali + крипто) и зеркальный SDK формата. На macOS — ещё и с `apm`:
   # тесты качества эхоподавления откалиброваны по arm64 и на x86 SIMD-путях

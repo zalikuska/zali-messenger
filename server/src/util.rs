@@ -69,6 +69,32 @@ pub(crate) fn hex_color_or_default(value: &str) -> String {
     hex_color(value).unwrap_or_else(|| "#cbff00".to_string())
 }
 
+/// Служебные имена, под которыми новый аккаунт выглядел бы как система или
+/// администрация. "system" к тому же — владелец старых демо-серверов: такой логин
+/// унаследовал бы их (аудит 2026-11-19). Уже существующие аккаунты не трогаем.
+pub(crate) fn is_reserved_username(value: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "system", "admin", "administrator", "root", "operator", "moderator", "support",
+        "official", "zali", "zalimessenger", "zali-messenger", "security", "jev",
+    ];
+    let lower = value.trim().to_lowercase();
+    RESERVED.contains(&lower.as_str())
+}
+
+/// Управляющие символы направления текста и невидимые разделители. В имени ими
+/// переворачивают видимый текст (U+202E и соседи) или прячут различия между похожими именами.
+pub(crate) fn strip_invisible_controls(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| {
+            !matches!(*ch,
+                '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{061C}'
+            ) && !ch.is_control()
+        })
+        .collect()
+}
+
 pub(crate) fn is_valid_username(value: &str) -> bool {
     let len = value.chars().count();
     (3..=32).contains(&len)

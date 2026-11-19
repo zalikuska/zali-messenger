@@ -1091,7 +1091,7 @@ body[data-ui-v2="on"] .mode-switch {
 }
 
 .contact-suggest-item:hover,
-.contact-suggest-item:focus-visible {
+.contact-suggest-item:focus-visible:where([data-kbd-focus] *) {
     background: var(--menu-hover);
     outline: 0;
 }
@@ -1140,7 +1140,7 @@ body[data-ui-v2="on"] .mode-switch {
 }
 
 .contact-suggest-item:hover .contact-suggest-plus,
-.contact-suggest-item:focus-visible .contact-suggest-plus {
+.contact-suggest-item:focus-visible:where([data-kbd-focus] *) .contact-suggest-plus {
     color: var(--accent-fg);
 }
 
@@ -2030,7 +2030,7 @@ body[data-nav-mode="servers"] .contacts {
     -webkit-tap-highlight-color: transparent;
 }
 
-.server-rail-item:focus-visible {
+.server-rail-item:focus-visible:where([data-kbd-focus] *) {
     outline: none;
 }
 
@@ -2042,7 +2042,7 @@ body[data-nav-mode="servers"] .contacts {
 }
 
 .server-rail-item:hover .server-rail-avatar,
-.server-rail-item:focus-visible .server-rail-avatar {
+.server-rail-item:focus-visible:where([data-kbd-focus] *) .server-rail-avatar {
     border-radius: 14px;
 }
 
@@ -4001,13 +4001,13 @@ html[data-appearance="light"] .theme-violet { --swatch: #803af0; }
 }
 
 .peer-context-menu-item:hover,
-.peer-context-menu-item:focus-visible {
+.peer-context-menu-item:focus-visible:where([data-kbd-focus] *) {
     background: var(--menu-hover);
     outline: 0;
 }
 
 .peer-context-menu-item:hover .ui-icon,
-.peer-context-menu-item:focus-visible .ui-icon {
+.peer-context-menu-item:focus-visible:where([data-kbd-focus] *) .ui-icon {
     color: var(--text);
 }
 
@@ -4082,7 +4082,7 @@ html[data-appearance="light"] .theme-violet { --swatch: #803af0; }
 }
 
 .peer-context-menu-range:hover::-webkit-slider-thumb,
-.peer-context-menu-range:focus-visible::-webkit-slider-thumb {
+.peer-context-menu-range:focus-visible:where([data-kbd-focus] *)::-webkit-slider-thumb {
     transform: scale(1.15);
 }
 
@@ -4102,7 +4102,7 @@ html[data-appearance="light"] .theme-violet { --swatch: #803af0; }
     background: var(--text);
 }
 
-.peer-context-menu-range:focus-visible {
+.peer-context-menu-range:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
 }
 
@@ -6188,7 +6188,7 @@ span.msg-sender:hover {
 }
 
 .reaction-chip:hover,
-.reaction-chip:focus-visible {
+.reaction-chip:focus-visible:where([data-kbd-focus] *) {
     border-color: var(--lime);
     box-shadow: 0 0 0 2px var(--lime-dim);
     outline: 0;
@@ -6253,7 +6253,7 @@ span.msg-sender:hover {
 }
 
 .reaction-btn:hover,
-.reaction-btn:focus-visible {
+.reaction-btn:focus-visible:where([data-kbd-focus] *) {
     border-color: var(--lime);
     box-shadow: 0 0 0 2px var(--lime-dim);
     outline: 0;
@@ -6319,7 +6319,7 @@ span.msg-sender:hover {
 /* Эмодзи подрастает под курсором — это и есть подтверждение попадания,
    поэтому подсветка под ним может остаться едва заметной. */
 .reaction-menu .reaction-btn:hover,
-.reaction-menu .reaction-btn:focus-visible {
+.reaction-menu .reaction-btn:focus-visible:where([data-kbd-focus] *) {
     border-color: transparent;
     background: var(--menu-hover);
     box-shadow: none;
@@ -6380,13 +6380,13 @@ span.msg-sender:hover {
 }
 
 .reaction-menu-action:hover,
-.reaction-menu-action:focus-visible {
+.reaction-menu-action:focus-visible:where([data-kbd-focus] *) {
     background: var(--menu-hover);
     outline: 0;
 }
 
 .reaction-menu-action:hover .ui-icon,
-.reaction-menu-action:focus-visible .ui-icon {
+.reaction-menu-action:focus-visible:where([data-kbd-focus] *) .ui-icon {
     color: var(--text);
 }
 
@@ -6397,7 +6397,7 @@ span.msg-sender:hover {
 }
 
 .reaction-menu-action.is-danger:hover,
-.reaction-menu-action.is-danger:focus-visible {
+.reaction-menu-action.is-danger:focus-visible:where([data-kbd-focus] *) {
     background: rgba(255, 92, 118, .16);
     color: rgb(255, 108, 132);
 }
@@ -6427,12 +6427,12 @@ span.msg-sender:hover {
 }
 
 .msg.out .msg-quote:hover,
-.msg.out .msg-quote:focus-visible {
+.msg.out .msg-quote:focus-visible:where([data-kbd-focus] *) {
     background: rgba(var(--on-accent-rgb),.16);
 }
 
 .msg-quote:hover,
-.msg-quote:focus-visible {
+.msg-quote:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     opacity: 1;
     background: rgba(var(--ink-rgb),.12);
@@ -6519,7 +6519,7 @@ span.msg-sender:hover {
 }
 
 .composer-context-close:hover,
-.composer-context-close:focus-visible {
+.composer-context-close:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     background: rgba(var(--ink-rgb),.08);
     color: var(--text);
@@ -6806,7 +6806,7 @@ span.msg-sender:hover {
 }
 
 .file-chip:hover,
-.file-chip:focus-visible {
+.file-chip:focus-visible:where([data-kbd-focus] *) {
     box-shadow:
         0 10px 24px rgba(0,0,0,calc(.10 * var(--shadow-k))),
         inset 0 1px 0 rgba(var(--hl-rgb),.08),
@@ -6893,16 +6893,16 @@ span.msg-sender:hover {
    rule alone loses to that two-class-plus-tag selector. */
 .msg-attachments .file-message,
 .msg-attachments .file-message:hover,
-.msg-attachments .file-message:focus-visible {
+.msg-attachments .file-message:focus-visible:where([data-kbd-focus] *) {
     text-decoration: none;
 }
 
 .file-message:hover .file-message-name,
-.file-message:focus-visible .file-message-name {
+.file-message:focus-visible:where([data-kbd-focus] *) .file-message-name {
     text-decoration: underline;
 }
 
-.file-message:focus-visible {
+.file-message:focus-visible:where([data-kbd-focus] *) {
     outline: 1px solid rgba(var(--accent-rgb),.5);
     outline-offset: 2px;
 }
@@ -7087,7 +7087,7 @@ span.msg-sender:hover {
 }
 
 .draft-att .file-chip:hover,
-.draft-att .file-chip:focus-visible {
+.draft-att .file-chip:focus-visible:where([data-kbd-focus] *) {
     box-shadow: none;
     outline: 0;
 }
@@ -7103,7 +7103,7 @@ span.msg-sender:hover {
 
 .input-bar {
     display: grid;
-    grid-template-columns: 40px 40px 1fr 40px;
+    grid-template-columns: 1fr 40px 40px 40px 40px;
     align-items: center;
     gap: 10px;
     width: calc(100% - (var(--composer-inline-inset) * 2));
@@ -7744,7 +7744,7 @@ body[data-msg-side="one"] .sk-self { margin-left: 0; }
         var(--lime);
 }
 
-.auth-rules input[type="checkbox"]:focus-visible {
+.auth-rules input[type="checkbox"]:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 2px;
 }
@@ -9080,12 +9080,12 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
 }
 
 .zc-segment:hover,
-.zc-segment:focus-visible {
+.zc-segment:focus-visible:where([data-kbd-focus] *) {
     filter: brightness(1.18);
     transform: scaleY(1.12);
 }
 
-.zc-segment:focus-visible {
+.zc-segment:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k))));
 }
@@ -10430,7 +10430,7 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
 
     /* Composer becomes a single rounded pill: round attach / coin / send inside. */
     #viewChat .input-bar {
-        grid-template-columns: auto auto 1fr auto;
+        grid-template-columns: 1fr auto auto auto auto;
         align-items: center;
         gap: 2px;
         height: auto;
@@ -11707,7 +11707,7 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
     box-shadow: none;
 }
 
-.f-choice:focus-visible {
+.f-choice:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k))));
 }
@@ -12015,7 +12015,7 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
 }
 
 .peer-context-menu-item.is-danger:hover,
-.peer-context-menu-item.is-danger:focus-visible {
+.peer-context-menu-item.is-danger:focus-visible:where([data-kbd-focus] *) {
     background: rgba(255, 77, 109, .1);
 }
 
@@ -12941,7 +12941,7 @@ body[data-design-mode="focus"] .empty-sub {
 /* Непрозрачное поле: --bg плюс белый слой поверх, чтобы переписка не
    просвечивала под ним при прокрутке — при любой цветовой схеме. */
 body[data-design-mode="focus"] #viewChat .input-bar {
-    grid-template-columns: var(--f-ctl) var(--f-ctl) minmax(0, 1fr) var(--f-ctl);
+    grid-template-columns: minmax(0, 1fr) var(--f-ctl) var(--f-ctl) var(--f-ctl) var(--f-ctl);
     gap: 2px;
     height: auto;
     min-height: 48px;
@@ -13321,7 +13321,7 @@ body[data-design-mode="focus"] .settings-theme-grid .btn-theme {
     letter-spacing: 0;
 }
 
-body[data-design-mode="focus"] .settings-theme-grid .btn-theme:focus-visible {
+body[data-design-mode="focus"] .settings-theme-grid .btn-theme:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     box-shadow: var(--f-ring);
 }
@@ -13474,7 +13474,7 @@ body[data-design-mode="focus"] .recent-account-remove svg {
 }
 
 body[data-design-mode="focus"] .recent-account-row:hover .recent-account-remove,
-body[data-design-mode="focus"] .recent-account-remove:focus-visible {
+body[data-design-mode="focus"] .recent-account-remove:focus-visible:where([data-kbd-focus] *) {
     opacity: 1;
 }
 
@@ -14294,8 +14294,8 @@ body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
     filter: brightness(1.1);
 }
 
-.voice-compact-timer:focus-visible,
-.voice-compact-btn:focus-visible {
+.voice-compact-timer:focus-visible:where([data-kbd-focus] *),
+.voice-compact-btn:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--on-accent);
     outline-offset: -2px;
 }
@@ -15149,7 +15149,7 @@ body[data-design-mode="focus"] .auth-link:hover {
     background: var(--f-fill-hover);
 }
 
-body[data-design-mode="focus"] .auth-link:focus-visible {
+body[data-design-mode="focus"] .auth-link:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 2px;
 }
@@ -15180,7 +15180,7 @@ body[data-design-mode="focus"] .auth-network-head {
     user-select: none;
 }
 
-body[data-design-mode="focus"] .auth-network-head:focus-visible {
+body[data-design-mode="focus"] .auth-network-head:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 2px;
     border-radius: 8px;
@@ -15511,7 +15511,7 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 }
 
 /* Видимый фокус с клавиатуры: у большинства кнопок он был только на hover. */
-:where(button, a[href], [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
+:where(button, a[href], [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 2px;
 }
@@ -15571,13 +15571,13 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
 
 .bwrap { position: relative; }
 
-.msg:focus-visible {
+.msg:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 3px;
     border-radius: 12px;
 }
 
-#msgs:focus-visible {
+#msgs:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid rgba(var(--accent-rgb), .5);
     outline-offset: -2px;
 }
@@ -15605,7 +15605,7 @@ body[data-design-mode="focus"] .auth-network.is-open .auth-input {
     .contact-more { opacity: 0; }
     .contact:hover .contact-more,
     .contact:focus-within .contact-more,
-    .contact-more:focus-visible { opacity: 1; }
+    .contact-more:focus-visible:where([data-kbd-focus] *) { opacity: 1; }
 }
 
 @media (pointer: coarse), (max-width: 760px) {
@@ -15661,7 +15661,7 @@ body.auth-open .m-net-strip {
     transform: rotate(-135deg);
 }
 
-.auth-network-head:focus-visible {
+.auth-network-head:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 2px;
     border-radius: 8px;
@@ -15694,7 +15694,7 @@ body.auth-open .m-net-strip {
 }
 
 .auth-link:hover { background: rgba(var(--ink-rgb),.07); opacity: 1; }
-.auth-link:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+.auth-link:focus-visible:where([data-kbd-focus] *) { outline: 2px solid var(--lime); outline-offset: 2px; }
 
 @media (max-width: 760px) {
     .auth-footer { grid-template-columns: 1fr; }
@@ -15782,7 +15782,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     transform: rotate(-135deg);
 }
 
-.settings-group-toggle:focus-visible {
+.settings-group-toggle:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 3px;
     border-radius: 6px;
@@ -15825,7 +15825,7 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
 
 .hub-card em.hub-card-action::after { content: "→"; font-weight: 700; }
 .hub-card:hover em.hub-card-action,
-.hub-card:focus-visible em.hub-card-action {
+.hub-card:focus-visible:where([data-kbd-focus] *) em.hub-card-action {
     border-color: rgba(var(--accent-rgb), .45);
     background: rgba(var(--ink-rgb),.09);
 }
@@ -15915,8 +15915,8 @@ body[data-design-mode="focus"] .auth-link { border: 0; }
     background: rgba(var(--accent-rgb), .14);
 }
 
-.tb-addon-btn:focus-visible,
-.tb-addon-chip:focus-visible {
+.tb-addon-btn:focus-visible:where([data-kbd-focus] *),
+.tb-addon-chip:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     box-shadow: 0 0 0 2px var(--lime-dim), 0 0 0 1px var(--lime);
 }
@@ -16861,13 +16861,13 @@ body[data-design-mode] .hub-addons .hub-addon-more {
 }
 
 .addon-bar:hover i,
-.addon-bar:focus-visible i {
+.addon-bar:focus-visible:where([data-kbd-focus] *) i {
     background: var(--lime);
     filter: brightness(1.15);
 }
 
 .addon-bar.is-empty:hover i,
-.addon-bar.is-empty:focus-visible i {
+.addon-bar.is-empty:focus-visible:where([data-kbd-focus] *) i {
     background: rgba(var(--ink-rgb),.3);
     filter: none;
 }
@@ -16899,7 +16899,7 @@ body[data-design-mode] .hub-addons .hub-addon-more {
 }
 
 .addon-bar:hover::after,
-.addon-bar:focus-visible::after {
+.addon-bar:focus-visible:where([data-kbd-focus] *)::after {
     opacity: 1;
     transform: translate(-50%, 0);
 }
@@ -16916,9 +16916,9 @@ body[data-design-mode] .hub-addons .hub-addon-more {
 }
 
 .addon-bar:first-child:hover::after,
-.addon-bar:first-child:focus-visible::after,
+.addon-bar:first-child:focus-visible:where([data-kbd-focus] *)::after,
 .addon-bar:last-child:hover::after,
-.addon-bar:last-child:focus-visible::after {
+.addon-bar:last-child:focus-visible:where([data-kbd-focus] *)::after {
     transform: translate(0, 0);
 }
 
@@ -19290,7 +19290,7 @@ body[data-design-mode="focus"] .zc-card-status {
     cursor: pointer;
 }
 
-.server-card-hit:focus-visible {
+.server-card-hit:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb));
 }
@@ -19817,7 +19817,7 @@ body[data-sidebar-panel] .sidebar .mode-switch {
     cursor: pointer;
 }
 .game-focus-pick:hover,
-.game-focus-pick:focus-visible { outline: none; background: rgba(var(--ink-rgb),.07); }
+.game-focus-pick:focus-visible:where([data-kbd-focus] *) { outline: none; background: rgba(var(--ink-rgb),.07); }
 .game-focus-pick.selected { background: rgba(var(--ink-rgb),.08); }
 .game-focus-pick .ava {
     flex: none;
@@ -19974,7 +19974,7 @@ body[data-design-mode="focus"][data-design-glow="on"] .wt-progress-fill {
     text-align: left;
     cursor: pointer;
 }
-:where(.zs-btn):focus-visible {
+:where(.zs-btn):focus-visible:where([data-kbd-focus] *) {
     outline: none;
     border-color: var(--lime);
     box-shadow: 0 0 0 3px var(--lime-dim);
@@ -20306,7 +20306,7 @@ body .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles {
     box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--accent-rgb));
 }
 
-.voice-src-tile:focus-visible {
+.voice-src-tile:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k))));
 }
@@ -20465,11 +20465,11 @@ body .voice-panel.has-stage .voice-call-expanded-grid .voice-tiles {
     cursor: default;
 }
 
-.voice-picker-btn:focus-visible,
-.voice-picker-close:focus-visible,
-.voice-picker-row:focus-visible,
-.voice-picker-cat:focus-visible,
-.voice-picker-seg-btn:focus-visible {
+.voice-picker-btn:focus-visible:where([data-kbd-focus] *),
+.voice-picker-close:focus-visible:where([data-kbd-focus] *),
+.voice-picker-row:focus-visible:where([data-kbd-focus] *),
+.voice-picker-cat:focus-visible:where([data-kbd-focus] *),
+.voice-picker-seg-btn:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -21079,8 +21079,8 @@ body[data-design-mode="focus"] .auth-fail-server {
     background: var(--ha-fill-hover);
 }
 
-.hub-action:focus-visible,
-.hub-update:focus-visible {
+.hub-action:focus-visible:where([data-kbd-focus] *),
+.hub-update:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -21123,7 +21123,7 @@ body[data-design-mode="focus"] .auth-fail-server {
 }
 
 .hub-action:hover .hub-action-go,
-.hub-action:focus-visible .hub-action-go {
+.hub-action:focus-visible:where([data-kbd-focus] *) .hub-action-go {
     color: rgba(var(--accent-fg-rgb));
     opacity: 1;
     transform: translateX(3px);
@@ -21150,7 +21150,7 @@ body[data-design-mode="focus"] .hub-action-art {
 }
 
 body[data-design-mode="focus"] .hub-action:hover .hub-action-art,
-body[data-design-mode="focus"] .hub-action:focus-visible .hub-action-art {
+body[data-design-mode="focus"] .hub-action:focus-visible:where([data-kbd-focus] *) .hub-action-art {
     opacity: .5;
 }
 
@@ -21294,7 +21294,7 @@ body[data-decor-art="off"] .hub-action-art {
 }
 
 .hub-action--addon.has-bg:hover::before,
-.hub-action--addon.has-bg:focus-visible::before {
+.hub-action--addon.has-bg:focus-visible:where([data-kbd-focus] *)::before {
     filter: brightness(1.15);
 }
 
@@ -21347,7 +21347,7 @@ body[data-decor-art="off"] .hub-action-art {
     background: var(--f-fill-hover, rgba(var(--ink-rgb),.095));
 }
 
-.hub-back:focus-visible {
+.hub-back:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -21888,8 +21888,8 @@ body[data-decor-art="off"] .hub-action-art {
     opacity: 1;
 }
 
-.store-chip:focus-visible,
-.store-get:focus-visible {
+.store-chip:focus-visible:where([data-kbd-focus] *),
+.store-get:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -22203,7 +22203,7 @@ body[data-decor-art="off"] .hub-action-art {
     opacity: 1;
 }
 
-.store-seg-btn:focus-visible {
+.store-seg-btn:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -22620,7 +22620,7 @@ body .voice-btn.voice-join-big svg {
     filter: brightness(1.06);
     transform: scale(1.03);
 }
-.voice-screen-watch:focus-visible .voice-screen-watch-pill {
+.voice-screen-watch:focus-visible:where([data-kbd-focus] *) .voice-screen-watch-pill {
     outline: 2px solid #fff;
     outline-offset: 2px;
 }
@@ -23082,7 +23082,7 @@ body[data-msg-side="one"] .msg.out.group-end .bubble { border-top-left-radius: 6
     transform: translateX(16px);
     background: var(--on-accent);
 }
-.settings-body .server-toggle.settings-toggle > input[type="checkbox"]:focus-visible {
+.settings-body .server-toggle.settings-toggle > input[type="checkbox"]:focus-visible:where([data-kbd-focus] *) {
     outline: 2px solid var(--lime);
     outline-offset: 2px;
 }
@@ -23125,7 +23125,7 @@ body[data-design-mode="focus"] .settings-shell {
 .tb-brand.is-update[data-channel="b"] { color: #ffc531; }
 .tb-brand.is-update[data-channel="r"] { color: var(--accent-fg); }
 .tb-brand.is-update:hover { background: rgba(var(--ink-rgb),.07); }
-.tb-brand.is-update:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.tb-brand.is-update:focus-visible:where([data-kbd-focus] *) { outline: 2px solid currentColor; outline-offset: 2px; }
 .tb-brand.is-update.is-downloading { cursor: progress; font-variant-numeric: tabular-nums; }
 .tb-brand.is-update.is-downloading:hover { background: none; }
 
@@ -23312,7 +23312,7 @@ body[data-design-mode="focus"] .settings-shell {
     /* Поле ввода сообщения: капсула. Кнопки прижаты к нижней строке — когда
        текст растёт в несколько строк, они остаются у большого пальца. */
     html body[data-design-mode] #viewChat .input-bar {
-        grid-template-columns: auto auto minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto auto auto auto;
         align-items: end;
         gap: 2px;
         min-height: 48px;
@@ -23656,7 +23656,7 @@ html body[data-design-mode] #viewChat .discord-media-shell.discord-media-shell-i
 
 .sound-option:hover { background: var(--f-fill-hover, rgba(var(--ink-rgb),.08)); }
 .sound-option:active { transform: translateY(1px); }
-.sound-option:focus-visible { outline: none; box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)))); }
+.sound-option:focus-visible:where([data-kbd-focus] *) { outline: none; box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)))); }
 /* Выбор — как у «Выбора из списка»: плитка на ступень светлее, отметка —
    сплошной акцентный кружок значка. Рамки нет. */
 .sound-option.active { background: var(--f-fill-strong, rgba(var(--ink-rgb),.11)); }
@@ -23772,7 +23772,7 @@ html body[data-design-mode] #viewChat .discord-media-shell.discord-media-shell-i
 
 .server-rail-item .server-rail-avatar,
 .server-rail-item:hover .server-rail-avatar,
-.server-rail-item:focus-visible .server-rail-avatar,
+.server-rail-item:focus-visible:where([data-kbd-focus] *) .server-rail-avatar,
 .server-rail-item.active .server-rail-avatar {
     border-radius: 30%;
 }
@@ -23782,7 +23782,7 @@ html body[data-design-mode] #viewChat .discord-media-shell.discord-media-shell-i
 }
 
 .server-rail-item:not(.active):not(.server-rail-action):hover .server-rail-avatar,
-.server-rail-item:not(.active):not(.server-rail-action):focus-visible .server-rail-avatar {
+.server-rail-item:not(.active):not(.server-rail-action):focus-visible:where([data-kbd-focus] *) .server-rail-avatar {
     box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(var(--ink-rgb),.18);
 }
 
@@ -23793,7 +23793,7 @@ html body[data-design-mode] #viewChat .discord-media-shell.discord-media-shell-i
 /* Действия рейки («+», каталог, меню) — кнопки, а не серверы: круг. */
 .server-rail-action .server-rail-avatar,
 .server-rail-action:hover .server-rail-avatar,
-.server-rail-action:focus-visible .server-rail-avatar {
+.server-rail-action:focus-visible:where([data-kbd-focus] *) .server-rail-avatar {
     border-radius: 50%;
 }
 
@@ -23902,7 +23902,7 @@ html body[data-design-mode] #viewChat .discord-media-shell.discord-media-shell-i
     background: var(--tr-fill-hover);
 }
 
-.tr-overlay button:focus-visible {
+.tr-overlay button:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -25867,7 +25867,7 @@ html[data-appearance="light"] .appearance-seg button.is-active {
     box-shadow: var(--l-shadow-1);
 }
 
-.appearance-seg button:focus-visible {
+.appearance-seg button:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),calc(.3 * var(--glow-k))));
 }
@@ -26544,11 +26544,11 @@ html[data-appearance="light"] .auth-art .aa-hole { fill: rgba(var(--ink-rgb),.7)
     transform: scale(1.12);
 }
 
-.rp-grip:focus-visible {
+.rp-grip:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
 }
 
-.rp-grip:focus-visible i {
+.rp-grip:focus-visible:where([data-kbd-focus] *) i {
     box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 5px rgba(var(--accent-rgb),calc(.5 * var(--glow-k)));
 }
 
@@ -27175,7 +27175,7 @@ body[data-decor-art="off"] .sup-hero-art {
     background: var(--f-fill-hover, rgba(var(--ink-rgb),.095));
 }
 
-.sup-card:focus-visible {
+.sup-card:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -27228,7 +27228,7 @@ body[data-decor-art="off"] .sup-hero-art {
 }
 
 .sup-card:hover .hub-action-go,
-.sup-card:focus-visible .hub-action-go {
+.sup-card:focus-visible:where([data-kbd-focus] *) .hub-action-go {
     color: rgba(var(--accent-fg-rgb));
     opacity: 1;
     transform: translateX(3px);
@@ -27423,7 +27423,7 @@ body[data-decor-art="off"] .sup-hero-art {
     transform: rotate(-90deg);
 }
 
-.sup-policy summary:focus-visible {
+.sup-policy summary:focus-visible:where([data-kbd-focus] *) {
     outline: 0;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),calc(.22 * var(--glow-k)));
 }
@@ -28653,11 +28653,11 @@ html[data-appearance="light"] #hubViolationBody {
 }
 .wt-opt-copy strong { font-size: 15px; font-weight: 700; }
 .wt-opt-copy small { color: var(--text2); font-size: 13px; line-height: 1.4; }
-.wt-opt:focus-visible,
-.wt-swatch:focus-visible,
-.wt-tile:focus-visible,
-.wt-btn:focus-visible,
-.wt-skip:focus-visible {
+.wt-opt:focus-visible:where([data-kbd-focus] *),
+.wt-swatch:focus-visible:where([data-kbd-focus] *),
+.wt-tile:focus-visible:where([data-kbd-focus] *),
+.wt-btn:focus-visible:where([data-kbd-focus] *),
+.wt-skip:focus-visible:where([data-kbd-focus] *) {
     outline: none;
     box-shadow: var(--f-ring, 0 0 0 3px rgba(var(--accent-rgb),.22));
 }
@@ -29096,7 +29096,7 @@ body[data-design-mode="focus"] [data-settings-section="email"] { order: 41; }
 }
 
 .auth-forgot:hover { color: var(--text); background: var(--f-fill, rgba(var(--ink-rgb),.065)); }
-.auth-forgot:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+.auth-forgot:focus-visible:where([data-kbd-focus] *) { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
 
 /* Шаг вместо формы: всё остальное в карточке скрыто, как у экрана ошибки. */
 .auth-flow {
@@ -29216,7 +29216,7 @@ body[data-design-mode="focus"] [data-settings-section="email"] { order: 41; }
 }
 
 .auth-flow-link:hover { color: var(--text); background: var(--f-fill, rgba(var(--ink-rgb),.065)); }
-.auth-flow-link:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+.auth-flow-link:focus-visible:where([data-kbd-focus] *) { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
 
 /* ── Поле кода: шесть ячеек поверх одного настоящего поля ──────────────── */
 
@@ -29861,4 +29861,459 @@ body.is-mobile-layout .main {
    же самое, его перебивают десктопные правила по специфичности — отсюда !important. */
 html[data-appearance="light"] body.is-mobile-layout .main {
     background: var(--bg) !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Телефон: экраны из Хаба (Настройки, Аддоны, Поддержка и их вложенные страницы)
+   въезжают справа поверх него — как чат поверх списка (mobile_push.js).
+   • Настройки — свой экран: пока он поверх, Хаб остаётся виден (.is-under) и не
+     проигрывает view-enter при возврате (.view-noenter).
+   • Панели хаба лежат слоем над главной: у вложенной снят `hidden` и у всей цепочки
+     под ней, поэтому главная (с шапкой) остаётся на месте и открывается из-под пальца.
+   • Только transform: въезд — класс .hub-push-enter на время анимации, жест и
+     закрытие пишут transform инлайном. Базовое `animation: none` обязательно: без
+     него снятие класса меняло бы имя анимации на view-enter и играло его заново.
+   ════════════════════════════════════════════════════════════════════════ */
+@keyframes hub-push-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+body.is-mobile-layout #viewHub.is-under {
+    display: grid;
+}
+
+body.is-mobile-layout #viewHub.view-noenter {
+    animation: none;
+}
+
+body.is-mobile-layout #viewSettings.is-push {
+    z-index: 4;
+    background: var(--bg);
+    animation: none;
+}
+
+body.is-mobile-layout #viewSettings.is-push.hub-push-enter {
+    animation: hub-push-in .26s cubic-bezier(.2,.8,.2,1) both;
+}
+
+/* Шапка хаба на главной остаётся под вложенной панелью: прежние правила прятали её
+   на вкладках, когда панель сменяла главную на месте. */
+body.is-mobile-layout #viewHub[data-hub-current] .hub-hero {
+    display: grid;
+}
+
+body.is-mobile-layout #viewHub .hub-pane:not([data-hub-pane="overview"]) {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    align-content: start;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    padding: calc(var(--m-safe-top) + 12px) 12px calc(var(--m-dock-h) + var(--m-safe-bottom) + 16px);
+    background: var(--bg);
+}
+
+body.is-mobile-layout #viewHub .hub-pane:not([data-hub-pane="overview"])::-webkit-scrollbar {
+    display: none;
+}
+
+body.is-mobile-layout #viewHub .hub-pane.hub-push-enter {
+    animation: hub-push-in .26s cubic-bezier(.2,.8,.2,1) both;
+}
+
+
+/* ── Окно перевода: сумма — ползунок от нуля до баланса ───────────────────
+   Точное число вписывается рядом с «Отправить» (.zc-send-row), а не отдельной
+   большой строкой: ползунок, быстрые доли и поле — один и тот же ввод
+   (syncCoinModalSlider). Селекторы с body[data-design-mode] перекрывают общее
+   правило input'ов окна (высота 48, заливка, рамка) во всех режимах оформления. */
+.zc-slider-field {
+    gap: 8px;
+}
+/* Ползунок собран из своих элементов: невидимый нативный <input type=range>
+   лежит поверх и отвечает за касания, клавиатуру и доступность, а полоску,
+   заливку и ручку рисуют соседние span'ы. Нативные ::-webkit-slider-thumb
+   рисуют градиенты мыльно и по-разному в WebKit (Mac) и Chromium — здесь вид
+   одинаковый во всех оболочках и пиксель в пиксель.
+   Положение — --pn (0…1) на .zc-range из
+   syncCoinModalSlider; ширина невидимой нативной ручки = ширине видимой, поэтому
+   палец и картинка совпадают на всём ходе. */
+.zc-send .zc-range {
+    --pn: 0;
+    --zc-w: 18px;
+    --zc-h: 32px;
+    --zc-track: 6px;
+    /* Цвет зазора вокруг ручки = фон окна («Фокус» красит его --menu-bg;
+       в тёмной теме он светлее --surface-rgb, и зазор читался рамкой). */
+    --zc-gap: var(--menu-bg, rgb(var(--surface-rgb)));
+    position: relative;
+    height: 44px;
+    touch-action: pan-y;
+}
+body[data-design-mode] .zc-send .coin-transfer-field .zc-range input.zc-slider,
+body[data-design-mode] .zc-send .coin-transfer-field .zc-range input.zc-slider:focus {
+    -webkit-appearance: none;
+    appearance: none;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    opacity: 0;
+    cursor: grab;
+    touch-action: pan-y;
+}
+body[data-design-mode] .zc-send .coin-transfer-field .zc-range input.zc-slider:active { cursor: grabbing; }
+body[data-design-mode] .zc-send .coin-transfer-field .zc-range input.zc-slider:disabled { cursor: default; }
+.zc-range .zc-slider::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.zc-range .zc-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: var(--zc-w);
+    height: 100%;
+    border: 0;
+    background: transparent;
+}
+.zc-range .zc-slider::-moz-range-track { height: 100%; background: transparent; }
+.zc-range .zc-slider::-moz-range-thumb {
+    width: var(--zc-w);
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+}
+
+/* Вид — по docs/UI_GUIDELINES.md: только токены, без литералов чёрного/белого,
+   без градиентов и без смены формы от наведения/нажатия.
+   · полоска — нейтральная `--f-fill-strong`, пилюля 6 px;
+   · пройденная часть — сплошной акцент (`--lime`): это «моя» сумма;
+   · ручка — вытянутый вверх прямоугольник 18×32 r6 цветом основного текста
+     (графит на светлой бумаге, светлая на тёмной) с тремя рёбрами-хватом цветом
+     поверхности окна; от полоски её отделяет кольцо-зазор тем же цветом
+     поверхности — как выбор у аватарок, без обводки и тени;
+   · фокус с клавиатуры — `--f-ring` снаружи зазора. */
+.zc-range-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: var(--zc-track);
+    margin-top: calc(var(--zc-track) / -2);
+    border-radius: 999px;
+    background: var(--f-fill-strong, rgba(var(--ink-rgb), .11));
+    overflow: hidden;
+    pointer-events: none;
+}
+.zc-range-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(var(--zc-w) / 2 + (100% - var(--zc-w)) * var(--pn));
+    background: var(--lime);
+}
+.zc-range-thumb {
+    position: absolute;
+    top: 50%;
+    left: calc((100% - var(--zc-w)) * var(--pn));
+    width: var(--zc-w);
+    height: var(--zc-h);
+    margin-top: calc(var(--zc-h) / -2);
+    border-radius: 6px;
+    background: var(--text);
+    box-shadow: 0 0 0 3px var(--zc-gap);
+    pointer-events: none;
+}
+/* Хват: три ребра по 2 px с шагом 5 px — целые пиксели, линии не мылятся. */
+.zc-range-thumb::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    top: 50%;
+    height: 12px;
+    margin-top: -6px;
+    background: repeating-linear-gradient(to bottom,
+        rgba(var(--surface-rgb), .7) 0 2px,
+        transparent 2px 5px);
+}
+.zc-range input:focus-visible:where([data-kbd-focus] *) ~ .zc-range-thumb {
+    box-shadow: 0 0 0 3px var(--zc-gap), 0 0 0 6px rgba(var(--accent-rgb), .35);
+}
+.zc-range input:disabled ~ .zc-range-track,
+.zc-range input:disabled ~ .zc-range-thumb { opacity: .45; }
+
+/* Строка остатка в окне перевода — всегда одна строка одной высоты
+   (updateCoinModalSummary держит её и при пустой сумме, и при нехватке):
+   длинное число не переносится, подпись при нужде обрезается многоточием. */
+.zc-send .coin-gift-summary.is-transfer .zc-sum-row > span {
+    white-space: nowrap;
+}
+.zc-send .coin-gift-summary.is-transfer .zc-sum-row > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.zc-send .coin-gift-summary.is-transfer.is-error .zc-sum-row > span {
+    color: var(--danger-fg, var(--red));
+}
+.zc-send .coin-gift-summary.is-transfer.is-error .zc-sum-row > span:last-child {
+    font-weight: 700;
+}
+
+/* Сумму вписали руками или шагнули стрелками — ручка и заливка доезжают за
+   160 мс, а не перескакивают. Пока ползунок держат, переход выключен: ручка
+   идёт ровно под пальцем. */
+.zc-range-thumb { transition: left .16s var(--ease-out, ease-out); }
+.zc-range-fill { transition: width .16s var(--ease-out, ease-out); }
+.zc-range input:active ~ .zc-range-thumb,
+.zc-range input:active ~ .zc-range-track .zc-range-fill { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+    .zc-range-thumb, .zc-range-fill { transition: none; }
+}
+
+/* Строка внизу: точная сумма слева, «Отправить» во всю остальную ширину. */
+.zc-send .coin-transfer-actions.zc-send-row {
+    grid-template-columns: minmax(0, 10.5rem) minmax(0, 1fr);
+    align-items: stretch;
+}
+.zc-send .zc-send-row .zc-amount-box {
+    height: 48px;
+    padding-right: 4px;
+}
+.zc-send .zc-send-row .zc-amount-box input,
+body[data-design-mode] .zc-send .zc-send-row .zc-amount-box input {
+    font-size: 18px;
+    padding-left: 12px;
+}
+.zc-send .zc-raffle-link {
+    align-self: flex-start;
+    margin: 0;
+}
+
+
+/* ── Подложка окон поверх .main: на всё окно, а не на одну колонку чата ───
+   Она лежала внутри .main (position: absolute), поэтому левая панель оставалась
+   яркой, а затемнён был только чат — с серой мутной границей посередине.
+   Теперь слой фиксированный под строкой заголовка (она остаётся перетаскиваемой),
+   затемнение ровное и мягче: окно читается, но фон не «гаснет». Окно над сценой
+   аддона (.is-over-stage) уже задаёт top само. */
+.coin-transfer-modal:not(.is-over-stage) {
+    position: fixed;
+    inset: var(--titlebar-h, 0px) 0 0 0;
+}
+body[data-design-mode="focus"] .coin-transfer-modal,
+body[data-design-mode="focus"] .raffle-modal {
+    background: rgba(var(--scrim-rgb), calc(.5 * var(--scrim-k)));
+}
+@media (max-width: 760px) {
+    html body .coin-transfer-modal:not(.is-over-stage) {
+        inset: 0 0 var(--kbd-inset, 0px) 0;
+    }
+}
+
+
+/* ── Кольца фокуса — только с клавиатуры (modules/focus_modality.js) ──────
+   Все :focus-visible выше дописаны :where([data-kbd-focus] *): атрибут на <html>
+   ставит Tab/стрелки и снимает любое нажатие мышью или пальцем. Это правило
+   гасит ещё и стандартную рамку браузера у элементов без своего кольца;
+   нулевая специфичность — любое авторское outline (кромка акцента) сильнее. */
+:where(html:not([data-kbd-focus])) :where(:focus-visible) {
+    outline: none;
+}
+
+/* ── ВЫБОР GIF (gif_picker.js, 2026-11-19) ───────────────────────────────────
+   Кнопка поля ввода и плавающий слой над ним. Поле ввода — первая колонка, все
+   кнопки справа от него (скрепка, ZaliCoin, GIF, отправить); сетки .input-bar во
+   всех слоях считают четыре кнопки. Пока кнопка GIF скрыта (до входа), поле
+   занимает и её колонку. Подложка, тень, радиус — общие токены --menu-*
+   (§4 гайдлайнов «Плавающие слои»). */
+#viewChat .input-bar > .gif-btn[hidden] { display: none !important; }
+#viewChat .input-bar:has(> .gif-btn[hidden]) > #msgInput { grid-column: span 2; }
+
+.gif-picker {
+    position: absolute;
+    z-index: 40;
+    /* Кнопка GIF — справа, у кнопки отправки: окно открывается над ней. */
+    right: 12px;
+    bottom: calc(100% + 6px);
+    width: min(380px, calc(100% - 24px));
+    height: min(440px, 62vh);
+    display: flex;
+    flex-direction: column;
+    background: var(--menu-bg);
+    box-shadow: var(--menu-shadow);
+    border-radius: var(--menu-radius, 14px);
+    overflow: hidden;
+    transform-origin: calc(100% - 60px) 100%;
+    animation: menu-pop .22s var(--ease-out) backwards;
+}
+.gif-picker[hidden] { display: none; }
+/* Без ключа KLIPY — только объяснение, без пустой высоты сетки. */
+.gif-picker.is-unavailable { height: auto; }
+.gif-picker.is-unavailable .gif-picker-search { opacity: .45; }
+.gif-picker-head { flex: 0 0 auto; padding: 10px 10px 6px; }
+.gif-picker-search {
+    width: 100%;
+    height: 40px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(var(--ink-rgb), .065));
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: box-shadow .15s var(--ease-out);
+}
+.gif-picker-search::placeholder { color: var(--text2); opacity: 1; }
+.gif-picker-search:focus {
+    box-shadow: 0 0 0 1px var(--f-ring-border, var(--accent-fg)), 0 0 0 4px rgba(var(--accent-rgb), .22);
+}
+.gif-picker-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px 10px 10px;
+}
+.gif-picker-grid { display: flex; align-items: flex-start; gap: 6px; }
+.gif-picker-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.gif-picker-tile {
+    position: relative;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--f-fill, rgba(var(--ink-rgb), .065));
+    /* Размытая заглушка KLIPY ставится инлайном (background-image), пока грузится превью. */
+    background-size: cover;
+    background-position: center;
+}
+.gif-picker-pick {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    transition: opacity .15s var(--ease-out);
+}
+.gif-picker-pick img,
+.gif-picker-pick video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.gif-picker-pick:hover { opacity: .82; }
+.gif-picker-pick:focus-visible:where([data-kbd-focus] *) { outline: 2px solid var(--accent-fg); outline-offset: -2px; border-radius: 10px; }
+
+/* Вкладки «KLIPY / Избранное» — сегменты (§4): контейнер fill r12, кнопка 30 r9 13/600,
+   выбранная — fill-strong и основной текст, не акцентом. */
+.gif-picker-tabs {
+    display: flex;
+    gap: 2px;
+    margin-top: 8px;
+    padding: 3px;
+    border-radius: 12px;
+    background: var(--f-fill, rgba(var(--ink-rgb), .065));
+}
+.gif-picker-tab {
+    flex: 1 1 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out);
+}
+.gif-picker-tab:hover { color: var(--text); }
+.gif-picker-tab[aria-selected="true"] { background: var(--f-fill-strong, rgba(var(--ink-rgb), .11)); color: var(--text); }
+.gif-picker-tab:focus-visible:where([data-kbd-focus] *) { outline: 2px solid var(--accent-fg); outline-offset: 1px; }
+.gif-picker-tab-count { font-variant-numeric: tabular-nums; opacity: var(--meta-50, .5); }
+.gif-picker-tab-count[hidden] { display: none; }
+.gif-picker.is-unavailable .gif-picker-tabs { opacity: .45; pointer-events: none; }
+
+/* Звёздочка «в избранное» — на плитке окна и на GIF из KLIPY в ленте. Лежит поверх
+   картинки, поэтому плашка — чёрно-белый литерал (§3), отмеченная — акцент схемы. */
+.gif-fav-star {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, .55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity .15s var(--ease-out), background .15s var(--ease-out);
+}
+.gif-fav-star svg { width: 18px; height: 18px; fill: none; }
+.gif-fav-star:hover { background: rgba(0, 0, 0, .72); }
+.gif-fav-star.is-on { color: var(--lime); }
+.gif-fav-star.is-on svg { fill: currentColor; }
+.gif-picker-tile:hover .gif-fav-star,
+.gif-picker-tile .gif-fav-star.is-on,
+.discord-media-shell:hover > .gif-fav-star,
+.gif-fav-star:focus-visible:where([data-kbd-focus] *) { opacity: 1; }
+.gif-fav-star:focus-visible:where([data-kbd-focus] *) { outline: 2px solid #fff; outline-offset: 1px; }
+#viewChat .discord-media-shell-gif { position: relative; }
+@media (hover: none) {
+    /* На сенсорном экране наведения нет — звёздочка видна всегда. */
+    .gif-fav-star { opacity: 1; }
+}
+.gif-picker-note {
+    margin-top: 2px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--f-surface, rgba(var(--ink-rgb), .032));
+    color: var(--text2);
+    font-size: 13px;
+    text-align: center;
+}
+.gif-picker-note[hidden] { display: none; }
+.gif-picker-foot {
+    flex: 0 0 auto;
+    padding: 6px 12px 8px;
+    color: var(--text);
+    opacity: var(--meta-45, .45);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    text-align: right;
+}
+@media (max-width: 760px) {
+    .gif-picker {
+        left: 8px;
+        right: 8px;
+        width: auto;
+        height: min(56vh, 460px);
+        transform-origin: 50% 100%;
+    }
+    .gif-picker-search { height: 44px; font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .gif-picker { animation: none; }
+    .gif-picker-pick, .gif-picker-tab, .gif-fav-star { transition: none; }
 }

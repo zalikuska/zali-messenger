@@ -223,6 +223,9 @@ ZaliMixin(ZaliInterface, class {
         // only be booted once their node is in the document — so they piggyback on
         // the single post-render hook every message list already calls.
         window.ZaliTgs?.hydrate(root);
+        // Строки ленты кешируются целиком — звёздочка «в избранное» на GIF из KLIPY
+        // могла остаться с прошлым состоянием (gif_picker.js).
+        this.syncGifFavStars?.(root);
 
         const videos = root.querySelectorAll?.('video.media-gif-like[data-gif-like="1"]') || [];
         videos.forEach(video => {
@@ -356,6 +359,23 @@ ZaliMixin(ZaliInterface, class {
                 <div class="tenor-badge">Tenor GIF</div>
                 <div class="tenor-hint">Загружаем анимацию...</div>
             </div>`;
+        }
+
+        // GIF из выбора в поле ввода (gif_picker.js) — без рамки, как GIF из Tenor.
+        if (this.isKlipyUrl?.(url) && this.isDirectMediaUrl(url)) {
+            const video = path.endsWith('.mp4') || path.endsWith('.webm');
+            const media = this.renderAttachmentPreview({
+                name: 'GIF',
+                mimeType: video ? (path.endsWith('.mp4') ? 'video/mp4' : 'video/webm') : (path.endsWith('.webp') ? 'image/webp' : 'image/gif'),
+                kind: video ? 'video' : 'gif',
+                dataUrl: url
+            }, false, { gifLike: true, trustedRemote: true });
+            // Звёздочка «в избранное» — внутрь рамки GIF, последним ребёнком. Состояние
+            // после перерисовки из кеша строк поправляет syncGifFavStars (hydrateGifMedia).
+            return this.gifFavStarHTML && /<\/div>\s*$/.test(media)
+                // Функция-заменитель: в строке-замене «$`», «$&» из URL подставили бы куски разметки.
+                ? media.replace(/<\/div>\s*$/, () => `${this.gifFavStarHTML(url)}</div>`)
+                : media;
         }
 
         if (this.isDirectMediaUrl(url)) {
@@ -500,10 +520,10 @@ ZaliMixin(ZaliInterface, class {
 
     messageIsGifOnly(msg) {
         const text = (msg.text || '').trim();
-        if (text) return false;
 
         const attachments = this.normalizeAttachments(msg.attachments);
         if (attachments.length > 0) {
+            if (text) return false;
             // Stickers ride along here so a lone sticker gets the same
             // chrome-less `media-only` treatment a lone GIF does.
             return attachments.every(att =>
@@ -514,8 +534,11 @@ ZaliMixin(ZaliInterface, class {
             );
         }
 
+        // Сообщение — одна ссылка на GIF (Tenor, KLIPY из выбора GIF, прямой .gif).
+        // Раньше сюда не доходили: проверка `if (text)` выше отсекала любой текст,
+        // и GIF-ссылка рисовалась в рамке пузыря.
         const urls = this.extractUrls(msg.text);
-        if (urls.length !== 1) return false;
+        if (urls.length !== 1 || text !== urls[0]) return false;
 
         const url = urls[0];
         if (!this.isTenorUrl(url) && !this.isDirectMediaUrl(url)) return false;
@@ -523,7 +546,7 @@ ZaliMixin(ZaliInterface, class {
             try { return new URL(url).pathname.toLowerCase(); }
             catch (e) { return url.toLowerCase(); }
         })();
-        return path.endsWith('.gif') || this.isTenorUrl(url);
+        return path.endsWith('.gif') || this.isTenorUrl(url) || !!this.isKlipyUrl?.(url);
     }
 
     // A photo/gif/sticker sent with a caption: same "is every attachment
@@ -573,6 +596,9 @@ ZaliMixin(ZaliInterface, class {
         const urls = this.extractUrls(msg.text);
         if (urls.some(url => this.isTenorUrl(url))) {
             return 'Tenor GIF';
+        }
+        if (urls.length === 1 && (msg.text || '').trim() === urls[0] && this.isKlipyUrl?.(urls[0])) {
+            return 'GIF';
         }
 
         const text = (msg.text || '').trim();

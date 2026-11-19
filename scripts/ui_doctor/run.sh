@@ -16,5 +16,9 @@ echo "──────── телефон: клавиатура, поле в
 node scripts/ui_doctor/check_mobile.mjs || FAILED=1
 
 echo ""
+echo "──────── кольца фокуса — только с клавиатуры"
+node scripts/ui_doctor/check_focus.mjs || FAILED=1
+
+echo ""
 if [ "$FAILED" = "0" ]; then echo "ui-doctor: all checks passed"; else echo "ui-doctor: FAILURES"; fi
 exit $FAILED

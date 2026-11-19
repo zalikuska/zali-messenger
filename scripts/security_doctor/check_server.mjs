@@ -239,8 +239,13 @@ section('audit 2026-11-18');
             && /disconnect_user_sockets/.test(rustFn(devices, 'revoke_device'))
             && /disconnect_user_sockets\(state, username\)/.test(moderation)
             && /WS_CLOSE_SENTINEL/.test(realtime));
-    record('a DM report (reporter-supplied text) never auto-punishes',
-        /verification == "reporter"/.test(rustFn(moderation, 'apply_decision')));
+    // Строже, чем «reporter»: автонаказание только при полной сверке сервером
+    // (partial — тоже текст жалобщика), и pending-приостановка не действует до
+    // подтверждения человеком (аудит 2026-11-19).
+    record('only fully server-verified reports auto-punish; pending suspensions are not enforced',
+        /verification != "server"/.test(rustFn(moderation, 'apply_decision'))
+            && /n == accused_red/.test(moderation)
+            && /fn enforced_pairs/.test(moderation));
     record('failed-login slots are reserved before bcrypt, per IP and per account',
         /failed_login_user_rate_key/.test(auth) && /release_reservation\(\)/.test(rustFn(auth, 'login')));
     record('registration checks the lowercase name inside the INSERT',

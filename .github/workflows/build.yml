@@ -110,15 +110,6 @@ jobs:
         run: .\scripts\build_windows_app.ps1
         shell: pwsh
 
-      # Inno Setup предустановлен на раннере, но не лежит в PATH.
-      - name: Build online installer
-        shell: pwsh
-        run: |
-          $inno = 'C:\Program Files (x86)\Inno Setup 6'
-          if (-not (Test-Path "$inno\ISCC.exe")) { throw "ISCC.exe не найден в $inno" }
-          $env:PATH = "$inno;$env:PATH"
-          .\scripts\build_windows_app.ps1 -OnlineInstallerOnly
-
       # Версия в имени файла — как при ручной публикации (ops/RELEASE.md).
       - name: Name files
         id: pkg
@@ -133,6 +124,25 @@ jobs:
           path: ${{ steps.pkg.outputs.exe }}
           archive: false
           if-no-files-found: error
+
+  # Онлайн-установщик скачивает exe с сервера при установке, поэтому ему не нужны ни
+  # Rust, ни веб-бандл — только ISCC. Отдельный job: собирается за минуту параллельно
+  # с exe, и ошибка в .iss видна сразу, а не после десятиминутной сборки клиента.
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inno Setup предустановлен на раннере, но не лежит в PATH.
+      - name: Build online installer
+        shell: pwsh
+        run: |
+          $inno = 'C:\Program Files (x86)\Inno Setup 6'
+          if (-not (Test-Path "$inno\ISCC.exe")) { throw "ISCC.exe не найден в $inno" }
+          $env:PATH = "$inno;$env:PATH"
+          .\scripts\build_windows_app.ps1 -OnlineInstallerOnly
 
       - uses: actions/upload-artifact@v7
         with:

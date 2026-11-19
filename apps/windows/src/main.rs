@@ -513,8 +513,116 @@ fn init_logging() {
     }
 }
 
+/// Пишет строку о падении прямо в zali-win.log, мимо tracing: писатель tracing держит
+/// `Mutex`, и если сбой случился, пока он занят, лог через него повесил бы процесс
+/// вместо того, чтобы его закрыть. Файл открыт на дозапись — с писателем tracing не
+/// конфликтует.
+fn append_crash_line(line: &str) {
+    use std::io::Write;
+    let path = NativeState::app_data_dir().join("zali-win.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
+        let _ = file.flush();
+    }
+}
+
+/// Без этого любое падение шелла было невидимым: GUI-процесс без консоли, stderr уходит
+/// в никуда, в zali-win.log — ни строчки, окно просто исчезает (так и выглядел вылет на
+/// кнопке «развернуть»). Хук паники срабатывает в точке паники — до того, как tao
+/// поймает её в своём wndproc и перевыбросит; фильтр необработанных исключений ловит
+/// то, что паникой не является (access violation и т. п. в нативном коде).
+fn install_crash_logging() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        append_crash_line(&format!(
+            "PANIC (если её никто не поймал — процесс завершится) on thread {:?}: {}\n{}",
+            std::thread::current().name().unwrap_or("<unnamed>"),
+            info,
+            backtrace
+        ));
+        default_hook(info);
+    }));
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::Diagnostics::Debug::{SetUnhandledExceptionFilter, EXCEPTION_POINTERS};
+
+        unsafe extern "system" fn on_unhandled_exception(info: *const EXCEPTION_POINTERS) -> i32 {
+            let (code, address) = unsafe {
+                info.as_ref()
+                    .and_then(|p| p.ExceptionRecord.as_ref())
+                    .map(|r| (r.ExceptionCode as u32, r.ExceptionAddress as usize))
+                    .unwrap_or((0, 0))
+            };
+            let module = module_name_for_address(address);
+            append_crash_line(&format!(
+                "CRASH unhandled exception 0x{code:08X} at 0x{address:X} ({module})\n{}",
+                std::backtrace::Backtrace::force_capture()
+            ));
+            0 // EXCEPTION_CONTINUE_SEARCH: дальше — обычная обработка (WER), процесс завершится
+        }
+        unsafe {
+            SetUnhandledExceptionFilter(Some(on_unhandled_exception));
+        }
+    }
+}
+
+/// Модуль (DLL/exe), в который попадает адрес исключения, — чтобы по строке в логе
+/// сразу было видно, чей это код: наш exe, WebView2Loader, драйвер видеокарты…
+#[cfg(target_os = "windows")]
+fn module_name_for_address(address: usize) -> String {
+    use windows_sys::Win32::Foundation::HMODULE;
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
+    let mut module: HMODULE = std::ptr::null_mut();
+    let found = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            address as *const u16,
+            &mut module,
+        )
+    };
+    if found == 0 {
+        return "unknown module".to_string();
+    }
+    let mut buf = [0u16; 512];
+    let len = unsafe { GetModuleFileNameW(module, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    format!("{} +0x{:X}", String::from_utf16_lossy(&buf[..len]), address - module as usize)
+}
+
+/// Кнопка «развернуть/восстановить» в нашем заголовке. Windows: тот же путь, что у
+/// системной кнопки, Win+↑ и Aero Snap, — `WM_SYSCOMMAND` в очередь окна. Раньше здесь
+/// был `window.set_maximized()` tao: он вызывает `ShowWindow`, а следом перезаписывает
+/// стили окна и дёргает `SWP_FRAMECHANGED` прямо изнутри нашего обработчика событий,
+/// и вся цепочка WM_SIZE/WM_NCCALCSIZE/ресайз WebView2 шла вложенно в нём — на этой
+/// кнопке приложение и вылетало (2026-11, точная точка паники не установлена: на тот
+/// момент лога падений не было). Через очередь сообщение обрабатывает `DefWindowProc` уже вне
+/// обработчика, а флаг MAXIMIZED tao сам выставит по WM_SIZE. Состояние — `IsZoomed`,
+/// то есть реальное состояние окна, а не флаг tao.
+fn toggle_maximize(window: &tao::window::Window) {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{IsZoomed, PostMessageW, SC_MAXIMIZE, SC_RESTORE, WM_SYSCOMMAND};
+        if let RawWindowHandle::Win32(handle) = window.raw_window_handle() {
+            let hwnd = handle.hwnd as HWND;
+            let command = if unsafe { IsZoomed(hwnd) } != 0 { SC_RESTORE } else { SC_MAXIMIZE };
+            if unsafe { PostMessageW(hwnd, WM_SYSCOMMAND, command as usize, 0) } != 0 {
+                return;
+            }
+            error!("PostMessageW(WM_SYSCOMMAND) failed, falling back to tao set_maximized");
+        }
+    }
+    window.set_maximized(!window.is_maximized());
+}
+
 fn main() -> wry::Result<()> {
     init_logging();
+    install_crash_logging();
     info!("Zali Messenger starting...");
     #[cfg(target_os = "windows")]
     ensure_single_instance_or_focus_existing();
@@ -753,17 +861,14 @@ fn main() -> wry::Result<()> {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        // Windows only in practice: `tao` 0.24's Win32 backend can panic inside its own
-        // window-proc trampoline while computing monitor info (GetMonitorInfo) for an
-        // undecorated window — hit by `window.set_maximized()` below on some multi-monitor
-        // / mixed-DPI setups, reported as the whole app silently closing on a maximize
-        // click. tao catches panics inside its own wndproc and re-raises them once control
-        // returns to this closure (mirroring winit's approach), so they land here as a
-        // normal, catchable panic rather than aborting mid-callback. Upstream fix is tao
-        // 0.34.6 (monitor-handle panic guard), but that's a breaking multi-version bump
-        // (winit/tao moved to an ApplicationHandler-style event loop API since) that needs
-        // a real Windows machine to verify — this keeps affected users' sessions alive in
-        // the meantime instead of losing the whole client to one bad SetWindowPos call.
+        // Ловит паники только нашего кода в этом замыкании. Паники внутри wndproc tao
+        // (в том числе вложенного, когда WinAPI-вызов отсюда синхронно шлёт сообщения
+        // окну) сюда НЕ попадают: tao запоминает их в своём `catch_unwind` и
+        // перевыбрасывает в цикле сообщений уже после возврата из этого замыкания
+        // (tao 0.24.1 event_loop.rs, `take_panic_error` → `resume_unwind`), и процесс
+        // завершается. Прошлая версия комментария обещала обратное — на этом держалась
+        // «защита» от вылета на кнопке «развернуть», которая ничего не защищала (см.
+        // `toggle_maximize`). Причину любого вылета теперь пишет `install_crash_logging`.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match event {
             Event::UserEvent(AppEvent::EvaluateScript(script)) => {
@@ -800,7 +905,7 @@ fn main() -> wry::Result<()> {
                 window.set_minimized(true);
             }
             Event::UserEvent(AppEvent::ToggleMaximizeWindow) => {
-                window.set_maximized(!window.is_maximized());
+                toggle_maximize(&window);
             }
             Event::UserEvent(AppEvent::CloseWindowRequest) => {
                 handle_close_request(&window, control_flow);

@@ -30,6 +30,11 @@ use tokio_util::io::ReaderStream;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+/// Разных реакций одного человека на одно сообщение (аудит 2026-11-19).
+const MAX_REACTIONS_PER_REACTOR: i64 = 20;
+/// Глубже этого история листается не offset-ом (аудит 2026-11-19).
+const MAX_HISTORY_OFFSET: i64 = 200_000;
+
 pub(crate) async fn load_reaction_states(
     state: &Arc<AppState>,
     message_ids: &[String],
@@ -215,7 +220,8 @@ pub(crate) async fn get_server_messages(
     }
 
     let limit = page.limit.unwrap_or(50).clamp(1, 500);
-    let offset = page.offset.unwrap_or(0).max(0);
+    // OFFSET в SQLite линеен — без потолка один запрос сканировал всю историю.
+    let offset = page.offset.unwrap_or(0).clamp(0, MAX_HISTORY_OFFSET);
     let newest_first = page.newest_first.unwrap_or(false);
     let conversation_scope = Some(server_conversation_scope(&server_id, &channel_id));
     let history_access = match resolve_history_access(
@@ -391,7 +397,8 @@ pub(crate) async fn get_messages(
     }
 
     let limit = page.limit.unwrap_or(50).clamp(1, 500);
-    let offset = page.offset.unwrap_or(0).max(0);
+    // OFFSET в SQLite линеен — без потолка один запрос сканировал всю историю.
+    let offset = page.offset.unwrap_or(0).clamp(0, MAX_HISTORY_OFFSET);
     let newest_first = page.newest_first.unwrap_or(false);
     let conversation_scope = Some(dm_conversation_scope(&effective_user, &user));
     let history_access = match resolve_history_access(
@@ -585,6 +592,19 @@ pub(crate) async fn set_message_reaction(
                 .await
         }
         Ok(None) => {
+            // Потолок разных реакций одного человека на сообщение: каждая новая
+            // раздувает сводку, которую сервер шлёт всем зрителям (аудит 2026-11-19).
+            let own: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM reactions WHERE message_id = ? AND reactor = ?",
+            )
+            .bind(&id)
+            .bind(&auth_user)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+            if own >= MAX_REACTIONS_PER_REACTOR {
+                return (StatusCode::BAD_REQUEST, "Слишком много разных реакций на одно сообщение").into_response();
+            }
             sqlx::query(
                 "INSERT INTO reactions (message_id, reactor, emoji, updated_at)
                  VALUES (?, ?, ?, ?)
@@ -1925,7 +1945,11 @@ pub(crate) async fn delete_message(
             let allowed = can_delete_message(&state, &m, &auth_user)
                 .await
                 .unwrap_or(false);
-            if !allowed {
+            // Приостановленному можно убрать своё, но не модерировать чужое: право
+            // менеджера канала — та же власть, что и запись (аудит 2026-11-19).
+            let suspended_moderating =
+                m.sender != auth_user && crate::moderation::is_suspended(&state, &auth_user);
+            if !allowed || suspended_moderating {
                 warn!("DELETE_MESSAGE forbidden id={} auth={}", id, auth_user);
                 return StatusCode::FORBIDDEN.into_response();
             }
@@ -2061,6 +2085,14 @@ pub(crate) async fn edit_message(
     if existing.sender != auth_user {
         warn!("EDIT_MESSAGE forbidden id={} auth={}", id, auth_user);
         return (StatusCode::FORBIDDEN, "Редактировать может только автор").into_response();
+    }
+    // Правка — запись. Автор, которого исключили из сервера или лишили права писать
+    // в канал, не должен переписывать старые сообщения (аудит 2026-11-19).
+    if let (Some(sid), Some(cid)) = (existing.server_id.as_deref(), existing.channel_id.as_deref()) {
+        if !can_access_channel(&state.db, sid, cid, &auth_user, "send").await.unwrap_or(false) {
+            warn!("EDIT_MESSAGE forbidden (no send) id={} auth={}", id, auth_user);
+            return (StatusCode::FORBIDDEN, "Нет права писать в этот канал").into_response();
+        }
     }
     // Правка пишет новый архив и звено hash chain — те же лимиты, что у загрузки
     // (общий счётчик МиБ ниже). Раньше правка шла без лимитов вовсе (аудит 2026-11-18).

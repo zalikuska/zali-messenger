@@ -177,6 +177,9 @@ const DefaultApiRoutes = Object.freeze({
         passwordResetVerify: apiRoute('/auth/password-reset/verify'),
         passwordResetComplete: apiRoute('/auth/password-reset/complete'),
     },
+    gifs: {
+        config: apiRoute('/gifs/config'),
+    },
     historyRecovery: {
         base: apiRoute('/history-recovery'),
         fulfill: (id) => apiRoute(`/history-recovery/${encodeURIComponent(id)}/fulfill`),

@@ -553,6 +553,11 @@ pub(crate) async fn request_key_republish(
     headers: HeaderMap,
     Json(payload): Json<RepublishRequestPayload>,
 ) -> Response {
+    // Каждый запрос будит всех участников scope на перепубликацию ключей
+    // (аудит 2026-11-19: лимита не было вовсе).
+    if !crate::rate_allow(&state, format!("key-republish:{}", caller.to_lowercase()), 20) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Слишком много запросов. Повторите через минуту.").into_response();
+    }
     let scope = canonical_scope(&trim_limited(payload.scope, 256));
     if scope.is_empty() {
         return (StatusCode::BAD_REQUEST, "Не указан scope").into_response();

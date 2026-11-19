@@ -100,6 +100,8 @@ mod mailer;
 pub use mailer::MailSettings;
 mod account_email;
 mod history_recovery;
+// Выбор GIF: сервер только отдаёт клиенту ключ KLIPY, поиск идёт из клиента.
+mod gifs;
 
 #[cfg(windows)]
 fn set_windows_app_user_model_id() {
@@ -182,6 +184,8 @@ pub struct Config {
     // Почта (mailer.rs): MAIL_TRANSPORT и соседние переменные. В debug по умолчанию
     // письма пишутся в каталог, в релизе без настройки почта выключена.
     mail: mailer::MailSettings,
+    // Ключ приложения KLIPY для выбора GIF (gifs.rs). Не задан — кнопки GIF нет.
+    klipy_app_key: Option<String>,
 }
 
 impl Config {
@@ -438,6 +442,10 @@ impl Config {
             moderation_max_per_minute,
             moderation_max_per_day,
             mail: mailer::MailSettings::from_env(),
+            klipy_app_key: std::env::var("KLIPY_APP_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
         }
     }
 }
@@ -2366,6 +2374,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/password", post(change_password))
         .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/auth/email/config", get(account_email::email_config))
+        .route("/api/gifs/config", get(gifs::gifs_config))
         .route(
             "/api/auth/email",
             get(account_email::email_status).post(account_email::start_email_link),

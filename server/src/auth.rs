@@ -569,6 +569,9 @@ pub(crate) async fn register(
         )
             .into_response();
     }
+    if crate::util::is_reserved_username(username) {
+        return (StatusCode::BAD_REQUEST, "Этот логин зарезервирован").into_response();
+    }
 
     if let Some(reason) = password_policy_error(username, &payload.password) {
         warn!("Регистрация отклонена: username '{}' — пароль не прошёл политику", username);

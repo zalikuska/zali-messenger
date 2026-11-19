@@ -602,12 +602,16 @@ pub(crate) fn build_history_output(
     server_id: Option<String>,
     channel_id: Option<String>,
 ) -> Value {
-    let record_sender = record.get("sender").and_then(Value::as_str).unwrap_or("");
-    let sender = decrypted
+    // Автор — тот, кого сервер проставил из JWT; `sender` внутри архива пишет сам
+    // отправитель и может назваться кем угодно (аудит 2026-11-19). Архивный — только
+    // запасной, если сервер имени не прислал.
+    let record_sender = record
         .get("sender")
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(record_sender);
+        .filter(|value| !value.trim().is_empty());
+    let sender = record_sender
+        .or_else(|| decrypted.get("sender").and_then(Value::as_str))
+        .unwrap_or("");
     let text = decrypted.get("text").and_then(Value::as_str).unwrap_or("");
     let attachments = decrypted
         .get("attachments")

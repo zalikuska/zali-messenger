@@ -529,7 +529,9 @@ ZaliMixin(ZaliInterface, class {
                 // reconciled the locally-echoed copy — after a reload your own sent
                 // message showed twice, one of them stuck on "sending" forever.
                 clientId: payload?.clientId || payload?.client_id || '',
-                sender: unpacked.sender || sender,
+                // Автор — тот, кого сервер проставил из JWT. `sender` внутри архива
+                // пишет сам отправитель и может назваться кем угодно (аудит 2026-11-19).
+                sender: sender || unpacked.sender,
                 receiver,
                 text: unpacked.text,
                 // Decrypted by the WASM core alongside the body; without this the
@@ -812,6 +814,7 @@ ZaliMixin(ZaliInterface, class {
             const control = document.getElementById(id);
             if (control) control.disabled = noTarget;
         }
+        this.syncGifButton?.();
     }
 
     // --- Bus Command Handlers ---

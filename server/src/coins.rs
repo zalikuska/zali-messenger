@@ -559,10 +559,13 @@ async fn broadcast_coin_gift(state: &Arc<AppState>, gift: &CoinGiftView) {
     };
     let connected: HashSet<&str> = candidates.iter().map(String::as_str).collect();
     let mut seen: HashSet<String> = viewers.iter().cloned().collect();
-    for name in std::iter::once(&gift.sender).chain(gift.claims.iter().map(|claim| &claim.username)) {
-        if connected.contains(name.as_str()) && seen.insert(name.clone()) {
-            viewers.push(name.clone());
-        }
+    // Сверх зрителей канала — только отправитель: это его удержанные монеты, и
+    // lookup_coin_gifts отдаёт ему карточку и без доступа к каналу. Прежние
+    // получатели, потерявшие доступ (исключены, ушли), список получателей больше
+    // не видят — как и через GET (аудит 2026-11-19).
+    let sender = &gift.sender;
+    if connected.contains(sender.as_str()) && seen.insert(sender.clone()) {
+        viewers.push(sender.clone());
     }
 
     let payload = serde_json::json!({

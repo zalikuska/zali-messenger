@@ -38,7 +38,11 @@ ZaliMixin(ZaliInterface, class {
         // кнопками с data-hub-tab («Назад в хаб», «Подпись аддонов»).
         document.getElementById('viewHub')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-hub-tab]');
-            if (btn) this.setHubTab(btn.getAttribute('data-hub-tab'));
+            if (!btn) return;
+            const target = btn.getAttribute('data-hub-tab');
+            // Телефон: «Назад» уводит верхнюю панель вправо, а не гасит её на месте.
+            if (this.mobileHubPopTo?.(target)) return;
+            this.setHubTab(target);
         });
         const pane = document.getElementById('hubSigning');
         if (!pane) return;
@@ -124,17 +128,26 @@ ZaliMixin(ZaliInterface, class {
             btn.classList.toggle('is-active', on);
             btn.setAttribute('aria-selected', on ? 'true' : 'false');
         });
-        document.querySelectorAll('[data-hub-pane]').forEach((pane) => {
-            pane.hidden = pane.getAttribute('data-hub-pane') !== tab;
-        });
-        // CSS на телефоне прячет шапку хаба на вложенных вкладках (там уже есть «Назад в хаб»),
-        // а новая вкладка всегда открывается сверху, а не с прежней позиции прокрутки.
+        // Телефон: вложенные панели лежат поверх главной (mobile_push.js), её не прячем.
+        this.syncHubPaneVisibility();
         const hubView = document.getElementById('viewHub');
         // Имя НЕ data-hub-pane: по нему выше выбираются сами панели и #viewHub пряталась бы.
+        const prevTab = hubView?.getAttribute('data-hub-current') || 'overview';
         if (hubView && hubView.getAttribute('data-hub-current') !== tab) {
             hubView.setAttribute('data-hub-current', tab);
-            hubView.scrollTop = 0;
-            hubView.querySelector('.hub-view')?.scrollTo?.(0, 0);
+            if (this.isMobileLayout?.()) {
+                // Главная под панелью остаётся где была (при «назад» она на месте), а
+                // новая панель въезжает справа и открывается сверху.
+                const pane = hubView.querySelector(`[data-hub-pane="${tab}"]`);
+                if (pane) pane.scrollTop = 0;
+                if (tab !== 'overview' && this.hubPaneChain(prevTab).length <= this.hubPaneChain(tab).length) {
+                    this.mobileHubMarkEnter(pane);
+                }
+            } else {
+                // Новая вкладка всегда открывается сверху, а не с прежней позиции прокрутки.
+                hubView.scrollTop = 0;
+                hubView.querySelector('.hub-view')?.scrollTo?.(0, 0);
+            }
         }
         // Упаковщик живёт на странице «Для разработчиков» рядом с подписью:
         // это один путь автора (собрать → подписать → опубликовать).

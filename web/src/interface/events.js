@@ -685,6 +685,20 @@ ZaliMixin(ZaliInterface, class {
                 this.openCoinTransferModal(this.S.current || '');
             });
         }
+        const gifBtn = document.getElementById('gifBtn');
+        gifBtn?.addEventListener('click', () => this.toggleGifPicker());
+        // Наведение, фокус, касание — тренды KLIPY начинают грузиться до клика (gif_picker.js).
+        for (const type of ['pointerenter', 'focus', 'pointerdown']) {
+            gifBtn?.addEventListener(type, () => this.gifPrefetchTrending?.(), { passive: true });
+        }
+        // Фокус в поле ввода — соединения с KLIPY снова тёплые (браузер закрывает их
+        // примерно через 10 с простоя; сам прогрев не чаще раза в 15 с).
+        document.getElementById('msgInput')?.addEventListener('focus', () => {
+            if (this.gifEnabled?.()) this.gifWarmConnections();
+        });
+        // Звёздочка «в избранное» на GIF в ленте. В фазе захвата — раньше, чем клик
+        // по картинке откроет просмотр медиа.
+        document.addEventListener('click', (e) => { this.onGifFavClick?.(e); }, true);
         const coinRaffleBtn = document.getElementById('coinRaffleBtn');
         if (coinRaffleBtn) {
             coinRaffleBtn.addEventListener('click', () => {
@@ -727,8 +741,8 @@ ZaliMixin(ZaliInterface, class {
                 if (e.target === coinTransferModal) this.closeCoinTransferModal();
             });
         }
-        const coinTransferMaxBtn = document.getElementById('coinTransferMaxBtn');
-        if (coinTransferMaxBtn) coinTransferMaxBtn.addEventListener('click', () => this.fillCoinModalMax());
+        const coinTransferSlider = document.getElementById('coinTransferSlider');
+        if (coinTransferSlider) coinTransferSlider.addEventListener('input', () => this.onCoinModalSlider());
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape' || e.defaultPrevented || !this.coinModalOpen()) return;
             e.preventDefault();
@@ -1720,7 +1734,14 @@ ZaliMixin(ZaliInterface, class {
                 if (logBody) logBody.innerHTML = '';
             });
         }
-        if (closeSettings) closeSettings.addEventListener('click', () => showChatView());
+        if (closeSettings) {
+            closeSettings.addEventListener('click', () => {
+                // Телефон, настройки из Хаба: стрелка уводит их вправо — назад в Хаб.
+                const layer = this.mobileHubTopLayer?.();
+                if (layer?.kind === 'settings' && this.mobileHubClose(layer)) return;
+                showChatView();
+            });
+        }
         const mobileMenuBtn = document.getElementById('mobileMenuBtn');
         if (mobileMenuBtn) {
             mobileMenuBtn.addEventListener('click', () => this.toggleMobileSidebar());
@@ -2175,6 +2196,7 @@ ZaliMixin(ZaliInterface, class {
         this.syncMobileChrome();
         this.setupMobileNavGestures();
         this.setupMobileForwardNavGesture();
+        this.setupMobileHubPushGesture();
         this.setupMobileDockDrag();
         this.setupMobileKeyboardAvoidance();
         this.setupMobileTouchGestures();

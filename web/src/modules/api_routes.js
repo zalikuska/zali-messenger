@@ -33,6 +33,10 @@
         discover: {
             servers: apiRoute('/discover/servers'),
         },
+        // Выбор GIF: сервер отдаёт только ключ KLIPY (server/src/gifs.rs).
+        gifs: {
+            config: apiRoute('/gifs/config'),
+        },
         auth: {
             me: apiRoute('/auth/me'),
             register: apiRoute('/auth/register'),

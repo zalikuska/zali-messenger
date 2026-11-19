@@ -263,7 +263,9 @@ begin
       for I := 0 to GetArrayLength(Lines) - 1 do
       begin
         Line := Trim(Lines[I]);
-        Line := StringChange(Line, ' ', '');
+        // StringChange правит строку на месте (var-параметр) и возвращает число замен —
+        // присваивание результата в String не компилируется («Type mismatch»).
+        StringChange(Line, ' ', '');
         if (Length(Line) = 64) and (CompareText(Line, ExpectedHashLower) = 0) then
         begin
           Result := True;
@@ -298,6 +300,14 @@ begin
     if DownloadUrl = '' then
     begin
       MsgBox('Сервер не вернул ссылку на файл установки. Обратитесь к администратору сервера.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    { Без https и без контрольной суммы не ставим: раньше пустой sha256 молча
+      пропускал проверку, и подменённый ответ запускал любой exe (аудит 2026-11-19). }
+    if (Pos('https://', Lowercase(DownloadUrl)) <> 1) or (Length(Sha256) <> 64) then
+    begin
+      MsgBox('Сервер вернул небезопасные данные установки (нет https или контрольной суммы). Установка отменена.', mbError, MB_OK);
       Result := False;
       Exit;
     end;

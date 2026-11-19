@@ -852,6 +852,15 @@ struct WebView {
                     guard response == .OK, let destination = panel.url else { return }
                     do {
                         try decoded.data.write(to: destination, options: [.atomic])
+                        // Файл от собеседника — помечаем как скачанный из сети, как
+                        // браузер: без карантина присланный .command/.app открылся бы
+                        // двойным щелчком мимо Gatekeeper (Windows ставит Zone.Identifier;
+                        // аудит 2026-11-19).
+                        let quarantine: [String: Any] = [
+                            kLSQuarantineAgentNameKey as String: "ZaliMessenger",
+                            kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String,
+                        ]
+                        try? (destination as NSURL).setResourceValue(quarantine, forKey: .quarantinePropertiesKey)
                     } catch {
                         NSLog("Failed to save attachment: \(error.localizedDescription)")
                     }
@@ -1294,7 +1303,8 @@ struct WebView {
                     let result: [String: Any] = [
                         "id": messageId,
                         "clientId": record.clientId ?? record.client_id ?? "",
-                        "sender": unpacked.sender,
+                        // Автор от сервера (из JWT), не из архива — см. NetworkService.
+                        "sender": record.sender.isEmpty ? unpacked.sender : record.sender,
                         "receiver": record.receiver,
                         "text": unpacked.text,
                         "call": unpacked.call ?? "",

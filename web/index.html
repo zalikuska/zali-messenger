@@ -39,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261119-email-dock3">
+    <link rel="stylesheet" href="style.css?v=20261119-gif7">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -341,6 +341,8 @@
                         <div class="composer-focus-note" id="composerFocusNote" hidden role="status"></div>
                         <div class="draft-attachments" id="draftAttachments"></div>
                         <div class="input-bar" id="inputBar">
+                            <!-- Поле первым: все кнопки справа от него (2026-11-19). -->
+                            <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
                             <button class="attach-btn" id="attachBtn" type="button" title="Прикрепить картинку или GIF" aria-label="Прикрепить картинку или GIF">
                                 <svg class="ui-icon ui-icon-paperclip" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                                     <path d="M8.1 12.75 13.72 7.1a3.04 3.04 0 0 1 4.3 4.3l-6.7 6.7a4.95 4.95 0 0 1-7-7l6.66-6.66a6.78 6.78 0 0 1 9.58 9.58l-6.82 6.82" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
@@ -357,7 +359,13 @@
                                     <path d="M9.5 9h5l-5 6h5M10.4 12h3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                                 </svg>
                             </button>
-                            <textarea id="msgInput" placeholder="Сообщение..." autocomplete="off" maxlength="4000" rows="1"></textarea>
+                            <!-- Выбор GIF (gif_picker.js). Скрыта, пока сервер не отдал ключ KLIPY. -->
+                            <button class="attach-btn gif-btn" id="gifBtn" type="button" title="GIF" aria-label="Выбрать GIF" aria-haspopup="dialog" aria-expanded="false" hidden>
+                                <svg class="ui-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                                    <rect x="2.75" y="5.75" width="18.5" height="12.5" rx="3.5" stroke="currentColor" stroke-width="1.8"/>
+                                    <path d="M9.5 10.2A2.4 2.4 0 1 0 9.5 13.8V12.2H8M12 9.7v4.6M14.6 14.3V9.7h3.6M14.6 12h2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
                             <button class="send-btn" id="sendBtn" disabled>
                                 <svg viewBox="0 0 24 24" fill="currentColor" width="17" height="17">
                                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -1111,15 +1119,15 @@
                             <span>Кому</span>
                             <input type="text" id="coinTransferRecipientInput" placeholder="Имя пользователя" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next" data-user-suggest>
                         </label>
-                        <div class="coin-transfer-field">
+                        <div class="coin-transfer-field zc-slider-field">
                             <div class="zc-field-row">
-                                <label for="coinTransferAmountInput" id="coinTransferAmountLabel">Сумма</label>
+                                <label for="coinTransferSlider" id="coinTransferAmountLabel">Сумма</label>
                                 <span class="zc-available" id="coinTransferAvailable">Доступно: —</span>
                             </div>
-                            <div class="zc-amount-box">
-                                <input type="text" id="coinTransferAmountInput" placeholder="0" inputmode="decimal" autocomplete="off" enterkeyhint="done">
-                                <span class="zc-amount-unit" aria-hidden="true">ZC</span>
-                                <button class="zc-amount-max" id="coinTransferMaxBtn" type="button" aria-label="Подставить всю доступную сумму">Всё</button>
+                            <div class="zc-range">
+                                <input type="range" class="zc-slider" id="coinTransferSlider" min="0" max="0" step="1" value="0" disabled data-no-swipe aria-label="Доля от доступного баланса">
+                                <span class="zc-range-track" aria-hidden="true"><span class="zc-range-fill"></span></span>
+                                <span class="zc-range-thumb" aria-hidden="true"></span>
                             </div>
                         </div>
                         <div class="coin-transfer-field" id="coinGiftClaimsField" hidden>
@@ -1132,9 +1140,12 @@
                         </div>
                         <div class="coin-gift-summary" id="coinGiftSummary" role="status" aria-live="polite" hidden></div>
                         <p class="coin-transfer-status" id="coinTransferStatus" role="status" aria-live="polite" hidden></p>
-                        <div class="coin-transfer-actions">
-                            <button class="btn-flat zc-raffle-link" id="coinRaffleBtn" type="button" hidden>Устроить розыгрыш</button>
-                            <button class="btn-flat" id="coinTransferCancelBtn" type="button">Отмена</button>
+                        <button class="btn-flat zc-raffle-link" id="coinRaffleBtn" type="button" hidden>Устроить розыгрыш</button>
+                        <div class="coin-transfer-actions zc-send-row">
+                            <div class="zc-amount-box">
+                                <input type="text" id="coinTransferAmountInput" placeholder="0" inputmode="decimal" autocomplete="off" enterkeyhint="done" aria-label="Точная сумма">
+                                <span class="zc-amount-unit" aria-hidden="true">ZC</span>
+                            </div>
                             <button class="auth-btn primary" id="coinTransferSubmitBtn" type="button">Отправить</button>
                         </div>
                     </div>
@@ -1917,6 +1928,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261119-email"></script>
+    <script src="app.js?v=20261119-gif7"></script>
 </body>
 </html>

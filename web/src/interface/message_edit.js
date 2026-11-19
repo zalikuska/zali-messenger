@@ -68,6 +68,18 @@ ZaliMixin(ZaliInterface, class {
     renderReplyQuote(msg) {
         const quote = this.normalizeReplyQuote(msg?.reply);
         if (!quote) return '';
+        // Цитату собирает отвечающий, и автора с текстом в ней можно выдумать
+        // («Администрация: переведи…» над своим сообщением). Если оригинал есть
+        // в истории — показываем его настоящего автора и текст (аудит 2026-11-19).
+        const original = quote.id ? this.findMessageById(quote.id)?.msg : null;
+        if (original) {
+            const real = this.buildReplyQuote(original);
+            if (real) {
+                quote.sender = real.sender;
+                quote.text = real.text;
+                quote.attachmentCount = real.attachmentCount;
+            }
+        }
         // data-reply-target drives the click-to-scroll below; absent when the
         // original is not in this client's history at all.
         const target = quote.id ? ` data-reply-target="${this.esc(quote.id)}"` : '';
