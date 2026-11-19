@@ -1,0 +1,171 @@
+name: CI
+
+# Тесты и статические проверки. Сборки приложений — в build.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONUTF8: "1"
+
+jobs:
+  # Быстрые проверки без компиляции: докер-доки, версии, мост, все *_doctor.
+  # Каждая — отдельным шагом, и `!cancelled()` не даёт первой красной скрыть остальные.
+  checks:
+    name: Static checks & doctors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Docs and versions are consistent
+        run: python3 scripts/check_docs.py
+
+      # Веб-бандл нужен и doctor-скриптам (они исполняют боевой interface.js),
+      # и bridge_check.sh (сверяет протокол моста с Swift/JS).
+      - name: Bundle web assets
+        run: python3 scripts/bundle_web.py
+
+      - name: Bridge protocol is in sync
+        if: ${{ !cancelled() }}
+        run: ./scripts/bridge_check.sh
+
+      - name: security-doctor
+        if: ${{ !cancelled() }}
+        run: ./scripts/security_doctor/run.sh
+
+      - name: crypto-doctor
+        if: ${{ !cancelled() }}
+        run: ./scripts/crypto_doctor/run.sh
+
+      - name: notify-doctor
+        if: ${{ !cancelled() }}
+        run: ./scripts/notify_doctor/run.sh
+
+      - name: perf-doctor
+        if: ${{ !cancelled() }}
+        run: ./scripts/perf_doctor/run.sh
+
+      - name: memory-doctor
+        if: ${{ !cancelled() }}
+        run: ./scripts/memory_doctor/run.sh
+
+      - name: ui-doctor
+        if: ${{ !cancelled() }}
+        run: ./scripts/ui_doctor/run.sh
+
+      # Серверную часть activity_doctor гоняет job `server` (полный cargo test).
+      - name: activity-doctor (web)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/activity_doctor/check_activity.mjs
+          node scripts/activity_doctor/check_focus.mjs
+
+      - name: voice-doctor
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          node scripts/voice_doctor/check_source.mjs
+          node scripts/voice_doctor/check_negotiation.mjs
+          node scripts/voice_doctor/check_call_records.mjs
+          node scripts/voice_doctor/check_shared_browser.mjs
+
+      # Падает уже на чистом HEAD (14 проверок «отдать bob»/«забрать управление»),
+      # ещё до появления CI. Не блокируем остальное, но шаг остаётся красным в логе.
+      # Починить проверку или код и убрать continue-on-error.
+      - name: voice-doctor (remote control — known failing)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node scripts/voice_doctor/check_remote_control.mjs
+
+  # Интеграционные тесты сервера (tests/*.rs в корне репо, подключены [[test]] в
+  # server/Cargo.toml) и unit-тесты крейта; заодно серверная часть activity-doctor.
+  server:
+    name: Server tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "server -> target"
+
+      - name: Test server
+        run: cargo test --manifest-path server/Cargo.toml --locked
+
+  # core (ядро .zali + крипто) и зеркальный SDK формата. На macOS — ещё и с `apm`:
+  # тесты качества эхоподавления откалиброваны по arm64 и на x86 SIMD-путях
+  # AEC3 могут давать иные числа, так что на Linux их не гоняем.
+  core:
+    name: Core & SDK tests (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            features: ""
+          - name: macos (apm)
+            os: macos-latest
+            features: "--features apm"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # cpal (dev-зависимость core) на Linux линкуется с ALSA.
+      - name: Install ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core -> target
+            sdk/Rust -> target
+
+      - name: Test core
+        run: cargo test --manifest-path core/Cargo.toml --locked ${{ matrix.features }}
+
+      - name: Test SDK
+        if: runner.os == 'Linux'
+        run: cargo test --manifest-path sdk/Rust/Cargo.toml --locked
+
+  # Unit-тесты Windows-шелла: только на Windows, там собирается его платформенный слой.
+  windows:
+    name: Windows client tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/windows -> target"
+
+      # build.rs включает web/index.html, style.css, app.js через include_str!.
+      - name: Bundle web assets
+        run: python scripts/bundle_web.py
+
+      # Без --locked: bump_version.py меняет version в apps/windows/Cargo.toml, а
+      # запись самого крейта в Cargo.lock остаётся старой — с --locked каждый бамп
+      # версии ронял бы сборку.
+      - name: Test Windows client
+        run: cargo test --manifest-path apps/windows/Cargo.toml

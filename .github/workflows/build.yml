@@ -1,0 +1,268 @@
+name: Build apps
+
+# Собирает все клиенты: macOS, Windows (exe + онлайн-установщик), Android, iOS,
+# а также standalone веб-клиент (WASM). Тесты — в ci.yml.
+#
+# Артефакты грузятся БЕЗ повторной упаковки (`archive: false`, upload-artifact v7):
+# GitHub не заворачивает одиночный файл в zip поверх уже готового, а имя
+# артефакта = имя файла. Единственный zip — macOS, и он нужен по делу:
+# `.app` это каталог, а апдейтер (`UpdateService.installAndRelaunch`) ждёт именно
+# `ditto`-архив.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "core/**"
+      - "sdk/Rust/**"
+      - "web/**"
+      - "brand/**"
+      - "scripts/build_*"
+      - "scripts/bundle_web.py"
+      - "scripts/bump_version.py"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "apps/**"
+      - "core/**"
+      - "sdk/Rust/**"
+      - "web/**"
+      - "brand/**"
+      - "scripts/build_*"
+      - "scripts/bundle_web.py"
+      - "scripts/bump_version.py"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONUTF8: "1"
+  # Прод-адреса и так зашиты дефолтом в web/src/interface.js; явные значения
+  # защищают от случайно подхваченного окружения раннера.
+  ZALI_API_BASE_URL: https://msgs.zalikus.org
+  ZALI_WS_BASE_URL: wss://msgs.zalikus.org
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "core -> target"
+
+      # bundle_web.py → ядро (--features apm) → swift build → .app → подпись → самопроверка
+      # на ссылки вне бандла: всё делает сам скрипт.
+      - name: Build ZaliMessenger.app
+        run: ./scripts/build_app.sh
+
+      # Именно ditto: он сохраняет симлинки и права, и им же апдейтер распаковывает.
+      - name: Package .app
+        id: pkg
+        run: |
+          VER=$(sed -n 's/^APP_VERSION="\(.*\)"/\1/p' scripts/build_app.sh)
+          ditto -c -k --keepParent ZaliMessenger.app "ZaliMessenger-$VER.zip"
+          echo "file=ZaliMessenger-$VER.zip" >> "$GITHUB_OUTPUT"
+
+      # CI не имеет локального сертификата «ZaliMessenger Local», бандл подписан
+      # ad-hoc: уведомления в таком билде не заработают, для публикации
+      # macOS-релиз по-прежнему собирается на Mac разработчика.
+      - uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pkg.outputs.file }}
+          archive: false
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # ~/.cargo/registry, ~/.cargo/git и apps/windows/target по ключу Cargo.lock —
+      # иначе каждый запуск пересобирает wry, tao, tokio, windows-sys с нуля.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/windows -> target"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      - name: Build ZaliMessenger.exe
+        run: .\scripts\build_windows_app.ps1
+        shell: pwsh
+
+      # Inno Setup предустановлен на раннере, но не лежит в PATH.
+      - name: Build online installer
+        shell: pwsh
+        run: |
+          $inno = 'C:\Program Files (x86)\Inno Setup 6'
+          if (-not (Test-Path "$inno\ISCC.exe")) { throw "ISCC.exe не найден в $inno" }
+          $env:PATH = "$inno;$env:PATH"
+          .\scripts\build_windows_app.ps1 -OnlineInstallerOnly
+
+      # Версия в имени файла — как при ручной публикации (ops/RELEASE.md).
+      - name: Name files
+        id: pkg
+        shell: bash
+        run: |
+          VER=$(sed -n 's/^APP_VERSION="\(.*\)"/\1/p' scripts/build_app.sh)
+          cp dist/windows/ZaliMessenger.exe "dist/windows/ZaliMessenger-$VER.exe"
+          echo "exe=dist/windows/ZaliMessenger-$VER.exe" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pkg.outputs.exe }}
+          archive: false
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/windows/installer/ZaliMessengerOnlineSetup.exe
+          archive: false
+          if-no-files-found: error
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # gradle-daemon-jvm.properties требует JetBrains JDK 21.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: jetbrains
+          java-version: "21"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "core -> target"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # assets/web копирует Gradle из web/, но сам бандл делает только этот скрипт.
+      - name: Bundle web assets
+        run: python3 scripts/bundle_web.py
+
+      # NDK уже стоит на раннере (ANDROID_NDK_HOME). Gradle ядро не собирает и об этом
+      # не предупреждает (CLAUDE.md) — без этого шага в APK не окажется .so.
+      - name: Build Rust core for Android
+        run: ./apps/android/build_android_core.sh
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Assemble APK
+        working-directory: apps/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      # Подпись — одноразовый debug-ключ раннера, а не ~/.android/debug.keystore
+      # разработчика: апдейтер Android отвергнет такой APK как «подписанный другим
+      # ключом». Это билд для проверки и ручной установки, не для публикации.
+      - name: Name APK
+        id: pkg
+        run: |
+          VER=$(sed -n 's/^APP_VERSION="\(.*\)"/\1/p' scripts/build_app.sh)
+          cp apps/android/app/build/outputs/apk/debug/app-debug.apk "ZaliMessenger-$VER.apk"
+          echo "file=ZaliMessenger-$VER.apk" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pkg.outputs.file }}
+          archive: false
+          if-no-files-found: error
+
+  # Без подписи и без артефакта: сборка под симулятор доказывает, что проект,
+  # xcframework с ядром и веб-ресурсы сходятся. Нужен Xcode 26 (SDK iOS 26) —
+  # macos-latest сейчас macOS 26.
+  ios:
+    name: iOS (simulator)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "core -> target"
+
+      - name: Bundle web assets
+        run: python3 scripts/bundle_web.py
+
+      - name: Build Rust core xcframework
+        run: ./scripts/build_ios_core.sh
+
+      - name: Generate Xcode project
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          cd apps/ios && xcodegen generate
+
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild build \
+            -project apps/ios/ZaliMessenger.xcodeproj \
+            -scheme ZaliMessenger \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+
+  # Standalone браузерный клиент / PWA (msg.zalikus.org). Это каталог статики,
+  # поэтому артефактом не выкладывается — иначе пришлось бы упаковывать в zip.
+  # Деплой — по-прежнему скриптом из ops/.
+  web:
+    name: Web (WASM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "core -> target"
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      # wasm-pkg должен лежать ДО bundle_web.py, иначе бандл не подхватит glue-JS.
+      - name: Build WASM core
+        run: ./scripts/build_web_wasm.sh
+
+      - name: Bundle web assets
+        run: python3 scripts/bundle_web.py
+
+      - name: Check outputs exist
+        run: |
+          for f in web/index.html web/style.css web/app.js web/wasm-pkg/zali_core.js web/wasm-pkg/zali_core_bg.wasm; do
+            test -s "$f" || { echo "::error::нет $f"; exit 1; }
+          done
