@@ -69,6 +69,12 @@ if missing:
 print(f"bridge protocol coverage OK ({len(messages)} messages)")
 PY
 
+# --static: только сверка протокола и маршрутов (CI на Linux) — без cargo check
+# Windows-шелла и swift build, которым нужны macOS/Windows.
+if [ "${1:-}" = "--static" ]; then
+  exit 0
+fi
+
 cargo check -q --manifest-path "$ROOT/apps/windows/Cargo.toml"
 swift build --package-path "$ROOT/apps/macos" -c debug
 # Каждый файл бандла по отдельности: ZaliInterface разложен по web/src/interface/*.js,

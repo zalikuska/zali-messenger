@@ -168,6 +168,18 @@ const DefaultApiRoutes = Object.freeze({
         login: apiRoute('/auth/login'),
         wsTicket: apiRoute('/auth/ws-ticket'),
         password: apiRoute('/auth/password'),
+        emailConfig: apiRoute('/auth/email/config'),
+        email: apiRoute('/auth/email'),
+        emailResend: apiRoute('/auth/email/resend'),
+        emailConfirm: apiRoute('/auth/email/confirm'),
+        emailPending: apiRoute('/auth/email/pending'),
+        passwordReset: apiRoute('/auth/password-reset'),
+        passwordResetVerify: apiRoute('/auth/password-reset/verify'),
+        passwordResetComplete: apiRoute('/auth/password-reset/complete'),
+    },
+    historyRecovery: {
+        base: apiRoute('/history-recovery'),
+        fulfill: (id) => apiRoute(`/history-recovery/${encodeURIComponent(id)}/fulfill`),
     },
     contacts: {
         list: apiRoute('/contacts'),

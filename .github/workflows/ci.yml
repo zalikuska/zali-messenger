@@ -41,7 +41,7 @@ jobs:
 
       - name: Bridge protocol is in sync
         if: ${{ !cancelled() }}
-        run: ./scripts/bridge_check.sh
+        run: ./scripts/bridge_check.sh --static
 
       - name: security-doctor
         if: ${{ !cancelled() }}

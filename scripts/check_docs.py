@@ -84,7 +84,14 @@ def check_paths():
             p = re.sub(r"(::\w+|:\d+)$", "", raw.rstrip(".,;)"))
             if any(s in p for s in SKIP_PARTS):
                 continue
-            if not (ROOT / p).exists():
+            # Сгенерированное и в .gitignore (web/app.js, apps/macos/.build): на свежем
+            # клоне его ещё нет, а в доках упоминать его всё равно нужно.
+            # Для несуществующего пути git не знает, файл это или каталог, а шаблон
+            # вида `**/.build/` ловит только каталог — поэтому пробуем и с «/».
+            if not (ROOT / p).exists() and not any(
+                subprocess.run(["git", "check-ignore", "-q", q], cwd=ROOT, capture_output=True).returncode == 0
+                for q in (p, p.rstrip("/") + "/")
+            ):
                 fail(f"{f.relative_to(ROOT)}: пути `{p}` нет в репозитории")
 
 

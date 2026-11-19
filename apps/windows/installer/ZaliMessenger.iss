@@ -230,26 +230,17 @@ begin
   end;
 end;
 
+// DownloadTemporaryFile (Inno Setup 6.1+) кладёт файл в {tmp} и бросает исключение при
+// сетевой ошибке или не-2xx. Раньше тут был ADODB.Stream, но ISCC 6.7 не компилирует
+// `Stream.Type := 1` («Identifier expected»: Type — зарезервированное слово), и
+// онлайн-установщик не собирался вообще. Контрольную сумму по-прежнему сверяет
+// VerifySha256 после загрузки.
 function HttpDownloadFile(const Url, DestFile: string): Boolean;
-var
-  Http, Stream: Variant;
 begin
   Result := False;
   try
-    Http := CreateOleObject('WinHttp.WinHttpRequest.5.1');
-    Http.Open('GET', Url, False);
-    Http.SetRequestHeader('User-Agent', 'ZaliMessengerOnlineInstaller');
-    Http.Send('');
-    if Http.Status = 200 then
-    begin
-      Stream := CreateOleObject('ADODB.Stream');
-      Stream.Type := 1; // adTypeBinary
-      Stream.Open;
-      Stream.Write(Http.ResponseBody);
-      Stream.SaveToFile(DestFile, 2); // adSaveCreateOverWrite
-      Stream.Close;
-      Result := True;
-    end;
+    DownloadTemporaryFile(Url, ExtractFileName(DestFile), '', nil);
+    Result := FileExists(DestFile);
   except
     Result := False;
   end;

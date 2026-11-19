@@ -81,8 +81,9 @@ $env:ZALI_WS_BASE_URL  = "wss://msgs.zalikus.org"
 `GET {UpdateApiBaseUrl}/api/version?platform=windows` (тот же эндпоинт, что
 апдейтер клиента, `server/src/updates.rs::get_latest_version`), скачивает
 `downloadUrl`, проверяет `sha256` (`certutil -hashfile`, встроен в Windows) и
-копирует файл в `{app}\ZaliMessenger.exe`. HTTP — через
-`WinHttp.WinHttpRequest.5.1` + `ADODB.Stream` (COM, без доп. плагинов). Один
+копирует файл в `{app}\ZaliMessenger.exe`. Метаданные — через
+`WinHttp.WinHttpRequest.5.1` (COM), сам файл — встроенным `DownloadTemporaryFile`
+(Inno 6.1+): прежний `ADODB.Stream` с `Stream.Type := 1` не компилируется в ISCC 6.7. Один
 раз собранный `ZaliMessengerOnlineSetup.exe` всегда ставит текущую
 опубликованную версию — пересобирать инсталлятор на каждый релиз не нужно,
 только `POST /api/version`.
