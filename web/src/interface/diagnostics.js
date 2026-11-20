@@ -287,8 +287,103 @@ ZaliMixin(ZaliInterface, class {
                 deafened: !!this.voice.deafened,
                 candTypes: snapshot.candTypes || '',
             }, (healthy || !live) ? 'INFO' : 'WARN');
+            this.reportVoiceVideoHealth(peer, entry, stats, { rtt, availableOut });
         } catch (error) {
             this.voiceDiag('audio-health-failed', { peer, error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
+    // То же для видео (камера, демонстрация экрана) — из того же getStats, без второго
+    // вызова. До 2026-11-20 видео в журнале звонка не было вовсе: жалоба «сыпется и
+    // зависает» разбиралась только живым CDP на телефоне. По строке на каждую идущую
+    // видеодорожку пира за интервал: кодек и кодировщик (программный libvpx или
+    // аппаратный), разрешение и fps, фактический и целевой битрейт, чем ограничено
+    // качество, повторы/потери/NACK/PLI; на приёме — потери, выброшенные кадры, фризы.
+    reportVoiceVideoHealth(peer, entry, stats, { rtt = null, availableOut = null } = {}) {
+        const codecs = new Map();
+        const rows = [];
+        stats.forEach(report => {
+            if (report.type === 'codec') codecs.set(report.id, String(report.mimeType || '').replace('video/', ''));
+        });
+        // Путь медиа: через ретранслятор или напрямую — от него зависят лимиты видео.
+        {
+            const byId = new Map();
+            let pair = null;
+            stats.forEach(report => {
+                byId.set(report.id, report);
+                if (report.type === 'candidate-pair' && (report.selected || (report.state === 'succeeded' && report.nominated))) pair = report;
+            });
+            if (pair) this.noteVoicePeerPath(peer, entry, byId.get(pair.localCandidateId), byId.get(pair.remoteCandidateId));
+        }
+        const prev = entry.lastVideoStats || {};
+        const next = {};
+        const kbps = (key, bytes, ts) => {
+            const was = prev[key];
+            next[key] = { bytes, ts };
+            if (!was || !(ts > was.ts) || bytes < was.bytes) return '';
+            return Math.round(((bytes - was.bytes) * 8) / (ts - was.ts));
+        };
+        const delta = (key, value) => {
+            next[key] = value;
+            return typeof value === 'number' && typeof prev[key] === 'number' ? value - prev[key] : '';
+        };
+        stats.forEach(report => {
+            const isVideo = report.kind === 'video' || report.mediaType === 'video';
+            if (!isVideo) return;
+            const mid = String(report.mid ?? report.ssrc ?? '');
+            if (report.type === 'outbound-rtp' && report.bytesSent > 0) {
+                const id = `out:${mid}`;
+                rows.push({
+                    dir: 'out',
+                    mid,
+                    codec: codecs.get(report.codecId) || '',
+                    impl: report.encoderImplementation || '',
+                    res: report.frameWidth ? `${report.frameWidth}x${report.frameHeight}` : '',
+                    fps: typeof report.framesPerSecond === 'number' ? Math.round(report.framesPerSecond) : '',
+                    kbps: kbps(id, report.bytesSent, report.timestamp),
+                    targetKbps: typeof report.targetBitrate === 'number' ? Math.round(report.targetBitrate / 1000) : '',
+                    limit: report.qualityLimitationReason || '',
+                    resChanges: report.qualityLimitationResolutionChanges ?? '',
+                    retxKB: typeof report.retransmittedBytesSent === 'number' ? Math.round(report.retransmittedBytesSent / 1024) : '',
+                    nack: delta(`${id}:nack`, report.nackCount),
+                    pli: delta(`${id}:pli`, report.pliCount),
+                    keyframes: delta(`${id}:kf`, report.keyFramesEncoded),
+                });
+            } else if (report.type === 'inbound-rtp' && report.bytesReceived > 0) {
+                const id = `in:${mid}`;
+                rows.push({
+                    dir: 'in',
+                    mid,
+                    codec: codecs.get(report.codecId) || '',
+                    impl: report.decoderImplementation || '',
+                    res: report.frameWidth ? `${report.frameWidth}x${report.frameHeight}` : '',
+                    fps: typeof report.framesPerSecond === 'number' ? Math.round(report.framesPerSecond) : '',
+                    kbps: kbps(id, report.bytesReceived, report.timestamp),
+                    lost: delta(`${id}:lost`, report.packetsLost),
+                    dropped: delta(`${id}:drop`, report.framesDropped),
+                    freezes: delta(`${id}:freeze`, report.freezeCount),
+                    freezeMs: (() => {
+                        const d = delta(`${id}:freezeDur`, report.totalFreezesDuration);
+                        return d === '' ? '' : Math.round(d * 1000);
+                    })(),
+                    nack: delta(`${id}:nack`, report.nackCount),
+                    pli: delta(`${id}:pli`, report.pliCount),
+                    jitterMs: typeof report.jitter === 'number' ? Math.round(report.jitter * 1000) : '',
+                });
+            }
+        });
+        entry.lastVideoStats = next;
+        for (const row of rows) {
+            const bad = row.dir === 'out'
+                ? (row.limit && row.limit !== 'none')
+                : (Number(row.freezes) > 0 || Number(row.dropped) > 5);
+            this.voiceDiag('video-health', {
+                peer,
+                ...row,
+                relayed: !!entry.relayed,
+                rtt: rtt === null ? '' : rtt.toFixed(3),
+                availOutKbps: availableOut === null ? '' : Math.round(availableOut / 1000),
+            }, bad ? 'WARN' : 'INFO');
         }
     }
 
@@ -339,6 +434,17 @@ ZaliMixin(ZaliInterface, class {
     // Names the candidate pair actually carrying media, which is the difference
     // between "ICE said connected" and "audio has a path". Read once per successful
     // connect, so it costs one getStats() call per peer per call.
+    // Запоминает, идёт ли медиа пира через TURN-ретранслятор, и при смене пути
+    // переставляет лимиты видео (voiceVideoBudget режет их под потолок ретранслятора).
+    noteVoicePeerPath(peer, entry, local, remote) {
+        if (!entry || (!local && !remote)) return;
+        const relayed = local?.candidateType === 'relay' || remote?.candidateType === 'relay';
+        if (entry.relayed === relayed) return;
+        entry.relayed = relayed;
+        this.voiceDiag('media-path', { peer, relayed, local: local?.candidateType || '?', remote: remote?.candidateType || '?' });
+        void this.ensureVoiceSenderLimits?.(entry);
+    }
+
     async reportVoiceSelectedPair(peer) {
         const entry = this.voice.peerConnections.get(peer);
         if (!entry?.pc?.getStats) return;
@@ -355,6 +461,7 @@ ZaliMixin(ZaliInterface, class {
             if (!pair) return;
             const local = byId.get(pair.localCandidateId);
             const remote = byId.get(pair.remoteCandidateId);
+            this.noteVoicePeerPath(peer, entry, local, remote);
             this.voiceDiag('selected-pair', {
                 peer,
                 local: local ? `${local.candidateType}/${local.protocol}` : '?',

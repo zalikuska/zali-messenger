@@ -298,6 +298,15 @@ ZaliMixin(ZaliInterface, class {
             && breaks >= (this._composerTextBreaks || 0);
         this._composerTextLength = length;
         this._composerTextBreaks = breaks;
+        // Пустое поле — всегда одна строка по CSS (rows=1 + min-height), без
+        // замера: на старте чат ещё не разложен, замер ловил плейсхолдер в две
+        // строки и оставлял 62px, пока пользователь не начнёт печатать.
+        if (!length) {
+            inp.style.height = '';
+            inp.style.overflowY = 'hidden';
+            if (inp.scrollTop) inp.scrollTop = 0;
+            return;
+        }
         if (!grew) inp.style.height = 'auto';
         const scrollHeight = inp.scrollHeight;
         const cap = this.composerMaxHeight(inp);

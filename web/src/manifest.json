@@ -90,6 +90,7 @@
     "interface/history_recovery.js",
     "interface/attachments.js",
     "interface/media_sheet.js",
+    "interface/media_viewer.js",
     "interface/gif_picker.js",
     "interface/message_render.js",
     "interface/render_shell.js",

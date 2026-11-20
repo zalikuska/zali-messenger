@@ -295,6 +295,9 @@ ZaliMixin(ZaliInterface, class {
                     await entry.pc.setRemoteDescription(signalPayload.sdp);
                 }
                 await this.flushPendingVoiceIceCandidates(entry, from);
+                // H.264 первым и в ответе (см. preferVoiceVideoCodecs): иначе кодек решал
+                // порядок в оффере собеседника.
+                this.preferVoiceVideoCodecs(entry.pc);
                 const answer = await entry.pc.createAnswer();
                 await entry.pc.setLocalDescription(answer);
                 this.voiceDiag('signal-answer-send', {
@@ -315,7 +318,7 @@ ZaliMixin(ZaliInterface, class {
                         type: 'answer',
                         sdp: {
                             type: entry.pc.localDescription?.type || 'answer',
-                            sdp: entry.pc.localDescription?.sdp || '',
+                            sdp: this.voiceSdpForPeer(entry.pc.localDescription?.sdp || ''),
                         },
                     },
                 });
@@ -910,6 +913,7 @@ ZaliMixin(ZaliInterface, class {
             this.voice.participants = participants;
             this.voice.joinedAt = this.parseVoiceJoinedAt(payload.joinedAt);
             this.voice.memberStates = this.parseVoiceMemberStates(payload.states);
+            this.pruneStaleRemoteScreens();
             // The server's record of who placed a DM call, for EVERY room state — not
             // only ringing ones. A client restored from the reconnect snapshot (page
             // reload, app restart mid-call) has no callTrack, so its offer-owner

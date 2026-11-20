@@ -121,6 +121,29 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   Снимается: `call_end`, кнопки, `onStart` активити (там звонит сам веб), 60 с.
   Вебвью в фоне рингтон не играет (`renderVoicePanel`, `__zaliNativeAppFocus`).
   «Отклонить» — `CallActionReceiver` с секретом звонка, без вебвью.
+- **Идущий звонок держит `OngoingCallService`** (2026-11-20; `CALL_STATE` из
+  `syncNativeCallState` в `voice_ui.js`, возможность `callService`). Сервис переднего
+  плана типов `microphone` (+ `camera`, пока камера включена; тип без выданного
+  разрешения — `SecurityException`, поэтому типы считаются по разрешениям), Wi‑Fi lock
+  `LOW_LATENCY` и частичный wake lock. Без него (журнал Xiaomi, Android 16): камеру
+  отрезало, как только активити переставала быть видимой (`CameraService … restricted,
+  isUidVisible 0` — хватало системного диалога демонстрации экрана), а погасший экран
+  через 7–12 с вставлял весь звонок — процесс уходил в `procState 12`, MIUI SmartPower
+  душил его все 132 с фона, офферы перезапуска оставались без ответа. С сервисом —
+  `procState 3` при выключенном экране. Типы `microphone`/`camera` можно запустить
+  только из видимого приложения — веб шлёт состояние при начале звонка; отказ ОС — запись
+  `ZaliCall` в logcat, звонок идёт как раньше. `stopWithTask` + `onTaskRemoved` снимают
+  сервис со смахиванием задачи.
+- **Интерфейс телефона — только портрет** (2026-11-20, `MainActivity.applyOrientation`,
+  возможность `screenRotation`). Альбомный (`FULL_USER`, с системной блокировкой поворота)
+  и скрытые системные полосы — только пока медиа на весь экран: веб шлёт
+  `SCREEN_ROTATION { free }` из `media_viewer.js` (видео звонка `#voiceFocus`, фото
+  `#mediaViewer`, `document.fullscreenElement`), а `<video>` на весь экран — это
+  `onShowCustomView` (без него кнопка в панели видео ничего не делала). Планшет
+  (sw ≥ 600dp) не ограничен. В альбомном ширина > 760 px и раскладка за оверлеем
+  «настольная» — обработчики смены раскладки в `events.js` пропускают ход, пока
+  `mobileRotationHeld()`, иначе `syncMobileChrome` сбросил бы открытый чат. Новый
+  полноэкранный медиа-оверлей — вписать в `mediaRotationWanted()` и в `handleMobileBack`.
 - **Автообновление — `AppUpdater.kt`** (возможность `appUpdate`, общий веб
   `updates.js`). Платформу и версию вебу отдаёт `documentStartScript`
   (`__ZALI_NATIVE_PLATFORM = "android"`, `__ZALI_NATIVE_APP_VERSION`). Версия —
@@ -129,6 +152,14 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   живьём) — апдейтер предлагал бы ту же версию вечно. Ответ на
   `INSTALL_UPDATE_REQUEST` веб не ждёт, поэтому отказ (нет разрешения ставить
   приложения) дублируется событием `update_event` `kind: install_error`.
+
+- **Тема приложения (`res/values*/themes.xml`) не должна быть тёмной.** WebView берёт
+  `prefers-color-scheme` из `android:isLightTheme` темы приложения: от родителя
+  `android:Theme.Material` (тёмный) вебвью всегда отвечал «dark», и режим «Как в
+  системе» на светлой системной теме показывал тёмный интерфейс (2026-11-20).
+  Сейчас: `Material.Light` до API 29, `Theme.DeviceDefault.DayNight` с API 29
+  (`values-v29`); активити держит `configChanges=uiMode`, вебвью сам пересчитывает
+  запрос. Не проверено на телефоне.
 
 Origin pin для навигации в `MainActivity.kt` — таблица в скилле
 `security-invariants`. Для правил дублирования `core/` под Android — `CLAUDE.md`.

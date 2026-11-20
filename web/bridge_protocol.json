@@ -232,6 +232,17 @@
         "requestId"
       ]
     },
+    "CALL_STATE": {
+      "fields": [
+        "active",
+        "camera"
+      ]
+    },
+    "SCREEN_ROTATION": {
+      "fields": [
+        "free"
+      ]
+    },
     "CLEAR_LOCAL_DATA": {
       "fields": []
     },

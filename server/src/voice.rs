@@ -131,9 +131,10 @@ impl VoiceRoom {
     }
 }
 
-/// Why an account is leaving its voice room. Only an explicit hang-up is remembered
+/// Why an account is leaving its voice room. An explicit hang-up is remembered
 /// (see `mark_voice_room_ended`): a WebSocket that closed or a switch to another room
-/// is exactly what a later keepalive is allowed to recover from.
+/// is exactly what a later keepalive is allowed to recover from — except a DM whose
+/// other side is online and was just told `voice_call_ended` (see `leave_voice_room`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VoiceLeave {
     Explicit,
@@ -584,6 +585,23 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
             spawn_call_end_push(state, target, &room_id, username, crate::CallPushEnd::Missed);
         }
         if room_type == "dm" {
+            // Ушёл не явным «положить трубку», а обрывом, — но оставшийся участник на
+            // связи и сейчас получит voice_call_ended: для него звонок окончен. Тогда
+            // комната окончена и для ушедшего. Без пометки его перезапущенный клиент
+            // (уже взявший комнату из снимка при переподключении) через 8 с воссоздавал
+            // её своим пингом в restore_dm_room и сидел там один «в эфире» (2026-11-20,
+            // Android после переустановки). Оставшийся без сокета — не помечаем: оба
+            // могли пропасть разом и оба вернуться.
+            if reason != VoiceLeave::Explicit
+                && remaining_participants.iter().any(|participant| {
+                    state
+                        .user_connections
+                        .get(participant)
+                        .is_some_and(|conns| conns.iter().any(|conn| !conn.is_closed()))
+                })
+            {
+                mark_voice_room_ended(state, room_id.clone());
+            }
             for participant in remaining_participants {
                 let device = devices.get(&participant).cloned().unwrap_or_default();
                 send_json_to_user(

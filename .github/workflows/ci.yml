@@ -94,16 +94,18 @@ jobs:
   # Интеграционные тесты сервера (tests/*.rs в корне репо, подключены [[test]] в
   # server/Cargo.toml) и unit-тесты крейта; заодно серверная часть activity-doctor.
   #
-  # Четыре параллельных шарда (состав — scripts/ci_server_tests.sh; `rest` собирает всё
-  # не назначенное другим, так что новый [[test]] не теряется). Каждый шард собирает
-  # сервер сам, зато общий `shared-key` даёт им один кэш зависимостей.
+  # Семь параллельных шардов (состав — scripts/ci_server_tests.sh; `rest` собирает всё
+  # не назначенное другим, так что новый [[test]] не теряется; hash_chain.rs, самый
+  # тяжёлый файл, делится пополам по именам тестов). Каждый шард собирает сервер сам,
+  # зато общий `shared-key` даёт им один кэш зависимостей. Список имён ниже обязан
+  # совпадать с `scripts/ci_server_tests.sh --list` — это сверяет check_docs.py.
   server:
     name: Server tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [chain, security, core, rest]
+        shard: [chain1, chain2, security, core, economy, social, rest]
     steps:
       - uses: actions/checkout@v7
 

@@ -28,6 +28,8 @@ object MessageNotifier {
     private const val QUIET_CHANNEL_ID = "zali-quiet"
     private const val QUIET_TAG = "zali-quiet"
     private const val NOTIFICATION_TAG = "zali-message"
+    // Акцент приложения (--accent-rgb 203,255,0): им система красит маленький значок.
+    private const val ACCENT_COLOR = 0xFFCBFF00.toInt()
     const val EXTRA_SENDER = "org.zalikus.messenger.extra.SENDER"
     const val EXTRA_SERVER_ID = "org.zalikus.messenger.extra.SERVER_ID"
     const val EXTRA_CHANNEL_ID = "org.zalikus.messenger.extra.CHANNEL_ID"
@@ -83,7 +85,8 @@ object MessageNotifier {
             appContext, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(appContext, QUIET_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ACCENT_COLOR)
             .setContentTitle(sender.ifEmpty { "Zali Messenger" })
             .setContentText("Новых сообщений: $count")
             .setNumber(count)
@@ -154,12 +157,55 @@ object MessageNotifier {
         // уведомление этого сообщения и зазвучать (иначе setOnlyAlertOnce промолчит).
         silent: Boolean = false,
         alertAgain: Boolean = false,
+        // Фоновый приём FCM уже на рабочем потоке и живёт считанные секунды: аватарку
+        // ждём (до 4 с), иначе уведомление ушло бы без неё и поток бы убили до дозагрузки.
+        // Живая доставка идёт с потока моста — там сеть не ждём, а аватарку дорисовываем.
+        waitForAvatar: Boolean = false,
     ) {
         if (!canNotify(context)) return
         val appContext = context.applicationContext
         ensureChannel(appContext)
 
         val id = notificationId(messageId)
+        var avatar = if (sender.isEmpty()) null else NotificationAvatar.cached(appContext, sender)
+        if (sender.isNotEmpty() && avatar == null && waitForAvatar) {
+            avatar = NotificationAvatar.fetch(appContext, sender)
+        }
+        post(appContext, id, sender, text, attachmentCount, serverId, channelId, silent, alertAgain, avatar)
+
+        if (sender.isEmpty()) return
+        if (avatar != null && !NotificationAvatar.isStale(appContext, sender)) return
+        // Нет аватарки или она устарела: скачиваем в фоне. Если картинки не было совсем —
+        // перерисовываем то же уведомление (тот же id, без повторного звука).
+        val hadAvatar = avatar != null
+        NotificationAvatar.refreshAsync(appContext, sender) { fresh ->
+            if (!hadAvatar && isActive(appContext, id)) {
+                post(appContext, id, sender, text, attachmentCount, serverId, channelId, silent, false, fresh)
+            }
+        }
+    }
+
+    private fun isActive(context: Context, id: Int): Boolean {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+        return try {
+            manager.activeNotifications.any { it.id == id && it.tag == NOTIFICATION_TAG }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun post(
+        appContext: Context,
+        id: Int,
+        sender: String,
+        text: String,
+        attachmentCount: Int,
+        serverId: String?,
+        channelId: String?,
+        silent: Boolean,
+        alertAgain: Boolean,
+        avatar: android.graphics.Bitmap?,
+    ) {
         val titleSender = sender.ifEmpty { "Zali Messenger" }
         val title = if (serverId == null && channelId == null) titleSender else "$titleSender в канале"
         // Нажатие ведёт в переписку уведомления (MainActivity.consumeNotificationIntent).
@@ -174,7 +220,12 @@ object MessageNotifier {
         )
 
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ACCENT_COLOR)
+            // Фото отправителя; нет его — буква на лайме, как заглушка в приложении.
+            .apply {
+                if (sender.isNotEmpty()) setLargeIcon(avatar ?: NotificationAvatar.letter(sender))
+            }
             .setContentTitle(title)
             .setContentText(bodyFor(text, attachmentCount))
             .setPriority(NotificationCompat.PRIORITY_HIGH)

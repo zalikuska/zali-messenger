@@ -58,7 +58,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b69";
+const APP_DISPLAY_VERSION: &str = "0.2b70";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -2838,6 +2838,11 @@ pub fn handle_ipc_message(
         | BridgeProtocolMessageType::GalleryOpenSettings => {
             // Android-only: галерея внутри приложения (MediaGallery.kt). Веб шлёт
             // их только при возможности `mediaGallery`, которой здесь нет.
+        }
+        BridgeProtocolMessageType::CallState | BridgeProtocolMessageType::ScreenRotation => {
+            // Android-only: сервис переднего плана на время звонка (OngoingCallService.kt)
+            // и поворот экрана только для медиа на весь экран (MainActivity). Веб шлёт их
+            // только при возможностях `callService` / `screenRotation`, которых здесь нет.
         }
     }
 }

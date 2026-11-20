@@ -178,8 +178,31 @@ def check_versions():
         fail("версии расходятся: " + (r.stderr or r.stdout).strip().replace("\n", " "))
 
 
+def check_ci_shards():
+    """Шарды серверных тестов в ci.yml (matrix) совпадают с scripts/ci_server_tests.sh.
+
+    Шард, названный в скрипте, но не вписанный в matrix, просто не запустится — и его
+    тесты тихо выпадут из CI."""
+    ci = ROOT / ".github" / "workflows" / "ci.yml"
+    if not ci.exists():
+        return
+    m = re.search(r"shard:\s*\[([^\]]*)\]", ci.read_text(encoding="utf-8"))
+    if not m:
+        return fail(".github/workflows/ci.yml: не нашёл matrix `shard: [...]` серверных тестов")
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "ci_server_tests.sh"), "--list"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return fail("scripts/ci_server_tests.sh --list: " + (r.stderr or r.stdout).strip())
+    in_yaml = {x.strip() for x in m.group(1).split(",") if x.strip()}
+    in_script = set(r.stdout.split())
+    if in_yaml != in_script:
+        fail(f"шарды серверных тестов расходятся: в ci.yml {sorted(in_yaml)}, в ci_server_tests.sh {sorted(in_script)}")
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "ci_server_tests.sh"), "--check"], capture_output=True, text=True)
+    if r.returncode != 0:
+        fail("scripts/ci_server_tests.sh --check: " + (r.stderr or r.stdout).strip())
+
+
 if __name__ == "__main__":
-    for check in (check_frontmatter, check_skill_refs, check_paths, check_claims, check_ui_claims, check_versions):
+    for check in (check_frontmatter, check_skill_refs, check_paths, check_claims, check_ui_claims, check_versions, check_ci_shards):
         check()
     if errors:
         print("check_docs: найдено расхождений:", len(errors), file=sys.stderr)

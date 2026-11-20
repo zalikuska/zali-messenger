@@ -169,11 +169,31 @@ console.log('\n== частота экрана и отправка в звоно�
     await alice.applyVoiceVideoBitrateLimit(sender, 'screen');
     record('отправка держит частоту экрана (maxFramerate 120)', sender.params.encodings[0].maxFramerate === 120);
     record('при нехватке канала падает разрешение, а не плавность', sender.params.degradationPreference === 'maintain-framerate');
-    record('бюджет больше, чем у демонстрации экрана', sender.params.encodings[0].maxBitrate > 2000000);
+    const browserBudget = sender.params.encodings[0].maxBitrate;
     alice.voice.screenActivity = '';
+    record('бюджет больше, чем у демонстрации экрана', browserBudget > alice.voiceVideoBudget('screen'));
     const plain = { params: { encodings: [{}] }, getParameters() { return JSON.parse(JSON.stringify(this.params)); }, async setParameters(p) { this.params = p; } };
     await alice.applyVoiceVideoBitrateLimit(plain, 'screen');
+    // Обычная демонстрация держит разрешение (а размер кадра ограничен
+    // VOICE_SCREEN_MAX_SIDE) и без потолка частоты.
     record('обычная демонстрация экрана — как раньше', plain.params.degradationPreference === 'maintain-resolution' && !plain.params.encodings[0].maxFramerate);
+    // Через TURN-ретранслятор всё медиа пира — одна сессия с потолком coturn
+    // (VOICE_RELAY_MAX_BPS = max-bps конфигурации). Видео вместе обязано в него
+    // уложиться, а при штатном потолке — получать полные прямые лимиты (не «на бумаге»).
+    {
+        const saved = { cam: alice.voice.cameraOn, scr: alice.voice.screenSharing };
+        const ceiling = ZaliInterface.VOICE_RELAY_MAX_BPS;
+        alice.voice.cameraOn = true;
+        alice.voice.screenSharing = true;
+        const relayed = { relayed: true };
+        const both = alice.voiceVideoBudget('screen', relayed) + alice.voiceVideoBudget('camera', relayed);
+        record('через ретранслятор экран + камера укладываются в потолок сессии', both <= ceiling * 0.9);
+        record('при штатном потолке через ретранслятор — полные лимиты',
+            alice.voiceVideoBudget('screen', relayed) === alice.voiceVideoBudget('screen', { relayed: false })
+            && alice.voiceVideoBudget('camera', relayed) === alice.voiceVideoBudget('camera', { relayed: false }));
+        alice.voice.cameraOn = saved.cam;
+        alice.voice.screenSharing = saved.scr;
+    }
     alice.voice.screenActivity = 'browser';
 }
 

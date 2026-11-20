@@ -183,6 +183,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     var openAppSettings: (() -> Unit)? = null
     /** Светлота темы из веба (SET_APPEARANCE): светлая ли и цвет фона ARGB. */
     var applyAppearance: ((light: Boolean, background: Int) -> Unit)? = null
+    /** Поворот экрана свободен (медиа на весь экран) — SCREEN_ROTATION → MainActivity.applyOrientation. */
+    var setScreenRotationFree: ((free: Boolean) -> Unit)? = null
     private val galleryExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "zali-gallery").apply { isDaemon = true }
     }
@@ -374,6 +376,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             voice: false,
             windowDrag: false,
             screenCapture: true,
+            // Звонок держит сервис переднего плана (CALL_STATE → OngoingCallService):
+            // без него погасший экран замораживал процесс и рвал звонок через ~10 с.
+            callService: true,
+            // Портрет по умолчанию, поворот — только медиа на весь экран (SCREEN_ROTATION).
+            screenRotation: true,
             // Галерея внутри приложения: лист плиток с камерой (GALLERY_*, MediaGallery.kt).
             mediaGallery: true,
             // Кружок на значке в режиме «в игре»: тихое уведомление на канале LOW
@@ -495,6 +502,18 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             }
             "GALLERY_OPEN_SETTINGS" -> openAppSettings?.let { mainHandler.post { it() } }
             "STOP_SCREEN_CAPTURE" -> handleStopScreenCapture()
+            // Интерфейс телефона — только портрет; альбомный — пока медиа на весь экран
+            // (web/src/interface/media_viewer.js).
+            "SCREEN_ROTATION" -> {
+                val free = dict.optBoolean("free", false)
+                setScreenRotationFree?.let { apply -> mainHandler.post { apply(free) } }
+            }
+            // Идущий звонок: сервис переднего плана + Wi‑Fi/wake lock (OngoingCallService).
+            "CALL_STATE" -> OngoingCallService.sync(
+                context,
+                active = dict.optBoolean("active", false),
+                camera = dict.optBoolean("camera", false),
+            )
             "SHOW_NOTIFICATION" -> if (dict.optBoolean("quiet", false)) {
                 // Режим «в игре»: тихое уведомление ради кружка на значке (или его снятие).
                 val sender = dict.optString("sender", "").trim()

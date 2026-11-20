@@ -2224,6 +2224,7 @@ body[data-nav-mode="servers"] .contacts {
 
 .voice-panel {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     padding: 0 16px;
     margin-top: -2px;
@@ -2825,6 +2826,14 @@ body[data-nav-mode="servers"] .contacts {
     max-height: none;
     padding: 0;
     overflow: hidden;
+    /* .voice-panel — grid с неявной колонкой `auto`: она раздувается до
+       min-content содержимого (на телефоне панель кнопок и плитки давали 506px
+       при экране 390px), и весь экран звонка съезжал за правый край. */
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.voice-call-expanded {
+    min-width: 0;
 }
 
 /* Flex column, not a fixed-row grid: header / stage / participants / controls
@@ -14348,6 +14357,31 @@ body[data-design-mode="focus"] .call-ctrl-btn.danger:hover {
     --call-strip-h: 54px;
 }
 
+/* Телефон в Android-оболочке: окно edge-to-edge, под статус-баром лежит сама
+   страница. Полоса звонка прижата к top:0, поэтому раньше целиком пряталась под
+   часами и значками, а вкладка под ней сдвигалась ещё и на свой собственный
+   отступ под статус-бар (пустая дыра). Теперь высота полосы включает
+   --m-safe-top, фон полосы заходит под статус-бар, кнопки сидят ниже него, а
+   вкладка под полосой считает верхний отступ уже закрытым. На десктопе
+   --m-safe-top = 0 — ничего не меняется. */
+.main.has-call-strip {
+    --call-strip-h: calc(var(--m-safe-top) + 38px);
+}
+
+.main.has-incoming-strip {
+    --call-strip-h: calc(var(--m-safe-top) + 54px);
+}
+
+.main .voice-call-strip :is(.voice-compact, .voice-incoming, .voice-callbar) {
+    box-sizing: border-box;
+    padding-top: var(--m-safe-top);
+}
+
+.main.has-call-strip > .view,
+.main.has-call-strip > #viewChat {
+    --m-safe-top: 0px;
+}
+
 .voice-incoming {
     display: flex;
     align-items: center;
@@ -20178,6 +20212,21 @@ body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile {
     min-width: 0;
     min-height: 0;
     gap: 6px;
+}
+
+/* Телефон: плитки заполняют всю область, без 16:9 (колонки — fitVoiceTiles). */
+@media (max-width: 760px) {
+    body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tiles {
+        grid-template-columns: repeat(var(--vt-cols, 1), minmax(0, 1fr));
+        grid-auto-rows: minmax(0, 1fr);
+        justify-content: stretch;
+        align-content: stretch;
+        height: 100%;
+    }
+
+    body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile {
+        aspect-ratio: auto;
+    }
 }
 
 body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tile-avatar {
@@ -30316,4 +30365,18 @@ body[data-design-mode="focus"] .raffle-modal {
 @media (prefers-reduced-motion: reduce) {
     .gif-picker { animation: none; }
     .gif-picker-pick, .gif-picker-tab, .gif-fav-star { transition: none; }
+}
+
+/* Фото из ленты на весь экран (media_viewer.js) — оформление видео звонка на весь экран. */
+.media-viewer .voice-focus-media {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.media-viewer .voice-focus-media img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
 }

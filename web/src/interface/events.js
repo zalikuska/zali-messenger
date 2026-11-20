@@ -804,6 +804,22 @@ ZaliMixin(ZaliInterface, class {
             // Высота могла остаться от прошлого текста, если поле очистили без пересчёта:
             // при фокусе меряем заново, до первого символа.
             msgInput.addEventListener('focus', () => this.resizeComposer());
+            // На старте поле меряется, пока чат ещё не разложен (узкая колонка
+            // или вид за краем экрана): плейсхолдер переносится на вторую строку,
+            // и в style.height остаются 62px вместо 40 — поле «кривое» до первого
+            // ввода. Ширина потом меняется, а пересчёта не было. Реагируем только
+            // на смену ширины — смена высоты (сам resizeComposer) цикла не даёт.
+            if (typeof ResizeObserver === 'function') {
+                this._composerWidthObserver?.disconnect();
+                let lastWidth = 0;
+                this._composerWidthObserver = new ResizeObserver((entries) => {
+                    const width = Math.round(entries[entries.length - 1].contentRect.width);
+                    if (width === lastWidth) return;
+                    lastWidth = width;
+                    if (width > 0) this.resizeComposer();
+                });
+                this._composerWidthObserver.observe(msgInput);
+            }
             msgInput.addEventListener('keydown', (e) => {
                 // Escape backs out of a reply/edit without sending anything. Only
                 // when one is active, so it keeps its usual meaning otherwise.
@@ -2217,6 +2233,9 @@ ZaliMixin(ZaliInterface, class {
         const mobileQuery = this.mobileLayoutQuery();
         if (mobileQuery) {
             const onMobileChange = () => {
+                // Телефон повёрнут ради медиа на весь экран: за ним раскладка по ширине
+                // стала «настольной», но навигацию телефона не сбрасываем (media_viewer.js).
+                if (this.mobileRotationHeld?.()) return;
                 if (!this.isMobileLayout()) {
                     this.closeMobileSidebar();
                 }
@@ -2235,6 +2254,7 @@ ZaliMixin(ZaliInterface, class {
             if (this._resizeRaf) return;
             this._resizeRaf = requestAnimationFrame(() => {
                 this._resizeRaf = 0;
+                if (this.mobileRotationHeld?.()) return;
                 if (!this.isMobileLayout()) {
                     this.closeMobileSidebar();
                 }
@@ -2249,5 +2269,7 @@ ZaliMixin(ZaliInterface, class {
         });
         // Колесо мыши в WebKit — плавно, трекпад не трогаем (smooth_scroll.js).
         this.setupSmoothWheel?.();
+        // Фото из ленты на весь экран по тапу и альбомный поворот только для медиа.
+        this.setupMediaViewer?.();
     }
 });

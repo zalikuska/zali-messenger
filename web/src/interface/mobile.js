@@ -937,9 +937,17 @@ ZaliMixin(ZaliInterface, class {
         // Приветствие нового аккаунта (welcome_tour.js): «назад» — предыдущий шаг,
         // с первого — закрыть. Не через closers: шаг меняется, а окно остаётся.
         if (shown(document.getElementById('welcomeTour')) && this.welcomeTourBack?.()) return true;
+        // Видео из ленты на весь экран (кнопка в его панели): «назад» — выйти из него.
+        const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+        if (fullscreen) {
+            (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)?.catch?.(() => {});
+            return true;
+        }
         const closers = [
             // Видео звонка на весь экран (voice_ui.js openVoiceFocus) — поверх всего.
             ['#voiceFocus', () => this.closeVoiceFocus?.()],
+            // Фото на весь экран (media_viewer.js).
+            ['#mediaViewer', () => this.closeMediaViewer?.()],
             ['#mediaSheet', () => this.closeMediaSheet?.()],
             ['#gifPicker', () => this.closeGifPicker?.()],
             ['#reactionMenu, .reaction-menu', () => this.hideReactionMenu?.()],

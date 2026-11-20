@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.ZaliMessenger" parent="android:Theme.Material.NoActionBar">
+    <!-- Родитель обязан быть светлым/DayNight, а не тёмным Material: WebView берёт
+         prefers-color-scheme из android:isLightTheme темы приложения, и от тёмного
+         родителя вебвью всегда говорил «dark» — «Как в системе» не работало на
+         светлой системной теме. API 29+ — Theme.DeviceDefault.DayNight (values-v29). -->
+    <style name="Theme.ZaliMessenger" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@color/zali_bg</item>

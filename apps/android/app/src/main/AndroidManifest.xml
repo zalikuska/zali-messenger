@@ -28,6 +28,12 @@
          before MediaProjection.createVirtualDisplay() will succeed. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Идущий звонок (OngoingCallService): процесс не замораживается в фоне, камера и
+         микрофон работают за экраном, Wi‑Fi без энергосбережения, процессор не спит. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -75,6 +81,14 @@
         <service
             android:name=".ScreenCaptureService"
             android:foregroundServiceType="mediaProjection"
+            android:exported="false" />
+
+        <!-- Идущий звонок (CALL_STATE из веба). Типы выбираются по выданным
+             разрешениям: microphone всегда, camera — пока камера включена. -->
+        <service
+            android:name=".OngoingCallService"
+            android:foregroundServiceType="microphone|camera"
+            android:stopWithTask="true"
             android:exported="false" />
 
         <!-- Входящий звонок, пока приложение не на экране (IncomingCall.kt): держит

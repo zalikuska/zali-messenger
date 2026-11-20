@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 29+: тема следует системной (день/ночь), от неё же WebView берёт
+         prefers-color-scheme. Остальное — как в values/themes.xml. -->
+    <style name="Theme.ZaliMessenger" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/zali_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -19,6 +19,12 @@ ZaliMixin(ZaliInterface, class {
     // than a warning in the log. Crossing it is recorded so that "звонок тормозил at
     // 11 people" is a fact in the journal rather than a recollection.
     static get MAX_MESH_AUDIO_PEERS() { return 15; }
+    // Сколько личный звонок может простоять без собеседника в комнате, прежде чем
+    // считаться оконченным (concludeAbandonedDmCallIfNeeded). Больше трёх тактов пинга
+    // присутствия (8 с): живой собеседник после restore_dm_room возвращается за один.
+    static get VOICE_DM_ALONE_END_MS() { return 30000; }
+    // Наибольшая сторона кадра демонстрации на отправке (scaleResolutionDownBy).
+    static get VOICE_SCREEN_MAX_SIDE() { return 1920; }
 
     // How many participants get a 16:9 tile; the rest collapse into small circles
     // under the grid (renderVoiceTiles). Smaller while a screen share owns the stage:
@@ -353,7 +359,7 @@ ZaliMixin(ZaliInterface, class {
                     } else {
                         entry.videoSender = entry.pc.addTrack(track, this.voice.localStream);
                     }
-                    await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera');
+                    await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera', entry);
                 }
                 await this.renegotiateAllVoicePeers();
                 this.renderVoicePanel();
@@ -407,8 +413,91 @@ ZaliMixin(ZaliInterface, class {
     // 'stable', both sides look fully negotiated — and not a single packet can
     // flow. Making the flag a property of the link instead of an argument to one
     // function is what keeps every path honest.
+    // H.264 первым у каждого видео-transceiver'а. Без этого кодек решал тот, кто слал
+    // оффер: Mac (WebKit) ставит H.264 первым, Chrome/Android — VP8. Живой звонок
+    // 2026-11-20 после перезапусков (оффер слал телефон) шёл в VP8 в обе стороны, и
+    // всё программно (libvpx): телефон кодировал 720p камеры и декодировал экран Mac
+    // 1710×1107 @ 58 к/с процессором, Mac кодировал экран без VideoToolbox — фризы. В
+    // звонке, где оффер слал Mac, был H.264 с аппаратными кодеками (MediaCodec /
+    // c2.mtk.avc.encoder / VideoToolbox). Порядок H.264 между собой — как у движка;
+    // VP8/VP9/AV1 остаются запасными, служебные (rtx/red/ulpfec) — как были.
+    preferVoiceVideoCodecs(pc) {
+        if (!pc?.getTransceivers || typeof RTCRtpReceiver === 'undefined' || !RTCRtpReceiver.getCapabilities) return;
+        let codecs;
+        try { codecs = RTCRtpReceiver.getCapabilities('video')?.codecs || []; } catch (e) { return; }
+        if (!codecs.length) return;
+        const isH264 = (c) => /h264/i.test(String(c.mimeType || ''));
+        if (!codecs.some(isH264)) return;
+        const ordered = [...codecs.filter(isH264), ...codecs.filter(c => !isH264(c))];
+        for (const transceiver of pc.getTransceivers()) {
+            const kind = transceiver.receiver?.track?.kind || transceiver.sender?.track?.kind;
+            if (kind !== 'video' || transceiver.stopped || typeof transceiver.setCodecPreferences !== 'function') continue;
+            try {
+                transceiver.setCodecPreferences(ordered);
+            } catch (error) {
+                this.voiceTrace('codec-preferences-failed', { error: error?.message || String(error) }, 'WARN');
+            }
+        }
+    }
+
+    // Стартовый битрейт видео. libwebrtc начинает оценку канала с ~300 кбит/с и
+    // поднимает её секундами: первые 20–40 с звонка и после каждого переподключения
+    // камера шла 180×320, экран — 339×220 (живой звонок 2026-11-20). Параметр кодека
+    // x-google-start-bitrate (кбит/с) в SDP, который ОТПРАВИТЕЛЬ получает от
+    // собеседника, задаёт старт его оценки — оба клиента наши, поэтому каждый
+    // вписывает его в SDP, уходящий собеседнику. Читают и Chrome (Android), и WebKit
+    // (Mac): оба на libwebrtc. Не выше потолка камеры: старт выше реального канала на
+    // 2,4 ГГц сразу дал бы всплеск потерь.
+    static get VOICE_VIDEO_START_KBPS() { return 2500; }
+
+    voiceSdpForPeer(sdp) {
+        const text = String(sdp || '');
+        if (!text) return text;
+        // Значение обязано МЕНЯТЬСЯ от SDP к SDP: libwebrtc перезапускает оценку канала
+        // стартовым битрейтом только при изменении x-google-start-bitrate (повтор того
+        // же числа намеренно игнорируется). Звонок начинается со звука, оценка за это
+        // время сползает до ~500 кбит/с, и камера/экран, включённые посреди звонка,
+        // разгонялись ~23 с (замер 2026-11-20, через ретранслятор). Чередование 2500/2501
+        // перезапускает старт на каждом пересогласовании (добавили видео — старт ~2,5).
+        this._voiceSdpStartSeq = (Number(this._voiceSdpStartSeq) || 0) + 1;
+        const start = ZaliInterface.VOICE_VIDEO_START_KBPS + (this._voiceSdpStartSeq % 2);
+        const eol = text.includes('\r\n') ? '\r\n' : '\n';
+        const lines = text.split(eol);
+        const videoPts = new Set();
+        const withFmtp = new Set();
+        for (const line of lines) {
+            const rtp = /^a=rtpmap:(\d+) (H264|VP8|VP9|AV1)\/90000/i.exec(line);
+            if (rtp) videoPts.add(rtp[1]);
+        }
+        if (!videoPts.size) return text;
+        const out = [];
+        for (const line of lines) {
+            const fmtp = /^a=fmtp:(\d+) /.exec(line);
+            if (fmtp && videoPts.has(fmtp[1])) {
+                withFmtp.add(fmtp[1]);
+                out.push(/x-google-start-bitrate=/.test(line) ? line.replace(/x-google-start-bitrate=\d+/, `x-google-start-bitrate=${start}`) : `${line};x-google-start-bitrate=${start}`);
+                continue;
+            }
+            out.push(line);
+            const rtp = /^a=rtpmap:(\d+) /.exec(line);
+            if (rtp && videoPts.has(rtp[1])) {
+                // fmtp кодека может идти ниже rtpmap — решаем после прохода.
+                out.push(`__ZALI_FMTP_${rtp[1]}__`);
+            }
+        }
+        return out
+            .map(line => {
+                const m = /^__ZALI_FMTP_(\d+)__$/.exec(line);
+                if (!m) return line;
+                return withFmtp.has(m[1]) ? null : `a=fmtp:${m[1]} x-google-start-bitrate=${start}`;
+            })
+            .filter(line => line !== null)
+            .join(eol);
+    }
+
     createVoiceOfferFor(entry) {
         if (!entry?.pc) return Promise.reject(new Error('no peer connection'));
+        this.preferVoiceVideoCodecs(entry.pc);
         if (entry.needsIceRestart) {
             // Counted so the end-of-call summary can say "this link was restarted
             // nine times" — one restart is a blip, nine is a network worth naming.
@@ -451,7 +540,7 @@ ZaliMixin(ZaliInterface, class {
                     type: 'offer',
                     sdp: {
                         type: entry.pc.localDescription?.type || 'offer',
-                        sdp: entry.pc.localDescription?.sdp || '',
+                        sdp: this.voiceSdpForPeer(entry.pc.localDescription?.sdp || ''),
                     },
                 },
             });
@@ -537,7 +626,7 @@ ZaliMixin(ZaliInterface, class {
         const track = this.voice.localScreenStream.getVideoTracks()[0];
         if (!track) return false;
         entry.screenSender = entry.pc.addTrack(track, this.voice.localScreenStream);
-        void this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
+        void this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen', entry);
         // Звук идёт в том же MediaStream, что и картинка: по id потока принимающая
         // сторона отличает его от голоса (см. isRemoteScreenStream).
         const screenAudio = this.voice.localScreenStream.getAudioTracks()[0];
@@ -647,6 +736,14 @@ ZaliMixin(ZaliInterface, class {
             }
             const track = stream.getVideoTracks()[0];
             if (!track) return;
+            // Размер источника — до возможной подмены потока смесью со звуком ниже: дорожка
+            // нативного захвата (генератор в воркере) своих width/height в getSettings не
+            // сообщает, а без них потолок стороны кадра (VOICE_SCREEN_MAX_SIDE) не работал
+            // — Mac слал 3420×2214 (2026-11-20).
+            const sourceInfo = stream.__zaliNativeInfo || null;
+            this.voice.screenSourceSize = sourceInfo?.width && sourceInfo?.height
+                ? { width: Number(sourceInfo.width), height: Number(sourceInfo.height) }
+                : null;
             // Звук системы от оболочки уже несёт звук приложения (macOS < 14.2: SCStream
             // не исключает процесс WebKit) — подмешивание удвоило бы уведомления и видео.
             if (appAudio && !ownWindow && stream.__zaliNativeInfo?.audioExcludesApp === false) {
@@ -1015,6 +1112,7 @@ ZaliMixin(ZaliInterface, class {
             };
             entry.pc.onsignalingstatechange = () => {
                 this.voiceTrace('signaling-state', { peer: name, state: entry.pc.signalingState, roomId: this.voice.roomId || '' });
+                if (entry.pc.signalingState === 'stable') void this.ensureVoiceSenderLimits(entry);
                 if (entry.pc.signalingState === 'stable' && entry.renegotiationPending && !entry.negotiating) {
                     entry.renegotiationPending = false;
                     this.renegotiateVoicePeer(name).catch(() => {});
@@ -1072,8 +1170,15 @@ ZaliMixin(ZaliInterface, class {
                     receiverTrack: event.receiver?.track ? `${event.receiver.track.kind}:${event.receiver.track.readyState}:${event.receiver.track.enabled ? 'on' : 'off'}` : '',
                     tracks: stream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled ? 'on' : 'off'}`),
                 });
+                const voiceStream = this.voice.remoteAudios.get(name)?.srcObject || null;
                 if (this.isRemoteScreenStream(entry, name, stream, track)) {
                     this.attachRemoteScreenStream(name, stream);
+                } else if (track?.kind === 'video' && voiceStream && voiceStream.id !== stream.id
+                    && !stream.getAudioTracks().length) {
+                    // Камера пришла отдельным потоком без звука (так бывает в WebKit):
+                    // в плитку человека, но голос не трогаем — attachRemoteVoiceStream
+                    // подменил бы им <audio> и собеседник замолчал бы.
+                    this.attachRemoteVideoStream(name, stream);
                 } else {
                     this.attachRemoteVoiceStream(name, stream);
                 }
@@ -1673,26 +1778,110 @@ ZaliMixin(ZaliInterface, class {
     // degradationPreference is the other half: with a hard cap, something has to
     // give. Camera gives up resolution and keeps motion smooth; a shared screen is
     // mostly still and unreadable when downscaled, so it gives up frame rate instead.
-    voiceVideoBudget(kind = 'camera') {
+    voiceVideoBudget(kind = 'camera', entry = null) {
+        const direct = this.voiceDirectVideoBudget(kind);
+        const relayCap = entry?.relayed ? this.voiceRelayVideoCap(kind) : 0;
+        return relayCap ? Math.min(direct, relayCap) : direct;
+    }
+
+    // Через TURN-ретранслятор всё медиа пира идёт одной сессией (max-bundle), и
+    // ретранслятор режет её потолком (`max-bps` coturn); всё сверх него теряется —
+    // фризы почти в каждом звонке между разными сетями. Прежний прод-потолок 3 Мбит/с
+    // был подобран под лимиты 1,2 + 2,0 и делал нынешние 2,5 + 8 недостижимыми
+    // («на бумаге»). Поэтому потолок сессии — одна константа, которую обязана давать
+    // конфигурация coturn (скилл zali-ops-turn-nginx: max-bps = это число), и лимиты
+    // через ретранслятор считаются из неё: видео вместе ≤ 88 % потолка (остальное —
+    // звук, повторы, заголовки RTP/SRTP/TURN). При 12 Мбит/с это полные прямые лимиты
+    // (экран 8 + камера 2,5), то есть ретранслятор ничего не урезает; ограничение
+    // срабатывает, только если потолок окажется ниже.
+    static get VOICE_RELAY_MAX_BPS() { return 12000000; }
+
+    voiceRelayVideoCap(kind) {
+        const allowance = Math.floor(ZaliInterface.VOICE_RELAY_MAX_BPS * 0.88);
+        const camera = !!this.voice.cameraOn;
+        const screen = !!this.voice.screenSharing;
+        const cameraDirect = this.voiceDirectVideoBudget('camera');
+        const screenDirect = this.voiceDirectVideoBudget('screen');
+        if (kind === 'screen') {
+            const reserve = camera ? Math.min(cameraDirect, Math.floor(allowance * 0.25)) : 0;
+            return Math.max(500000, Math.min(screenDirect, allowance - reserve));
+        }
+        const reserve = screen ? Math.min(screenDirect, Math.floor(allowance * 0.75)) : 0;
+        return Math.max(300000, Math.min(cameraDirect, allowance - reserve));
+    }
+
+    voiceDirectVideoBudget(kind = 'camera') {
         const peers = Math.max(1, this.voice.peerConnections.size || 1);
         // «Общий браузер»: плавность важнее — на 60+ к/с 720p нужно больше, чем демонстрации.
         if (kind === 'screen' && this.voice.screenActivity === 'browser') {
-            return Math.max(1000000, Math.min(6000000, Math.floor(12000000 / peers)));
+            // Поднят вместе с экраном (было 12 / 6): браузеру нужно больше демонстрации.
+            return Math.max(1000000, Math.min(10000000, Math.floor(20000000 / peers)));
         }
-        const total = kind === 'screen' ? 3000000 : 2500000;
-        const ceiling = kind === 'screen' ? 2000000 : 1200000;
-        const floor = kind === 'screen' ? 250000 : 150000;
+        // Подняты 2026-11-20 по просьбе пользователя (было 3 / 2 / 0,25 Мбит/с у экрана,
+        // 2,5 / 1,2 / 0,15 у камеры; экран — 8 Мбит/с на собеседника). Это потолки:
+        // фактический битрейт по-прежнему ведёт оценка канала WebRTC, на слабом канале
+        // он сам опустится ниже.
+        const total = kind === 'screen' ? 16000000 : 5000000;
+        const ceiling = kind === 'screen' ? 8000000 : 2500000;
+        const floor = kind === 'screen' ? 500000 : 300000;
         return Math.max(floor, Math.min(ceiling, Math.floor(total / peers)));
     }
 
-    async applyVoiceVideoBitrateLimit(sender, kind = 'camera') {
+    // Лимит, поставленный ДО согласования, Chromium теряет: отправитель из addTrack,
+    // сделанного до применения оффера собеседника, связывается с его m-line, и
+    // encodings приходят пустыми. Живой звонок 2026-11-20: у видеоотправителя
+    // телефона maxBitrate не было вовсе (у звука — был), камера слала ~2,75 Мбит/с
+    // при потолке 1,2 (цель кодировщика 2500 — умолчание WebRTC для 720p), забивая
+    // общий 2,4 ГГц эфир. Поэтому после каждого согласования (signalingState →
+    // stable) лимиты сверяются и, если слетели, ставятся заново.
+    async ensureVoiceSenderLimits(entry) {
+        if (!entry?.pc) return;
+        const maxOf = (sender) => {
+            try { return sender.getParameters().encodings?.[0]?.maxBitrate; } catch (e) { return undefined; }
+        };
+        try {
+            if (entry.audioSender?.track && maxOf(entry.audioSender) !== 64000) {
+                await this.applyVoiceAudioBitrateLimit(entry.audioSender);
+            }
+            if (entry.videoSender?.track && maxOf(entry.videoSender) !== this.voiceVideoBudget('camera', entry)) {
+                await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera', entry);
+            }
+            if (entry.screenSender?.track && maxOf(entry.screenSender) !== this.voiceVideoBudget('screen', entry)) {
+                await this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen', entry);
+            }
+        } catch (error) {
+            this.voiceTrace('sender-limits-failed', { error: error?.message || String(error) }, 'WARN');
+        }
+    }
+
+    async applyVoiceVideoBitrateLimit(sender, kind = 'camera', entry = null) {
         if (!sender) return;
         try {
             const params = sender.getParameters();
             if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-            const maxBitrate = this.voiceVideoBudget(kind);
+            const maxBitrate = this.voiceVideoBudget(kind, entry);
             params.encodings[0].maxBitrate = maxBitrate;
+            // Демонстрация тоже 'balanced' (было 'maintain-resolution'): при просевшем
+            // канале «держать разрешение» значит уронить частоту до слайд-шоу. Замер
+            // 2026-11-20: экран Mac 3420×2214 при ~400 кбит/с — 16 фризов, картинка
+            // стояла 8,5 с из каждых 20. И большая сторона кадра — не больше 1920:
+            // «Оригинал» на Retina отдаёт в 3 раза больше пикселей, чем вмещает бюджет.
+            // Экран всё же держит разрешение: 'balanced' на просевшем канале (88–290
+            // кбит/с сразу после переподключения) ужал демонстрацию до 339×220 и
+            // поднимал обратно минутами — «разрешение и качество упали в 0». Фризы
+            // прежнего 'maintain-resolution' были от 3420×2214 — теперь сторона кадра
+            // ограничена VOICE_SCREEN_MAX_SIDE, и кадр в 3+ раза меньше.
             params.degradationPreference = kind === 'screen' ? 'maintain-resolution' : 'balanced';
+            if (kind === 'screen') {
+                const settings = sender.track?.getSettings?.() || {};
+                let longSide = Math.max(Number(settings.width) || 0, Number(settings.height) || 0);
+                if (!longSide && this.voice.screenSourceSize) {
+                    longSide = Math.max(this.voice.screenSourceSize.width, this.voice.screenSourceSize.height);
+                }
+                params.encodings[0].scaleResolutionDownBy = longSide > ZaliInterface.VOICE_SCREEN_MAX_SIDE
+                    ? longSide / ZaliInterface.VOICE_SCREEN_MAX_SIDE
+                    : 1;
+            }
             if (kind === 'screen' && this.voice.screenActivity === 'browser') {
                 // Частота экрана запустившего без потолка WebRTC по умолчанию (60), а при
                 // нехватке канала или процессора падает разрешение, не плавность.
@@ -1700,7 +1889,7 @@ ZaliMixin(ZaliInterface, class {
                 params.degradationPreference = 'maintain-framerate';
             }
             await sender.setParameters(params);
-            this.voiceTrace('video-bitrate-limit', { kind, maxBitrate, peers: this.voice.peerConnections.size });
+            this.voiceTrace('video-bitrate-limit', { kind, maxBitrate, relayed: !!entry?.relayed, peers: this.voice.peerConnections.size });
         } catch (error) {
             this.voiceTrace('video-bitrate-limit-failed', { kind, error: error?.message || String(error) }, 'WARN');
         }
@@ -1711,8 +1900,8 @@ ZaliMixin(ZaliInterface, class {
     // senders were created long before that happened.
     async refreshVoiceSenderLimits() {
         for (const entry of this.voice.peerConnections.values()) {
-            if (entry.videoSender) await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera');
-            if (entry.screenSender) await this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen');
+            if (entry.videoSender) await this.applyVoiceVideoBitrateLimit(entry.videoSender, 'camera', entry);
+            if (entry.screenSender) await this.applyVoiceVideoBitrateLimit(entry.screenSender, 'screen', entry);
         }
     }
 
@@ -1760,7 +1949,7 @@ ZaliMixin(ZaliInterface, class {
             if (track.kind === 'audio') {
                 await this.applyVoiceAudioBitrateLimit(sender);
             } else if (track.kind === 'video') {
-                await this.applyVoiceVideoBitrateLimit(sender, 'camera');
+                await this.applyVoiceVideoBitrateLimit(sender, 'camera', entry);
             }
             this.voiceTrace('attach-local-track-added', {
                 peer,
@@ -1894,11 +2083,29 @@ ZaliMixin(ZaliInterface, class {
     // ВЫТЕСНЯЛ его микрофон. Звуковая дорожка из потока с другим id, чем у уже
     // играющего голоса этого человека, — это звук экрана, даже если screen-meta
     // ещё не дошёл (голос и камера едут в одном потоке, экран — в отдельном).
+    //
+    // Видео (2026-11-20). screen-meta шлётся при начале показа и после
+    // пересогласования; клиент, перезапущенный посреди чужой демонстрации, его не
+    // получал — экран лёг в плитку человека и вытеснял камеру. Правило «id потока не
+    // совпал с голосом — значит экран» для видео НЕНАДЁЖНО: на Mac (WebKit) камера
+    // телефона пришла в потоке с другим id и стала «демонстрацией». Поэтому решает
+    // состояние с сервера (voice_state каждого клиента): экрана нет — это камера;
+    // экран есть, камеры нет — экран; есть оба — по id; состояния нет — как раньше,
+    // только по screen-meta.
     isRemoteScreenStream(entry, name, stream, track) {
         if (entry.remoteScreenStreamId && stream.id === entry.remoteScreenStreamId) return true;
+        const voiceStream = this.voice.remoteAudios.get(name)?.srcObject;
         if (track?.kind === 'audio') {
-            const voiceStream = this.voice.remoteAudios.get(name)?.srcObject;
             if (voiceStream && voiceStream.id !== stream.id) {
+                entry.remoteScreenStreamId = stream.id;
+                return true;
+            }
+            return false;
+        }
+        if (track?.kind === 'video') {
+            const st = this.voice.memberStates?.[String(name).toLowerCase()];
+            if (!st || !st.screen) return false;
+            if (!st.camera || (voiceStream && voiceStream.id !== stream.id)) {
                 entry.remoteScreenStreamId = stream.id;
                 return true;
             }
@@ -1928,8 +2135,61 @@ ZaliMixin(ZaliInterface, class {
             video.setSinkId(this.audioPrefs.speakerDeviceId).catch(() => {});
         }
         video.play?.().catch(error => this.voiceTrace('remote-screen-play-failed', { peer: name, error: error?.message || String(error) }, 'WARN'));
+        video.dataset.attachedAt = String(Date.now());
+        // Закончившаяся дорожка экрана — конец показа, даже без screen-meta stop.
+        const screenTrack = stream.getVideoTracks?.()[0];
+        if (screenTrack && !screenTrack.__zaliScreenEndHook) {
+            screenTrack.__zaliScreenEndHook = true;
+            screenTrack.addEventListener('ended', () => {
+                if (this.voice.remoteScreens.get(name)?.srcObject === stream) {
+                    this.voiceTrace('remote-screen-track-ended', { peer: name, streamId: stream.id || '' }, 'WARN');
+                    this.detachRemoteScreenStream(name);
+                }
+            });
+        }
         this.voiceTrace('remote-screen-attach', { peer: name, streamId: stream.id || '' });
         this.scheduleRenderVoicePanel();
+    }
+
+    // Фантомная демонстрация (2026-11-20): плитка экрана снималась только сигналом
+    // screen-meta stop или разрывом соединения. Собеседник, перезапустивший приложение
+    // посреди показа, «стоп» не шлёт, а его новые офферы применялись в старом
+    // соединении — на Mac навсегда оставалась плитка с последним кадром экрана телефона.
+    // Сервер же знает правду: каждый клиент шлёт voice_state {screen}. Если сервер
+    // дольше 6 с говорит «не показывает», а плитка висит дольше 6 с — снимаем.
+    // Состояния нет (старый клиент его не шлёт) — не трогаем.
+    pruneStaleRemoteScreens() {
+        const states = this.voice.memberStates || {};
+        const now = Date.now();
+        if (!this._screenStateFalseSince) this._screenStateFalseSince = new Map();
+        for (const [name, video] of this.voice.remoteScreens) {
+            const st = states[String(name).toLowerCase()];
+            if (!st || st.screen) {
+                this._screenStateFalseSince.delete(name);
+                continue;
+            }
+            const since = this._screenStateFalseSince.get(name) || now;
+            this._screenStateFalseSince.set(name, since);
+            const attachedAt = Number(video?.dataset?.attachedAt) || 0;
+            if (now - since < 6000 || now - attachedAt < 6000) continue;
+            this._screenStateFalseSince.delete(name);
+            const entry = this.voice.peerConnections.get(name);
+            if (entry) entry.remoteScreenStreamId = null;
+            const stream = video?.srcObject || null;
+            const liveVideo = stream?.getVideoTracks?.().some(t => t.readyState === 'live');
+            // Экрана нет, а камера есть и дорожка жива — это была камера, ошибочно
+            // принятая за экран: переносим в плитку человека, а не выбрасываем.
+            const toCamera = !!(st.camera && liveVideo);
+            this.voiceDiag('remote-screen-pruned', {
+                peer: name,
+                reason: 'server-state-no-screen',
+                rerouted: toCamera ? 'camera' : '',
+            }, 'WARN');
+            this.detachRemoteScreenStream(name);
+            // Только видео: attachRemoteVoiceStream подменил бы звук голоса этим
+            // потоком, а в нём аудио нет.
+            if (toCamera) this.attachRemoteVideoStream(name, stream);
+        }
     }
 
     detachRemoteScreenStream(peer) {

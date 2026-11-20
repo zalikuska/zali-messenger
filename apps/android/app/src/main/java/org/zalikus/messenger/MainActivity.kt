@@ -3,12 +3,15 @@ package org.zalikus.messenger
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import android.net.Uri
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -18,6 +21,9 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -75,6 +81,55 @@ class MainActivity : ComponentActivity() {
         // light(): тёмные значки на светлом фоне; dark(): светлые на тёмном.
         val style = if (light) SystemBarStyle.light(transparent, transparent) else SystemBarStyle.dark(transparent)
         enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+    }
+
+    /** Веб держит свободный поворот: медиа на весь экран (SCREEN_ROTATION, media_viewer.js). */
+    private var webRotationFree = false
+
+    /** Видео из ленты на весь экран — `<video>` в полноэкранном режиме (onShowCustomView). */
+    private var customView: View? = null
+    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+
+    /**
+     * Интерфейс телефона — только портрет. Альбомный разрешён, пока на экране медиа
+     * на весь экран: видео звонка, фото, видео из ленты. FULL_USER уважает системную
+     * блокировку поворота. Планшет (sw ≥ 600dp) не ограничиваем — там раскладка
+     * компьютера, и портрет-only был бы неудобен.
+     */
+    private fun applyOrientation() {
+        val media = webRotationFree || customView != null
+        requestedOrientation = when {
+            resources.configuration.smallestScreenWidthDp >= 600 -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            media -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        // Медиа на весь экран — без строки состояния и панели навигации (свайп от края
+        // показывает их на время).
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (media) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    private fun setWebRotationFree(free: Boolean) {
+        if (webRotationFree == free) return
+        webRotationFree = free
+        applyOrientation()
+    }
+
+    /** Выход из полноэкранного `<video>`; true — он был открыт. */
+    private fun exitCustomView(): Boolean {
+        val view = customView ?: return false
+        val callback = customViewCallback
+        customView = null
+        customViewCallback = null
+        (view.parent as? ViewGroup)?.removeView(view)
+        applyOrientation()
+        callback?.onCustomViewHidden()
+        return true
     }
 
     private fun applyAppearance(light: Boolean, background: Int) {
@@ -439,6 +494,7 @@ class MainActivity : ComponentActivity() {
             uiBackground = prefs.getInt("background", DARK_BACKGROUND)
         }
         applySystemBars(uiLight)
+        applyOrientation()
         pendingNotificationIntent = intent
         // Сессия, сохранённая на прошлом запуске, регистрирует FCM-токен и без нового входа.
         PushSession.syncRegistration(this)
@@ -488,7 +544,9 @@ class MainActivity : ComponentActivity() {
             // Клавиатуру система убирает сама, до этого обработчика.
             BackHandler(enabled = webView != null) {
                 val wv = webView
-                if (wv == null) {
+                if (exitCustomView()) {
+                    // «Назад» из видео на весь экран — только выход из него.
+                } else if (wv == null) {
                     moveTaskToBack(true)
                 } else {
                     wv.evaluateJavascript(
@@ -548,6 +606,7 @@ class MainActivity : ComponentActivity() {
                         nativeBridge.captureGalleryPhoto = { requestId -> captureGalleryPhoto(requestId) }
                         nativeBridge.openAppSettings = { openAppSettings() }
                         nativeBridge.applyAppearance = { light, background -> applyAppearance(light, background) }
+                        nativeBridge.setScreenRotationFree = { free -> setWebRotationFree(free) }
                         wv.apply {
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
@@ -611,6 +670,31 @@ class MainActivity : ComponentActivity() {
                                     pendingMediaRequest?.deny()
                                     pendingMediaRequest = request
                                     mediaPermissionLauncher.launch(missing.toTypedArray())
+                                }
+
+                                // Кнопка «на весь экран» в панели видео из ленты. Без этих двух
+                                // методов вебвью её показывает, но нажатие ничего не делает.
+                                override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                                    if (customView != null) {
+                                        callback.onCustomViewHidden()
+                                        return
+                                    }
+                                    customView = view
+                                    customViewCallback = callback
+                                    view.setBackgroundColor(android.graphics.Color.BLACK)
+                                    (window.decorView as ViewGroup).addView(
+                                        view,
+                                        ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+                                    )
+                                    applyOrientation()
+                                }
+
+                                override fun onHideCustomView() {
+                                    val view = customView ?: return
+                                    customView = null
+                                    customViewCallback = null
+                                    (view.parent as? ViewGroup)?.removeView(view)
+                                    applyOrientation()
                                 }
 
                                 override fun onShowFileChooser(

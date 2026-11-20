@@ -471,6 +471,25 @@ ZaliMixin(ZaliInterface, class {
         const height = tiles.clientHeight;
         if (!count || width <= 0 || height <= 0) return;
         const gap = 10;
+        // Телефон: плитки не держат 16:9, а делят всю область поровну — на узком
+        // экране 16:9 оставляет под и над сеткой пустые полосы. Колонок 1 для
+        // 1–3 участников, 2 до восьми, дальше 3; CSS растягивает строки на 1fr.
+        const phone = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
+        if (phone) {
+            const c = count <= 3 ? 1 : count <= 8 ? 2 : 3;
+            const r = Math.ceil(count / c);
+            const tw = (width - (c - 1) * gap) / c;
+            const th = (height - (r - 1) * gap) / r;
+            tiles.style.setProperty('--vt-cols', String(c));
+            tiles.style.setProperty('--vt-av', `${Math.max(32, Math.min(120, Math.round(Math.min(tw, th) * 0.4)))}px`);
+            if (typeof ResizeObserver === 'function' && this._voiceTilesObserved !== tiles) {
+                this._voiceTilesObserver?.disconnect();
+                this._voiceTilesObserver = new ResizeObserver(() => this.fitVoiceTiles());
+                this._voiceTilesObserver.observe(tiles);
+                this._voiceTilesObserved = tiles;
+            }
+            return;
+        }
         let best = { w: 0, c: 1 };
         for (let c = 1; c <= count; c++) {
             const r = Math.ceil(count / c);
@@ -749,6 +768,22 @@ ZaliMixin(ZaliInterface, class {
         }, Math.max(0, Number(delayMs) || 0));
     }
 
+    // Оболочке с `callService` (Android) — идёт ли звонок и включена ли камера: она
+    // держит на это время сервис переднего плана, Wi‑Fi без энергосбережения и wake
+    // lock (OngoingCallService.kt). Без этого погасший экран или уход в другое
+    // приложение (в том числе ради демонстрации экрана) замораживал процесс: камера
+    // отрезалась сразу, а через ~10 с вставал весь звонок. Шлётся только при изменении.
+    syncNativeCallState() {
+        if (!this.nativeSupports?.('callService')) return;
+        const status = String(this.voice?.status || 'idle');
+        const active = status === 'calling' || status === 'connecting' || status === 'connected';
+        const camera = active && !!this.voice.cameraOn;
+        const key = `${active}:${camera}`;
+        if (this._nativeCallStateKey === key) return;
+        this._nativeCallStateKey = key;
+        this.postNativeMessage({ type: NativeMessageTypes.CALL_STATE, active, camera });
+    }
+
     renderVoicePanel() {
         // Every voice-state transition (ringing → answered/declined/missed/ended)
         // calls renderVoicePanel(), so syncing the ringtone here — rather than at
@@ -765,6 +800,7 @@ ZaliMixin(ZaliInterface, class {
             this.stopRingtone();
             this.closeIncomingCallNotification();
         }
+        this.syncNativeCallState();
         this.renderVoicePanelBody();
         this.syncVoiceMemberState();
         // Список каналов слева показывает, кто сидит в голосовых каналах: любое
@@ -991,6 +1027,27 @@ ZaliMixin(ZaliInterface, class {
 
     // The slim bar above every tab while a call is live. Hidden only where the
     // call itself is already on screen: its voice channel, or a DM's open grid.
+    // Начало звонка по часам сервера (`joinedAt` из voice_room_state, Unix мс): личный
+    // звонок идёт с момента, когда в комнате стали оба, — позднее из двух времён входа;
+    // канал — с моего входа. 0 — сервер не прислал (старый сервер, ещё нет состояния).
+    voiceServerCallStart(type) {
+        const joined = this.voice.joinedAt || {};
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const now = Date.now();
+        const valid = (ms) => Number.isFinite(ms) && ms > 0 && ms <= now + 5000;
+        if (type === 'channel') {
+            const mine = Number(joined[me]);
+            return valid(mine) ? Math.min(mine, now) : 0;
+        }
+        const names = (Array.isArray(this.voice.participants) ? this.voice.participants : [])
+            .map(name => String(name || '').trim().toLowerCase())
+            .filter(Boolean);
+        if (names.length < 2) return 0;
+        const times = names.map(name => Number(joined[name]));
+        if (!times.every(valid)) return 0;
+        return Math.min(Math.max(...times), now);
+    }
+
     renderVoiceCallStrip() {
         const type = this.voiceLiveCallType();
         // The sidebar marks the voice channel we are in. This runs on every
@@ -1003,8 +1060,12 @@ ZaliMixin(ZaliInterface, class {
         // The call clock lives here because this runs on every renderVoicePanel
         // whatever tab is open; the room views are not always rendered.
         if (type) {
-            if (!this.voice.activeSince) {
-                this.voice.activeSince = Number(this.voice.callTrack?.connectedAt) || Date.now();
+            // Звонок, восстановленный после перезапуска приложения, не имеет callTrack —
+            // счётчик начинался заново от Date.now() (2026-11-20: 82 с вместо 399).
+            // Тогда начало берётся с сервера (joinedAt), он его пережил.
+            const serverStart = this.voice.callTrack?.connectedAt ? 0 : this.voiceServerCallStart(type);
+            if (!this.voice.activeSince || (serverStart && serverStart < this.voice.activeSince)) {
+                this.voice.activeSince = Number(this.voice.callTrack?.connectedAt) || serverStart || Date.now();
             }
             this.startVoiceCallBarTimer();
         } else {
@@ -1199,6 +1260,8 @@ ZaliMixin(ZaliInterface, class {
                     this._voiceFocusKeyHook = null;
                 }
             }
+            // Альбомный поворот держится только пока видео на весь экран (media_viewer.js).
+            this.syncScreenRotation?.();
             return;
         }
         if (!root) {
@@ -1241,6 +1304,7 @@ ZaliMixin(ZaliInterface, class {
         this.syncRemoteControlFocus?.(root);
         // Панель адреса, захват ввода и курсоры «Общего браузера» (shared_browser.js).
         this.syncSharedBrowserFocus?.(root);
+        this.syncScreenRotation?.();
     }
 
     mountVoiceVideoElements() {

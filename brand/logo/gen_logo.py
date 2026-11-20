@@ -292,6 +292,30 @@ def android_monochrome_xml():
             f'{paths}\n    </group>\n</vector>\n')
 
 
+def android_notification_xml():
+    """Маленький значок уведомления Android: тот же силуэт, но вписанный в 24dp.
+
+    Системе нужна альфа-маска на всю площадь 24dp — а монохромный слой лаунчера
+    рассчитан на безопасную зону адаптивной иконки (силуэт в нём в разы мельче)."""
+    bs = bubbles()
+    x0, x1 = L, RIGHT
+    y0, y1 = bs[0][2], bs[-1][2] + H
+    size, margin = 24, 1.0
+    k = (size - 2 * margin) / max(x1 - x0, y1 - y0)
+    tx = (size - (x1 - x0) * k) / 2 - x0 * k
+    ty = (size - (y1 - y0) * k) / 2 - y0 * k
+    paths = "\n".join(
+        f'        <path android:fillColor="#FFFFFFFF" android:pathData="{rrect(x, y, w, H, *r)}"/>'
+        for _, x, y, w, r in bs)
+    return (f'<?xml version="1.0" encoding="utf-8"?>\n<!-- {GENERATED} -->\n'
+            f'<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
+            f'    android:width="{size}dp"\n    android:height="{size}dp"\n'
+            f'    android:viewportWidth="{size}"\n    android:viewportHeight="{size}">\n'
+            f'    <group\n        android:scaleX="{k:.6f}"\n        android:scaleY="{k:.6f}"\n'
+            f'        android:translateX="{tx:.4f}"\n        android:translateY="{ty:.4f}">\n'
+            f'{paths}\n    </group>\n</vector>\n')
+
+
 # ── Windows ───────────────────────────────────────────────────────────────────
 # Windows тоже не скругляет иконки: острый чёрный квадрат среди скруглённых иконок
 # Windows 11 — чужой. Плитка со скруглением в духе Win11 (меньше, чем у macOS, без
@@ -588,6 +612,8 @@ def export():
             f.write(ANDROID_ADAPTIVE)
     with open(out(f"{res}/drawable/ic_launcher_monochrome.xml"), "w") as f:
         f.write(android_monochrome_xml())
+    with open(out(f"{res}/drawable/ic_notification.xml"), "w") as f:
+        f.write(android_notification_xml())
 
     shutil.rmtree(tmp)
     print("иконки экспортированы")

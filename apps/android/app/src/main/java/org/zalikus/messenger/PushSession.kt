@@ -91,6 +91,8 @@ object PushSession {
     /** Выход из аккаунта: пуши ушедшего аккаунта больше не расшифровываются и не показываются. */
     fun clear(context: Context) {
         prefs(context).edit().clear().apply()
+        // Аватарки чужих аккаунтов из уведомлений следующему пользователю ни к чему.
+        NotificationAvatar.clear(context)
     }
 
     /**

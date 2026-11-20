@@ -129,7 +129,7 @@ ZaliMixin(ZaliInterface, class {
                 type: 'offer',
                 sdp: {
                     type: entry.pc.localDescription?.type || 'offer',
-                    sdp: entry.pc.localDescription?.sdp || '',
+                    sdp: this.voiceSdpForPeer(entry.pc.localDescription?.sdp || ''),
                 },
             },
         });
@@ -293,7 +293,7 @@ ZaliMixin(ZaliInterface, class {
                 type: 'offer',
                 sdp: {
                     type: entry.pc.localDescription?.type || 'offer',
-                    sdp: entry.pc.localDescription?.sdp || '',
+                    sdp: this.voiceSdpForPeer(entry.pc.localDescription?.sdp || ''),
                 },
             },
         });
@@ -464,6 +464,10 @@ ZaliMixin(ZaliInterface, class {
             msg: 'Голосовая комната больше не существует на сервере — звонок завершён',
             ts: new Date().toLocaleTimeString(),
         });
+        // Личная комната с исчезнувшим на сервере звонком мертва: запоздавший
+        // voice_room_state из неё (ответ на пинг, отправленный до ошибки) не должен
+        // снова ввести нас в неё. Канал — нет: его id постоянный, в него возвращаются.
+        if (this.voice.roomType === 'dm' || current.startsWith('voice:dm:')) this.abandonVoiceRoom(current);
         // announce:false — there is nothing to announce to, and voice_leave for a
         // missing room only earns another voice_error.
         void this.leaveVoiceRoom({ announce: false, outcome: 'failed' });
@@ -546,8 +550,60 @@ ZaliMixin(ZaliInterface, class {
                 this.stopVoicePresenceKeepalive();
                 return;
             }
+            // Сначала вывод, потом пинг: пинг, ушедший в том же такте перед выходом,
+            // возвращал voice_room_state уже после сброса — и тот снова вводил клиент
+            // в мёртвую комнату (живой журнал 2026-11-20, повторный вход через 1 с).
+            if (this.concludeAbandonedDmCallIfNeeded()) return;
             this.sendVoiceRoomPresence();
+            this.pruneStaleRemoteScreens();
         }, 8000);
+    }
+
+    // Личный звонок, в котором кроме нас никого нет, — окончен. Так выглядел фантомный
+    // звонок после перезапуска (2026-11-20): старый сокет телефона отвалился, сервер по
+    // обрыву удалил комнату и разослал voice_call_ended (Mac вышел), а перезапущенный
+    // телефон, уже взявший комнату из снимка, своим пингом присутствия воссоздал её через
+    // restore_dm_room — и сидел в ней один «в эфире» без конца, с микрофоном и сервисом
+    // звонка. concludeDeadVoiceCallIfNeeded это не ловит: он ждёт хотя бы одного пира, а
+    // здесь их ноль. Собеседник, который действительно ещё в звонке, возвращается своим
+    // пингом за 8 с (restore_dm_room пускает только отправителя) — поэтому запас 30 с.
+    concludeAbandonedDmCallIfNeeded() {
+        const roomId = String(this.voice.roomId || '').trim();
+        const status = String(this.voice.status || '');
+        const me = String(this.myName() || '').trim();
+        const others = (Array.isArray(this.voice.participants) ? this.voice.participants : [])
+            .map(name => String(name || '').trim())
+            .filter(name => name && name !== me);
+        const alone = roomId
+            && this.voice.roomType === 'dm'
+            && (status === 'connected' || status === 'connecting')
+            && !this.voice.outgoingInvite
+            && !this.voice.incomingInvite
+            && others.length === 0;
+        if (!alone) {
+            this.voice.dmAloneSince = null;
+            return false;
+        }
+        const now = Date.now();
+        if (!this.voice.dmAloneSince || this.voice.dmAloneSince.roomId !== roomId) {
+            this.voice.dmAloneSince = { roomId, at: now };
+            return false;
+        }
+        const aloneMs = now - this.voice.dmAloneSince.at;
+        if (aloneMs < ZaliInterface.VOICE_DM_ALONE_END_MS) return false;
+        this.voice.dmAloneSince = null;
+        this.voiceDiag('call-dead-dm-alone', { roomId, status, seconds: Math.round(aloneMs / 1000) }, 'WARN');
+        this.addLogEntry({
+            type: 'INFO',
+            msg: 'Собеседник вышел из звонка — звонок завершён',
+            ts: new Date().toLocaleTimeString(),
+        });
+        // События этой комнаты, уже летящие к нам, не должны её воскресить.
+        this.abandonVoiceRoom(roomId);
+        // announce: true — сервер помечает комнату завершённой, и следующий пинг
+        // присутствия (с этого или другого устройства) её уже не воскресит.
+        void this.leaveVoiceRoom({ announce: true, outcome: 'completed' });
+        return true;
     }
 
     stopVoicePresenceKeepalive() {

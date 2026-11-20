@@ -622,6 +622,70 @@ async fn dm_keepalive_does_not_rebuild_a_call_that_was_hung_up() {
     assert_eq!(error["code"], "room_not_found");
 }
 
+/// A DM removed by an implicit leave (WebSocket eviction, switching rooms) while the
+/// other side is online is over: the other side was told `voice_call_ended` and left.
+/// The leaver's client used to rebuild it with its next keepalive and sit in it alone
+/// (2026-11-20: an Android app restarted mid-call, its old socket evicted 150 s later).
+/// Eviction itself waits 150 s, so the room switch drives the same implicit path here.
+#[tokio::test]
+async fn dm_keepalive_does_not_rebuild_a_call_ended_by_an_implicit_leave() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    add_contact(&app, &alice, "bob").await;
+    add_contact(&app, &bob, "alice").await;
+    let server_id = create_server(&app, &alice, "implicit-leave").await;
+    let channel_id = create_voice_channel(&app, &alice, &server_id, "general").await;
+    let room_id = "voice:dm:alice:bob:implicit";
+
+    let mut alice_ws = connect_ws(&app, &alice).await;
+    let mut bob_ws = connect_ws(&app, &bob).await;
+    send(
+        &mut alice_ws,
+        serde_json::json!({ "type": "voice_call_invite", "roomId": room_id, "target": "bob", "device": "a" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    send(
+        &mut bob_ws,
+        serde_json::json!({ "type": "voice_call_accept", "roomId": room_id, "inviter": "alice", "device": "b" }),
+    )
+    .await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    let _ = drain_voice_events(&mut alice_ws, 100).await;
+
+    // Not a hang-up: alice's account moves to another room.
+    send(
+        &mut alice_ws,
+        serde_json::json!({
+            "type": "voice_join",
+            "roomId": format!("voice:channel:{}:{}", server_id, channel_id),
+            "roomType": "channel",
+            "serverId": server_id,
+            "channelId": channel_id,
+            "device": "a",
+        }),
+    )
+    .await;
+    let bob_events = drain_voice_events(&mut bob_ws, 400).await;
+    assert!(find_event(&bob_events, "voice_call_ended").is_some(), "{bob_events:?}");
+    let _ = drain_voice_events(&mut alice_ws, 200).await;
+
+    // A stale page of alice's (the one that was evicted) keeps ticking for the DM.
+    send(
+        &mut alice_ws,
+        serde_json::json!({ "type": "voice_join", "roomId": room_id, "roomType": "dm", "keepalive": true, "device": "a2" }),
+    )
+    .await;
+    let alice_events = drain_voice_events(&mut alice_ws, 400).await;
+    assert!(
+        !alice_events.iter().any(|e| e["type"] == "voice_room_state" && e["roomId"] == room_id),
+        "a DM the other side was told is over must not be rebuilt: {alice_events:?}"
+    );
+    let error = find_event(&alice_events, "voice_error").expect("must be told the call is over");
+    assert_eq!(error["code"], "room_not_found");
+}
+
 /// Every `voice_error` carries a machine-readable `code`. The client ends a call on
 /// `room_not_found`, and matching that on the Russian prose in `message` would come
 /// apart the first time someone rewords it.

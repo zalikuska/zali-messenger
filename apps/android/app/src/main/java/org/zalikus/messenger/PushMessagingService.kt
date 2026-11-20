@@ -74,6 +74,7 @@ class PushMessagingService : FirebaseMessagingService() {
             messageId = messageId,
             silent = data["silent"] == "1",
             alertAgain = alertAgain,
+            waitForAvatar = true,
         )
     }
 

@@ -2258,6 +2258,13 @@ struct WebView {
                     // их только при возможности `mediaGallery`, которой здесь нет.
                     break
 
+                case .callState, .screenRotation:
+                    // Android-only: сервис переднего плана на время звонка
+                    // (OngoingCallService.kt) и поворот экрана только для медиа на весь
+                    // экран (MainActivity). Веб шлёт их только при возможностях
+                    // `callService` / `screenRotation`, которых здесь нет.
+                    break
+
                 case .mobileNavProgress:
                     // Android-only (see MainActivity.kt/NativeBridge.kt): syncs the
                     // mobile list<->chat push-nav progress into the native Compose
