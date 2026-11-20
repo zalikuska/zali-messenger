@@ -1,0 +1,12 @@
+/service-worker.js
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/manifest.json
+  Cache-Control: no-cache
+/app.js
+  Cache-Control: no-cache
+/style.css
+  Cache-Control: no-cache
+/wasm-pkg/*
+  Cache-Control: no-cache

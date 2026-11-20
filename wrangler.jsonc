@@ -1,0 +1,9 @@
+{
+  // Standalone browser/PWA клиент (msg.zalikus.org) как Worker со статическими ассетами.
+  // Каталог dist-web/ собирает scripts/deploy_web_cloudflare.sh — в git его нет.
+  "name": "zali-messenger",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist-web"
+  }
+}
