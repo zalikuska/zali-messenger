@@ -49,6 +49,14 @@ mod loopback;
 mod mf;
 #[cfg(target_os = "windows")]
 mod mic;
+// Скрытые приложения: разбор, геометрия и маска NV12 — везде (тесты), Win32 — только Windows.
+pub(crate) mod privacy;
+#[cfg(target_os = "windows")]
+pub(crate) mod privacy_win;
+// Горячие клавиши звонка и плашки поверх окон вне захвата (op set_hotkeys / overlay).
+pub(crate) mod hotkey_codes;
+#[cfg(target_os = "windows")]
+mod desktop_ui;
 pub(crate) mod remote_control;
 // «Общий браузер»: чистые правила — везде, скрытый WebView2 — только Windows.
 pub(crate) mod shared_browser;

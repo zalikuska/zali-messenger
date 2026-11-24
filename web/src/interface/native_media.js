@@ -589,6 +589,9 @@ ZaliMixin(ZaliInterface, class {
         } else if (event === 'browser_state') {
             // Адрес/заголовок/история скрытого браузера «Общего браузера».
             this.onNativeSharedBrowserState?.(payload);
+        } else if (event === 'hotkey') {
+            // Глобальное сочетание сработало в оболочке (screen_privacy.js).
+            this.onNativeHotkey?.(String(payload.action || ''));
         } else if (event === 'rc_revoked') {
             // Оболочка сама сняла разрешение на удалённое управление (поток экрана кончился).
             this.onNativeRemoteControlRevoked?.(payload);

@@ -83,6 +83,7 @@
     "interface/voice_ui.js",
     "interface/remote_control.js",
     "interface/shared_browser.js",
+    "interface/screen_privacy.js",
     "interface/server_messages.js",
     "interface/avatars.js",
     "interface/api.js",

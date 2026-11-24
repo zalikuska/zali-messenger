@@ -773,6 +773,9 @@ ZaliMixin(ZaliInterface, class {
                         // соберёт страница без голосов звонка.
                         audio: wantAudio && !ownWindow && this.nativeSupports('nativeScreenAudio'),
                         cursor: true,
+                        // Скрытые приложения (screen_privacy.js): оболочка вырезает/закрывает их
+                        // картинку и звук; дальше правки приходят на лету op `set_privacy`.
+                        ...(this.screenPrivacyNativePayload ? { privacy: this.screenPrivacyNativePayload() } : {}),
                         ...(nativeSfu ? { sfu: this.voiceNativeSfuScreenSpec(Number(choice.fps) || 30) } : {}),
                     },
                     firstFrameTimeoutMs: 8000,
@@ -832,6 +835,7 @@ ZaliMixin(ZaliInterface, class {
                 this.addLogEntry({ type: 'INFO', msg: 'Звук демонстрации недоступен — передаётся только картинка', ts: new Date().toLocaleTimeString() });
             }
             this.voice.screenSharing = true;
+            this.syncScreenPrivacyWarning?.();
             if (!this.voice.screenRestarting) this.playVoiceEventSound?.('stream');
             // Оффер — из sourceInfo, снятого до подмены потока: со звуком приложения `stream`
             // выше стал смесью (new MediaStream), у неё нет __zaliNativeInfo, и оболочка
@@ -928,6 +932,7 @@ ZaliMixin(ZaliInterface, class {
         this.stopShareAppAudio?.('screen-stop');
         this.voice.screenSharing = false;
         this.voice.screenAudioShared = false;
+        this.syncScreenPrivacyWarning?.();
         this.resetNativeScreenCaptureState();
         this.detachLocalScreenPreview();
         for (const [peer, entry] of this.voice.peerConnections.entries()) {

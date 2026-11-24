@@ -18,6 +18,10 @@ ZaliMixin(ZaliInterface, class {
     /** Категории настроек приложения → карточки (data-settings-section). */
     settingsCategories() {
         const ico = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
+        // «Трансляция» (screen_privacy.js) — только там, где есть что показать: в оболочках
+        // macOS/Windows и пояснение на Android. В браузере обе карточки скрыты.
+        const streamCat = this.nativeSupports?.('nativeScreenPrivacy') || this.nativeSupports?.('nativeHotkeys')
+            || window.__ZALI_NATIVE_PLATFORM === 'android';
         return [
             { id: 'profile', label: 'Профиль', sections: ['profile', 'game-activity', 'game-focus'],
               icon: ico('<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c.6-3.8 3.6-6 7.5-6s6.9 2.2 7.5 6"/>') },
@@ -25,6 +29,8 @@ ZaliMixin(ZaliInterface, class {
               icon: ico('<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.5-1.9-.3-1 .4-2.1 1.5-2.1H17a4 4 0 0 0 4-4c0-5-4-10-9-10z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>') },
             { id: 'sound', label: 'Звук и звонки', sections: ['audio', 'notify-sound'],
               icon: ico('<path d="M4 10v4h4l5 4V6l-5 4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>') },
+            { id: 'stream', label: 'Трансляция', sections: ['screen-privacy', 'hotkeys'],
+              icon: ico('<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/><path d="M9 10.5h6"/>') },
             { id: 'account', label: 'Аккаунт', sections: ['email', 'session', 'settings-sync', 'crypto'],
               icon: ico('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>') },
             { id: 'app', label: 'Приложение', sections: ['updates', 'autostart', 'cache'],
@@ -33,7 +39,7 @@ ZaliMixin(ZaliInterface, class {
               icon: ico('<path d="M9 4h4v2.5a1.5 1.5 0 0 0 3 0V4h4v6h-2.5a1.5 1.5 0 0 0 0 3H20v7h-6v-2.5a1.5 1.5 0 0 0-3 0V20H4v-7h2.5a1.5 1.5 0 0 0 0-3H4V4z"/>') },
             { id: 'dev', label: 'Для разработчиков', sections: ['perf', 'voice-trace', 'control', 'logs'],
               icon: ico('<path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/>') },
-        ];
+        ].filter(cat => cat.id !== 'stream' || streamCat);
     }
 
     settingsActiveCategory() {

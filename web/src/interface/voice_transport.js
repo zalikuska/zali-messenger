@@ -613,6 +613,8 @@ ZaliMixin(ZaliInterface, class {
         this.voice.videoEnabled = false;
         this.voice.cameraOn = false;
         this.voice.screenSharing = false;
+        // Плашка «скрытие выключено» живёт, только пока идёт трансляция (screen_privacy.js).
+        this.syncScreenPrivacyWarning?.();
         // Видео, развёрнутое на весь экран (voice_ui.js openVoiceFocus), уже
         // остановлено — без этого оверлей с чёрным кадром переживал конец звонка.
         this._voiceFocus = null;

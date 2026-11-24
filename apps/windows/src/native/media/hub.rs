@@ -2,7 +2,7 @@
 //! что трогает устройства, уходит в свои потоки (COM MTA), поток окна не ждёт.
 
 use super::format::Processing;
-use super::{camera, devices, mic, remote_control, screen, shared_browser, EventSink, FrameSink, MediaRequest};
+use super::{camera, desktop_ui, devices, mic, privacy, privacy_win, remote_control, screen, shared_browser, EventSink, FrameSink, MediaRequest};
 use crate::native::AppEvent;
 use tao::event_loop::EventLoopProxy;
 use serde_json::{json, Value};
@@ -194,14 +194,29 @@ pub fn handle(request: MediaRequest, events: EventSink) {
                 .options
                 .get("thumbWidth")
                 .and_then(Value::as_u64)
-                .unwrap_or(320)
-                .clamp(64, 1280) as usize;
+                .unwrap_or(320);
+            // 0 — список без превью (клавиша трансляции, screen_privacy.js): иначе снимок
+            // каждого окна задерживал бы старт на секунды.
+            let thumb_width = if thumb_width == 0 { 0 } else { thumb_width.clamp(64, 1280) as usize };
             spawn("zali-media-sources", move || {
                 let sources = screen::list_sources(thumb_width);
                 events.emit(with_request_id(json!({ "event": "screen_sources", "sources": sources }), &request.request_id));
             });
         }
         "start" => start(request, events),
+        // Скрытые приложения в трансляции (privacy.rs, privacy_win.rs).
+        "list_apps" => spawn("zali-media-apps", move || {
+            events.emit(with_request_id(json!({ "event": "apps", "apps": privacy_win::list_apps() }), &request.request_id));
+        }),
+        "set_privacy" => {
+            privacy::update(&request.options);
+            if request.request_id.is_some() {
+                events.emit(with_request_id(json!({ "event": "privacy_ok" }), &request.request_id));
+            }
+        }
+        // Глобальные горячие клавиши и плашки поверх окон (desktop_ui.rs).
+        "set_hotkeys" => desktop_ui::set_hotkeys(&request.options, request.request_id.clone(), events),
+        "overlay" => desktop_ui::overlay(&request.options),
         "stop" => {
             if let Some(stream) = request.stream {
                 let stop = sessions().remove(&stream);

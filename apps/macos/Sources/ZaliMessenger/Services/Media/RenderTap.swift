@@ -303,6 +303,7 @@ final class ScreenAudioTap {
     private var nextTimestamp: UInt64 = 0
     private var excluded: [AudioObjectID] = []
     private var listener: AudioPropertyListener?
+    private var privacyObserver: UUID?
     private let controlQueue = DispatchQueue(label: "com.zali.messenger.media.screenaudio")
 
     init(stream: UInt32, bridge: MediaBridgeServer) {
@@ -313,8 +314,18 @@ final class ScreenAudioTap {
     static func ownProcessObjects() -> [AudioObjectID] {
         let me = getpid()
         let helpers = Set(ownHelperPIDs?() ?? [])
+        // Скрытые приложения с «не передавать звук» (ScreenPrivacy.swift): их процессы и
+        // всё, за что они «отвечают» (WebContent/GPU-процессы браузеров, хелперы Electron).
+        let muted = ScreenPrivacy.shared.snapshot().audioApps
+        let mutedBundles = Set(muted.map { $0.id })
+        let mutedPids = ScreenPrivacy.pids(of: mutedBundles)
         return AudioProcesses.list().filter { p in
-            p.pid == me || helpers.contains(p.pid) || AudioProcesses.responsiblePID(p.pid) == me
+            if p.pid == me || helpers.contains(p.pid) { return true }
+            let responsible = AudioProcesses.responsiblePID(p.pid)
+            if responsible == me { return true }
+            guard !mutedBundles.isEmpty else { return false }
+            return mutedPids.contains(p.pid) || mutedPids.contains(responsible) || mutedBundles.contains(p.bundleID)
+                || mutedBundles.contains(where: { !$0.isEmpty && p.bundleID.hasPrefix($0 + ".") })
         }.map { $0.object }
     }
 
@@ -332,6 +343,10 @@ final class ScreenAudioTap {
         listener = AudioPropertyListener(object: AudioObjectID(kAudioObjectSystemObject),
                                          selector: kAudioHardwarePropertyProcessObjectList, queue: controlQueue) { [weak self] in
             self?.refreshExcluded()
+        }
+        // Список скрытых приложений поменялся на лету — тап пересобирает исключения.
+        privacyObserver = ScreenPrivacy.shared.observe { [weak self] in
+            self?.controlQueue.async { self?.refreshExcluded() }
         }
         mediaLog("screen audio tap: started stream=\(stream) rate=\(Int(tap.sampleRate)) excluded=\(excluded.count)")
     }
@@ -372,6 +387,8 @@ final class ScreenAudioTap {
     }
 
     func stop() {
+        if let privacyObserver { ScreenPrivacy.shared.unobserve(privacyObserver) }
+        privacyObserver = nil
         listener?.cancel()
         listener = nil
         tap?.stop()

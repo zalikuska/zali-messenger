@@ -5,7 +5,7 @@ name = "zali_messenger_win"
 # APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
 # compares against the server's app_releases.version). This field only needs to
 # keep incrementing for Cargo's own bookkeeping; it is not shown to users.
-version = "0.2.71"
+version = "0.2.72"
 edition = "2021"
 
 [dependencies]
@@ -97,6 +97,10 @@ windows = { version = "0.61", features = [
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_UI_Shell_PropertiesSystem",
+    # RegisterHotKey — глобальные горячие клавиши звонка (native/media/desktop_ui.rs).
+    "Win32_UI_Input_KeyboardAndMouse",
+    # Название и значок приложения из .exe для «Скрытых приложений» (media/privacy_win.rs).
+    "Win32_Storage_FileSystem",
 ] }
 # Общая память WebView2 для кадров (ICoreWebView2Environment12::CreateSharedBuffer,
 # ICoreWebView2_17::PostSharedBufferToScript). Ровно та версия, что тянет wry 0.35:

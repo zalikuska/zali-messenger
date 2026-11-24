@@ -53,9 +53,12 @@ enum ScreenSources {
         try ensureAccess()
         let content = try await content()
         var items: [(dict: [String: Any], filter: SCContentFilter, aspect: Double)] = []
+        // Превью — как будет в захвате: приложения, скрытые плашкой, вырезаны и здесь.
+        let privacy = ScreenPrivacy.shared.snapshot()
+        let previewExcluded = Set(privacy.videoApps.filter { privacy.style(of: $0) == .plate }.map { $0.id })
         for (index, d) in content.displays.enumerated() {
-            // Превью — как будет в захвате: окна мессенджера на экране тоже видны.
-            let filter = SCContentFilter(display: d, excludingWindows: [])
+            // Окна мессенджера на экране тоже видны.
+            let filter = displayFilter(d, content: content, excludingBundles: previewExcluded)
             let px = pixelSize(filter: filter, fallback: CGSize(width: d.width, height: d.height))
             let title = content.displays.count > 1 ? "Экран \(index + 1)" : "Весь экран"
             items.append(([
@@ -114,8 +117,16 @@ enum ScreenSources {
         return "data:image/jpeg;base64," + (data as Data).base64EncodedString()
     }
 
-    /// Фильтр захвата по id из списка.
-    static func filter(for sourceId: String) async throws -> (SCContentFilter, String, CGSize) {
+    /// Что за источник захвата: экран (его границы в глобальных координатах CG — для
+    /// скрытых окон) или окно (bundle id владельца — скрыт ли он целиком).
+    struct SourceInfo {
+        var displayBounds: CGRect?
+        var ownerBundle: String?
+    }
+
+    /// Фильтр захвата по id из списка. `excludingBundles` — приложения, вырезаемые из
+    /// захвата экрана целиком (скрытые плашкой и/или со звуком SCStream, ScreenPrivacy.swift).
+    static func filter(for sourceId: String, excludingBundles: Set<String> = []) async throws -> (SCContentFilter, String, CGSize, SourceInfo) {
         try ensureAccess()
         let content = try await content()
         let parts = sourceId.split(separator: ":", maxSplits: 1).map(String.init)
@@ -124,16 +135,35 @@ enum ScreenSources {
             guard let d = (id.flatMap { id in content.displays.first { $0.displayID == id } }) ?? (sourceId.isEmpty ? content.displays.first : nil) else {
                 throw MediaError.notFound("экран \(sourceId) не найден")
             }
-            let filter = SCContentFilter(display: d, excludingWindows: [])
-            return (filter, "Экран", pixelSize(filter: filter, fallback: CGSize(width: d.width, height: d.height)))
+            let filter = displayFilter(d, content: content, excludingBundles: excludingBundles)
+            return (filter, "Экран", pixelSize(filter: filter, fallback: CGSize(width: d.width, height: d.height)),
+                    SourceInfo(displayBounds: CGDisplayBounds(d.displayID), ownerBundle: nil))
         }
         if parts.first == "window", parts.count == 2, let id = UInt32(parts[1]),
            let w = content.windows.first(where: { $0.windowID == id }) {
             let filter = SCContentFilter(desktopIndependentWindow: w)
             let title = (w.title ?? "").isEmpty ? (w.owningApplication?.applicationName ?? "Окно") : (w.title ?? "Окно")
-            return (filter, title, pixelSize(filter: filter, fallback: w.frame.size))
+            return (filter, title, pixelSize(filter: filter, fallback: w.frame.size),
+                    SourceInfo(displayBounds: nil, ownerBundle: w.owningApplication?.bundleIdentifier))
         }
         throw MediaError.notFound("источник \(sourceId) не найден")
+    }
+
+    static func displayFilter(_ d: SCDisplay, content: SCShareableContent, excludingBundles: Set<String>) -> SCContentFilter {
+        guard !excludingBundles.isEmpty else { return SCContentFilter(display: d, excludingWindows: []) }
+        let apps = content.applications.filter { excludingBundles.contains($0.bundleIdentifier) }
+        return SCContentFilter(display: d, excludingApplications: apps, exceptingWindows: [])
+    }
+
+    /// Фильтр того же экрана с новым списком вырезаемых приложений (на лету).
+    static func refreshedDisplayFilter(sourceId: String, excludingBundles: Set<String>) async throws -> SCContentFilter {
+        let content = try await content()
+        let parts = sourceId.split(separator: ":", maxSplits: 1).map(String.init)
+        let id = parts.count == 2 ? UInt32(parts[1]) : nil
+        guard let d = (id.flatMap { id in content.displays.first { $0.displayID == id } }) ?? (sourceId.isEmpty ? content.displays.first : nil) else {
+            throw MediaError.notFound("экран \(sourceId) не найден")
+        }
+        return displayFilter(d, content: content, excludingBundles: excludingBundles)
     }
 }
 
@@ -205,6 +235,20 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var idleTimer: DispatchSourceTimer?
     private var idleRepeats = 0
     private var capturedFrames = 0
+    // Скрытые приложения (ScreenPrivacy.swift).
+    private var sourceInfo = ScreenSources.SourceInfo()
+    private var isDisplaySource = true
+    private var wantsAudio = false
+    /// Звук идёт тапом Core Audio (исключение процессов — там), а не звуком SCStream.
+    private var audioViaTap = false
+    private var privacyObserver: UUID?
+    private let privacyTracker = PrivacyWindowTracker()
+    private lazy var privacyRenderer = PrivacyRenderer()
+    /// Какие приложения сейчас вырезаны фильтром (меняется только в `applyPrivacy`).
+    private var filterExcluded = Set<String>()
+    private let privacyLock = NSLock()
+    private var privacyTask: Task<Void, Never>?
+    private var privacyMasked = 0
 
     /// Для `stats`: кадры от ScreenCaptureKit и повторы на неподвижном экране за окно.
     func takeStats() -> [String: Any] {
@@ -223,6 +267,15 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             out["paused"] = videoQueue.sync { pausedLayers.sorted() }
         }
         out["audio_tap"] = audioTap != nil
+        let snap = ScreenPrivacy.shared.snapshot()
+        if snap.isActive {
+            out["privacy_masked"] = videoQueue.sync { () -> Int in
+                let n = privacyMasked
+                privacyMasked = 0
+                return n
+            }
+            out["privacy_excluded"] = privacyLock.withLock { filterExcluded.count }
+        }
         return out
     }
     var onEnded: ((String) -> Void)?
@@ -235,7 +288,16 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func start(sourceId: String, fps: Int, maxHeight: Int, maxSide: Int = 0, audio: Bool, cursor: Bool,
                layers: [LayerSpec] = [], previewLayer: Int = 0, codec: VideoCodecKind = .h264) async throws {
-        let (filter, title, px) = try await ScreenSources.filter(for: sourceId)
+        let isDisplay = sourceId.isEmpty || sourceId.hasPrefix("display:")
+        var useTap = false
+        if audio, isDisplay, #available(macOS 14.2, *) { useTap = true }
+        isDisplaySource = isDisplay
+        wantsAudio = audio
+        audioViaTap = useTap
+        let excluded = isDisplay ? privacyExcludedBundles(ScreenPrivacy.shared.snapshot()) : []
+        let (filter, title, px, info) = try await ScreenSources.filter(for: sourceId, excludingBundles: excluded)
+        privacyLock.withLock { filterExcluded = excluded }
+        sourceInfo = info
         label = title
         self.sourceId = sourceId
         var (w, h) = fitVideoSize(sourceWidth: Int(px.width), sourceHeight: Int(px.height), maxWidth: 0, maxHeight: maxHeight)
@@ -296,15 +358,14 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // SCStream не исключает процесс WebKit GPU, где играют голоса собеседников). Звук
         // окна — SCStream: он берёт звук только приложения-владельца окна. macOS < 14.2 —
         // SCStream и для экрана (собеседники могут слышать себя).
-        let isDisplay = sourceId.isEmpty || sourceId.hasPrefix("display:")
-        var useTap = false
-        if audio, isDisplay, #available(macOS 14.2, *) { useTap = true }
         audioExcludesApp = !(audio && isDisplay && !useTap)
         config.capturesAudio = audio && !useTap
         config.excludesCurrentProcessAudio = true
         config.sampleRate = 48_000
         config.channelCount = 2
 
+        // Окна скрытых приложений — до первого кадра.
+        if isDisplay { privacyTracker.configure(ScreenPrivacy.shared.snapshot(), generation: ScreenPrivacy.shared.generation()) }
         let s = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
@@ -331,6 +392,9 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             } catch {
                 mediaLog("screen: audio tap failed (\((error as? MediaError)?.message ?? "\(error)")), falling back to SCStream audio")
                 audioExcludesApp = false
+                // Звук теперь из SCStream: приложения с «не передавать звук» — фильтром.
+                audioViaTap = false
+                applyPrivacy()
                 do {
                     try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
                     config.capturesAudio = true
@@ -341,6 +405,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         startIdleRepeat()
+        privacyObserver = ScreenPrivacy.shared.observe { [weak self] in self?.applyPrivacy() }
         mediaLog("screen: started stream=\(stream) source=\(sourceId) \(w)x\(h)@\(rate) audio=\(audio)\(useTap ? "(tap)" : "") cursor=\(cursor) codec=\(layers.isEmpty ? "H264" : codec.rawValue)")
     }
 
@@ -416,7 +481,82 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         sender.openGate()
     }
 
-    private func encodeAll(_ buffer: CVPixelBuffer, pts: CMTime) {
+    // MARK: - Скрытые приложения
+
+    /// Кого вырезать из захвата экрана фильтром: скрытые плашкой (жёсткая гарантия), и
+    /// все с «не передавать звук», если звук идёт из SCStream (macOS < 14.2) — у фильтра
+    /// звук и картинка неразделимы.
+    private func privacyExcludedBundles(_ snap: ScreenPrivacy.Snapshot) -> Set<String> {
+        var out = Set(snap.videoApps.filter { snap.style(of: $0) == .plate }.map { $0.id })
+        if wantsAudio && !audioViaTap { out.formUnion(snap.audioApps.map { $0.id }) }
+        return out
+    }
+
+    /// Состояние скрытия поменялось (или скрытое приложение запустилось): фильтр, трекер
+    /// окон и немедленный перекодированный кадр, чтобы неподвижный экран не ждал повтора.
+    private func applyPrivacy() {
+        // Наблюдатель зовётся с разных потоков — всё изменение состояния на главном.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.applyPrivacy() }
+            return
+        }
+        guard !stopped else { return }
+        let snap = ScreenPrivacy.shared.snapshot()
+        if isDisplaySource {
+            privacyTracker.configure(snap, generation: ScreenPrivacy.shared.generation())
+            let wanted = privacyExcludedBundles(snap)
+            privacyTask?.cancel()
+            privacyTask = Task { [weak self] in
+                guard let self, let s = self.scStream else { return }
+                do {
+                    let filter = try await ScreenSources.refreshedDisplayFilter(sourceId: self.sourceId, excludingBundles: wanted)
+                    guard !Task.isCancelled, !self.stopped else { return }
+                    try await s.updateContentFilter(filter)
+                    self.privacyLock.withLock { self.filterExcluded = wanted }
+                    mediaLog("screen: privacy filter stream=\(self.stream) excluded=\(wanted.sorted())")
+                } catch {
+                    mediaLog("screen: privacy filter update failed \(error)")
+                }
+            }
+        }
+        videoQueue.async { [weak self] in
+            guard let self, !self.stopped, let buffer = self.lastPixelBuffer else { return }
+            self.lastFrameHost = mach_absolute_time()
+            self.encodeAll(buffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
+        }
+    }
+
+    /// Маска кадра `w×h` (пиксели, верх-лево), показанного на экране в `shownAt`
+    /// (mach_absolute_time). Только на `videoQueue`.
+    private func privacyMask(width w: Int, height h: Int, shownAt: UInt64) -> PrivacyMask {
+        let snap = ScreenPrivacy.shared.snapshot()
+        guard snap.enabled, let first = snap.videoApps.first else { return PrivacyMask() }
+        let full = CGRect(x: 0, y: 0, width: w, height: h)
+        if !isDisplaySource {
+            // Показ окна скрытого приложения — закрыт весь кадр.
+            guard let owner = sourceInfo.ownerBundle, let app = snap.videoApps.first(where: { $0.id == owner }) else { return PrivacyMask() }
+            return .full(full, style: snap.style(of: app))
+        }
+        // Трекер ещё не опросил окна под нынешнее состояние (только что включили скрытие,
+        // запустилось скрытое приложение) — закрыть весь кадр, а не пропустить открытым.
+        let (tracked, trackedGeneration) = privacyTracker.refresh(notOlderThan: shownAt)
+        guard trackedGeneration == ScreenPrivacy.shared.generation(),
+              let bounds = sourceInfo.displayBounds, bounds.width > 0, bounds.height > 0 else {
+            return .full(full, style: snap.style(of: first))
+        }
+        let sx = CGFloat(w) / bounds.width
+        let sy = CGFloat(h) / bounds.height
+        return tracked.mapped({ r in
+            CGRect(x: (r.minX - bounds.minX) * sx, y: (r.minY - bounds.minY) * sy, width: r.width * sx, height: r.height * sy)
+        }, radiusScale: sx)
+    }
+
+    /// `shownAt` — когда кадр был на экране (mach_absolute_time); по умолчанию — сейчас
+    /// (повтор последнего кадра: окна с тех пор могли появиться).
+    private func encodeAll(_ raw: CVPixelBuffer, pts: CMTime, shownAt: UInt64 = mach_absolute_time()) {
+        let mask = privacyMask(width: CVPixelBufferGetWidth(raw), height: CVPixelBufferGetHeight(raw), shownAt: shownAt)
+        let buffer = mask.isEmpty ? raw : privacyRenderer.process(raw, mask: mask)
+        if !mask.isEmpty { privacyMasked += 1 }
         let top = layerCount - 1
         if layerCount == 0 || !pausedLayers.contains(top) || previewLayer == top { encoder?.encode(buffer, pts: pts) }
         for (i, layer) in lowerLayers.enumerated() where !pausedLayers.contains(i) || previewLayer == i {
@@ -431,6 +571,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         scStream = nil
         idleTimer?.cancel()
         idleTimer = nil
+        if let privacyObserver { ScreenPrivacy.shared.unobserve(privacyObserver) }
+        privacyObserver = nil
+        privacyTask?.cancel()
+        privacyTracker.stop()
         encoder?.invalidate()
         lowerLayers.forEach { $0.invalidate() }
         attachPublisher(nil)
@@ -446,16 +590,18 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped, CMSampleBufferIsValid(sampleBuffer) else { return }
         switch type {
         case .screen:
-            if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-               let raw = attachments.first?[.status] as? Int,
-               let status = SCFrameStatus(rawValue: raw), status != .complete {
+            let info = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]])?.first
+            if let raw = info?[.status] as? Int, let status = SCFrameStatus(rawValue: raw), status != .complete {
                 return
             }
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
             lastPixelBuffer = pixelBuffer
-            lastFrameHost = mach_absolute_time()
+            let arrived = mach_absolute_time()
+            lastFrameHost = arrived
             capturedFrames += 1
-            encodeAll(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+            // Когда кадр был на экране: маска — из опроса окон не раньше этого момента.
+            let shown = (info?[.displayTime] as? NSNumber)?.uint64Value ?? arrived
+            encodeAll(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), shownAt: min(shown, arrived))
         case .audio:
             handleAudio(sampleBuffer)
         default:
@@ -464,6 +610,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func handleAudio(_ sampleBuffer: CMSampleBuffer) {
+        // Показ окна приложения с «не передавать звук»: SCStream несёт звук только этого
+        // приложения — его и не отдаём.
+        if !isDisplaySource, let owner = sourceInfo.ownerBundle,
+           ScreenPrivacy.shared.snapshot().audioApps.contains(where: { $0.id == owner }) { return }
         guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(format) else { return }
         let asbd = asbdPtr.pointee

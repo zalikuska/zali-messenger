@@ -20,6 +20,8 @@ use super::h264_mf::LayerEncoder;
 use super::EventSink;
 use super::hub::StartContext;
 use super::loopback::{sleep_unless_stopped, WasapiCapture};
+use super::privacy::{self, Rect as PRect};
+use super::privacy_win;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -630,7 +632,7 @@ pub fn list_sources(thumb_width: usize) -> Vec<Value> {
     let thumb = |source: Source, timeout_ms: u64| -> String {
         // Превью — не дольше общего бюджета: список важнее картинок.
         match &d3d {
-            Some(d3d) if started.elapsed() < THUMB_BUDGET => {
+            Some(d3d) if thumb_width > 0 && started.elapsed() < THUMB_BUDGET => {
                 thumbnail(d3d, source, thumb_width, Duration::from_millis(timeout_ms)).unwrap_or_default()
             }
             _ => String::new(),
@@ -738,9 +740,68 @@ fn webview2_tree_census() -> (usize, usize) {
     (inside, webviews.len() - inside)
 }
 
-/// Звук демонстрации: process loopback без нашего дерева процессов → стерео-кадры.
+/// Отправка звука демонстрации блоками по 20 мс с метками по счёту отсчётов (сброс на
+/// часы при расхождении > 200 мс). Общая для обоих режимов захвата ниже.
+struct ScreenAudioOut {
+    buf: Vec<f32>,
+    seq: u32,
+    anchor: u64,
+    sent: u64,
+}
+
+impl ScreenAudioOut {
+    const BLOCK_FRAMES: usize = 960;
+
+    fn new() -> Self {
+        Self { buf: Vec::with_capacity(9600), seq: 0, anchor: now_us(), sent: 0 }
+    }
+
+    /// `false` — окно закрылось (приложение выходит).
+    fn flush(&mut self, ctx: &StartContext) -> bool {
+        while self.buf.len() >= Self::BLOCK_FRAMES * 2 {
+            let by_samples = self.anchor + self.sent * 1_000_000 / 48_000;
+            let now = now_us();
+            if by_samples.abs_diff(now) > 200_000 {
+                self.anchor = now;
+                self.sent = 0;
+            }
+            let ts = self.anchor + self.sent * 1_000_000 / 48_000;
+            let frame = audio_frame(&FrameHeader::audio(ctx.stream, ts, 2, self.seq), &self.buf[..Self::BLOCK_FRAMES * 2]);
+            self.buf.drain(..Self::BLOCK_FRAMES * 2);
+            self.seq = self.seq.wrapping_add(1);
+            self.sent += Self::BLOCK_FRAMES as u64;
+            if ctx.frames.pending() < 50 && !ctx.frames.send(frame) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+enum AudioLoop {
+    /// Сменился режим (скрытие звука включили/выключили или поменяли список) — заново.
+    Switch,
+    /// Поток звука кончился: остановка, выход приложения или звук недоступен.
+    Done,
+}
+
+/// Звук демонстрации. Без скрытых приложений со звуком — process loopback всей системы
+/// без нашего дерева процессов. Со скрытыми — include по каждому разрешённому процессу
+/// со звуковой сессией и сведение (`privacy::audio_roots`): исключить Windows умеет только
+/// одно дерево. Режим переключается на лету по `privacy::generation`.
 fn run_screen_audio(ctx: StartContext, stop: Arc<AtomicBool>) {
     let _com = ComGuard::new();
+    let mut out = ScreenAudioOut::new();
+    while !stop.load(Ordering::Acquire) && !ctx.stopped() {
+        let muted = privacy::snapshot().muted_ids();
+        let result = if muted.is_empty() { screen_audio_exclude_self(&ctx, &stop, &mut out) } else { screen_audio_filtered(&ctx, &stop, &mut out, muted) };
+        if matches!(result, AudioLoop::Done) {
+            return;
+        }
+    }
+}
+
+fn screen_audio_exclude_self(ctx: &StartContext, stop: &AtomicBool, out: &mut ScreenAudioOut) -> AudioLoop {
     let (inside, outside) = webview2_tree_census();
     // outside — процессы WebView2 любых приложений, не только наши: тревожно, только если
     // inside = 0 (наш WebView2 живёт вне дерева, и голоса звонка попадут в захват).
@@ -751,40 +812,144 @@ fn run_screen_audio(ctx: StartContext, stop: Arc<AtomicBool>) {
             // Windows 10 до 2004 не умеет process loopback — демонстрация без звука.
             let (_, text) = super::com::describe(&error);
             tracing::warn!("[ZALI][WIN] media screen audio unavailable: {text}");
-            return;
+            return AudioLoop::Done;
         }
     };
-    const BLOCK_FRAMES: usize = 960;
-    let mut buf: Vec<f32> = Vec::with_capacity(9600);
-    let mut seq = 0u32;
-    let mut anchor = now_us();
-    let mut sent: u64 = 0;
+    let mut generation = privacy::generation();
     while !stop.load(Ordering::Acquire) && !ctx.stopped() {
-        if capture.read(10, &mut buf).is_err() {
+        let now_generation = privacy::generation();
+        if now_generation != generation {
+            if !privacy::snapshot().muted_ids().is_empty() {
+                return AudioLoop::Switch;
+            }
+            generation = now_generation;
+        }
+        if capture.read(10, &mut out.buf).is_err() {
             // Сменилось устройство вывода — process loopback переживает это сам; если
             // нет, короткая пауза и выход: видео продолжается без звука.
-            sleep_unless_stopped(&stop, 200);
-            break;
+            sleep_unless_stopped(stop, 200);
+            return AudioLoop::Done;
         }
-        while buf.len() >= BLOCK_FRAMES * 2 {
-            let by_samples = anchor + sent * 1_000_000 / 48_000;
-            let now = now_us();
-            if by_samples.abs_diff(now) > 200_000 {
-                anchor = now;
-                sent = 0;
-            }
-            let ts = anchor + sent * 1_000_000 / 48_000;
-            let frame = audio_frame(&FrameHeader::audio(ctx.stream, ts, 2, seq), &buf[..BLOCK_FRAMES * 2]);
-            buf.drain(..BLOCK_FRAMES * 2);
-            seq = seq.wrapping_add(1);
-            sent += BLOCK_FRAMES as u64;
-            if ctx.frames.pending() < 50 && !ctx.frames.send(frame) {
-                return;
-            }
+        if !out.flush(ctx) {
+            return AudioLoop::Done;
         }
+    }
+    AudioLoop::Done
+}
+
+/// Один процесс в режиме include: поток чтения → очередь для микшера.
+struct IncludeSource {
+    stop: Arc<AtomicBool>,
+    queue: Arc<Mutex<std::collections::VecDeque<f32>>>,
+    primed: bool,
+}
+
+impl Drop for IncludeSource {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
     }
 }
 
+fn spawn_include_source(pid: u32) -> IncludeSource {
+    let stop = Arc::new(AtomicBool::new(false));
+    let queue = Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(48_000)));
+    let (thread_stop, thread_queue) = (Arc::clone(&stop), Arc::clone(&queue));
+    let _ = std::thread::Builder::new().name(format!("zali-screen-audio-{pid}")).spawn(move || {
+        let _com = ComGuard::new();
+        let capture = match WasapiCapture::open_process_loopback_including(pid, 2).and_then(|c| c.start().map(|_| c)) {
+            Ok(c) => c,
+            Err(error) => {
+                tracing::warn!("[ZALI][WIN] media screen audio include pid={pid} failed: {}", super::com::describe(&error).1);
+                return;
+            }
+        };
+        let mut chunk = Vec::with_capacity(4800);
+        while !thread_stop.load(Ordering::Acquire) {
+            chunk.clear();
+            if capture.read(10, &mut chunk).is_err() {
+                break;
+            }
+            if chunk.is_empty() {
+                continue;
+            }
+            let mut q = thread_queue.lock().unwrap_or_else(|p| p.into_inner());
+            q.extend(chunk.iter().copied());
+            // Не копим больше 200 мс: микшер отстал — старое выбрасываем.
+            let cap = 48_000 * 2 / 5;
+            if q.len() > cap {
+                let extra = q.len() - cap;
+                q.drain(..extra);
+            }
+        }
+    });
+    IncludeSource { stop, queue, primed: false }
+}
+
+fn screen_audio_filtered(ctx: &StartContext, stop: &AtomicBool, out: &mut ScreenAudioOut, muted: Vec<String>) -> AudioLoop {
+    const TICK_FRAMES: usize = 480; // 10 мс
+    const PRIME: usize = TICK_FRAMES * 2 * 2; // 20 мс в очереди, прежде чем брать
+    let mut generation = privacy::generation();
+    let own = std::process::id();
+    let mut sources: HashMap<u32, IncludeSource> = HashMap::new();
+    let mut refreshed: Option<Instant> = None;
+    let mut next = Instant::now();
+    let mut mix = vec![0f32; TICK_FRAMES * 2];
+    tracing::info!("[ZALI][WIN] media screen audio: include mode, muted={muted:?}");
+    while !stop.load(Ordering::Acquire) && !ctx.stopped() {
+        let now_generation = privacy::generation();
+        if now_generation != generation {
+            // Пересобираем захват, только если поменялся список «не передавать звук»:
+            // смена стиля картинки или окна не должна рвать звук.
+            if privacy::snapshot().muted_ids() != muted {
+                return AudioLoop::Switch;
+            }
+            generation = now_generation;
+        }
+        // Раз в секунду — какие процессы сейчас со звуком: новые подхватываем, ушедших гасим.
+        if refreshed.map(|t| t.elapsed() >= Duration::from_secs(1)).unwrap_or(true) {
+            refreshed = Some(Instant::now());
+            let (roots, skipped) = privacy::audio_roots(&privacy_win::audio_session_pids(), &privacy_win::process_table(), own, &muted);
+            sources.retain(|pid, _| roots.contains(pid));
+            for pid in roots {
+                if let std::collections::hash_map::Entry::Vacant(slot) = sources.entry(pid) {
+                    tracing::info!("[ZALI][WIN] media screen audio: include pid={pid}");
+                    slot.insert(spawn_include_source(pid));
+                }
+            }
+            if !skipped.is_empty() {
+                tracing::debug!("[ZALI][WIN] media screen audio: skipped parents of hidden apps {skipped:?}");
+            }
+        }
+        let now = Instant::now();
+        if next > now {
+            std::thread::sleep(next - now);
+        }
+        next = (next + Duration::from_millis(10)).max(Instant::now() - Duration::from_millis(50));
+        mix.iter_mut().for_each(|v| *v = 0.0);
+        for source in sources.values_mut() {
+            let mut q = source.queue.lock().unwrap_or_else(|p| p.into_inner());
+            if !source.primed {
+                if q.len() < PRIME {
+                    continue;
+                }
+                source.primed = true;
+            }
+            let take = q.len().min(TICK_FRAMES * 2);
+            for (i, v) in q.drain(..take).enumerate() {
+                mix[i] += v;
+            }
+            if take < TICK_FRAMES * 2 {
+                // Источник замолчал/запаздывает — снова ждём запаса, чтобы не трещать.
+                source.primed = false;
+            }
+        }
+        out.buf.extend(mix.iter().map(|v| v.clamp(-1.0, 1.0)));
+        if !out.flush(ctx) {
+            return AudioLoop::Done;
+        }
+    }
+    AudioLoop::Done
+}
 
 // --- отправка напрямую на SFU (core/src/sfu_publisher.rs) -----------------------------
 //
@@ -1113,6 +1278,68 @@ fn budget_fps(bps: u64, width: u32, height: u32, max_fps: u32) -> u32 {
     by_bits.clamp(30.min(max_fps), max_fps)
 }
 
+// --- скрытые приложения (privacy.rs, privacy_win.rs) ------------------------------------
+
+/// Что за источник для скрытия: монитор (его экранный прямоугольник) или окно (id
+/// приложения-владельца — скрыт ли он целиком).
+enum PrivacySource {
+    Display(Option<PRect>),
+    Window(String),
+}
+
+struct PrivacyCtx {
+    source: PrivacySource,
+    masked: u64,
+}
+
+impl PrivacyCtx {
+    fn new(source: Source) -> Self {
+        let source = match source {
+            Source::Display(h) => PrivacySource::Display(privacy_win::monitor_rect(h)),
+            Source::Window(h) => PrivacySource::Window(privacy_win::window_owner_id(h)),
+        };
+        Self { source, masked: 0 }
+    }
+
+    /// Закрыть скрытые приложения в плотном NV12 `w × h`, куда вписано содержимое
+    /// `cw × ch` (поля — `letterbox_rect`); `frame_at` — когда кадр забран из захвата (маска —
+    /// из опроса окон не раньше, `privacy_win::regions_for_frame`). `true` — что-то закрыто.
+    fn mask(&mut self, payload: &mut [u8], w: u32, h: u32, cw: u32, ch: u32, frame_at: Instant) -> bool {
+        let snap = privacy::snapshot();
+        let apps = snap.video_apps();
+        if apps.is_empty() || w == 0 || h == 0 {
+            return false;
+        }
+        let mask = match &self.source {
+            PrivacySource::Window(owner) => match apps.iter().find(|(id, _)| id == owner) {
+                Some((_, style)) => privacy::FrameMask::full(w, h, *style),
+                None => return false,
+            },
+            PrivacySource::Display(None) => privacy::FrameMask::full(w, h, apps[0].1),
+            PrivacySource::Display(Some(monitor)) => {
+                let (tracked_generation, screen) = privacy_win::regions_for_frame(frame_at);
+                if tracked_generation != privacy::generation() {
+                    // Трекер ещё не опросил окна под нынешнее состояние (старт, только что
+                    // включили скрытие или добавили приложение) — закрыть весь кадр.
+                    privacy::FrameMask::full(w, h, apps[0].1)
+                } else {
+                    if screen.is_empty() {
+                        return false;
+                    }
+                    let dest = letterbox_rect(cw.max(1), ch.max(1), w, h);
+                    privacy::map_to_frame(&screen, *monitor, cw.max(1), ch.max(1), PRect::new(dest.left, dest.top, dest.right, dest.bottom), w, h)
+                }
+            }
+        };
+        if mask.is_empty() {
+            return false;
+        }
+        privacy::mask_nv12(payload, w as usize, h as usize, &mask, &mut privacy_win::label_mask);
+        self.masked += 1;
+        true
+    }
+}
+
 /// Кадр захвата → плотный NV12 в `payload`; возвращает фактический размер. GPU даёт ровно
 /// `ow × oh`; CPU-путь (GPU отказал) — сколько вышло после ресайза (±пара пикселей, ширина
 /// не больше 1920): страница примет любой, а слоям SFU нужен точный — они сверяют сами.
@@ -1196,6 +1423,13 @@ pub fn run(ctx: StartContext) {
     let max_height = opt_u("maxHeight", 0).min(4320) as u32;
     let cursor = ctx.options.get("cursor").and_then(Value::as_bool).unwrap_or(true);
     let want_audio = ctx.options.get("audio").and_then(Value::as_bool).unwrap_or(false);
+    // Скрытые приложения: текущее состояние приходит и в старте (op set_privacy могла
+    // не дойти до перезапуска оболочки), дальше — на лету.
+    if let Some(p) = ctx.options.get("privacy") {
+        privacy::update(p);
+    }
+    let mut privacy_ctx = PrivacyCtx::new(source);
+    let _privacy_tracker = matches!(source, Source::Display(_)).then(privacy_win::track);
 
     let d3d = match D3d::new() {
         Ok(d3d) => d3d,
@@ -1279,6 +1513,9 @@ pub fn run(ctx: StartContext) {
     // Время подготовки слоёв SFU на кадр (конвертация на GPU + выгрузка) — в статистику.
     let mut convert_us = 0u64;
     let mut convert_n = 0u64;
+    // Размер содержимого последнего кадра — для маски скрытых окон на повторах.
+    let mut last_content = (0u32, 0u32);
+    let mut last_frame_at = Instant::now();
     // Заголовок + данные → поток окна; данные запоминаются для повтора без копии.
     let send = |payload: &mut Vec<u8>, last: &mut Vec<u8>, w: u16, h: u16, seq: &mut u32| -> bool {
         let mut frame_bytes = vec![0u8; HEADER_LEN + payload.len()];
@@ -1302,6 +1539,10 @@ pub fn run(ctx: StartContext) {
             video["idle_repeats"] = json!(idle_repeats);
             video["convert"] = json!(if gpu_failed { "cpu" } else { "gpu" });
             video["audio"] = json!(want_audio);
+            if privacy_ctx.masked > 0 {
+                video["privacy_masked"] = json!(privacy_ctx.masked);
+                privacy_ctx.masked = 0;
+            }
             if let Some(s) = sfu.as_mut() {
                 video["sfu_layers"] = s.stats();
             }
@@ -1344,6 +1585,7 @@ pub fn run(ctx: StartContext) {
                     if !matches!(conv.flush_pending(&d3d, &mut payload), Ok(true)) || payload.len() != nv12_len(layer.width as usize, layer.height as usize) {
                         continue;
                     }
+                    privacy_ctx.mask(&mut payload, layer.width, layer.height, last_content.0, last_content.1, last_frame_at);
                     if !layer.paused {
                         layer.last_submit = Instant::now();
                         layer.last_nv12.clear();
@@ -1372,6 +1614,9 @@ pub fn run(ctx: StartContext) {
                 for layer in s.layers.iter_mut() {
                     if !layer.paused && !layer.last_nv12.is_empty() && layer.last_submit.elapsed() >= IDLE_REPEAT {
                         layer.last_submit = Instant::now();
+                        // Скрытие могли включить, пока экран стоит: повтор тоже закрываем.
+                        let (lw, lh) = (layer.width, layer.height);
+                        privacy_ctx.mask(&mut layer.last_nv12, lw, lh, last_content.0, last_content.1, Instant::now());
                         if layer.encoder.submit(layer.last_nv12.clone(), now_us() as i64) {
                             layer.submitted += 1;
                         }
@@ -1382,12 +1627,17 @@ pub fn run(ctx: StartContext) {
                 last_sent = Instant::now();
                 idle_repeats += 1;
                 let mut again = last_payload.clone();
+                privacy_ctx.mask(&mut again, last_size.0 as u32, last_size.1 as u32, last_content.0, last_content.1, Instant::now());
                 if !send(&mut again, &mut last_payload, last_size.0, last_size.1, &mut seq) {
                     break None;
                 }
             }
             continue;
         };
+        // Кадр забран из захвата: на экране он был не позже — опрос окон с этого момента
+        // видит всё, что на нём есть.
+        let frame_at = Instant::now();
+        last_frame_at = frame_at;
         captured += 1;
         let Ok(content) = frame.ContentSize() else { continue };
         let Ok(texture) = frame_texture(&frame) else { continue };
@@ -1400,6 +1650,7 @@ pub fn run(ctx: StartContext) {
         if cw == 0 || ch == 0 {
             continue;
         }
+        last_content = (cw, ch);
         if let Some(s) = sfu.as_mut() {
             // Слои — каждый со своей частотой, размер задан при старте (окно меняет
             // размер — картинка вписывается с полями, letterbox_rect). Странице — слой превью.
@@ -1422,6 +1673,7 @@ pub fn run(ctx: StartContext) {
                 if convert_frame(&d3d, &mut layer.converter, &mut gpu_failed, &texture, &desc, cw, ch, lw, lh, &mut payload, true) != Some((lw, lh)) {
                     continue;
                 }
+                privacy_ctx.mask(&mut payload, lw, lh, cw, ch, frame_at);
                 if !layer.paused {
                     layer.last_submit = Instant::now();
                     layer.last_nv12.clear();
@@ -1459,6 +1711,7 @@ pub fn run(ctx: StartContext) {
         drop(frame);
         // Размер — фактический: CPU-ресайз может разойтись с (ow, oh) на пару пикселей.
         let Some((fw, fh)) = done else { continue };
+        privacy_ctx.mask(&mut payload, fw, fh, cw, ch, frame_at);
         last_size = (fw as u16, fh as u16);
         last_sent = Instant::now();
         if !send(&mut payload, &mut last_payload, fw as u16, fh as u16, &mut seq) {

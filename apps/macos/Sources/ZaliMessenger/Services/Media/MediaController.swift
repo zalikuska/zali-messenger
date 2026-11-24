@@ -73,8 +73,12 @@ final class MediaController {
         // nativeSharedBrowser — «Общий браузер» (SharedBrowser.swift).
         // nativeSfuScreen — экран слоями simulcast прямо на SFU издателем ядра, мимо WebRTC
         // страницы (options.sfu в start, op sfu_answer, события `sfu`; NativeSfuPublisher.swift).
+        // nativeScreenPrivacy — скрытые приложения в трансляции (ScreenPrivacy.swift, op
+        // list_apps/set_privacy); nativeHotkeys — глобальные сочетания (HotkeyManager.swift,
+        // op set_hotkeys); nativeOverlay — плашки поверх окон вне захвата (DesktopOverlay.swift).
         return ["nativeMic": true, "nativeCamera": true, "nativeScreen": true, "nativeScreenAudio": true,
-                "nativeRemoteControl": true, "nativeSharedBrowser": true, "nativeSfuScreen": true]
+                "nativeRemoteControl": true, "nativeSharedBrowser": true, "nativeSfuScreen": true,
+                "nativeScreenPrivacy": true, "nativeHotkeys": true, "nativeOverlay": true]
     }
 
     // MARK: - Запросы
@@ -97,6 +101,32 @@ final class MediaController {
             let run: () -> Void = { self.browsersOnMain[stream]?.input(options) }
             if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
             return
+        }
+        // Скрытие приложений, горячие клавиши и плашки — на главном потоке, мимо `queue`.
+        switch op {
+        case "list_apps":
+            let run = { self.reply(requestId, ["event": "apps", "apps": ScreenPrivacy.runningApps()]) }
+            if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
+            return
+        case "set_privacy":
+            ScreenPrivacy.shared.update(options)
+            if let requestId { reply(requestId, ["event": "privacy_ok"]) }
+            return
+        case "set_hotkeys":
+            let bindings = (options["bindings"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
+            let run = {
+                HotkeyManager.shared.onHotkey = { [weak self] action in self?.send(["event": "hotkey", "action": action]) }
+                let results = HotkeyManager.shared.apply(bindings)
+                self.reply(requestId, ["event": "hotkeys", "results": results])
+            }
+            if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
+            return
+        case "overlay":
+            let run = { DesktopOverlay.shared.handle(options) }
+            if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
+            return
+        default:
+            break
         }
         if op != "request_keyframe" && op != "sfu_answer" {
             // Куки и адреса «Общего браузера» в журнал не пишутся — только их число.
@@ -342,6 +372,9 @@ final class MediaController {
         let maxHeight = (options["maxHeight"] as? NSNumber)?.intValue ?? 0
         let audio = options["audio"] as? Bool ?? false
         let cursor = options["cursor"] as? Bool ?? true
+        // Скрытые приложения: страница шлёт текущее состояние и в старте (op set_privacy
+        // могла не дойти до перезапуска оболочки).
+        if let privacy = options["privacy"] as? [String: Any] { ScreenPrivacy.shared.update(privacy) }
         // Отправка на SFU из оболочки (options.sfu): слои simulcast кодирует VideoToolbox,
         // в сеть их шлёт издатель ядра; странице — только слой превью.
         let sfu = options["sfu"] as? [String: Any]

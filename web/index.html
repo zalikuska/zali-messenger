@@ -39,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261124-gif8">
+    <link rel="stylesheet" href="style.css?v=20261124-privacy6">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -754,6 +754,63 @@
                                         </span>
                                     </label>
                                     <p class="settings-help" id="remoteControlComponentNote"></p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card" id="screenPrivacySettingsCard" data-settings-section="screen-privacy">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Трансляция</span>
+                                        <h3 class="settings-card-title">Скрытые приложения</h3>
+                                    </div>
+                                    <span class="settings-card-note">privacy</span>
+                                </div>
+                                <div class="settings-stack" id="screenPrivacyControls">
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputScreenHidingEnabled" type="checkbox">
+                                        <span>
+                                            <strong>Скрытие включено</strong>
+                                            <small>Пока идёт трансляция экрана, приложения из списка ниже закрыты для зрителей плашкой «Владелец трансляции скрыл это приложение» или размытием. Список хранится только на этом устройстве</small>
+                                        </span>
+                                    </label>
+                                    <label class="settings-field">
+                                        <span class="settings-label">Как закрывать картинку</span>
+                                        <select id="inputScreenHidingStyle" class="settings-input">
+                                            <option value="plate">Плашка с надписью</option>
+                                            <option value="blur">Сильное размытие</option>
+                                        </select>
+                                    </label>
+                                    <div class="sp-apps" id="screenPrivacyApps"></div>
+                                    <div class="settings-inline-actions">
+                                        <button id="screenPrivacyAddBtn" class="btn-flat" type="button">Добавить приложение</button>
+                                    </div>
+                                    <div class="sp-picker" id="screenPrivacyPicker" hidden></div>
+                                    <label class="server-toggle settings-toggle">
+                                        <input id="inputScreenHidingWarn" type="checkbox">
+                                        <span>
+                                            <strong>Предупреждать, когда скрытие выключено</strong>
+                                            <small>Во время трансляции поверх всех окон будет видна плашка — только вам, в трансляцию она не попадает</small>
+                                        </span>
+                                    </label>
+                                </div>
+                                <p class="settings-help" id="screenPrivacyNote"></p>
+                            </section>
+
+                            <section class="settings-card" id="hotkeysSettingsCard" data-settings-section="hotkeys">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Звонки</span>
+                                        <h3 class="settings-card-title">Горячие клавиши</h3>
+                                    </div>
+                                    <span class="settings-card-note">keys</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <div class="sp-hotkeys" id="hotkeysList"></div>
+                                    <label class="settings-field">
+                                        <span class="settings-label">Что показывать по клавише трансляции</span>
+                                        <select id="inputHotkeyShareSource" class="settings-input"></select>
+                                    </label>
+                                    <p class="settings-help" id="hotkeysNote">Сочетания работают из любого приложения, даже когда окно мессенджера свёрнуто. Нажмите на поле и затем сочетание; Esc — отменить</p>
                                 </div>
                             </section>
 
@@ -1928,6 +1985,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261124-gif8"></script>
+    <script src="app.js?v=20261124-privacy6"></script>
 </body>
 </html>

@@ -37,6 +37,8 @@ export AUTH_COOKIE_SECURE=false
 export TRUSTED_PROXY_MODE=false
 export SFU_UDP_PORT=3479
 export SFU_PUBLIC_IP="$LAN_IP"
+# Android-пуши (FCM): ключ сервисного аккаунта Firebase, если лежит в каталоге данных.
+[ -s "$DATA/fcm-service-account.json" ] && export FCM_SERVICE_ACCOUNT_FILE="$DATA/fcm-service-account.json"
 export RUST_LOG="${RUST_LOG:-zali_server=info,tower_http=warn}"
 
 k="$(grep -E '^KLIPY_APP_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)"

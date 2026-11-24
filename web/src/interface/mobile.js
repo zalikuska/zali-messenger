@@ -1344,6 +1344,7 @@ ZaliMixin(ZaliInterface, class {
         void this.renderControlSettings();
         this.renderGameActivitySettings();
         this.renderGameFocusSettings();
+        this.renderScreenPrivacySettings?.();
         this.renderRecentAccounts();
         this.renderVaultCloudSyncControls();
         this.refreshEmailSettings();

@@ -1269,6 +1269,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindGameActivitySettings();
         this.bindGameFocusSettings();
         this.bindRemoteControlSettings?.();
+        this.bindScreenPrivacySettings?.();
         this.bindComposerFocusNote();
         const inputAutostart = document.getElementById('inputAutostart');
         if (inputAutostart) {

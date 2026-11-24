@@ -18,7 +18,8 @@ use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, IMMDevice, AUDCLNT_SHAREMODE_SHARED,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX,
 };
 use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0};
@@ -96,7 +97,22 @@ impl WasapiCapture {
     pub fn open_process_loopback_excluding_self(channels: u16) -> Result<Self> {
         let mut last = None;
         for format in [SampleFormat::F32, SampleFormat::I16] {
-            let client = activate_process_loopback(unsafe { GetCurrentProcessId() })?;
+            let client = activate_process_loopback(unsafe { GetCurrentProcessId() }, false)?;
+            match Self::init(client, format, channels, STREAMFLAGS_LOOPBACK) {
+                Ok(capture) => return Ok(capture),
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.unwrap_or_else(windows::core::Error::empty))
+    }
+
+    /// Звук только процесса `pid` и его потомков (режим include) — для показа экрана со
+    /// скрытыми приложениями: исключить можно лишь одно дерево, поэтому звук собирается
+    /// по каждому разрешённому процессу и сводится (screen.rs → `run_screen_audio`).
+    pub fn open_process_loopback_including(pid: u32, channels: u16) -> Result<Self> {
+        let mut last = None;
+        for format in [SampleFormat::F32, SampleFormat::I16] {
+            let client = activate_process_loopback(pid, true)?;
             match Self::init(client, format, channels, STREAMFLAGS_LOOPBACK) {
                 Ok(capture) => return Ok(capture),
                 Err(error) => last = Some(error),
@@ -198,13 +214,17 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationHandler_Impl {
 
 impl IAgileObject_Impl for ActivationHandler_Impl {}
 
-fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
+fn activate_process_loopback(pid: u32, include: bool) -> Result<IAudioClient> {
     let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
                 TargetProcessId: pid,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+                ProcessLoopbackMode: if include {
+                    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+                } else {
+                    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
+                },
             },
         },
     };
