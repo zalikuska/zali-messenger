@@ -47,6 +47,10 @@ final class MicCapture {
     private var ringRead = 0
     private var ringWrite = 0
     private var ringFirstHost: UInt64 = 0
+    // Метка последнего обратного вызова и позиция кольца, с которой он писал: из них
+    // метка первого отсчёта каждой выборки (для склейки с опорным сигналом AEC).
+    private var ringLastHost: UInt64 = 0
+    private var ringLastPos = 0
     private var ringOverflows = 0
     private let rtLock: UnsafeMutablePointer<os_unfair_lock> = {
         let p = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
@@ -232,6 +236,8 @@ final class MicCapture {
             let cap = MicCapture.ringCapacity
             os_unfair_lock_lock(rtLock)
             if ringFirstHost == 0 { ringFirstHost = host }
+            ringLastHost = host
+            ringLastPos = ringWrite
             let free = cap - (ringWrite - ringRead)
             let count = min(n, free)
             if count < n { ringOverflows += 1 }
@@ -253,19 +259,26 @@ final class MicCapture {
         for i in 0..<count { drainScratch[i] = ring[(ringRead + i) & (cap - 1)] }
         ringRead += count
         let host = ringFirstHost
+        let lastHost = ringLastHost
+        let backSamples = ringLastPos - (ringRead - count)
         let overflows = ringOverflows
         ringOverflows = 0
         os_unfair_lock_unlock(rtLock)
         if overflows > 0 { mediaLog("mic: ring overflow x\(overflows) stream=\(stream) — обработка не успевает") }
         guard count > 0 else { return }
-        drainScratch.withUnsafeBufferPointer { process(UnsafeBufferPointer(rebasing: $0[0..<count]), hostTime: host) }
+        // Метка первого забранного отсчёта: метка последнего обратного вызова минус
+        // отсчёты от начала выборки до позиции, с которой тот писал.
+        let firstNs = MediaClock.nanos(hostTime: lastHost) - Int64(Double(backSamples) * 1e9 / max(deviceRate, 1))
+        drainScratch.withUnsafeBufferPointer {
+            process(UnsafeBufferPointer(rebasing: $0[0..<count]), hostTime: host, firstNs: firstNs)
+        }
     }
 
-    private func process(_ chunk: UnsafeBufferPointer<Float>, hostTime: UInt64) {
+    private func process(_ chunk: UnsafeBufferPointer<Float>, hostTime: UInt64, firstNs: Int64) {
         guard !stopped else { return }
         stateLock.lock(); let resampler = self.resampler; stateLock.unlock()
         let feed: (UnsafeBufferPointer<Float>) -> Void = { block in
-            self.apm.process(block, into: &self.pending)
+            self.apm.process(block, tsNs: firstNs, into: &self.pending)
         }
         if let resampler, !resampler.passthrough {
             resampler.process(chunk, feed)

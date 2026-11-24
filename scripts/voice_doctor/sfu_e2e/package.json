@@ -1,0 +1,9 @@
+{
+  "name": "zali-sfu-e2e",
+  "private": true,
+  "description": "Стенд SFU: настоящий веб-клиент в Chromium (playwright-core) против локального сервера. Установка: npm install",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.65.1"
+  }
+}

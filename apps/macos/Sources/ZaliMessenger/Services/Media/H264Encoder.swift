@@ -3,8 +3,33 @@ import VideoToolbox
 import CoreMedia
 import CoreVideo
 
-/// H.264 для страницы: VideoToolbox realtime, без B-кадров, Annex B, SPS/PPS перед
-/// каждым ключевым кадром, ключевой раз в 2 с и по запросу (`requestKeyframe`).
+/// Кодек кодировщика. H.265 — только для слоёв нативной демонстрации через SFU (2026-11-24):
+/// при том же качестве экрана ~вдвое меньше битрейта; камера и «Общий браузер» — H.264.
+enum VideoCodecKind: String {
+    case h264 = "H264"
+    case h265 = "H265"
+
+    var cmType: CMVideoCodecType { self == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC }
+    /// Номер кодека в заголовке кадра моста (MediaFrame, native_media.js).
+    var frameCodec: UInt8 { self == .h264 ? MediaFrame.codecH264 : MediaFrame.codecH265 }
+
+    /// Есть ли аппаратный кодировщик (программный HEVC на 4K60 положил бы процессор).
+    var hardwareEncodeAvailable: Bool {
+        if self == .h264 { return true }
+        let spec: [CFString: Any] = [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
+        var probe: VTCompressionSession?
+        let status = VTCompressionSessionCreate(allocator: nil, width: 1920, height: 1080, codecType: cmType,
+                                                encoderSpecification: spec as CFDictionary, imageBufferAttributes: nil,
+                                                compressedDataAllocator: nil, outputCallback: nil, refcon: nil,
+                                                compressionSessionOut: &probe)
+        if let probe { VTCompressionSessionInvalidate(probe) }
+        return status == noErr && probe != nil
+    }
+}
+
+/// H.264 (или H.265, `codec`) для страницы: VideoToolbox realtime, без B-кадров, Annex B,
+/// параметры последовательности (SPS/PPS, у H.265 и VPS) перед каждым ключевым кадром,
+/// ключевой раз в 2 с и по запросу (`requestKeyframe`).
 ///
 /// Страница декодирует это `VideoDecoder` (WebKit) и отдаёт в WebRTC, который кодирует
 /// заново под сеть — поэтому битрейт здесь щедрый: путь до страницы — loopback, а
@@ -21,7 +46,8 @@ final class H264Encoder {
     let width: Int
     let height: Int
     let fps: Int
-    /// avc1.PPCCLL — известен после первого ключевого кадра.
+    let codec: VideoCodecKind
+    /// avc1.PPCCLL / hvc1.… — известен после первого ключевого кадра.
     private(set) var codecString: String = ""
     var onOutput: ((Output) -> Void)?
 
@@ -33,10 +59,15 @@ final class H264Encoder {
     private var lastEncodeHost: UInt64 = 0
     private var encodeFailures = 0
 
-    init(width: Int, height: Int, fps: Int, bitsPerPixel: Double = 0.1) throws {
+    /// - bitrate: явный битрейт (слой для сети, его меняет `setBitrate`); 0 — по bitsPerPixel.
+    /// - keyframeSeconds: ключевой кадр по таймеру. Для сети — реже: каждый ключевой кадр
+    ///   слоя 4K — всплеск в мегабайты, а новым зрителям SFU сам просит ключевой (PLI).
+    init(width: Int, height: Int, fps: Int, bitsPerPixel: Double = 0.1, bitrate explicitBitrate: Int = 0, keyframeSeconds: Double = 2,
+         codec: VideoCodecKind = .h264) throws {
+        self.codec = codec
         self.width = max(2, width & ~1)
         self.height = max(2, height & ~1)
-        // До 240: «Общий браузер» идёт с частотой экрана (120/144 Гц); экран и камера сами ≤ 60.
+        // До 240: «Общий браузер» и демонстрация идут с частотой экрана (120/144 Гц); камера ≤ 60.
         self.fps = max(1, min(fps, 240))
         let spec: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
@@ -44,14 +75,14 @@ final class H264Encoder {
         var created: VTCompressionSession?
         var status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(self.width), height: Int32(self.height),
-            codecType: kCMVideoCodecType_H264, encoderSpecification: spec as CFDictionary,
+            codecType: codec.cmType, encoderSpecification: spec as CFDictionary,
             imageBufferAttributes: nil, compressedDataAllocator: nil,
             outputCallback: nil, refcon: nil, compressionSessionOut: &created)
         if status != noErr || created == nil {
             // Низколатентный режим есть не у всех кодировщиков — обычный realtime.
             status = VTCompressionSessionCreate(
                 allocator: nil, width: Int32(self.width), height: Int32(self.height),
-                codecType: kCMVideoCodecType_H264, encoderSpecification: nil,
+                codecType: codec.cmType, encoderSpecification: nil,
                 imageBufferAttributes: nil, compressedDataAllocator: nil,
                 outputCallback: nil, refcon: nil, compressionSessionOut: &created)
         }
@@ -59,20 +90,24 @@ final class H264Encoder {
             throw MediaError.failed("VTCompressionSessionCreate \(status)")
         }
         self.session = session
-        let bitrate = Int(Double(self.width * self.height * self.fps) * bitsPerPixel)
+        let bitrate = explicitBitrate > 0 ? explicitBitrate : Int(Double(self.width * self.height * self.fps) * bitsPerPixel)
         let set: (CFString, Any) -> Void = { key, value in
             _ = VTSessionSetProperty(session, key: key, value: value as CFTypeRef)
         }
         set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue!)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse!)
-        if VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_ConstrainedHigh_AutoLevel) != noErr {
+        if codec == .h265 {
+            set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
+        } else if VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_ConstrainedHigh_AutoLevel) != noErr {
             set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel)
         }
-        set(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 2.0 as NSNumber)
-        set(kVTCompressionPropertyKey_MaxKeyFrameInterval, (self.fps * 2) as NSNumber)
+        set(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, keyframeSeconds as NSNumber)
+        set(kVTCompressionPropertyKey_MaxKeyFrameInterval, Int(Double(self.fps) * keyframeSeconds) as NSNumber)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, self.fps as NSNumber)
-        set(kVTCompressionPropertyKey_AverageBitRate, max(bitrate, 500_000) as NSNumber)
-        set(kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CABAC)
+        // Явный битрейт — слой SFU: у нижнего потолок 400 кбит/с, пол 500 кбит/с был бы выше
+        // него до первого `bitrates` от издателя. Пол — как у setBitrate.
+        set(kVTCompressionPropertyKey_AverageBitRate, max(bitrate, explicitBitrate > 0 ? 100_000 : 500_000) as NSNumber)
+        if codec == .h264 { set(kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CABAC) }
         VTCompressionSessionPrepareToEncodeFrames(session)
     }
 
@@ -96,6 +131,19 @@ final class H264Encoder {
 
     func requestKeyframe() {
         lock.lock(); forceKey = true; lock.unlock()
+    }
+
+    /// Новый средний битрейт на лету (слой для сети: бюджет считает WebRTC по оценке канала)
+    /// и потолок всплеска — полторы секунды бюджета за секунду.
+    func setBitrate(_ bps: Int) {
+        lock.lock()
+        let s = session
+        lock.unlock()
+        guard let s else { return }
+        let value = max(bps, 100_000)
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AverageBitRate, value: value as NSNumber)
+        let limits = [NSNumber(value: value / 8 * 3 / 2), NSNumber(value: 1)] as CFArray
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_DataRateLimits, value: limits)
     }
 
     /// Кодирует кадр. Чаще `fps` не кодирует (камера/экран могут отдавать больше).
@@ -166,24 +214,31 @@ final class H264Encoder {
         var out = Data()
         let startCode: [UInt8] = [0, 0, 0, 1]
         if keyframe, let format = CMSampleBufferGetFormatDescription(sample) {
+            let hevc = codec == .h265
+            // Одна сигнатура у H.264- и HEVC-версии: (формат, индекс, указатель, размер, число, длина заголовка).
+            let getSet: (CMFormatDescription, Int, UnsafeMutablePointer<UnsafePointer<UInt8>?>?, UnsafeMutablePointer<Int>?,
+                         UnsafeMutablePointer<Int>?, UnsafeMutablePointer<Int32>?) -> OSStatus = hevc
+                ? { CMVideoFormatDescriptionGetHEVCParameterSetAtIndex($0, parameterSetIndex: $1, parameterSetPointerOut: $2,
+                                                                       parameterSetSizeOut: $3, parameterSetCountOut: $4, nalUnitHeaderLengthOut: $5) }
+                : { CMVideoFormatDescriptionGetH264ParameterSetAtIndex($0, parameterSetIndex: $1, parameterSetPointerOut: $2,
+                                                                       parameterSetSizeOut: $3, parameterSetCountOut: $4, nalUnitHeaderLengthOut: $5) }
             var count = 0
             var nalHeaderLength: Int32 = 0
-            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: 0, parameterSetPointerOut: nil,
-                                                               parameterSetSizeOut: nil, parameterSetCountOut: &count,
-                                                               nalUnitHeaderLengthOut: &nalHeaderLength)
+            _ = getSet(format, 0, nil, nil, &count, &nalHeaderLength)
             for i in 0..<count {
                 var ptr: UnsafePointer<UInt8>?
                 var size = 0
-                if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: i, parameterSetPointerOut: &ptr,
-                                                                      parameterSetSizeOut: &size, parameterSetCountOut: nil,
-                                                                      nalUnitHeaderLengthOut: nil) == noErr, let ptr {
+                if getSet(format, i, &ptr, &size, nil, nil) == noErr, let ptr {
                     out.append(contentsOf: startCode)
                     out.append(ptr, count: size)
-                    if i == 0, size >= 4 {
+                    if !hevc, i == 0, size >= 4 {
                         let codec = String(format: "avc1.%02X%02X%02X", ptr[1], ptr[2], ptr[3])
                         lock.lock(); codecString = codec; lock.unlock()
                     }
                 }
+            }
+            if hevc, let name = H264Encoder.hevcCodecString(format) {
+                lock.lock(); codecString = name; lock.unlock()
             }
         }
         // AVCC (4-байтные длины) → Annex B (стартовые коды).
@@ -210,6 +265,26 @@ final class H264Encoder {
         lock.lock(); defer { lock.unlock() }
         return codecString
     }
+
+    /// `hvc1.P.C.TL.B` (RFC 6381 / ISO 14496-15 E.3) из атома hvcC формата: профиль, флаги
+    /// совместимости (в обратном порядке бит), ярус и уровень, байты ограничений.
+    static func hevcCodecString(_ format: CMFormatDescription) -> String? {
+        guard let atoms = CMFormatDescriptionGetExtension(format, extensionKey: kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms) as? [String: Any],
+              let hvcc = atoms["hvcC"] as? Data, hvcc.count >= 13 else { return nil }
+        let b = [UInt8](hvcc.prefix(13))
+        let space = (b[1] >> 6) & 0x3
+        let tier = (b[1] >> 5) & 0x1
+        let profile = b[1] & 0x1f
+        var compat = UInt32(b[2]) << 24 | UInt32(b[3]) << 16 | UInt32(b[4]) << 8 | UInt32(b[5])
+        var reversed: UInt32 = 0
+        for _ in 0..<32 { reversed = (reversed << 1) | (compat & 1); compat >>= 1 }
+        var constraints = Array(b[6...11])
+        while let last = constraints.last, last == 0 { constraints.removeLast() }
+        let prefix = ["", "A", "B", "C"][Int(space)]
+        var out = "hvc1.\(prefix)\(profile).\(String(reversed, radix: 16, uppercase: true)).\(tier == 1 ? "H" : "L")\(b[12])"
+        for c in constraints { out += "." + String(c, radix: 16, uppercase: true) }
+        return out
+    }
 }
 
 /// Отправка закодированного видео одного потока в мост: нумерация кадров, удержание
@@ -217,6 +292,8 @@ final class H264Encoder {
 /// и пропуск кадров при заторе с ключевым после него.
 final class VideoStreamSender {
     let stream: UInt32
+    /// Слой simulcast + 1 в заголовке кадра; 0 — поток без слоёв.
+    var layer: UInt8 = 0
     private let bridge: MediaBridgeServer
     private let lock = NSLock()
     private var seq: UInt32 = 0
@@ -308,9 +385,10 @@ final class VideoStreamSender {
         seq &+= 1
         let n = seq
         lock.unlock()
-        let header = MediaFrame.Header(kind: MediaFrame.kindVideo, codec: MediaFrame.codecH264, stream: stream,
+        let header = MediaFrame.Header(kind: MediaFrame.kindVideo, codec: encoder?.codec.frameCodec ?? MediaFrame.codecH264, stream: stream,
                                        timestampMicros: out.timestampMicros, width: UInt16(clamping: out.width),
-                                       height: UInt16(clamping: out.height), keyframe: out.keyframe, channels: 0, seq: n)
+                                       height: UInt16(clamping: out.height), keyframe: out.keyframe, channels: 0, seq: n,
+                                       layer: layer)
         let data = MediaFrame.make(header, payloadBytes: out.annexB.count) { dst in
             out.annexB.withUnsafeBytes { src in dst.copyMemory(from: src) }
         }

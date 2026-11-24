@@ -330,6 +330,18 @@ ZaliMixin(ZaliInterface, class {
                     // without re-offering, that change never reaches this peer.
                     this.voiceTrace('offer-collision-requeue', { roomId, from }, 'WARN');
                     entry.renegotiationPending = true;
+                    // WebKit после отката сбрасывает транспорт (ice=new), и отправитель
+                    // микрофона дальше молчит (outPackets=0), хотя трек живой и в SDP
+                    // sendrecv. Заново привязать трек к отправителю — без пересогласования.
+                    const mic = this.voice.localStream?.getAudioTracks?.()[0];
+                    if (mic && entry.audioSender) {
+                        try {
+                            await entry.audioSender.replaceTrack(null);
+                            await entry.audioSender.replaceTrack(mic);
+                        } catch (error) {
+                            this.voiceTrace('offer-collision-reattach-failed', { from, error: error?.message || String(error) }, 'WARN');
+                        }
+                    }
                 }
             } catch (error) {
                 this.voiceDiag('offer-apply-error', { roomId, from, error: error?.message || String(error) }, 'ERROR');
@@ -877,6 +889,23 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
 
+        if (eventType === 'voice_sfu_publish_answer') {
+            if (payload.slot === 'native') await this.onVoiceSfuNativeAnswer(payload);
+            else await this.onVoiceSfuPublishAnswer(payload);
+            return;
+        }
+        if (eventType === 'voice_sfu_offer') {
+            this.onVoiceSfuOffer(payload);
+            return;
+        }
+        if (eventType === 'voice_sfu_closed') {
+            this.onVoiceSfuClosed(payload);
+            return;
+        }
+        if (eventType === 'voice_sfu_error') {
+            this.onVoiceSfuError(payload);
+            return;
+        }
         if (eventType === 'voice_room_state') {
             const roomId = String(payload.roomId || '').trim();
             if (this.isAbandonedVoiceRoom(roomId)) {
@@ -914,6 +943,10 @@ ZaliMixin(ZaliInterface, class {
             this.voice.joinedAt = this.parseVoiceJoinedAt(payload.joinedAt);
             this.voice.memberStates = this.parseVoiceMemberStates(payload.states);
             this.pruneStaleRemoteScreens();
+            // Как ходит видео комнаты — решает сервер (voice_sfu.js). Ниже, после
+            // syncVoicePeers: SFU-сессия нужна только участнику живого звонка.
+            const videoTransport = String(payload.videoTransport || 'mesh');
+            this.voice.videoCodecs = payload.videoCodecs && typeof payload.videoCodecs === 'object' ? payload.videoCodecs : {};
             // The server's record of who placed a DM call, for EVERY room state — not
             // only ringing ones. A client restored from the reconnect snapshot (page
             // reload, app restart mid-call) has no callTrack, so its offer-owner
@@ -1008,6 +1041,7 @@ ZaliMixin(ZaliInterface, class {
                     this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось получить доступ к микрофону', ts: new Date().toLocaleTimeString() });
                 }
                 await this.syncVoicePeers();
+                await this.applyVoiceVideoTransport(videoTransport);
             } else if (roomStatus === 'ringing' || roomStatus === 'pending') {
                 this.renderVoicePanel();
             } else if (this.voice.roomType === 'dm' && this.voice.roomId === roomId && this.voice.callTrack) {

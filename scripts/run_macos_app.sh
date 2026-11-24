@@ -49,7 +49,7 @@ python3 scripts/bundle_web.py
 
 # 1. Сборка Rust-ядра
 echo "⚙️  Сборка Rust Core..."
-cd core && cargo build --release --features apm && cd ..
+cd core && cargo build --release --features apm,sfu && cd ..
 
 # 2. Сборка Swift-приложения через Swift Package Manager
 echo "🚀 Сборка SwiftUI приложения через SPM..."

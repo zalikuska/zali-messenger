@@ -333,25 +333,30 @@ ZaliMixin(ZaliInterface, class {
         }
 
         if (this.isTenorUrl(url)) {
+            // Звёздочка «в избранное» (gifAddFavStar, gif_picker.js) — на любой GIF по ссылке.
             if (this.isDirectMediaUrl(url)) {
-                return this.renderAttachmentPreview({
+                const media = this.renderAttachmentPreview({
                     name: 'Tenor',
                     mimeType: path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.webm') ? 'video/webm' : 'image/gif',
                     kind: path.endsWith('.mp4') || path.endsWith('.webm') ? 'video' : 'gif',
                     dataUrl: url
                 }, false, { gifLike: true, trustedRemote: true });
+                return this.gifAddFavStar?.(media, url) ?? media;
             }
 
             const cached = this.tenorCache.get(this.tenorCacheKey(url));
             if (cached?.mediaUrl) {
                 const mimeType = cached.mimeType || (path.endsWith('.mp4') ? 'video/mp4' : 'image/gif');
                 const kind = cached.kind || (mimeType.startsWith('video/') ? 'video' : 'gif');
-                return this.renderAttachmentPreview({
+                const media = this.renderAttachmentPreview({
                     name: 'Tenor',
                     mimeType,
                     kind,
                     dataUrl: cached.mediaUrl
                 }, false, { gifLike: true, trustedRemote: true });
+                // В избранное уходит разрешённый файл, а не страница Tenor: так его
+                // можно отправить и нарисовать без повторного разрешения ссылки.
+                return this.gifAddFavStar?.(media, cached.mediaUrl) ?? media;
             }
 
             this.requestTenorResolution(url);
@@ -372,19 +377,19 @@ ZaliMixin(ZaliInterface, class {
             }, false, { gifLike: true, trustedRemote: true });
             // Звёздочка «в избранное» — внутрь рамки GIF, последним ребёнком. Состояние
             // после перерисовки из кеша строк поправляет syncGifFavStars (hydrateGifMedia).
-            return this.gifFavStarHTML && /<\/div>\s*$/.test(media)
-                // Функция-заменитель: в строке-замене «$`», «$&» из URL подставили бы куски разметки.
-                ? media.replace(/<\/div>\s*$/, () => `${this.gifFavStarHTML(url)}</div>`)
-                : media;
+            return this.gifAddFavStar?.(media, url) ?? media;
         }
 
         if (this.isDirectMediaUrl(url)) {
-            return this.renderAttachmentPreview({
+            const media = this.renderAttachmentPreview({
                 name: url.split('/').pop() || 'media',
                 mimeType: path.endsWith('.mp4') ? 'video/mp4' : path.endsWith('.webm') ? 'video/webm' : path.endsWith('.gif') ? 'image/gif' : 'image/*',
                 kind: path.endsWith('.mp4') || path.endsWith('.webm') ? 'video' : 'image',
                 dataUrl: url
             }, false, { trustedRemote: true });
+            // Прямой .gif с любого https-хоста тоже можно отметить (gifFavoritable);
+            // для png/jpg/mp4 звёздочка не добавляется.
+            return this.gifAddFavStar?.(media, url) ?? media;
         }
 
         return '';

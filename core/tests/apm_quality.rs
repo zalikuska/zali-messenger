@@ -10,7 +10,7 @@
 //! измерений — нет.
 #![cfg(feature = "apm")]
 
-use zali_messenger_core::audio_processing::{VoiceProcessingConfig, VoiceProcessor, FRAME, SAMPLE_RATE};
+use zali_messenger_core::audio_processing::{VoiceProcessingConfig, VoiceProcessor, VoiceProcessingStats, FRAME, SAMPLE_RATE};
 
 const SR: usize = SAMPLE_RATE as usize;
 
@@ -410,6 +410,146 @@ fn loud_double_talk_through_the_full_pipeline_never_clips() {
     let mic: Vec<f32> = (0..fx.len).map(|i| (echo[i] + fx.near[i]) * 1.8 + fx.floor[i]).collect();
     let out = run(VoiceProcessingConfig::ALL, &fx.far, &mic);
     assert!(out.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "выход вне [-1, 1]");
+}
+
+/// Как в приложении: опорный сигнал приходит из другого потока на `lag_ms` позже, чем
+/// микрофон за то же время, пачками по `burst_ms` (с метками времени или без), пока
+/// отсчёт меньше `render_until`. Микрофон — по 10 мс.
+fn run_threaded(
+    config: VoiceProcessingConfig,
+    far: &[f32],
+    mic: &[f32],
+    lag_ms: usize,
+    burst_ms: usize,
+    timed: bool,
+    render_until: usize,
+) -> (Vec<f32>, VoiceProcessingStats) {
+    let ns = |samples: usize| (samples as i64) * 1_000_000_000 / SR as i64;
+    let (lag, burst) = (lag_ms * SR / 1000, burst_ms * SR / 1000);
+    let mut p = VoiceProcessor::new(config);
+    let mut out = Vec::with_capacity(mic.len());
+    let (mut r, mut i) = (0usize, 0usize);
+    while i < mic.len() {
+        let n = FRAME.min(mic.len() - i);
+        // Пачка опорного [r, r+burst) доходит к обработчику в момент r+burst+lag.
+        while r + burst <= far.len().min(render_until) && r + burst + lag <= i + n {
+            if timed {
+                p.push_render_at(&far[r..r + burst], 1, ns(r));
+            } else {
+                p.push_render(&far[r..r + burst], 1);
+            }
+            r += burst;
+        }
+        if timed {
+            p.process_capture_at(&mic[i..i + n], ns(i), &mut out);
+        } else {
+            p.process_capture(&mic[i..i + n], &mut out);
+        }
+        i += n;
+    }
+    let stats = p.stats();
+    // Выход отстаёт от входа на то, что ещё ждёт опорный: выравниваем к началу.
+    out.resize(mic.len(), 0.0);
+    (out, stats)
+}
+
+#[test]
+fn late_reference_is_aligned_by_timestamps() {
+    let fx = fixtures();
+    let echo = convolve(&fx.far, &room_ir(5.0, 0.6, 0.25, 3));
+    let mic: Vec<f32> = echo.iter().zip(&fx.floor).map(|(a, b)| a + b).collect();
+    for &(lag, burst) in &[(10usize, 10usize), (40, 10), (40, 20), (90, 30)] {
+        let (out, _) = run_threaded(AEC, &fx.far, &mic, lag, burst, false, usize::MAX);
+        let (untimed, _) = erle(&mic, &out, &echo, 2.0);
+        // Как было в приложении: эхоподавитель эхо не находит.
+        assert!(untimed < 30.0, "без меток, опоздание {lag} мс: ERLE {untimed:.1} — стенд больше не воспроизводит сбой");
+        let (out, st) = run_threaded(AEC, &fx.far, &mic, lag, burst, true, usize::MAX);
+        let delay = st.hold_ms.unwrap();
+        // Выход отстаёт на ожидание (≤ 0.1 с) — окна ERLE по 0.5 с это почти не трогает.
+        let (med, min) = erle(&mic, &out, &echo, 2.0);
+        eprintln!("опоздание {lag} мс пачками {burst}: без меток {untimed:.1}, с метками {med:.1}/{min:.1} дБ, ожидание {delay:.1} мс, тишины {}", st.ref_zero_frames);
+        assert!(med >= 40.0 && min >= 20.0, "с метками, опоздание {lag} мс пачками {burst}: ERLE медиана {med:.1}, минимум {min:.1}");
+        // Микрофон ждёт ровно опоздание (плюс пачка), не больше.
+        assert!(delay <= (lag + burst) as f64 + 12.0, "ожидание {delay:.1} мс при опоздании {lag}+{burst}");
+        assert_eq!(st.ref_forced_frames, 0);
+    }
+}
+
+#[test]
+fn silent_output_does_not_hold_the_mic() {
+    // WASAPI loopback в тишине пакетов не шлёт: опорный кончился на 4-й секунде, а
+    // микрофон должен идти дальше без задержки (не дольше порога молчания).
+    let fx = fixtures();
+    let mic: Vec<f32> = fx.near.iter().zip(&fx.floor).map(|(a, b)| a + b).collect();
+    let (_, st) = run_threaded(VoiceProcessingConfig::ALL, &fx.far, &mic, 20, 10, true, 4 * SR);
+    let held_ms = (mic.len() - st.capture_frames as usize * FRAME) * 1000 / SR;
+    assert!(held_ms <= 130, "микрофон ждёт {held_ms} мс после того, как вывод замолчал");
+    assert!(st.ref_zero_frames > 0, "вместо молчащего опорного должна идти тишина");
+}
+
+/// Резкие шумы: пачки щелчков клавиатуры (3–12 щелчков по 4–14 мс с шагом 70–200 мс,
+/// между пачками 0.3–1.5 с), пик щелчка — `peak`.
+fn keyboard(len: usize, peak: f32, seed: u64) -> Vec<f32> {
+    let mut r = Rng(seed);
+    let mut y = vec![0.0f32; len];
+    let mut t = SR / 2;
+    while t < len {
+        let n = 3 + ((r.next().abs() * 10.0) as usize);
+        for _ in 0..n {
+            let dur = (0.004 + 0.01 * r.next().abs()) * SR as f32;
+            let f = 1500.0 + 2500.0 * r.next().abs();
+            let a = peak * (0.5 + 0.5 * r.next().abs());
+            for k in 0..dur as usize {
+                if t + k >= len {
+                    break;
+                }
+                let env = (-(k as f32) / (dur * 0.3)).exp();
+                y[t + k] += a * env * (0.6 * r.next() + 0.4 * (2.0 * std::f32::consts::PI * f * k as f32 / SR as f32).sin());
+            }
+            t += ((0.07 + 0.13 * r.next().abs()) * SR as f32) as usize;
+        }
+        t += ((0.3 + 1.2 * r.next().abs()) * SR as f32) as usize;
+    }
+    y
+}
+
+#[test]
+fn keyboard_clicks_between_phrases_are_muted() {
+    // RNNoise резкие шумы почти не трогает (4–5 дБ), а AGC при тихой речи поднимал их
+    // громче, чем было (живые звонки 2026-11: «все шумы слышны очень сильно»). Затвор по
+    // VAD глушит их в паузах между фразами. Измерено: 43 / 40 дБ, речь 0.968 / −0.5 дБ.
+    let fx = fixtures();
+    let len = fx.len;
+    let zeros = vec![0.0f32; len];
+    let segs: Vec<(f32, f32)> = (0..10).map(|k| (k as f32 * 6.0, k as f32 * 6.0 + 3.0)).collect();
+    let pause = |i: usize| {
+        let t = i as f32 / SR as f32;
+        t > 1.0 && !segs.iter().any(|&(a, b)| t >= a - 0.05 && t < b + 0.4)
+    };
+    for &(peak, near_gain, config, min_atten, min_sim) in &[(0.1f32, 1.0f32, NS, 35.0, 0.93), (0.03, 0.2, AGC, 30.0, 0.75)] {
+        let near: Vec<f32> = gate(&fx.near, &segs).iter().map(|v| v * near_gain).collect();
+        let clicks = keyboard(len, peak, 5);
+        let mut lp = 0.0f32;
+        let mut r = Rng(3);
+        let mic: Vec<f32> = (0..len)
+            .map(|i| {
+                lp = 0.98 * lp + 0.02 * r.next();
+                near[i] + clicks[i] + lp * 0.003
+            })
+            .collect();
+        let out = run(config, &zeros, &mic);
+        let (mut em, mut eo) = (0.0, 0.0);
+        for i in 0..len - FRAME {
+            if pause(i) {
+                em += (mic[i] as f64).powi(2);
+                eo += (out[i + FRAME] as f64).powi(2);
+            }
+        }
+        let atten = db(em, eo);
+        let (sim, level) = similarity(&out, &near, 1.0, &|_| true);
+        assert!(atten >= min_atten, "щелчки {peak}, речь ×{near_gain}: в паузах ослаблены всего на {atten:.1} дБ");
+        assert!(sim >= min_sim && level >= -1.5, "щелчки {peak}, речь ×{near_gain}: речь {sim:.3} ({level:+.1} дБ)");
+    }
 }
 
 #[test]

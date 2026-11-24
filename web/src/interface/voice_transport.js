@@ -121,6 +121,12 @@ ZaliMixin(ZaliInterface, class {
             // and answers it with `targetDevice`; without this an idle second device of
             // the same account could leave, re-offer or hang up a call it is not in.
             device: this.voiceDeviceId(),
+            // Умею видео через SFU (voice_sfu.js). Сервер учитывает его в voice_join,
+            // инвайте и принятии; комната уходит в SFU, только когда умеют все.
+            sfu: this.voiceSfuSupported?.() || false,
+            // Что декодируем аппаратно (voice_sfu.js) — по этим спискам отправители через
+            // SFU выбирают общий для комнаты кодек. null, пока замер не готов.
+            videoCodecs: this.voiceVideoDecodeCodecs?.() || undefined,
         };
     }
 
@@ -571,6 +577,9 @@ ZaliMixin(ZaliInterface, class {
         }
         this.voice.peerConnections.clear();
         this.voice.signalChains?.clear();
+        // Сессии SFU сервер снимает сам по voice_leave/обрыву; здесь — только свои соединения.
+        this.teardownVoiceSfu?.({ announce: false });
+        this.voice.videoTransport = 'mesh';
         for (const audio of this.voice.remoteAudios.values()) {
             try {
                 audio.pause?.();
@@ -596,6 +605,9 @@ ZaliMixin(ZaliInterface, class {
         this.voice.screenIsDisplay = false;
         this.voice.screenActivity = '';
         this.voice.screenFps = 0;
+        // Слот издателя оболочки сервер снимает вместе с voice_sfu_leave.
+        this.voice.screenViaNativeSfu = false;
+        this.voice.screenShareChoice = null;
         this.detachLocalVideoPreview();
         this.detachLocalScreenPreview();
         this.voice.videoEnabled = false;

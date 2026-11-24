@@ -110,9 +110,28 @@ pub(crate) struct VoiceRoom {
     /// звонок из уведомления без сессии (`decline_call_with_token`). Живёт, пока звонок
     /// звонит: комната принята, отклонена или снята — секрета больше нет.
     decline_token: Option<String>,
+    /// Кто из участников умеет видео через SFU (`sfu: true` в `voice_join`). Заполняется,
+    /// только если SFU на этом сервере включён, — пустое множество значит mesh.
+    sfu_capable: HashSet<String>,
+    /// Кто сообщил, что до SFU не достучался (`voice_sfu_failed`): пока он в комнате,
+    /// видео всей комнаты идёт в mesh — иначе он не увидит никого.
+    sfu_failed: HashSet<String>,
+    /// Какие видеокодеки каждый участник декодирует аппаратно (`videoCodecs` в его
+    /// событиях). Через SFU все зрители получают один поток — отправитель выбирает кодек,
+    /// который есть у всех (voiceSfuChooseCodec в voice_sfu.js). Нет записи — старый
+    /// клиент: для него только H.264/VP8.
+    video_codecs: HashMap<String, Vec<String>>,
 }
 
 impl VoiceRoom {
+    /// Как в этой комнате ходит видео. SFU — только когда его умеют ВСЕ участники:
+    /// клиент, публикующий только в SFU, невидим для того, кто ждёт видео по mesh.
+    pub(crate) fn video_via_sfu(&self) -> bool {
+        !self.participants.is_empty()
+            && self.sfu_failed.is_empty()
+            && self.participants.iter().all(|p| self.sfu_capable.contains(p))
+    }
+
     fn new(room_type: String, server_id: Option<String>, channel_id: Option<String>) -> Self {
         Self {
             room_type,
@@ -127,6 +146,9 @@ impl VoiceRoom {
             devices: HashMap::new(),
             initiator_device: None,
             decline_token: None,
+            sfu_capable: HashSet::new(),
+            sfu_failed: HashSet::new(),
+            video_codecs: HashMap::new(),
         }
     }
 }
@@ -312,6 +334,11 @@ fn voice_room_payload(room_id: &str, room: &VoiceRoom) -> serde_json::Value {
         "participants": participants,
         "joinedAt": joined_at,
         "states": states,
+        "videoTransport": if room.video_via_sfu() { "sfu" } else { "mesh" },
+        "videoCodecs": participants
+            .iter()
+            .filter_map(|name| room.video_codecs.get(name).map(|list| (name.clone(), serde_json::json!(list))))
+            .collect::<serde_json::Map<String, serde_json::Value>>(),
     })
 }
 
@@ -559,6 +586,9 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
         room.joined_at.remove(username);
         room.states.remove(username);
         room.devices.remove(username);
+        room.sfu_capable.remove(username);
+        room.sfu_failed.remove(username);
+        room.video_codecs.remove(username);
         remaining_participants = room.participants.iter().cloned().collect();
         devices = room.devices.clone();
         remove_room =
@@ -575,6 +605,21 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
             mark_voice_room_ended(state, room_id.clone());
         } else {
             mark_voice_room_ended(state, member_end_key(&room_id, username));
+        }
+    }
+
+    if let Some(sfu) = state.sfu.as_ref() {
+        sfu.send(crate::sfu::SfuCommand::Leave {
+            room: room_id.clone(),
+            user: username.to_string(),
+        });
+        if remove_room {
+            for participant in &remaining_participants {
+                sfu.send(crate::sfu::SfuCommand::Leave {
+                    room: room_id.clone(),
+                    user: participant.clone(),
+                });
+            }
         }
     }
 
@@ -936,6 +981,247 @@ fn restore_dm_room(state: &Arc<AppState>, sender: &str, room_id: &str) {
     }
 }
 
+fn set_sfu_capable(room: &mut VoiceRoom, user: &str, capable: bool) {
+    if capable {
+        room.sfu_capable.insert(user.to_string());
+    } else {
+        room.sfu_capable.remove(user);
+    }
+}
+
+/// `videoCodecs` из события клиента: короткие имена (AV1, H265, H264, VP8, VP9), не
+/// больше восьми — это отображение умений, не повод хранить что угодно.
+fn parse_video_codecs(payload: &serde_json::Value) -> Option<Vec<String>> {
+    let list = payload["videoCodecs"].as_array()?;
+    Some(
+        list.iter()
+            .filter_map(|v| v.as_str())
+            .filter(|v| !v.is_empty() && v.len() <= 8 && v.chars().all(|c| c.is_ascii_alphanumeric()))
+            .take(8)
+            .map(|v| v.to_ascii_uppercase())
+            .collect(),
+    )
+}
+
+fn set_video_codecs(room: &mut VoiceRoom, user: &str, codecs: Option<Vec<String>>) -> bool {
+    let Some(codecs) = codecs else {
+        return false;
+    };
+    if room.video_codecs.get(user) == Some(&codecs) {
+        return false;
+    }
+    // Что участник декодирует аппаратно (по этому страница выбирает кодек демонстрации):
+    // только при смене списка, без логов клиента видно, почему кодек оказался именно таким.
+    tracing::info!("[VOICE] video codecs user={} decode={}", user, codecs.join("/"));
+    room.video_codecs.insert(user.to_string(), codecs);
+    true
+}
+
+/// Сигналинг SFU (`voice_sfu_*`). Те же проверки, что у `voice_signal`: участник
+/// комнаты, то самое устройство, звонок уже принят, — плюс комната в режиме SFU.
+async fn handle_sfu_event(
+    state: &Arc<AppState>,
+    sender: &str,
+    device: &str,
+    event_type: &str,
+    payload: &serde_json::Value,
+) {
+    use crate::sfu::{SfuCommand, SourceKind};
+    let Some(sfu) = state.sfu.as_ref() else {
+        send_json_to_user(
+            state,
+            sender,
+            targeted(
+                serde_json::json!({
+                    "type": "voice_sfu_error",
+                    "roomId": payload["roomId"].as_str().unwrap_or_default(),
+                    "code": "sfu_disabled",
+                    "message": "SFU на сервере выключен",
+                }),
+                device,
+            ),
+        )
+        .await;
+        return;
+    };
+    let room_id = payload["roomId"].as_str().unwrap_or_default().trim().to_string();
+    if room_id.is_empty() {
+        return;
+    }
+    // Уйти и снять свою публикацию можно всегда — но только с устройства, которое держит
+    // звонок: второе, простаивающее устройство аккаунта не должно рвать его SFU-сессии.
+    if matches!(event_type, "voice_sfu_leave" | "voice_sfu_unpublish") {
+        let holder = member_device(state, &room_id, sender);
+        if other_device(&holder, device) {
+            warn!("[VOICE][SFU] reject {} sender={} device={} roomId={} holder={}", event_type, sender, device, room_id, holder);
+            return;
+        }
+    }
+    if event_type == "voice_sfu_leave" {
+        sfu.send(SfuCommand::Leave {
+            room: room_id,
+            user: sender.to_string(),
+        });
+        return;
+    }
+    if event_type == "voice_sfu_unpublish" {
+        sfu.send(SfuCommand::Unpublish {
+            room: room_id,
+            user: sender.to_string(),
+            native: payload["slot"].as_str() == Some("native"),
+        });
+        return;
+    }
+    let verdict = state.voice_rooms.get(&room_id).map(|room| {
+        let member = room.participants.contains(sender);
+        let holder = room.devices.get(sender).cloned().unwrap_or_default();
+        let ringing = room.room_type == "dm" && room.call_state == "ringing";
+        (member, holder, ringing, room.video_via_sfu())
+    });
+    let Some((member, holder, ringing, via_sfu)) = verdict else {
+        return;
+    };
+    if !member || ringing || other_device(&holder, device) {
+        warn!(
+            "[VOICE][SFU] reject {} sender={} device={} roomId={} member={} ringing={}",
+            event_type, sender, device, room_id, member, ringing
+        );
+        return;
+    }
+    if event_type == "voice_sfu_failed" {
+        let reason = payload["reason"].as_str().unwrap_or_default();
+        warn!("[VOICE][SFU] client cannot reach SFU sender={} roomId={} reason={}", sender, room_id, reason);
+        let changed = state
+            .voice_rooms
+            .get_mut(&room_id)
+            .map(|mut room| {
+                let before = room.video_via_sfu();
+                room.sfu_failed.insert(sender.to_string());
+                before != room.video_via_sfu()
+            })
+            .unwrap_or(false);
+        sfu.send(SfuCommand::Leave {
+            room: room_id.clone(),
+            user: sender.to_string(),
+        });
+        if changed {
+            broadcast_voice_room_state(state, &room_id).await;
+        }
+        return;
+    }
+    if !via_sfu {
+        send_json_to_user(
+            state,
+            sender,
+            targeted(
+                serde_json::json!({
+                    "type": "voice_sfu_error",
+                    "roomId": room_id,
+                    "code": "room_mesh",
+                    "message": "Комната сейчас в режиме mesh",
+                }),
+                device,
+            ),
+        )
+        .await;
+        return;
+    }
+    let sdp = payload["sdp"].as_str().unwrap_or_default();
+    // SDP с сотней m-линий не бывает; ограничение — от мусора, а не от клиентов.
+    if sdp.len() > 200_000 {
+        return;
+    }
+    match event_type {
+        "voice_sfu_publish" => {
+            let mut sources = HashMap::new();
+            if let Some(map) = payload["sources"].as_object() {
+                for (mid, kind) in map.iter().take(16) {
+                    if mid.is_empty() || mid.len() > 16 {
+                        continue;
+                    }
+                    if let Some(kind) = kind.as_str().and_then(SourceKind::parse) {
+                        sources.insert(mid.clone(), kind);
+                    }
+                }
+            }
+            let mut layers: HashMap<String, HashMap<String, u64>> = HashMap::new();
+            if let Some(map) = payload["layers"].as_object() {
+                for (mid, by_rid) in map.iter().take(16) {
+                    if mid.is_empty() || mid.len() > 16 {
+                        continue;
+                    }
+                    let Some(by_rid) = by_rid.as_object() else { continue };
+                    let entry = layers.entry(mid.clone()).or_default();
+                    for (rid, px) in by_rid.iter().take(4) {
+                        if rid.len() <= 8 {
+                            if let Some(px) = px.as_u64() {
+                                entry.insert(rid.clone(), px);
+                            }
+                        }
+                    }
+                }
+            }
+            info!(
+                "[VOICE][SFU] publish sender={} roomId={} sdpLen={} sources={}",
+                sender,
+                room_id,
+                sdp.len(),
+                sources.len()
+            );
+            sfu.send(SfuCommand::Publish {
+                room: room_id,
+                user: sender.to_string(),
+                device: device.to_string(),
+                sdp: sdp.to_string(),
+                sources,
+                layers,
+                native: payload["slot"].as_str() == Some("native"),
+                fresh: payload["fresh"].as_bool().unwrap_or(false),
+            });
+        }
+        "voice_sfu_join" => {
+            sfu.send(SfuCommand::Join {
+                room: room_id,
+                user: sender.to_string(),
+                device: device.to_string(),
+                reset: payload["reset"].as_bool().unwrap_or(false),
+                max_pixel_rate: payload["maxPixelRate"].as_u64().unwrap_or(0),
+            });
+        }
+        "voice_sfu_answer" => {
+            sfu.send(SfuCommand::Answer {
+                room: room_id,
+                user: sender.to_string(),
+                sdp: sdp.to_string(),
+                rev: payload["rev"].as_u64().unwrap_or(0),
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Отправляет клиентам по WS то, что сгенерировал поток SFU (ответы, офферы подписки,
+/// ошибки). Только тому устройству, что держит звонок, и только пока оно в комнате.
+pub(crate) fn spawn_sfu_relay(
+    state: Arc<AppState>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::sfu::SfuOut>,
+) {
+    tokio::spawn(async move {
+        while let Some(out) = rx.recv().await {
+            let room_id = out.payload["roomId"].as_str().unwrap_or_default().to_string();
+            let still_member = state
+                .voice_rooms
+                .get(&room_id)
+                .map(|room| room.participants.contains(&out.user))
+                .unwrap_or(false);
+            if !still_member {
+                continue;
+            }
+            send_json_to_user(&state, &out.user, targeted(out.payload, &out.device)).await;
+        }
+    });
+}
+
 async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde_json::Value) {
     let room_id = payload["roomId"]
         .as_str()
@@ -1289,6 +1575,15 @@ pub(crate) async fn handle_voice_event(
                 return;
             }
 
+            // Умение SFU отмечается ДО захода: рассылка состава из join_voice_room уже
+            // несёт правильный videoTransport. Комнату, которой ещё нет (первый вошедший),
+            // join создаёт сам — тогда отмечаем после и рассылаем, если режим сменился.
+            let sfu_capable = state.sfu.is_some() && payload["sfu"].as_bool().unwrap_or(false);
+            let codecs = parse_video_codecs(payload);
+            if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
+                set_sfu_capable(&mut room, sender, sfu_capable);
+                set_video_codecs(&mut room, sender, codecs.clone());
+            }
             join_voice_room(
                 state,
                 sender,
@@ -1300,6 +1595,33 @@ pub(crate) async fn handle_voice_event(
                 keepalive,
             )
             .await;
+            // Join отклонён: отправитель не участник — снимаем записи, сделанные до захода.
+            if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
+                if !room.participants.contains(sender) {
+                    room.sfu_capable.remove(sender);
+                    room.video_codecs.remove(sender);
+                }
+            }
+            let transport_changed = state
+                .voice_rooms
+                .get_mut(&room_id)
+                .filter(|room| room.participants.contains(sender))
+                .map(|mut room| {
+                    let before = room.video_via_sfu();
+                    set_sfu_capable(&mut room, sender, sfu_capable);
+                    // Список кодеков доходит с опозданием (клиент меряет его асинхронно) —
+                    // новый список тоже повод разослать состояние: отправители перевыберут кодек.
+                    let codecs_changed = set_video_codecs(&mut room, sender, codecs.clone());
+                    before != room.video_via_sfu() || codecs_changed
+                })
+                .unwrap_or(false);
+            if transport_changed {
+                broadcast_voice_room_state(state, &room_id).await;
+            }
+        }
+        "voice_sfu_publish" | "voice_sfu_unpublish" | "voice_sfu_join" | "voice_sfu_answer" | "voice_sfu_leave"
+        | "voice_sfu_failed" => {
+            handle_sfu_event(state, sender, &device, event_type, payload).await;
         }
         "voice_leave" => {
             info!("[VOICE][LEAVE] user={} device={} explicit_leave", sender, device);
@@ -1447,6 +1769,15 @@ pub(crate) async fn handle_voice_event(
                 room.states.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(target.clone());
+                // Умение SFU каждой стороны приходит с её собственным событием: звонящего —
+                // с инвайтом, ответившего — с принятием.
+                room.sfu_capable.clear();
+                room.sfu_failed.clear();
+                room.video_codecs.clear();
+                if state.sfu.is_some() && payload["sfu"].as_bool().unwrap_or(false) {
+                    room.sfu_capable.insert(sender.to_string());
+                }
+                set_video_codecs(room, sender, parse_video_codecs(payload));
                 room.devices.clear();
                 room.initiator_device = (!device.is_empty()).then(|| device.clone());
                 room.decline_token = Some(uuid::Uuid::new_v4().simple().to_string());
@@ -1614,6 +1945,13 @@ pub(crate) async fn handle_voice_event(
                 room.states.clear();
                 room.participants.insert(sender.to_string());
                 room.participants.insert(inviter.clone());
+                room.sfu_capable.retain(|user| *user == inviter);
+                room.sfu_failed.clear();
+                room.video_codecs.retain(|user, _| *user == inviter);
+                if state.sfu.is_some() && payload["sfu"].as_bool().unwrap_or(false) {
+                    room.sfu_capable.insert(sender.to_string());
+                }
+                set_video_codecs(room, sender, parse_video_codecs(payload));
                 // The call now lives on exactly two devices: the one that dialled and
                 // the one that answered.
                 room.devices

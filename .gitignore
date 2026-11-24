@@ -92,3 +92,6 @@ ssh/
 # Письма почтового сервера в режиме MAIL_TRANSPORT=file (debug по умолчанию): внутри живые коды.
 mail-outbox/
 /dist-web/
+scripts/voice_doctor/sfu_e2e/node_modules/
+# Локальное состояние wrangler (Cloudflare CLI).
+.wrangler/

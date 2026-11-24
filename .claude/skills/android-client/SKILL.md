@@ -19,6 +19,20 @@ description: Android-шелл (apps/android/) — NativeBridge.kt/ZaliCoreBridge
   история каналов. Лечение — **нативный обработчик**, а не фолбэк:
   `serverHistory` и `editMessage` теперь объявлены `true` и реализованы в
   `handleLoadServerHistory` / `handleEditMessage`.
+- **Демонстрация экрана — `MEDIA_REQUEST`, как у десктопа** (с 2026-11-22): `nativeScreen`
+  и `__ZALI_MEDIA_BRIDGE = {kind:'webmessage'}` объявляются, только если WebView умеет
+  WebMessage-каналы с ArrayBuffer и есть кодировщик H.264 (`NativeBridge.mediaScreenSupported`).
+  Захват — `ScreenCaptureService.startH264Capture` + `ScreenH264Encoder.kt`; иначе прежний
+  `START_SCREEN_CAPTURE` (JPEG, ~8 к/с). Протокол и транспорт — скилл `voice-calls` →
+  `native-capture.md`. На телефоне не проверено.
+  В звонке через SFU (`nativeSfuScreen`, если ядро загрузилось) слои кодирует оболочка и шлёт
+  издатель ядра по JNI (`ScreenSfuLayers.kt`, `ZaliSfuNative.kt`); ядро собирать с
+  `--features android,sfu` (`build_android_core.sh` уже так делает) — без этого `create`
+  вернёт 0 и экран пойдёт прежним путём.
+  **Перезагрузка страницы гасит показ** (`NativeBridge.onPageStarted` из `onPageStarted`
+  WebView): новая страница номера потока не знает и `stop` не пришлёт — без сброса `start`
+  отвечал `busy` до перезапуска приложения, а индикатор записи горел. Согласие, пришедшее
+  на уже отменённый запрос, сервис сразу гасит (`screenCaptureWanted`).
 - **Перебор ключей ограничен и детерминирован** —
   `ZaliCoreBridge.MAX_DECRYPT_CANDIDATES` (12) плюс обход
   `conversationKeys.keys.sorted()`, и оба кэша расшифровки (положительный и

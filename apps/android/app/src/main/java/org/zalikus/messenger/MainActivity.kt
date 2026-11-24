@@ -754,6 +754,8 @@ class MainActivity : ComponentActivity() {
                                 }
 
                                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                                    // Показ экрана прошлой страницы больше никому не нужен.
+                                    nativeBridge.onPageStarted()
                                     if (!NativeBridge.documentStartScriptSupported) {
                                         view.evaluateJavascript(nativeBridge.documentStartScript(), null)
                                     }

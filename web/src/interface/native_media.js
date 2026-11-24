@@ -17,6 +17,10 @@
 //     его и Origin, второе соединение не принимает. Токен в URL не кладётся.
 //   * Windows — общая память WebView2 (PostSharedBufferToScript,
 //     __ZALI_MEDIA_BRIDGE = {kind:'sharedbuffer'}), кадры без копирования.
+//   * Android — WebMessage-порт (__ZALI_MEDIA_BRIDGE = {kind:'webmessage'}): страница
+//     шлёт MEDIA_REQUEST op 'transport', оболочка отдаёт конец канала сообщением
+//     "zali-media-port:<__ZALI_BRIDGE_NONCE__>"; по порту — ArrayBuffer с кадрами. Только
+//     экран (H.264 из MediaCodec, ScreenH264Encoder.kt).
 //
 // Формат кадра (little-endian), 32 байта заголовка + данные:
 //   0 u8  0x5A        4 u32 stream      16 u16 width    21 u8  channels
@@ -40,6 +44,16 @@ const ZALI_MEDIA_KIND_VIDEO = 2;
 const ZALI_MEDIA_CODEC_PCM_F32 = 1;
 const ZALI_MEDIA_CODEC_H264 = 1;
 const ZALI_MEDIA_CODEC_NV12 = 2;
+// Превью нативной демонстрации через SFU, когда слои сжаты H.265/AV1 (macOS, Android):
+// Annex B / OBU low-overhead, параметры последовательности — внутри ключевого кадра.
+const ZALI_MEDIA_CODEC_H265 = 3;
+const ZALI_MEDIA_CODEC_AV1 = 4;
+// Строка кодека для VideoDecoder, если оболочка не назвала (или назвала не того кодека).
+const ZALI_MEDIA_CODEC_DEFAULTS = {
+    [ZALI_MEDIA_CODEC_H264]: ['avc1.', 'avc1.42E01F'],
+    [ZALI_MEDIA_CODEC_H265]: ['hvc1.', 'hvc1.1.6.L120.B0'],
+    [ZALI_MEDIA_CODEC_AV1]: ['av01.', 'av01.0.08M.08'],
+};
 
 /** Разбор заголовка кадра. `bytes` — Uint8Array с кадром целиком. */
 function zaliParseMediaFrame(bytes) {
@@ -341,10 +355,12 @@ class ZaliNativeVideoSink {
             this.deliver(frame);
             return;
         }
-        if (header.codec !== ZALI_MEDIA_CODEC_H264) return;
-        if (!this.decoder || this.decoderCodec !== codecString || this.decoder.state === 'closed') {
+        const known = ZALI_MEDIA_CODEC_DEFAULTS[header.codec];
+        if (!known) return;
+        const wanted = String(codecString || '').startsWith(known[0]) ? codecString : known[1];
+        if (!this.decoder || this.decoderCodec !== wanted || this.decoder.state === 'closed') {
             try { this.decoder?.close(); } catch (e) {}
-            this.decoderCodec = codecString || 'avc1.42E01F';
+            this.decoderCodec = wanted;
             this.decoder = new VideoDecoder({
                 output: (frame) => this.deliver(frame),
                 error: (error) => {
@@ -405,6 +421,7 @@ ZaliMixin(ZaliInterface, class {
         if (!info || typeof info !== 'object') return null;
         if (info.kind === 'websocket' && typeof info.url === 'string' && /^ws:\/\/127\.0\.0\.1:\d+\//.test(info.url) && info.token) return info;
         if (info.kind === 'sharedbuffer' && window.chrome?.webview?.addEventListener) return info;
+        if (info.kind === 'webmessage' && window.__ZALI_NATIVE_PLATFORM === 'android' && window.__ZALI_BRIDGE_NONCE__) return info;
         if (info.kind === 'fake' && typeof info.attach === 'function') return info;
         return null;
     }
@@ -458,6 +475,29 @@ ZaliMixin(ZaliInterface, class {
                 window.chrome.webview.addEventListener('sharedbufferreceived', handler);
                 state.transport = { open: true, kind: 'sharedbuffer', close: () => window.chrome.webview.removeEventListener('sharedbufferreceived', handler) };
                 done(true);
+                return;
+            }
+            if (info.kind === 'webmessage') {
+                // Порт принимаем только с секретом моста: вложенные фреймы (песочница
+                // аддонов) могут слать окну сообщения, но секрета не знают.
+                const expected = `zali-media-port:${window.__ZALI_BRIDGE_NONCE__}`;
+                let timer = null;
+                const onMessage = (e) => {
+                    if (e.data !== expected || !e.ports?.[0]) return;
+                    window.removeEventListener('message', onMessage);
+                    clearTimeout(timer);
+                    const port = e.ports[0];
+                    port.onmessage = (m) => { if (m.data instanceof ArrayBuffer) onBytes(new Uint8Array(m.data)); };
+                    state.transport = { open: true, kind: 'webmessage', close: () => { try { port.close(); } catch (err) {} } };
+                    done(true);
+                };
+                timer = setTimeout(() => { window.removeEventListener('message', onMessage); done(false); }, 4000);
+                window.addEventListener('message', onMessage);
+                if (!this.postNativeMessage({ type: NativeMessageTypes.MEDIA_REQUEST, op: 'transport' })) {
+                    window.removeEventListener('message', onMessage);
+                    clearTimeout(timer);
+                    done(false);
+                }
                 return;
             }
             if (info.kind === 'fake') {
@@ -541,6 +581,9 @@ ZaliMixin(ZaliInterface, class {
             state.transportUnavailable = true;
             this.voiceDiag?.('native-media-transport-unavailable', { streams: state.streams.size }, 'WARN');
             for (const id of Array.from(state.streams.keys())) this.endNativeMediaStream(id, 'transport-unavailable');
+        } else if (event === 'sfu') {
+            // Издатель экрана в ядре оболочки (voice_sfu.js → startVoiceNativeSfuScreen).
+            this.onNativeSfuEvent?.(Number(stream), payload.sfu || {});
         } else if (event === 'devices_changed') {
             this.onNativeMediaDevicesChanged?.(payload);
         } else if (event === 'browser_state') {
@@ -549,6 +592,16 @@ ZaliMixin(ZaliInterface, class {
         } else if (event === 'rc_revoked') {
             // Оболочка сама сняла разрешение на удалённое управление (поток экрана кончился).
             this.onNativeRemoteControlRevoked?.(payload);
+        } else if (event === 'warn' && payload.code === 'mic_digital_silence') {
+            // Windows: устройство отдаёт ровные нули — почти всегда выключен доступ
+            // классических приложений к микрофону. Собеседник слышит тишину, пакеты идут.
+            this.voiceDiag?.('mic-digital-silence', { stream, device: payload.device || '' }, 'WARN');
+            this.showToast?.({
+                title: 'Микрофон молчит',
+                text: `«${payload.device || 'Микрофон'}» отдаёт полную тишину. Проверьте «Параметры → Конфиденциальность → Микрофон → Разрешить классическим приложениям» и выбранное устройство.`,
+                tone: 'warn',
+                timeoutMs: 12000,
+            });
         } else if (event === 'stats' && payload.processing) {
             this.voiceDiag?.('mic-processing-native', { stream, ...payload.processing, ...this.nativeMediaPageCounters(entry) });
         } else if (event === 'stats' && payload.video) {
@@ -615,7 +668,11 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async openNativeMediaStreamOnce({ kind, deviceId = '', sourceId = '', options = {}, firstFrameTimeoutMs = 5000 } = {}) {
+    /**
+     * startTimeoutMs — сколько ждать ответа `started`: на Android перед ним системное окно
+     * согласия на захват экрана, человек может думать дольше 10 с.
+     */
+    async openNativeMediaStreamOnce({ kind, deviceId = '', sourceId = '', options = {}, firstFrameTimeoutMs = 5000, startTimeoutMs = 10000 } = {}) {
         if (!this.nativeCaptureAvailable(kind)) throw new Error(`нативный захват ${kind} недоступен`);
         const transportOk = await this.ensureNativeMediaTransport();
         if (!transportOk) throw new Error('транспорт кадров не поднялся');
@@ -640,7 +697,7 @@ ZaliMixin(ZaliInterface, class {
         trace('native-media-open', { deviceId: String(deviceId || '').slice(0, 12), sourceId: String(sourceId || ''), options: JSON.stringify(options) });
         try {
             await Promise.all([entry.audio?.start(), entry.video?.start()]);
-            const started = await this.nativeMediaRequest('start', { stream, kind, deviceId, sourceId, options }, 10000);
+            const started = await this.nativeMediaRequest('start', { stream, kind, deviceId, sourceId, options }, startTimeoutMs);
             entry.codec = started?.codec || entry.codec;
             entry.label = started?.label || '';
             entry.info = started || null;

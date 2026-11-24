@@ -52,9 +52,11 @@ pub fn run(ctx: StartContext) {
         let _ = std::thread::Builder::new().name("zali-media-mic-ref".into()).spawn(move || {
             run_render_reference(
                 stop,
-                move |samples, channels| {
+                move |samples, channels, ts_ns| {
                     if let Ok(mut p) = processor.lock() {
-                        p.push_render(samples, channels);
+                        // По меткам: опорный приходит из своего потока позже микрофона —
+                        // обработчик сам дождётся его перед кадром (см. core Aligner).
+                        p.push_render_at(samples, channels, ts_ns);
                     }
                 },
                 move |ok| reference_ok.store(ok, Ordering::Release),
@@ -70,6 +72,9 @@ pub fn run(ctx: StartContext) {
     let mut sent_samples: u64 = 0;
     let mut last_stats = Instant::now();
     let mut reopen_attempts = 0u32;
+    let mut raw_peak = 0f32;
+    let mut zero_since: Option<Instant> = None;
+    let mut zero_warned = false;
 
     'device: while !ctx.stopped() {
         let opened = super::devices::capture_device(&ctx.device_id).and_then(|device| {
@@ -105,17 +110,20 @@ pub fn run(ctx: StartContext) {
 
         while !ctx.stopped() {
             raw.clear();
-            if let Err(error) = capture.read(20, &mut raw) {
-                tracing::warn!("[ZALI][WIN] media mic read failed: {error}");
-                // Явно выбранное устройство отключили — поток кончился; устройство по
-                // умолчанию — переоткрываем (новое по умолчанию).
-                if !ctx.device_id.is_empty() {
-                    ctx.ended("device-lost");
-                    break 'device;
+            let raw_ts = match capture.read(20, &mut raw) {
+                Ok(ts) => ts,
+                Err(error) => {
+                    tracing::warn!("[ZALI][WIN] media mic read failed: {error}");
+                    // Явно выбранное устройство отключили — поток кончился; устройство по
+                    // умолчанию — переоткрываем (новое по умолчанию).
+                    if !ctx.device_id.is_empty() {
+                        ctx.ended("device-lost");
+                        break 'device;
+                    }
+                    sleep_unless_stopped(ctx.stop_flag(), 300);
+                    continue 'device;
                 }
-                sleep_unless_stopped(ctx.stop_flag(), 300);
-                continue 'device;
-            }
+            };
             let gen = PROCESSING_GEN.load(Ordering::Acquire);
             if gen != seen_gen {
                 seen_gen = gen;
@@ -125,8 +133,22 @@ pub fn run(ctx: StartContext) {
                 }
             }
             if !raw.is_empty() {
+                let peak = raw.iter().fold(0f32, |m, s| m.max(s.abs()));
+                raw_peak = raw_peak.max(peak);
+                if peak > 0.0 {
+                    zero_since = None;
+                } else if zero_since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_secs(5) && !zero_warned {
+                    // Ровный ноль с устройства — не тишина в комнате (у той есть шум), а
+                    // запрет доступа: «Конфиденциальность → Микрофон → Разрешить классическим
+                    // приложениям» выключено — WASAPI открывается без ошибки и отдаёт нули;
+                    // либо выбран вход, в который ничего не подключено. Собеседник слышит
+                    // тишину, хотя пакеты идут (Mac: rxLevel=0.000, 2026-11-22).
+                    zero_warned = true;
+                    tracing::warn!("[ZALI][WIN] media mic digital silence on {label}: check Windows privacy → microphone access for desktop apps");
+                    ctx.events.emit(json!({ "event": "warn", "stream": ctx.stream, "code": "mic_digital_silence", "device": label }));
+                }
                 if let Ok(mut p) = processor.lock() {
-                    p.process_capture(&raw, &mut processed);
+                    p.process_capture_at(&raw, raw_ts.unwrap_or_else(super::loopback::qpc_now_ns), &mut processed);
                 }
             }
             while processed.len() >= BLOCK {
@@ -158,6 +180,10 @@ pub fn run(ctx: StartContext) {
                 value["agc"] = json!(processing.agc);
                 value["reference"] = json!(reference_ok.load(Ordering::Acquire));
                 value["device"] = json!(label);
+                // Пик сырого сигнала устройства за окно (до обработки): 0 — устройство отдаёт нули.
+                value["raw_peak_dbfs"] = json!(if raw_peak > 0.0 { (20.0 * raw_peak.log10() * 10.0).round() / 10.0 } else { -200.0 });
+                tracing::info!("[ZALI][WIN] media mic stats {label} raw_peak={raw_peak:.4}");
+                raw_peak = 0.0;
                 ctx.events.emit(json!({ "event": "stats", "stream": ctx.stream, "processing": value }));
             }
         }

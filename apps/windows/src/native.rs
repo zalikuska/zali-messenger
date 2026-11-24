@@ -58,7 +58,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b70";
+const APP_DISPLAY_VERSION: &str = "0.2b71";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -366,6 +366,8 @@ struct NativeCapabilities {
     native_camera: bool,
     native_screen: bool,
     native_screen_audio: bool,
+    /// Экран напрямую на SFU: слои Media Foundation → издатель ядра (media/screen.rs).
+    native_sfu_screen: bool,
     /// Удалённое управление по разрешению (native/media/remote_control.rs).
     native_remote_control: bool,
     /// «Общий браузер» — скрытый WebView2 (native/media/shared_browser.rs).
@@ -407,6 +409,7 @@ impl Default for NativeCapabilities {
             native_camera: media::NATIVE_MEDIA,
             native_screen: media::NATIVE_MEDIA,
             native_screen_audio: media::NATIVE_MEDIA,
+            native_sfu_screen: media::NATIVE_MEDIA,
             native_remote_control: media::NATIVE_MEDIA,
             native_shared_browser: media::NATIVE_MEDIA,
             control_server: true,

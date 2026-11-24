@@ -315,7 +315,8 @@ ZaliMixin(ZaliInterface, class {
         // track, leaking the other's camera lock with no track.stop() ever called.
         if (this.voice.cameraOn || this.voice.cameraRequestInFlight) return;
         const peerCount = this.voice.peerConnections.size;
-        if (peerCount > ZaliInterface.MAX_MESH_VIDEO_PEERS) {
+        // Через SFU камера уходит одной копией — потолок mesh к ней не относится.
+        if (!this.voiceVideoViaSfu() && peerCount > ZaliInterface.MAX_MESH_VIDEO_PEERS) {
             this.voiceDiag('camera-refused-mesh-size', {
                 peers: peerCount,
                 limit: ZaliInterface.MAX_MESH_VIDEO_PEERS,
@@ -338,6 +339,7 @@ ZaliMixin(ZaliInterface, class {
                         await this.attachLocalVoiceTracks(peer);
                     }
                     await this.renegotiateAllVoicePeers();
+                    if (this.voiceVideoViaSfu()) await this.publishVoiceSfu();
                 } catch (error) {
                     this.voiceTrace('camera-enable-failed', { error: error?.message || String(error) }, 'WARN');
                     this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось включить камеру', ts: new Date().toLocaleTimeString() });
@@ -352,6 +354,11 @@ ZaliMixin(ZaliInterface, class {
                 this.voice.videoEnabled = true;
                 this.voice.cameraOn = true;
                 this.attachLocalVideoPreview();
+                if (this.voiceVideoViaSfu()) {
+                    await this.publishVoiceSfu();
+                    this.renderVoicePanel();
+                    return;
+                }
                 for (const peer of this.voice.peerConnections.keys()) {
                     const entry = this.getVoicePeerEntry(peer);
                     if (entry.videoSender) {
@@ -391,6 +398,7 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         this.renegotiateAllVoicePeers();
+        if (this.voiceVideoViaSfu()) void this.publishVoiceSfu();
         this.renderVoicePanel();
     }
 
@@ -450,7 +458,7 @@ ZaliMixin(ZaliInterface, class {
     // 2,4 ГГц сразу дал бы всплеск потерь.
     static get VOICE_VIDEO_START_KBPS() { return 2500; }
 
-    voiceSdpForPeer(sdp) {
+    voiceSdpForPeer(sdp, startKbps = ZaliInterface.VOICE_VIDEO_START_KBPS) {
         const text = String(sdp || '');
         if (!text) return text;
         // Значение обязано МЕНЯТЬСЯ от SDP к SDP: libwebrtc перезапускает оценку канала
@@ -460,13 +468,13 @@ ZaliMixin(ZaliInterface, class {
         // разгонялись ~23 с (замер 2026-11-20, через ретранслятор). Чередование 2500/2501
         // перезапускает старт на каждом пересогласовании (добавили видео — старт ~2,5).
         this._voiceSdpStartSeq = (Number(this._voiceSdpStartSeq) || 0) + 1;
-        const start = ZaliInterface.VOICE_VIDEO_START_KBPS + (this._voiceSdpStartSeq % 2);
+        const start = Math.round(Number(startKbps) || ZaliInterface.VOICE_VIDEO_START_KBPS) + (this._voiceSdpStartSeq % 2);
         const eol = text.includes('\r\n') ? '\r\n' : '\n';
         const lines = text.split(eol);
         const videoPts = new Set();
         const withFmtp = new Set();
         for (const line of lines) {
-            const rtp = /^a=rtpmap:(\d+) (H264|VP8|VP9|AV1)\/90000/i.exec(line);
+            const rtp = /^a=rtpmap:(\d+) (H264|H265|VP8|VP9|AV1)\/90000/i.exec(line);
             if (rtp) videoPts.add(rtp[1]);
         }
         if (!videoPts.size) return text;
@@ -623,6 +631,15 @@ ZaliMixin(ZaliInterface, class {
         if (!this.voice.screenSharing || !this.voice.localScreenStream) return false;
         const entry = this.getVoicePeerEntry(peer);
         if (!entry || entry.screenSender) return false;
+        if (this.voiceVideoViaSfu()) {
+            // Экран несёт SFU (voice_sfu.js); собеседнику — только состояние «Общего
+            // браузера», один раз на показ.
+            if (!entry.sfuScreenAnnounced) {
+                entry.sfuScreenAnnounced = true;
+                this.onSharedBrowserPeerAttached?.(peer);
+            }
+            return false;
+        }
         const track = this.voice.localScreenStream.getVideoTracks()[0];
         if (!track) return false;
         entry.screenSender = entry.pc.addTrack(track, this.voice.localScreenStream);
@@ -647,7 +664,11 @@ ZaliMixin(ZaliInterface, class {
         // leaking the other capture (its track.stop() never runs, so the OS's
         // "sharing your screen" indicator can stay on for it indefinitely).
         if (this.voice.screenSharing || this.voice.screenShareRequestInFlight) return;
-        if (!navigator.mediaDevices?.getDisplayMedia) {
+        // Android: аппаратный H.264 оболочки по протоколу MEDIA_REQUEST (как на macOS и
+        // Windows, ScreenH264Encoder.kt) — дальше обычный путь ниже. Нет поддержки
+        // WebMessage с ArrayBuffer — прежний JPEG → canvas (startNativeScreenCapture).
+        const androidNative = !navigator.mediaDevices?.getDisplayMedia && !!this.nativeCaptureAvailable?.('screen');
+        if (!navigator.mediaDevices?.getDisplayMedia && !androidNative) {
             // Android WebView has no getDisplayMedia() at all (Chromium/WebView
             // limitation, not a missing bridge hook) — route through native
             // MediaProjection capture instead when the platform offers it.
@@ -660,7 +681,14 @@ ZaliMixin(ZaliInterface, class {
         }
         this.voice.screenShareRequestInFlight = true;
         try {
-            const choice = options || this.loadVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY);
+            const pickedChoice = options || this.loadVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY);
+            // Для перезапуска той же демонстрации (restartVoiceScreenShare) — выбор как есть.
+            this.voice.screenShareChoice = pickedChoice;
+            // 1440p/4K и 120 к/с рассчитаны на SFU (одна копия на сервер); в mesh и при откате
+            // с SFU нативный H.264 на таких значениях уходит в десятки Мбит/с — потолок 1080p60.
+            const choice = this.voiceVideoViaSfu()
+                ? pickedChoice
+                : { ...pickedChoice, height: Number(pickedChoice.height) > 1080 ? 1080 : pickedChoice.height, fps: Math.min(60, Number(pickedChoice.fps) || 30) };
             const video = { cursor: 'always', frameRate: Number(choice.fps) || 30 };
             const height = Number(choice.height) || 0;
             if (height) {
@@ -669,7 +697,8 @@ ZaliMixin(ZaliInterface, class {
             }
             // Звук демонстрации — по выбору в окне «Что показать» (по умолчанию да).
             // Эхо/шумодав/АРУ для системного звука вредны: они режут музыку и игры.
-            const wantAudio = !(choice.audio === 0 || choice.audio === false);
+            // Звук экрана Android-оболочка пока не захватывает.
+            const wantAudio = !androidNative && !(choice.audio === 0 || choice.audio === false);
             const request = {
                 video,
                 // restrictOwnAudio — подсказка Chromium (Windows): не захватывать звук самого
@@ -693,6 +722,14 @@ ZaliMixin(ZaliInterface, class {
             // Номер нативного потока: к нему оболочка привязывает разрешение на
             // удалённое управление (смесь со звуком приложения его теряет).
             let nativeScreenStream = 0;
+            // Слои для SFU кодирует оболочка и шлёт их сама (voice_sfu.js →
+            // startVoiceNativeSfuScreen) — без второго кодирования в WebRTC страницы.
+            // macOS/Windows — выбранный источник, Android — весь экран.
+            const nativeSfu = !choice.browser && (androidNative || !!choice.sourceId)
+                && !!this.nativeCaptureAvailable?.('screen') && !!this.voiceNativeSfuScreenAvailable?.();
+            // Номер нативного потока для издателя оболочки (у Android nativeScreenStream
+            // не ставится: удалённого управления там нет).
+            let sfuStream = 0;
             if (choice.browser) {
                 // «Общий браузер» (shared_browser.js): кадры — со скрытого встроенного
                 // браузера оболочки, а не с экрана; звука у него пока нет.
@@ -706,6 +743,21 @@ ZaliMixin(ZaliInterface, class {
                 this.voice.screenFps = Number(stream?.__zaliNativeInfo?.fps) || 60;
                 const browserTrack = stream.getVideoTracks()[0];
                 if (browserTrack) { try { browserTrack.contentHint = 'motion'; } catch (e) {} }
+            } else if (androidNative) {
+                // Источник — всегда весь экран, согласие — системное окно MediaProjection
+                // (до ответа `started` человек может думать долго).
+                stream = await this.openNativeMediaStream({
+                    kind: 'screen',
+                    sourceId: 'display:0',
+                    options: {
+                        fps: Math.min(60, Number(choice.fps) || 30),
+                        maxHeight: height,
+                        ...(nativeSfu ? { sfu: this.voiceNativeSfuScreenSpec(Math.min(60, Number(choice.fps) || 30)) } : {}),
+                    },
+                    firstFrameTimeoutMs: 8000,
+                    startTimeoutMs: 120000,
+                });
+                sfuStream = Number(stream?.__zaliNativeStream) || 0;
             } else if (choice.sourceId && this.nativeCaptureAvailable?.('screen')) {
                 appAudio = wantAudio && (isDisplay || ownWindow);
                 // Источник выбран в нашем окне с превью (openVoiceScreenPicker) — захват
@@ -721,10 +773,12 @@ ZaliMixin(ZaliInterface, class {
                         // соберёт страница без голосов звонка.
                         audio: wantAudio && !ownWindow && this.nativeSupports('nativeScreenAudio'),
                         cursor: true,
+                        ...(nativeSfu ? { sfu: this.voiceNativeSfuScreenSpec(Number(choice.fps) || 30) } : {}),
                     },
                     firstFrameTimeoutMs: 8000,
                 });
                 nativeScreenStream = Number(stream?.__zaliNativeStream) || 0;
+                sfuStream = nativeScreenStream;
             } else {
                 try {
                     stream = await navigator.mediaDevices.getDisplayMedia(request);
@@ -765,6 +819,11 @@ ZaliMixin(ZaliInterface, class {
             this.voice.screenNativeStream = nativeScreenStream;
             this.voice.screenIsDisplay = !!nativeScreenStream && isDisplay && !choice.browser;
             this.voice.screenActivity = choice.browser ? 'browser' : '';
+            // Что за картинка — для кодировщика (voiceScreenContentHint в voice_sfu.js). Без
+            // подсказки дорожка нативного захвата (генератор кадров) кодировалась как камера —
+            // и в mesh, и через SFU. Частота из пикера: 60 к/с выбирают ради плавности.
+            if (!choice.browser) this.voice.screenFps = Number(choice.fps) || 30;
+            try { track.contentHint = this.voiceScreenContentHint(); } catch (e) {}
             // Аудиодорожки может не быть: платформа не умеет (macOS WKWebView),
             // не отдан системный звук, или в системном окне не отмечено «Поделиться
             // звуком». Тогда демонстрация идёт как раньше — только картинка.
@@ -773,7 +832,19 @@ ZaliMixin(ZaliInterface, class {
                 this.addLogEntry({ type: 'INFO', msg: 'Звук демонстрации недоступен — передаётся только картинка', ts: new Date().toLocaleTimeString() });
             }
             this.voice.screenSharing = true;
-            this.playVoiceEventSound?.('stream');
+            if (!this.voice.screenRestarting) this.playVoiceEventSound?.('stream');
+            // Оффер — из sourceInfo, снятого до подмены потока: со звуком приложения `stream`
+            // выше стал смесью (new MediaStream), у неё нет __zaliNativeInfo, и оболочка
+            // вечно сидела в connected:false, а на сервер шёл только запасной путь страницы
+            // (Windows, 2026-11-22).
+            const sfuOffer = nativeSfu ? sourceInfo?.sfu : null;
+            if (nativeSfu && !sfuOffer) {
+                this.voiceTrace('sfu-native-screen-unavailable', { error: sourceInfo?.sfuError || 'no offer' }, 'WARN');
+            }
+            // До publishVoiceSfu: экран страницы (превью) в её публикацию не идёт.
+            // Android: перезапуск захвата — новое системное окно согласия, поэтому при сбое
+            // издателя страница остаётся на этом захвате и шлёт превью сама (inPlace).
+            if (sfuOffer && this.voiceVideoViaSfu()) this.startVoiceNativeSfuScreen(sfuStream, sfuOffer, { inPlace: androidNative });
             // Fires when the user stops sharing via the browser/OS's own
             // "Stop sharing" control, not just our in-app button.
             track.addEventListener('ended', () => this.stopScreenShare());
@@ -782,6 +853,7 @@ ZaliMixin(ZaliInterface, class {
             for (const peer of this.voice.peerConnections.keys()) {
                 this.attachLocalScreenTrackToPeer(peer);
             }
+            if (this.voiceVideoViaSfu()) await this.publishVoiceSfu();
             await this.renegotiateAllVoicePeers();
             // screen-meta travels as an independent signal from the SDP that
             // actually carries the track (see sendScreenShareMeta) — if that
@@ -799,12 +871,30 @@ ZaliMixin(ZaliInterface, class {
         } catch (error) {
             // AbortError/NotAllowedError just mean the user cancelled the
             // browser's screen/window/tab picker — not worth surfacing as a warning.
-            if (error?.name !== 'NotAllowedError' && error?.name !== 'AbortError') {
+            // Нативный путь: code 'denied' — отказ в системном окне согласия.
+            if (error?.name !== 'NotAllowedError' && error?.name !== 'AbortError' && error?.code !== 'denied') {
                 this.addLogEntry({ type: 'WARN', msg: error?.message || 'Не удалось начать демонстрацию экрана', ts: new Date().toLocaleTimeString() });
             }
             this.voiceTrace('screen-share-failed', { error: error?.message || String(error) }, 'WARN');
         } finally {
             this.voice.screenShareRequestInFlight = false;
+        }
+    }
+
+    // Та же демонстрация заново, без звуков и без окна выбора: издатель оболочки отказал
+    // (откат на WebRTC страницы) или звонок ушёл из SFU в mesh, где слоёв оболочки нет.
+    async restartVoiceScreenShare(reason) {
+        const choice = this.voice.screenShareChoice;
+        if (!this.voice.screenSharing || !choice || this.voice.screenRestarting) return;
+        this.voiceTrace('screen-share-restart', { reason });
+        this.voice.screenRestarting = true;
+        try {
+            this.stopScreenShare();
+            await this.startScreenShare(choice);
+        } catch (error) {
+            this.voiceDiag('screen-share-restart-failed', { reason, error: error?.message || String(error) }, 'WARN');
+        } finally {
+            this.voice.screenRestarting = false;
         }
     }
 
@@ -816,7 +906,8 @@ ZaliMixin(ZaliInterface, class {
         this.onSharedBrowserShareStopping?.('screen-stop');
         // Свой выход из канала гасит демонстрацию через resetVoiceState, не через этот
         // метод, — поэтому здесь только намеренная остановка, и звук не двоится с выходом.
-        this.playVoiceEventSound?.('stream-stop');
+        if (!this.voice.screenRestarting) this.playVoiceEventSound?.('stream-stop');
+        this.stopVoiceNativeSfuScreen?.();
         if (this.voice.screenCaptureFromNative) {
             this.postNativeMessage({
                 type: NativeMessageTypes.STOP_SCREEN_CAPTURE,
@@ -840,6 +931,7 @@ ZaliMixin(ZaliInterface, class {
         this.resetNativeScreenCaptureState();
         this.detachLocalScreenPreview();
         for (const [peer, entry] of this.voice.peerConnections.entries()) {
+            entry.sfuScreenAnnounced = false;
             if (entry.screenAudioSender) {
                 try { entry.pc.removeTrack(entry.screenAudioSender); } catch (e) {}
                 entry.screenAudioSender = null;
@@ -852,6 +944,7 @@ ZaliMixin(ZaliInterface, class {
         }
         this.voiceTrace('screen-share-stop', {});
         this.renegotiateAllVoicePeers();
+        if (this.voiceVideoViaSfu()) void this.publishVoiceSfu();
         this.renderVoicePanel();
     }
 
@@ -924,6 +1017,7 @@ ZaliMixin(ZaliInterface, class {
         this.playVoiceEventSound?.('stream');
         this.voice.screenCaptureFromNative = true;
         this.voice.screenShareRequestInFlight = false;
+        try { track.contentHint = 'detail'; } catch (e) {}
         // Native-originated stream has no browser "Stop sharing" control, but
         // the track still ends if the underlying canvas stream is torn down.
         track.addEventListener('ended', () => this.stopScreenShare());
@@ -932,6 +1026,7 @@ ZaliMixin(ZaliInterface, class {
         for (const peer of this.voice.peerConnections.keys()) {
             this.attachLocalScreenTrackToPeer(peer);
         }
+        if (this.voiceVideoViaSfu()) await this.publishVoiceSfu();
         await this.renegotiateAllVoicePeers();
         for (const peer of this.voice.peerConnections.keys()) {
             if (this.voice.peerConnections.get(peer)?.screenSender) {
@@ -1927,6 +2022,8 @@ ZaliMixin(ZaliInterface, class {
         const added = [];
         try {
             for (const track of tracks) {
+                // Камеру в режиме SFU несёт соединение публикации, а не каждый пир.
+                if (track.kind === 'video' && this.voiceVideoViaSfu()) continue;
                 const senderField = track.kind === 'video' ? 'videoSender' : 'audioSender';
                 const sender = entry.pc.addTrack(track, this.voice.localStream);
                 entry[senderField] = sender;
@@ -2000,7 +2097,9 @@ ZaliMixin(ZaliInterface, class {
         this.syncRemoteAudioPlaybackMode();
         this.ensureVoicePlaybackGestureHook();
         this.ensureVoiceMeterLoop();
-        this.attachRemoteVideoStream(name, stream);
+        // В режиме SFU голосовой поток пира видео не несёт: без проверки его пустой
+        // список видеодорожек снёс бы камеру, пришедшую через сервер.
+        if (!this.voiceVideoViaSfu() || stream.getVideoTracks().length) this.attachRemoteVideoStream(name, stream);
         this.voiceTrace('remote-audio-attach', {
             peer: name,
             streamId: stream.id || '',

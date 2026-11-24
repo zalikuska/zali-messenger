@@ -216,8 +216,12 @@ fn install_windows_tray(proxy: tao::event_loop::EventLoopProxy<AppEvent>) -> tra
         &quit_item,
     ]);
 
+    // Меню — только по правой кнопке; левый клик открывает окно (см. поток ниже).
+    // По умолчанию tray-icon показывает меню и на левый клик, и тогда оба действия
+    // дрались за фокус.
     let tray = tray_icon::TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
         .with_icon(tray_icon_image())
         .with_tooltip("Zali Messenger")
         .build()
@@ -241,7 +245,17 @@ fn install_windows_tray(proxy: tao::event_loop::EventLoopProxy<AppEvent>) -> tra
                     }
                 }
                 recv(tray_rx) -> event => {
-                    if let Ok(tray_icon::TrayIconEvent::Click { .. }) = event {
+                    // Только левая кнопка, только отпускание. Раньше срабатывал любой
+                    // Click, в том числе правая кнопка вниз: tray-icon в этот момент
+                    // синхронно открывает меню (TrackPopupMenu), а TrayShow из очереди
+                    // активировал главное окно и тут же закрывал меню — пункты не
+                    // появлялись вовсе.
+                    if let Ok(tray_icon::TrayIconEvent::Click {
+                        button: tray_icon::MouseButton::Left,
+                        button_state: tray_icon::MouseButtonState::Up,
+                        ..
+                    }) = event
+                    {
                         let _ = proxy.send_event(AppEvent::TrayShow);
                     }
                 }
@@ -825,6 +839,22 @@ fn main() -> wry::Result<()> {
 
     #[cfg(target_os = "windows")]
     let webview_builder = webview_builder.with_web_context(&mut web_context);
+
+    // Свои аргументы WebView2 заменяют умолчания wry целиком — они повторены (msWebOOUI…,
+    // автозапуск звука). Сверх них — H.265 в WebRTC: без WebRtcAllowH265Receive/Send
+    // WebView2 не объявлял H.265 в RTCRtpReceiver, и показ экрана с Mac (VideoToolbox: H.265
+    // аппаратно, AV1 нет) шёл в H.264 при вдвое большем битрейте (живой звонок 2026-11-24:
+    // зритель Windows декодировал AV1/H264/VP8/VP9). Аппаратного декодера HEVC нет — Chromium
+    // кодек всё равно не объявит; незнакомое имя фичи он молча пропускает.
+    #[cfg(target_os = "windows")]
+    let webview_builder = {
+        use wry::WebViewBuilderExtWindows;
+        webview_builder.with_additional_browser_args(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+             --enable-features=WebRtcAllowH265Receive,WebRtcAllowH265Send,PlatformHEVCDecoderSupport,PlatformHEVCEncoderSupport \
+             --autoplay-policy=no-user-gesture-required",
+        )
+    };
 
     let webview = webview_builder.build()?;
 

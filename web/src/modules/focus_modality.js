@@ -33,11 +33,25 @@
         else root.removeAttribute('data-kbd-focus');
     }
 
+    // Стрелки на пустом месте (фокус на <body>: листают ленту) кольца не заслуживают —
+    // кольцо рисовать не на чем, а признак потом оставался бы включённым до клика.
+    const isIdleTarget = (el) => !el || el === document.body || el === root;
+
     document.addEventListener('keydown', (e) => {
         if (e.metaKey || e.ctrlKey || e.altKey) return;
-        if (e.key === 'Tab' || (NAV_KEYS.has(e.key) && !isTextEditing(e.target))) setKeyboard(true);
+        if (e.key === 'Tab' || (NAV_KEYS.has(e.key) && !isTextEditing(e.target) && !isIdleTarget(e.target))) setKeyboard(true);
     }, true);
-    document.addEventListener('pointerdown', () => setKeyboard(false), true);
+    // Любое нажатие снимает признак — и на window, и на document: часть оболочек
+    // и вложенных слоёв глушит событие до document. mousedown/touchstart — запасные
+    // пути для движков без полноценных pointer-событий.
+    const clearKeyboard = () => setKeyboard(false);
+    window.addEventListener('pointerdown', clearKeyboard, true);
+    document.addEventListener('pointerdown', clearKeyboard, true);
+    document.addEventListener('mousedown', clearKeyboard, true);
+    document.addEventListener('touchstart', clearKeyboard, { capture: true, passive: true });
+    // Ушли из окна (Alt+Tab, клик в другое приложение) и вернулись: Tab от переключения
+    // окон мог просочиться и включить признак — возвращаемся к окну без колец.
+    window.addEventListener('blur', clearKeyboard);
 
     window.ZaliFocusModality = {
         isKeyboard: () => root.hasAttribute('data-kbd-focus'),

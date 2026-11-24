@@ -166,7 +166,8 @@ pub fn handle(request: MediaRequest, events: EventSink) {
         }
     }
     devices::watch_device_changes(&events);
-    if request.op != "request_keyframe" {
+    // sfu_answer — SDP с ключами ICE: в журнал не пишем.
+    if request.op != "request_keyframe" && request.op != "sfu_answer" {
         // id устройства — укороченный: отличить устройства хватает, журнал не пухнет.
         let device: String = request.device_id.chars().take(24).collect();
         // Куки и адреса «Общего браузера» в журнал не попадают — только их число.
@@ -257,8 +258,19 @@ pub fn handle(request: MediaRequest, events: EventSink) {
         "set_processing" => {
             mic::set_processing(Processing::from_flags(&request.options, mic::current_processing()));
         }
-        // NV12 без сжатия: каждый кадр и так ключевой.
+        // NV12 без сжатия: каждый кадр и так ключевой (слоям SFU ключевые кадры
+        // заказывает издатель ядра, screen.rs).
         "request_keyframe" => {}
+        // Ответ SFU на оффер издателя экрана (страница переслала voice_sfu_publish_answer).
+        "sfu_answer" => {
+            let sdp = request.options.get("sdp").and_then(Value::as_str).unwrap_or("").to_string();
+            match request.stream {
+                Some(stream) if !sdp.is_empty() && screen::sfu_answer(stream, sdp) => {
+                    events.emit(with_request_id(json!({ "event": "sfu_answer_ok", "stream": stream }), &request.request_id));
+                }
+                _ => events.error(request.request_id.as_deref(), request.stream, "not_found", "издатель экрана не найден"),
+            }
+        }
         other => {
             if request.request_id.is_some() {
                 events.error(request.request_id.as_deref(), request.stream, "unsupported", format!("неизвестная операция {other}"));

@@ -6,6 +6,8 @@ pub mod bus;
 pub mod crypto;
 pub mod loader;
 pub mod net;
+#[cfg(feature = "sfu")]
+pub mod sfu_publisher;
 
 use loader::ZaliLoader;
 use std::sync::{OnceLock, RwLock};

@@ -63,7 +63,7 @@ jobs:
         with:
           workspaces: "core -> target"
 
-      # bundle_web.py → ядро (--features apm) → swift build → .app → подпись → самопроверка
+      # bundle_web.py → ядро (--features apm,sfu) → swift build → .app → подпись → самопроверка
       # на ссылки вне бандла: всё делает сам скрипт.
       - name: Build ZaliMessenger.app
         run: ./scripts/build_app.sh
@@ -98,9 +98,14 @@ jobs:
 
       # ~/.cargo/registry, ~/.cargo/git и apps/windows/target по ключу Cargo.lock —
       # иначе каждый запуск пересобирает wry, tao, tokio, windows-sys с нуля.
+      # Явный `key`: без него ключ строится из имени job («windows»), а ci.yml держит
+      # job с тем же именем, но с debug-сборкой `cargo test`. Общий ключ → кэш,
+      # сохранённый CI, попадает сюда без release-артефактов, и каждый запуск компилирует
+      # 243 крейта заново. Release-кэш живёт отдельно и сохраняется один раз на Cargo.lock.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "apps/windows -> target"
+          key: release
 
       - uses: actions/setup-python@v7
         with:

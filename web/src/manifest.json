@@ -77,6 +77,7 @@
     "interface/voice_media.js",
     "interface/voice_devices.js",
     "interface/voice_negotiation.js",
+    "interface/voice_sfu.js",
     "interface/voice_call.js",
     "interface/voice_signal.js",
     "interface/voice_ui.js",

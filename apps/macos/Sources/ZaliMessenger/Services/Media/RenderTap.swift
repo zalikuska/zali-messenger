@@ -49,7 +49,7 @@ enum AudioProcesses {
 @available(macOS 14.2, *)
 final class AudioTapIO {
     private let description: CATapDescription
-    private let onAudio: (UnsafePointer<Float>, Int, Int) -> Void
+    private let onAudio: (UnsafePointer<Float>, Int, Int, UInt64) -> Void
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
@@ -59,8 +59,9 @@ final class AudioTapIO {
     private var scratch = [Float](repeating: 0, count: 32_768)
     private let queue: DispatchQueue
 
-    /// `onAudio(samples, frames, channels)` — на потоке IOProc.
-    init(description: CATapDescription, label: String, onAudio: @escaping (UnsafePointer<Float>, Int, Int) -> Void) {
+    /// `onAudio(samples, frames, channels, hostTime)` — на потоке IOProc; `hostTime` —
+    /// время первого отсчёта (метка входа IOProc).
+    init(description: CATapDescription, label: String, onAudio: @escaping (UnsafePointer<Float>, Int, Int, UInt64) -> Void) {
         self.description = description
         self.onAudio = onAudio
         self.queue = DispatchQueue(label: "com.zali.messenger.media.tap.\(label)", qos: .userInteractive)
@@ -108,8 +109,9 @@ final class AudioTapIO {
         aggregateID = aggregate
 
         var procID: AudioDeviceIOProcID?
-        err = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { [weak self] _, inInputData, _, _, _ in
-            self?.handle(inInputData)
+        err = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { [weak self] _, inInputData, inInputTime, _, _ in
+            let t = inInputTime.pointee
+            self?.handle(inInputData, hostTime: t.mFlags.contains(.hostTimeValid) ? t.mHostTime : mach_absolute_time())
         }
         guard err == noErr, let procID else {
             stop()
@@ -135,7 +137,7 @@ final class AudioTapIO {
         if err != noErr { mediaLog("tap: update processes failed \(err)") }
     }
 
-    private func handle(_ input: UnsafePointer<AudioBufferList>) {
+    private func handle(_ input: UnsafePointer<AudioBufferList>, hostTime: UInt64) {
         let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         guard list.count > 0 else { return }
         if interleavedInput {
@@ -143,7 +145,7 @@ final class AudioTapIO {
             let ch = max(Int(buf.mNumberChannels), 1)
             let frames = Int(buf.mDataByteSize) / (4 * ch)
             guard frames > 0, let data = buf.mData?.assumingMemoryBound(to: Float.self) else { return }
-            onAudio(data, frames, ch)
+            onAudio(data, frames, ch, hostTime)
             return
         }
         let frames = Int(list[0].mDataByteSize) / 4
@@ -157,7 +159,7 @@ final class AudioTapIO {
             }
             for i in 0..<frames { scratch[i * ch + c] = data[i] }
         }
-        scratch.withUnsafeBufferPointer { onAudio($0.baseAddress!, frames, ch) }
+        scratch.withUnsafeBufferPointer { onAudio($0.baseAddress!, frames, ch, hostTime) }
     }
 
     func stop() {
@@ -212,8 +214,11 @@ final class RenderTap {
         if needStop { stopTap() }
     }
 
-    private func deliver(_ samples: UnsafePointer<Float>, frames: Int, channels: Int, rate: Double) {
+    private func deliver(_ samples: UnsafePointer<Float>, frames: Int, channels: Int, rate: Double, hostTime: UInt64) {
         if mono.count < frames { mono = [Float](repeating: 0, count: frames) }
+        // Метка первого отсчёта: по ней обработчик склеивает опорный сигнал с микрофоном
+        // (тап приходит из своего потока и опаздывает — без меток AEC эхо не находит).
+        let tsNs = MediaClock.nanos(hostTime: hostTime)
         let scale = 1 / Float(channels)
         for i in 0..<frames {
             var s: Float = 0
@@ -226,7 +231,7 @@ final class RenderTap {
                 guard let base = out.baseAddress else { return }
                 lock.lock()
                 for apm in sinks.values where apm.aec {
-                    apm.pushRender(base, frames: out.count, channels: 1)
+                    apm.pushRender(base, frames: out.count, channels: 1, tsNs: tsNs)
                 }
                 lock.unlock()
             }
@@ -242,8 +247,8 @@ final class RenderTap {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         description.name = "echo reference"
         weak var tapRef: AudioTapIO?
-        let tap = AudioTapIO(description: description, label: "render") { [weak self] samples, frames, ch in
-            self?.deliver(samples, frames: frames, channels: ch, rate: tapRef?.sampleRate ?? 48_000)
+        let tap = AudioTapIO(description: description, label: "render") { [weak self] samples, frames, ch, host in
+            self?.deliver(samples, frames: frames, channels: ch, rate: tapRef?.sampleRate ?? 48_000, hostTime: host)
         }
         tapRef = tap
         do {
@@ -318,7 +323,7 @@ final class ScreenAudioTap {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
         description.name = "screen audio"
         weak var tapRef: AudioTapIO?
-        let tap = AudioTapIO(description: description, label: "screen") { [weak self] samples, frames, ch in
+        let tap = AudioTapIO(description: description, label: "screen") { [weak self] samples, frames, ch, _ in
             self?.deliver(samples, frames: frames, channels: ch, rate: tapRef?.sampleRate ?? 48_000)
         }
         tapRef = tap

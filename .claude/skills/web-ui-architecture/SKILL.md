@@ -90,7 +90,10 @@ description: Структура web/src/interface.js (ZaliMixin, manifest.json) 
 пишется как `X:focus-visible:where([data-kbd-focus] *)`: эвристика браузера не годится —
 WebKit (Mac-оболочка) считает программный `focus()` после печати «клавиатурным», и
 кольца вылезали после обычного клика. Проверка — `ui_doctor` (`check_focus.mjs`).
-Вид поля ввода в фокусе — на `:focus`, его это не касается. В JS вместо
+Признак снимается `pointerdown` на window и document, `mousedown`, `touchstart` и
+потерей фокуса окном (`blur`); стрелки на `<body>` его не включают. Системная подсветка
+касания Android (`-webkit-tap-highlight-color`) гасится глобально, `:where(*)` в конце
+`style.css`. Вид поля ввода в фокусе — на `:focus`, его это не касается. В JS вместо
 `matches(':focus-visible')` — ещё и `ZaliFocusModality.isKeyboard()`.
 
 ## Выпадающие списки и полосы прокрутки

@@ -13,9 +13,12 @@
 // старые клиенты — как любую прямую ссылку на картинку (isDirectMediaUrl).
 //
 // Избранное — вкладка рядом с выдачей KLIPY и звёздочка на плитке и на GIF в чате.
+// Отметить можно любую GIF, что рисуется в ленте по ссылке (gifFavoritable): KLIPY,
+// Tenor, прямой .gif с любого https-хоста. GIF-файл, приложенный к сообщению, в
+// избранное не попадает — у него нет ссылки, а копить файлы мы не берёмся.
 // Хранится на устройстве, отдельно на каждый аккаунт (zali_gif_favorites_v1:<имя>):
-// только ссылки и размеры, сами файлы не копируются (условия KLIPY). В облако настроек
-// не кладётся — там 4 КБ на значение.
+// только ссылки и размеры, сами файлы не копируются (условия KLIPY). Синхронизация
+// между устройствами — settings_sync (gif_favorites), см. ниже.
 //
 // Тестовый ключ KLIPY — 100 запросов в час, поэтому: поиск с паузой после ввода,
 // тренды кешируются на 10 минут, «поделиться» шлётся одним запросом без повторов,
@@ -154,10 +157,10 @@ ZaliMixin(ZaliInterface, class {
         try {
             const raw = JSON.parse(localStorage.getItem(key) || '[]');
             if (Array.isArray(raw)) {
-                list = raw.filter(f => f && typeof f.url === 'string' && /^https:\/\//i.test(f.url) && this.isKlipyUrl(f.url))
+                list = raw.filter(f => f && typeof f.url === 'string' && this.gifFavoritable(f.url))
                     .map(f => ({
                         url: f.url,
-                        preview: typeof f.preview === 'string' && /^https:\/\//i.test(f.preview) && this.isKlipyUrl(f.preview) ? f.preview : f.url,
+                        preview: typeof f.preview === 'string' && this.gifFavoritable(f.preview) ? f.preview : f.url,
                         poster: typeof f.poster === 'string' && /^https:\/\//i.test(f.poster) && this.isKlipyUrl(f.poster) ? f.poster : '',
                         w: Number(f.w) || 1,
                         h: Number(f.h) || 1,
@@ -182,10 +185,31 @@ ZaliMixin(ZaliInterface, class {
         return !!url && this.gifFavorites().some(f => f.url === url);
     }
 
+    /** Ссылку можно держать в избранном: https и либо KLIPY (любой файл), либо Tenor
+     *  (прямой файл), либо прямой .gif на любом хосте (Giphy, Imgur, чей-то сервер).
+     *  Хранится только ссылка, как и для KLIPY, — файл не копируется. Те же правила, что
+     *  у renderUrlPreview: что в ленте рисуется как GIF, то и можно отметить. */
+    gifFavoritable(url) {
+        let parsed;
+        try { parsed = new URL(String(url || '')); } catch (e) { return false; }
+        if (parsed.protocol !== 'https:') return false;
+        if (this.isKlipyUrl(url)) return true;
+        if (this.isTenorUrl?.(url)) return !!this.isDirectMediaUrl?.(url);
+        return /\.gif$/i.test(parsed.pathname);
+    }
+
+    /** Вставляет звёздочку «в избранное» последним ребёнком рамки GIF (разметка из
+     *  renderAttachmentPreview). Не GIF для избранного или нет рамки — без изменений. */
+    gifAddFavStar(media, url) {
+        if (!this.gifFavoritable(url) || !/<\/div>\s*$/.test(media)) return media;
+        // Функция-заменитель: в строке-замене «$`», «$&» из URL подставили бы куски разметки.
+        return media.replace(/<\/div>\s*$/, () => `${this.gifFavStarHTML(url)}</div>`);
+    }
+
     /** Добавить/убрать. entry — запись выдачи (gifEntryFromItem) или { url } из чата. */
     gifToggleFavorite(entry) {
         const url = String(entry?.url || '');
-        if (!url || !this.isKlipyUrl(url)) return false;
+        if (!url || !this.gifFavoritable(url)) return false;
         const list = this.gifFavorites();
         const on = !list.some(f => f.url === url);
         const next = on
@@ -236,8 +260,9 @@ ZaliMixin(ZaliInterface, class {
             const preview = f.preview && f.preview !== f.url
                 ? (f.preview.startsWith(dir) && !f.preview.slice(dir.length).includes('/') ? f.preview.slice(dir.length) : pack(f.preview))
                 : '';
+            // «|» и перевод строки — разделители формата; чужая ссылка могла бы их содержать.
+            if (/[|\n]/.test(f.url) || /[|\n]/.test(preview)) continue;
             const line = `${pack(f.url)}|${preview}|${Math.round(f.w) || 1}x${Math.round(f.h) || 1}`;
-            if (/[\n]/.test(line)) continue;
             if (size + line.length + 1 > limit) break;
             lines.push(line);
             size += line.length + 1;
@@ -257,14 +282,14 @@ ZaliMixin(ZaliInterface, class {
             const [file, prev, size] = line.split('|');
             if (!file) return;
             const url = unpack(file);
-            if (!/^https:\/\//i.test(url) || !this.isKlipyUrl(url)) return;
+            if (!this.gifFavoritable(url)) return;
             const dir = url.slice(0, url.lastIndexOf('/') + 1);
             const preview = !prev ? url : (prev.includes('/') || /^https:\/\//i.test(prev) ? unpack(prev) : dir + prev);
             const [w, h] = String(size || '').split('x').map(Number);
             const known = local.get(url);
             list.push({
                 url,
-                preview: this.isKlipyUrl(preview) ? preview : url,
+                preview: this.gifFavoritable(preview) ? preview : url,
                 w: w > 0 ? w : 1,
                 h: h > 0 ? h : 1,
                 title: known?.title || '',

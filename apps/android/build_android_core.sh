@@ -36,7 +36,7 @@ repo_root="$(pwd)"
     -t arm64-v8a \
     -t x86_64 \
     -o "$repo_root/apps/android/app/src/main/jniLibs" \
-    build --release --features android)
+    build --release --features android,sfu)
 
 echo "✅ Rust Core собран для Android (arm64-v8a + x86_64) и скопирован в apps/android/app/src/main/jniLibs"
 echo "Дальше: cd apps/android && ./gradlew assembleDebug"

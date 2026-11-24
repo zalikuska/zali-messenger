@@ -123,6 +123,13 @@ idna = "1"
 # ece (a web-push dependency) only ships an OpenSSL-backed encryption backend — "vendored"
 # builds OpenSSL from source so the VPS doesn't need libssl-dev/pkg-config preinstalled.
 openssl = { version = "0.10", features = ["vendored"] }
+# SFU (sfu.rs): видео звонков идёт через сервер, а не копией на каждого собеседника.
+# Sans-IO WebRTC — сокет, таймеры и пересылку ведёт наш цикл. Крипто — тот же
+# вендоренный OpenSSL, что выше (без aws-lc: лишний C-тулчейн на VPS).
+str0m = { version = "0.25", default-features = false, features = ["openssl", "vendored"] }
+# Буферы UDP-сокета SFU (SO_RCVBUF/SO_SNDBUF): ключевой кадр 4K — тысячи пакетов разом,
+# системные ~200 КБ теряют его хвост. Уже есть в Cargo.lock через tokio.
+socket2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
@@ -177,3 +184,8 @@ path = "../tests/account_email.rs"
 [[test]]
 name = "history_recovery"
 path = "../tests/history_recovery.rs"
+
+# str0m с тремя константами, поднятыми под экран 1080p+ (окно NACK, интервал NACK, очередь пейсера) —
+# что и почему, в PATCHES.md форка. Отдельный репозиторий, закреплён по коммиту.
+[patch.crates-io]
+str0m = { git = "https://github.com/zalikuska/str0m-zali", rev = "d22d5e01cb859f1bade7e2b49c1b0488c1767c6b" }

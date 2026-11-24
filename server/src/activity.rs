@@ -16,10 +16,13 @@
 //!   каждое поле санитизируется как недоверенный ввод: оно уйдёт всем зрителям
 //!   и попадёт в их DOM.
 //!
-//! - **Зритель — друг или участник общего сервера.** Отношение симметрично, так
-//!   что «кому разослать» и «чьи статусы показать при подключении» — один и тот
-//!   же запрос (`related_users`). Раздавать статус вообще всем авторизованным
-//!   нельзя: по нему видно, чем человек занят прямо сейчас.
+//! - **Зритель — друг, участник общего сервера или собеседник по личке**, с
+//!   которым переписка взаимная (оба хоть раз написали друг другу). Отношение
+//!   симметрично, так что «кому разослать» и «чьи статусы показать при
+//!   подключении» — один и тот же запрос (`activity_audience`). Раздавать статус
+//!   вообще всем авторизованным нельзя: по нему видно, чем человек занят прямо
+//!   сейчас. По той же причине одного входящего сообщения мало — иначе любой
+//!   незнакомец, написав разок, видел бы, во что ты играешь.
 //!
 //! - **Рассылка только по изменению.** Клиент для надёжности повторяет текущий
 //!   статус раз в ~25 с (новый сокет после реконнекта ничего не знает), и без
@@ -183,6 +186,36 @@ pub(crate) async fn related_users(state: &AppState, username: &str) -> HashSet<S
     related
 }
 
+/// Собеседники по личке, с которыми переписка взаимная: `username` писал им, и
+/// они писали ему. Симметрично по построению.
+async fn mutual_dm_peers(state: &AppState, username: &str) -> HashSet<String> {
+    match sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT a.receiver FROM messages a
+         WHERE a.server_id IS NULL AND a.sender = ?1 AND a.receiver <> ?1
+           AND EXISTS (SELECT 1 FROM messages b
+                       WHERE b.server_id IS NULL AND b.sender = a.receiver AND b.receiver = ?1)",
+    )
+    .bind(username)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(peers) => peers.into_iter().collect(),
+        Err(e) => {
+            warn!("activity: dm peers lookup failed user={} err={}", username, e);
+            HashSet::new()
+        }
+    }
+}
+
+/// Кто видит игровой статус `username` (и чей статус видит он сам): друзья,
+/// соседи по серверам и собеседники по взаимной личке.
+pub(crate) async fn activity_audience(state: &AppState, username: &str) -> HashSet<String> {
+    let mut audience = related_users(state, username).await;
+    audience.extend(mutual_dm_peers(state, username).await);
+    audience.remove(username);
+    audience
+}
+
 fn activity_payload(username: &str, activity: Option<&GameActivity>) -> Value {
     json!({
         "type": "user_activity",
@@ -194,7 +227,7 @@ fn activity_payload(username: &str, activity: Option<&GameActivity>) -> Value {
 /// Разослать новое состояние `username` тем, кто его видит, и ему самому
 /// (чтобы остальные его устройства показали то же самое).
 async fn publish(state: &Arc<AppState>, username: &str, activity: Option<&GameActivity>) {
-    let mut viewers: Vec<String> = related_users(state, username)
+    let mut viewers: Vec<String> = activity_audience(state, username)
         .await
         .into_iter()
         .filter(|viewer| {
@@ -293,7 +326,7 @@ async fn visible_activities(state: &AppState, viewer: &str) -> HashMap<String, G
     if candidates.is_empty() {
         return HashMap::new();
     }
-    let related = related_users(state, viewer).await;
+    let related = activity_audience(state, viewer).await;
     candidates
         .into_iter()
         .filter(|name| name != viewer && related.contains(name))
@@ -444,6 +477,41 @@ mod tests {
         set_connection_activity(&state, alice_conn, "alice", &game("Factorio")).await;
 
         assert!(visible_activities(&state, "carol").await.contains_key("alice"));
+    }
+
+    async fn dm(state: &Arc<AppState>, sender: &str, receiver: &str) {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        sqlx::query(
+            "INSERT INTO messages (id, sender, receiver, filename, timestamp)
+             VALUES (?, ?, ?, 'f.zali', CURRENT_TIMESTAMP)",
+        )
+        .bind(format!("m{n}"))
+        .bind(sender)
+        .bind(receiver)
+        .execute(&state.db)
+        .await
+        .expect("insert message");
+    }
+
+    #[tokio::test]
+    async fn a_mutual_dm_partner_sees_the_game_but_a_one_way_sender_does_not() {
+        let state = test_state().await;
+        dm(&state, "alice", "bob").await;
+        dm(&state, "bob", "alice").await;
+        // eve только написала alice — ответа не было.
+        dm(&state, "eve", "alice").await;
+        let (alice_conn, _alice_rx) = connect(&state, "alice");
+        let (_bob_conn, mut bob_rx) = connect(&state, "bob");
+        let (_eve_conn, mut eve_rx) = connect(&state, "eve");
+
+        set_connection_activity(&state, alice_conn, "alice", &game("Deadlock")).await;
+
+        let frame: Value =
+            serde_json::from_str(&bob_rx.try_recv().expect("bob got a frame")).expect("json");
+        assert_eq!(frame["activity"]["name"], "Deadlock");
+        assert!(eve_rx.try_recv().is_err(), "a one-way sender must not receive it");
+        assert!(visible_activities(&state, "bob").await.contains_key("alice"));
+        assert!(visible_activities(&state, "eve").await.is_empty());
     }
 
     #[tokio::test]

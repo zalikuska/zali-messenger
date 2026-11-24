@@ -7,7 +7,8 @@ import CoreMedia
 // 32 байта заголовка, little-endian:
 //   0 u8 0x5A | 1 u8 версия=1 | 2 u8 вид (1 звук, 2 видео) | 3 u8 кодек
 //   4 u32 stream | 8 u64 метка, мкс | 16 u16 ширина | 18 u16 высота
-//   20 u8 флаги (бит 0 — ключевой) | 21 u8 каналы | 22 u16 резерв
+//   20 u8 флаги (бит 0 — ключевой) | 21 u8 каналы | 22 u8 слой (0 — без слоёв, иначе
+//   номер слоя simulcast + 1, снизу вверх) | 23 u8 резерв
 //   24 u32 длина данных | 28 u32 номер кадра
 enum MediaFrame {
     static let headerSize = 32
@@ -15,6 +16,8 @@ enum MediaFrame {
     static let kindVideo: UInt8 = 2
     static let codecPCMF32: UInt8 = 1
     static let codecH264: UInt8 = 1
+    /// Превью нативной демонстрации, когда слои сжаты H.265 (native_media.js ZALI_MEDIA_CODEC_H265).
+    static let codecH265: UInt8 = 3
 
     struct Header {
         var kind: UInt8
@@ -26,6 +29,8 @@ enum MediaFrame {
         var keyframe: Bool = false
         var channels: UInt8 = 0
         var seq: UInt32 = 0
+        /// 0 — поток без слоёв; иначе номер слоя + 1 (экран для SFU без перекодирования).
+        var layer: UInt8 = 0
     }
 
     /// Заголовок + `payloadBytes` байт данных, которые дописывает `fill`.
@@ -42,7 +47,8 @@ enum MediaFrame {
             raw.storeBytes(of: h.height.littleEndian, toByteOffset: 18, as: UInt16.self)
             raw.storeBytes(of: UInt8(h.keyframe ? 1 : 0), toByteOffset: 20, as: UInt8.self)
             raw.storeBytes(of: h.channels, toByteOffset: 21, as: UInt8.self)
-            raw.storeBytes(of: UInt16(0), toByteOffset: 22, as: UInt16.self)
+            raw.storeBytes(of: h.layer, toByteOffset: 22, as: UInt8.self)
+            raw.storeBytes(of: UInt8(0), toByteOffset: 23, as: UInt8.self)
             raw.storeBytes(of: UInt32(payloadBytes).littleEndian, toByteOffset: 24, as: UInt32.self)
             raw.storeBytes(of: h.seq.littleEndian, toByteOffset: 28, as: UInt32.self)
             if payloadBytes > 0 {
@@ -78,6 +84,11 @@ enum MediaClock {
     }
 
     static func nowMicros() -> UInt64 { micros(hostTime: mach_absolute_time()) }
+
+    /// Host time → нс (метки опорного сигнала и микрофона для эхоподавителя).
+    static func nanos(hostTime: UInt64) -> Int64 {
+        Int64(bitPattern: hostTime &* UInt64(timebase.numer) / UInt64(max(timebase.denom, 1)))
+    }
 
     static func micros(_ time: CMTime) -> UInt64 {
         guard time.isValid, time.isNumeric else { return nowMicros() }

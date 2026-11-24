@@ -26,6 +26,8 @@ use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
 
 mod voice;
+// Видео звонков через сервер (selective forwarding unit) — см. sfu.rs.
+mod sfu;
 use voice::{
     decline_call_with_token, get_turn_credentials, revalidate_server_voice, get_server_voice_presence, get_voice_channel_presence, handle_voice_event, leave_voice_room, send_voice_room_snapshot_to_user,
     VoiceLeave, VoiceRoom,
@@ -172,6 +174,9 @@ pub struct Config {
     turn_static_auth_secret: Option<String>,
     turn_urls: Vec<String>,
     turn_credential_ttl_secs: u64,
+    // SFU (sfu.rs). `SFU_UDP_PORT` не задан (по умолчанию) — SFU выключен, видео звонков
+    // идёт в mesh, как раньше: та же схема «включается настройкой деплоя», что TURN выше.
+    sfu: Option<sfu::SfuConfig>,
     // Классификатор жалоб (moderation.rs). Ключ не задан (по умолчанию) —
     // жалобы принимаются и копятся в очереди, классификатор не зовётся.
     openrouter_api_key: Option<String>,
@@ -436,6 +441,7 @@ impl Config {
             turn_static_auth_secret: turn_static_auth_secret.filter(|_| !turn_urls.is_empty()),
             turn_urls,
             turn_credential_ttl_secs,
+            sfu: sfu::SfuConfig::from_env(),
             openrouter_api_key,
             openrouter_base_url,
             moderation_model,
@@ -625,6 +631,8 @@ pub struct AppState {
     // merely forgot (restart, eviction after a long outage) but never one of these.
     // See `mark_voice_room_ended` in voice.rs.
     ended_voice_rooms: DashMap<String, Instant>,
+    // Поток SFU (sfu.rs); None — выключен или не смог занять порт.
+    sfu: Option<sfu::SfuHandle>,
     ws_tickets: DashMap<String, WsTicketRecord>,
     // Coalesces `key_envelope_available` pushes: recipient → when one was last sent.
     // A republish sweep writes one envelope per device per scope, and each write used
@@ -2296,6 +2304,8 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     let device_activity = device_activity::load_device_activity(&pool).await;
     let moderation = moderation::ModerationRuntime::load(&pool).await;
     let mailer = mailer::Mailer::start(&config.mail, &data_dir);
+    let (sfu_out_tx, sfu_out_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sfu = config.sfu.clone().and_then(|cfg| sfu::start(cfg, sfu_out_tx));
     let state = Arc::new(AppState {
         db: pool,
         data_dir,
@@ -2309,6 +2319,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
         voice_rooms: DashMap::new(),
         user_voice_rooms: DashMap::new(),
         ended_voice_rooms: DashMap::new(),
+        sfu,
         ws_tickets: DashMap::new(),
         key_envelope_notified_at: DashMap::new(),
         login_attempts: DashMap::new(),
@@ -2321,6 +2332,7 @@ pub async fn build_app_state(data_dir: PathBuf, config: Config) -> Arc<AppState>
     });
     // Очередь жалоб: без OPENROUTER_API_KEY задача не стартует, жалобы ждут.
     moderation::spawn_worker(Arc::clone(&state));
+    voice::spawn_sfu_relay(Arc::clone(&state), sfu_out_rx);
     state
 }
 

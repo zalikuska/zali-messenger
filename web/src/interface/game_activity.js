@@ -434,15 +434,23 @@ ZaliMixin(ZaliInterface, class {
 
     // Статусы приходят пачками (снимок при подключении — десятки записей), а
     // перерисовка списков не бесплатна: сводим всё к одному кадру.
+    //
+    // rAF + страховочный таймер (как scheduleRenderMessages): у свёрнутого или
+    // заслонённого окна rAF не вызывается вовсе (WKWebView, WebView2), и статус
+    // друга, пришедший по сокету мгновенно, появлялся бы на экране только когда
+    // окно снова покажут. Сработает то, что раньше; второй вызов — пустышка.
     scheduleGameActivityRender() {
         if (this._gameActivityRenderQueued) return;
         this._gameActivityRenderQueued = true;
+        let done = false;
         const run = () => {
+            if (done) return;
+            done = true;
             this._gameActivityRenderQueued = false;
             this.renderGameActivityUi();
         };
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-        else setTimeout(run, 0);
+        setTimeout(run, typeof requestAnimationFrame === 'function' ? 50 : 0);
     }
 
     renderGameActivityUi() {
@@ -490,7 +498,7 @@ ZaliMixin(ZaliInterface, class {
             } else if (detected) {
                 text = `Сейчас определено: ${detected.name}.`;
             } else {
-                text = 'Игра не найдена. Как только вы запустите известную игру, она появится у друзей и участников ваших серверов.';
+                text = 'Игра не найдена. Как только вы запустите известную игру, она появится у друзей, участников ваших серверов и собеседников по личке.';
             }
             status.textContent = text;
         }

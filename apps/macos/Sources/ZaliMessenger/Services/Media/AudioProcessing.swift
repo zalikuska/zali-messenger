@@ -29,20 +29,24 @@ final class ApmHandle {
         if let ptr { zali_apm_set_config(ptr, aec, ns, agc) }
     }
 
-    func pushRender(_ samples: UnsafePointer<Float>, frames: Int, channels: Int) {
+    /// `tsNs` — host time первого отсчёта в нс (те же часы, что у `process`).
+    func pushRender(_ samples: UnsafePointer<Float>, frames: Int, channels: Int, tsNs: Int64) {
         guard let ptr, frames > 0 else { return }
-        zali_apm_push_render(ptr, samples, frames, UInt32(channels))
+        zali_apm_push_render_at(ptr, samples, frames, UInt32(channels), tsNs)
     }
 
-    /// Обрабатывает `input`, готовые отсчёты дописывает в `out`.
-    func process(_ input: UnsafeBufferPointer<Float>, into out: inout [Float]) {
+    /// Обрабатывает `input` (первый отсчёт — в `tsNs`, host time в нс), готовые отсчёты
+    /// дописывает в `out`. Кадры, которым ещё не пришёл опорный сигнал, ждут следующего
+    /// вызова (не дольше 120 мс) — так эхоподавитель всегда видит опорный раньше эха.
+    func process(_ input: UnsafeBufferPointer<Float>, tsNs: Int64, into out: inout [Float]) {
         guard let ptr else {
             out.append(contentsOf: input)
             return
         }
-        var scratch = [Float](repeating: 0, count: input.count + 960)
+        // Запас: ждавшие кадры выходят разом.
+        var scratch = [Float](repeating: 0, count: input.count + 960 * 14)
         var produced = scratch.withUnsafeMutableBufferPointer { dst in
-            zali_apm_process_capture(ptr, input.baseAddress, input.count, dst.baseAddress, dst.count)
+            zali_apm_process_capture_at(ptr, input.baseAddress, input.count, tsNs, dst.baseAddress, dst.count)
         }
         out.append(contentsOf: scratch[0..<produced])
         // Остаток (если выход оказался больше буфера) — забрать без нового входа.

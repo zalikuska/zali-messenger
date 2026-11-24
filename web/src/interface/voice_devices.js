@@ -79,6 +79,11 @@ ZaliMixin(ZaliInterface, class {
                     try { await entry.videoSender.replaceTrack(track); } catch (e) {}
                 }
             }
+            // В режиме SFU камеру несёт соединение публикации (voice_sfu.js).
+            const sfuCamera = this.voice.sfu?.pub?.transceivers?.camera;
+            if (sfuCamera?.sender) {
+                try { await sfuCamera.sender.replaceTrack(track); } catch (e) {}
+            }
             this.attachLocalVideoPreview();
             this.voiceTrace('camera-switched', { deviceId: id, label: track.label || '' });
             this.renderVoicePanel();
@@ -281,8 +286,8 @@ ZaliMixin(ZaliInterface, class {
     openNativeScreenPicker() {
         const pref = this.loadVoiceDevicePref(ZaliInterface.VOICE_SCREEN_PREF_KEY);
         let tab = pref.sourceKind === 'window' ? 'window' : 'display';
-        let height = [0, 720, 1080].includes(Number(pref.height)) ? Number(pref.height) : 1080;
-        let fps = [15, 30, 60].includes(Number(pref.fps)) ? Number(pref.fps) : 30;
+        let height = [0, 720, 1080, 1440, 2160].includes(Number(pref.height)) ? Number(pref.height) : 1080;
+        let fps = [15, 30, 60, 120].includes(Number(pref.fps)) ? Number(pref.fps) : 30;
         const audioSupported = this.nativeSupports('nativeScreenAudio');
         let audio = audioSupported && !(pref.audio === 0 || pref.audio === false);
         let selectedId = '';
@@ -297,8 +302,8 @@ ZaliMixin(ZaliInterface, class {
             bodyHtml: `
                 ${seg('tab', [{ v: 'display', l: 'Экраны' }, { v: 'window', l: 'Окна' }], tab)}
                 <div class="voice-src-grid" id="voiceSrcGrid" role="radiogroup" aria-label="Источник"></div>
-                <div class="voice-picker-field"><span class="voice-picker-label">Разрешение</span>${seg('height', [{ v: 720, l: '720p' }, { v: 1080, l: '1080p' }, { v: 0, l: 'Оригинал' }], height)}</div>
-                <div class="voice-picker-field"><span class="voice-picker-label">Частота кадров</span>${seg('fps', [{ v: 15, l: '15' }, { v: 30, l: '30' }, { v: 60, l: '60' }], fps)}</div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Разрешение</span>${seg('height', [{ v: 720, l: '720p' }, { v: 1080, l: '1080p' }, { v: 1440, l: '1440p' }, { v: 2160, l: '4K' }, { v: 0, l: 'Оригинал' }], height)}</div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Частота кадров</span>${seg('fps', [{ v: 15, l: '15' }, { v: 30, l: '30' }, { v: 60, l: '60' }, { v: 120, l: '120' }], fps)}</div>
                 ${audioSupported ? `<div class="voice-picker-field"><span class="voice-picker-label">Звук</span>${seg('audio', [{ v: 1, l: 'Передавать' }, { v: 0, l: 'Без звука' }], audio ? 1 : 0)}</div>` : ''}`,
             onMount: (ov, confirm) => {
                 ov.querySelector('.voice-picker')?.classList.add('voice-picker--wide');
@@ -447,8 +452,8 @@ ZaliMixin(ZaliInterface, class {
             { id: 'window', icon: 'window', title: 'Окно', note: 'Одно приложение' },
         ];
         let surface = categories.some(c => c.id === pref.surface) ? pref.surface : 'monitor';
-        let height = [0, 720, 1080].includes(Number(pref.height)) ? Number(pref.height) : 1080;
-        let fps = [15, 30, 60].includes(Number(pref.fps)) ? Number(pref.fps) : 30;
+        let height = [0, 720, 1080, 1440, 2160].includes(Number(pref.height)) ? Number(pref.height) : 1080;
+        let fps = [15, 30, 60, 120].includes(Number(pref.fps)) ? Number(pref.fps) : 30;
         // Звук демонстрации: по умолчанию включён. В Windows отдаётся звук всей
         // системы (или вкладки); где платформа не умеет — картинка идёт без звука.
         let audio = !(pref.audio === 0 || pref.audio === false);
@@ -465,8 +470,8 @@ ZaliMixin(ZaliInterface, class {
                             <span class="voice-picker-cat-note">${this.esc(c.note)}</span>
                         </button>`).join('')}
                 </div>
-                <div class="voice-picker-field"><span class="voice-picker-label">Разрешение</span>${seg('height', [{ v: 720, l: '720p' }, { v: 1080, l: '1080p' }, { v: 0, l: 'Оригинал' }], height)}</div>
-                <div class="voice-picker-field"><span class="voice-picker-label">Частота кадров</span>${seg('fps', [{ v: 15, l: '15' }, { v: 30, l: '30' }, { v: 60, l: '60' }], fps)}</div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Разрешение</span>${seg('height', [{ v: 720, l: '720p' }, { v: 1080, l: '1080p' }, { v: 1440, l: '1440p' }, { v: 2160, l: '4K' }, { v: 0, l: 'Оригинал' }], height)}</div>
+                <div class="voice-picker-field"><span class="voice-picker-label">Частота кадров</span>${seg('fps', [{ v: 15, l: '15' }, { v: 30, l: '30' }, { v: 60, l: '60' }, { v: 120, l: '120' }], fps)}</div>
                 <div class="voice-picker-field"><span class="voice-picker-label">Звук</span>${seg('audio', [{ v: 1, l: 'Передавать' }, { v: 0, l: 'Без звука' }], audio ? 1 : 0)}</div>
                 <div class="voice-picker-note">Конкретный экран или окно вы выберете в следующем системном окне.</div>`,
             onMount: (overlay) => {

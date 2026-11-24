@@ -5,13 +5,14 @@
 //! Статический импорт (как делает крейт `windows`) означал бы, что загрузчик не
 //! запустит exe вообще — весь мессенджер, а не только камера. Методы интерфейсов
 //! (IMFSourceReader и т.п.) идут через vtable и импорта не требуют — динамически
-//! грузятся только эти пять свободных функций.
+//! грузятся только свободные функции ниже (камера и кодировщик H.264, h264_mf.rs).
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use windows::core::{s, w, Interface, Result, HRESULT, PCSTR, PCWSTR};
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFAttributes, IMFMediaSource, IMFMediaType, IMFSourceReader, MF_VERSION,
+    IMFActivate, IMFAttributes, IMFMediaBuffer, IMFMediaSource, IMFMediaType, IMFSample, IMFSourceReader,
+    MFT_REGISTER_TYPE_INFO, MF_VERSION,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
@@ -21,12 +22,25 @@ type MfCreateAttributesFn = unsafe extern "system" fn(*mut *mut c_void, u32) -> 
 type MfCreateMediaTypeFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
 type MfEnumDeviceSourcesFn = unsafe extern "system" fn(*mut c_void, *mut *mut *mut c_void, *mut u32) -> HRESULT;
 type MfCreateSourceReaderFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> HRESULT;
+type MftEnumExFn = unsafe extern "system" fn(
+    windows::core::GUID,
+    u32,
+    *const MFT_REGISTER_TYPE_INFO,
+    *const MFT_REGISTER_TYPE_INFO,
+    *mut *mut *mut c_void,
+    *mut u32,
+) -> HRESULT;
+type MfCreateSampleFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
+type MfCreateMemoryBufferFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> HRESULT;
 
 struct Api {
     create_attributes: MfCreateAttributesFn,
     create_media_type: MfCreateMediaTypeFn,
     enum_device_sources: MfEnumDeviceSourcesFn,
     create_source_reader: MfCreateSourceReaderFn,
+    mft_enum_ex: MftEnumExFn,
+    create_sample: MfCreateSampleFn,
+    create_memory_buffer: MfCreateMemoryBufferFn,
 }
 
 const MFSTARTUP_NOSOCKET: u32 = 1;
@@ -45,6 +59,9 @@ fn api() -> Option<&'static Api> {
             create_media_type: std::mem::transmute(proc(w!("mfplat.dll"), s!("MFCreateMediaType"))?),
             enum_device_sources: std::mem::transmute(proc(w!("mf.dll"), s!("MFEnumDeviceSources"))?),
             create_source_reader: std::mem::transmute(proc(w!("mfreadwrite.dll"), s!("MFCreateSourceReaderFromMediaSource"))?),
+            mft_enum_ex: std::mem::transmute(proc(w!("mfplat.dll"), s!("MFTEnumEx"))?),
+            create_sample: std::mem::transmute(proc(w!("mfplat.dll"), s!("MFCreateSample"))?),
+            create_memory_buffer: std::mem::transmute(proc(w!("mfplat.dll"), s!("MFCreateMemoryBuffer"))?),
         };
         // Один раз на процесс; MFShutdown не зовём — Media Foundation живёт до выхода.
         if startup(MF_VERSION, MFSTARTUP_NOSOCKET).is_err() {
@@ -105,5 +122,49 @@ pub fn create_source_reader(source: &IMFMediaSource, attrs: &IMFAttributes) -> R
         let mut raw = std::ptr::null_mut();
         (api.create_source_reader)(source.as_raw(), attrs.as_raw(), &mut raw).ok()?;
         Ok(IMFSourceReader::from_raw(raw))
+    }
+}
+
+/// Преобразования (MFT) категории `category` с такими типами входа и выхода.
+pub fn mft_enum_ex(
+    category: windows::core::GUID,
+    flags: u32,
+    input: &MFT_REGISTER_TYPE_INFO,
+    output: &MFT_REGISTER_TYPE_INFO,
+) -> Result<Vec<IMFActivate>> {
+    let api = api().ok_or_else(missing)?;
+    unsafe {
+        let mut list: *mut *mut c_void = std::ptr::null_mut();
+        let mut count = 0u32;
+        (api.mft_enum_ex)(category, flags, input, output, &mut list, &mut count).ok()?;
+        let mut out = Vec::with_capacity(count as usize);
+        if !list.is_null() {
+            for i in 0..count as usize {
+                let raw = *list.add(i);
+                if !raw.is_null() {
+                    out.push(IMFActivate::from_raw(raw));
+                }
+            }
+            CoTaskMemFree(Some(list as *const _));
+        }
+        Ok(out)
+    }
+}
+
+pub fn create_sample() -> Result<IMFSample> {
+    let api = api().ok_or_else(missing)?;
+    unsafe {
+        let mut raw = std::ptr::null_mut();
+        (api.create_sample)(&mut raw).ok()?;
+        Ok(IMFSample::from_raw(raw))
+    }
+}
+
+pub fn create_memory_buffer(len: u32) -> Result<IMFMediaBuffer> {
+    let api = api().ok_or_else(missing)?;
+    unsafe {
+        let mut raw = std::ptr::null_mut();
+        (api.create_memory_buffer)(len, &mut raw).ok()?;
+        Ok(IMFMediaBuffer::from_raw(raw))
     }
 }

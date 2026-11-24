@@ -4,7 +4,7 @@
 cd "$(dirname "$0")/../core"
 
 # Сборка для архитектуры текущего Mac (x86_64 или aarch64)
-cargo build --release --features apm
+cargo build --release --features apm,sfu
 
 # Создание папки для библиотеки в проекте macOS, если её нет
 mkdir -p ../apps/macos/ZaliMessenger/Frameworks

@@ -49,6 +49,9 @@ function makeClient(name, { host = false } = {}) {
         roomId: 'voice:server:s1:c1', roomType: 'server', serverId: 's1', channelId: 'c1',
         screenSharing: host, screenNativeStream: host ? 7 : 0, screenIsDisplay: host,
         peerConnections: new Map(others.map((n) => [n, { pc: {} }])),
+        // Зритель видит экран alice: без этого onRemoteControlGranted отвечает 'no-screen'
+        // (проверка аудита 2026-11-18) и право не принимается.
+        remoteScreens: new Map(host ? [] : [['alice', {}]]),
     };
     api.addLogEntry = (e) => api.logs.push(e.msg);
     api.voiceTrace = () => {};

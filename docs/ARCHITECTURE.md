@@ -181,6 +181,20 @@ The standalone web host must serve `index.html` for `/server/*` and `/profile/*`
 `server/src/main.rs` has had two subsystems pulled out so far:
 - `server/src/voice.rs` — `VoiceRoom` state, join/leave/route/invite, the `voice_*`
   WS dispatcher (~780 lines).
+- `server/src/sfu.rs` — selective forwarding unit for call video (str0m, sans-IO, its
+  own OS thread; UDP socket plus ICE-TCP on the same port as a fallback for networks that block UDP). Camera/screen go to the server once (simulcast q/h/f)
+  and each viewer gets the layer that fits its own bandwidth estimate; mic audio and data
+  channels stay peer-to-peer. Enabled by `SFU_UDP_PORT`; the room's mode (`videoTransport`
+  in `voice_room_state`) is `sfu` only when every participant supports it. Client side:
+  `web/src/interface/voice_sfu.js`. In the native shells the screen share skips the WebView:
+  the shell encodes the simulcast layers itself (macOS VideoToolbox, Windows Media Foundation,
+  Android MediaCodec fed through an OpenGL fan-out) and a str0m publisher in the Rust core
+  (`core/src/sfu_publisher.rs`, feature `sfu`; C ABI, direct Rust, JNI) sends them to the SFU,
+  signalled by the page as a second publisher (`slot: "native"`).
+  The server builds against a patched str0m kept in its own repository
+  ([`zalikuska/str0m-zali`](https://github.com/zalikuska/str0m-zali), pinned by `rev` in
+  `[patch.crates-io]` of `server/Cargo.toml`): larger NACK window, faster NACKs and a shorter
+  pacer queue for 1080p+ screen share; the patch list is `PATCHES.md` there.
 - `server/src/devices.rs` — device trust (register/approve/revoke), E2E key envelope
   delivery, cloud vault events, history tickets, transparency log
   (~1125 lines).

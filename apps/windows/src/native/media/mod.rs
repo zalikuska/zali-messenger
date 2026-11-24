@@ -40,6 +40,8 @@ mod com;
 #[cfg(target_os = "windows")]
 mod devices;
 #[cfg(target_os = "windows")]
+mod h264_mf;
+#[cfg(target_os = "windows")]
 mod hub;
 #[cfg(target_os = "windows")]
 mod loopback;

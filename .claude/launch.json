@@ -11,6 +11,23 @@
       "port": 3000
     },
     {
+      "name": "zali-server-sfu",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "k=\"$(grep -E '^KLIPY_APP_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2-)\"; [ -n \"$k\" ] && export KLIPY_APP_KEY=\"$k\"; SFU_UDP_PORT=3479 JWT_SECRET=local-dev-sfu-secret-not-for-production-0001 ALLOWED_ORIGINS=http://127.0.0.1:8090,http://localhost:8090,http://127.0.0.1:8092,http://localhost:8092 CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG=true exec cargo run --release --manifest-path server/Cargo.toml -p zali_server"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "zali-server-lan",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "scripts/lan_server.sh"
+      ],
+      "port": 3000
+    },
+    {
       "name": "web-static",
       "runtimeExecutable": "python3",
       "runtimeArgs": [
@@ -45,6 +62,56 @@
         "web"
       ],
       "port": 3000
+    },
+    {
+      "name": "lan-dist",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8099",
+        "--bind",
+        "0.0.0.0",
+        "--directory",
+        "dist/windows-lan"
+      ],
+      "port": 8099
+    },
+    {
+      "name": "zali-server-sfu-rig",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "mkdir -p /tmp/zali-sfu-rig && BIND_ADDR=127.0.0.1:3001 ZALI_DATA_DIR=/tmp/zali-sfu-rig SFU_UDP_PORT=3480 SFU_PUBLIC_IP=127.0.0.1 JWT_SECRET=local-dev-sfu-rig-secret-not-for-production-01 ALLOWED_ORIGINS=http://127.0.0.1:8090,http://localhost:8090 ALLOW_GUEST_MODE=false AUTH_COOKIE_SECURE=false exec server/target/release/zali_server"
+      ],
+      "port": 3001
+    },
+    {
+      "name": "zali-server-sfu-rig-loss",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "mkdir -p /tmp/zali-sfu-rig && BIND_ADDR=127.0.0.1:3001 ZALI_DATA_DIR=/tmp/zali-sfu-rig SFU_UDP_PORT=3480 SFU_PUBLIC_IP=127.0.0.1 JWT_SECRET=local-dev-sfu-rig-secret-not-for-production-01 ALLOWED_ORIGINS=http://127.0.0.1:8090,http://localhost:8090 ALLOW_GUEST_MODE=false AUTH_COOKIE_SECURE=false SFU_TEST_LOSS_IN=3 SFU_TEST_DELAY_TO_PUB_MS=30 exec server/target/release/zali_server"
+      ],
+      "port": 3001
+    },
+    {
+      "name": "zali-server-sfu-rig-wifi",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "mkdir -p /tmp/zali-sfu-rig && BIND_ADDR=127.0.0.1:3001 ZALI_DATA_DIR=/tmp/zali-sfu-rig SFU_UDP_PORT=3480 SFU_PUBLIC_IP=127.0.0.1 JWT_SECRET=local-dev-sfu-rig-secret-not-for-production-01 ALLOWED_ORIGINS=http://127.0.0.1:8090,http://localhost:8090 ALLOW_GUEST_MODE=false AUTH_COOKIE_SECURE=false SFU_TEST_STALL=70/520/256 SFU_TEST_DELAY_TO_PUB_MS=3 RUST_LOG=zali_server::sfu=debug,zali_server=info exec server/target/release/zali_server"
+      ],
+      "port": 3001
+    },
+    {
+      "name": "zali-server-sfu-rig-wifi-viewer",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "mkdir -p /tmp/zali-sfu-rig && BIND_ADDR=127.0.0.1:3001 ZALI_DATA_DIR=/tmp/zali-sfu-rig SFU_UDP_PORT=3480 SFU_PUBLIC_IP=127.0.0.1 JWT_SECRET=local-dev-sfu-rig-secret-not-for-production-01 ALLOWED_ORIGINS=http://127.0.0.1:8090,http://localhost:8090 ALLOW_GUEST_MODE=false AUTH_COOKIE_SECURE=false SFU_TEST_STALL=70/520/256 SFU_TEST_STALL_VIEWERS=1 RUST_LOG=zali_server::sfu=debug,zali_server=info exec server/target/release/zali_server"
+      ],
+      "port": 3001
     }
   ]
 }

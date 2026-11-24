@@ -134,19 +134,28 @@ impl WasapiCapture {
     /// (чередующиеся отсчёты f32). Ждём с таймаутом и забираем всё в любом случае:
     /// loopback устройства вывода на части систем не сигналит событием.
     /// Ошибка — устройство пропало (`AUDCLNT_E_DEVICE_INVALIDATED`) или поток умер.
-    pub fn read(&self, timeout_ms: u32, out: &mut Vec<f32>) -> Result<()> {
+    /// Ok(Some(t)) — метка первого забранного отсчёта (QPC в нс: для микрофона — когда
+    /// записан, для loopback — когда отдан на вывод): по ним эхоподавитель склеивает
+    /// опорный сигнал с микрофоном. Ok(None) — пакетов не было.
+    pub fn read(&self, timeout_ms: u32, out: &mut Vec<f32>) -> Result<Option<i64>> {
+        let mut first_ts: Option<i64> = None;
         unsafe {
             // Таймаут — не ошибка: всё равно проверяем, нет ли пакетов.
             let _ = WaitForSingleObject(self.event, timeout_ms);
             loop {
                 let packet = self.capture.GetNextPacketSize()?;
                 if packet == 0 {
-                    return Ok(());
+                    return Ok(first_ts);
                 }
                 let mut data: *mut u8 = std::ptr::null_mut();
                 let mut frames = 0u32;
                 let mut flags = 0u32;
-                self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+                let mut qpc = 0u64;
+                self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut qpc))?;
+                if first_ts.is_none() {
+                    // Метка — в единицах по 100 нс. Ноль — драйвер её не дал.
+                    first_ts = Some(if qpc > 0 { (qpc as i64).saturating_mul(100) } else { qpc_now_ns() });
+                }
                 let count = frames as usize * self.channels;
                 if flags & BUFFERFLAGS_SILENT != 0 || data.is_null() {
                     out.resize(out.len() + count, 0.0);
@@ -199,7 +208,11 @@ fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
             },
         },
     };
-    let prop = PROPVARIANT {
+    // Весь PROPVARIANT в ManuallyDrop, а не только внутреннее поле: у самого PROPVARIANT
+    // (windows 0.61) есть Drop → PropVariantClear → для VT_BLOB CoTaskMemFree(pBlobData).
+    // Здесь pBlobData — адрес на стеке, и это давало STATUS_HEAP_CORRUPTION (0xc0000374)
+    // при первом же включении звука демонстрации (2026-11-22, оба билда).
+    let prop = std::mem::ManuallyDrop::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
                 vt: VT_BLOB,
@@ -214,7 +227,7 @@ fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
                 },
             }),
         },
-    };
+    });
     let (tx, rx) = mpsc::channel();
     let handler: IActivateAudioInterfaceCompletionHandler =
         ActivationHandler { done: std::sync::Mutex::new(Some(tx)) }.into();
@@ -222,7 +235,7 @@ fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
         let operation = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&prop),
+            Some(&*prop),
             &handler,
         )?;
         // PROPVARIANT ссылается на стековую структуру — не очищаем (PropVariantClear
@@ -244,7 +257,23 @@ fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
 
 /// Поток: loopback устройства вывода по умолчанию → `on_render(samples, channels)`.
 /// Устройство вывода сменилось (наушники) или пропало — переоткрываем по умолчанию.
-pub fn run_render_reference(stop: Arc<AtomicBool>, mut on_render: impl FnMut(&[f32], usize), on_state: impl Fn(bool)) {
+/// Сейчас по QPC, нс — те же часы, что метки `GetBuffer`.
+pub fn qpc_now_ns() -> i64 {
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    let (mut now, mut freq) = (0i64, 0i64);
+    unsafe {
+        let _ = QueryPerformanceCounter(&mut now);
+        let _ = QueryPerformanceFrequency(&mut freq);
+    }
+    if freq <= 0 {
+        return 0;
+    }
+    ((now as i128) * 1_000_000_000 / freq as i128) as i64
+}
+
+/// Поток опорного сигнала: `on_render(samples, channels, ts_ns)` — `ts_ns` метка первого
+/// отсчёта (QPC, нс).
+pub fn run_render_reference(stop: Arc<AtomicBool>, mut on_render: impl FnMut(&[f32], usize, i64), on_state: impl Fn(bool)) {
     let _com = super::com::ComGuard::new();
     let mut buf = Vec::with_capacity(4800);
     while !stop.load(Ordering::Acquire) {
@@ -264,11 +293,12 @@ pub fn run_render_reference(stop: Arc<AtomicBool>, mut on_render: impl FnMut(&[f
         on_state(true);
         while !stop.load(Ordering::Acquire) {
             buf.clear();
-            if capture.read(10, &mut buf).is_err() {
-                break;
-            }
-            if !buf.is_empty() {
-                on_render(&buf, capture.channels);
+            let ts = match capture.read(10, &mut buf) {
+                Ok(ts) => ts,
+                Err(_) => break,
+            };
+            if let (false, Some(ts)) = (buf.is_empty(), ts) {
+                on_render(&buf, capture.channels, ts);
             }
         }
         on_state(false);

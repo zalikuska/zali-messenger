@@ -43,6 +43,8 @@ final class MediaController {
     /// «Общий браузер»: тот же объект, что в `entries`, но для главного потока —
     /// ввод (до 60 событий/с) идёт в WKWebView без прыжка через `queue`.
     private var browsersOnMain: [UInt32: SharedBrowser] = [:]
+    /// Издатели экрана на SFU по номеру потока (сам издатель держит и `ScreenCapture`).
+    private var sfuPublishers: [UInt32: NativeSfuPublisher] = [:]
 
     /// Поднимает транспорт кадров. Звать до создания WKWebView (порт уходит в user-скрипт).
     @discardableResult
@@ -69,8 +71,10 @@ final class MediaController {
         guard bridgeReady else { return [:] }
         // nativeRemoteControl — удалённое управление по разрешению (RemoteControl.swift).
         // nativeSharedBrowser — «Общий браузер» (SharedBrowser.swift).
+        // nativeSfuScreen — экран слоями simulcast прямо на SFU издателем ядра, мимо WebRTC
+        // страницы (options.sfu в start, op sfu_answer, события `sfu`; NativeSfuPublisher.swift).
         return ["nativeMic": true, "nativeCamera": true, "nativeScreen": true, "nativeScreenAudio": true,
-                "nativeRemoteControl": true, "nativeSharedBrowser": true]
+                "nativeRemoteControl": true, "nativeSharedBrowser": true, "nativeSfuScreen": true]
     }
 
     // MARK: - Запросы
@@ -94,7 +98,7 @@ final class MediaController {
             if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
             return
         }
-        if op != "request_keyframe" {
+        if op != "request_keyframe" && op != "sfu_answer" {
             // Куки и адреса «Общего браузера» в журнал не пишутся — только их число.
             var logged = options
             if let cookies = logged["cookies"] as? [Any] { logged["cookies"] = cookies.count }
@@ -162,11 +166,19 @@ final class MediaController {
                         self.reply(requestId, ["event": "browser_cookies", "stream": stream, "cookies": cookies])
                     }
                 }
+            case "sfu_answer":
+                // Ответ SFU на оффер издателя (страница переслала voice_sfu_publish_answer).
+                guard case .screen(let screen) = entries[stream], let publisher = sfuPublishers[stream] else {
+                    return fail(requestId, stream: stream, MediaError.notFound("нет издателя SFU у потока \(stream)"))
+                }
+                _ = screen
+                publisher.answer((options["sdp"] as? String) ?? "")
+                reply(requestId, ["event": "sfu_answer_ok", "stream": stream])
             case "request_keyframe":
                 keyframeRequests += 1
                 switch entries[stream] {
                 case .camera(let hub): hub.requestKeyframe(stream)
-                case .screen(let screen): screen.requestKeyframe()
+                case .screen(let screen): screen.requestKeyframe(layer: (options["layer"] as? NSNumber)?.intValue)
                 case .browser(let browser): browser.requestKeyframe()
                 default: break
                 }
@@ -330,6 +342,24 @@ final class MediaController {
         let maxHeight = (options["maxHeight"] as? NSNumber)?.intValue ?? 0
         let audio = options["audio"] as? Bool ?? false
         let cursor = options["cursor"] as? Bool ?? true
+        // Отправка на SFU из оболочки (options.sfu): слои simulcast кодирует VideoToolbox,
+        // в сеть их шлёт издатель ядра; странице — только слой превью.
+        let sfu = options["sfu"] as? [String: Any]
+        // Не больше трёх слоёв; масштаб ≥ 1 (от размера захвата), частота 1…240.
+        let layers: [ScreenCapture.LayerSpec] = ((sfu?["layers"] as? [[String: Any]]) ?? []).prefix(3).enumerated().map { i, l in
+            let minBps = max(100_000, (l["minBps"] as? NSNumber)?.intValue ?? 300_000)
+            return ScreenCapture.LayerSpec(
+                rid: String((l["rid"] as? String ?? ["q", "h", "f"][i]).prefix(8)),
+                scale: max(1, (l["scale"] as? NSNumber)?.doubleValue ?? 1),
+                fps: max(1, min((l["fps"] as? NSNumber)?.intValue ?? fps, 240)),
+                bitsPerPixel: max(0.01, min((l["bpp"] as? NSNumber)?.doubleValue ?? 0.08, 1)),
+                minBps: minBps,
+                maxBps: max(minBps, min((l["maxBps"] as? NSNumber)?.intValue ?? 8_000_000, 200_000_000)))
+        }
+        let maxSide = (sfu?["maxSide"] as? NSNumber)?.intValue ?? 0
+        let previewLayer = (sfu?["previewLayer"] as? NSNumber)?.intValue ?? 0
+        let startBitrate = (sfu?["startBitrate"] as? NSNumber)?.intValue ?? 2_500_000
+        let codec = layers.isEmpty ? .h264 : MediaController.pickSfuCodec(sfu)
         let capture = ScreenCapture(stream: stream, bridge: bridge)
         capture.onEnded = { [weak self] reason in
             self?.queue.async { self?.stop(stream: stream, reason: reason, notify: true) }
@@ -337,11 +367,24 @@ final class MediaController {
         capture.sender.onFirstKeyframe = { [weak self, weak capture] in
             self?.queue.async {
                 guard let self, let capture, case .screen = self.entries[stream] else { return }
-                self.reply(requestId, ["event": "started", "stream": stream, "codec": capture.encoder?.currentCodec ?? "",
-                                       "label": capture.label, "deviceId": sourceId,
-                                       "audioExcludesApp": capture.audioExcludesApp,
-                                       "width": capture.width, "height": capture.height]) { [weak capture] in
-                    capture?.sender.openGate()
+                var started: [String: Any] = ["event": "started", "stream": stream, "codec": (capture.sender.encoder ?? capture.encoder)?.currentCodec ?? "",
+                                              "label": capture.label, "deviceId": sourceId,
+                                              "audioExcludesApp": capture.audioExcludesApp,
+                                              "width": capture.width, "height": capture.height,
+                                              "layers": capture.layerCount]
+                if !layers.isEmpty {
+                    if let publisher = self.makeSfuPublisher(stream: stream, capture: capture, startBitrate: startBitrate, codec: codec) {
+                        capture.attachPublisher(publisher)
+                        started["sfu"] = [
+                            "sdp": publisher.offerSdp, "mid": publisher.mid, "codec": codec.rawValue,
+                            "layers": capture.layerInfo.map { ["rid": $0.rid, "width": $0.width, "height": $0.height, "fps": $0.fps] },
+                        ] as [String: Any]
+                    } else {
+                        started["sfuError"] = "издатель ядра не создан"
+                    }
+                }
+                self.reply(requestId, started) { [weak capture] in
+                    capture?.openGates()
                 }
             }
         }
@@ -354,7 +397,8 @@ final class MediaController {
         }
         Task {
             do {
-                try await capture.start(sourceId: sourceId, fps: fps, maxHeight: maxHeight, audio: audio, cursor: cursor)
+                try await capture.start(sourceId: sourceId, fps: fps, maxHeight: maxHeight, maxSide: maxSide, audio: audio,
+                                        cursor: cursor, layers: layers, previewLayer: previewLayer, codec: codec)
                 self.queue.async {
                     guard isCurrent() else { capture.stop(); return }
                     self.failIfNoFrame(stream: stream, requestId: requestId, sender: capture.sender, seconds: 8)
@@ -368,6 +412,49 @@ final class MediaController {
                 }
             }
         }
+    }
+
+    /// Издатель ядра для экрана: события ядра — на `queue`; ключевые кадры и бюджет слоёв
+    /// уходят кодировщикам, остальное — странице (`event: "sfu"`).
+    /// Кодек слоёв нативной демонстрации: первый из `options.sfu.codecs` (страница: его
+    /// декодируют все в комнате, лучший первым), который здесь кодируется аппаратно и который
+    /// страница декодирует для превью (`previewDecode` — слой превью сжат тем же кодеком).
+    /// AV1-кодировщика у VideoToolbox нет. Старая страница списка не шлёт — H.264.
+    static func pickSfuCodec(_ sfu: [String: Any]?) -> VideoCodecKind {
+        let wanted = (sfu?["codecs"] as? [String]) ?? []
+        let preview = Set((sfu?["previewDecode"] as? [String]) ?? ["H264"])
+        for name in wanted {
+            guard let kind = VideoCodecKind(rawValue: name.uppercased()), preview.contains(kind.rawValue) else { continue }
+            if kind.hardwareEncodeAvailable { return kind }
+        }
+        return .h264
+    }
+
+    private func makeSfuPublisher(stream: UInt32, capture: ScreenCapture, startBitrate: Int, codec: VideoCodecKind) -> NativeSfuPublisher? {
+        let publisher = NativeSfuPublisher(layers: capture.layerInfo, startBitrate: startBitrate, codec: codec) { [weak self, weak capture] ev in
+            self?.queue.async {
+                guard let self, let capture, case .screen(let c) = self.entries[stream], c === capture else { return }
+                switch ev["event"] as? String {
+                case "keyframe":
+                    capture.requestKeyframe(layer: (ev["layer"] as? NSNumber)?.intValue)
+                case "bitrates":
+                    capture.setLayerBitrates((ev["bitrates"] as? [NSNumber])?.map { $0.intValue } ?? [])
+                    self.send(["event": "sfu", "stream": stream, "sfu": ev])
+                case "stats":
+                    mediaLog("screen sfu stream=\(stream) \(ev)")
+                    self.send(["event": "sfu", "stream": stream, "sfu": ev])
+                case "closed":
+                    mediaLog("screen sfu stream=\(stream) closed \(ev)")
+                    self.sfuPublishers.removeValue(forKey: stream)
+                    self.send(["event": "sfu", "stream": stream, "sfu": ev])
+                default:
+                    self.send(["event": "sfu", "stream": stream, "sfu": ev])
+                }
+            }
+        }
+        if let publisher { sfuPublishers[stream] = publisher }
+        mediaLog("screen sfu stream=\(stream) publisher=\(publisher != nil) codec=\(codec.rawValue) layers=\(capture.layerInfo.map { "\($0.rid):\($0.width)x\($0.height)@\($0.fps)" })")
+        return publisher
     }
 
     /// «Общий браузер»: скрытый WKWebView создаётся на главном потоке, кадры — как у экрана.
@@ -434,6 +521,7 @@ final class MediaController {
                 hubs = hubs.filter { $0.value !== hub }
             }
         case .screen(let screen):
+            sfuPublishers.removeValue(forKey: stream)
             screen.stop()
         case .browser(let browser):
             browser.stop()

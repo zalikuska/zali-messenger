@@ -42,11 +42,18 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
     private var captureThread: HandlerThread? = null
     @Volatile private var lastFrameAtMs = 0L
+    /** Режим MEDIA_REQUEST (H.264); null — прежний JPEG-путь. */
+    @Volatile private var h264: ScreenH264Encoder? = null
+    @Volatile private var mediaRequest: NativeBridge.MediaScreenRequest? = null
+    /** Режим «слои прямо на SFU» (ScreenSfuLayers); null — один кодировщик для страницы. */
+    @Volatile private var sfuLayers: ScreenSfuLayers? = null
+    private var codecThread: HandlerThread? = null
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             // Fires when the user stops sharing via the OS's own screen-share
             // indicator/notification, not just our STOP_SCREEN_CAPTURE path.
+            mediaRequest?.let { NativeBridge.activeInstance?.onMediaScreenEnded(it, "system") }
             stopCaptureInternal()
             stopSelf()
         }
@@ -83,9 +90,21 @@ class ScreenCaptureService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // Согласие пришло, когда запрос уже отменён (страница перезагрузилась, пока было
+        // открыто системное окно): проекцию сразу гасим, иначе висел бы индикатор записи.
+        if (NativeBridge.activeInstance?.screenCaptureWanted(requestId) != true) {
+            try { projection.stop() } catch (e: Exception) {}
+            stopSelf()
+            return START_NOT_STICKY
+        }
         mediaProjection = projection
         projection.registerCallback(projectionCallback, null)
-        startCapture(projection, requestId)
+        val media = NativeBridge.activeInstance?.mediaScreenRequestFor(requestId)
+        if (media != null) {
+            startH264Capture(projection, media)
+        } else {
+            startCapture(projection, requestId)
+        }
         return START_NOT_STICKY
     }
 
@@ -125,6 +144,115 @@ class ScreenCaptureService : Service() {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             reader.surface, null, handler
         )
+    }
+
+    /**
+     * MEDIA_REQUEST: VirtualDisplay → входная поверхность MediaCodec → H.264 в страницу.
+     * Короткая сторона — не больше `maxShort` (выбор «Качество» в окне демонстрации),
+     * длинная — не больше 2560; стороны кратны 16 (иначе часть кодировщиков отказывает).
+     */
+    private fun startH264Capture(projection: MediaProjection, req: NativeBridge.MediaScreenRequest) {
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealMetrics(metrics)
+        val w0 = metrics.widthPixels.toFloat()
+        val h0 = metrics.heightPixels.toFloat()
+        // Потолок длинной стороны для SFU (страница: SFU_SCREEN_MAX_SIDE).
+        val maxSide = req.sfu?.optInt("maxSide", 0)?.takeIf { it > 0 }?.toFloat() ?: 2560f
+        val scale = minOf(1f, req.maxShort / minOf(w0, h0), minOf(2560f, maxSide) / maxOf(w0, h0))
+        val width = ((w0 * scale).toInt() / 16 * 16).coerceAtLeast(16)
+        val height = ((h0 * scale).toInt() / 16 * 16).coerceAtLeast(16)
+
+        val thread = HandlerThread("ZaliScreenH264").apply { start() }
+        captureThread = thread
+        val handler = Handler(thread.looper)
+        mediaRequest = req
+        if (NativeBridge.activeInstance == null) {
+            stopCaptureInternal()
+            stopSelf()
+            return
+        }
+        val sfu = req.sfu
+        if (sfu == null) {
+            startSingleEncoder(projection, req, width, height, metrics.densityDpi, handler, null)
+            return
+        }
+        // Слои — на потоке захвата: там живёт контекст OpenGL раздачи кадров.
+        val codec = HandlerThread("ZaliScreenCodec").apply { start() }
+        codecThread = codec
+        handler.post {
+            if (mediaRequest !== req) return@post
+            val session = ScreenSfuLayers.create(
+                handler, Handler(codec.looper), req, sfu, width, height, width, height,
+                onPreviewStarted = { layers, c ->
+                    NativeBridge.activeInstance?.onMediaScreenStarted(
+                        req, c, layers.previewWidth, layers.previewHeight, layers.offerJson(), null,
+                    )
+                },
+                onPreviewFrame = { bytes, key -> NativeBridge.activeInstance?.postMediaFrame(req, bytes, key) ?: false },
+                onError = { message -> failCapture(req, message) },
+                onPublisherEvent = { layers, ev ->
+                    when (ev.optString("event")) {
+                        "keyframe" -> layers.requestKeyframe(ev.optInt("layer", 0))
+                        "bitrates" -> {
+                            val list = ev.optJSONArray("bitrates")
+                            if (list != null) layers.setBitrates((0 until list.length()).map { list.optInt(it, 0) })
+                            NativeBridge.activeInstance?.onMediaSfuEvent(req, ev)
+                        }
+                        else -> NativeBridge.activeInstance?.onMediaSfuEvent(req, ev)
+                    }
+                },
+            )
+            if (session == null) {
+                // Издатель или кодировщики слоёв не поднялись — прежний путь (WebRTC страницы).
+                android.util.Log.w("ZaliScreen", "sfu layers unavailable, single encoder")
+                startSingleEncoder(projection, req, width, height, metrics.densityDpi, handler, "слои SFU не запустились")
+                return@post
+            }
+            sfuLayers = session
+            virtualDisplay = projection.createVirtualDisplay(
+                "ZaliScreenSfu", width, height, metrics.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                session.inputSurface, null, handler
+            )
+            activeService = this
+        }
+    }
+
+    /** Один кодировщик: кадры только странице (она и отправляет их собеседникам). */
+    private fun startSingleEncoder(
+        projection: MediaProjection,
+        req: NativeBridge.MediaScreenRequest,
+        width: Int,
+        height: Int,
+        dpi: Int,
+        handler: Handler,
+        sfuError: String?,
+    ) {
+        val encoder = ScreenH264Encoder(
+            width, height, req.fps, req.stream, handler,
+            onStarted = { codec -> NativeBridge.activeInstance?.onMediaScreenStarted(req, codec, width, height, null, sfuError) },
+            onFrame = { bytes, key -> NativeBridge.activeInstance?.postMediaFrame(req, bytes, key) ?: false },
+            onError = { message -> failCapture(req, message) },
+        )
+        if (!encoder.start()) {
+            stopCaptureInternal()
+            stopSelf()
+            return
+        }
+        h264 = encoder
+        virtualDisplay = projection.createVirtualDisplay(
+            "ZaliScreenH264", width, height, dpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            encoder.inputSurface, null, handler
+        )
+        activeService = this
+    }
+
+    private fun failCapture(req: NativeBridge.MediaScreenRequest, message: String) {
+        NativeBridge.activeInstance?.onScreenCaptureError(req.requestId, message)
+        stopCaptureInternal()
+        stopSelf()
     }
 
     /** RGBA_8888 ImageReader frame -> JPEG bytes, accounting for row padding
@@ -169,12 +297,25 @@ class ScreenCaptureService : Service() {
     }
 
     private fun stopCaptureInternal() {
+        if (activeService === this) activeService = null
+        mediaRequest = null
         virtualDisplay?.release()
         virtualDisplay = null
+        h264?.release()
+        h264 = null
+        // GL раздачи — на её потоке; quitSafely ниже ещё выполнит этот release.
+        val layers = sfuLayers
+        sfuLayers = null
+        val gl = captureThread
+        if (layers != null) {
+            if (gl == null || !Handler(gl.looper).post { layers.release() }) layers.release()
+        }
         imageReader?.close()
         imageReader = null
         captureThread?.quitSafely()
         captureThread = null
+        codecThread?.quitSafely()
+        codecThread = null
         try { mediaProjection?.unregisterCallback(projectionCallback) } catch (e: Exception) {}
         mediaProjection?.stop()
         mediaProjection = null
@@ -191,6 +332,36 @@ class ScreenCaptureService : Service() {
         private const val EXTRA_RESULT_CODE = "resultCode"
         private const val EXTRA_RESULT_DATA = "resultData"
         private const val EXTRA_REQUEST_ID = "requestId"
+
+        @Volatile private var activeService: ScreenCaptureService? = null
+
+        /** request_keyframe из страницы: ближайший кадр H.264 — ключевой. */
+        fun requestKeyframe() {
+            val service = activeService ?: return
+            service.h264?.requestKeyframe()
+            service.sfuLayers?.let { it.requestKeyframe(it.previewIndex) }
+        }
+
+        /**
+         * op sfu_fallback: страница отказалась от издателя и шлёт превью сама — остальные
+         * слои встают, издатель закрывается (на потоке GL, не из колбэка издателя).
+         */
+        fun sfuFallback(stream: Int): Boolean {
+            val service = activeService ?: return false
+            if (service.mediaRequest?.stream != stream) return false
+            val layers = service.sfuLayers ?: return false
+            val gl = service.captureThread ?: return false
+            return Handler(gl.looper).post { layers.fallbackToPreview() }
+        }
+
+        /** Ответ SFU на оффер издателя (op sfu_answer). `false` — слоёв SFU нет. */
+        fun sfuAnswer(stream: Int, sdp: String): Boolean {
+            val service = activeService ?: return false
+            if (service.mediaRequest?.stream != stream) return false
+            val layers = service.sfuLayers ?: return false
+            layers.publisher.answer(sdp)
+            return true
+        }
 
         fun start(context: Context, resultCode: Int, resultData: Intent, requestId: String) {
             val intent = Intent(context, ScreenCaptureService::class.java)

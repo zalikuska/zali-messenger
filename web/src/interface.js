@@ -472,6 +472,10 @@ class ZaliInterface {
             window.__ZALI_INTERFACE = this;
         } catch (e) {}
         this.S.navMode = this.loadStoredNavMode();
+        // Замер видеокодеков движка (voice_sfu.js) — заранее: список должен уйти уже с
+        // первым событием звонка (инвайт/принятие), иначе отправитель через SFU выбирает
+        // H.264, а повышать кодек посреди показа нельзя (перезапуск потока у всех).
+        setTimeout(() => { try { void this.ensureVoiceCodecCaps?.(); } catch (e) {} }, 0);
 
         // Register UI update commands on the bus
         const E = window.ZaliBusEvents || {};

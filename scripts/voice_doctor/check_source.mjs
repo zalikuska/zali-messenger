@@ -100,8 +100,26 @@ record('a sent offer arms an answer watchdog',
 // mid-call renegotiation set a local offer too, and an unanswered one there is worse:
 // it also blocks every later renegotiation for that peer (they queue on a return to
 // 'stable' that can never come).
+// Соединение публикации SFU (voice_sfu.js, publishVoiceSfu) — не mesh-пир: у него свой
+// сторож ответа (onVoiceSfuAnswerTimeout) и ICE-restart ему не нужен — при сбое оно
+// пересоздаётся целиком (recoverVoiceSfu → resetVoiceSfuPublisher). Поэтому правила ниже
+// его не считают, а проверяют отдельно.
+function methodRange(re) {
+    const start = lines.findIndex(l => re.test(l));
+    if (start < 0) return [-1, -1];
+    const end = start + lines.slice(start).findIndex((l, i) => i > 0 && /^\s{4}\}/.test(l));
+    return [start, end];
+}
+const [sfuPubStart, sfuPubEnd] = methodRange(/async publishVoiceSfu\(\)\s*\{/);
+const inSfuPublish = (lineNo) => sfuPubStart > -1 && lineNo - 1 >= sfuPubStart && lineNo - 1 <= sfuPubEnd;
 {
-    const offers = hits(/setLocalDescription\(offer\)/);
+    const body = sfuPubStart > -1 ? lines.slice(sfuPubStart, sfuPubEnd + 1).join('\n') : '';
+    record('the SFU publish offer arms its own answer timer and failed links are rebuilt',
+        sfuPubStart === -1 || (body.includes('onVoiceSfuAnswerTimeout') && src.includes('this.resetVoiceSfuPublisher();')),
+        sfuPubStart === -1 ? 'no SFU publisher' : '');
+}
+{
+    const offers = hits(/setLocalDescription\(offer\)/).filter(h => !inSfuPublish(Number(h.split(':')[0])));
     const arms = hits(/this\.armVoiceAnswerWatchdog\(/);
     record('every path that sets a local offer arms the answer watchdog',
         arms.length >= offers.length && offers.length >= 3,
@@ -136,6 +154,7 @@ record('a sent offer arms an answer watchdog',
     lines.forEach((line, i) => {
         if (!/\.createOffer\(/.test(line)) return;
         if (helperStart > -1 && i >= helperStart && i <= helperEnd) return;
+        if (inSfuPublish(i + 1)) return;
         direct.push(`${i + 1}: ${line.trim()}`);
     });
     record('offers are built through createVoiceOfferFor, which owns the iceRestart flag',

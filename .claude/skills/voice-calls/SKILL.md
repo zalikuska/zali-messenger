@@ -8,7 +8,8 @@ description: Голосовые звонки WebRTC full mesh (web/src/interface
 Вся WebRTC-логика живёт в `web/src/interface/voice_*.js` (`voice_transport`,
 `voice_media`, `voice_negotiation`, `voice_call`, `voice_signal`, `voice_ui`) и
 исполняется в WebView; нативные шеллы (macOS/Windows/iOS/Android) только
-ретранслируют `voice_*` по WS. **Правки голоса дублировать в нативные клиенты
+ретранслируют `voice_*` по WS (видео в режиме SFU идёт через сервер, но тоже
+из WebView). **Правки голоса дублировать в нативные клиенты
 не нужно** — достаточно `bundle_web.py`. Исключение — захват устройств на macOS и
 Windows: его делают оболочки (`native-capture.md`), веб получает кадры.
 
@@ -19,7 +20,7 @@ Windows: его делают оболочки (`native-capture.md`), веб по
 |---|---|
 | Согласование: offer/answer, polite peer, ICE, `voice_signal.js`, `voice_negotiation.js` | этот файл (ниже) |
 | Комнаты и жизненный цикл: presence, устройства, инвайты, `voice_transport.js`, `server/src/voice.rs` | `.claude/skills/voice-calls/room-lifecycle.md` |
-| Битрейт, телеметрия звука, WS keepalive/heartbeat, `voice_media.js`, `server/src/realtime.rs` | `.claude/skills/voice-calls/media-and-ws.md` |
+| Битрейт, телеметрия звука, WS keepalive/heartbeat, SFU (видео через сервер), `voice_media.js`, `voice_sfu.js`, `server/src/sfu.rs`, `server/src/realtime.rs` | `.claude/skills/voice-calls/media-and-ws.md` |
 | Нативный захват микрофона/камеры/экрана на macOS/Windows, `native_media.js`, обработка звука `core/src/audio_processing.rs`, протокол `MEDIA_REQUEST` | `.claude/skills/voice-calls/native-capture.md` |
 
 ## Согласование (offer/answer/ICE)

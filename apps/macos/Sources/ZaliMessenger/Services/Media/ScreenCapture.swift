@@ -159,6 +159,30 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var scStream: SCStream?
     private(set) var encoder: H264Encoder?
     let sender: VideoStreamSender
+    /// Слой simulcast для отправки на SFU без перекодирования (options.sfu.layers): масштаб
+    /// от размера захвата, частота и битрейт как доля бит на пиксель в пределах [min, max].
+    /// Порядок — снизу вверх, последний — верхний.
+    struct LayerSpec {
+        let rid: String
+        let scale: Double
+        let fps: Int
+        let bitsPerPixel: Double
+        let minBps: Int
+        let maxBps: Int
+    }
+    /// Кодировщики нижних слоёв (верхний — `encoder`). Пусто — поток без слоёв.
+    private var lowerLayers: [H264Encoder] = []
+    private(set) var layerCount = 0
+    /// Фактические слои после старта (размер кадра известен только тогда).
+    private(set) var layerInfo: [NativeSfuPublisher.Layer] = []
+    /// Какой слой видит страница (превью своего экрана); остальные — только в издатель.
+    private var previewLayer = 0
+    /// Издатель ядра (core/src/sfu_publisher.rs): все слои уходят в сеть мимо WebView.
+    private let publisherLock = NSLock()
+    private var publisher: NativeSfuPublisher?
+    /// Слои, выключенные бюджетом издателя: их не кодируем (кроме слоя превью — его
+    /// кодируем для страницы, но в сеть не шлём). Меняется и читается на `videoQueue`.
+    private var pausedLayers = Set<Int>()
     private(set) var label = ""
     /// `display:<id>` / `window:<id>` — к экрану привязывается удалённое управление.
     private(set) var sourceId = ""
@@ -193,6 +217,11 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         out["width"] = width
         out["height"] = height
+        if layerCount > 0 {
+            out["layers"] = layerCount
+            out["preview_layer"] = previewLayer
+            out["paused"] = videoQueue.sync { pausedLayers.sorted() }
+        }
         out["audio_tap"] = audioTap != nil
         return out
     }
@@ -204,20 +233,55 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         self.sender = VideoStreamSender(stream: stream, bridge: bridge)
     }
 
-    func start(sourceId: String, fps: Int, maxHeight: Int, audio: Bool, cursor: Bool) async throws {
+    func start(sourceId: String, fps: Int, maxHeight: Int, maxSide: Int = 0, audio: Bool, cursor: Bool,
+               layers: [LayerSpec] = [], previewLayer: Int = 0, codec: VideoCodecKind = .h264) async throws {
         let (filter, title, px) = try await ScreenSources.filter(for: sourceId)
         label = title
         self.sourceId = sourceId
         var (w, h) = fitVideoSize(sourceWidth: Int(px.width), sourceHeight: Int(px.height), maxWidth: 0, maxHeight: maxHeight)
         // Предел H.264 у VideoToolbox — 4096×2304.
         (w, h) = fitVideoSize(sourceWidth: w, sourceHeight: h, maxWidth: 4096, maxHeight: 2304)
+        // Потолок длинной стороны для SFU (страница: SFU_SCREEN_MAX_SIDE).
+        if maxSide > 0 { (w, h) = fitVideoSize(sourceWidth: w, sourceHeight: h, maxWidth: maxSide, maxHeight: maxSide) }
         width = w
         height = h
-        let rate = max(1, min(fps, 60))
-        let encoder = try H264Encoder(width: w, height: h, fps: rate, bitsPerPixel: 0.12)
+        // До 240: 1440p@120 и выше на дисплеях ProMotion/высокой частоты (раньше — ≤ 60).
+        // ScreenCaptureKit сам не отдаст чаще, чем обновляется экран.
+        let rate = max(1, min(fps, 240))
+        let encoder: H264Encoder
+        if let top = layers.last {
+            // Слои уходят в сеть как есть (издатель ядра → SFU): битрейт — по бюджету оценки
+            // канала, ключевые кадры — по запросу SFU, по таймеру редко.
+            func bps(_ spec: LayerSpec, _ lw: Int, _ lh: Int, _ lfps: Int) -> Int {
+                let raw = Double(lw * lh * lfps) * spec.bitsPerPixel
+                return max(spec.minBps, min(spec.maxBps, Int(raw)))
+            }
+            var info: [NativeSfuPublisher.Layer] = []
+            for spec in layers.dropLast() {
+                let lw = max(16, Int((Double(w) / max(spec.scale, 1)).rounded()) & ~1)
+                let lh = max(16, Int((Double(h) / max(spec.scale, 1)).rounded()) & ~1)
+                let lfps = max(1, min(spec.fps, rate))
+                let lowerEncoder = try H264Encoder(width: lw, height: lh, fps: lfps, bitrate: bps(spec, lw, lh, lfps), keyframeSeconds: 10, codec: codec)
+                let index = lowerLayers.count
+                lowerEncoder.onOutput = { [weak self] out in self?.layerOutput(index, out) }
+                lowerLayers.append(lowerEncoder)
+                info.append(.init(rid: spec.rid, width: lw, height: lh, fps: lfps, maxBitrate: spec.maxBps))
+            }
+            let topFps = max(1, min(top.fps, rate))
+            encoder = try H264Encoder(width: w, height: h, fps: topFps, bitrate: bps(top, w, h, topFps), keyframeSeconds: 10, codec: codec)
+            info.append(.init(rid: top.rid, width: w, height: h, fps: topFps, maxBitrate: top.maxBps))
+            layerCount = layers.count
+            layerInfo = info
+            self.previewLayer = max(0, min(previewLayer, layers.count - 1))
+            let topIndex = layers.count - 1
+            encoder.onOutput = { [weak self] out in self?.layerOutput(topIndex, out) }
+            sender.encoder = self.previewLayer == topIndex ? encoder : lowerLayers[self.previewLayer]
+        } else {
+            encoder = try H264Encoder(width: w, height: h, fps: rate, bitsPerPixel: 0.12)
+            sender.encoder = encoder
+            encoder.onOutput = { [weak self] out in self?.sender.deliver(out) }
+        }
         self.encoder = encoder
-        sender.encoder = encoder
-        encoder.onOutput = { [weak self] out in self?.sender.deliver(out) }
 
         let config = SCStreamConfiguration()
         config.width = w
@@ -277,7 +341,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         startIdleRepeat()
-        mediaLog("screen: started stream=\(stream) source=\(sourceId) \(w)x\(h)@\(rate) audio=\(audio)\(useTap ? "(tap)" : "") cursor=\(cursor)")
+        mediaLog("screen: started stream=\(stream) source=\(sourceId) \(w)x\(h)@\(rate) audio=\(audio)\(useTap ? "(tap)" : "") cursor=\(cursor) codec=\(layers.isEmpty ? "H264" : codec.rawValue)")
     }
 
     private func startIdleRepeat() {
@@ -290,13 +354,75 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lastFrameHost = now
             self.idleRepeats += 1
             let pts = CMClockGetTime(CMClockGetHostTimeClock())
-            self.encoder?.encode(buffer, pts: pts)
+            self.encodeAll(buffer, pts: pts)
         }
         t.resume()
         idleTimer = t
     }
 
-    func requestKeyframe() { encoder?.requestKeyframe() }
+    /// Без `layer` — ключевой во всех слоях; иначе — в слое `layer` (0 — нижний).
+    func requestKeyframe(layer: Int? = nil) {
+        guard let layer, layerCount > 0 else {
+            encoder?.requestKeyframe()
+            lowerLayers.forEach { $0.requestKeyframe() }
+            return
+        }
+        layerEncoder(layer)?.requestKeyframe()
+    }
+
+    private func layerEncoder(_ layer: Int) -> H264Encoder? {
+        if layer == layerCount - 1 { return encoder }
+        return layer >= 0 && layer < lowerLayers.count ? lowerLayers[layer] : nil
+    }
+
+    /// Бюджет слоёв снизу вверх, бит/с (из оценки канала издателя). 0 — слой выключить:
+    /// не кодировать, пока бюджет не вернётся; включённый снова начинает с ключевого кадра.
+    func setLayerBitrates(_ bitrates: [Int]) {
+        guard layerCount > 0 else { return }
+        for (i, bps) in bitrates.enumerated() where bps > 0 {
+            layerEncoder(i)?.setBitrate(bps)
+        }
+        videoQueue.async { [self] in
+            for (i, bps) in bitrates.enumerated() where i < layerCount {
+                if bps == 0 {
+                    pausedLayers.insert(i)
+                } else if pausedLayers.remove(i) != nil {
+                    layerEncoder(i)?.requestKeyframe()
+                }
+            }
+        }
+    }
+
+    /// Подключить издателя ядра: с этого момента все слои уходят и в него.
+    func attachPublisher(_ p: NativeSfuPublisher?) {
+        publisherLock.lock()
+        let old = publisher
+        publisher = p
+        publisherLock.unlock()
+        if old !== p { old?.close() }
+        if p != nil { requestKeyframe() }
+    }
+
+    /// Готовый кадр слоя: в издатель и странице — если это слой превью.
+    private func layerOutput(_ index: Int, _ out: H264Encoder.Output) {
+        publisherLock.lock()
+        let p = publisher
+        publisherLock.unlock()
+        p?.push(layer: index, annexB: out.annexB, keyframe: out.keyframe, timestampMicros: out.timestampMicros)
+        if index == previewLayer { sender.deliver(out) }
+    }
+
+    func openGates() {
+        sender.openGate()
+    }
+
+    private func encodeAll(_ buffer: CVPixelBuffer, pts: CMTime) {
+        let top = layerCount - 1
+        if layerCount == 0 || !pausedLayers.contains(top) || previewLayer == top { encoder?.encode(buffer, pts: pts) }
+        for (i, layer) in lowerLayers.enumerated() where !pausedLayers.contains(i) || previewLayer == i {
+            layer.encode(buffer, pts: pts)
+        }
+    }
 
     func stop() {
         guard !stopped else { return }
@@ -306,6 +432,8 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         idleTimer?.cancel()
         idleTimer = nil
         encoder?.invalidate()
+        lowerLayers.forEach { $0.invalidate() }
+        attachPublisher(nil)
         if #available(macOS 14.2, *), let tap = audioTap as? ScreenAudioTap { tap.stop() }
         audioTap = nil
         if let s {
@@ -327,7 +455,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             lastPixelBuffer = pixelBuffer
             lastFrameHost = mach_absolute_time()
             capturedFrames += 1
-            encoder?.encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+            encodeAll(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         case .audio:
             handleAudio(sampleBuffer)
         default:

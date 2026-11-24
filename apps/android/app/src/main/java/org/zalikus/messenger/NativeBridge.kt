@@ -16,6 +16,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.webkit.WebMessageCompat
+import androidx.webkit.WebMessagePortCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import okhttp3.Call
 import okhttp3.Callback
@@ -376,6 +379,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             voice: false,
             windowDrag: false,
             screenCapture: true,
+            // Экран по протоколу MEDIA_REQUEST: аппаратный H.264 → WebCodecs (как на
+            // macOS/Windows). Без поддержки WebMessage с ArrayBuffer — прежний JPEG-путь.
+            nativeScreen: ${mediaScreenSupported},
+            // Экран слоями прямо на SFU издателем ядра (ScreenSfuLayers.kt), мимо WebRTC страницы.
+            nativeSfuScreen: ${sfuScreenSupported},
             // Звонок держит сервис переднего плана (CALL_STATE → OngoingCallService):
             // без него погасший экран замораживал процесс и рвал звонок через ~10 с.
             callService: true,
@@ -401,6 +409,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
           // с 2026-11-15 нет) плашка почти сплошная. Именно documentElement — на document-start
           // body ещё нет.
           document.documentElement.classList.add('is-android-shell');
+          ${if (mediaScreenSupported) "window.__ZALI_MEDIA_BRIDGE = { kind: 'webmessage' };" else ""}
           // Здесь стояло document.body.classList.add('zali-native-android') — мёртвый
           // код с двух сторон: на document-start document.body ещё null, а в CSS этот
           // класс не используется нигде.
@@ -482,6 +491,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
             "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
+            "MEDIA_REQUEST" -> handleMediaRequest(dict)
             "DOWNLOAD_UPDATE_REQUEST" -> handleDownloadUpdate(dict)
             "INSTALL_UPDATE_REQUEST" -> handleInstallUpdate(dict)
             "GALLERY_LIST" -> emitGalleryList(dict.optString("requestId", ""), dict.optInt("limit", 240))
@@ -1323,6 +1333,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     fun onScreenCaptureDenied(requestId: String) {
         if (requestId != activeScreenCaptureRequestId) return
         activeScreenCaptureRequestId = ""
+        if (mediaScreen?.requestId == requestId) {
+            mediaScreen = null
+            emitMediaError(requestId, "denied", "")
+            return
+        }
         emitScreenCaptureError(requestId, null)
     }
 
@@ -1345,7 +1360,210 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     fun onScreenCaptureError(requestId: String, message: String?) {
         if (requestId != activeScreenCaptureRequestId) return
         activeScreenCaptureRequestId = ""
+        val media = mediaScreen
+        if (media?.requestId == requestId) {
+            mediaScreen = null
+            if (media.started) {
+                emitMediaEvent(JSONObject().apply {
+                    put("event", "error")
+                    put("stream", media.stream)
+                    put("message", message ?: "")
+                })
+            } else {
+                emitMediaError(requestId, "failed", message ?: "")
+            }
+            return
+        }
         emitScreenCaptureError(requestId, message)
+    }
+
+    // MARK: - Экран по протоколу MEDIA_REQUEST (H.264 из MediaCodec → WebMessage-порт)
+    //
+    // Тот же протокол, что у macOS/Windows (web/src/interface/native_media.js, скилл
+    // voice-calls → native-capture.md): op start/stop/request_keyframe, ответы событием
+    // шины media_event, кадры — двоичные (32 байта заголовка + Annex B). Транспорт —
+    // WebMessage-порт: страница шлёт op 'transport', мы создаём канал и отдаём ей один
+    // конец сообщением "zali-media-port:<секрет моста>" (вложенные фреймы секрета не
+    // знают). Пока поддержки нет, страница идёт старым путём START_SCREEN_CAPTURE.
+
+    /** `sfu` — слои прямо на SFU (options.sfu страницы, ScreenSfuLayers.kt); null — обычный поток. */
+    data class MediaScreenRequest(val requestId: String, val stream: Int, val fps: Int, val maxShort: Int, val sfu: JSONObject? = null) {
+        @Volatile var started = false
+    }
+
+    @Volatile private var mediaScreen: MediaScreenRequest? = null
+    private var mediaPort: WebMessagePortCompat? = null
+    private val mediaFramesInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun mediaScreenRequestFor(requestId: String): MediaScreenRequest? = mediaScreen?.takeIf { it.requestId == requestId }
+
+    /** Запрос показа ещё нужен странице (не отменён и не пережит перезагрузкой). */
+    fun screenCaptureWanted(requestId: String): Boolean =
+        requestId.isNotEmpty() && requestId == activeScreenCaptureRequestId
+
+    /**
+     * Новая загрузка страницы (перезагрузка, перезапуск WebView): её показ экрана умер вместе
+     * с ней — новая страница не знает номера потока и `stop` не пришлёт. Без сброса `start`
+     * отказывал `busy` до перезапуска приложения, а проекция и системный индикатор записи
+     * оставались включёнными. Как `media::stop_all` на Windows при перезагрузке страницы.
+     */
+    fun onPageStarted() {
+        val had = mediaScreen != null || activeScreenCaptureRequestId.isNotEmpty()
+        mediaScreen = null
+        activeScreenCaptureRequestId = ""
+        if (had) context.stopService(android.content.Intent(context, ScreenCaptureService::class.java))
+    }
+
+    private fun handleMediaRequest(dict: JSONObject) {
+        val op = dict.optString("op", "")
+        val requestId = dict.optString("requestId", "")
+        val stream = dict.optInt("stream", 0)
+        when (op) {
+            "transport" -> mainHandler.post { openMediaPort() }
+            "start" -> {
+                val launcher = requestScreenCapturePermission
+                if (dict.optString("kind", "") != "screen" || !mediaScreenSupported || launcher == null) {
+                    emitMediaError(requestId, "unsupported", "Нативный захват недоступен")
+                    return
+                }
+                if (mediaScreen != null || activeScreenCaptureRequestId.isNotEmpty()) {
+                    emitMediaError(requestId, "busy", "Экран уже показывается")
+                    return
+                }
+                val options = dict.optJSONObject("options") ?: JSONObject()
+                val maxHeight = options.optInt("maxHeight", 0)
+                val req = MediaScreenRequest(
+                    requestId,
+                    stream,
+                    options.optInt("fps", 30).coerceIn(5, 60),
+                    if (maxHeight <= 0) 1080 else maxHeight.coerceIn(360, 2160),
+                    options.optJSONObject("sfu")?.takeIf { sfuScreenSupported },
+                )
+                mediaScreen = req
+                activeScreenCaptureRequestId = requestId
+                mainHandler.post { launcher(requestId) }
+            }
+            "stop" -> {
+                val media = mediaScreen ?: return
+                if (media.stream != stream) return
+                mediaScreen = null
+                activeScreenCaptureRequestId = ""
+                context.stopService(android.content.Intent(context, ScreenCaptureService::class.java))
+            }
+            "request_keyframe" -> ScreenCaptureService.requestKeyframe()
+            "sfu_answer" -> {
+                val sdp = dict.optJSONObject("options")?.optString("sdp", "") ?: ""
+                if (sdp.isNotEmpty() && ScreenCaptureService.sfuAnswer(stream, sdp)) {
+                    emitMediaEvent(JSONObject().apply {
+                        put("event", "sfu_answer_ok")
+                        if (requestId.isNotEmpty()) put("requestId", requestId)
+                        put("stream", stream)
+                    })
+                } else {
+                    emitMediaError(requestId, "not_found", "издатель экрана не найден")
+                }
+            }
+            "sfu_fallback" -> {
+                if (ScreenCaptureService.sfuFallback(stream)) {
+                    emitMediaEvent(JSONObject().apply {
+                        put("event", "sfu_fallback_ok")
+                        if (requestId.isNotEmpty()) put("requestId", requestId)
+                        put("stream", stream)
+                    })
+                } else {
+                    emitMediaError(requestId, "not_found", "слои экрана не найдены")
+                }
+            }
+            else -> if (requestId.isNotEmpty()) emitMediaError(requestId, "unsupported", op)
+        }
+    }
+
+    /** Новый канал на каждый запрос: после перезагрузки страницы старый порт мёртв. */
+    private fun openMediaPort() {
+        try {
+            try { mediaPort?.close() } catch (e: Exception) {}
+            val ports = WebViewCompat.createWebMessageChannel(webView)
+            mediaPort = ports[0]
+            WebViewCompat.postWebMessage(
+                webView,
+                WebMessageCompat("zali-media-port:$bridgeNonce", arrayOf(ports[1])),
+                android.net.Uri.parse("*"),
+            )
+        } catch (e: Exception) {
+            mediaPort = null
+            emitMediaEvent(JSONObject().apply { put("event", "transport_unavailable") })
+        }
+    }
+
+    fun onMediaScreenStarted(req: MediaScreenRequest, codec: String, width: Int, height: Int, sfu: JSONObject? = null, sfuError: String? = null) {
+        if (mediaScreen !== req || req.started) return
+        req.started = true
+        emitMediaEvent(JSONObject().apply {
+            put("event", "started")
+            put("requestId", req.requestId)
+            put("stream", req.stream)
+            put("codec", codec)
+            put("label", "Экран")
+            put("width", width)
+            put("height", height)
+            put("fps", req.fps)
+            if (sfu != null) put("sfu", sfu)
+            if (sfuError != null) put("sfuError", sfuError)
+        })
+    }
+
+    /** Событие издателя ядра (connected, bitrates, stats, closed) → странице. */
+    fun onMediaSfuEvent(req: MediaScreenRequest, ev: JSONObject) {
+        if (mediaScreen !== req) return
+        emitMediaEvent(JSONObject().apply {
+            put("event", "sfu")
+            put("stream", req.stream)
+            put("sfu", ev)
+        })
+    }
+
+    fun onMediaScreenEnded(req: MediaScreenRequest, reason: String) {
+        if (mediaScreen !== req) return
+        mediaScreen = null
+        activeScreenCaptureRequestId = ""
+        emitMediaEvent(JSONObject().apply {
+            put("event", "ended")
+            put("stream", req.stream)
+            put("reason", reason)
+        })
+    }
+
+    /**
+     * Кадр в страницу. Порт живёт на главном потоке; если он не успевает (больше 6 кадров
+     * в очереди), разностные кадры выбрасываются — кодировщик тогда даёт ключевой.
+     */
+    fun postMediaFrame(req: MediaScreenRequest, bytes: ByteArray, keyframe: Boolean): Boolean {
+        if (mediaScreen !== req) return false
+        if (!keyframe && mediaFramesInFlight.get() > 6) return false
+        mediaFramesInFlight.incrementAndGet()
+        mainHandler.post {
+            try {
+                mediaPort?.postMessage(WebMessageCompat(bytes))
+            } catch (e: Exception) {
+            } finally {
+                mediaFramesInFlight.decrementAndGet()
+            }
+        }
+        return true
+    }
+
+    private fun emitMediaError(requestId: String, code: String, message: String) {
+        emitMediaEvent(JSONObject().apply {
+            put("event", "error")
+            if (requestId.isNotEmpty()) put("requestId", requestId)
+            put("code", code)
+            put("message", message)
+        })
+    }
+
+    private fun emitMediaEvent(payload: JSONObject) {
+        val js = "window.loader && window.loader.bus.send('zali_interface:media_event', $payload);"
+        mainHandler.post { webView.evaluateJavascript(js, null) }
     }
 
     private fun emitScreenCaptureError(requestId: String, message: String?) {
@@ -2614,5 +2832,21 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
          * live bridge to push frames/errors. */
         @Volatile
         var activeInstance: NativeBridge? = null
+
+        /** Кадры двоичными через WebMessage-порт и есть кодировщик H.264. */
+        val mediaScreenSupported: Boolean by lazy {
+            try {
+                WebViewFeature.isFeatureSupported(WebViewFeature.CREATE_WEB_MESSAGE_CHANNEL) &&
+                    WebViewFeature.isFeatureSupported(WebViewFeature.POST_WEB_MESSAGE) &&
+                    WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_PORT_POST_MESSAGE) &&
+                    WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER) &&
+                    ScreenH264Encoder.available()
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        /** Слои прямо на SFU: нужен издатель ядра (libzali_messenger_core с фичей sfu). */
+        val sfuScreenSupported: Boolean by lazy { mediaScreenSupported && ZaliCoreBridge.isAvailable }
     }
 }

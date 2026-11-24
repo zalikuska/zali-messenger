@@ -5,7 +5,7 @@ name = "zali_messenger_win"
 # APP_DISPLAY_VERSION in src/native.rs, which is what the in-app updater actually
 # compares against the server's app_releases.version). This field only needs to
 # keep incrementing for Cargo's own bookkeeping; it is not shown to users.
-version = "0.2.70"
+version = "0.2.71"
 edition = "2021"
 
 [dependencies]
@@ -60,6 +60,7 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    "Win32_System_Performance",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -86,6 +87,8 @@ windows = { version = "0.61", features = [
     "Win32_Media_Multimedia",
     "Win32_Security",
     "Win32_System_Com_StructuredStorage",
+    # VARIANT для ICodecAPI (настройки кодировщика H.264, media/h264_mf.rs).
+    "Win32_System_Ole",
     "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
@@ -106,9 +109,10 @@ webview2-com = "0.28"
 # что уже тянет `windows`.
 windows-core = "0.61"
 windows052 = { package = "windows", version = "0.52", features = ["Win32_Foundation", "Win32_System_WinRT", "Win32_System_Com"] }
-# Эхо/шум/громкость микрофона (core/src/audio_processing.rs) — только Windows-сборке;
-# экспериментальный macOS Rust-шелл нативный захват не делает.
-zali_messenger_core = { path = "../../core", features = ["apm"] }
+# Эхо/шум/громкость микрофона (core/src/audio_processing.rs) и отправка экрана напрямую
+# на SFU (core/src/sfu_publisher.rs) — только Windows-сборке; экспериментальный macOS
+# Rust-шелл нативный захват не делает.
+zali_messenger_core = { path = "../../core", features = ["apm", "sfu"] }
 
 [build-dependencies]
 serde_json = "1.0"
