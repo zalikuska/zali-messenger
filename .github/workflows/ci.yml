@@ -97,7 +97,7 @@ jobs:
   # Семь параллельных шардов (состав — scripts/ci_server_tests.sh; `rest` собирает всё
   # не назначенное другим, так что новый [[test]] не теряется; hash_chain.rs, самый
   # тяжёлый файл, делится пополам по именам тестов). Каждый шард собирает сервер сам,
-  # зато общий `shared-key` даёт им один кэш зависимостей. Список имён ниже обязан
+  # зато общий кеш (composite `.github/actions/rust-cache`, ключ на ОС) даёт им один кэш зависимостей. Список имён ниже обязан
   # совпадать с `scripts/ci_server_tests.sh --list` — это сверяет check_docs.py.
   server:
     name: Server tests (${{ matrix.shard }})
@@ -111,10 +111,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-cache
         with:
           workspaces: "server -> target"
-          shared-key: server-tests
 
       - name: Test server (${{ matrix.shard }})
         run: ./scripts/ci_server_tests.sh ${{ matrix.shard }}
@@ -145,7 +144,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-cache
         with:
           workspaces: |
             core -> target
@@ -167,7 +166,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-cache
         with:
           workspaces: "apps/windows -> target"
 
