@@ -39,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261124-privacy6">
+    <link rel="stylesheet" href="style.css?v=20261125-buglog1">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -264,6 +264,13 @@
                         <div class="me-name" id="meName">Не вошли</div>
                         <div class="me-sub" id="meSub"><span class="online-dot"></span> В сети</div>
                     </div>
+                    <button class="settings-btn bug-report-btn" id="bugReportBtn" type="button" title="Сообщить об ошибке" aria-label="Сообщить об ошибке">
+                        <svg class="ui-icon ui-icon-bug" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                            <path d="M9.2 7.6V7a2.8 2.8 0 0 1 5.6 0v.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            <rect x="6.5" y="7.6" width="11" height="12.4" rx="5.5" stroke="currentColor" stroke-width="1.8"/>
+                            <path d="M12 10.5v9.2M3.5 13h3M17.5 13h3M4.6 8l2.2 1.9M19.4 8l-2.2 1.9M4.6 19l2.2-1.9M19.4 19l-2.2-1.9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                    </button>
                     <button class="settings-btn" id="settingsBtn" type="button" title="Настройки" aria-label="Настройки">
                         <svg class="ui-icon ui-icon-gear" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
                             <path d="M10.4 3.25h3.2l.55 2.32c.54.2 1.05.5 1.5.87l2.27-.72 1.6 2.76-1.72 1.62c.05.3.08.6.08.9s-.03.6-.08.9l1.72 1.62-1.6 2.76-2.27-.72c-.45.37-.96.67-1.5.87l-.55 2.32h-3.2l-.55-2.32a5.78 5.78 0 0 1-1.5-.87l-2.27.72-1.6-2.76L6.2 11.9a5.6 5.6 0 0 1 0-1.8L4.48 8.48l1.6-2.76 2.27.72c.45-.37.96-.67 1.5-.87l.55-2.32Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
@@ -1044,6 +1051,12 @@
                                         <div class="settings-diag-row">
                                             <button class="btn-flat" id="sendDiagnosticsBtn" type="button">Отправить диагностику</button>
                                             <span class="settings-help" id="sendDiagnosticsNote">Журнал, трасса и состояние соединения уйдут разработчику. Содержимое переписки и ключи не отправляются.</span>
+                                        </div>
+                                        <!-- Своими словами и со скриншотами (bug_report.js). На телефоне
+                                             подвала с кнопкой-жуком нет — вход сюда. -->
+                                        <div class="settings-diag-row">
+                                            <button class="btn-flat" id="bugReportSettingsBtn" type="button">Сообщить об ошибке</button>
+                                            <span class="settings-help">Опишите, что сломалось, и приложите картинки. Не отправляйте сюда мусор — см. Правила сообщества.</span>
                                         </div>
                                     </section>
 
@@ -1985,6 +1998,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261124-privacy6"></script>
+    <script src="app.js?v=20261125-buglog1"></script>
 </body>
 </html>

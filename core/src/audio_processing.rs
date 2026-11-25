@@ -6,28 +6,39 @@
 //! заикается. Поэтому оболочки захватывают микрофон сами, обычным HAL-вводом, и
 //! эхо/шум/громкость обрабатывают здесь — одним кодом на обеих платформах.
 //!
-//! Конвейер (выбран по стенду качества 2026-11-12, см. tests/apm_quality.rs):
+//! Конвейер (AEC3 выбран по стенду качества 2026-11-12, шумодав — 2026-11-25, см.
+//! tests/apm_quality.rs):
 //!
 //! ```text
 //!  опорный сигнал (что играет) ──→ ┐
-//!  микрофон → [ФВЧ + AEC3 (sonora)] → [RNNoise] → [AGC2 адаптивный (sonora)] → [затвор по VAD] → выход
+//!  микрофон → [ФВЧ + AEC3 (sonora)] → [DeepFilterNet3] → [AGC2 адаптивный (sonora)] → [затвор по SNR] → выход
 //! ```
 //!
 //! * AEC3 — чистый Rust-порт эхоподавителя WebRTC (`sonora`). На стенде не хуже
 //!   C++-оригинала из Chromium: ERLE 53 против 47 дБ, речь в паузах дальней стороны
 //!   проседает на 0.5 против 2.0 дБ.
-//! * RNNoise (`nnnoiseless`) вместо шумодава WebRTC: на стационарном шуме глушит
-//!   глубже (19–30 дБ) и почти не трогает речь (−0.1…−0.5 дБ против −1…−6 дБ),
-//!   заодно добирает остаточное эхо (+20 дБ ERLE).
-//! * AGC2 стоит после RNNoise, отдельным экземпляром: иначе он поднимал бы шум до того,
-//!   как его уберёт RNNoise.
-//! * Затвор (`SpeechGate`, 2026-11-24) — после всего: глушит паузы между фразами до −40 дБ
-//!   по VAD RNNoise. Резкие шумы (клавиатура, щелчки) RNNoise пропускает почти целиком,
-//!   а AGC их поднимал; затвор снимает их в паузах на 40+ дБ. Под сильным ровным шумом
-//!   он сам мельчает до нуля — там начало слов едва выходит из шума.
+//! * Шумодав — нейросеть DeepFilterNet3 (`vendor/dfn3_rs`, своя копия с NEON-ядрами).
+//!   До неё стоял RNNoise: ровный шум он снимал (19–30 дБ), а щелчки клавиатуры и мыши,
+//!   стук — почти нет (1–9 дБ в паузах, поверх речи 0–4 дБ), и живые звонки 2026-11
+//!   «слышно все клики». DFN3 снимает их на 22–37 дБ, в том числе поверх речи, ровный
+//!   шум — на 29–36 дБ. Цена — задержка 30 мс вместо 10 и 5 МБ весов; по времени
+//!   ~65 мкс на кадр на M-серии (как RNNoise).
+//! * AGC2 стоит после шумодава, отдельным экземпляром: иначе он поднимал бы шум до того,
+//!   как его уберёт шумодав.
+//! * Затвор (`SpeechGate`) — после всего: глушит паузы между фразами до −40 дБ по оценке
+//!   SNR от DFN3 (`lsnr`), чтобы AGC не поднимал остатки шума в паузах.
+//! * Перед шумодавом — нормализатор уровня (`InputLevel`): DFN3 зависит от абсолютного
+//!   уровня, речь тише ~−42 дБFS он целиком принимает за шум и вырезает (стенд: речь на
+//!   −47 дБFS — минус 46 дБ на выходе), а встроенный микрофон MacBook даёт речь на
+//!   −30…−45 дБFS (живые звонки 2026-11). Поэтому вход поднимается до уровня, на котором
+//!   DFN3 работает лучше всего, а выход того же кадра делится обратно.
+//! * Предел ослабления шумодава — по тому, насколько речь громче ровного шума: в тихой
+//!   комнате без предела (щелчки снимаются целиком), под сильным шумом 30 дБ — без
+//!   предела DFN3 вместе с шумом съедает тихие куски речи (сходство на белом шуме при
+//!   SNR 5 дБ 0.71 против 0.90).
 //!
 //! Формат: 48 кГц, моно, f32 в [-1, 1], кадры по 10 мс (480 отсчётов). Блоки любой
-//! длины нарезаются внутри; RNNoise добавляет задержку в один кадр.
+//! длины нарезаются внутри; шумодав добавляет задержку в `NS_DELAY_FRAMES` кадра.
 //! Опорный сигнал и микрофон приходят из разных потоков — снаружи нужен мьютекс
 //! (его держит FFI-обёртка `ZaliApm`).
 
@@ -36,6 +47,8 @@ use sonora::{AudioProcessing, Config, StreamConfig};
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME: usize = 480;
+/// Задержка шумодава в кадрах (30 мс: перекрытие окон STFT + 2 кадра заглядывания вперёд).
+pub const NS_DELAY_FRAMES: usize = dfn3_rs::ALGORITHM_DELAY / FRAME;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VoiceProcessingConfig {
@@ -62,8 +75,9 @@ pub struct VoiceProcessingStats {
     /// обработки и то, что уходит собеседникам.
     pub input_dbfs: Option<f64>,
     pub output_dbfs: Option<f64>,
-    /// Шум (кадры, где RNNoise не слышит голоса) до и после шумодава, и разница —
-    /// сколько он реально срезает. None — шумодав выключен или шумовых кадров не было.
+    /// Шум (кадры, где шумодав не слышит голоса: его оценка SNR ниже `NOISE_LSNR`) до и
+    /// после шумодава, и разница — сколько он реально срезает. None — шумодав выключен
+    /// или шумовых кадров не было.
     pub noise_in_dbfs: Option<f64>,
     pub noise_out_dbfs: Option<f64>,
     pub ns_attenuation_db: Option<f64>,
@@ -74,7 +88,10 @@ pub struct VoiceProcessingStats {
     /// больше 20 дБ), и его текущая глубина — 0 под сильным шумом, −40 в тихой комнате.
     pub gate_closed_ratio: Option<f64>,
     pub gate_depth_db: Option<f64>,
-    /// Доля кадров с голосом (VAD RNNoise > 0.5) за ~5 с.
+    /// Усиление нормализатора перед шумодавом сейчас, дБ (`InputLevel`): 0 — вход и так
+    /// громкий, до 30 — тихий микрофон или тишина.
+    pub ns_input_gain_db: Option<f64>,
+    /// Доля кадров с голосом (оценка SNR шумодава ≥ `SpeechGate::OPEN_LSNR`) за ~5 с.
     pub speech_ratio: Option<f64>,
     /// Кадров с отсчётом на пределе (|x| ≥ 0.999) на выходе — с начала потока.
     pub clipped_frames: u64,
@@ -225,7 +242,11 @@ pub struct VoiceProcessor {
     align: Aligner,
     front: AudioProcessing,
     agc: AudioProcessing,
-    denoise: Box<nnnoiseless::DenoiseState<'static>>,
+    denoise: Box<dfn3_rs::Denoiser>,
+    /// Кадры внутри шумодава (вход и его оценка SNR): выходит из него вход
+    /// `NS_DELAY_FRAMES` кадров назад, и затвор со статистикой смотрят на тот же кадр.
+    inflight: std::collections::VecDeque<InFlight>,
+    input_level: InputLevel,
     highpass: Highpass,
     gate: SpeechGate,
     render_fifo: Vec<f32>,
@@ -236,7 +257,127 @@ pub struct VoiceProcessor {
     render_frames: u64,
     capture_frames: u64,
     levels: Levels,
+    /// Предел ослабления шумодава сейчас, дБ (100 — без предела).
+    atten_lim_db: f32,
+    /// Сколько ещё кадров микрофона считать, что собеседник говорит (см. `note_render`).
+    far_hold: u32,
 }
+
+/// Кадр внутри шумодава: уровень входа (до нормализатора), усиление нормализатора на нём
+/// (от и до — линейно по кадру) и оценка SNR, которую шумодав дал на нём.
+#[derive(Clone, Copy)]
+struct InFlight {
+    stat: FrameStat,
+    power: f64,
+    gain: (f32, f32),
+    lsnr: f32,
+}
+
+impl InFlight {
+    const NONE: Self = Self { stat: FrameStat::SILENT, power: 0.0, gain: (1.0, 1.0), lsnr: SpeechGate::OPEN_LSNR };
+}
+
+/// Нормализатор уровня перед шумодавом: усиление, при котором громкие кадры входа
+/// (95-й перцентиль уровней за 10 с) оказываются на `TARGET_DB` — уровне, на котором DFN3
+/// лучше всего работает (запись речи на стенде: −17.6). Только поднимает, не больше
+/// `MAX_DB`; выход шумодава делится на то же усиление того же кадра, так что уровень на
+/// выходе не меняется. Перцентиль, а не детектор речи: детектор — сам DFN3, а он тихую
+/// речь и не слышит.
+///
+/// Окно длинное и подъём медленный: паузы между фразами усиление не двигают (5 % окна —
+/// полсекунды речи за 10 с). Скачок уровня на входе DFN3 сбивает его собственную нормировку
+/// (подстраивается ~1 с): с окном 2 с каждое начало фразы после паузы приходило на +30 дБ,
+/// и сходство речи падало на 0.02. Вниз — быстро: громкий голос после долгой тишины.
+///
+/// Цель выше уровня записи на стенде: DFN3 тем лучше, чем громче вход (сходство тихой речи
+/// с усилением +36 дБ — 0.97, с +12 — 0.80), но с целью −10 речь при громком эхе
+/// проседала (0.946 против 0.971 с −15).
+struct InputLevel {
+    /// Уровни кадров окна (ячейки гистограммы по 1 дБ) и сама гистограмма.
+    ring: std::collections::VecDeque<u8>,
+    counts: [u16; Self::BINS],
+    gain_db: f32,
+}
+
+impl InputLevel {
+    const TARGET_DB: f32 = -15.0;
+    const MAX_DB: f32 = 36.0;
+    const WINDOW: usize = 1000;
+    /// Ячейка `i` — уровень кадра от `i − 120` до `i − 119` дБFS.
+    const BINS: usize = 128;
+    /// Скорость изменения усиления: вверх 5 дБ/с, вниз 100 дБ/с. Быстрый подъём (30 дБ/с)
+    /// гонял усиление по фразам и ронял сходство речи на 0.02–0.06 (стенд); но если
+    /// усиление ниже цели больше чем на `FAR_BELOW_DB` (тихий микрофон в начале звонка —
+    /// речь пока вырезается целиком), идёт вверх быстро. Только пока собеседник молчит:
+    /// когда говорит он, AEC вычищает эхо, выход тихий, и усиление взлетало к максимуму —
+    /// ближняя речь начиналась со спуска на 30 дБ (стенд, громкое эхо: 0.938 против 0.951).
+    const UP_DB_PER_FRAME: f32 = 0.05;
+    const FAST_UP_DB_PER_FRAME: f32 = 0.3;
+    const FAR_BELOW_DB: f32 = 12.0;
+    const DOWN_DB_PER_FRAME: f32 = 1.0;
+
+    fn new() -> Self {
+        Self { ring: std::collections::VecDeque::with_capacity(Self::WINDOW), counts: [0; Self::BINS], gain_db: 0.0 }
+    }
+
+    /// Уровень нового кадра → усиление (линейное) в начале и в конце этого кадра.
+    /// `fast_up` — можно подниматься быстро (собеседник молчит, см. `FAR_BELOW_DB`).
+    fn next(&mut self, frame_db: f32, fast_up: bool) -> (f32, f32) {
+        if self.ring.len() == Self::WINDOW {
+            if let Some(old) = self.ring.pop_front() {
+                self.counts[old as usize] -= 1;
+            }
+        }
+        let bin = (frame_db + 120.0).clamp(0.0, (Self::BINS - 1) as f32) as u8;
+        self.ring.push_back(bin);
+        self.counts[bin as usize] += 1;
+        // 95-й перцентиль: сверху набирается 5 % кадров окна.
+        let mut above = 0usize;
+        let mut loud = 0usize;
+        for (i, &c) in self.counts.iter().enumerate().rev() {
+            above += c as usize;
+            if above * 20 >= self.ring.len() {
+                loud = i;
+                break;
+            }
+        }
+        let target = (Self::TARGET_DB - (loud as f32 - 120.0 + 0.5)).clamp(0.0, Self::MAX_DB);
+        let from = self.gain_db;
+        let up = if fast_up && target - from > Self::FAR_BELOW_DB { Self::FAST_UP_DB_PER_FRAME } else { Self::UP_DB_PER_FRAME };
+        self.gain_db = if target > from { (from + up).min(target) } else { (from - Self::DOWN_DB_PER_FRAME).max(target) };
+        (SpeechGate::db_to_lin(from), SpeechGate::db_to_lin(self.gain_db))
+    }
+}
+
+/// Умножает кадр на усиление, линейно меняющееся по нему от `gain.0` до `gain.1`
+/// (`inverse` — делит на него).
+fn apply_ramp(frame: &mut [f32], gain: (f32, f32), inverse: bool) {
+    if gain == (1.0, 1.0) {
+        return;
+    }
+    let n = frame.len() as f32;
+    for (i, v) in frame.iter_mut().enumerate() {
+        let g = gain.0 + (gain.1 - gain.0) * (i as f32 + 1.0) / n;
+        if inverse {
+            *v /= g;
+        } else {
+            *v *= g;
+        }
+    }
+}
+
+/// Ниже этой оценки SNR (дБ) кадр — шум без голоса (для статистики). У ровного шума
+/// DFN3 даёт −15…−10, у речи в тихой комнате 13–35.
+const NOISE_LSNR: f32 = -5.0;
+/// Предел ослабления шумодава под сильным ровным шумом (речь громче шума ≤ 10 дБ), дБ.
+const ATTEN_LIM_NOISY_DB: f32 = 30.0;
+/// Предел ослабления шумодава, пока говорит собеседник (есть эхо), дБ.
+const ECHO_ATTEN_LIM_DB: f32 = 18.0;
+/// Собеседник говорит: мощность кадра того, что играет, выше −55 дБFS.
+const FAR_ACTIVE_POWER: f64 = 3.2e-6;
+/// И ещё 1 с после: хвост эха в комнате и подавитель AEC3, который ещё отпускает (стенд,
+/// громкое эхо: речь сразу после реплики собеседника 0.944 с 0.5 с, 0.947 с 1 с).
+const FAR_HOLD_FRAMES: u32 = 100;
 
 fn mono() -> StreamConfig {
     StreamConfig::new(SAMPLE_RATE, 1)
@@ -245,7 +386,7 @@ fn mono() -> StreamConfig {
 fn front_config(c: VoiceProcessingConfig) -> Config {
     Config {
         // Только вместе с AEC3. Без него ФВЧ sonora гонит звук через банк полос и портит
-        // речь перед RNNoise (сходство на белом шуме 0.78 против 0.87) — там стоит свой
+        // речь перед шумодавом (стенд с RNNoise: сходство на белом шуме 0.78 против 0.87) — там стоит свой
         // биквад (`Highpass`), см. process_frame.
         high_pass_filter: if c.echo_cancellation { Some(HighPassFilter::default()) } else { None },
         echo_canceller: if c.echo_cancellation { Some(EchoCanceller::default()) } else { None },
@@ -277,7 +418,9 @@ impl VoiceProcessor {
             align: Aligner::default(),
             front,
             agc,
-            denoise: nnnoiseless::DenoiseState::new(),
+            denoise: Box::new(dfn3_rs::Denoiser::new()),
+            inflight: std::collections::VecDeque::with_capacity(NS_DELAY_FRAMES + 2),
+            input_level: InputLevel::new(),
             highpass: Highpass::new(100.0),
             gate: SpeechGate::new(),
             render_fifo: Vec::with_capacity(FRAME * 4),
@@ -288,6 +431,8 @@ impl VoiceProcessor {
             render_frames: 0,
             capture_frames: 0,
             levels: Levels::default(),
+            atten_lim_db: 100.0,
+            far_hold: 0,
         }
     }
 
@@ -307,7 +452,11 @@ impl VoiceProcessor {
         }
         self.agc.apply_config(agc_config(config));
         if config.noise_suppression && !self.config.noise_suppression {
-            self.denoise = nnnoiseless::DenoiseState::new();
+            self.atten_lim_db = 100.0;
+            self.denoise.set_attenuation_limit(100.0);
+            self.denoise.reset();
+            self.inflight.clear();
+            self.input_level = InputLevel::new();
             self.gate = SpeechGate::new();
         }
         if config.noise_suppression != self.config.noise_suppression {
@@ -420,6 +569,14 @@ impl VoiceProcessor {
     fn feed_render_frame(&mut self, frame: &[f32]) {
         let _ = self.front.process_render_f32(&[frame], &mut [&mut self.scratch_render[..]]);
         self.render_frames += 1;
+        self.note_render(frame);
+    }
+
+    /// Собеседник говорит (то, что играет, громче `FAR_ACTIVE_POWER`) — держать `far_hold`.
+    fn note_render(&mut self, frame: &[f32]) {
+        if Levels::power(frame) > FAR_ACTIVE_POWER {
+            self.far_hold = FAR_HOLD_FRAMES;
+        }
     }
 
     /// Опорный сигнал — то, что сейчас играет из динамиков. `channels` = 1 или 2
@@ -440,6 +597,9 @@ impl VoiceProcessor {
             let frame = &self.render_fifo[offset..offset + FRAME];
             let _ = self.front.process_render_f32(&[frame], &mut [&mut self.scratch_render[..]]);
             self.render_frames += 1;
+            if Levels::power(frame) > FAR_ACTIVE_POWER {
+                self.far_hold = FAR_HOLD_FRAMES;
+            }
             offset += FRAME;
         }
         self.render_fifo.drain(..offset);
@@ -473,44 +633,64 @@ impl VoiceProcessor {
 
     /// Один кадр в `scratch_a` → результат в `scratch_a`.
     fn process_frame(&mut self) {
-        let mut noise_frame = false;
-        let mut vad_now: Option<(f32, FrameStat, f32)> = None;
         Levels::ema(&mut self.levels.input, Levels::power(&self.scratch_a));
         if self.config.echo_cancellation {
             let _ = self.front.process_capture_f32(&[&self.scratch_a[..]], &mut [&mut self.scratch_b[..]]);
             std::mem::swap(&mut self.scratch_a, &mut self.scratch_b);
         }
+        // Шумодав: вход кадра, который из него вышел (`NS_DELAY_FRAMES` кадров назад), и
+        // кадра после него, оценка SNR новейшего кадра, уровень выхода до AGC, шум ли это.
+        let mut denoised: Option<(FrameStat, FrameStat, f32, f32, bool)> = None;
         if self.config.noise_suppression {
-            // Без AEC фильтр высоких частот — свой: RNNoise плохо снимает сетевой гул и
-            // гул вентилятора (100–240 Гц), ФВЧ на 100 Гц добирает его, не трогая голос.
+            // Без AEC фильтр высоких частот — свой: сетевой гул и гул вентилятора
+            // (100–240 Гц) ФВЧ на 100 Гц добирает, не трогая голос.
             if !self.config.echo_cancellation {
                 self.highpass.process(&mut self.scratch_a);
             }
-            let input_stat = FrameStat::of(&self.scratch_a);
-            // RNNoise ждёт масштаб 16-битных отсчётов.
-            for v in self.scratch_a.iter_mut() {
-                *v *= 32767.0;
-            }
-            let vad = self.denoise.process_frame(&mut self.scratch_b[..], &self.scratch_a[..]);
-            let before = Levels::power(&self.scratch_a) / (32767.0 * 32767.0);
-            for (dst, src) in self.scratch_a.iter_mut().zip(self.scratch_b.iter()) {
-                *dst = (src / 32767.0).clamp(-1.0, 1.0);
-            }
-            Levels::ema(&mut self.levels.speech, if vad > 0.5 { 1.0 } else { 0.0 });
-            noise_frame = vad < 0.2;
-            vad_now = Some((vad, input_stat, FrameStat::of(&self.scratch_a).db));
-            if noise_frame {
-                Levels::ema(&mut self.levels.noise_in, before);
+            let stat = FrameStat::of(&self.scratch_a);
+            let gain = self.input_level.next(stat.db, self.far_hold == 0);
+            let entry = InFlight { stat, power: Levels::power(&self.scratch_a), gain, lsnr: 0.0 };
+            apply_ramp(&mut self.scratch_a, entry.gain, false);
+            let input: &[f32; FRAME] = self.scratch_a[..].try_into().expect("кадр");
+            let output: &mut [f32; FRAME] = (&mut self.scratch_b[..]).try_into().expect("кадр");
+            let lsnr = self.denoise.process(input, output);
+            std::mem::swap(&mut self.scratch_a, &mut self.scratch_b);
+            self.inflight.push_back(InFlight { lsnr, ..entry });
+            Levels::ema(&mut self.levels.speech, if lsnr >= SpeechGate::OPEN_LSNR { 1.0 } else { 0.0 });
+            let out = if self.inflight.len() > NS_DELAY_FRAMES { self.inflight.pop_front() } else { None }.unwrap_or(InFlight::NONE);
+            // Выход — вход `NS_DELAY_FRAMES` кадров назад отсчёт в отсчёт: делится на его усиление.
+            apply_ramp(&mut self.scratch_a, out.gain, true);
+            let next = self.inflight.front().map_or(FrameStat::SILENT, |f| f.stat);
+            // Отсчёты кадра покрывают два окна анализа — его и следующее.
+            let next_lsnr = self.inflight.front().map_or(out.lsnr, |f| f.lsnr);
+            let noise = out.lsnr.max(next_lsnr) < NOISE_LSNR;
+            if noise {
+                Levels::ema(&mut self.levels.noise_in, out.power);
                 Levels::ema(&mut self.levels.noise_out, Levels::power(&self.scratch_a));
             }
+            denoised = Some((out.stat, next, lsnr, FrameStat::of(&self.scratch_a).db, noise));
         }
         if self.config.auto_gain {
             let _ = self.agc.process_capture_f32(&[&self.scratch_a[..]], &mut [&mut self.scratch_b[..]]);
             std::mem::swap(&mut self.scratch_a, &mut self.scratch_b);
         }
-        if let Some((vad, input, denoised_db)) = vad_now {
-            self.gate.process(vad, input, denoised_db, &mut self.scratch_a);
+        let mut noise_frame = false;
+        if let Some((cur, next, lsnr, denoised_db, noise)) = denoised {
+            noise_frame = noise;
+            self.gate.process(lsnr, cur, next, denoised_db, &mut self.scratch_a);
             Levels::ema(&mut self.levels.gate_closed, if self.gate.gain_db < -20.0 { 1.0 } else { 0.0 });
+            // Предел ослабления шумодава — по тому, насколько речь громче ровного шума (см.
+            // шапку модуля). Шаг 1 дБ, переход за кадр — без щелчков на смене.
+            self.far_hold = self.far_hold.saturating_sub(1);
+            let lim = (ATTEN_LIM_NOISY_DB + (100.0 - ATTEN_LIM_NOISY_DB) * self.gate.depth).round();
+            // Пока говорит собеседник — не глубже `ECHO_ATTEN_LIM_DB`: под остатком эха DFN3
+            // подрезает и ближнюю речь (стенд, двойной разговор: 0.60 против 0.71 у RNNoise;
+            // с пределом 18 дБ — 0.65). Щелчки в паузах при этом глушит затвор.
+            let lim = if self.far_hold > 0 { lim.min(ECHO_ATTEN_LIM_DB) } else { lim };
+            if lim != self.atten_lim_db {
+                self.atten_lim_db = lim;
+                self.denoise.set_attenuation_limit_smooth(lim, std::time::Duration::from_millis(10));
+            }
         }
         Levels::ema(&mut self.levels.output, Levels::power(&self.scratch_a));
         if noise_frame {
@@ -541,6 +721,7 @@ impl VoiceProcessor {
             noise_final_dbfs: Levels::dbfs(self.levels.noise_final.0),
             gate_closed_ratio: self.levels.gate_closed.0,
             gate_depth_db: self.config.noise_suppression.then(|| self.gate.depth_db as f64),
+            ns_input_gain_db: self.config.noise_suppression.then(|| self.input_level.gain_db as f64),
             speech_ratio: self.levels.speech.0,
             clipped_frames: self.levels.clipped_frames,
             ref_lag_ms: self.align.lag.0,
@@ -552,35 +733,39 @@ impl VoiceProcessor {
     }
 }
 
-/// Затвор по детектору речи RNNoise — стоит последним, после AGC.
+/// Затвор по оценке SNR шумодава — стоит последним, после AGC.
 ///
-/// RNNoise хорошо снимает ровный шум (вентилятор, гул: 15–26 дБ), но резкие — щелчки
-/// клавиатуры и мыши, стук — пропускает почти целиком (стенд: 4–5 дБ), а AGC при тихой
-/// речи их ещё и поднимает (щелчок громче, чем был на входе). Живые звонки 2026-11: «все
-/// шумы слышны очень сильно», шумодав на Windows срезал 4–11 дБ. Поэтому вне речи выход
+/// Шумодав оставляет от шума остатки (DFN3: щелчки −22…−37 дБ), а AGC при тихой речи
+/// поднимает их вместе с голосом — в паузах это снова слышно (живые звонки 2026-11 с
+/// RNNoise: шумовые кадры после AGC на 10 дБ громче входа). Поэтому вне речи выход
 /// глушится до `FLOOR_DB`.
 ///
-/// * Открывается, когда RNNoise слышит голос два кадра подряд: щелчок даёт одиночный
-///   всплеск VAD, а по одному кадру затвор открывался бы на всё удержание. Выход RNNoise
-///   отстаёт на кадр от входа, поэтому VAD следующего кадра уже известен — без задержки.
-/// * VAD узнаёт начало фразы под шумом только через 2–3 кадра — затвор съел бы первый
-///   слог. Поэтому он открывается заранее по скачку уровня над шумом (`ONSET_DB`) на
-///   `PROVISIONAL` кадров; не подтвердил VAD — закрывается. Щелчок так не откроет: у него
+/// * Речь — оценка SNR (`lsnr`) DFN3 не ниже `OPEN_LSNR` два кадра подряд (щелчок даёт
+///   одиночный всплеск) или не ниже `OPEN_LSNR_SURE` в одном. `lsnr` считается по
+///   новейшему кадру, а из шумодава выходит кадр на `NS_DELAY_FRAMES` раньше — это
+///   покрывает отставание самой оценки на начале фразы.
+/// * Под шумом и под остатком эха оценка растёт на начале фразы медленнее, поэтому затвор
+///   открывается и по скачку уровня над шумом (`ONSET_DB`) на `PROVISIONAL` кадров, если
+///   оценка уже не ниже `ONSET_MIN_LSNR`; не подтвердилась — закрывается (без этого
+///   правила двойной разговор на стенде 0.55 против 0.65). Щелчок так не откроет: у него
 ///   энергия собрана в 1–5 мс кадра (`impulsive`), у голоса — размазана.
 /// * Держится `HANGOVER` кадров после речи — хвосты слов и паузы между ними не рвутся.
+/// * Глубина — по тому, насколько речь громче ровного шума (`depth`); по ней же ставится
+///   предел ослабления шумодава.
 struct SpeechGate {
     gain_db: f32,
     hangover: u32,
     provisional: u32,
-    prev_vad: f32,
-    prev: FrameStat,
+    prev_lsnr: f32,
     floor_db: f32,
     history: std::collections::VecDeque<f32>,
     in_floor_db: f32,
     in_history: std::collections::VecDeque<f32>,
-    /// Уровень речи на входе (скользящее среднее по кадрам с речью, ~1 с).
+    /// Уровень речи на входе шумодава (скользящее среднее по кадрам с речью, ~1 с).
     speech_db: f32,
-    /// Текущая глубина (для статистики).
+    /// Насколько речь громче ровного шума, 0…1: 0 — на ≤ 10 дБ, 1 — на ≥ 20 дБ.
+    depth: f32,
+    /// Текущая глубина в дБ (для статистики).
     depth_db: f32,
 }
 
@@ -591,6 +776,8 @@ struct FrameStat {
 }
 
 impl FrameStat {
+    const SILENT: Self = Self { db: -120.0, impulsive: false };
+
     fn of(frame: &[f32]) -> Self {
         // Четверти по 2.5 мс: у щелчка почти вся энергия в одной (стенд: медиана 0.83),
         // у голоса размазана (низкий мужской — 0.52, женский — 0.36).
@@ -608,10 +795,18 @@ impl FrameStat {
 }
 
 impl SpeechGate {
-    const OPEN_VAD: f32 = 0.5;
+    /// Речь в кадре — оценка SNR DFN3 от этого уровня, дБ (стенд: речь p5 13–16, щелчки
+    /// p50 −13…−15, тихая речь на 20 дБ тише — p50 20).
+    const OPEN_LSNR: f32 = 6.0;
+    /// С этого уровня хватает одного кадра: на начале фразы оценка отстаёт от речи на 2–3
+    /// кадра и съедает запас заглядывания, а лишний кадр ожидания гасил первый слог.
+    /// Щелчок так открывает затвор редко (стенд: у 1–5 % кадров щелчков), и то впустую —
+    /// DFN3 его уже вырезал.
+    const OPEN_LSNR_SURE: f32 = 20.0;
     const HANGOVER: u32 = 30; // 300 мс
-    const PROVISIONAL: u32 = 4; // 40 мс на подтверждение VAD
+    const PROVISIONAL: u32 = 4; // 40 мс на подтверждение
     const ONSET_DB: f32 = 12.0;
+    const ONSET_MIN_LSNR: f32 = 0.0;
     const ONSET_INPUT_DB: f32 = 4.0;
     const IMPULSE_SHARE: f64 = 0.7;
     /// Окно оценки уровня шума: 1.5 с.
@@ -627,18 +822,18 @@ impl SpeechGate {
             gain_db: 0.0,
             hangover: Self::HANGOVER,
             provisional: 0,
-            prev_vad: 1.0,
-            prev: FrameStat { db: -120.0, impulsive: false },
+            prev_lsnr: 35.0,
             floor_db: -60.0,
             history: std::collections::VecDeque::with_capacity(Self::FLOOR_WINDOW),
             in_floor_db: -60.0,
             in_history: std::collections::VecDeque::with_capacity(Self::FLOOR_WINDOW),
             speech_db: -30.0,
+            depth: 1.0,
             depth_db: Self::FLOOR_DB,
         }
     }
 
-    /// Уровень шума — 20-й перцентиль уровней кадров за 1.5 с: шум после RNNoise скачет
+    /// Уровень шума — 20-й перцентиль уровней кадров за 1.5 с: шум после шумодава скачет
     /// на 10 дБ от кадра к кадру, и минимум лежал бы на 10 дБ ниже обычного шума.
     fn percentile(history: &std::collections::VecDeque<f32>) -> f32 {
         let mut v: Vec<f32> = history.iter().copied().collect();
@@ -654,11 +849,11 @@ impl SpeechGate {
         10f32.powf(db / 20.0)
     }
 
-    /// `vad` и `input` — VAD и вход RNNoise этого вызова; `frame` — выход того же вызова
-    /// (звук предыдущего входа).
-    fn process(&mut self, vad: f32, input: FrameStat, denoised_db: f32, frame: &mut [f32]) {
-        let cur = self.prev; // звук, который сейчас на выходе (по входу RNNoise)
-        // Уровень над шумом — по выходу RNNoise: под ровным шумом начало фразы на входе
+    /// `lsnr` — оценка SNR новейшего кадра; `cur` и `next` — вход шумодава у кадра, который
+    /// сейчас на выходе (`frame`), и у следующего за ним; `denoised_db` — уровень `frame`
+    /// после шумодава, до AGC.
+    fn process(&mut self, lsnr: f32, cur: FrameStat, next: FrameStat, denoised_db: f32, frame: &mut [f32]) {
+        // Уровень над шумом — по выходу шумодава: под ровным шумом начало фразы на входе
         // тонет (на 1–4 дБ громче шума), а после шумодава шума почти нет и голос виден.
         if self.history.len() == Self::FLOOR_WINDOW {
             self.history.pop_front();
@@ -670,16 +865,17 @@ impl SpeechGate {
         }
         self.in_history.push_back(cur.db);
         self.in_floor_db = Self::percentile(&self.in_history);
-        let speech = vad.min(self.prev_vad) >= Self::OPEN_VAD;
+        let speech = lsnr.min(self.prev_lsnr) >= Self::OPEN_LSNR || lsnr >= Self::OPEN_LSNR_SURE;
+        self.prev_lsnr = lsnr;
         // Начало голоса: уровень над шумом и держится в следующем кадре (не тише чем на
         // 3 дБ). Щелчок за 10 мс затухает на 10+ дБ, а пришедший в конце кадра — резкий.
-        let rising = input.db >= cur.db - 3.0 && !cur.impulsive && !input.impulsive;
+        let rising = next.db >= cur.db - 3.0 && !cur.impulsive && !next.impulsive;
         // И на входе хоть немного над шумом: после шумодава в паузах почти цифровая
-        // тишина, и «+6 дБ» там дал бы любой хвост щелчка.
-        let over_input = cur.db > self.in_floor_db + Self::ONSET_INPUT_DB && input.db > self.in_floor_db + Self::ONSET_INPUT_DB;
-        let onset = !speech && rising && denoised_db > self.floor_db + Self::ONSET_DB && over_input;
-        self.prev_vad = vad;
-        self.prev = input;
+        // тишина, и «+12 дБ» там дал бы любой хвост щелчка.
+        let over_input = cur.db > self.in_floor_db + Self::ONSET_INPUT_DB && next.db > self.in_floor_db + Self::ONSET_INPUT_DB;
+        // И DFN3 хоть немного слышит голос: удар по столу и хвост щелчка в комнате тоже
+        // «нарастают», но оценка у них −8…−15 (стенд: клавиатура в паузах −47 → −51 дБ).
+        let onset = !speech && rising && denoised_db > self.floor_db + Self::ONSET_DB && over_input && lsnr >= Self::ONSET_MIN_LSNR;
         let open = if speech {
             self.hangover = Self::HANGOVER;
             self.provisional = 0;
@@ -696,16 +892,16 @@ impl SpeechGate {
         } else {
             false
         };
-        if speech {
+        if speech && cur.db > self.in_floor_db {
             self.speech_db += 0.01 * (cur.db - self.speech_db);
         }
         // Глубина — по тому, насколько речь громче шума. Под сильным ровным шумом (речь
         // громче на ≤ 10 дБ) начало слов едва выходит из шума, и жёсткий затвор резал бы
-        // их (стенд, белый шум при SNR 5 дБ); там шум снимает RNNoise, а щелчки шум и так
-        // маскирует. В тихой комнате (≥ 20 дБ) — полная глубина.
-        let depth = ((self.speech_db - self.in_floor_db - Self::DEPTH_FROM_SNR_DB) / (Self::DEPTH_FULL_SNR_DB - Self::DEPTH_FROM_SNR_DB))
+        // их (стенд, белый шум при SNR 5 дБ); там шум снимает шумодав, а остатки щелчков
+        // шум и так маскирует. В тихой комнате (≥ 20 дБ) — полная глубина.
+        self.depth = ((self.speech_db - self.in_floor_db - Self::DEPTH_FROM_SNR_DB) / (Self::DEPTH_FULL_SNR_DB - Self::DEPTH_FROM_SNR_DB))
             .clamp(0.0, 1.0);
-        let floor = Self::FLOOR_DB * depth;
+        let floor = Self::FLOOR_DB * self.depth;
         self.depth_db = floor;
         let target = if open { 0.0 } else { (self.gain_db - Self::RELEASE_DB_PER_FRAME).max(floor) };
         let (from, to) = (Self::db_to_lin(self.gain_db), Self::db_to_lin(target));

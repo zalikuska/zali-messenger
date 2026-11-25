@@ -10,7 +10,7 @@
 //! измерений — нет.
 #![cfg(feature = "apm")]
 
-use zali_messenger_core::audio_processing::{VoiceProcessingConfig, VoiceProcessor, VoiceProcessingStats, FRAME, SAMPLE_RATE};
+use zali_messenger_core::audio_processing::{VoiceProcessingConfig, VoiceProcessor, VoiceProcessingStats, FRAME, NS_DELAY_FRAMES, SAMPLE_RATE};
 
 const SR: usize = SAMPLE_RATE as usize;
 
@@ -315,6 +315,9 @@ fn near_speech_survives_a_real_conversation() {
         far_segs.iter().any(|&(a, b)| t >= a && t < b)
     };
     // (эхо относительно ближней речи, мин. сходство в паузах дальней, мин. сходство в двойном разговоре, мин. уровень в двойном)
+    // С DFN3 (2026-11-25): паузы 0.971 / 0.951, двойной 0.645 / 0.580; с RNNoise было
+    // 0.991 / 0.979 и 0.712 / 0.609. Под эхом DFN3 подрезает ближнюю речь сильнее —
+    // держат предел ослабления на время реплик собеседника и медленный нормализатор.
     for &(enr, near_only_min, dt_min, dt_level_min) in &[(0.0f64, 0.95, 0.60, -4.5), (5.0, 0.95, 0.50, -6.5)] {
         let mut echo = convolve(&far, &room_ir(80.0, 0.8, 0.3, 17));
         scale_to(&mut echo, energy(&near) * 10f64.powf(enr / 10.0));
@@ -364,21 +367,23 @@ fn stationary_noise_is_removed_without_eating_speech() {
     let zeros = vec![0.0f32; len];
     let near_e = energy(&fx.near);
     let ce = frame_db(&fx.near);
-    // Порог ослабления: широкополосный шум ≥ 15 дБ (измерено 18–26). Вентилятор с
-    // тональным гулом 120/240 Гц ≥ 12 дБ (измерено 13.9): тоны RNNoise снимает лишь
-    // частично, ФВЧ на 100 Гц до 120 Гц почти не достаёт, а выше резать — худеет голос.
+    // Порог ослабления ≥ 18 дБ: DFN3 (2026-11-25) — белый 29.4, розовый 22.7, вентилятор
+    // 22.6, вентилятор с гулом 120/240 Гц 24.1 (у RNNoise было 18–26 и 13.9 на гуле). Под
+    // таким шумом (SNR 5 дБ) предел ослабления шумодава — 30 дБ: без него DFN3 съедал тихие
+    // куски речи вместе с шумом (сходство на белом 0.71 против 0.88 на входе).
     for (name, mut noise, min_atten) in
-        [("белый", white, 15.0), ("розовый", pink, 15.0), ("вентилятор без гула", fan_broadband, 15.0), ("вентилятор с гулом", fan, 12.0)]
+        [("белый", white, 18.0), ("розовый", pink, 18.0), ("вентилятор без гула", fan_broadband, 18.0), ("вентилятор с гулом", fan, 18.0)]
     {
         scale_to(&mut noise, near_e / 10f64.powf(0.5)); // SNR 5 дБ
         let mic: Vec<f32> = (0..len).map(|i| fx.near[i] + noise[i]).collect();
         let out = run(NS, &zeros, &mic);
         // ослабление шума — в паузах речи (кадры тише −70 дБ), с учётом задержки в кадр
         let (mut em, mut eo) = (0.0, 0.0);
-        for f in (SR / FRAME)..ce.len() - 1 {
+        let d = NS_DELAY_FRAMES;
+        for f in (SR / FRAME)..ce.len() - d {
             if ce[f] < -70.0 && ce[f + 1] < -70.0 {
                 em += energy(&mic[f * FRAME..f * FRAME + FRAME]);
-                eo += energy(&out[(f + 1) * FRAME..(f + 1) * FRAME + FRAME]);
+                eo += energy(&out[(f + d) * FRAME..(f + d) * FRAME + FRAME]);
             }
         }
         let atten = db(em, eo);
@@ -515,9 +520,9 @@ fn keyboard(len: usize, peak: f32, seed: u64) -> Vec<f32> {
 
 #[test]
 fn keyboard_clicks_between_phrases_are_muted() {
-    // RNNoise резкие шумы почти не трогает (4–5 дБ), а AGC при тихой речи поднимал их
-    // громче, чем было (живые звонки 2026-11: «все шумы слышны очень сильно»). Затвор по
-    // VAD глушит их в паузах между фразами. Измерено: 43 / 40 дБ, речь 0.968 / −0.5 дБ.
+    // Синтетические щелчки (шум + тон, 4–14 мс). С RNNoise в паузах было 4–5 дБ, а AGC при
+    // тихой речи поднимал их громче, чем было; затвор по VAD довёл до 43 / 40 дБ. С DFN3
+    // и затвором по его оценке SNR (2026-11-25): 77.6 / 73.2 дБ, речь 0.959 / 0.844.
     let fx = fixtures();
     let len = fx.len;
     let zeros = vec![0.0f32; len];
@@ -526,7 +531,7 @@ fn keyboard_clicks_between_phrases_are_muted() {
         let t = i as f32 / SR as f32;
         t > 1.0 && !segs.iter().any(|&(a, b)| t >= a - 0.05 && t < b + 0.4)
     };
-    for &(peak, near_gain, config, min_atten, min_sim) in &[(0.1f32, 1.0f32, NS, 35.0, 0.93), (0.03, 0.2, AGC, 30.0, 0.75)] {
+    for &(peak, near_gain, config, min_atten, min_sim) in &[(0.1f32, 1.0f32, NS, 55.0, 0.93), (0.03, 0.2, AGC, 50.0, 0.75)] {
         let near: Vec<f32> = gate(&fx.near, &segs).iter().map(|v| v * near_gain).collect();
         let clicks = keyboard(len, peak, 5);
         let mut lp = 0.0f32;
@@ -539,10 +544,11 @@ fn keyboard_clicks_between_phrases_are_muted() {
             .collect();
         let out = run(config, &zeros, &mic);
         let (mut em, mut eo) = (0.0, 0.0);
-        for i in 0..len - FRAME {
+        let d = NS_DELAY_FRAMES * FRAME;
+        for i in 0..len - d {
             if pause(i) {
                 em += (mic[i] as f64).powi(2);
-                eo += (out[i + FRAME] as f64).powi(2);
+                eo += (out[i + d] as f64).powi(2);
             }
         }
         let atten = db(em, eo);
@@ -550,6 +556,151 @@ fn keyboard_clicks_between_phrases_are_muted() {
         assert!(atten >= min_atten, "щелчки {peak}, речь ×{near_gain}: в паузах ослаблены всего на {atten:.1} дБ");
         assert!(sim >= min_sim && level >= -1.5, "щелчки {peak}, речь ×{near_gain}: речь {sim:.3} ({level:+.1} дБ)");
     }
+}
+
+/// Реалистичные удары: короткая вспышка (0.3–1 мс) через резонаторы корпуса (`modes`:
+/// частота, затухание в мс) и комнату (RT60 0.25 с). `typing` — пачки клавиш, иначе
+/// одиночные удары (у мыши — с отпусканием через 60–120 мс). Пик — `peak`.
+fn resonant_hits(len: usize, peak: f32, seed: u64, modes: &[(f32, f32)], typing: bool) -> Vec<f32> {
+    let mut r = Rng(seed);
+    let mut exc = vec![0.0f32; len];
+    let mut t = SR / 2;
+    while t < len {
+        let n = if typing { 4 + (r.next().abs() * 12.0) as usize } else { 1 + (r.next().abs() * 3.0) as usize };
+        for _ in 0..n {
+            let a = peak * (0.5 + 0.5 * r.next().abs());
+            let d = ((0.0003 + 0.0007 * r.next().abs()) * SR as f32) as usize;
+            for k in 0..d {
+                if t + k < len {
+                    exc[t + k] += a * r.next();
+                }
+            }
+            if !typing {
+                let t2 = t + ((0.06 + 0.06 * r.next().abs()) * SR as f32) as usize;
+                for k in 0..d {
+                    if t2 + k < len {
+                        exc[t2 + k] += 0.6 * a * r.next();
+                    }
+                }
+            }
+            t += ((if typing { 0.08 + 0.15 * r.next().abs() } else { 0.25 + 0.5 * r.next().abs() }) * SR as f32) as usize;
+        }
+        t += ((0.4 + 1.5 * r.next().abs()) * SR as f32) as usize;
+    }
+    let mut y = vec![0.0f32; len];
+    for &(f, tau_ms) in modes {
+        let rr = (-1.0 / (tau_ms / 1000.0 * SR as f32)).exp();
+        let w = 2.0 * std::f32::consts::PI * f / SR as f32;
+        let (a1, a2) = (2.0 * rr * w.cos(), -rr * rr);
+        let (mut y1, mut y2) = (0.0f32, 0.0f32);
+        for i in 0..len {
+            let v = exc[i] + a1 * y1 + a2 * y2;
+            y2 = y1;
+            y1 = v;
+            y[i] += v * (1.0 - rr);
+        }
+    }
+    let mut out = convolve(&y, &room_ir(0.0, 0.5, 0.25, seed + 1));
+    let m = out.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+    out.iter_mut().for_each(|v| *v *= peak / m.max(1e-9));
+    out
+}
+
+#[test]
+fn realistic_clicks_are_removed_in_pauses_and_over_speech() {
+    // Жалоба живых звонков 2026-11 с RNNoise: «все клики слышно идеально». RNNoise снимал
+    // такие удары на 1–9 дБ в паузах и на 0–4 дБ поверх речи. Весь конвейер шумодава с
+    // DFN3 и затвором (2026-11-25): в паузах клавиатура 51, мышь 76, стук 19.5 дБ; поверх
+    // речи — целиком (выход со щелчками не громче выхода без них); речь 0.91–0.95.
+    // Стук — слабое место: низкий удар (120–260 Гц) DFN3 принимает за голос (SNR 22–33).
+    let fx = fixtures();
+    let len = fx.len;
+    let zeros = vec![0.0f32; len];
+    let segs: Vec<(f32, f32)> = (0..10).map(|k| (k as f32 * 6.0, k as f32 * 6.0 + 3.0)).collect();
+    let pause = |i: usize| {
+        let t = i as f32 / SR as f32;
+        t > 1.0 && !segs.iter().any(|&(a, b)| t >= a - 0.05 && t < b + 0.4)
+    };
+    let phrases = gate(&fx.near, &segs);
+    let mut r = Rng(3);
+    let mut lp = 0.0f32;
+    let floor: Vec<f32> = (0..len).map(|_| { lp = 0.98 * lp + 0.02 * r.next(); lp * 0.003 }).collect();
+    let d = NS_DELAY_FRAMES * FRAME;
+    let sources = [
+        ("клавиатура", resonant_hits(len, 0.15, 11, &[(450.0, 8.0), (900.0, 6.0), (2600.0, 4.0), (5200.0, 2.5)], true), 40.0),
+        ("мышь", resonant_hits(len, 0.15, 9, &[(2300.0, 4.0), (4100.0, 3.0), (6800.0, 2.0)], false), 50.0),
+        ("стук по столу", resonant_hits(len, 0.3, 13, &[(120.0, 25.0), (260.0, 15.0), (700.0, 8.0)], false), 15.0),
+    ];
+    for (name, clicks, min_pause) in &sources {
+        let min_pause = *min_pause;
+        // В паузах между фразами.
+        let mic: Vec<f32> = (0..len).map(|i| phrases[i] + clicks[i] + floor[i]).collect();
+        let out = run(NS, &zeros, &mic);
+        let (mut em, mut eo) = (0.0, 0.0);
+        for i in 0..len - d {
+            if pause(i) {
+                em += (mic[i] as f64).powi(2);
+                eo += (out[i + d] as f64).powi(2);
+            }
+        }
+        let atten = db(em, eo);
+        let (sim, level) = similarity(&out, &phrases, 1.0, &|_| true);
+        // Поверх сплошной речи: насколько выход со щелчками громче выхода без них в кадрах,
+        // где щелчок не тише речи на 10+ дБ, — против того, насколько был громче вход.
+        let mic2: Vec<f32> = (0..len).map(|i| fx.near[i] + clicks[i] + floor[i]).collect();
+        let clean2: Vec<f32> = (0..len).map(|i| fx.near[i] + floor[i]).collect();
+        let (o2, oc) = (run(NS, &zeros, &mic2), run(NS, &zeros, &clean2));
+        let (sp, cl) = (frame_db(&fx.near), frame_db(clicks));
+        let (mut a_in, mut b_in, mut a_out, mut b_out) = (0.0, 0.0, 0.0, 0.0);
+        for f in (SR / FRAME)..len / FRAME - NS_DELAY_FRAMES {
+            if sp[f] > -40.0 && cl[f] > sp[f] - 10.0 {
+                a_in += energy(&mic2[f * FRAME..f * FRAME + FRAME]);
+                b_in += energy(&clean2[f * FRAME..f * FRAME + FRAME]);
+                let g = f + NS_DELAY_FRAMES;
+                a_out += energy(&o2[g * FRAME..g * FRAME + FRAME]);
+                b_out += energy(&oc[g * FRAME..g * FRAME + FRAME]);
+            }
+        }
+        let over = db(a_in - b_in, (a_out - b_out).max(1e-12));
+        let (sim2, _) = similarity(&o2, &fx.near, 1.0, &|_| true);
+        assert!(atten >= min_pause, "{name}: в паузах ослаблены всего на {atten:.1} дБ");
+        assert!(over >= 20.0, "{name}: поверх речи ослаблены всего на {over:.1} дБ");
+        assert!(sim >= 0.88 && level >= -1.5, "{name}: речь между ударами {sim:.3} ({level:+.1} дБ)");
+        assert!(sim2 >= 0.89, "{name}: речь под ударами {sim2:.3}");
+    }
+}
+
+#[test]
+fn quiet_speech_survives_the_denoiser() {
+    // DFN3 зависит от абсолютного уровня: речь тише ~−42 дБFS он целиком принимал за шум
+    // (−46 дБ на выходе на −47 дБFS), а встроенный микрофон MacBook даёт −30…−45. Держит
+    // нормализатор уровня перед шумодавом.
+    let fx = fixtures();
+    let zeros = vec![0.0f32; fx.len];
+    let mut r = Rng(99);
+    // (усиление речи, мин. сходство, мин. уровень). Измерено: 0.979, 0.960, 0.963 (−0.3…−0.4
+    // дБ); на −55 дБFS (×0.02) — 0.816, −5.5 дБ: шум пола там всего на 25 дБ тише речи.
+    for (gain, min_sim, min_level) in [(1.0f32, 0.94, -1.5), (0.1, 0.92, -1.5), (0.05, 0.92, -1.5), (0.02, 0.75, -8.0)] {
+        let speech: Vec<f32> = fx.near.iter().map(|v| v * gain).collect();
+        let mic: Vec<f32> = speech.iter().map(|v| v + r.next() * 0.00017).collect(); // пол −80 дБFS
+        let out = run(NS, &zeros, &mic);
+        let scale = 1.0 / gain;
+        let (o, c): (Vec<f32>, Vec<f32>) = out.iter().zip(&speech).map(|(a, b)| (a * scale, b * scale)).unzip();
+        let (sim, level) = similarity(&o, &c, 1.0, &|_| true);
+        assert!(sim >= min_sim && level >= min_level, "речь ×{gain}: {sim:.3} ({level:+.1} дБ)");
+    }
+}
+
+#[test]
+fn aec_never_outputs_digital_silence() {
+    // DFN3 после 60 мс точных нулей засыпает и сбрасывает свою нормировку — нельзя, чтобы
+    // их давал AEC3, пока говорит только собеседник (эхо вычтено целиком).
+    let fx = fixtures();
+    let echo = convolve(&fx.far, &room_ir(80.0, 0.8, 0.3, 3));
+    let mic: Vec<f32> = echo.iter().zip(&fx.floor).map(|(a, b)| a + b).collect();
+    let out = run(AEC, &fx.far, &mic);
+    let zero = out[SR..].chunks_exact(FRAME).filter(|c| c.iter().all(|&v| v == 0.0)).count();
+    assert_eq!(zero, 0, "кадров точной тишины на выходе AEC: {zero}");
 }
 
 #[test]

@@ -548,6 +548,12 @@ ZaliMixin(ZaliInterface, class {
                 title: 'Поддержка',
                 note: 'Состояние аккаунта, нарушения и жалобы',
             },
+            {
+                actionId: 'bug-report',
+                art: 'bug',
+                title: 'Сообщить об ошибке',
+                note: 'Опишите проблему и приложите скриншоты',
+            },
         ];
         const status = this.S.updateStatus || {};
         let update = '';

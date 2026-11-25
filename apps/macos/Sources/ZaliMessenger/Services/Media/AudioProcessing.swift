@@ -2,7 +2,7 @@ import Foundation
 import AVFAudio
 import CoreBridge
 
-/// Владелец обработчика `zali_apm_*` (core/src/audio_processing.rs): AEC3 → RNNoise →
+/// Владелец обработчика `zali_apm_*` (core/src/audio_processing.rs): AEC3 → DeepFilterNet3 →
 /// AGC2, 48 кГц моно f32. Внутри мьютекс — опорный сигнал (поток process tap) и
 /// микрофон (поток обработки) вызывают из разных потоков.
 final class ApmHandle {

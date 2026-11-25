@@ -266,6 +266,9 @@ const DefaultApiRoutes = Object.freeze({
         decryptFailure: apiRoute('/diagnostics/decrypt-failure'),
             report: apiRoute('/diagnostics/report'),
     },
+    bugReports: {
+        submit: apiRoute('/bug-reports'),
+    },
 });
 
 /**

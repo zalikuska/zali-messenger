@@ -112,6 +112,7 @@
     "interface/autographs.js",
     "interface/diagnostics.js",
     "interface/diagnostic_reports.js",
+    "interface/bug_report.js",
     "interface/moderation_report.js",
     "interface/support_hub.js",
     "interface/game_activity.js",

@@ -12,7 +12,7 @@ char* zali_bus_dispatch(const char* address_command, const char* args_json);
 void zali_bus_free_string(char* ptr);
 
 // Обработка голоса нативного захвата микрофона (core/src/audio_processing.rs, фича `apm`):
-// AEC3 → RNNoise → AGC2, 48 кГц моно f32. Опорный сигнал и микрофон можно звать из
+// AEC3 → DeepFilterNet3 → AGC2, 48 кГц моно f32. Опорный сигнал и микрофон можно звать из
 // разных потоков — внутри мьютекс.
 typedef struct ZaliApm ZaliApm;
 ZaliApm* zali_apm_new(bool aec, bool ns, bool agc);

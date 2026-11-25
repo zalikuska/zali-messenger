@@ -102,7 +102,7 @@ ZaliMixin(ZaliInterface, class {
     }
 
     // Микрофон из оболочки (interface/native_media.js): обычный HAL/WASAPI-ввод и наша
-    // обработка (AEC3 → RNNoise → AGC2) вместо системного VoiceProcessingIO, который на
+    // обработка (AEC3 → DeepFilterNet3 → AGC2) вместо системного VoiceProcessingIO, который на
     // macOS глушит звук всей системы на каждый вход в звонок. null — пути нет или он
     // отказал; тогда вызывающий идёт в getUserMedia, звонок не падает.
     // Сохранённый id от движка оболочка не знает — defaultIfUnknown (native_media.js).

@@ -9,7 +9,7 @@ import os
 /// **Никакого `kAudioUnitSubType_VoiceProcessingIO` и `setVoiceProcessingEnabled`**: именно
 /// VoiceProcessingIO на каждый вход в звонок приглушал все приложения на 15 дБ и
 /// пересобирал устройство вывода (журнал macOS 2026-11-12, `AudioDeviceDuck`). Эхо, шум и
-/// громкость — наш `ApmHandle` (core, AEC3 → RNNoise → AGC2) с опорным сигналом из
+/// громкость — наш `ApmHandle` (core, AEC3 → DeepFilterNet3 → AGC2) с опорным сигналом из
 /// `RenderTap`.
 ///
 /// Выход — 48 кГц моно f32 блоками по 10 мс. AUHAL на входе не меняет частоту, поэтому

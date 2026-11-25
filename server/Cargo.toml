@@ -38,6 +38,10 @@ name = "diagnostics"
 path = "../tests/diagnostics.rs"
 
 [[test]]
+name = "bug_reports"
+path = "../tests/bug_reports.rs"
+
+[[test]]
 name = "hash_chain"
 path = "../tests/hash_chain.rs"
 

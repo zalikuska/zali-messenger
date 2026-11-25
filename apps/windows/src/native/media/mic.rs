@@ -1,5 +1,5 @@
 //! Микрофон: WASAPI shared (роль `eConsole`), 48 кГц моно f32 → `VoiceProcessor`
-//! (AEC3 → RNNoise → AGC2) → кадры по 20 мс. Опорный сигнал эхоподавления — loopback
+//! (AEC3 → DeepFilterNet3 → AGC2) → кадры по 20 мс. Опорный сигнал эхоподавления — loopback
 //! устройства вывода по умолчанию в соседнем потоке (`loopback::run_render_reference`).
 
 use super::com::{now_us, ComGuard};

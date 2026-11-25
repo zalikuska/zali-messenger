@@ -1142,6 +1142,8 @@ ZaliMixin(ZaliInterface, class {
         document.getElementById('sendDiagnosticsBtn')?.addEventListener('click', () => {
             void this.sendManualDiagnosticReport();
         });
+        document.getElementById('bugReportBtn')?.addEventListener('click', () => this.openBugReportDialog());
+        document.getElementById('bugReportSettingsBtn')?.addEventListener('click', () => this.openBugReportDialog());
         const closeSettings = document.getElementById('closeSettings');
         const resetEncryptionKeysBtn = document.getElementById('resetEncryptionKeysBtn');
         const networkConfigSaveBtn = document.getElementById('networkConfigSaveBtn');
@@ -1806,6 +1808,8 @@ ZaliMixin(ZaliInterface, class {
                         this.setHubTab('addons');
                     } else if (action === 'support') {
                         this.setHubTab('support');
+                    } else if (action === 'bug-report') {
+                        this.openBugReportDialog();
                     }
                     return;
                 }

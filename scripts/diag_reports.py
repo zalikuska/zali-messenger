@@ -19,6 +19,12 @@ WS, ошибке JS — web/src/interface/diagnostic_reports.js) и отчёты
     python3 scripts/diag_reports.py show ID --raw        # тело как JSON
 
 Виды: manual, voice_failed, delivery_failed, ws_unstable, js_error, decrypt, other.
+
+Сообщения об ошибках, написанные людьми (кнопка «Сообщить об ошибке», текст и до
+пяти картинок — server/src/bug_reports.rs), — отдельные команды:
+
+    python3 scripts/diag_reports.py bugs [--user alice] [--limit 50]
+    python3 scripts/diag_reports.py bug 2d1249f0 [--save ./bug-2d1249f0]   # текст; --save кладёт картинки и журнал в папку
 """
 import argparse
 import json
@@ -42,6 +48,21 @@ def api(path, params=None):
     except urllib.error.HTTPError as e:
         hint = ' — неверный токен или RELEASE_ADMIN_TOKEN на сервере не задан' if e.code == 403 else ''
         sys.exit(f'HTTP {e.code} {path}{hint}')
+    except urllib.error.URLError as e:
+        sys.exit(f'Сервер недоступен: {e.reason}')
+
+
+def api_bytes(path):
+    base = os.environ.get('ZALI_API_URL', 'http://localhost:3000').rstrip('/')
+    token = os.environ.get('ZALI_ADMIN_TOKEN', '').strip()
+    if not token:
+        sys.exit('ZALI_ADMIN_TOKEN не задан (это RELEASE_ADMIN_TOKEN сервера).')
+    req = urllib.request.Request(f'{base}{path}', headers={'Authorization': f'Bearer {token}'})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        sys.exit(f'HTTP {e.code} {path}')
     except urllib.error.URLError as e:
         sys.exit(f'Сервер недоступен: {e.reason}')
 
@@ -115,6 +136,56 @@ def cmd_show(args):
             print(line if isinstance(line, str) else json.dumps(line, ensure_ascii=False))
 
 
+def cmd_bugs(args):
+    data = api('/api/bug-reports', {'user': args.user, 'limit': args.limit})
+    print(f"Сообщений об ошибках: {data['count']}")
+    for it in data['items']:
+        pics = f" [картинок: {it['images']}]" if it.get('images') else ''
+        pics += ' [журнал]' if it.get('hasLog') else ''
+        preview = ' '.join(it['preview'].split())
+        print(f"{it['createdAt']}  {it['id'][:8]}  {it['user']:<16} {it['platform'] or '-':<14} "
+              f"{it['appVersion'] or '-':<8} {preview}{pics}")
+
+
+def cmd_bug(args):
+    bug_id = args.id
+    if len(bug_id) < 32:
+        data = api('/api/bug-reports', {'limit': 500})
+        matches = [it['id'] for it in data['items'] if it['id'].startswith(bug_id)]
+        if not matches:
+            sys.exit(f'Нет сообщения с id {bug_id}…')
+        if len(matches) > 1:
+            sys.exit(f'Неоднозначно: {", ".join(m[:12] for m in matches)}')
+        bug_id = matches[0]
+    bug = api(f'/api/bug-reports/{urllib.parse.quote(bug_id)}')
+    print(f"{bug['user']} — {bug['createdAt']} ({bug['platform'] or '-'}, {bug['appVersion'] or '-'}), id {bug['id']}\n")
+    print(bug['text'])
+    images = bug.get('images') or []
+    log = bug.get('log')
+    if not images and not log:
+        return
+    if log:
+        print('\nЖурнал приложен' + ('' if args.save else ' (--save ПАПКА — сохранить как log.json)'))
+    if images:
+        print(f"\nКартинок: {len(images)}")
+        if not args.save:
+            print('  (--save ПАПКА — сохранить)')
+    if not args.save:
+        return
+    os.makedirs(args.save, exist_ok=True)
+    if log:
+        log_path = os.path.join(args.save, f"{bug['id'][:8]}-log.json")
+        with open(log_path, 'w', encoding='utf-8') as f:
+            json.dump(log, f, ensure_ascii=False, indent=2)
+        print(f"  {log_path}")
+    for img in images:
+        ext = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp'}.get(img['mime'], 'bin')
+        path = os.path.join(args.save, f"{bug['id'][:8]}-{img['idx']}.{ext}")
+        with open(path, 'wb') as f:
+            f.write(api_bytes(f"/api/bug-reports/{urllib.parse.quote(bug['id'])}/images/{img['idx']}"))
+        print(f"  {path} ({fmt_bytes(img['bytes'])})")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='cmd', required=True)
@@ -129,6 +200,14 @@ def main():
     p_show.add_argument('id')
     p_show.add_argument('--raw', action='store_true')
     p_show.set_defaults(fn=cmd_show)
+    p_bugs = sub.add_parser('bugs')
+    p_bugs.add_argument('--user')
+    p_bugs.add_argument('--limit', type=int, default=50)
+    p_bugs.set_defaults(fn=cmd_bugs)
+    p_bug = sub.add_parser('bug')
+    p_bug.add_argument('id')
+    p_bug.add_argument('--save')
+    p_bug.set_defaults(fn=cmd_bug)
     args = parser.parse_args()
     args.fn(args)
 

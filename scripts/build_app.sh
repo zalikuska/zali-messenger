@@ -14,7 +14,7 @@ APP_BUNDLE="$PROJECT_ROOT/$APP_NAME.app"
 # MAJOR.MINOR{a|b|r}BUILD (r > b > a, see compareVersions in interface.js);
 # unlike apps/windows/Cargo.toml, CFBundleShortVersionString isn't SemVer-locked
 # so this can hold the display version directly.
-APP_VERSION="0.2b72"
+APP_VERSION="0.2b73"
 
 TURN_CONF="/opt/homebrew/etc/turnserver.conf"
 
@@ -66,7 +66,7 @@ python3 scripts/bundle_web.py
 
 # 1. Сборка Rust ядра
 echo "📦 Сборка Rust ядра..."
-# --features apm: обработка звука нативного захвата микрофона (zali_apm_*, AEC3 → RNNoise → AGC2).
+# --features apm: обработка звука нативного захвата микрофона (zali_apm_*, AEC3 → DeepFilterNet3 → AGC2).
 # --features sfu: отправка экрана на SFU издателем ядра (zali_sfu_pub_*, core/src/sfu_publisher.rs).
 cd core && cargo build --release --features apm,sfu
 cd ..

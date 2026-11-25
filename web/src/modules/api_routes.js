@@ -142,6 +142,10 @@
             // Общие отчёты (вручную и при сбоях) — diagnostic_reports.js.
             report: apiRoute('/diagnostics/report'),
         },
+        // «Сообщить об ошибке»: текст + картинки — bug_report.js.
+        bugReports: {
+            submit: apiRoute('/bug-reports'),
+        },
     });
 
     window.ZaliApiRoutes = API_ROUTES;

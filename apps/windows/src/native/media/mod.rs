@@ -7,7 +7,7 @@
 //!
 //! * микрофон — WASAPI shared, роль `eConsole` (не `eCommunications`: режим «связь»
 //!   включает системное приглушение остальных приложений), 48 кГц моно f32,
-//!   обработка `VoiceProcessor` из core (AEC3 → RNNoise → AGC2) с опорным сигналом
+//!   обработка `VoiceProcessor` из core (AEC3 → DeepFilterNet3 → AGC2) с опорным сигналом
 //!   из WASAPI loopback устройства вывода по умолчанию (`mic.rs`, `loopback.rs`);
 //! * камера — Media Foundation `IMFSourceReader` в NV12, один сеанс на устройство,
 //!   кадры раздаются всем потокам, открывшим эту камеру (`camera.rs`);

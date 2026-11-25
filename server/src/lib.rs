@@ -89,6 +89,7 @@ mod updates;
 pub(crate) use updates::*;
 mod diagnostics;
 pub(crate) use diagnostics::*;
+mod bug_reports;
 mod hash_chain;
 pub(crate) use hash_chain::*;
 mod profiles;
@@ -1643,6 +1644,45 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
     .await
     .ok();
 
+    // Сообщения об ошибках от пользователей (bug_reports.rs): текст отдельно от
+    // картинок, чтобы список не тянул BLOB'ы.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bug_reports (
+            id TEXT PRIMARY KEY,
+            reported_by TEXT NOT NULL,
+            body TEXT NOT NULL,
+            app_version TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы bug_reports");
+    // Журнал клиента, приложенный к сообщению (с 0.2b74); старые строки — NULL.
+    sqlx::query("ALTER TABLE bug_reports ADD COLUMN log TEXT")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_bug_reports_created_at ON bug_reports (created_at)",
+    )
+    .execute(&pool)
+    .await
+    .ok();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bug_report_images (
+            report_id TEXT NOT NULL,
+            idx INTEGER NOT NULL,
+            mime TEXT NOT NULL,
+            data BLOB NOT NULL,
+            PRIMARY KEY (report_id, idx)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("Ошибка создания таблицы bug_report_images");
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS decrypt_failure_reports (
             id TEXT PRIMARY KEY,
@@ -2554,6 +2594,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/diagnostics/reports", get(list_reports))
         .route("/api/diagnostics/reports/:id", get(get_report))
         .route("/api/diagnostics/metrics", get(get_metrics))
+        // «Сообщить об ошибке»: текст + скриншоты base64 внутри JSON (bug_reports.rs);
+        // чтение — оператор за RELEASE_ADMIN_TOKEN.
+        .route(
+            "/api/bug-reports",
+            post(bug_reports::submit)
+                .layer(DefaultBodyLimit::max(bug_reports::MAX_BODY_BYTES + 4096))
+                .get(bug_reports::list),
+        )
+        .route("/api/bug-reports/:id", get(bug_reports::get))
+        .route("/api/bug-reports/:id/images/:idx", get(bug_reports::image))
         // Жалобы на сообщения и состояние аккаунта (moderation.rs); оператор —
         // за RELEASE_ADMIN_TOKEN, как диагностика.
         .route("/api/moderation/reports", post(moderation::submit_report))
