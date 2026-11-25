@@ -8,7 +8,7 @@ name: Server build
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/shared-rust-cache]
     paths:
       - "server/**"
       - "core/**"
