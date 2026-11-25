@@ -1,0 +1,68 @@
+name: Server build
+
+# Бинарник zali_server для прод-VPS (Linux x86_64). Собирается здесь, потому что
+# на самом VPS один vCPU и ~1 ГБ RAM — сборка занимает часы. Клиенты — в build.yml.
+#
+# Артефакт грузится без упаковки (`archive: false`): имя артефакта = имя файла.
+# Скачать: gh run download <run-id> -n zali_server-linux-x86_64
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "core/**"
+      - ".github/workflows/server.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - "core/**"
+      - ".github/workflows/server.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: zali_server (Linux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/rust-cache
+        with:
+          workspaces: "server -> target"
+          key: release
+
+      - name: Build zali_server (release)
+        run: cargo build --release --manifest-path server/Cargo.toml -p zali_server
+
+      - name: Name binary
+        run: |
+          cp server/target/release/zali_server zali_server-linux-x86_64
+          sha256sum zali_server-linux-x86_64 > zali_server-linux-x86_64.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zali_server-linux-x86_64
+          path: zali_server-linux-x86_64
+          archive: false
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zali_server-linux-x86_64.sha256
+          path: zali_server-linux-x86_64.sha256
+          archive: false
+          if-no-files-found: error
