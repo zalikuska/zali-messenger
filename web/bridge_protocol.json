@@ -241,6 +241,38 @@
         "requestId"
       ]
     },
+    "DOWNLOAD_MESSAGE_ATTACHMENT": {
+      "fields": [
+        "messageId",
+        "requestId"
+      ],
+      "optional": [
+        "sender",
+        "receiver",
+        "serverId",
+        "channelId",
+        "archivePath",
+        "name",
+        "size",
+        "mode"
+      ]
+    },
+    "STAGE_ATTACHMENT": {
+      "fields": [
+        "stageId",
+        "requestId"
+      ],
+      "optional": [
+        "index",
+        "data",
+        "abort"
+      ]
+    },
+    "CLEAR_NOTIFICATIONS": {
+      "fields": [
+        "conversation"
+      ]
+    },
     "CALL_STATE": {
       "fields": [
         "active",

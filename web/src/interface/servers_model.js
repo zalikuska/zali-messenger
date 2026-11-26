@@ -77,6 +77,8 @@ ZaliMixin(ZaliInterface, class {
             myRole: server.myRole || server.my_role || null,
             canInvite: !!(server.canInvite ?? server.can_invite),
             canManage: !!(server.canManage ?? server.can_manage),
+            // Переносить людей между голосовыми каналами (сервер решает сам: владелец, админ, «Управление» или своя роль).
+            canMoveMembers: !!(server.canMoveMembers ?? server.can_move_members),
             memberCount: Number(server.memberCount || server.member_count || 0) || 0,
             joinLink: server.joinLink || server.join_link || '',
         })).map(server => this.ensureServerChannels(server)).filter(Boolean) : [];
@@ -140,6 +142,7 @@ ZaliMixin(ZaliInterface, class {
             { key: 'can_kick', label: 'Исключать', hint: 'Кикать участников из сервера', group: 'Управление', defaultCreate: false },
             { key: 'can_ban', label: 'Бан', hint: 'Блокировать участников', group: 'Управление', defaultCreate: false },
             { key: 'can_manage_treasury', label: 'Казна', hint: 'Выплачивать ZaliCoin из казны сервера', group: 'Управление', defaultCreate: false },
+            { key: 'can_move_members', label: 'Переносить участников', hint: 'Перетягивать людей между голосовыми каналами', group: 'Управление', defaultCreate: false },
         ];
     }
 

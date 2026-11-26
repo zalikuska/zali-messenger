@@ -51,6 +51,7 @@ object CallNotifier {
     private const val CHANNEL_ID = "zali-call-v1"
     private const val MISSED_CHANNEL_ID = "zali-missed-call-v1"
     const val NOTIFICATION_ID = 0x5A1C
+    private const val MISSED_TTL_MS = 6L * 60 * 60 * 1000
     /** Столько же звонок живёт на сервере, прежде чем стать пропущенным. */
     const val RING_TIMEOUT_MS = 60_000L
 
@@ -157,6 +158,12 @@ object CallNotifier {
             .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
+            // Пропущенный звонок теряет смысл, когда чат с этим человеком открыли (запись о
+            // звонке лежит в нём — MessageNotifier.clearConversation) или прошло несколько часов.
+            .setTimeoutAfter(MISSED_TTL_MS)
+            .addExtras(android.os.Bundle().apply {
+                putString(MessageNotifier.EXTRA_CONVERSATION, MessageNotifier.conversationKey(from, null, null))
+            })
             .setContentIntent(openIntent(appContext, id, from, action = null, roomId = roomId))
             .build()
         try {

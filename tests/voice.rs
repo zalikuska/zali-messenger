@@ -1141,3 +1141,115 @@ async fn declining_from_a_notification_needs_the_calls_own_token() {
         "a guessed token must not hang up the caller: {alice_events:?}"
     );
 }
+
+async fn join_server(app: &TestApp, user: &RegisteredUser, owner: &RegisteredUser, server_id: &str) {
+    common::join_by_invite(app, owner, server_id, &user.username, "hunter22").await;
+}
+
+/// Ждёт событие нужного типа среди голосовых; пустой список — оно не пришло.
+async fn wait_event(ws: &mut Ws, event_type: &str) -> Option<serde_json::Value> {
+    let events = drain_voice_events(ws, 700).await;
+    events.into_iter().find(|event| event["type"] == event_type)
+}
+
+/// Перенос участников между голосовыми каналами (`voice_move_member`): просить вправе владелец,
+/// админ, «Управление» и роль с флагом `can_move_members`; цель обязана сидеть в голосовом
+/// канале ЭТОГО сервера, а назначение — быть голосовым каналом этого же сервера. Сервер ничего
+/// не переселяет сам — цели уходит `voice_moved`, дальше она заходит в канал как обычно.
+#[tokio::test]
+async fn moving_a_member_between_voice_channels_is_gated_by_permission() {
+    let app = spawn_app().await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let bob = register_user(&app, "bob", "hunter22").await;
+    let carol = register_user(&app, "carol", "hunter22").await;
+    let server_id = create_server(&app, &alice, "Guild").await;
+    let room_a = create_voice_channel(&app, &alice, &server_id, "room-a").await;
+    let room_b = create_voice_channel(&app, &alice, &server_id, "room-b").await;
+    join_server(&app, &bob, &alice, &server_id).await;
+    join_server(&app, &carol, &alice, &server_id).await;
+
+    // Видимость права в списке серверов: владелец — да, участник — нет.
+    let (_, listed) = get_json(&app, &alice, "/api/servers").await;
+    let mine = listed["servers"].as_array().unwrap().iter().find(|s| s["id"] == server_id.as_str()).unwrap();
+    assert_eq!(mine["canMoveMembers"], true);
+    let (_, listed) = get_json(&app, &carol, "/api/servers").await;
+    let theirs = listed["servers"].as_array().unwrap().iter().find(|s| s["id"] == server_id.as_str()).unwrap();
+    assert_eq!(theirs["canMoveMembers"], false);
+
+    let mut alice_ws = connect_ws(&app, &alice).await;
+    let mut bob_ws = connect_ws(&app, &bob).await;
+    let mut carol_ws = connect_ws(&app, &carol).await;
+    join_channel(&mut bob_ws, &server_id, &room_a).await;
+    join_channel(&mut carol_ws, &server_id, &room_a).await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+    let _ = drain_voice_events(&mut carol_ws, 300).await;
+
+    let move_event = |target: &str, channel: &str| {
+        serde_json::json!({
+            "type": "voice_move_member", "serverId": server_id, "channelId": channel, "target": target,
+        })
+    };
+
+    // Обычный участник перенести не может, цель ничего не получает.
+    send(&mut carol_ws, move_event("bob", &room_b)).await;
+    let result = wait_event(&mut carol_ws, "voice_move_result").await.expect("result");
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["code"], "move_forbidden");
+    assert!(wait_event(&mut bob_ws, "voice_moved").await.is_none());
+
+    // Владелец переносит: ему — ok, цели — voice_moved с каналом и автором.
+    send(&mut alice_ws, move_event("bob", &room_b)).await;
+    let result = wait_event(&mut alice_ws, "voice_move_result").await.expect("result");
+    assert_eq!(result["ok"], true, "{result}");
+    let moved = wait_event(&mut bob_ws, "voice_moved").await.expect("bob is told to move");
+    assert_eq!(moved["channelId"], room_b.as_str());
+    assert_eq!(moved["fromChannelId"], room_a.as_str());
+    assert_eq!(moved["by"], "alice");
+    // Сервер сам не переселяет — это делает клиент цели обычным заходом в канал.
+    join_channel(&mut bob_ws, &server_id, &room_b).await;
+    let _ = drain_voice_events(&mut bob_ws, 300).await;
+
+    // Перенос в тот же канал, в не-голосовой канал и того, кто не в голосе, — отказы.
+    send(&mut alice_ws, move_event("carol", &room_a)).await;
+    assert_eq!(wait_event(&mut alice_ws, "voice_move_result").await.unwrap()["code"], "already_there");
+    let (_, channels) = get_json(&app, &alice, &format!("/api/servers/{}/channels", server_id)).await;
+    let text_channel = channels.as_array().unwrap().iter().find(|c| c["kind"] == "text").unwrap()["id"].as_str().unwrap().to_string();
+    send(&mut alice_ws, move_event("carol", &text_channel)).await;
+    assert_eq!(wait_event(&mut alice_ws, "voice_move_result").await.unwrap()["code"], "bad_request");
+    send(&mut alice_ws, move_event("alice", &room_b)).await;
+    assert_eq!(wait_event(&mut alice_ws, "voice_move_result").await.unwrap()["code"], "bad_request");
+    send(&mut alice_ws, move_event("nobody", &room_b)).await;
+    assert_eq!(wait_event(&mut alice_ws, "voice_move_result").await.unwrap()["code"], "not_in_voice");
+
+    // Роль с флагом can_move_members даёт право обычному участнику; владельца он не двигает.
+    let role: serde_json::Value = app
+        .http
+        .post(app.url(&format!("/api/servers/{}/roles", server_id)))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "name": "Диспетчер", "can_move_members": true }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(role["canMoveMembers"], true);
+    let assign = app
+        .http
+        .patch(app.url(&format!("/api/servers/{}/members/carol", server_id)))
+        .header("Authorization", alice.auth_header())
+        .json(&serde_json::json!({ "username": "carol", "role": role["roleId"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(assign.status(), 200);
+    let (_, listed) = get_json(&app, &carol, "/api/servers").await;
+    let theirs = listed["servers"].as_array().unwrap().iter().find(|s| s["id"] == server_id.as_str()).unwrap();
+    assert_eq!(theirs["canMoveMembers"], true);
+    send(&mut carol_ws, move_event("bob", &room_a)).await;
+    assert_eq!(wait_event(&mut carol_ws, "voice_move_result").await.unwrap()["ok"], true);
+    join_channel(&mut alice_ws, &server_id, &room_a).await;
+    let _ = drain_voice_events(&mut alice_ws, 300).await;
+    send(&mut carol_ws, move_event("alice", &room_b)).await;
+    assert_eq!(wait_event(&mut carol_ws, "voice_move_result").await.unwrap()["code"], "move_forbidden");
+}

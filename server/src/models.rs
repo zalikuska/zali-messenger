@@ -131,6 +131,7 @@ pub(crate) struct ServerRoleRecord {
     pub(crate) can_kick: i64,
     pub(crate) can_ban: i64,
     pub(crate) can_manage_treasury: i64,
+    pub(crate) can_move_members: i64,
     pub(crate) position: i64,
     pub(crate) created_at: DateTime<Utc>,
 }
@@ -173,6 +174,9 @@ pub(crate) struct ServerRoleResponse {
     /// Распоряжаться казной сервера (treasury.rs). Владелец и админ могут всегда.
     #[serde(rename = "canManageTreasury")]
     pub(crate) can_manage_treasury: bool,
+    /// Переносить участников между голосовыми каналами (voice.rs). Владелец и админ могут всегда.
+    #[serde(rename = "canMoveMembers")]
+    pub(crate) can_move_members: bool,
     pub(crate) position: i64,
 }
 
@@ -217,6 +221,10 @@ pub(crate) struct ServerResponse {
     /// обычного «Участника» и прятал настройки сервера.
     #[serde(rename = "canManage")]
     pub(crate) can_manage: bool,
+    /// Может ли зритель переносить людей между голосовыми каналами: владелец, админ,
+    /// «Управление» или роль с правом «Переносить участников».
+    #[serde(rename = "canMoveMembers")]
+    pub(crate) can_move_members: bool,
     #[serde(rename = "memberCount")]
     pub(crate) member_count: i64,
     /// Сколько участников сейчас с живым соединением. Считается только для
@@ -418,6 +426,7 @@ pub(crate) struct ServerRolePayload {
     pub(crate) can_kick: Option<bool>,
     pub(crate) can_ban: Option<bool>,
     pub(crate) can_manage_treasury: Option<bool>,
+    pub(crate) can_move_members: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

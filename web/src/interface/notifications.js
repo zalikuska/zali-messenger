@@ -114,6 +114,12 @@ ZaliMixin(ZaliInterface, class {
     // снимают switchChat / setActiveChannel / setNavMode при выборе чата.
     clearAttendedConversationUnread() {
         if (!this.isAppAttended()) return;
+        if (this.S.navMode === 'servers') {
+            const attendedKey = this.currentServerChatKey();
+            if (attendedKey && this.isServerChatVisible(attendedKey)) this.markConversationRead(true, attendedKey);
+        } else if (this.S.current && this.isDmChatVisible(this.S.current)) {
+            this.markConversationRead(false, this.S.current);
+        }
         let changed = false;
         if (this.S.navMode === 'servers') {
             const key = this.currentServerChatKey();
@@ -738,6 +744,69 @@ ZaliMixin(ZaliInterface, class {
         return true;
     }
 
+    // ---- Отметка «прочитано до» (на устройстве) ----
+    // Сервер не знает, что человек прочитал, а счётчик непрочитанного живёт в памяти сессии. Чтобы
+    // прочитанное не считалось новым, когда догрузка принесла его снова (кэш обрезан, сообщений нет
+    // в списке), по каждой переписке хранится время самого нового увиденного сообщения. Время — серверное
+    // из самих сообщений, а не часы устройства. Чтение на ДРУГОМ устройстве сюда не попадает: для этого
+    // нужна отметка на сервере.
+    readMarkKey({ isChannel = false, peer = '', key = '' } = {}) {
+        return isChannel ? String(key || '').trim() : `dm:${String(peer || '').trim().toLowerCase()}`;
+    }
+
+    readMarksStorageKey() {
+        return `zali_read_marks_v1:${String(this.myName() || '').trim().toLowerCase()}`;
+    }
+
+    loadReadMarks() {
+        const storageKey = this.readMarksStorageKey();
+        if (this._readMarks && this._readMarksOwner === storageKey) return this._readMarks;
+        let marks = {};
+        try {
+            const raw = JSON.parse(localStorage.getItem(storageKey) || 'null');
+            if (raw && typeof raw === 'object') marks = raw;
+        } catch (e) { marks = {}; }
+        this._readMarks = marks;
+        this._readMarksOwner = storageKey;
+        return marks;
+    }
+
+    readMarkFor(key) {
+        return Number(this.loadReadMarks()[key] || 0);
+    }
+
+    advanceReadMark(key, timestampMs) {
+        const value = Number(timestampMs) || 0;
+        if (!key || value <= 0) return;
+        const marks = this.loadReadMarks();
+        if (value <= Number(marks[key] || 0)) return;
+        marks[key] = value;
+        if (this._readMarksSaveTimer) return;
+        this._readMarksSaveTimer = setTimeout(() => {
+            this._readMarksSaveTimer = null;
+            try { localStorage.setItem(this.readMarksStorageKey(), JSON.stringify(this._readMarks || {})); } catch (e) { /* только до перезагрузки */ }
+        }, 500);
+    }
+
+    // Переписка на экране и её видят: всё, что в ней есть сейчас, прочитано. Ключ — `dm:<собеседник>`
+    // или `<сервер>:<канал>` (как у client_view).
+    markConversationRead(isChannel, keyOrPeer) {
+        const key = String(keyOrPeer || '').trim();
+        if (!key) return;
+        const list = isChannel ? this.S.serverChats?.[key] : this.S.chats?.[key];
+        if (!Array.isArray(list)) return;
+        // Часы устройства врут: не считаем своё неотправленное эхо (время локальное) и «будущее».
+        const limit = Date.now() + 60 * 1000;
+        let newest = 0;
+        for (let i = list.length - 1; i >= Math.max(0, list.length - 24); i -= 1) {
+            const msg = list[i];
+            if (!msg || msg.status === 'sending' || msg.status === 'error') continue;
+            const at = this.messageTimestampValue(msg.timestamp);
+            if (at > 0 && at <= limit && at > newest) newest = at;
+        }
+        this.advanceReadMark(this.readMarkKey({ isChannel, peer: key, key }), newest);
+    }
+
     // Single choke point for "a message arrived in a chat the user isn't currently
     // looking at". Both the live WS push path AND the reconnect / background
     // history-catch-up paths (loadHistory, mergeServerChatMessages) route through
@@ -745,14 +814,23 @@ ZaliMixin(ZaliInterface, class {
     // no notification and no unread badge, which was the root cause of notifications
     // being rare and arriving with a huge delay: most messages land via catch-up
     // after a WS drop, not via the live push that used to be the only notify trigger.
-    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null, messageId = '' }) {
+    notifyBackgroundMessage({ sender, text, attachmentCount = 0, serverId = null, channelId = null, peer = null, messageId = '', timestamp = null, catchUp = false }) {
         const from = String(sender || '').trim();
-        if (!from || from === this.myName()) return;
+        // Без учёта регистра: логин в сообщении и в сессии пишут по-разному (Android хранит
+        // последнего вошедшего в нижнем регистре), и своё сообщение считалось чужим.
+        if (!from || from.toLowerCase() === String(this.myName() || '').trim().toLowerCase()) return;
         // Карточка ZaliCoin — в уведомлении по-человечески, без служебного id.
         text = this.coinCardSummary(text) || text;
         const isChannel = !!(serverId && channelId);
         const muteKey = isChannel ? `${serverId}:${channelId}` : String(peer || '').trim();
         if (!muteKey) return;
+        // Догрузка истории (реконнект, фоновое обновление) приносит и то, что человек уже прочитал
+        // на этом устройстве, но чего нет в кэше: счёт и уведомление — только по сообщениям новее
+        // отметки «прочитано». Живая доставка (WS) — по определению новое, её не фильтруем.
+        if (catchUp) {
+            const sentAt = this.messageTimestampValue(timestamp);
+            if (sentAt > 0 && sentAt <= this.readMarkFor(this.readMarkKey({ isChannel, peer: muteKey, key: muteKey }))) return;
+        }
         if (isChannel) {
             this.S.channelUnread = this.S.channelUnread || {};
             this.S.channelUnread[muteKey] = (this.S.channelUnread[muteKey] || 0) + 1;

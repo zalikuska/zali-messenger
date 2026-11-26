@@ -39,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261126-dlfx2">
+    <link rel="stylesheet" href="style.css?v=20261126-viewer3">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -287,6 +287,11 @@
                      its own voice channel is not the thing on screen. Filled by
                      renderVoiceCallStrip() in web/src/interface/voice_ui.js. -->
                 <div class="voice-call-strip" id="voiceCallStrip" hidden></div>
+
+                <!-- UPDATE STRIP: phone only (no titlebar there, whose label is the
+                     desktop update notice). Same slot as the call strip and yields
+                     to it. Filled by renderUpdateStrip() in interface/updates.js. -->
+                <div class="update-strip" id="updateStrip" hidden></div>
 
                 <!-- CHAT VIEW -->
                 <div id="viewChat" class="view active">
@@ -2020,6 +2025,6 @@
         <button class="a2hs-banner-close" id="a2hsBannerClose" type="button" aria-label="Закрыть">&times;</button>
     </div>
 
-    <script src="app.js?v=20261125-buglog1"></script>
+    <script src="app.js?v=20261126-viewer3"></script>
 </body>
 </html>

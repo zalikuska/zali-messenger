@@ -217,9 +217,8 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `display:<id>` / `window:<id>` — к экрану привязывается удалённое управление.
     private(set) var sourceId = ""
     /// Звук системы в этом потоке не содержит звука самого приложения (tap без его
-    /// процессов). false — SCStream (macOS < 14.2 или отказ тапа): процесс WebKit с
-    /// голосами и уведомлениями там слышен, и страница не подмешивает звук приложения
-    /// второй раз (`started.audioExcludesApp`).
+    /// процессов; для экрана других источников звука системы нет). Всегда true: страница
+    /// подмешивает звук приложения без звонка сама (`started.audioExcludesApp`).
     private(set) var audioExcludesApp = true
     private(set) var width = 0
     private(set) var height = 0
@@ -354,12 +353,13 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         config.queueDepth = 5
         config.scalesToFit = true
         if #available(macOS 14.0, *) { config.preservesAspectRatio = true }
-        // Звук экрана целиком — Core Audio тапом без процессов приложения (ScreenAudioTap:
-        // SCStream не исключает процесс WebKit GPU, где играют голоса собеседников). Звук
-        // окна — SCStream: он берёт звук только приложения-владельца окна. macOS < 14.2 —
-        // SCStream и для экрана (собеседники могут слышать себя).
-        audioExcludesApp = !(audio && isDisplay && !useTap)
-        config.capturesAudio = audio && !useTap
+        // Звук экрана целиком — только Core Audio тапом без процессов приложения (ScreenAudioTap:
+        // SCStream не исключает процесс WebKit GPU, где играют голоса собеседников). Нет тапа
+        // (macOS < 14.2, отказ в «Запись системного звука») — демонстрация идёт без звука
+        // системы, а не со звуком SCStream: он унёс бы голоса звонка в стрим, и собеседники
+        // слышали бы себя. Звук окна — SCStream: он берёт звук только приложения-владельца окна.
+        audioExcludesApp = true
+        config.capturesAudio = audio && !isDisplay
         config.excludesCurrentProcessAudio = true
         config.sampleRate = 48_000
         config.channelCount = 2
@@ -369,7 +369,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let s = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
-            if audio && !useTap { try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue) }
+            if audio && !isDisplay { try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue) }
         } catch {
             throw MediaError.failed("SCStream output: \(error.localizedDescription)")
         }
@@ -390,18 +390,8 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                 try tap.start()
                 audioTap = tap
             } catch {
-                mediaLog("screen: audio tap failed (\((error as? MediaError)?.message ?? "\(error)")), falling back to SCStream audio")
-                audioExcludesApp = false
-                // Звук теперь из SCStream: приложения с «не передавать звук» — фильтром.
-                audioViaTap = false
-                applyPrivacy()
-                do {
-                    try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
-                    config.capturesAudio = true
-                    try await s.updateConfiguration(config)
-                } catch {
-                    mediaLog("screen: SCStream audio fallback failed \(error)")
-                }
+                // Без тапа звука системы нет: SCStream не исключает голоса звонка (см. выше).
+                mediaLog("screen: audio tap failed (\((error as? MediaError)?.message ?? "\(error)")), screen shared without system audio")
             }
         }
         startIdleRepeat()

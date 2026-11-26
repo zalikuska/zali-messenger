@@ -46,6 +46,14 @@ const WS_SLEEP_GAP: Duration = Duration::from_secs(15);
 /// не начинался. Тот же дедлайн, что у браузерного сокета (voice_transport.js).
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Сокет, прожившийся меньше этого, считается «моргнувшим»: путь принял апгрейд и тут же
+/// оборвал (мобильная сеть, провайдер, прокси). Раньше после каждого такого обрыва клиент
+/// переподключался без паузы и сбрасывал бэкофф на успешном подключении — на плохом пути
+/// это бесконечный цикл «подключено → разорвано» с интервалом в доли секунды (сервер видел
+/// повторные «Connection reset without closing handshake» с жизнью в 60 мс–2 с).
+/// Теперь короткая жизнь не сбрасывает бэкофф, и перед повтором выдерживается пауза.
+const WS_STABLE_AFTER: Duration = Duration::from_secs(15);
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Подключение WS с отключённым Нейглом и дедлайном.
@@ -408,7 +416,7 @@ pub(crate) async fn run_voice_transport(
             }
         };
 
-        reconnect_delay_secs = 1;
+        let connected_at = Instant::now();
         trace(format!("voice ws connected url={}", current.ws_url));
         let (mut writer, mut reader) = ws_stream.split();
         dispatch_voice_transport_state(&proxy, "up", "connected", pending.len());
@@ -544,6 +552,20 @@ pub(crate) async fn run_voice_transport(
         }
 
         dispatch_voice_transport_state(&proxy, "down", down_reason, pending.len());
+        if down_reason == "config-changed" || connected_at.elapsed() >= WS_STABLE_AFTER {
+            reconnect_delay_secs = 1;
+        } else {
+            trace(format!(
+                "voice ws lived {}ms (< {}s); backing off {}s before reconnect",
+                connected_at.elapsed().as_millis(),
+                WS_STABLE_AFTER.as_secs(),
+                reconnect_delay_secs
+            ));
+            if !backoff_draining_outbound(reconnect_delay_secs, &mut config_rx, &mut outbound_rx, &mut pending, &proxy).await {
+                return;
+            }
+            reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(30);
+        }
     }
 }
 
@@ -912,7 +934,8 @@ pub(crate) async fn run_message_transport(
             }
         };
 
-        reconnect_delay_secs = 1;
+        let connected_at = Instant::now();
+        let mut intentional = false;
         let mut current = current;
         // Active liveness probe. Without this the writer half of the socket was never
         // used at all — a connection that goes silently dark (sleep/wake, network
@@ -970,6 +993,7 @@ pub(crate) async fn run_message_transport(
                         continue;
                     }
                     trace("message ws config changed; reconnecting");
+                    intentional = true;
                     break;
                 }
                 maybe_msg = reader.next() => {
@@ -1024,6 +1048,25 @@ pub(crate) async fn run_message_transport(
         // error, stream end) lands here before the outer loop retries — one place to
         // flip the badge off instead of duplicating it at each break site.
         dispatch_ui_event(&proxy, UiBusEvent::SetConnectionStatus, Value::Bool(false));
+        if intentional || connected_at.elapsed() >= WS_STABLE_AFTER {
+            reconnect_delay_secs = 1;
+        } else {
+            trace(format!(
+                "message ws lived {}ms (< {}s); backing off {}s before reconnect",
+                connected_at.elapsed().as_millis(),
+                WS_STABLE_AFTER.as_secs(),
+                reconnect_delay_secs
+            ));
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {}
+                changed = config_rx.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+            }
+            reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(30);
+        }
     }
 }
 

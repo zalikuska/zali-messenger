@@ -64,6 +64,12 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
     private var currentDeviceId: String = ""
     private var connectionGeneration: Int = 0
     private var reconnectAttempt: Int = 0
+    /// Сокет, прожившийся меньше `stableAfter`, не сбрасывает бэкофф: путь, принимающий
+    /// апгрейд и тут же рвущий (мобильная сеть, провайдер, прокси), иначе крутил бы
+    /// реконнект с первой же паузой бесконечно. Токен гасит отложенный сброс при обрыве.
+    private static let stableAfter: TimeInterval = 15
+    private var reconnectStableToken: Int = 0
+    private var voiceReconnectStableToken: Int = 0
     private var reconnectWorkItem: DispatchWorkItem?
     private var heartbeatWorkItem: DispatchWorkItem?
     /// Deadline for the message socket's in-flight ping — see scheduleHeartbeat.
@@ -731,6 +737,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             self.pingTimeoutWorkItem?.cancel()
             self.pingTimeoutWorkItem = nil
             self.reconnectWorkItem?.cancel()
+            self.reconnectStableToken += 1
             self.reconnectAttempt = min(self.reconnectAttempt + 1, 6)
             let baseDelay = min(pow(2.0, Double(self.reconnectAttempt - 1)) * 1.5, 30.0)
             let jitter = Double.random(in: 0.0...0.75)
@@ -1265,6 +1272,7 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
             self.voicePingTimeoutWorkItem = nil
             self.voiceReconnectWorkItem?.cancel()
             self.emitVoiceTransportState("down", reason: reason)
+            self.voiceReconnectStableToken += 1
             self.voiceReconnectAttempt += 1
             let delay = min(pow(2.0, Double(self.voiceReconnectAttempt - 1)), 30.0)
             let workItem = DispatchWorkItem { [weak self] in
@@ -2752,7 +2760,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
         connectionQueue.async { [weak self] in
             guard let self else { return }
             if self.voiceWebSocketTask === webSocketTask {
-                self.voiceReconnectAttempt = 0
+                self.voiceReconnectStableToken += 1
+                let token = self.voiceReconnectStableToken
+                self.connectionQueue.asyncAfter(deadline: .now() + NetworkService.stableAfter) { [weak self] in
+                    if let self, token == self.voiceReconnectStableToken { self.voiceReconnectAttempt = 0 }
+                }
                 self.trace("voice ws didOpen user=\(self.currentUsername)")
                 let generation = self.voiceConnectionGeneration
                 self.emitVoiceTransportState("up", reason: "connected")
@@ -2764,7 +2776,11 @@ class NetworkService: NSObject, URLSessionWebSocketDelegate {
                 self.trace("ws didOpen ignored for stale task")
                 return
             }
-            self.reconnectAttempt = 0
+            self.reconnectStableToken += 1
+            let stableToken = self.reconnectStableToken
+            self.connectionQueue.asyncAfter(deadline: .now() + NetworkService.stableAfter) { [weak self] in
+                if let self, stableToken == self.reconnectStableToken { self.reconnectAttempt = 0 }
+            }
             // Сервер мог перезапуститься — активность сообщается заново (reportDeviceIdle).
             self.lastReportedActivityAt = nil
             let proto = `protocol` ?? "nil"

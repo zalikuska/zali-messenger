@@ -375,7 +375,16 @@ ZaliMixin(ZaliInterface, class {
                 clearTimeout(connectTimer);
                 if (generation !== this.voiceSocketGeneration) return;
                 this.voice.socketReady = true;
-                this.voiceSocketReconnectDelayMs = 1000;
+                // Бэкофф сбрасываем не на открытии, а когда сокет прожил 15 с: путь, который
+                // принимает апгрейд и тут же рвёт (мобильная сеть, провайдер), иначе гонял бы
+                // реконнект с паузой в секунду бесконечно (сервер видел жизнь в доли секунды).
+                if (this.voiceSocketStableTimer) clearTimeout(this.voiceSocketStableTimer);
+                this.voiceSocketStableTimer = setTimeout(() => {
+                    this.voiceSocketStableTimer = null;
+                    if (generation === this.voiceSocketGeneration && this.voice.socket === socket) {
+                        this.voiceSocketReconnectDelayMs = 1000;
+                    }
+                }, 15000);
                 if (this.voiceSocketPingTimer) {
                     clearInterval(this.voiceSocketPingTimer);
                     this.voiceSocketPingTimer = null;
@@ -503,6 +512,10 @@ ZaliMixin(ZaliInterface, class {
                 if (generation !== this.voiceSocketGeneration) return;
                 this.voice.socketReady = false;
                 this.voice.socket = null;
+                if (this.voiceSocketStableTimer) {
+                    clearTimeout(this.voiceSocketStableTimer);
+                    this.voiceSocketStableTimer = null;
+                }
                 if (this.voiceSocketPingTimer) {
                     clearInterval(this.voiceSocketPingTimer);
                     this.voiceSocketPingTimer = null;
@@ -541,10 +554,16 @@ ZaliMixin(ZaliInterface, class {
         return roomLabel;
     }
 
-    resetVoiceState({ preserveInvite = false } = {}) {
+    // keepMedia — переход из одного голосового канала в другой: микрофон, аудиоконтекст, мьют и
+    // «наушники» остаются как есть, сбрасывается только комната (пиры, плитки, камера, экран).
+    // Раньше каждый переход глушил захват и заводил его заново (на macOS это сотни миллисекунд
+    // запуска аудиоустройства) плюс пересоздавал и «размораживал» аудиоконтекст — отсюда
+    // «человек переходит между каналами с задержкой».
+    resetVoiceState({ preserveInvite = false, keepMedia = false } = {}) {
         // Захват микрофона, начатый до этого сброса, по возвращении увидит другую
-        // эпоху и остановит пришедший поток (captureVoiceLocalStream).
-        this._voiceResetEpoch = (this._voiceResetEpoch || 0) + 1;
+        // эпоху и остановит пришедший поток (captureVoiceLocalStream). При keepMedia поток
+        // нужен и следующей комнате — эпоху не трогаем.
+        if (!keepMedia) this._voiceResetEpoch = (this._voiceResetEpoch || 0) + 1;
         // Written BEFORE anything is torn down: the per-peer counters, the last
         // stats sample and the selected candidate pair all live on entries this
         // method is about to close, and they are exactly what a post-mortem needs.
@@ -623,16 +642,26 @@ ZaliMixin(ZaliInterface, class {
         // остановлено — без этого оверлей с чёрным кадром переживал конец звонка.
         this._voiceFocus = null;
         this.syncVoiceFocusOverlay?.();
-        if (this.voice.localStream) {
-            for (const track of this.voice.localStream.getTracks()) {
+        if (keepMedia && this.voice.localStream) {
+            // Микрофон остаётся; камера — нет (cameraOn уже сброшен), и её дорожку нужно не только
+            // остановить, но и убрать из потока: иначе включение камеры в новой комнате найдёт
+            // в нём мёртвую дорожку.
+            for (const track of this.voice.localStream.getVideoTracks()) {
                 try { track.stop(); } catch (e) {}
+                try { this.voice.localStream.removeTrack(track); } catch (e) {}
             }
+        } else {
+            if (this.voice.localStream) {
+                for (const track of this.voice.localStream.getTracks()) {
+                    try { track.stop(); } catch (e) {}
+                }
+            }
+            this.voice.localStream = null;
+            // A capture still in flight when the session is torn down must not be
+            // handed to the *next* call as its local stream.
+            this.voice.localStreamInFlight = null;
+            this.voice.micError = '';
         }
-        this.voice.localStream = null;
-        // A capture still in flight when the session is torn down must not be
-        // handed to the *next* call as its local stream.
-        this.voice.localStreamInFlight = null;
-        this.voice.micError = '';
         if (this.voice.localScreenStream) {
             for (const track of this.voice.localScreenStream.getTracks()) {
                 try { track.stop(); } catch (e) {}
@@ -640,18 +669,21 @@ ZaliMixin(ZaliInterface, class {
         }
         this.voice.localScreenStream = null;
         this.stopShareAppAudio?.('voice-reset');
-        if (this.voice.audioContext) {
-            try { this.voice.audioContext.close?.(); } catch (e) {}
+        if (!keepMedia) {
+            if (this.voice.audioContext) {
+                try { this.voice.audioContext.close?.(); } catch (e) {}
+            }
+            this.voice.audioContext = null;
+            this.voice.audioResumePending = false;
+            this.voice.audioResumeNextAttemptAt = 0;
+            this.voice.playbackUnlocked = false;
         }
-        this.voice.audioContext = null;
-        this.voice.audioResumePending = false;
-        this.voice.audioResumeNextAttemptAt = 0;
-        this.voice.playbackUnlocked = false;
         this.voice.meterUiRenderedOnce = false;
         this.voice.meterLevels = { local: 0, remote: 0 };
-        this.voice.meterLocal = null;
+        // Анализатор своего микрофона привязан к аудиоконтексту и потоку, которые остаются.
+        if (!keepMedia) this.voice.meterLocal = null;
         this.voice.meterRemote.clear();
-        this.stopVoiceMeterLoop();
+        if (!keepMedia) this.stopVoiceMeterLoop();
         this.voice.traceLines = [];
         this.voice.roomId = '';
         this.voice.roomType = '';
@@ -663,8 +695,11 @@ ZaliMixin(ZaliInterface, class {
         this.voice.joinedAt = {};
         this.voice.firstSeen = new Map();
         this.voice.status = 'idle';
-        this.voice.muted = false;
-        this.voice.deafened = false;
+        if (!keepMedia) {
+            this.voice.muted = false;
+            this.voice.deafened = false;
+            this._voiceMutedByDeafen = false;
+        }
         this.voice.expanded = false;
         this.voice.activeSince = 0;
         this.stopVoiceCallBarTimer();

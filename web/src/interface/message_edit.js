@@ -265,6 +265,17 @@ ZaliMixin(ZaliInterface, class {
             this.addLogEntry({ type: 'WARN', msg: 'Пустое сообщение нельзя сохранить — удалите его', ts: new Date().toLocaleTimeString() });
             return false;
         }
+        // Правка заменяет архив ЦЕЛИКОМ. Вложение без байтов (крупное на телефоне) оболочка
+        // при переупаковке молча выбросила бы — файл пропал бы из сообщения навсегда.
+        if (attachments.some(att => !att.dataUrl && Number(att.size) > 0)) {
+            this.showToast?.({
+                title: 'Сообщение нельзя изменить здесь',
+                text: 'В нём есть файл, которого нет на этом устройстве. Измените сообщение на компьютере.',
+                tone: 'warn',
+            });
+            this.addLogEntry({ type: 'WARN', msg: 'Правка отменена: вложение сообщения не загружено на устройство', ts: new Date().toLocaleTimeString() });
+            return false;
+        }
         if (text === String(found.msg.text || '')) {
             // Nothing changed — don't burn a chain version on a no-op edit.
             this.cancelComposerContext();

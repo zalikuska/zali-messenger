@@ -813,6 +813,15 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
 
+        if (eventType === 'voice_moved') {
+            void this.onVoiceMoved(payload);
+            return;
+        }
+        if (eventType === 'voice_move_result') {
+            this.onVoiceMoveResult(payload);
+            return;
+        }
+
         if (eventType === 'voice_error') {
             const code = String(payload.code || '').trim();
             const errorRoomId = String(payload.roomId || '').trim();

@@ -1411,6 +1411,110 @@ async fn route_voice_signal(state: &Arc<AppState>, sender: &str, payload: &serde
     }
 }
 
+/// Перенос участника из его голосового канала в другой голосовой канал того же сервера
+/// (событие `voice_move_member`: serverId, channelId — куда, target — кого).
+///
+/// Сервер ничего не переселяет сам: медиа держит клиент, и только он может заново войти в
+/// комнату. Здесь решается одно — вправе ли отправитель это просить (право «Переносить
+/// участников», владелец, админ или «Управление»), и вправе ли цель туда попасть; после чего
+/// цели уходит `voice_moved`, а клиент делает обычный заход в канал. Отправителю — всегда
+/// `voice_move_result`: отдельный тип, потому что `voice_error` для клиента — повод завершить
+/// СВОЙ звонок.
+async fn handle_voice_move_member(
+    state: &Arc<AppState>,
+    sender: &str,
+    device: &str,
+    payload: &serde_json::Value,
+) {
+    let server_id = payload["serverId"].as_str().unwrap_or_default().trim().to_string();
+    let to_channel = payload["channelId"].as_str().unwrap_or_default().trim().to_string();
+    let target = payload["target"].as_str().unwrap_or_default().trim().to_string();
+    let reply = |ok: bool, code: &'static str, message: &'static str| {
+        let event = targeted(
+            serde_json::json!({
+                "type": "voice_move_result",
+                "ok": ok,
+                "code": code,
+                "message": message,
+                "target": target,
+            }),
+            device,
+        );
+        async move { send_json_to_user(state, sender, event).await }
+    };
+    if server_id.is_empty() || to_channel.is_empty() || target.is_empty() || target == sender {
+        return reply(false, "bad_request", "Не указан участник или канал").await;
+    }
+    if !crate::servers::can_move_voice_members(&state.db, &server_id, sender)
+        .await
+        .unwrap_or(false)
+    {
+        return reply(false, "move_forbidden", "Нет права переносить участников").await;
+    }
+    // Куда: голосовой канал именно этого сервера.
+    let kind: Option<String> =
+        sqlx::query_scalar("SELECT kind FROM channels WHERE id = ? AND server_id = ? LIMIT 1")
+            .bind(&to_channel)
+            .bind(&server_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+    if kind.as_deref() != Some("voice") {
+        return reply(false, "bad_request", "Это не голосовой канал сервера").await;
+    }
+    // Кого: того, кто сейчас сидит в голосовом канале этого же сервера.
+    let current_room = state.user_voice_rooms.get(&target).map(|room| room.value().clone());
+    let located = current_room.as_deref().and_then(|room_id| {
+        state.voice_rooms.get(room_id).and_then(|room| {
+            let in_server = room.room_type == "channel"
+                && room.server_id.as_deref() == Some(server_id.as_str())
+                && room.participants.contains(&target);
+            in_server.then(|| (room.channel_id.clone().unwrap_or_default(), room.devices.get(&target).cloned().unwrap_or_default()))
+        })
+    });
+    let Some((from_channel, target_device)) = located else {
+        return reply(false, "not_in_voice", "Участник не в голосовом канале этого сервера").await;
+    };
+    if from_channel == to_channel {
+        return reply(false, "already_there", "Участник уже в этом канале").await;
+    }
+    // Владельца сервера переносит только он сам.
+    let owner: Option<String> = sqlx::query_scalar("SELECT owner FROM servers WHERE id = ? LIMIT 1")
+        .bind(&server_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+    if owner.as_deref() == Some(target.as_str()) && owner.as_deref() != Some(sender) {
+        return reply(false, "move_forbidden", "Владельца сервера переносить нельзя").await;
+    }
+    if !can_access_channel(&state.db, &server_id, &to_channel, &target, "voice")
+        .await
+        .unwrap_or(false)
+    {
+        return reply(false, "target_forbidden", "У участника нет доступа к этому каналу").await;
+    }
+    info!(
+        "[VOICE][MOVE] by={} target={} server={} {} -> {}",
+        sender, target, server_id, from_channel, to_channel
+    );
+    send_json_to_user(
+        state,
+        &target,
+        targeted(
+            serde_json::json!({
+                "type": "voice_moved",
+                "serverId": server_id,
+                "channelId": to_channel,
+                "fromChannelId": from_channel,
+                "by": sender,
+            }),
+            &target_device,
+        ),
+    )
+    .await;
+    reply(true, "ok", "Участник перенесён").await
+}
+
 pub(crate) async fn handle_voice_event(
     state: &Arc<AppState>,
     sender: &str,
@@ -1689,6 +1793,9 @@ pub(crate) async fn handle_voice_event(
         "voice_sfu_publish" | "voice_sfu_unpublish" | "voice_sfu_join" | "voice_sfu_answer" | "voice_sfu_leave"
         | "voice_sfu_watch" | "voice_sfu_failed" => {
             handle_sfu_event(state, sender, &device, event_type, payload).await;
+        }
+        "voice_move_member" => {
+            handle_voice_move_member(state, sender, &device, payload).await;
         }
         "voice_leave" => {
             info!("[VOICE][LEAVE] user={} device={} explicit_leave", sender, device);

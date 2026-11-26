@@ -606,7 +606,25 @@ ZaliMixin(ZaliInterface, class {
                 timeoutMs: 12000,
             });
         } else if (event === 'stats' && payload.processing) {
-            this.voiceDiag?.('mic-processing-native', { stream, ...payload.processing, ...this.nativeMediaPageCounters(entry) });
+            // Две короткие строки вместо одной длинной: отчёт клиента режет строку на 400
+            // символов (diagnostic_reports.js), а в полной статистике их ~900 — у Windows-
+            // пользователей пропадали ровно `reference`, `ns_attenuation_db`, `speech_ratio`
+            // и `output_dbfs` (разбор «у кого-то эхо, у кого-то задавлено», 2026-11-26).
+            // Числа — до десятых, ключевые поля первыми.
+            const p = payload.processing;
+            const r1 = value => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 10) / 10 : value);
+            const pick = keys => Object.fromEntries(keys.filter(key => p[key] !== undefined && p[key] !== null).map(key => [key, r1(p[key])]));
+            this.voiceDiag?.('mic-processing-native', {
+                stream,
+                ...pick(['device', 'reference', 'reference_status', 'aec', 'ns', 'agc', 'erle_db', 'delay_ms', 'speech_ratio',
+                    'input_dbfs', 'output_dbfs', 'ns_attenuation_db', 'ns_input_gain_db', 'gate_closed_ratio', 'gate_depth_db', 'raw_peak_dbfs']),
+            });
+            this.voiceDiag?.('mic-processing-native-2', {
+                stream,
+                ...pick(['noise_in_dbfs', 'noise_out_dbfs', 'noise_final_dbfs', 'echo_return_loss_db', 'ref_lag_ms', 'hold_ms',
+                    'ref_zero_frames', 'ref_forced_frames', 'ref_late_dropped', 'clipped_frames', 'capture', 'device_rate', 'source']),
+                ...this.nativeMediaPageCounters(entry),
+            });
         } else if (event === 'stats' && payload.video) {
             // Оболочка: кадры, кбит/с, пропуски (затор), повторы неподвижного экрана;
             // страница: сколько кадров дошло и сколько раз пересобирался декодер.

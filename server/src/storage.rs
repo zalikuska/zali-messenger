@@ -581,6 +581,10 @@ pub(crate) async fn ensure_default_server_roles(
         .bind(server_id)
         .execute(pool)
         .await?;
+    sqlx::query("UPDATE server_roles SET can_move_members = 1 WHERE server_id = ? AND role_id = 'admin'")
+        .bind(server_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

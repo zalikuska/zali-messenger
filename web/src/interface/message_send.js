@@ -31,6 +31,18 @@ ZaliMixin(ZaliInterface, class {
             ? this.normalizeAttachments(directAttachments)
             : (isSystemPost ? [] : this.normalizeAttachments(this.S.draftAttachments));
         if (!text && attachments.length === 0) return;
+        // Вложение без байтов (крупное, приехавшее на телефон только описанием) оболочка при
+        // упаковке молча пропустила бы — сообщение ушло бы без файла. Не отправляем, ничего не
+        // стирая: человек видит причину и может убрать вложение сам.
+        const unsendable = attachments.filter(att => !att.dataUrl && !att.stageId && Number(att.size) > 0);
+        if (unsendable.length) {
+            this.showToast?.({
+                title: 'Вложение не загружено',
+                text: `${unsendable[0].name || 'Файл'}: на этом устройстве его содержимого нет, отправить его нельзя.`,
+                tone: 'error',
+            });
+            return;
+        }
 
         // Snapshotted before the first await: the user can dismiss the reply bar
         // (or start another reply) while the key resolution below is in flight.
@@ -260,6 +272,7 @@ ZaliMixin(ZaliInterface, class {
                 kind: att.kind,
                 size: att.size,
                 dataUrl: att.dataUrl,
+                stageId: att.stageId || '',
             }))
         });
         if (!sentToNative) {
@@ -941,6 +954,8 @@ ZaliMixin(ZaliInterface, class {
                 // must also be in front of the user — see isAppAttended().
                 if (!this.isServerChatAttended(key)) {
                     this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, serverId, channelId, messageId });
+                } else {
+                    this.markConversationRead(true, key);
                 }
             }
             this.scheduleSaveStoredMessageCache();
@@ -1014,6 +1029,8 @@ ZaliMixin(ZaliInterface, class {
             // itself must also be in front of the user — see isAppAttended().
             if (!this.isDmChatAttended(peer)) {
                 this.notifyBackgroundMessage({ sender, text: incomingText, attachmentCount: incomingAttachments.length, peer, messageId });
+            } else {
+                this.markConversationRead(false, peer);
             }
         }
         this.scheduleSaveStoredMessageCache();

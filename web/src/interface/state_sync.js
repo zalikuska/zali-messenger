@@ -467,6 +467,8 @@ ZaliMixin(ZaliInterface, class {
                             attachmentCount: normalizedAttachments.length,
                             peer,
                             messageId: msgId,
+                            timestamp: msg.timestamp,
+                            catchUp: true,
                         });
                     }
                 }
@@ -485,6 +487,8 @@ ZaliMixin(ZaliInterface, class {
                         arr.sort((a, b) => this.compareMessagesByTime(a, b));
                     }
                 }
+                // Чат перед глазами: всё, что догрузилось, человек видит — это прочитано.
+                if (this.isDmChatAttended(peer)) this.markConversationRead(false, peer);
             });
             this.normalizeDmChatStore();
             this.saveStoredMessageCache();

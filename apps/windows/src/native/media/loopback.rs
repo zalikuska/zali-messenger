@@ -6,7 +6,7 @@
 //! автоконвертацией не приняло (старые драйверы), второй попыткой — 16-бит PCM той же
 //! частоты, переводим в f32 сами.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,8 +25,21 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0};
 use windows::Win32::System::Com::{IAgileObject, IAgileObject_Impl, BLOB, CLSCTX_ALL};
-use windows::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, WaitForSingleObject};
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::Win32::System::Variant::VT_BLOB;
+
+/// pid браузерного процесса WebView2 главного окна (0 — не известен). Голоса звонка играет
+/// его дерево, поэтому звук демонстрации исключает именно его, если он оказался вне
+/// дерева самого приложения (`screen.rs: screen_audio_root`).
+static MAIN_WEBVIEW_PID: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_main_webview_pid(pid: u32) {
+    MAIN_WEBVIEW_PID.store(pid, Ordering::Release);
+}
+
+pub fn main_webview_pid() -> u32 {
+    MAIN_WEBVIEW_PID.load(Ordering::Acquire)
+}
 
 const STREAMFLAGS_LOOPBACK: u32 = 0x0002_0000;
 const STREAMFLAGS_EVENTCALLBACK: u32 = 0x0004_0000;
@@ -122,12 +135,13 @@ impl WasapiCapture {
         unsafe { client2.SetClientProperties(&props).is_ok() }
     }
 
-    /// Звук всей системы, кроме дерева процессов этого приложения (сам клиент и его
-    /// процессы WebView2 — голоса собеседников, звуки интерфейса). Windows 10 2004+.
-    pub fn open_process_loopback_excluding_self(channels: u16) -> Result<Self> {
+    /// Звук всей системы, кроме дерева процессов `root` (обычно это наше приложение: сам
+    /// клиент и его процессы WebView2 — голоса собеседников, звуки интерфейса).
+    /// Windows 10 2004+.
+    pub fn open_process_loopback_excluding(root: u32, channels: u16) -> Result<Self> {
         let mut last = None;
         for format in [SampleFormat::F32, SampleFormat::I16] {
-            let client = activate_process_loopback(unsafe { GetCurrentProcessId() }, false)?;
+            let client = activate_process_loopback(root, false)?;
             match Self::init(client, format, channels, STREAMFLAGS_LOOPBACK) {
                 Ok(capture) => return Ok(capture),
                 Err(error) => last = Some(error),

@@ -2347,11 +2347,14 @@ struct WebView {
                     // их только при возможности `mediaGallery`, которой здесь нет.
                     break
 
-                case .callState, .screenRotation:
+                case .callState, .screenRotation, .clearNotifications, .downloadMessageAttachment, .stageAttachment:
                     // Android-only: сервис переднего плана на время звонка
-                    // (OngoingCallService.kt) и поворот экрана только для медиа на весь
-                    // экран (MainActivity). Веб шлёт их только при возможностях
-                    // `callService` / `screenRotation`, которых здесь нет.
+                    // (OngoingCallService.kt), поворот экрана только для медиа на весь
+                    // экран (MainActivity) и снятие уведомлений открытого чата
+                    // (MessageNotifier.clearConversation), скачивание и отправка крупных
+                    // вложений мимо data:-URL. Веб шлёт их только при возможностях
+                    // `callService` / `screenRotation` / `clearNotifications` /
+                    // `downloadMessageAttachment` / `stageAttachment`, которых здесь нет.
                     break
 
                 case .mobileNavProgress:

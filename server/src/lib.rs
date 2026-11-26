@@ -1365,6 +1365,20 @@ async fn init_db(data_dir: &std::path::Path) -> SqlitePool {
             .ok();
     }
 
+    // Право «Переносить участников» (voice.rs::can_move_voice_members). Админ переносит всегда,
+    // но у его встроенной роли флаг ставится — редактор ролей не должен показывать ему выключенную
+    // галочку. Только в момент появления колонки, как у казны выше.
+    if sqlx::query("ALTER TABLE server_roles ADD COLUMN can_move_members INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await
+        .is_ok()
+    {
+        sqlx::query("UPDATE server_roles SET can_move_members = 1 WHERE role_id = 'admin'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
     // «Приглашения» стали базовым правом: у встроенной роли «Участник» оно
     // включено по умолчанию, а сервер наконец его проверяет. Раньше флаг не
     // читался нигде, так что у всех существующих серверов он 0 — один раз

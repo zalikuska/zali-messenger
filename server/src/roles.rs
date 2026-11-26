@@ -16,7 +16,7 @@ pub(crate) async fn load_server_role_permissions_map(
     server_id: &str,
 ) -> Result<HashMap<String, (bool, bool, bool)>, sqlx::Error> {
     let rows = sqlx::query_as::<_, ServerRoleRecord>(
-        "SELECT server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, position, created_at
+        "SELECT server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, can_move_members, position, created_at
          FROM server_roles
          WHERE server_id = ?",
     )
@@ -52,7 +52,7 @@ pub(crate) async fn load_server_roles(
     }
 
     let rows = sqlx::query_as::<_, ServerRoleRecord>(
-        "SELECT server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, position, created_at
+        "SELECT server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, can_move_members, position, created_at
          FROM server_roles
          WHERE server_id = ?
          ORDER BY position ASC, name ASC",
@@ -82,6 +82,7 @@ pub(crate) async fn load_server_roles(
             can_kick: row.can_kick != 0,
             can_ban: row.can_ban != 0,
             can_manage_treasury: row.can_manage_treasury != 0,
+            can_move_members: row.can_move_members != 0,
             position: row.position,
         })
         .collect())
@@ -93,7 +94,7 @@ pub(crate) async fn load_server_role_record(
     role_id: &str,
 ) -> Result<Option<ServerRoleRecord>, sqlx::Error> {
     sqlx::query_as::<_, ServerRoleRecord>(
-        "SELECT server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, position, created_at
+        "SELECT server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, can_move_members, position, created_at
          FROM server_roles
          WHERE server_id = ? AND role_id = ? LIMIT 1",
     )
@@ -166,6 +167,7 @@ pub(crate) async fn create_server_role_record(
     let can_kick = payload.can_kick.unwrap_or(false) as i64;
     let can_ban = payload.can_ban.unwrap_or(false) as i64;
     let can_manage_treasury = payload.can_manage_treasury.unwrap_or(false) as i64;
+    let can_move_members = payload.can_move_members.unwrap_or(false) as i64;
     let position: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(position) + 1, 0) FROM server_roles WHERE server_id = ?",
     )
@@ -174,8 +176,8 @@ pub(crate) async fn create_server_role_record(
     .await
     .unwrap_or(0);
     sqlx::query(
-        "INSERT INTO server_roles (server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, position, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO server_roles (server_id, role_id, name, color, can_view, can_send, can_manage, can_manage_channels, can_manage_roles, can_invite, can_attach, can_embed, can_react, can_pin, can_mention, can_voice, can_kick, can_ban, can_manage_treasury, can_move_members, position, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(server_id)
     .bind(&role_id)
@@ -196,6 +198,7 @@ pub(crate) async fn create_server_role_record(
     .bind(can_kick)
     .bind(can_ban)
     .bind(can_manage_treasury)
+    .bind(can_move_members)
     .bind(position)
     .bind(Utc::now())
     .execute(pool)
@@ -220,6 +223,7 @@ pub(crate) async fn create_server_role_record(
         can_kick: can_kick != 0,
         can_ban: can_ban != 0,
         can_manage_treasury: can_manage_treasury != 0,
+        can_move_members: can_move_members != 0,
         position,
     })
 }
@@ -265,9 +269,10 @@ pub(crate) async fn update_server_role_record(
     let next_treasury = payload
         .can_manage_treasury
         .unwrap_or(current.can_manage_treasury != 0) as i64;
+    let next_move = payload.can_move_members.unwrap_or(current.can_move_members != 0) as i64;
     sqlx::query(
         "UPDATE server_roles
-         SET name = ?, color = ?, can_view = ?, can_send = ?, can_manage = ?, can_manage_channels = ?, can_manage_roles = ?, can_invite = ?, can_attach = ?, can_embed = ?, can_react = ?, can_pin = ?, can_mention = ?, can_voice = ?, can_kick = ?, can_ban = ?, can_manage_treasury = ?, updated_at = CURRENT_TIMESTAMP
+         SET name = ?, color = ?, can_view = ?, can_send = ?, can_manage = ?, can_manage_channels = ?, can_manage_roles = ?, can_invite = ?, can_attach = ?, can_embed = ?, can_react = ?, can_pin = ?, can_mention = ?, can_voice = ?, can_kick = ?, can_ban = ?, can_manage_treasury = ?, can_move_members = ?, updated_at = CURRENT_TIMESTAMP
          WHERE server_id = ? AND role_id = ?",
     )
     .bind(&next_name)
@@ -287,6 +292,7 @@ pub(crate) async fn update_server_role_record(
     .bind(next_kick)
     .bind(next_ban)
     .bind(next_treasury)
+    .bind(next_move)
     .bind(server_id)
     .bind(role_id)
     .execute(pool)
@@ -311,6 +317,7 @@ pub(crate) async fn update_server_role_record(
         can_kick: next_kick != 0,
         can_ban: next_ban != 0,
         can_manage_treasury: next_treasury != 0,
+        can_move_members: next_move != 0,
         position: current.position,
     })
 }

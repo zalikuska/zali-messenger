@@ -725,8 +725,42 @@ ZaliMixin(ZaliInterface, class {
         this.renderVoicePanel();
     }
 
+    // Перенос участника (право «Переносить участников», сервер проверяет сам). Ответ — voice_move_result.
+    moveVoiceMember(target, serverId, channelId) {
+        const name = String(target || '').trim();
+        if (!name || !serverId || !channelId) return false;
+        return this.sendVoiceEvent({ type: 'voice_move_member', serverId, channelId, target: name });
+    }
+
+    // Нас перенесли в другой голосовой канал: обычный заход туда — микрофон при этом не перезапускается.
+    async onVoiceMoved(payload) {
+        const serverId = String(payload?.serverId || '').trim();
+        const channelId = String(payload?.channelId || '').trim();
+        if (!serverId || !channelId) return;
+        // Только из канала этого же сервера и только в другой канал: чужое событие или повтор.
+        if (this.voice.roomType !== 'channel' || this.voice.serverId !== serverId || this.voice.channelId === channelId) return;
+        const now = Date.now();
+        if (now - Number(this._voiceMovedAt || 0) < 1500) return; // защита от петли переносов
+        this._voiceMovedAt = now;
+        const server = (this.S.servers || []).find(item => item.id === serverId);
+        const channel = (server?.channels || []).find(item => item.id === channelId);
+        if (!channel || !this.isVoiceChannel(channel)) return;
+        const wasViewing = !!this.isViewingVoiceCallRoom?.();
+        const by = String(payload?.by || '').trim();
+        this.showToast?.({ title: 'Вас перенесли', text: `${by || 'Модератор'} перенёс вас в «${channel.name}»` });
+        await this.joinVoiceChannel({ serverId, channelId });
+        // Смотрели свой прежний канал — следом открываем новый, а не остаёмся на опустевшем.
+        if (wasViewing && this.S.activeServer === serverId) this.setActiveChannel?.(channelId);
+    }
+
+    onVoiceMoveResult(payload) {
+        if (payload?.ok) return;
+        this.showToast?.({ title: 'Не удалось перенести', text: String(payload?.message || 'Перенос отклонён'), tone: 'warn' });
+    }
+
     async joinVoiceChannel({ serverId = null, channelId = null } = {}) {
-        const server = this.currentServer();
+        // Сервер берём по id, если он назван: при переносе человек может смотреть другой сервер.
+        const server = (serverId && (this.S.servers || []).find(item => item.id === serverId)) || this.currentServer();
         const channel = server && channelId ? (server.channels || []).find(ch => ch.id === channelId) : this.currentChannel();
         const sid = String(serverId || server?.id || '').trim();
         const cid = String(channelId || channel?.id || '').trim();
@@ -746,7 +780,9 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (activeRoomId && this.isInActiveCall()) {
-            await this.endCurrentVoiceSession({ reason: 'join-voice-channel' });
+            // Из канала в канал микрофон и аудио не трогаем — переход без повторного запуска захвата.
+            const hotSwitch = this.voice.roomType === 'channel' && !!this.voice.localStream;
+            await this.endCurrentVoiceSession({ reason: 'join-voice-channel', keepMedia: hotSwitch });
         }
         void this.refreshVoiceTurnCredentials();
         // Channel joins never unlocked playback, so the AudioContext could stay
@@ -800,7 +836,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderVoicePanel();
     }
 
-    async leaveVoiceRoom({ announce = true, outcome = 'completed' } = {}) {
+    async leaveVoiceRoom({ announce = true, outcome = 'completed', keepMedia = false } = {}) {
         const roomId = String(this.voice.roomId || '').trim();
         this.voiceDiag('leave-room', {
             roomId,
@@ -824,7 +860,7 @@ ZaliMixin(ZaliInterface, class {
         // Звук своего выхода (interface/sounds.js) — после voice_leave, чтобы сам выход
         // ничего не ждал, но до сброса: тот стирает состав, по которому решается звук.
         this.noteVoiceRoomLeft?.();
-        this.resetVoiceState();
+        this.resetVoiceState({ keepMedia });
     }
 
     // Tears down whatever voice session is live right now, picking the signal its
@@ -834,7 +870,7 @@ ZaliMixin(ZaliInterface, class {
     // left the previous room alive on the server (nobody ever sent voice_leave)
     // and its RTCPeerConnections running headless — the "звонок поверх звонка"
     // the user hit by pressing a call button mid-call.
-    async endCurrentVoiceSession({ reason = 'switch' } = {}) {
+    async endCurrentVoiceSession({ reason = 'switch', keepMedia = false } = {}) {
         const roomId = String(this.voice.roomId || '').trim();
         const status = String(this.voice.status || '');
         const outgoing = this.voice.outgoingInvite;
@@ -861,7 +897,7 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
         if (roomId) {
-            await this.leaveVoiceRoom({ announce: true, outcome: 'completed' });
+            await this.leaveVoiceRoom({ announce: true, outcome: 'completed', keepMedia });
             return;
         }
         this.resetVoiceState({ preserveInvite: false });

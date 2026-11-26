@@ -309,6 +309,37 @@ async function conversationView() {
     check('без сессии ничего не шлёт', sent.length === loggedOut, 'кадр до входа');
 }
 
+// Счётчик непрочитанного не должен считать своё и прочитанное.
+async function unreadAccounting() {
+    console.log('\n— счёт непрочитанного: своё и уже прочитанное —');
+    const { api, env, shown } = makeClient({ native: true, current: 'bob' });
+    env.focused = false; // чат alice не перед глазами
+    api.notifyBackgroundMessage({ sender: 'ME', text: 'мой ответ', peer: 'alice', messageId: 'own-1' });
+    check('своё сообщение с другим регистром логина не считается', !api.S.unread.alice && shown.length === 0,
+        `unread=${api.S.unread.alice || 0} уведомлений=${shown.length}`, 'unread=0, тишина');
+
+    const t0 = Date.UTC(2026, 8, 1, 12, 0, 0);
+    api.advanceReadMark('dm:alice', t0);
+    api.notifyBackgroundMessage({ sender: 'alice', text: 'старое', peer: 'alice', messageId: 'old', timestamp: new Date(t0 - 5000).toISOString(), catchUp: true });
+    check('догрузка: сообщение старше отметки «прочитано» не считается', !api.S.unread.alice && shown.length === 0,
+        `unread=${api.S.unread.alice || 0} уведомлений=${shown.length}`, 'unread=0, тишина');
+    api.notifyBackgroundMessage({ sender: 'alice', text: 'новое', peer: 'alice', messageId: 'new', timestamp: new Date(t0 + 5000).toISOString(), catchUp: true });
+    check('догрузка: сообщение новее отметки считается', api.S.unread.alice === 1 && shown.length === 1,
+        `unread=${api.S.unread.alice || 0} уведомлений=${shown.length}`, 'unread=1');
+    api.notifyBackgroundMessage({ sender: 'alice', text: 'живое', peer: 'alice', messageId: 'live', timestamp: new Date(t0 - 9000).toISOString() });
+    check('живая доставка не режется отметкой (время устройства врёт)', api.S.unread.alice === 2,
+        `unread=${api.S.unread.alice || 0}`, 'unread=2');
+
+    api.S.chats.carol = [
+        { id: 'c1', sender: 'carol', timestamp: new Date(t0).toISOString(), status: 'sent' },
+        { id: 'c2', sender: 'me', timestamp: new Date(t0 + 3600 * 1000).toISOString(), status: 'sending' },
+    ];
+    api.markConversationRead(false, 'carol');
+    check('неотправленное эхо (локальные часы) отметку не двигает', api.readMarkFor('dm:carol') === t0,
+        `mark=${api.readMarkFor('dm:carol')}`, 'mark=время c1');
+}
+
+await unreadAccounting();
 await attendedGate();
 await catchUpBurst();
 await hiddenWindow();

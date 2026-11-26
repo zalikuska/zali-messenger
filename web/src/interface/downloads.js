@@ -125,14 +125,19 @@ ZaliMixin(ZaliInterface, class {
             this.playDownloadFx?.(anchor);
             return true;
         }
-        const prefs = this.downloadPrefs();
-        const send = (mode) => this.requestNativeAction({
+        return this.runNativeDownload((mode, prefs) => ({
             type: NativeMessageTypes.DOWNLOAD_ATTACHMENT,
             dataUrl,
             filename,
             mode,
             folder: prefs.folder,
-        }, ZALI_DOWNLOAD_TIMEOUT_MS);
+        }), filename, anchor);
+    }
+
+    /** Режим и папка из настроек → запрос оболочке → тост/анимация. Общее для data:-URL и докачки. */
+    async runNativeDownload(buildMessage, filename, anchor = null) {
+        const prefs = this.downloadPrefs();
+        const send = (mode) => this.requestNativeAction(buildMessage(mode, prefs), ZALI_DOWNLOAD_TIMEOUT_MS);
         // «Сразу»: анимация стартует вместе со скачиванием — запись занимает мгновения,
         // а ждать ответа, чтобы показать, что клик сработал, незачем.
         if (prefs.mode === 'instant') this.playDownloadFx?.(anchor);
@@ -157,6 +162,58 @@ ZaliMixin(ZaliInterface, class {
             this.addLogEntry?.({ type: 'ERROR', msg: `Не удалось сохранить вложение: ${error?.message || error}`, ts: new Date().toLocaleTimeString() });
             this.showToast?.({ title: 'Не удалось сохранить файл', text: String(error?.message || ''), tone: 'error' });
             return false;
+        }
+    }
+
+    /**
+     * Вложение, байтов которого в странице нет (Android: крупнее порога нативного слоя): оболочка
+     * сама скачивает архив сообщения, расшифровывает и сохраняет файл — строка через мост не идёт.
+     * `card` — карточка `[data-attachment-unavailable]`; сообщение берём из её родителя.
+     */
+    async downloadMessageAttachment(card) {
+        if (!card || card.classList.contains('is-loading')) return false;
+        const name = card.getAttribute('data-attachment-unavailable') || 'attachment';
+        const found = this.findMessageById(card.closest('[data-message-id]')?.getAttribute('data-message-id'));
+        if (!this.nativeSupports('downloadMessageAttachment') || !found?.msg?.id) {
+            this.showToast?.({ title: 'Файл пока не скачать', text: `${name}: подождите, пока подгрузится история, и попробуйте снова.`, tone: 'warn' });
+            return false;
+        }
+        const msg = found.msg;
+        const me = String(this.myName?.() || '').trim();
+        let sender = String(msg.sender || '').trim();
+        let receiver = String(msg.receiver || '').trim();
+        let serverId = String(msg.serverId || '').trim();
+        let channelId = String(msg.channelId || '').trim();
+        if (found.serverKey && (!serverId || !channelId)) {
+            const [sid, cid] = String(found.serverKey).split(':');
+            serverId = serverId || sid || '';
+            channelId = channelId || cid || '';
+        }
+        if (!found.serverKey) {
+            if (!sender) sender = found.peer;
+            if (!receiver) receiver = sender.toLowerCase() === me.toLowerCase() ? found.peer : me;
+        }
+        const label = card.querySelector('.file-message-size');
+        const previousLabel = label ? label.textContent : '';
+        card.classList.add('is-loading');
+        if (label) label.textContent = 'Скачивание…';
+        try {
+            return await this.runNativeDownload((mode, prefs) => ({
+                type: NativeMessageTypes.DOWNLOAD_MESSAGE_ATTACHMENT,
+                messageId: String(msg.id),
+                sender,
+                receiver,
+                serverId,
+                channelId,
+                archivePath: card.getAttribute('data-attachment-path') || '',
+                name,
+                size: Number(card.getAttribute('data-attachment-size') || 0),
+                mode,
+                folder: prefs.folder,
+            }), name, card);
+        } finally {
+            card.classList.remove('is-loading');
+            if (label) label.textContent = previousLabel;
         }
     }
 });

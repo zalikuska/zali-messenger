@@ -412,10 +412,12 @@ ZaliMixin(ZaliInterface, class {
         this.voiceDiag('notification-action-no-invite', { action, roomId: room }, 'WARN');
     }
 
-    toggleVoiceMute() {
+    // Одна точка, где дорожки микрофона реально включаются и выключаются. `remember` —
+    // это выбор человека (переживает выход из канала, см. _voiceMutedPref); мьют, который
+    // поставило выключение звука, выбором не считается и вместе со звуком возвращается.
+    setVoiceMuted(nextMuted, { remember = true } = {}) {
         const stream = this.voice.localStream;
-        if (!stream) return;
-        const nextMuted = !this.voice.muted;
+        if (!stream) return false;
         for (const track of stream.getAudioTracks()) {
             track.enabled = !nextMuted;
         }
@@ -423,7 +425,14 @@ ZaliMixin(ZaliInterface, class {
         // Выбор человека переживает выход из канала: войдя в следующий, он должен
         // остаться без микрофона, а не заговорить сам (resetVoiceState сбрасывает
         // voice.muted, а запоминает выбор именно этот флаг).
-        this._voiceMutedPref = nextMuted;
+        if (remember) this._voiceMutedPref = nextMuted;
+        return true;
+    }
+
+    toggleVoiceMute() {
+        // Человек сам решил за микрофон — выключение звука больше не вправе его вернуть.
+        this._voiceMutedByDeafen = false;
+        if (!this.setVoiceMuted(!this.voice.muted)) return;
         this.renderVoicePanel();
     }
 
@@ -431,8 +440,21 @@ ZaliMixin(ZaliInterface, class {
     // camera audio track), independent of our own mic mute. Applied to every
     // live element immediately, and to each newly attached remote audio/video
     // element going forward (see attachRemoteAudioElement / mountVoiceVideoElements).
+    //
+    // Как в Discord: пока «наушники» выключены, микрофон тоже выключен (слушать
+    // не можешь — отвечать нечем). Включаешь звук — микрофон возвращается, но только
+    // если его выключили мы, а не человек до этого.
     toggleVoiceDeafen() {
-        this.voice.deafened = !this.voice.deafened;
+        const deafen = !this.voice.deafened;
+        this.voice.deafened = deafen;
+        if (deafen) {
+            if (!this.voice.muted && this.setVoiceMuted(true, { remember: false })) {
+                this._voiceMutedByDeafen = true;
+            }
+        } else if (this._voiceMutedByDeafen) {
+            this._voiceMutedByDeafen = false;
+            if (this.voice.muted) this.setVoiceMuted(false, { remember: false });
+        }
         this.applyVoiceDeafenState();
         this.renderVoicePanel();
     }

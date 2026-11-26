@@ -158,7 +158,7 @@ ZaliMixin(ZaliInterface, class {
         if (!key) return;
         // localStorage persists outbox attachments without dataUrl (quota), so the
         // payload needed for a retry lives only in this in-session cache.
-        const withData = this.normalizeAttachments(attachments).filter(att => att.dataUrl);
+        const withData = this.normalizeAttachments(attachments).filter(att => att.dataUrl || att.stageId);
         if (!withData.length) return;
         if (!this._outboxAttachmentCache) this._outboxAttachmentCache = new Map();
         this._outboxAttachmentCache.set(key, withData);
@@ -198,6 +198,9 @@ ZaliMixin(ZaliInterface, class {
                 kind: att.kind,
                 size: att.size,
                 archivePath: att.archivePath,
+                // Файл, присланный оболочке кусками, живёт на устройстве под этим id, и повтор
+                // отправки (в том числе после перезапуска) берёт его оттуда.
+                stageId: att.stageId || '',
             })),
             timestamp: String(message.timestamp || new Date().toISOString()),
             attemptCount: Number(message.attemptCount || 0),
@@ -520,9 +523,9 @@ ZaliMixin(ZaliInterface, class {
             }
 
             const declaredAttachments = this.normalizeAttachments(item.attachments);
-            let outAttachments = declaredAttachments.filter(att => att.dataUrl);
+            let outAttachments = declaredAttachments.filter(att => att.dataUrl || att.stageId);
             if (declaredAttachments.length && !outAttachments.length) {
-                outAttachments = this.getPendingOutboxAttachments(item.clientId).filter(att => att.dataUrl);
+                outAttachments = this.getPendingOutboxAttachments(item.clientId).filter(att => att.dataUrl || att.stageId);
             }
             if (declaredAttachments.length && !outAttachments.length) {
                 // The attachment bytes are gone (dataUrl is not persisted across
@@ -598,6 +601,7 @@ ZaliMixin(ZaliInterface, class {
                     kind: att.kind,
                     size: att.size,
                     dataUrl: att.dataUrl,
+                    stageId: att.stageId || '',
                 })),
             });
             if (!sentToNative) {

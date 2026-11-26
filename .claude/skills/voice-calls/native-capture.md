@@ -208,7 +208,7 @@ getUserMedia (на macOS это снова VoiceProcessingIO): `tryNativeMicStre
 | Windows `zali-win.log`, `[ZALI][WIN] media` | запрос, `started`/`ended`/`failed` с причиной, раз в 10 с `stats` видео (кадры, пропуски, кадры камеры, повторы, GPU/CPU-перевод), смена режима камеры |
 | Журнал звонка (страница) | `native-media-open` → `native-media-started ms=…` / `native-media-open-failed`, `native-video-stats` (цифры оболочки + сколько кадров дошло до страницы; WARN при пропусках или нуле кадров), `mic-processing-native`, ошибки и отставание декодера, `native-media-ended` с длительностью и числом кадров, `voice-panel-rebuild` (панель пересобрана при живом видео — кадр мигнёт) |
 
-`mic-processing-native` кроме AEC несёт уровни за ~5 с: `input_dbfs`, `output_dbfs`,
+`mic-processing-native` (+ `mic-processing-native-2` с шумами и склейкой опорного — с 2026-11-26 две строки по ≤400 символов: отчёт клиента режет строку на 400, из длинной пропадали `reference`, `ns_attenuation_db`, `speech_ratio`, `output_dbfs`; числа до десятых) кроме AEC несёт уровни за ~5 с: `input_dbfs`, `output_dbfs`,
 `noise_in_dbfs`/`noise_out_dbfs` (кадры без голоса — оценка SNR шумодава ниже −5 дБ — до
 и после него), `ns_attenuation_db` (сколько срезал шумодав; белый шум в тесте — ~29 дБ),
 `noise_final_dbfs` (те же шумовые кадры после AGC — если заметно выше `noise_out_dbfs`,
@@ -228,8 +228,8 @@ AEC — `erle_db` десятки дБ и `delay_ms` > 0; `erle_db` 0–9 при 
 | `request_keyframe` | ключевой кадр энкодера | ничего (каждый кадр NV12 — целый) |
 | Звук микрофона | блоки по 10 мс, своё пересэмплирование (AVAudioConverter) | блоки по 20 мс, WASAPI `AUTOCONVERTPCM` |
 | Опорный сигнал AEC | global process tap (14.2+) | loopback вывода по умолчанию |
-| Звук демонстрации экрана | tap без процессов приложения и его WebKit; окно — звук SCStream приложения-владельца | process loopback без дерева процессов приложения (и для окна — весь звук) |
-| `started.audioExcludesApp` у экрана | `true` при tap, `false` при SCStream (< 14.2, отказ тапа) — тогда страница звук приложения не подмешивает | всегда `true` |
+| Звук демонстрации экрана | tap без процессов приложения и его WebKit; окно — звук SCStream приложения-владельца | process loopback без дерева процессов приложения (и для окна — весь звук) Корень вырезаемого дерева — наш pid, но если браузерный процесс WebView2 главного окна (`loopback::main_webview_pid`, пишет `shared_buffer.rs`) оказался вне нашего дерева, вырезается его дерево (`screen.rs: screen_audio_root`, строка `exclude root=… (why)` в `zali-win.log`) |
+| `started.audioExcludesApp` у экрана | всегда `true`: звук экрана — только tap без процессов приложения; нет тапа (< 14.2, отказ «Запись системного звука») — демонстрация **без** звука системы (SCStream-звук унёс бы голоса звонка в стрим, 2026-11-26) | всегда `true` |
 | Своё окно (`own`) | страница шлёт `audio:false`, звук — только звук приложения из страницы | то же |
 | Пропал микрофон по умолчанию | переоткрывается на новом по умолчанию по событию HAL | до 20 попыток раз в 500 мс |
 | Затор транспорта | > 8 МБ в очереди сокета — пропуск видео до ключевого | > 3 кадров ждут поток окна — пропуск видео |

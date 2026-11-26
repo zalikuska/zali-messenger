@@ -39,10 +39,24 @@ ZaliMixin(ZaliInterface, class {
     onMessagesScroll() {
         const box = document.getElementById('msgs');
         if (!box) return;
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
         if (!this.isProgrammaticScroll()) {
-            this.pendingMessagesScroll = null;
-            this._bottomIntent = false;
-            this._msgUserScrollAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            // Скролл-событие не всегда от человека: когда строка растёт уже после закрепления
+            // (стикер дорисовывается, высоты пересчитываются), браузер двигает scrollTop сам, а
+            // событие приходит позже 200-мс метки «программного». Раньше любое такое событие снимало
+            // намерение «держаться низа», и лента оставалась выше последнего сообщения. Человеком
+            // скролл считается, только когда был его ввод (колесо, касание, клавиши, нажатая мышь)
+            // или идёт инерция после касания; иначе намерение остаётся, а лента возвращается к низу.
+            const touchInertia = nowMs - Number(this._msgTouchEndAt || 0) < 2500;
+            const userInput = this._msgPointerActive || touchInertia || nowMs - Number(this._msgUserInputAt || 0) < 1200;
+            if (userInput) {
+                this.pendingMessagesScroll = null;
+                this._bottomIntent = false;
+                this._msgUserScrollAt = nowMs;
+            } else if (this._bottomIntent && !this.pendingMessagesScroll
+                && box.scrollHeight - box.scrollTop - box.clientHeight > 1) {
+                this.pinToBottomAfterLayout(box);
+            }
         }
         if (this.messageScrollRaf) return;
         this.messageScrollRaf = requestAnimationFrame(() => {
@@ -54,8 +68,9 @@ ZaliMixin(ZaliInterface, class {
                 : String(this.S.current || '').trim();
             const nextWindow = this.computeMessageWindow(msgs, box, {
                 conversationChanged: conversationKey !== (this.messageWindow?.conversationKey || ''),
-                stickToBottom: this.isMessagesNearBottom(box),
+                stickToBottom: this.isMessagesNearBottom(box) || !!this._bottomIntent,
                 conversationKey,
+                anchorIndex: this.restoreHoldIndex(msgs),
             });
             const current = this.messageWindow || {};
             const sameList = current.conversationKey === conversationKey
@@ -109,12 +124,23 @@ ZaliMixin(ZaliInterface, class {
         return String(msg?.id || msg?.clientId || `${msg?.timestamp || ''}|${msg?.sender || ''}`);
     }
 
+    // Запомненные высоты — по каждому из последних открытых чатов, а не один набор на всех.
+    // Раньше хранилище пересоздавалось при каждой смене чата, и на повторном открытии первая
+    // отрисовка строила заглушки окна по средней высоте: лента отрисовывалась на 18 000 px короче
+    // настоящей, после замера вырастала, и «прилипание» к низу в этот момент слетало.
     messageHeightStore(conversationKey) {
         const key = String(conversationKey || '');
-        let store = this._msgHeights;
-        if (!store || store.key !== key) {
-            store = this._msgHeights = { key, map: new Map(), sum: 0, version: 0, tops: null, topsFor: null, topsLen: -1, topsVersion: -1, topsFallback: 0, fix: 0 };
+        const stores = this._msgHeightStores || (this._msgHeightStores = new Map());
+        let store = stores.get(key);
+        if (store) {
+            // LRU: недавно использованный — в конец.
+            stores.delete(key);
+            stores.set(key, store);
+            return store;
         }
+        store = { key, map: new Map(), sum: 0, version: 0, tops: null, topsFor: null, topsLen: -1, topsVersion: -1, topsFallback: 0, fix: 0 };
+        stores.set(key, store);
+        while (stores.size > 8) stores.delete(stores.keys().next().value);
         return store;
     }
 
@@ -183,7 +209,9 @@ ZaliMixin(ZaliInterface, class {
         if (changed) store.version += 1;
     }
 
-    computeMessageWindow(msgs, box, { conversationChanged = false, stickToBottom = false, conversationKey = null } = {}) {
+    // anchorIndex >= 0 — открыть чат на запомненном месте (restoreScroll): окно строится вокруг этой
+    // строки, а не прижимается к низу.
+    computeMessageWindow(msgs, box, { conversationChanged = false, stickToBottom = false, conversationKey = null, anchorIndex = -1 } = {}) {
         const total = Array.isArray(msgs) ? msgs.length : 0;
         const baseAvg = Math.max(this.minMessageRowHeight(), Math.min(160, Number(this.messageWindow?.avgHeight || 92)));
         // Windowing threshold by tier. Every mounted bubble costs layout, paint and
@@ -209,6 +237,8 @@ ZaliMixin(ZaliInterface, class {
         const key = conversationKey != null ? conversationKey
             : (this.S.navMode === 'servers' ? this.currentServerChatKey() : String(this.S.current || '').trim());
         const store = this.messageHeightStore(key);
+        // Поправка верхней заглушки относилась к прежнему показу чата; новый показ начинается с чистого листа.
+        if (conversationChanged) store.fix = 0;
         const avg = this.messageHeightAverage(store, baseAvg);
         const tops = this.messageRowOffsets(msgs, store, avg);
         const viewportCount = Math.max(18, Math.ceil(Math.max(1, box.clientHeight) / avg) + 8);
@@ -233,7 +263,10 @@ ZaliMixin(ZaliInterface, class {
         let start = Math.max(0, firstVisible - overscan);
         let end = Math.min(total, start + windowSize);
 
-        if (conversationChanged || stickToBottom || nearBottom) {
+        if (anchorIndex >= 0 && anchorIndex < total) {
+            start = Math.max(0, Math.min(anchorIndex - overscan, total - windowSize));
+            end = Math.min(total, start + windowSize);
+        } else if (conversationChanged || stickToBottom || nearBottom) {
             start = Math.max(0, total - windowSize);
             end = total;
         } else if (nearTop) {
@@ -453,8 +486,8 @@ ZaliMixin(ZaliInterface, class {
     }
 
     rebaseMessageSpacer(conversationKey) {
-        const store = this._msgHeights;
-        if (!store || store.key !== String(conversationKey || '') || !store.fix) return;
+        const store = this._msgHeightStores?.get(String(conversationKey || ''));
+        if (!store || !store.fix) return;
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         if (now - Number(this._msgUserScrollAt || 0) < 400) {
             clearTimeout(this._msgRebaseTimer);
@@ -537,6 +570,43 @@ ZaliMixin(ZaliInterface, class {
         box.addEventListener('scroll', () => {
             if (box.clientHeight === state.height) state.gap = gapNow();
         }, { passive: true });
+        // Картинка, аватарка или видео, догрузившиеся уже после закрепления, растят ленту, а
+        // scrollTop остаётся — низ уезжал вверх, и «к низу не прилипало». Следим, пока человек
+        // не листал сам (_bottomIntent) или лента и так стояла у низа; один сдвиг на кадр.
+        let mediaRaf = 0;
+        const followLateMedia = () => {
+            if (mediaRaf || this.pendingMessagesScroll) return;
+            if (!this._bottomIntent && state.gap > 56) return;
+            mediaRaf = requestAnimationFrame(() => {
+                mediaRaf = 0;
+                if (this.pendingMessagesScroll || (!this._bottomIntent && state.gap > 56)) return;
+                if (gapNow() <= 1) return;
+                this.markProgrammaticScroll();
+                box.scrollTop = box.scrollHeight;
+                state.gap = gapNow();
+            });
+        };
+        box.addEventListener('load', followLateMedia, true);
+        box.addEventListener('loadedmetadata', followLateMedia, true);
+        this._msgFollowState = state;
+        // Ввод человека: колесо, касание, клавиши, нажатие мыши (полоса прокрутки). По нему скролл-событие
+        // отличается от дрожания, которое делает сам браузер (onMessagesScroll).
+        const nowStamp = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        const noteInput = () => { this._msgUserInputAt = nowStamp(); };
+        for (const type of ['wheel', 'touchstart', 'touchmove']) {
+            box.addEventListener(type, noteInput, { passive: true });
+        }
+        // После касания лента ещё катится по инерции — это тоже человек (onMessagesScroll).
+        box.addEventListener('touchend', () => { this._msgTouchEndAt = nowStamp(); }, { passive: true });
+        box.addEventListener('touchcancel', () => { this._msgTouchEndAt = nowStamp(); }, { passive: true });
+        // Нажатая кнопка мыши (перетаскивание полосы прокрутки) — ввод, пока не отпущена.
+        box.addEventListener('pointerdown', () => { this._msgPointerActive = true; noteInput(); }, { passive: true });
+        window.addEventListener('pointerup', () => { this._msgPointerActive = false; noteInput(); }, true);
+        window.addEventListener('pointercancel', () => { this._msgPointerActive = false; }, true);
+        document.addEventListener('keydown', noteInput, true);
+        // Свернули окно или ушли в фон — запомнить место чтения (saveCurrentScrollMemory).
+        document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveCurrentScrollMemory(); });
+        window.addEventListener('pagehide', () => this.saveCurrentScrollMemory());
         new ResizeObserver(() => {
             const height = box.clientHeight;
             const previous = state.height;
@@ -571,6 +641,36 @@ ZaliMixin(ZaliInterface, class {
             state.gap = gapNow();
             this.syncJumpToBottom(box);
         }).observe(box);
+    }
+
+    // Строки, растущие уже после отрисовки (анимированный стикер, превью ссылки, видео без
+    // события load), растят ленту, а scrollTop остаётся — низ уезжал вверх. ResizeObserver на каждой
+    // отрисованной строке (их ≤ окна виртуализации): рост при «держим низ» — сразу к низу, ещё до
+    // кадра. Набор наблюдаемых сверяется после каждой отрисовки списка, лишние узлы снимаются.
+    watchMessageRows(box) {
+        if (!box || typeof ResizeObserver !== 'function') return;
+        if (!this._rowRO) {
+            this._rowObserved = new Set();
+            this._rowRO = new ResizeObserver(() => {
+                const box2 = document.getElementById('msgs');
+                if (!box2 || this.pendingMessagesScroll) return;
+                const follow = this._bottomIntent || (this._msgFollowState && this._msgFollowState.gap <= 56);
+                if (!follow) return;
+                if (box2.scrollHeight - box2.scrollTop - box2.clientHeight <= 1) return;
+                this.markProgrammaticScroll();
+                box2.scrollTop = box2.scrollHeight;
+                if (this._msgFollowState) this._msgFollowState.gap = 0;
+            });
+        }
+        const observed = this._rowObserved;
+        for (const node of observed) {
+            if (!node.isConnected) { this._rowRO.unobserve(node); observed.delete(node); }
+        }
+        for (const node of box.querySelectorAll(':scope > .msg')) {
+            if (observed.has(node)) continue;
+            observed.add(node);
+            this._rowRO.observe(node);
+        }
     }
 
     // Кнопка «к последним сообщениям»: появляется, когда лента отмотана больше
@@ -612,5 +712,122 @@ ZaliMixin(ZaliInterface, class {
     isMessagesNearBottom(box, threshold = 56) {
         if (!box) return true;
         return (box.scrollHeight - (box.scrollTop + box.clientHeight)) <= threshold;
+    }
+
+    // ── Запомненное место чтения ──────────────────────────────────────────────
+    // Чат открывался всегда внизу, даже если человек ушёл из него (или свернул приложение)
+    // на середине истории. Теперь при уходе из переписки, при сворачивании окна и при
+    // закрытии страницы запоминается якорь: id сообщения у верха ленты и его отступ. Открытие
+    // возвращает туда — если с тех пор не пришло нового (тогда читать надо новое, внизу) и
+    // сообщение ещё есть. Хранится на устройстве, по аккаунту, не больше 40 переписок.
+    scrollMemoryStorageKey() {
+        return `zali_scroll_marks_v1:${String(this.myName?.() || '').trim().toLowerCase()}`;
+    }
+
+    loadScrollMemory() {
+        const storageKey = this.scrollMemoryStorageKey();
+        if (this._scrollMemory && this._scrollMemoryOwner === storageKey) return this._scrollMemory;
+        let marks = {};
+        try {
+            const raw = JSON.parse(localStorage.getItem(storageKey) || 'null');
+            if (raw && typeof raw === 'object') marks = raw;
+        } catch (e) { marks = {}; }
+        this._scrollMemory = marks;
+        this._scrollMemoryOwner = storageKey;
+        return marks;
+    }
+
+    persistScrollMemory({ now = false } = {}) {
+        const write = () => {
+            this._scrollMemorySaveTimer = null;
+            const marks = this.loadScrollMemory();
+            const keys = Object.keys(marks);
+            if (keys.length > 40) {
+                keys.sort((a, b) => Number(marks[a]?.at || 0) - Number(marks[b]?.at || 0));
+                for (const old of keys.slice(0, keys.length - 40)) delete marks[old];
+            }
+            try { localStorage.setItem(this.scrollMemoryStorageKey(), JSON.stringify(marks)); } catch (e) { /* только до перезагрузки */ }
+        };
+        if (now) {
+            clearTimeout(this._scrollMemorySaveTimer);
+            write();
+        } else if (!this._scrollMemorySaveTimer) {
+            this._scrollMemorySaveTimer = setTimeout(write, 800);
+        }
+    }
+
+    // box должен показывать именно эту переписку — иначе в память попало бы чужое место.
+    saveScrollMemory(conversationKey, box, newestTs) {
+        const key = String(conversationKey || '');
+        if (!key || !box || !box.clientHeight) return false;
+        if (!box.querySelector(':scope > .msg[data-message-id]')) return false;
+        const marks = this.loadScrollMemory();
+        const newest = Number(newestTs) || 0;
+        if (this.isMessagesNearBottom(box) || this._bottomIntent) {
+            marks[key] = { bottom: true, newest, at: Date.now() };
+        } else {
+            const anchor = this.captureMessageScrollAnchor(box);
+            if (!anchor) return false;
+            marks[key] = { id: anchor.messageId, off: Math.round(anchor.topOffset), bottom: false, newest, at: Date.now() };
+        }
+        this.persistScrollMemory();
+        return true;
+    }
+
+    // Сворачивание окна / уход приложения в фон / закрытие страницы: текущая переписка — в память сразу.
+    saveCurrentScrollMemory() {
+        const box = document.getElementById('msgs');
+        if (!box || this.isMobileChatOffscreen?.()) return;
+        const key = this.S.navMode === 'servers' ? this.currentServerChatKey() : String(this.S.current || '').trim();
+        if (!key || this.lastRenderedConversationKey !== key) return;
+        if (this.saveScrollMemory(key, box, this._renderedNewestTs)) this.persistScrollMemory({ now: true });
+    }
+
+    // Куда вернуть чат при открытии: { index, id, off } или null (открывать внизу).
+    pickScrollRestore(conversationKey, msgs) {
+        const entry = this.loadScrollMemory()[String(conversationKey || '')];
+        if (!entry || entry.bottom || !entry.id || !Array.isArray(msgs) || !msgs.length) return null;
+        if (Date.now() - Number(entry.at || 0) > 3 * 24 * 3600 * 1000) return null;
+        const newestNow = this.messageTimestampValue(msgs[msgs.length - 1]?.timestamp);
+        // Пока человека не было, пришло новое — открываем внизу, как мессенджеры с непрочитанным.
+        if (newestNow > Number(entry.newest || 0)) return null;
+        const index = msgs.findIndex(msg => String(msg?.id || '') === entry.id || String(msg?.clientId || '') === entry.id);
+        if (index < 0) return null;
+        return { index, id: entry.id, off: Number(entry.off) || 0 };
+    }
+
+    applyScrollRestore(box, restore) {
+        if (!box || !restore?.id) return false;
+        let node = null;
+        try { node = box.querySelector(`.msg[data-message-id="${CSS.escape(restore.id)}"]`); } catch (e) { node = null; }
+        if (!node) return false;
+        const boxRect = box.getBoundingClientRect();
+        const rect = node.getBoundingClientRect();
+        this.markProgrammaticScroll();
+        const delta = (rect.top - boxRect.top) - restore.off;
+        if (Math.abs(delta) >= 1) box.scrollTop += delta;
+        // Читают историю, а не следуют за низом.
+        this._bottomIntent = false;
+        this.syncJumpToBottom?.(box);
+        // Пока высоты строк вокруг якоря ещё не измерены (чат только что загружен), окно и заглушки
+        // считаются по оценкам и после замера сдвигаются — якорь уплывал на сотни строк. Короткое время
+        // окно держим вокруг якоря, а его отступ подтверждаем после каждой отрисовки; ручной скролл
+        // снимает удержание.
+        this._restoreHold = { id: restore.id, off: restore.off, since: typeof performance !== 'undefined' ? performance.now() : Date.now() };
+        this._restoreHold.until = this._restoreHold.since + 2500;
+        return true;
+    }
+
+    /** Индекс якоря, вокруг которого пока держим окно (applyScrollRestore), или -1. */
+    restoreHoldIndex(msgs) {
+        const hold = this._restoreHold;
+        if (!hold) return -1;
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        if (now > hold.until || Number(this._msgUserScrollAt || 0) > hold.since) {
+            this._restoreHold = null;
+            return -1;
+        }
+        if (!Array.isArray(msgs)) return -1;
+        return msgs.findIndex(msg => String(msg?.id || '') === hold.id || String(msg?.clientId || '') === hold.id);
     }
 });

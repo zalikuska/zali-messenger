@@ -129,6 +129,7 @@ ZaliMixin(ZaliInterface, class {
             el.removeAttribute('role');
             el.removeAttribute('tabindex');
             el.removeAttribute('title');
+            this.renderUpdateStrip();
             return;
         }
         const channel = this.updateChannelOf(status.version);
@@ -149,6 +150,68 @@ ZaliMixin(ZaliInterface, class {
         el.setAttribute('tabindex', '0');
         el.title = hint;
         if (el.textContent !== text) el.textContent = text;
+        this.renderUpdateStrip();
+    }
+
+    // Полоса обновления для телефона: титлбара там нет, и обновление было видно только
+    // в хабе. Стоит в том же месте, что полоса звонка, и уступает ей — две полосы
+    // подряд съели бы пол-экрана. На десктопе её прячет CSS (там ярлык в титлбаре).
+    // «Доступно» можно смахнуть крестиком до перезапуска; загрузку и готовность — нельзя:
+    // иначе человек не узнает, что обновление скачано.
+    renderUpdateStrip() {
+        const strip = document.getElementById('updateStrip');
+        if (!strip) return;
+        const main = strip.parentElement;
+        const status = this.S.updateStatus || {};
+        const callStrip = !!main?.classList.contains('has-call-strip');
+        const dismissed = !!status.available && !status.downloading && !status.readyToInstall
+            && !status.error && this._updateStripDismissed === status.version;
+        const show = !!status.available && !callStrip && !dismissed;
+        main?.classList.toggle('has-update-strip', show);
+        strip.hidden = !show;
+        if (!show) {
+            delete strip.dataset.state;
+            return;
+        }
+        let state = 'available';
+        let text = `Обновление ${status.version}`;
+        let action = 'Обновить';
+        if (status.readyToInstall) {
+            state = 'ready';
+            text = 'Обновление загружено';
+            action = 'Установить';
+        } else if (status.downloading) {
+            state = 'downloading';
+            text = `Загрузка… ${Math.round((status.progress || 0) * 100)}%`;
+            action = '';
+        } else if (status.error) {
+            state = 'error';
+            text = 'Не удалось обновить';
+            action = 'Подробнее';
+        }
+        strip.dataset.state = state;
+        strip.style.setProperty('--update-progress', `${Math.round((status.progress || 0) * 100)}%`);
+        const html = `<button type="button" class="update-strip-main" id="updateStripMain">`
+            + `<span class="update-strip-text">${this.esc(text)}</span>`
+            + (action ? `<span class="update-strip-action">${this.esc(action)}</span>` : '')
+            + `</button>`
+            + (state === 'available' ? `<button type="button" class="update-strip-close" id="updateStripClose" aria-label="Скрыть">×</button>` : '');
+        if (html !== this._updateStripHtml) {
+            strip.innerHTML = html;
+            this._updateStripHtml = html;
+        }
+    }
+
+    handleUpdateStripClick(e) {
+        if (e.target.closest('#updateStripClose')) {
+            this._updateStripDismissed = this.S.updateStatus?.version || '';
+            this.renderUpdateStrip();
+            return;
+        }
+        if (!e.target.closest('#updateStripMain')) return;
+        // «Подробнее» при ошибке и неподписанный релиз — модалка; остальное — как клик по ярлыку.
+        if (this.S.updateStatus?.error) this.openUpdateModal();
+        else this.handleTitlebarUpdateClick();
     }
 
     // Клик по ярлыку: скачать в фоне → (по готовности) установить. Про неподписанный

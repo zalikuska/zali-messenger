@@ -123,6 +123,9 @@ ZaliMixin(ZaliInterface, class {
             // read this one; the renderer passes it through
             // attachmentDisplayUrl() first.
             dataUrl,
+            // Файл, присланный оболочке кусками (stageFileNatively): байтов в вебе нет, они лежат
+            // на устройстве под этим id и подставляются при упаковке сообщения.
+            stageId: att.stageId || '',
             archivePath: att.archivePath || att.archive_path || '',
         };
         // Non-enumerable: this object is spread into the persisted cache and into
@@ -211,6 +214,12 @@ ZaliMixin(ZaliInterface, class {
     async fileToAttachment(file) {
         const mimeType = this.inferMimeType(file);
         const kind = this.attachmentKindFor({ name: file.name, mimeType }) || 'file';
+        // Крупный файл телефона идёт в оболочку кусками, а не одной data:-строкой: строка в
+        // странице + её копия в JSON моста + разбор + байты — сотни МБ кучи на 50 МБ файла.
+        if (this.nativeSupports('stageAttachment') && Number(file.size) > ZaliInterface.STAGE_THRESHOLD_BYTES) {
+            const stageId = await this.stageFileNatively(file);
+            return this.normalizeAttachment({ name: file.name, mimeType, kind, size: file.size, stageId, dataUrl: '' });
+        }
         const dataUrl = await this.fileToDataUrl(file);
         return this.normalizeAttachment({
             name: file.name,
@@ -238,10 +247,96 @@ ZaliMixin(ZaliInterface, class {
             }
         }
         if (files.length === 0) return;
-        const attachments = await Promise.all(files.map(file => this.fileToAttachment(file)));
+        const accepted = this.filterFilesByUploadLimit(files);
+        if (accepted.length === 0) return;
+        // По одному, а не Promise.all: крупные файлы режутся на куски, и два сразу — это двойной
+        // расход памяти; сбой одного не должен терять остальные.
+        const attachments = [];
+        for (const file of accepted) {
+            try {
+                attachments.push(await this.fileToAttachment(file));
+            } catch (e) {
+                this.showToast?.({ title: 'Не удалось подготовить файл', text: `${file?.name || 'Файл'}: ${e?.message || e}`, tone: 'error' });
+            }
+        }
+        if (attachments.length === 0) return;
         this.S.draftAttachments = this.S.draftAttachments.concat(attachments);
         this.renderDraftAttachments();
         this.updateSendButtonState();
+    }
+
+    /**
+     * Сервер отбивает загрузку больше MAX_UPLOAD_BYTES пустым 400 («Error parsing
+     * multipart»), и раньше человек видел лишь «не отправилось». Всё сообщение —
+     * одно .zali-тело, поэтому лимит общий на черновик: берём файлы по порядку, пока
+     * влезают вместе с уже прикреплённым, остальные отклоняем с понятной причиной.
+     */
+    filterFilesByUploadLimit(files) {
+        const limit = ZaliInterface.MAX_UPLOAD_BYTES - ZaliInterface.UPLOAD_ENVELOPE_RESERVE_BYTES;
+        let total = (this.S.draftAttachments || []).reduce((sum, att) => sum + Number(att?.size || 0), 0);
+        const accepted = [];
+        const rejected = [];
+        for (const file of files) {
+            const size = Number(file?.size || 0);
+            if (total + size > limit) {
+                rejected.push(file);
+                continue;
+            }
+            total += size;
+            accepted.push(file);
+        }
+        if (rejected.length) {
+            const limitLabel = this.formatFileSize(ZaliInterface.MAX_UPLOAD_BYTES);
+            const names = rejected.slice(0, 2).map(file => file?.name || 'файл').join(', ');
+            const more = rejected.length > 2 ? ` и ещё ${rejected.length - 2}` : '';
+            this.showToast?.({
+                title: rejected.length === 1 ? 'Файл слишком большой' : 'Файлы слишком большие',
+                text: `${names}${more} не прикреплено: в одном сообщении можно отправить до ${limitLabel}.`,
+                tone: 'error',
+            });
+            this.addLogEntry?.({ type: 'WARN', msg: `Вложение отклонено по размеру (${rejected.length} шт., лимит ${limit} Б)`, ts: new Date().toLocaleTimeString() });
+        }
+        return accepted;
+    }
+
+    /** Режет файл на куски по STAGE_CHUNK_BYTES; каждый — отдельный запрос с ответом (порядок и backpressure). */
+    async stageFileNatively(file) {
+        const bytes = new Uint8Array(16);
+        (window.crypto || window.msCrypto).getRandomValues(bytes);
+        const stageId = `st_${Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')}`;
+        const chunk = ZaliInterface.STAGE_CHUNK_BYTES;
+        if (file.size > 16 * 1024 * 1024) {
+            this.showToast?.({ title: 'Готовим файл', text: `${file.name} — подождите несколько секунд.`, timeoutMs: 3000 });
+        }
+        try {
+            for (let index = 0; index * chunk < file.size; index += 1) {
+                const data = await this.blobToBase64(file.slice(index * chunk, (index + 1) * chunk));
+                await this.requestNativeAction({ type: NativeMessageTypes.STAGE_ATTACHMENT, stageId, index, data }, 60 * 1000);
+            }
+        } catch (e) {
+            void this.discardStagedAttachments([{ stageId }]);
+            throw e;
+        }
+        return stageId;
+    }
+
+    blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '');
+            reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать файл'));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    /** Убрать из черновика — убрать и файл на устройстве. Тихо: это уборка, не действие человека. */
+    async discardStagedAttachments(attachments) {
+        for (const att of attachments || []) {
+            if (!att?.stageId) continue;
+            try {
+                await this.requestNativeAction({ type: NativeMessageTypes.STAGE_ATTACHMENT, stageId: att.stageId, abort: true }, 10 * 1000);
+            } catch (e) { /* оболочка сама подметёт старые файлы */ }
+        }
     }
 
     clearDraftAttachments() {
@@ -565,6 +660,28 @@ ZaliMixin(ZaliInterface, class {
         const gifLike = !!options.gifLike || attachment.kind === 'gif' || attachment.mimeType === 'image/gif';
         const showControls = options.controls !== undefined ? !!options.controls : !gifLike;
         if (!src) {
+            // Файл, ушедший в оболочку кусками: байтов в вебе нет — показываем, что он прикреплён.
+            if (attachment.stageId) {
+                return `<div class="file-message is-staged">
+            ${this.renderFileIcon(attachment.name)}
+            <span class="file-message-info">
+                <span class="file-message-name">${this.esc(attachment.name)}</span>
+                <span class="file-message-size">${this.esc(this.formatFileSize(attachment.size))}</span>
+            </span>
+        </div>`;
+            }
+            // Содержимое не приехало (Android: крупнее лимита нативного слоя, либо история ещё
+            // догружается): карточка, по тапу файл скачивается по id сообщения, минуя страницу
+            // (downloadMessageAttachment). Без такой возможности у оболочки — только подпись.
+            if (attachment.size > 0 && attachment.kind !== 'sticker' && this.nativeBridge?.()?.transport === 'android') {
+                return `<div class="file-message is-unavailable" data-attachment-unavailable="${this.esc(attachment.name)}" data-attachment-size="${this.esc(String(Number(attachment.size) || 0))}" data-attachment-path="${this.esc(attachment.archivePath || '')}" data-attachment-mime="${this.esc(attachment.mimeType || '')}" role="button" tabindex="0">
+            ${this.renderFileIcon(attachment.name)}
+            <span class="file-message-info">
+                <span class="file-message-name">${this.esc(attachment.name)}</span>
+                <span class="file-message-size">${this.esc(this.formatFileSize(attachment.size))} · нажмите, чтобы скачать</span>
+            </span>
+        </div>`;
+            }
             return `<div class="media-unknown">${this.esc(attachment.name)}</div>`;
         }
 
@@ -682,3 +799,12 @@ ZaliMixin(ZaliInterface, class {
         </a>`;
     }
 });
+
+// Потолок одного сообщения совпадает с MAX_UPLOAD_BYTES прода (100 МиБ). Резерв — на
+// JSON-метаданные, шифрование и multipart-обвязку поверх самих байтов файлов.
+ZaliInterface.MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+ZaliInterface.UPLOAD_ENVELOPE_RESERVE_BYTES = 1024 * 1024;
+ZaliInterface.PHONE_INLINE_ATTACHMENT_MAX_BYTES = 16 * 1024 * 1024; // = INLINE_ATTACHMENT_MAX_BYTES в NativeBridge.kt
+// Файлы крупнее порога уходят в оболочку кусками (STAGE_ATTACHMENT); меньшие — data:-строкой, как раньше.
+ZaliInterface.STAGE_THRESHOLD_BYTES = 4 * 1024 * 1024;
+ZaliInterface.STAGE_CHUNK_BYTES = 1024 * 1024;

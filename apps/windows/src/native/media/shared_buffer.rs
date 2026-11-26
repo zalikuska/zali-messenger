@@ -32,8 +32,20 @@ const ORIGIN_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 struct Target {
     core: ICoreWebView2,
+    core2: ICoreWebView2_2,
     webview17: ICoreWebView2_17,
     environment: ICoreWebView2Environment12,
+}
+
+impl Target {
+    /// pid браузерного процесса WebView2 главного окна — звук демонстрации вырезает его
+    /// дерево, а не только «дерево приложения» (`loopback::main_webview_pid`).
+    fn publish_browser_pid(&self) {
+        let mut pid = 0u32;
+        if unsafe { self.core2.BrowserProcessId(&mut pid) }.is_ok() && pid != 0 {
+            super::loopback::set_main_webview_pid(pid);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -47,6 +59,12 @@ pub struct Poster {
 }
 
 impl Poster {
+    /// Заранее достать интерфейсы и pid процесса WebView2 (до первого кадра): звук
+    /// демонстрации выбирает, чьё дерево вырезать, ещё до того, как пойдут кадры.
+    pub fn prepare(&mut self, webview: &WebView) {
+        let _ = self.target(webview);
+    }
+
     fn target(&mut self, webview: &WebView) -> Option<&Target> {
         if self.target.is_none() && !self.unavailable {
             match Self::resolve(webview) {
@@ -70,7 +88,9 @@ impl Poster {
             let webview17: ICoreWebView2_17 = core.cast()?;
             let core2: ICoreWebView2_2 = core.cast()?;
             let environment: ICoreWebView2Environment12 = core2.Environment()?.cast()?;
-            Ok(Target { core, webview17, environment })
+            let target = Target { core, core2, webview17, environment };
+            target.publish_browser_pid();
+            Ok(target)
         }
     }
 
@@ -97,6 +117,8 @@ impl Poster {
         };
         self.origin_ok = is_app_document(&url);
         self.origin_checked_at = Some(Instant::now());
+        // WebView2 мог перезапуститься после сбоя — pid обновляем тем же редким тактом.
+        target.publish_browser_pid();
         self.origin_ok
     }
 

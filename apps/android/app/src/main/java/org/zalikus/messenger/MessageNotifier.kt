@@ -30,6 +30,13 @@ object MessageNotifier {
     private const val NOTIFICATION_TAG = "zali-message"
     // Акцент приложения (--accent-rgb 203,255,0): им система красит маленький значок.
     private const val ACCENT_COLOR = 0xFFCBFF00.toInt()
+    // Ключ переписки на самом уведомлении (extras): по нему clearConversation находит
+    // стоящие в шторке уведомления, когда чат открыли. Формат — как у client_view в вебе:
+    // `dm:<собеседник>` или `<сервер>:<канал>`, без учёта регистра.
+    const val EXTRA_CONVERSATION = "org.zalikus.messenger.extra.CONVERSATION"
+    // Уведомление, которое никто не открыл за сутки, уже не новость — система уберёт само,
+    // иначе шторка копит их неделями (приложение само их не трогало).
+    private const val MESSAGE_TTL_MS = 24L * 60 * 60 * 1000
     const val EXTRA_SENDER = "org.zalikus.messenger.extra.SENDER"
     const val EXTRA_SERVER_ID = "org.zalikus.messenger.extra.SERVER_ID"
     const val EXTRA_CHANNEL_ID = "org.zalikus.messenger.extra.CHANNEL_ID"
@@ -65,6 +72,29 @@ object MessageNotifier {
         manager.createNotificationChannel(channel)
     }
 
+    fun conversationKey(sender: String, serverId: String?, channelId: String?): String =
+        if (!serverId.isNullOrEmpty() && !channelId.isNullOrEmpty()) "$serverId:$channelId"
+        else "dm:$sender"
+
+    /**
+     * Чат открыт и виден — снять всё, что о нём напоминает: сообщения (в том числе тихие
+     * «в игре») и пропущенные звонки собеседника. Идёт по реально стоящим уведомлениям,
+     * поэтому не нужно хранить список и переживает перезапуск процесса.
+     */
+    fun clearConversation(context: Context, conversation: String) {
+        val key = conversation.trim()
+        if (key.isEmpty()) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        try {
+            for (active in manager.activeNotifications) {
+                val tagged = active.notification.extras?.getString(EXTRA_CONVERSATION) ?: continue
+                if (tagged.equals(key, ignoreCase = true)) manager.cancel(active.tag, active.id)
+            }
+        } catch (e: Exception) {
+            // activeNotifications бросает при отозванном разрешении и на редких прошивках.
+        }
+    }
+
     private fun quietId(sender: String): Int = "zali-quiet:${sender.lowercase()}".hashCode()
 
     /**
@@ -95,6 +125,8 @@ object MessageNotifier {
             .setSilent(true)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
+            .setTimeoutAfter(MESSAGE_TTL_MS)
+            .addExtras(android.os.Bundle().apply { putString(EXTRA_CONVERSATION, conversationKey(sender, null, null)) })
             .setContentIntent(pendingIntent)
             .build()
         try {
@@ -234,6 +266,10 @@ object MessageNotifier {
             .setOnlyAlertOnce(!alertAgain)
             .setSilent(silent)
             .setContentIntent(pendingIntent)
+            .setTimeoutAfter(MESSAGE_TTL_MS)
+            .addExtras(android.os.Bundle().apply {
+                putString(EXTRA_CONVERSATION, conversationKey(sender, serverId, channelId))
+            })
             .setGroup(serverId ?: "dm")
             .build()
 

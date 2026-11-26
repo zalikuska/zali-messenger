@@ -59,6 +59,15 @@
   (без ложного false→true и лишней догрузки истории). Дедлайн ответа на обычный
   пинг у Windows теперь 20 с, как у macOS (был 70 с). HTTP-пулы на событие
   сбрасываются (`URLSession.flush`, `connectionPool.evictAll`).
+- **Бэкофф реконнекта сбрасывается только после 15 с жизни сокета, а не на открытии**
+  (2026-11-26; Windows `WS_STABLE_AFTER` в `transport.rs`, macOS `stableAfter`, Android
+  `WS_STABLE_AFTER_MS`, браузер `voiceSocketStableTimer`). Сервер видел у Android-клиентов
+  (okhttp, мобильная сеть) цепочки «подключился → `Connection reset without closing handshake`»
+  с жизнью 60 мс–2 с: путь принимает апгрейд и рвёт, а сброс на onOpen держал паузу в 1–1,5 с.
+  У Windows после обрыва пауза не было вовсе — повтор шёл мгновенно. Диагностика на проде:
+  `/root/zali-server.log` (`grep '\[WS\]'`) и `/var/log/nginx/access.log` (`GET /ws`: код и байты
+  на закрытии; 502 в одну секунду у всех — рестарт сервера при деплое, а не обрыв).
+
 - **TCP_NODELAY везде, где ходят мелкие кадры**: сервер (`axum::serve(...).tcp_nodelay`)
   и WS Windows (`connect_ws` → `connect_async_with_config(.., true)`). С Нейглом
   пачка ICE-кандидатов ждала delayed ACK — до 200 мс на Windows.

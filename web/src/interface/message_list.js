@@ -153,12 +153,21 @@ ZaliMixin(ZaliInterface, class {
         const conversationChanged = previousConversationKey !== conversationKey;
         const previousScrollTop = box.scrollTop;
         const previousScrollHeight = box.scrollHeight;
-        const stickToBottom = this.isMessagesNearBottom(box);
+        // Уходим из переписки — запомнить, где человек в ней остановился (DOM ещё прежний).
+        if (conversationChanged && previousConversationKey && !this.isMobileChatOffscreen?.()) {
+            this.saveScrollMemory(previousConversationKey, box, this._renderedNewestTs);
+        }
+        // Намерение «держаться низа» переживает пересчёт высот: первая отрисовка внизу строит заглушки
+        // по средней высоте, замер настоящих делает ленту длиннее, и прежний `gap <= 56` принимал это
+        // за чтение истории — снимал намерение, и закрепление в следующем кадре молча выходило.
+        const stickToBottom = this.isMessagesNearBottom(box) || (!conversationChanged && !!this._bottomIntent);
         // Capturing the anchor walks message nodes reading getBoundingClientRect() —
         // a forced layout per node. It is only ever consumed by the `preserveScroll`
         // branch below, so skip the work outright in the cases that branch can't run
         // (conversation switch, queued scroll, or we're pinned to the bottom).
-        const scrollAnchor = (conversationChanged || this.pendingMessagesScroll || stickToBottom)
+        // Очередь «вниз» (switchChat на тот же чат, отправка) якорь не отменяет: человек, читающий историю,
+        // вниз не уедет (см. shouldAutoScroll ниже), и без якоря пересборка окна сдвигала ленту.
+        const scrollAnchor = (conversationChanged || this.pendingMessagesScroll === 'top' || stickToBottom)
             ? null
             : this.captureMessageScrollAnchor(box);
         const msgs = this.getCurrentMessages();
@@ -244,10 +253,13 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
 
+        // Открытие переписки на месте, где её оставили (saveScrollMemory), а не внизу.
+        const restore = conversationChanged ? this.pickScrollRestore(conversationKey, msgs) : null;
         const windowInfo = this.computeMessageWindow(msgs, box, {
             conversationChanged,
-            stickToBottom,
+            stickToBottom: restore ? false : stickToBottom,
             conversationKey,
+            anchorIndex: restore ? restore.index : this.restoreHoldIndex(msgs),
         });
         const renderedMsgs = windowInfo.useWindow ? msgs.slice(windowInfo.start, windowInfo.end) : msgs;
         // Одна строка массива = ровно один элемент верхнего уровня в #msgs (разделитель
@@ -478,6 +490,7 @@ ZaliMixin(ZaliInterface, class {
             if (patched && stickToBottom) this.animateArrivedMessages?.(box, tailBefore, { conversationChanged });
             this._lastMessagesHTML = html;
             this.hydrateGifMedia(box);
+            this.watchMessageRows(box);
 
             // Настоящие высоты отрисованных строк — для окна виртуализации (см.
             // recordMessageRowHeights во viewport.js). Раскладка к этому моменту всё
@@ -508,7 +521,7 @@ ZaliMixin(ZaliInterface, class {
         this.messageWindow.count = msgs.length;
         this.messageWindow.useWindow = !!windowInfo.useWindow;
 
-        const preserveScroll = !conversationChanged && !this.pendingMessagesScroll && !stickToBottom;
+        const preserveScroll = !conversationChanged && this.pendingMessagesScroll !== 'top' && !stickToBottom;
         if (preserveScroll && previousScrollHeight > 0 && htmlChanged) {
             // Holding a position in history is the opposite of following the bottom.
             this._bottomIntent = false;
@@ -530,7 +543,19 @@ ZaliMixin(ZaliInterface, class {
             }
         }
 
-        if (this.pendingMessagesScroll === 'top') {
+        // Идёт удержание якоря после восстановления места (applyScrollRestore): отступ подтверждаем заново,
+        // пока заглушки окна уточняются по измеренным высотам.
+        if (!conversationChanged && this._restoreHold && htmlChanged && this.restoreHoldIndex(msgs) >= 0) {
+            const hold = this._restoreHold;
+            this.applyScrollRestore(box, { id: hold.id, off: hold.off });
+            this._restoreHold = hold; // applyScrollRestore обновляет since: срок отсчитывается от первого восстановления
+        }
+        // Запомненное место важнее очереди «вниз» от switchChat/setActiveChannel; не нашлось строки —
+        // обычное поведение (вниз).
+        const restored = restore ? this.applyScrollRestore(box, restore) : false;
+        if (restored) {
+            this.pendingMessagesScroll = null;
+        } else if (this.pendingMessagesScroll === 'top') {
             this.applyPendingMessagesScroll(box);
         } else if (this.pendingMessagesScroll === 'bottom') {
             const shouldAutoScroll = conversationChanged || stickToBottom || previousScrollHeight <= box.clientHeight;
@@ -555,6 +580,8 @@ ZaliMixin(ZaliInterface, class {
 
         if (isServers && server) this.renderServerChatHeader(server, channel);
         this.lastRenderedConversationKey = conversationKey;
+        // Время самого нового сообщения показанной переписки — для saveScrollMemory при уходе из неё.
+        this._renderedNewestTs = msgs.length ? this.messageTimestampValue(msgs[msgs.length - 1]?.timestamp) : 0;
     }
 
     // Пустое состояние #msgs (нет сообщений, нет диалогов, голосовой канал)
@@ -595,6 +622,7 @@ ZaliMixin(ZaliInterface, class {
         // like an in-place update: the new conversation opened at whatever scroll
         // offset the old one had, i.e. the random jumps between chats.
         this.S.unread[peer] = 0;
+        this.markConversationRead(false, peer);
         this.syncTaskbarBadge();
         this.initChat(peer);
         this.ensureConversationCryptoKey({ peer, reason: 'switchChat' });

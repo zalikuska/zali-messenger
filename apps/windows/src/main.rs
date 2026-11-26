@@ -879,6 +879,8 @@ fn main() -> wry::Result<()> {
     #[cfg(target_os = "windows")]
     let mut media_poster = native::media::shared_buffer::Poster::default();
     #[cfg(target_os = "windows")]
+    media_poster.prepare(&webview);
+    #[cfg(target_os = "windows")]
     let media_proxy = proxy.clone();
 
     // Управление из терминала: поднимается, только если включено в настройках.

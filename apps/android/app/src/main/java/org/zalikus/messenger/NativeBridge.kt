@@ -136,6 +136,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     /** Между onOpen и обрывом. */
     @Volatile
     private var wsOpen = false
+    /** Сброс счётчика попыток после WS_STABLE_AFTER_MS жизни сокета (см. onOpen). */
+    @Volatile
+    private var wsStableRunnable: Runnable? = null
     /** Отложенный реконнект бэкоффа — хранится, чтобы смена сети могла его отменить. */
     @Volatile
     private var wsReconnectRunnable: Runnable? = null
@@ -397,6 +400,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             // Кружок на значке в режиме «в игре»: тихое уведомление на канале LOW
             // (SHOW_NOTIFICATION с quiet, MessageNotifier.showQuiet).
             quietBadge: true,
+            // Чат открыт — снять его уведомления из шторки (CLEAR_NOTIFICATIONS).
+            clearNotifications: true,
+            // Крупные вложения не идут строкой через мост: скачивание по id сообщения и
+            // отправка кусками (DOWNLOAD_MESSAGE_ATTACHMENT, STAGE_ATTACHMENT).
+            downloadMessageAttachment: true,
+            stageAttachment: true,
             // Снятие устройства с FCM-пушей при выходе (web_push.js, unregisterNativePushDevice).
             pushDevice: true,
             // Мост закрыт от вложенных фреймов (bridgeNonce + проверка верхнего
@@ -498,6 +507,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 dict.optString("mode", "").trim(),
                 dict.optString("requestId", "").trim(),
             )
+            // Большие вложения мимо строки через мост: приём — скачать и расшифровать архив
+            // на месте и сохранить файл (handleDownloadMessageAttachment); отправка — файл
+            // приезжает кусками в app-private каталог (handleStageAttachment).
+            "DOWNLOAD_MESSAGE_ATTACHMENT" -> handleDownloadMessageAttachment(dict)
+            "STAGE_ATTACHMENT" -> handleStageAttachment(dict)
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
             "MEDIA_REQUEST" -> handleMediaRequest(dict)
             "DOWNLOAD_UPDATE_REQUEST" -> handleDownloadUpdate(dict)
@@ -531,6 +545,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 context,
                 active = dict.optBoolean("active", false),
                 camera = dict.optBoolean("camera", false),
+            )
+            "CLEAR_NOTIFICATIONS" -> MessageNotifier.clearConversation(
+                context,
+                dict.optString("conversation", ""),
             )
             "SHOW_NOTIFICATION" -> if (dict.optBoolean("quiet", false)) {
                 // Режим «в игре»: тихое уведомление ради кружка на значке (или его снятие).
@@ -917,7 +935,20 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         }
 
         val tempPath = File(context.cacheDir, "${UUID.randomUUID()}.zali").path
-        val (packedAttachments, tempAttachmentFiles) = stageAttachmentsForPacking(dict.optJSONArray("attachments"))
+        val pack = stageAttachmentsForPacking(dict.optJSONArray("attachments"))
+        if (pack.missing) {
+            pack.tempFiles.forEach { it.delete() }
+            inFlightSendClientIds.remove(clientId)
+            // 400: «окончательная» ошибка для веба — повторять нечего, файла больше нет
+            // (приложение чистило каталог или его перепрограммировали).
+            sendBusEvent("on_send_error", JSONObject().apply {
+                put("clientId", clientId); put("statusCode", 400)
+                put("responseBody", "Файл больше недоступен — прикрепите его заново")
+            })
+            return
+        }
+        val packedAttachments = pack.attachments
+        val tempAttachmentFiles = pack.tempFiles
 
         val packed = ZaliCoreBridge.packMessage(
             sender, text, tempPath, key, keyVersion, packedAttachments,
@@ -937,6 +968,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         uploadMessage(sender, recipient, clientId, archiveFile, serverId, channelId, keyVersion) { success, messageId, statusCode, responseBody ->
             inFlightSendClientIds.remove(clientId)
             if (success) {
+                // Доставлено — файлы, присланные кусками, больше не нужны; до этого они
+                // должны пережить повторы отправки (и перезапуск приложения).
+                pack.stagedFiles.forEach { it.delete() }
                 sendBusEvent("on_send_success", JSONObject().apply {
                     put("clientId", clientId); put("messageId", messageId ?: "")
                 })
@@ -961,17 +995,49 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
      * Возвращает и список временных файлов: вызывающий удаляет их сразу после
      * упаковки, независимо от её исхода.
      */
-    private fun stageAttachmentsForPacking(attachmentsIn: JSONArray?): Pair<List<JSONObject>, List<File>> {
+    /** Итог раскладки вложений перед упаковкой. */
+    private class StagedPack(
+        val attachments: List<JSONObject>,
+        /** Временные копии из data:-URL — удаляются сразу после упаковки. */
+        val tempFiles: List<File>,
+        /** Файлы, присланные кусками (STAGE_ATTACHMENT) — удаляются после УСПЕШНОЙ отправки. */
+        val stagedFiles: List<File>,
+        /** Вложение объявлено, а его байтов нет: отправлять нельзя, иначе оно молча пропадёт. */
+        val missing: Boolean,
+    )
+
+    private fun stageAttachmentsForPacking(attachmentsIn: JSONArray?): StagedPack {
         val packedAttachments = mutableListOf<JSONObject>()
         val tempAttachmentFiles = mutableListOf<File>()
+        val stagedFiles = mutableListOf<File>()
+        var missing = false
         val source = attachmentsIn ?: JSONArray()
 
         for (i in 0 until source.length()) {
             val attachment = source.optJSONObject(i) ?: continue
             val dataUrl = attachment.optString("dataUrl", "")
-            if (dataUrl.isEmpty()) continue
+            val stageId = attachment.optString("stageId", "").trim()
             val name = attachment.optString("name", "attachment.bin")
             val kind = attachment.optString("kind", "file")
+
+            if (dataUrl.isEmpty() && stageId.isNotEmpty()) {
+                // Файл, присланный кусками: упаковка читает его по пути, копировать незачем.
+                val staged = stagedFile(stageId)?.takeIf { it.isFile && it.length() > 0 }
+                if (staged == null) { missing = true; continue }
+                val safeName = safeFileName(name, "bin")
+                stagedFiles.add(staged)
+                packedAttachments.add(JSONObject().apply {
+                    put("path", staged.path)
+                    put("archivePath", "attachments/$safeName")
+                    put("name", name)
+                    put("mimeType", attachment.optString("mimeType", "application/octet-stream"))
+                    put("kind", kind)
+                    put("size", staged.length())
+                })
+                continue
+            }
+
+            if (dataUrl.isEmpty()) continue
             val (bytes, mimeType, fileExtension) = decodeDataUrl(dataUrl)
             if (bytes.isEmpty()) continue
 
@@ -989,7 +1055,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 put("size", if (attachment.has("size")) attachment.optLong("size") else bytes.size.toLong())
             })
         }
-        return packedAttachments to tempAttachmentFiles
+        return StagedPack(packedAttachments, tempAttachmentFiles, stagedFiles, missing)
     }
 
     // MARK: - Message edit (EDIT_MESSAGE)
@@ -1023,7 +1089,14 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         }
 
         val tempPath = File(context.cacheDir, "${UUID.randomUUID()}.zali").path
-        val (packedAttachments, tempAttachmentFiles) = stageAttachmentsForPacking(dict.optJSONArray("attachments"))
+        val pack = stageAttachmentsForPacking(dict.optJSONArray("attachments"))
+        if (pack.missing) {
+            pack.tempFiles.forEach { it.delete() }
+            sendNativeResponse(requestId, ok = false, error = "Вложение сообщения недоступно — правка отменена")
+            return
+        }
+        val packedAttachments = pack.attachments
+        val tempAttachmentFiles = pack.tempFiles
         // Автор берётся из payload'а, а не из currentUsername(): последний хранится в
         // нижнем регистре (см. handlePersistDeviceIdentity), а это поле попадает
         // внутрь архива и оттуда читается при отрисовке — правка переименовала бы
@@ -1183,20 +1256,7 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         if (mode == "instant" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             Thread {
                 try {
-                    val values = android.content.ContentValues().apply {
-                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeName)
-                        put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeType.ifEmpty { "application/octet-stream" })
-                        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/ZaliMessenger")
-                        put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
-                    }
-                    val resolver = context.contentResolver
-                    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: throw java.io.IOException("Не удалось создать файл в «Загрузках»")
-                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                        ?: throw java.io.IOException("Не удалось открыть файл на запись")
-                    values.clear()
-                    values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
-                    resolver.update(uri, values, null, null)
+                    val uri = insertIntoDownloads(safeName, mimeType) { out -> out.write(bytes) }
                     if (requestId.isNotEmpty()) {
                         sendNativeResponse(
                             requestId,
@@ -1211,15 +1271,33 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             return
         }
 
-        val attachmentsDir = File(context.cacheDir, "attachments").apply { mkdirs() }
-        val file = File(attachmentsDir, "${UUID.randomUUID()}_$safeName")
+        val file = File(attachmentsCacheDir(), "${UUID.randomUUID()}_$safeName")
         try {
             file.writeBytes(bytes)
         } catch (e: Exception) {
             if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Не удалось записать файл")
             return
         }
+        shareAttachmentFile(file, safeName, requestId)
+    }
 
+    /** Каталог кэша под FileProvider (`file_paths.xml`); заодно подметает забытые файлы. */
+    private fun attachmentsCacheDir(): File {
+        val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+        pruneOldFiles(dir, 24L * 60 * 60 * 1000)
+        return dir
+    }
+
+    private fun pruneOldFiles(dir: File, maxAgeMs: Long) {
+        val cutoff = System.currentTimeMillis() - maxAgeMs
+        try {
+            dir.listFiles()?.forEach { if (it.isFile && it.lastModified() < cutoff) it.delete() }
+        } catch (e: Exception) {
+        }
+    }
+
+    /** Лист «Поделиться» для файла из кэша. Ответ — «открыт», сохранит ли человек, решает он. */
+    private fun shareAttachmentFile(file: File, safeName: String, requestId: String) {
         val uri = try {
             androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         } catch (e: Exception) {
@@ -1243,6 +1321,227 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = true, data = JSONObject().put("shared", true).put("name", safeName))
             } catch (e: Exception) {
                 if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Нет приложения для сохранения файла")
+            }
+        }
+    }
+
+    /** Создаёт файл в «Загрузки/ZaliMessenger» (Android 10+), пишет `writer` и снимает IS_PENDING. */
+    @android.annotation.SuppressLint("InlinedApi")
+    private fun insertIntoDownloads(safeName: String, mimeType: String, writer: (java.io.OutputStream) -> Unit): android.net.Uri {
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeName)
+            put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeType.ifEmpty { "application/octet-stream" })
+            put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/ZaliMessenger")
+            put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val resolver = context.contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw java.io.IOException("Не удалось создать файл в «Загрузках»")
+        try {
+            resolver.openOutputStream(uri)?.use { writer(it) }
+                ?: throw java.io.IOException("Не удалось открыть файл на запись")
+        } catch (e: Exception) {
+            // Не оставляем в «Загрузках» полуфайл с IS_PENDING, который галерея не покажет никогда.
+            try { resolver.delete(uri, null, null) } catch (ignored: Exception) {}
+            throw e
+        }
+        values.clear()
+        values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return uri
+    }
+
+    // MARK: - Large attachments: download by message id (DOWNLOAD_MESSAGE_ATTACHMENT)
+    //
+    // Вложение больше INLINE_ATTACHMENT_MAX_BYTES в веб строкой не едет (память телефона).
+    // Вместо этого веб называет сообщение и файл, а мы скачиваем архив потоком на диск,
+    // расшифровываем теми же ключами, что и историю, и кладём ровно этот файл в
+    // «Загрузки» (или в «Поделиться») — без data:-URL и без байтов в куче.
+
+    private fun handleDownloadMessageAttachment(dict: JSONObject) {
+        val requestId = dict.optString("requestId", "")
+        fun fail(message: String) {
+            if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = message)
+        }
+        val messageId = dict.optString("messageId", "").trim()
+        if (messageId.isEmpty()) return fail("Не указано сообщение")
+        if (!ZaliCoreBridge.isAvailable) return fail("Core: нативная библиотека не загружена")
+        if (wsAuthToken.isEmpty()) return fail("Нужно войти в аккаунт")
+        val sender = dict.optString("sender", "").trim()
+        val receiver = dict.optString("receiver", "").trim()
+        val serverId = dict.optString("serverId", "").trim().ifEmpty { null }
+        val channelId = dict.optString("channelId", "").trim().ifEmpty { null }
+        val archivePath = dict.optString("archivePath", "").trim()
+        val wantedName = dict.optString("name", "").trim()
+        val wantedSize = dict.optLong("size", -1)
+        val mode = dict.optString("mode", "").trim()
+
+        val request = Request.Builder()
+            .url("$apiBaseUrl/api/download/${java.net.URLEncoder.encode(messageId, "UTF-8")}")
+            .header("Authorization", "Bearer $wsAuthToken")
+            .build()
+        transferClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                fail("Не удалось скачать файл: ${e.message ?: "нет сети"}")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (it.code == 413) return fail("Файл сообщения превышает допустимый размер")
+                    val body = it.body
+                    if (!it.isSuccessful || body == null) return fail("Не удалось скачать файл")
+                    val workDirName = UUID.randomUUID().toString()
+                    val archiveFile = File(context.cacheDir, "dl-$workDirName.zali")
+                    try {
+                        // Потоком на диск: архив бывает до 100 МБ, в куче ему не место.
+                        body.byteStream().use { input ->
+                            archiveFile.outputStream().use { out -> input.copyTo(out) }
+                        }
+                    } catch (e: IOException) {
+                        archiveFile.delete()
+                        return fail("Загрузка прервалась: ${e.message ?: "нет сети"}")
+                    }
+                    cryptoExecutor.execute {
+                        unpackAndDeliverAttachment(
+                            archiveFile, workDirName, sender, receiver, serverId, channelId,
+                            archivePath, wantedName, wantedSize, mode, requestId,
+                        ) { message -> fail(message) }
+                    }
+                }
+            }
+        })
+    }
+
+    private fun unpackAndDeliverAttachment(
+        archiveFile: File, workDirName: String, sender: String, receiver: String,
+        serverId: String?, channelId: String?, archivePath: String, wantedName: String,
+        wantedSize: Long, mode: String, requestId: String, fail: (String) -> Unit,
+    ) {
+        val tempDir = File(context.cacheDir, "dl-$workDirName-unpack")
+        var delivered = false
+        try {
+            tempDir.mkdirs()
+            val keys = ZaliCoreBridge.candidateMessageKeys(
+                currentKey = currentE2eKey, conversationKeys = conversationKeys,
+                participantA = sender, participantB = receiver, serverId = serverId, channelId = channelId,
+            )
+            val payload = ZaliCoreBridge.unpackMessage(archiveFile.path, tempDir.path, keys)
+            if (payload == null) return fail("Не удалось расшифровать файл: ключ ещё не получен")
+            // Сначала по пути в архиве; сообщения, закэшированные до появления пути, — по
+            // имени и размеру.
+            val attachment = payload.attachments.firstOrNull { archivePath.isNotEmpty() && it.archivePath == archivePath }
+                ?: payload.attachments.firstOrNull { it.name == wantedName && (wantedSize < 0 || it.size == wantedSize) }
+                ?: payload.attachments.firstOrNull { it.name == wantedName }
+            if (attachment == null || !isSafeArchivePath(attachment.archivePath)) return fail("Файл не найден в сообщении")
+            val source = File(tempDir, attachment.archivePath)
+            if (!source.isFile || source.length() == 0L) return fail("Файл не найден в сообщении")
+            val safeName = safeFileName(attachment.name, "bin")
+            val mime = attachment.mimeType.ifEmpty { "application/octet-stream" }
+            delivered = true
+            deliverAttachmentFile(source, safeName, mime, mode, requestId) {
+                tempDir.deleteRecursively()
+            }
+        } finally {
+            archiveFile.delete()
+            // После успешной передачи каталог разбирает сам deliverAttachmentFile (файл
+            // ещё нужен: его копируют в «Загрузки» или кладут под лист «Поделиться»).
+            if (!delivered) tempDir.deleteRecursively()
+        }
+    }
+
+    /** Файл уже расшифрован на диске: в «Загрузки» (instant, Android 10+) или под «Поделиться». */
+    private fun deliverAttachmentFile(src: File, safeName: String, mimeType: String, mode: String, requestId: String, cleanup: () -> Unit) {
+        if (mode == "instant" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val uri = insertIntoDownloads(safeName, mimeType) { out -> src.inputStream().use { it.copyTo(out) } }
+                if (requestId.isNotEmpty()) {
+                    sendNativeResponse(
+                        requestId,
+                        ok = true,
+                        data = JSONObject().put("name", safeName).put("folder", "Загрузки/ZaliMessenger").put("path", uri.toString()),
+                    )
+                }
+            } catch (e: Exception) {
+                if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось сохранить файл")
+            } finally {
+                cleanup()
+            }
+            return
+        }
+        val target = File(attachmentsCacheDir(), "${UUID.randomUUID()}_$safeName")
+        try {
+            if (!src.renameTo(target)) {
+                src.copyTo(target, overwrite = true)
+            }
+        } catch (e: Exception) {
+            cleanup()
+            if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Не удалось записать файл")
+            return
+        }
+        cleanup()
+        shareAttachmentFile(target, safeName, requestId)
+    }
+
+    // MARK: - Large attachments: upload in chunks (STAGE_ATTACHMENT)
+    //
+    // Файл из выбора идёт в веб как data:-URL: base64-строка в JS, ещё одна копия в JSON
+    // моста, ещё одна — после разбора и байты — после декодирования; на 50 МБ это сотни
+    // мегабайт кучи. Для крупных файлов веб режет их на куски по 1 МиБ и присылает по одному
+    // (с ответом на каждый — это и порядок, и «противодавление»); SEND_MESSAGE потом ссылается
+    // на `stageId`. Каталог — filesDir, а не cacheDir: файл обязан пережить повторы отправки
+    // и перезапуск приложения, система чистить кэш вправе в любой момент.
+
+    private val stagedDir: File
+        get() = File(context.filesDir, "staged_attachments").apply { mkdirs() }
+
+    private val stageIdPattern = Regex("^[A-Za-z0-9_-]{8,64}$")
+    private val stageNextIndex = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val stageExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "zali-stage").apply { isDaemon = true }
+    }
+    private var stagedPruned = false
+
+    private fun stagedFile(stageId: String): File? =
+        if (stageIdPattern.matches(stageId)) File(stagedDir, "$stageId.part") else null
+
+    private fun handleStageAttachment(dict: JSONObject) {
+        val requestId = dict.optString("requestId", "")
+        fun respond(ok: Boolean, error: String? = null, received: Long = 0) {
+            if (requestId.isEmpty()) return
+            sendNativeResponse(requestId, ok, data = if (ok) JSONObject().put("received", received) else null, error = error)
+        }
+        val stageId = dict.optString("stageId", "").trim()
+        val file = stagedFile(stageId)
+        if (file == null) return respond(false, "Некорректный идентификатор файла")
+        val abort = dict.optBoolean("abort", false)
+        val index = dict.optInt("index", -1)
+        val data = dict.optString("data", "")
+        stageExecutor.execute {
+            try {
+                if (!stagedPruned) {
+                    stagedPruned = true
+                    // Файлы старше суток — хозяева ушли (сообщение отправлено или отменено).
+                    pruneOldFiles(stagedDir, 24L * 60 * 60 * 1000)
+                }
+                if (abort) {
+                    file.delete()
+                    stageNextIndex.remove(stageId)
+                    return@execute respond(true)
+                }
+                if (index == 0) {
+                    file.delete()
+                    stageNextIndex[stageId] = 0
+                }
+                if (index < 0 || index != stageNextIndex[stageId]) throw IOException("Нарушен порядок частей файла")
+                val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+                if (file.length() + bytes.size > MAX_STAGED_BYTES) throw IOException("Файл слишком большой")
+                java.io.FileOutputStream(file, true).use { it.write(bytes) }
+                stageNextIndex[stageId] = index + 1
+                respond(true, received = file.length())
+            } catch (e: Exception) {
+                file.delete()
+                stageNextIndex.remove(stageId)
+                respond(false, e.message ?: "Не удалось принять файл")
             }
         }
     }
@@ -1882,7 +2181,17 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 mainHandler.post {
                     if (generation != wsGeneration) return@post
-                    wsReconnectAttempt = 0
+                    // Счётчик попыток обнуляем не на открытии, а когда сокет продержался
+                    // WS_STABLE_AFTER_MS: путь, который принимает апгрейд и тут же рвёт
+                    // (мобильная сеть, провайдер), иначе крутил бы реконнект с первой же
+                    // паузой в 1,5 с бесконечно.
+                    wsStableRunnable?.let { mainHandler.removeCallbacks(it) }
+                    val stable = Runnable {
+                        wsStableRunnable = null
+                        if (generation == wsGeneration && wsOpen) wsReconnectAttempt = 0
+                    }
+                    wsStableRunnable = stable
+                    mainHandler.postDelayed(stable, WS_STABLE_AFTER_MS)
                     wsOpen = true
                     setConnectionStatusJs(true)
                     sendClientPresence()
@@ -1910,6 +2219,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
     private fun scheduleWsReconnect(generation: Int) {
         if (generation != wsGeneration) return
+        wsStableRunnable?.let { mainHandler.removeCallbacks(it) }
+        wsStableRunnable = null
         wsOpen = false
         setConnectionStatusJs(false)
         wsReconnectAttempt = min(wsReconnectAttempt + 1, 6)
@@ -2412,9 +2723,15 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     }
 
     /**
-     * Вложения расшифрованного архива в том виде, в каком их ждёт веб. Мелкие
-     * вкладываются inline как `data:`-URL (порог 2 МБ — тот же, что у macOS/iOS),
-     * крупные едут только описанием и докачиваются по требованию.
+     * Вложения расшифрованного архива в том виде, в каком их ждёт веб. Вкладываются
+     * inline как `data:`-URL до [INLINE_ATTACHMENT_MAX_BYTES]; крупнее едут только
+     * описанием — докачки по требованию в вебе НЕТ (комментарий «докачиваются» был
+     * обещанием, которого никто не исполнил), так что такое вложение скачать нельзя, и веб
+     * показывает карточку с пояснением (`renderAttachmentPreview`). Раньше порог был 2 МБ
+     * (перенесён с macOS, где его потом убрали именно за это): любой файл больше
+     * приезжал на телефон безымянной заглушкой, и «Файлы на телефонах не скачиваются».
+     * Потолок — память: файл копируется в base64, JSON и строку страницы одновременно,
+     * поэтому «без предела», как на компьютерах, телефону не по силам.
      */
     private fun renderedAttachments(payload: ZaliCoreBridge.MessagePayload, tempDir: File): JSONArray {
         val attachments = JSONArray()
@@ -2424,8 +2741,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
                 put("mimeType", attachment.mimeType)
                 put("kind", attachment.kind)
                 put("size", attachment.size)
+                // По нему DOWNLOAD_MESSAGE_ATTACHMENT находит файл в архиве, когда
+                // содержимое сюда не поместилось.
+                put("archivePath", attachment.archivePath)
             }
-            if (attachment.size <= 2 * 1024 * 1024 && isSafeArchivePath(attachment.archivePath)) {
+            if (attachment.size <= INLINE_ATTACHMENT_MAX_BYTES && isSafeArchivePath(attachment.archivePath)) {
                 val attachmentFile = File(tempDir, attachment.archivePath)
                 if (attachmentFile.exists()) {
                     val b64 = android.util.Base64.encodeToString(attachmentFile.readBytes(), android.util.Base64.NO_WRAP)
@@ -2888,6 +3208,8 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
 
         /** Сколько ждать ответа на пробу сокета после смены сети (kickConnections). */
         private const val WS_KICK_PROBE_TIMEOUT_MS = 5_000L
+        /** Сколько сокет должен прожить, чтобы бэкофф реконнекта сбросился. */
+        private const val WS_STABLE_AFTER_MS = 15_000L
 
         /** Пока человек активен, `client_idle` уходит не чаще (noteUserActivity). */
         private const val DEVICE_IDLE_REPORT_MS = 30_000L
@@ -2895,6 +3217,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         /** Потолки обоих кэшей расшифровки — те же, что у Windows (`native/cache.rs`). */
         private const val DECRYPTED_CACHE_MAX_ENTRIES = 400
         private const val DECRYPTED_CACHE_MAX_ENTRY_CHARS = 512 * 1024
+
+        /** Потолок файла, присланного кусками: совпадает с лимитом сервера (MAX_UPLOAD_BYTES прода). */
+        private const val MAX_STAGED_BYTES = 100L * 1024 * 1024
+
+        /** Вложения до этого размера едут в веб inline (`renderedAttachments`), остальные нельзя скачать. */
+        private const val INLINE_ATTACHMENT_MAX_BYTES = 16L * 1024 * 1024
 
         private const val REQUEST_CODE_NOTIFICATIONS = 4201
         /** См. scheduleHistoryReload: одна загрузка истории за раз. */

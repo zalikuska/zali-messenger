@@ -8,7 +8,7 @@
 //!   понимает NV12 `VideoFrame` без `colorSpace`), затем staging-текстура → плотный
 //!   NV12 в кадр. Нет VideoProcessor — тот же перевод на CPU (`format::bgra_to_nv12`).
 //! * Звук демонстрации — process loopback без дерева процессов приложения, стерео
-//!   f32 тем же `stream` (`loopback::WasapiCapture::open_process_loopback_excluding_self`).
+//!   f32 тем же `stream` (`loopback::WasapiCapture::open_process_loopback_excluding`).
 //!
 //! id источника: `display:<HMONITOR>` / `window:<HWND>` — стабилен, пока источник жив.
 
@@ -19,7 +19,7 @@ use super::format::{
 use super::h264_mf::LayerEncoder;
 use super::EventSink;
 use super::hub::StartContext;
-use super::loopback::{sleep_unless_stopped, WasapiCapture};
+use super::loopback::{self, sleep_unless_stopped, WasapiCapture};
 use super::privacy::{self, Rect as PRect};
 use super::privacy_win;
 use base64::Engine as _;
@@ -740,6 +740,46 @@ fn webview2_tree_census() -> (usize, usize) {
     (inside, webviews.len() - inside)
 }
 
+/// Лежит ли `pid` в дереве процессов `root` (по родителям из снимка процессов).
+fn in_process_tree(procs: &[privacy::ProcInfo], root: u32, pid: u32) -> bool {
+    let parent: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.parent)).collect();
+    let mut cur = pid;
+    for _ in 0..64 {
+        if cur == root {
+            return true;
+        }
+        match parent.get(&cur) {
+            Some(&pp) if pp != 0 && pp != cur => cur = pp,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Корень дерева, которое process loopback вырежет из звука демонстрации. Обычно это
+/// наш процесс — WebView2 с голосами звонка его потомок. Но голоса играет именно браузерный
+/// процесс WebView2 главного окна: если он оказался вне нашего дерева (общий каталог
+/// данных с ещё живым прежним экземпляром, перезапуск после обновления), «наше дерево» их не
+/// содержит, и собеседники слышат себя в демонстрации (жалоба 2026-11-24, «всё ещё» 2026-11-26).
+/// Тогда исключаем дерево этого процесса: наш собственный процесс звонка не играет.
+/// Возвращает `(корень, почему)`.
+fn screen_audio_root(procs: &[privacy::ProcInfo]) -> (u32, &'static str) {
+    let me = std::process::id();
+    let webview = loopback::main_webview_pid();
+    if webview == 0 || webview == me {
+        return (me, "self");
+    }
+    if !procs.iter().any(|p| p.pid == webview) {
+        // Процесса уже нет (перезапущен) — pid устарел, держимся своего дерева.
+        return (me, "self-stale-webview");
+    }
+    if in_process_tree(procs, me, webview) {
+        (me, "self")
+    } else {
+        (webview, "webview2-outside-tree")
+    }
+}
+
 /// Отправка звука демонстрации блоками по 20 мс с метками по счёту отсчётов (сброс на
 /// часы при расхождении > 200 мс). Общая для обоих режимов захвата ниже.
 struct ScreenAudioOut {
@@ -833,7 +873,9 @@ fn screen_audio_exclude_self(ctx: &StartContext, stop: &AtomicBool, out: &mut Sc
     // outside — процессы WebView2 любых приложений, не только наши: тревожно, только если
     // inside = 0 (наш WebView2 живёт вне дерева, и голоса звонка попадут в захват).
     tracing::info!("[ZALI][WIN] media screen audio: exclude tree pid={} webview2 inside={inside} outside={outside}", std::process::id());
-    let capture = match WasapiCapture::open_process_loopback_excluding_self(2).and_then(|c| c.start().map(|_| c)) {
+    let (root, why) = screen_audio_root(&privacy_win::process_table());
+    tracing::info!("[ZALI][WIN] media screen audio: exclude root={root} ({why}) own={} webview_pid={}", std::process::id(), loopback::main_webview_pid());
+    let capture = match WasapiCapture::open_process_loopback_excluding(root, 2).and_then(|c| c.start().map(|_| c)) {
         Ok(capture) => capture,
         Err(error) => {
             // Windows 10 до 2004 не умеет process loopback — демонстрация без звука.
@@ -935,7 +977,15 @@ fn screen_audio_filtered(ctx: &StartContext, stop: &AtomicBool, out: &mut Screen
         // Раз в секунду — какие процессы сейчас со звуком: новые подхватываем, ушедших гасим.
         if refreshed.map(|t| t.elapsed() >= Duration::from_secs(1)).unwrap_or(true) {
             refreshed = Some(Instant::now());
-            let (roots, skipped) = privacy::audio_roots(&privacy_win::audio_session_pids(), &privacy_win::process_table(), own, &muted);
+            let procs = privacy_win::process_table();
+            let (mut roots, skipped) = privacy::audio_roots(&privacy_win::audio_session_pids(), &procs, own, &muted);
+            // Браузерный процесс WebView2 главного окна вне нашего дерева — его голоса звонка
+            // `audio_roots` за свои не признал бы: выбрасываем и его, и всех, кто его потомок
+            // или предок (include берёт дерево целиком).
+            let webview = loopback::main_webview_pid();
+            if webview != 0 && webview != own && !in_process_tree(&procs, own, webview) {
+                roots.retain(|&pid| !in_process_tree(&procs, webview, pid) && !in_process_tree(&procs, pid, webview));
+            }
             sources.retain(|pid, _| roots.contains(pid));
             for pid in roots {
                 if let std::collections::hash_map::Entry::Vacant(slot) = sources.entry(pid) {

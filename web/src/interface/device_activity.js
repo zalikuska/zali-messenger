@@ -73,6 +73,12 @@ ZaliMixin(ZaliInterface, class {
         if (!this.S.session?.token) return;
         const conversation = this.currentViewedConversation();
         const deviceId = String(this.currentDeviceId?.() || '').trim();
+        // Открытый на экране чат прочитан: стоящие в шторке уведомления о нём (сообщения,
+        // пропущенные звонки) больше не нужны. Не зависит от того, ушёл ли кадр по сокету.
+        if (conversation !== this._lastClearedConversation) {
+            this._lastClearedConversation = conversation;
+            if (conversation) this.clearConversationNotifications?.(conversation);
+        }
         const key = `${this.myName?.() || ''}|${deviceId}|${conversation}`;
         const heartbeatDue = conversation
             && Date.now() - Number(this._lastConversationViewAt || 0) >= ZaliInterface.CONVERSATION_VIEW_HEARTBEAT_MS;
@@ -81,6 +87,34 @@ ZaliMixin(ZaliInterface, class {
         if (!this.sendClientActivityFrame?.(frame)) return;
         this._lastConversationViewKey = key;
         this._lastConversationViewAt = Date.now();
+    }
+
+    // Нативный шелл снимает свои уведомления сам (CLEAR_NOTIFICATIONS, пока только Android);
+    // в браузере их ставит service worker — закрываем через регистрацию. Ключ — тот же,
+    // что у client_view: `dm:<собеседник>` / `<сервер>:<канал>`.
+    clearConversationNotifications(conversation) {
+        if (this.nativeSupports('clearNotifications')) {
+            this.postNativeMessage({ type: NativeMessageTypes.CLEAR_NOTIFICATIONS, conversation });
+            return;
+        }
+        if (!this.hasNativeBridge()) void this.closeBrowserNotifications(conversation);
+    }
+
+    async closeBrowserNotifications(conversation) {
+        try {
+            if (typeof navigator === 'undefined' || !navigator.serviceWorker?.getRegistration) return;
+            const registration = await navigator.serviceWorker.getRegistration();
+            if (!registration?.getNotifications) return;
+            const wanted = String(conversation || '').toLowerCase();
+            for (const notification of await registration.getNotifications()) {
+                const data = notification.data || {};
+                let key = '';
+                if (data.serverId && data.channelId) key = `${data.serverId}:${data.channelId}`;
+                else if (data.kind === 'call_end' && data.from) key = `dm:${data.from}`;
+                else if (data.sender) key = `dm:${data.sender}`;
+                if (key && key.toLowerCase() === wanted) notification.close();
+            }
+        } catch (e) { /* уведомления — удобство, не повод для ошибки */ }
     }
 
     // Переключение чата, вкладки «Хаб»/«Настройки», фокус окна — опрос раз в секунду

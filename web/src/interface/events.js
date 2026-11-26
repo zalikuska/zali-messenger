@@ -99,6 +99,20 @@ ZaliMixin(ZaliInterface, class {
                     this.switchChat(row.dataset.name);
                 }
             });
+            // Двойной клик по голосовому каналу — сразу войти в него. Первый клик этого же
+            // жеста уже открыл канал (setActiveChannel выше), так что currentServer/Channel
+            // совпадают со строкой; ids берём из неё же, чтобы не зависеть от порядка.
+            contactsEl.addEventListener('dblclick', (e) => {
+                const channelRow = e.target.closest('.sidebar-channel[data-channel-id]');
+                if (!channelRow || channelRow.getAttribute('data-channel-kind') !== 'voice') return;
+                const serverId = channelRow.getAttribute('data-server-id');
+                const channelId = channelRow.getAttribute('data-channel-id');
+                if (!serverId || !channelId) return;
+                e.preventDefault();
+                window.getSelection?.()?.removeAllRanges();
+                void this.joinVoiceChannel({ serverId, channelId });
+            });
+            this.bindVoiceMemberDrag(contactsEl);
             contactsEl.addEventListener('contextmenu', (e) => {
                 // ПКМ по человеку в списке голосового канала — то же меню, что у контакта.
                 const voiceMember = e.target.closest('.sidebar-voice-member[data-name]');
@@ -126,6 +140,68 @@ ZaliMixin(ZaliInterface, class {
         // Servers: avatars in the rail (header on desktop, sidebar on the phone).
         this.bindServerRailEvents();
 
+    }
+
+    /**
+     * Перетягивание людей между голосовыми каналами в списке каналов. Свою строку можно тянуть
+     * всегда (быстрый переход), чужую — только с правом «Переносить участников» (draggable
+     * выставляет voiceChannelMembersHTML, а решает сервер: voice_move_member).
+     */
+    bindVoiceMemberDrag(container) {
+        const clear = () => {
+            this._voiceDrag = null;
+            container.querySelectorAll('.is-dragging, .drop-target').forEach(el => el.classList.remove('is-dragging', 'drop-target'));
+        };
+        const dropTarget = (e) => {
+            const drag = this._voiceDrag;
+            if (!drag) return null;
+            const row = e.target.closest('.sidebar-channel[data-channel-kind="voice"], .sidebar-voice-members[data-channel-kind="voice"]');
+            if (!row) return null;
+            const channelId = row.getAttribute('data-channel-id');
+            if (!channelId || channelId === drag.fromChannelId || row.getAttribute('data-server-id') !== drag.serverId) return null;
+            return { row, channelId };
+        };
+        container.addEventListener('dragstart', (e) => {
+            const member = e.target.closest?.('.sidebar-voice-member[draggable="true"]');
+            const group = member?.closest('.sidebar-voice-members');
+            if (!member || !group) return;
+            this._voiceDrag = {
+                name: member.getAttribute('data-name') || '',
+                serverId: group.getAttribute('data-server-id') || '',
+                fromChannelId: group.getAttribute('data-channel-id') || '',
+            };
+            member.classList.add('is-dragging');
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'move';
+                try { e.dataTransfer.setData('text/plain', this._voiceDrag.name); } catch (err) { /* Firefox требует данные, остальным всё равно */ }
+            }
+        });
+        container.addEventListener('dragover', (e) => {
+            const target = dropTarget(e);
+            container.querySelectorAll('.drop-target').forEach(el => { if (el !== target?.row) el.classList.remove('drop-target'); });
+            if (!target) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            target.row.classList.add('drop-target');
+        });
+        container.addEventListener('dragleave', (e) => {
+            const row = e.target.closest?.('.drop-target');
+            if (row && !row.contains(e.relatedTarget)) row.classList.remove('drop-target');
+        });
+        container.addEventListener('drop', (e) => {
+            const target = dropTarget(e);
+            const drag = this._voiceDrag;
+            clear();
+            if (!target || !drag) return;
+            e.preventDefault();
+            const me = String(this.myName?.() || '').trim().toLowerCase();
+            if (drag.name.toLowerCase() === me) {
+                void this.joinVoiceChannel({ serverId: drag.serverId, channelId: target.channelId });
+            } else {
+                this.moveVoiceMember(drag.name, drag.serverId, target.channelId);
+            }
+        });
+        container.addEventListener('dragend', clear);
     }
 
     /** Голосовая панель и плитки участников. Вызывается только из bindEvents(). */
@@ -272,6 +348,8 @@ ZaliMixin(ZaliInterface, class {
         document.getElementById('chatHdrCallCtl')?.addEventListener('click', (e) => {
             handleRingingAction(e);
         });
+
+        document.getElementById('updateStrip')?.addEventListener('click', (e) => this.handleUpdateStripClick(e));
 
         // The strip above every tab: its mute/deafen act in place, anywhere else
         // on it goes back to the call.
@@ -451,6 +529,13 @@ ZaliMixin(ZaliInterface, class {
                     e.stopPropagation();
                     const name = profileTarget.getAttribute('data-profile-open');
                     if (name) void this.openProfile(name);
+                    return;
+                }
+                const unavailable = e.target.closest('[data-attachment-unavailable]');
+                if (unavailable) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void this.downloadMessageAttachment(unavailable);
                     return;
                 }
                 const fileLink = e.target.closest('a.file-chip, a.file-message');
@@ -892,6 +977,8 @@ ZaliMixin(ZaliInterface, class {
                 const btn = e.target.closest('.draft-att-remove');
                 if (!btn) return;
                 const id = btn.getAttribute('data-att-id');
+                // Файл, отправленный оболочке кусками, лежит на устройстве — убираем и его.
+                void this.discardStagedAttachments(this.S.draftAttachments.filter(att => att.id === id));
                 this.S.draftAttachments = this.S.draftAttachments.filter(att => att.id !== id);
                 this.renderDraftAttachments();
                 this.updateSendButtonState();

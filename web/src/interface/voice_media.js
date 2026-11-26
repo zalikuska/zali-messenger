@@ -230,7 +230,10 @@ ZaliMixin(ZaliInterface, class {
         await this.enforceMicProcessing(stream);
         this.voice.micError = '';
         // Мьют, выставленный в прошлом канале, сохраняется (toggleVoiceMute).
-        this.voice.muted = !!this._voiceMutedPref;
+        // Поток пересоздан посреди звонка (смена устройства): «наушники» всё ещё выключены —
+        // микрофон остаётся выключенным, а не оживает сам.
+        this.voice.muted = !!this._voiceMutedPref || !!this.voice.deafened;
+        this._voiceMutedByDeafen = !!this.voice.deafened && !this._voiceMutedPref;
         for (const track of stream.getAudioTracks()) track.enabled = !this.voice.muted;
         this.voiceDiag('local-stream-ready', {
             tracks: stream.getTracks().map(track => `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`),

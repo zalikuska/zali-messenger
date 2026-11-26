@@ -104,6 +104,10 @@ pub(crate) async fn build_server_response(
     let can_invite = can_invite_to_server(pool, &server.id, viewer)
         .await
         .unwrap_or(false);
+    let can_move_members = can_manage
+        || can_move_voice_members(pool, &server.id, viewer)
+            .await
+            .unwrap_or(false);
     let join_link = display_join_link(server.join_link.clone(), &server.id);
     Ok(ServerResponse {
         id: server.id,
@@ -117,6 +121,7 @@ pub(crate) async fn build_server_response(
         my_role,
         can_invite,
         can_manage,
+        can_move_members,
         member_count,
         online_count: None,
         channels,
@@ -206,8 +211,11 @@ pub(crate) async fn build_server_responses_batch(
     // Роли с правом «Приглашения»: (server_id, role_id).
     let mut invite_roles: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
+    // Роли с правом «Переносить участников»: (server_id, role_id).
+    let mut move_roles: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     let mut server_perm_builder = QueryBuilder::<Sqlite>::new(
-        "SELECT server_id, role_id, can_view, can_send, can_manage, can_invite FROM server_roles WHERE server_id IN (",
+        "SELECT server_id, role_id, can_view, can_send, can_manage, can_invite, can_move_members FROM server_roles WHERE server_id IN (",
     );
     {
         let mut separated = server_perm_builder.separated(", ");
@@ -223,8 +231,12 @@ pub(crate) async fn build_server_responses_batch(
         let can_send: i64 = row.get("can_send");
         let can_manage: i64 = row.get("can_manage");
         let can_invite: i64 = row.get("can_invite");
+        let can_move_members: i64 = row.get("can_move_members");
         if can_invite != 0 || can_manage != 0 {
             invite_roles.insert((server_id.clone(), role_id.clone()));
+        }
+        if can_move_members != 0 {
+            move_roles.insert((server_id.clone(), role_id.clone()));
         }
         server_permissions
             .entry(server_id)
@@ -293,6 +305,12 @@ pub(crate) async fn build_server_responses_batch(
                 .as_deref()
                 .map(|role| invite_roles.contains(&(server_id.clone(), role.to_string())))
                 .unwrap_or(false);
+        let can_move_members = server.owner == viewer
+            || can_manage
+            || my_role
+                .as_deref()
+                .map(|role| move_roles.contains(&(server_id.clone(), role.to_string())))
+                .unwrap_or(false);
         let all_channels = channels_by_server.remove(&server_id).unwrap_or_default();
         let channels =
             if can_manage || server.owner == viewer || (my_role.is_none() && server.is_public != 0)
@@ -335,6 +353,7 @@ pub(crate) async fn build_server_responses_batch(
             my_role,
             can_invite,
             can_manage,
+            can_move_members,
             member_count: member_counts.get(&server_id).copied().unwrap_or(0),
             online_count: None,
             channels,
@@ -619,6 +638,29 @@ pub(crate) async fn is_server_owner(
         .await?
         .map(|server| server.owner == username)
         .unwrap_or(false))
+}
+
+/// Можно ли переносить участников между голосовыми каналами сервера: владелец, админ, «Управление»
+/// или роль с флагом `can_move_members`.
+pub(crate) async fn can_move_voice_members(
+    pool: &SqlitePool,
+    server_id: &str,
+    username: &str,
+) -> Result<bool, sqlx::Error> {
+    if can_manage_server(pool, server_id, username).await? {
+        return Ok(true);
+    }
+    let Some(role_id) = get_server_member_role(pool, server_id, username).await? else {
+        return Ok(false);
+    };
+    let flag: Option<i64> = sqlx::query_scalar(
+        "SELECT can_move_members FROM server_roles WHERE server_id = ? AND role_id = ? LIMIT 1",
+    )
+    .bind(server_id)
+    .bind(&role_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(flag.unwrap_or(0) != 0)
 }
 
 /// Право «Приглашения»: владелец, админ, любая роль с «Управлением» и любая

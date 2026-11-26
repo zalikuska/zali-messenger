@@ -3267,6 +3267,136 @@ body[data-nav-mode="servers"] .contacts {
     top: var(--call-strip-h);
 }
 
+/* ── Перетягивание людей между голосовыми каналами (events.js, bindVoiceMemberDrag) ───────
+   Тянуть можно себя и, при праве «Переносить участников», других. Цель броска — акцентная
+   рамка внутри строки: рамка снаружи обрезалась бы скроллом списка. */
+.sidebar-voice-member[draggable="true"] {
+    cursor: grab;
+}
+.sidebar-voice-member.is-dragging {
+    opacity: .45;
+}
+.sidebar-channel.drop-target,
+.sidebar-voice-members.drop-target {
+    box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb));
+    border-radius: var(--r-md, 10px);
+}
+
+/* ── Полоса обновления (телефон) ─────────────────────────────────────────
+   Живёт в слоте полосы звонка и уступает ей (updates.js, renderUpdateStrip).
+   Сплошной акцент: прозрачные лаймовые подложки читаются грязной оливой.
+   Фон заходит под статус-бар (--m-safe-top), как у полосы звонка. */
+.update-strip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 44;
+    height: var(--call-strip-h);
+    box-sizing: border-box;
+    padding-top: var(--m-safe-top);
+    display: flex;
+    align-items: stretch;
+    overflow: hidden;
+    background: rgb(var(--accent-rgb));
+    color: var(--on-accent);
+}
+
+.update-strip[hidden] {
+    display: none;
+}
+
+/* Прогресс загрузки — тёмная заливка слева направо под текстом. */
+.update-strip[data-state="downloading"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: var(--update-progress, 0%);
+    background: rgba(0, 0, 0, .16);
+    transition: width .25s linear;
+}
+
+.update-strip[data-state="error"] {
+    background: var(--red);
+    color: #fff;
+}
+
+.update-strip-main {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 14px;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 800;
+    text-align: left;
+    cursor: pointer;
+}
+
+.update-strip[data-state="downloading"] .update-strip-main {
+    cursor: progress;
+    font-variant-numeric: tabular-nums;
+}
+
+.update-strip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.update-strip-action {
+    flex: 0 0 auto;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .18);
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.update-strip-close {
+    position: relative;
+    flex: 0 0 auto;
+    width: 38px;
+    border: 0;
+    background: none;
+    color: inherit;
+    font-size: 22px;
+    line-height: 1;
+    opacity: .7;
+    cursor: pointer;
+}
+
+.main.has-update-strip {
+    --call-strip-h: calc(var(--m-safe-top) + 38px);
+}
+
+.main.has-update-strip > .view,
+.main.has-update-strip > #viewChat {
+    --m-safe-top: 0px;
+    top: var(--call-strip-h);
+}
+
+/* На десктопе обновление — это ярлык в титлбаре. */
+@media (min-width: 761px) {
+    .update-strip {
+        display: none !important;
+    }
+
+    .main.has-update-strip > .view,
+    .main.has-update-strip > #viewChat {
+        top: 0;
+    }
+}
+
 /* A voice channel has no text chat, so opening one shows only the call: the
    message list and composer are gone and the panel takes all the room under
    the header. */
@@ -22862,9 +22992,11 @@ body[data-design-mode="focus"] .voice-btn .call-ctrl-icon,
     height: 16px;
     stroke-width: 2.25;
 }
+/* Кнопки звонка 44–48 px: значок 24 px (масштаб 1:1 к сетке 24 — линии не «мылятся»,
+   как при дробных размерах). Обводка 1,8 px — та же весомость, что у 1,5 px на 20 px. */
 .call-ctrl-btn .call-ctrl-icon {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     stroke-width: 1.8;
 }
 .voice-tile-mic .call-ctrl-icon {
@@ -30392,18 +30524,216 @@ body[data-design-mode="focus"] .raffle-modal {
     .gif-picker-pick, .gif-picker-tab, .gif-fav-star { transition: none; }
 }
 
-/* Фото из ленты на весь экран (media_viewer.js) — оформление видео звонка на весь экран. */
-.media-viewer .voice-focus-media {
+/* Просмотр фото на весь экран (media_viewer.js): зум, панорама, листание, поворот.
+   Поверх фото всё остаётся чёрно-белым литералом (гайдлайны §3, «Светлота»): панели
+   плавающие — непрозрачная подложка и тень, без рамок и размытия. */
+.mv {
+    --mv-bar: rgba(20, 22, 26, .88);
+    --mv-bar-hover: rgba(52, 55, 62, .96);
+    --mv-ink: #fff;
+    --mv-ink-2: rgba(255, 255, 255, .62);
+    position: fixed;
+    inset: 0;
+    z-index: 10050;
+    color: var(--mv-ink);
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+    animation: voiceFocusIn .16s var(--ease-out, ease-out);
+}
+.mv-backdrop {
+    position: absolute;
+    inset: 0;
+    background: #050607;
+    opacity: var(--mv-dim, 1);
+}
+.mv-surface {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    touch-action: none;
+    cursor: default;
+}
+/* Рамка, в которую вписывается фото: экран без полос панелей. Сама невидима. */
+.mv-fitbox {
+    position: absolute;
+    top: calc(var(--m-safe-top, 0px) + 64px);
+    bottom: calc(var(--m-safe-bottom, 0px) + 92px);
+    left: 16px;
+    right: 16px;
+    pointer-events: none;
+}
+.mv-img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    max-width: none;
+    max-height: none;
+    transform-origin: 50% 50%;
+    will-change: transform;
+    border-radius: 2px;
+    /* Прозрачный PNG читается на «шашках», а не сливается с чёрным. */
+    background-color: #1a1c20;
+    background-image: linear-gradient(45deg, #23262b 25%, transparent 25%, transparent 75%, #23262b 75%),
+        linear-gradient(45deg, #23262b 25%, transparent 25%, transparent 75%, #23262b 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 8px 8px;
+    cursor: zoom-in;
+    -webkit-user-drag: none;
+}
+.mv.is-zoomed .mv-img { cursor: grab; }
+.mv.is-panning .mv-img, .mv.is-panning .mv-surface { cursor: grabbing; }
+
+.mv-top {
+    position: absolute;
+    top: calc(var(--m-safe-top, 0px) + 12px);
+    left: 16px;
+    right: 16px;
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    pointer-events: none;
+}
+.mv-title {
+    min-width: 0;
+    max-width: min(70%, 560px);
+    padding: 7px 14px;
+    border-radius: 14px;
+    background: var(--mv-bar);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .4);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    pointer-events: auto;
+}
+.mv-title:has(.mv-name[hidden]):has(.mv-meta:empty) { visibility: hidden; }
+.mv-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+}
+.mv-name[hidden] { display: none; }
+.mv-meta {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--mv-ink-2);
+    font-variant-numeric: tabular-nums;
+}
+.mv-meta:empty { display: none; }
+.mv-actions {
+    display: flex;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 16px;
+    background: var(--mv-bar);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .4);
+    pointer-events: auto;
+}
+.mv-btn, .mv-zoom, .mv-nav {
+    appearance: none;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    color: var(--mv-ink);
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+    transition: background-color .15s var(--ease-out, ease-out), opacity .15s var(--ease-out, ease-out);
+}
+.mv-btn {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
 }
+.mv-btn:hover, .mv-zoom:hover { background: var(--mv-bar-hover); }
+.mv-btn:active, .mv-zoom:active, .mv-nav:active { opacity: .7; }
+.mv-btn:focus-visible:where([data-kbd-focus] *),
+.mv-zoom:focus-visible:where([data-kbd-focus] *),
+.mv-nav:focus-visible:where([data-kbd-focus] *) {
+    outline: 2px solid var(--mv-ink);
+    outline-offset: 2px;
+}
 
-.media-viewer .voice-focus-media img {
-    display: block;
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
+.mv-dock {
+    position: absolute;
+    left: 50%;
+    bottom: calc(var(--m-safe-bottom, 0px) + 18px);
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 16px;
+    background: var(--mv-bar);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+}
+.mv-zoom {
+    min-width: 64px;
+    height: 40px;
+    padding: 0 8px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.mv-sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 6px;
+    background: rgba(255, 255, 255, .14);
+}
+
+.mv-nav {
+    position: absolute;
+    top: 50%;
+    width: 48px;
+    height: 56px;
+    margin-top: -28px;
+    border-radius: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--mv-bar);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .4);
+}
+.mv-nav svg { width: 22px; height: 22px; }
+.mv-prev { left: 16px; }
+.mv-next { right: 16px; }
+.mv-nav:hover { background: var(--mv-bar-hover); }
+.mv-nav[hidden] { display: none; }
+.mv-nav:disabled { opacity: 0; pointer-events: none; }
+
+/* Панели уходят, когда мышь стоит над фото, и возвращаются от движения; на касании —
+   по тапу по фото (is-bare). Скрытые не ловят нажатий. */
+.mv-top, .mv-dock, .mv-nav { transition: opacity .2s var(--ease-out, ease-out); }
+.mv.is-idle .mv-top, .mv.is-idle .mv-dock, .mv.is-idle .mv-nav,
+.mv.is-bare .mv-top, .mv.is-bare .mv-dock, .mv.is-bare .mv-nav { opacity: 0; pointer-events: none; }
+.mv.is-idle { cursor: none; }
+.mv.is-idle .mv-img, .mv.is-idle .mv-surface { cursor: none; }
+.mv.is-bare .mv-top *, .mv.is-bare .mv-dock *, .mv.is-bare .mv-nav { pointer-events: none; }
+
+/* Сенсорный экран: листают свайпом, стрелки не нужны. */
+@media (hover: none) and (pointer: coarse) {
+    .mv-nav { display: none; }
+}
+@media (max-width: 760px) {
+    .mv-fitbox { left: 8px; right: 8px; bottom: calc(var(--m-safe-bottom, 0px) + 84px); }
+    .mv-top { left: 12px; right: 12px; }
+    .mv-title { max-width: calc(100% - 128px); }
+    .mv-dock { bottom: calc(var(--m-safe-bottom, 0px) + 14px); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .mv { animation: none; }
+    .mv-top, .mv-dock, .mv-nav, .mv-btn, .mv-zoom { transition: none; }
 }
 
 /* --- Скрытые приложения и горячие клавиши (screen_privacy.js) --- */
@@ -30677,7 +31007,7 @@ body[data-design-mode="focus"] .raffle-modal {
 }
 .voice-screen-stop svg { width: 18px; height: 18px; }
 .voice-stage-tile:hover .voice-screen-stop,
-.voice-screen-stop:focus-visible { opacity: 1; }
+.voice-screen-stop:focus-visible:where([data-kbd-focus] *) { opacity: 1; }
 @media (hover: none) { .voice-screen-stop { opacity: 1; } }
 
 /* Сетка звонка на десктопе: неполная нижняя строка по центру, а не прижата влево

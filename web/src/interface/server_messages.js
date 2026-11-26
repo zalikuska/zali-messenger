@@ -86,6 +86,9 @@ ZaliMixin(ZaliInterface, class {
         // merges AFTER that baseline (reconnect catch-up, background refreshes)
         // notify for genuinely new messages, same rule as loadHistory() for DMs.
         const alreadyPrimed = this._historyPrimedChannels.has(key);
+        // Канал перед глазами: всё, что в нём теперь есть, прочитано (иначе отметка отстала бы
+        // от сообщений, пришедших, пока он был открыт).
+        if (this.isServerChatAttended(key)) this.markConversationRead(true, key);
         if (!alreadyPrimed) {
             this._historyPrimedChannels.add(key);
         } else if (newlyInserted.length && !this.isServerChatAttended(key)) {
@@ -97,6 +100,8 @@ ZaliMixin(ZaliInterface, class {
                     serverId: msg.serverId,
                     channelId: msg.channelId,
                     messageId: msg.id,
+                    timestamp: msg.timestamp,
+                    catchUp: true,
                 });
             });
             this.renderServerInterface();
@@ -713,6 +718,7 @@ ZaliMixin(ZaliInterface, class {
         // S.unread[peer] = 0 for DMs.
         this.S.channelUnread = this.S.channelUnread || {};
         this.S.channelUnread[`${server.id}:${next}`] = 0;
+        this.markConversationRead(true, `${server.id}:${next}`);
         this.syncTaskbarBadge();
         if (persist) this.saveStoredActiveChannel(next);
         this.saveStoredNavMode('servers');
@@ -769,12 +775,14 @@ ZaliMixin(ZaliInterface, class {
         // unread counter it may have accrued while the servers view was covering it.
         if (next === 'dm' && this.S.current) {
             this.S.unread[this.S.current] = 0;
+            this.markConversationRead(false, this.S.current);
         }
         // Mirror for the servers view: the already-selected channel becomes visible
         // again, so clear whatever it accrued while the DM view was covering it.
         if (next === 'servers' && this.S.activeServer && this.S.activeChannel) {
             this.S.channelUnread = this.S.channelUnread || {};
             this.S.channelUnread[`${this.S.activeServer}:${this.S.activeChannel}`] = 0;
+            this.markConversationRead(true, `${this.S.activeServer}:${this.S.activeChannel}`);
         }
         this.syncTaskbarBadge();
         this.updateNavModeButtons();

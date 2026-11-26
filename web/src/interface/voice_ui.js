@@ -19,7 +19,10 @@ ZaliMixin(ZaliInterface, class {
         const screen = '<rect x="2" y="3" width="20" height="14" rx="2.5"/><path d="M8 21h8"/><path d="M12 17v4"/>';
         const screenOff = '<path d="M3 3l18 18"/><path d="M20 6.5V6a3 3 0 0 0-3-3H7"/><path d="M2 8v6a3 3 0 0 0 3 3h12"/><path d="M8 21h8"/><path d="M12 17v4"/>';
         const headphones = '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>';
-        const headphonesOff = '<path d="M3 3l18 18"/><path d="M3 12a9 9 0 0 1 1.45-4.9"/><path d="M7.1 4.45A9 9 0 0 1 21 12v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-1"/><path d="M21 14h-3a2 2 0 0 0-2 2"/><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7"/>';
+        // Правая чашка рассечена диагональю: от неё остаются два уголка (верхний правый
+        // и нижний левый) с зазором ≥ 2,2 от оси черты, дуга оголовья обрывается так же.
+        // Раньше обрывки чашки сходились в комок у конца черты.
+        const headphonesOff = '<path d="M3 3l18 18"/><path d="M3 12a9 9 0 0 1 1.13-4.36"/><path d="M7.64 4.13A9 9 0 0 1 21 12v5"/><path d="M21 14h-3"/><path d="M16 19a2 2 0 0 0 2 2"/><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7"/>';
         const gamepad = '<path d="M6 11h4"/><path d="M8 9v4"/><path d="M15 12h.01"/><path d="M18 10h.01"/><path d="M17.3 5H6.7a4 4 0 0 0-4 3.6C2.6 9.4 2 14.5 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.4-1.4a2 2 0 0 1 1.4-.6h4.4a2 2 0 0 1 1.4.6L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.5-.6-6.6-.7-7.3A4 4 0 0 0 17.3 5Z"/>';
         const chevronDown = '<path d="m6 9 6 6 6-6"/>';
         const chevronUp = '<path d="m6 15 6-6 6 6"/>';
@@ -182,7 +185,9 @@ ZaliMixin(ZaliInterface, class {
                     ? `<span class="svm-flag is-off" title="Звук выключен">${this.voiceIcon('headphones-off')}</span>`
                     : (st.muted ? `<span class="svm-flag is-off" title="Микрофон выключен">${this.voiceIcon('mic-off')}</span>` : ''),
             ].join('');
-            return `<div class="sidebar-voice-member" data-peer="${this.esc(key)}" data-name="${this.esc(name)}">
+            // Тянуть можно себя (быстрый переход) и, при праве сервера, других людей.
+            const draggable = key === String(this.myName?.() || '').trim().toLowerCase() || !!server.canMoveMembers;
+            return `<div class="sidebar-voice-member" data-peer="${this.esc(key)}" data-name="${this.esc(name)}"${draggable ? ' draggable="true"' : ''}>
                 ${activity}
                 <span class="svm-ava">${this.renderAvatarHTML(name, 'avatar-img', name)}</span>
                 <span class="svm-name">${this.esc(name)}</span>
@@ -1115,6 +1120,8 @@ ZaliMixin(ZaliInterface, class {
             }
             strip.hidden = !kind;
             if (kind === 'live') this.fillVoiceCallTimers();
+            // Полоса обновления делит с ней место и уступает.
+            this.renderUpdateStrip?.();
         };
         // Звонящий входящий занимает полосу везде — в том числе поверх
         // голосового канала, где пользователь скорее всего и находится.
