@@ -501,6 +501,7 @@ final class MediaController {
         let viewHeight = (options["height"] as? NSNumber)?.intValue ?? 720
         // 0 — частота экрана запустившего.
         let fps = (options["fps"] as? NSNumber)?.intValue ?? 0
+        let scale = (options["scale"] as? NSNumber)?.doubleValue ?? 1
         let browser = SharedBrowser(stream: stream, bridge: bridge)
         browser.onState = { [weak self] state in
             var payload = state
@@ -522,7 +523,7 @@ final class MediaController {
         ensureStatsTimer()
         DispatchQueue.main.async { [self] in
             do {
-                try browser.start(url: url, profile: profile, cookies: cookies, viewWidth: viewWidth, viewHeight: viewHeight, fps: fps)
+                try browser.start(url: url, profile: profile, cookies: cookies, viewWidth: viewWidth, viewHeight: viewHeight, fps: fps, scale: scale)
                 browsersOnMain[stream] = browser
                 queue.async { self.failIfNoFrame(stream: stream, requestId: requestId, sender: browser.sender, seconds: 15) }
             } catch {

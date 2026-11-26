@@ -465,6 +465,9 @@ mod imp {
         pub cookies: Vec<Value>,
         pub width: u32,
         pub height: u32,
+        /// Пикселей кадра на CSS-пиксель (1…2): вьюпорт страницы остаётся width×height,
+        /// а окно и кадр — в `scale` раз крупнее (1280×720 × 1,5 = 1080p, чёткий текст).
+        pub scale: f64,
         pub fps: u64,
     }
 
@@ -513,6 +516,8 @@ mod imp {
         core: ICoreWebView2,
         width: f64,
         height: f64,
+        /// Высота окна (и кадра) в пикселях: CSS-высота × scale.
+        pixel_height: u32,
         input: InputState,
         temp_dir: Option<PathBuf>,
         inputs: u64,
@@ -576,8 +581,11 @@ mod imp {
         }
 
         fn open(&mut self, request: OpenRequest) {
-            let OpenRequest { ctx, url, profile, cookies, width, height, fps } = request;
+            let OpenRequest { ctx, url, profile, cookies, width, height, scale, fps } = request;
             let stream = ctx.stream;
+            // Страница заводит приёмник звука только с `audio` (флаг nativeSharedBrowserAudio);
+            // без него кадры звука выбросились бы — тогда и не снимаем.
+            let request_audio = ctx.options.get("audio").and_then(Value::as_bool).unwrap_or(false);
             if ctx.stopped() {
                 return;
             }
@@ -589,21 +597,23 @@ mod imp {
                 ctx.fail("failed", "недопустимый адрес");
                 return;
             }
-            match build(&ctx, stream, &url, &profile, &cookies, width, height) {
+            match build(&ctx, stream, &url, &profile, &cookies, width, height, scale) {
                 Ok(browser) => {
                     let hwnd = browser.hwnd.0 as isize;
+                    // Захват — в пикселях окна (CSS × scale), а не во вьюпорте страницы.
+                    let pixel_height = browser.pixel_height;
                     mark_browser_stream(stream);
                     self.open.insert(stream, browser);
                     // Кадры — обычный захват окна (screen.rs) без курсора. Звук — process
                     // loopback только по дереву процессов этого WebView2 (screen.rs, `audioPid`):
                     // «весь звук системы минус мессенджер» сюда не годится — браузер
                     // как раз часть мессенджера, и участники его не слышали. Без pid — без звука.
-                    let audio_pid = self.open.get(&stream).and_then(|b| b.pid);
+                    let audio_pid = if request_audio { self.open.get(&stream).and_then(|b| b.pid) } else { None };
                     let mut capture = ctx.clone();
                     capture.source_id = format!("window:{hwnd}");
                     capture.options = match audio_pid {
-                        Some(pid) => json!({ "fps": fps, "maxHeight": height, "audio": true, "audioPid": pid, "cursor": false }),
-                        None => json!({ "fps": fps, "maxHeight": height, "audio": false, "cursor": false }),
+                        Some(pid) => json!({ "fps": fps, "maxHeight": pixel_height, "audio": true, "audioPid": pid, "cursor": false }),
+                        None => json!({ "fps": fps, "maxHeight": pixel_height, "audio": false, "cursor": false }),
                     };
                     let spawned = std::thread::Builder::new()
                         .name("zali-media-browser".into())
@@ -713,9 +723,17 @@ mod imp {
         cookies: &[Value],
         width: u32,
         height: u32,
+        scale: f64,
     ) -> Result<Browser, String> {
         let width = width.clamp(640, 1920) & !1;
         let height = height.clamp(360, 1080) & !1;
+        // Кадр не больше 1920×1080: больше бюджет WebRTC всё равно не вывезет.
+        let scale = if scale.is_finite() { scale.clamp(1.0, 2.0) } else { 1.0 }
+            .min(1920.0 / width as f64)
+            .min(1080.0 / height as f64)
+            .max(1.0);
+        let pixel_width = ((width as f64 * scale).round() as u32) & !1;
+        let pixel_height = ((height as f64 * scale).round() as u32) & !1;
         let community = profile == "community";
         let root = profiles_root();
         if community {
@@ -727,7 +745,7 @@ mod imp {
             root.join("own")
         };
         std::fs::create_dir_all(&dir).map_err(|e| format!("каталог профиля: {e}"))?;
-        let hwnd = create_window(width, height)?;
+        let hwnd = create_window(pixel_width, pixel_height)?;
         let raw = RawHwnd(hwnd.0 as isize);
         let mut context = WebContext::new(Some(dir.clone()));
         let proxy = ctx.events.proxy().clone();
@@ -741,6 +759,7 @@ mod imp {
             .with_additional_browser_args(
                 "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
                  --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
+                 --disable-smooth-scrolling \
                  --autoplay-policy=no-user-gesture-required",
             )
             .with_navigation_handler(|url| allows_navigation(&url))
@@ -763,7 +782,7 @@ mod imp {
                 return Err(format!("WebView2: {error}"));
             }
         };
-        let core = match configure(&webview, ctx.events.clone(), stream) {
+        let core = match configure(&webview, ctx.events.clone(), stream, scale) {
             Ok(core) => core,
             Err(error) => {
                 drop(webview);
@@ -806,6 +825,7 @@ mod imp {
             core,
             width: width as f64,
             height: height as f64,
+            pixel_height,
             input: InputState::default(),
             temp_dir: community.then_some(dir),
             inputs: 0,
@@ -814,14 +834,15 @@ mod imp {
     }
 
     /// Настройки, запреты и события состояния. Возвращает ICoreWebView2.
-    fn configure(webview: &WebView, events: EventSink, stream: u32) -> windows052::core::Result<ICoreWebView2> {
+    fn configure(webview: &WebView, events: EventSink, stream: u32, scale: f64) -> windows052::core::Result<ICoreWebView2> {
         unsafe {
             let controller = webview.controller();
             let _ = controller.SetIsVisible(true);
             if let Ok(c3) = controller.cast::<ICoreWebView2Controller3>() {
-                // CSS-пиксели = пиксели окна при любом масштабе экрана.
+                // CSS-пиксель = `scale` пикселей окна при любом масштабе экрана: вьюпорт
+                // страницы прежний, кадр крупнее и чётче.
                 let _ = c3.SetShouldDetectMonitorScaleChanges(false);
-                let _ = c3.SetRasterizationScale(1.0);
+                let _ = c3.SetRasterizationScale(scale);
             }
             let core = controller.CoreWebView2()?;
             let settings = core.Settings()?;

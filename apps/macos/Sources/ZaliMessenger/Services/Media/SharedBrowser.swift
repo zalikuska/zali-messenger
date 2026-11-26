@@ -114,16 +114,20 @@ final class SharedBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     // MARK: - Запуск
 
     /// Только с главного потока. `cookies` — для «community» (и «own» на macOS 13 — из файла).
-    func start(url: URL, profile: String, cookies: [[String: Any]], viewWidth: Int, viewHeight: Int, fps: Int) throws {
+    /// `scale` — пикселей кадра на точку вьюпорта (1…2): страница видит viewWidth×viewHeight,
+    /// а кадр в `scale` раз крупнее (1280×720 × 1,5 = 1080p — чёткий текст у участников).
+    func start(url: URL, profile: String, cookies: [[String: Any]], viewWidth: Int, viewHeight: Int, fps: Int, scale: Double = 1) throws {
         dispatchPrecondition(condition: .onQueue(.main))
         self.profile = profile == "community" ? "community" : "own"
         self.fps = fps > 0 ? max(5, min(fps, 240)) : Self.displayRefreshRate()
         let w = max(640, min(viewWidth, 1920)) & ~1
         let h = max(360, min(viewHeight, 1080)) & ~1
-        width = w
-        height = h
+        // Кадр не больше 1920×1080: больше бюджет WebRTC всё равно не вывезет.
+        let k = max(1, min(scale.isFinite ? scale : 1, 2, 1920 / Double(w), 1080 / Double(h)))
+        width = Int((Double(w) * k).rounded()) & ~1
+        height = Int((Double(h) * k).rounded()) & ~1
         // Выше 60 к/с — тот же битрейт, что на 60: кадры чаще, но каждый меньше меняется.
-        let encoder = try H264Encoder(width: w, height: h, fps: self.fps, bitsPerPixel: 0.12 * min(1, 60 / Double(self.fps)))
+        let encoder = try H264Encoder(width: width, height: height, fps: self.fps, bitsPerPixel: 0.12 * min(1, 60 / Double(self.fps)))
         self.encoder = encoder
         sender.encoder = encoder
         encoder.onOutput = { [weak self] out in self?.sender.deliver(out) }
@@ -187,7 +191,7 @@ final class SharedBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             webView.load(URLRequest(url: url))
             self.startFrames()
         }
-        mediaLog("browser: started stream=\(stream) \(w)x\(h)@\(self.fps) profile=\(self.profile) cookies=\(seed.count)")
+        mediaLog("browser: started stream=\(stream) \(w)x\(h)→\(width)x\(height)@\(self.fps) profile=\(self.profile) cookies=\(seed.count)")
     }
 
     /// Частота экрана, на который смотрит запустивший (ProMotion — до 120), в пределах 30…240.
@@ -418,6 +422,10 @@ final class SharedBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             // «экранную» точку, равную точке в окне (ось Y у CG — сверху вниз).
             let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
             cg.location = CGPoint(x: p.x, y: primaryHeight - p.y)
+            // Непрерывная прокрутка (как тачпад): точные пиксельные дельты без анимации
+            // «колеса». Дискретное колесо WebKit плавно доводит каждое событие, и частые
+            // мелкие события участника превращались в тягучую, «сопротивляющуюся» прокрутку.
+            cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
             if let ev = NSEvent(cgEvent: cg) { webView.scrollWheel(with: ev) }
         case "key":
             guard let code = e["code"] as? String, let keyCode = RemoteControl.keyCodes[code] else { return }

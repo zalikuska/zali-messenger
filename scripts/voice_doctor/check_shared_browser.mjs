@@ -163,7 +163,10 @@ console.log('\n== запуск с профилем сообщества ==');
 
 console.log('\n== частота экрана и отправка в звонок ==');
 {
-    record('частоту выбирает оболочка (fps: 0 — по экрану запустившего)', alice.lastShare?.browser?.fps === 0);
+    // 60 к/с, а не частота экрана запустившего: 1080p на 120–240 Гц кодировщик WebRTC
+    // не вывозил — копилась задержка (0.2b84). Кадр в 1,5 раза крупнее вьюпорта.
+    record('частота 60 к/с, кадр 1080p при вьюпорте 720p', alice.lastShare?.browser?.fps === 60
+        && alice.lastShare?.browser?.scale === 1.5 && alice.lastShare?.browser?.height === 720);
     const sender = { params: { encodings: [{}] }, getParameters() { return JSON.parse(JSON.stringify(this.params)); }, async setParameters(p) { this.params = p; } };
     alice.voice.screenFps = 120;
     await alice.applyVoiceVideoBitrateLimit(sender, 'screen');

@@ -735,7 +735,9 @@ ZaliMixin(ZaliInterface, class {
             if (choice.browser) {
                 // «Общий браузер» (shared_browser.js): кадры — со скрытого встроенного
                 // браузера оболочки, а не с экрана; звук страниц Windows забирает сама оболочка
-                // (process loopback по дереву WebView2), на macOS звука пока нет.
+                // (process loopback по дереву WebView2) и шлёт тем же потоком (options.audio),
+                // на macOS звука пока нет: голоса звонка и страница браузера играют в одном
+                // GPU-процессе WebKit — тапом их не разделить.
                 stream = await this.openNativeMediaStream({
                     kind: 'browser',
                     options: choice.browser,

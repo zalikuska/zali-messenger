@@ -685,7 +685,10 @@ ZaliMixin(ZaliInterface, class {
         const firstFramePromise = new Promise((resolve) => { firstFrame = resolve; });
         const trace = (stage, details, level) => this.voiceDiag?.(stage, { stream, kind, ...details }, level);
         const entry = { stream, kind, codec: '', label: '', ended: false, audio: null, video: null, tracks: [], info: null };
-        const wantsAudio = kind === 'mic' || (kind === 'screen' && !!options.audio);
+        // Общий браузер: звук его страниц оболочка шлёт тем же потоком (Windows — process
+        // loopback по дереву WebView2). Без приёмника кадры звука выбрасывались, и звук
+        // браузера слышал только запустивший — из своих динамиков.
+        const wantsAudio = kind === 'mic' || ((kind === 'screen' || kind === 'browser') && !!options.audio);
         const wantsVideo = kind === 'camera' || kind === 'screen' || kind === 'browser';
         if (wantsAudio) entry.audio = new ZaliNativeAudioSink(kind === 'mic' ? firstFrame : null);
         if (wantsVideo) {

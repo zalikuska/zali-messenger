@@ -30,8 +30,12 @@ ZaliMixin(ZaliInterface, class {
 
     static get SB_VIEW_WIDTH() { return 1280; }
     static get SB_VIEW_HEIGHT() { return 720; }
-    // 0 — частота экрана запустившего (60/120/144 Гц): её выбирает оболочка.
-    static get SB_FPS() { return 0; }
+    // Кадр в 1,5 раза крупнее вьюпорта: страница видит 1280×720 (вёрстка не мельчает),
+    // а участникам идёт 1920×1080 с чётким текстом (было 1:1 — мыльные 720p).
+    static get SB_RENDER_SCALE() { return 1.5; }
+    // 60 к/с. Было 0 — частота экрана запустившего (120/144/240 Гц): кодировщик WebRTC
+    // не успевал за 1080p на такой частоте, картинка копила задержку и дёргалась.
+    static get SB_FPS() { return 60; }
     static get SB_CURSOR_BROADCAST_MS() { return 50; }
     // Курсор неподвижного человека не должен пропадать через пару секунд: «idle»
     // его лишь приглушает, а убирает только долгое молчание или `leave`.
@@ -349,8 +353,11 @@ ZaliMixin(ZaliInterface, class {
                     width: ZaliInterface.SB_VIEW_WIDTH,
                     height: ZaliInterface.SB_VIEW_HEIGHT,
                     fps: ZaliInterface.SB_FPS,
+                    scale: ZaliInterface.SB_RENDER_SCALE,
+                    // Звук страниц участникам — где оболочка умеет его снять (Windows).
+                    audio: !!this.nativeSupports?.('nativeSharedBrowserAudio'),
                 },
-                height: ZaliInterface.SB_VIEW_HEIGHT,
+                height: Math.round(ZaliInterface.SB_VIEW_HEIGHT * ZaliInterface.SB_RENDER_SCALE),
                 audio: 0,
             });
             if (!callAlive()) {
@@ -947,14 +954,40 @@ ZaliMixin(ZaliInterface, class {
             // т.п. — не для гостей), поэтому ПКМ дополнительно открывает наше короткое меню.
             this.showSharedBrowserContextMenu(own, event.clientX, event.clientY, media);
         });
+        // Прокрутка: события колеса копятся и уходят одним на кадр анимации, дробный
+        // остаток переносится в следующий. Раньше каждое мелкое событие тачпада шло
+        // отдельно (до сотен в секунду), дельты меньше пикселя округлялись в ноль, а
+        // запустивший на каждое событие запускал плавную прокрутку движка — страница
+        // «сопротивлялась». Дельта переводится в пиксели страницы: кадр у участника
+        // обычно уменьшен, и без этого страница ехала медленнее пальца.
         media.addEventListener('wheel', (event) => {
             if (!guard(event)) return;
             const own = owner();
             if (!mayControl(own)) return;
             const p = point(event);
             if (!p) return;
-            const k = event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? 400 : 1);
-            this.sendSharedBrowserInput(own, { t: 'wheel', x: p.cx, y: p.cy, dx: Math.round(event.deltaX * k), dy: Math.round(event.deltaY * k) });
+            const v = video();
+            const rect = v?.getBoundingClientRect?.();
+            const shown = v?.videoWidth && rect?.width && rect?.height
+                ? Math.min(rect.width / v.videoWidth, rect.height / v.videoHeight) * v.videoWidth
+                : 0;
+            const ratio = shown > 0 ? Math.max(0.5, Math.min(4, ZaliInterface.SB_VIEW_WIDTH / shown)) : 1;
+            const k = (event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? 400 : 1)) * ratio;
+            const wheel = sb.local.wheel || (sb.local.wheel = { owner: null, x: 0, y: 0, dx: 0, dy: 0, frame: 0 });
+            if (wheel.owner !== own) { wheel.dx = 0; wheel.dy = 0; }
+            wheel.owner = own;
+            wheel.x = p.cx;
+            wheel.y = p.cy;
+            wheel.dx += event.deltaX * k;
+            wheel.dy += event.deltaY * k;
+            if (wheel.frame) return;
+            wheel.frame = requestAnimationFrame(() => {
+                wheel.frame = 0;
+                const dx = Math.trunc(wheel.dx), dy = Math.trunc(wheel.dy);
+                wheel.dx -= dx;
+                wheel.dy -= dy;
+                if (dx || dy) this.sendSharedBrowserInput(wheel.owner, { t: 'wheel', x: wheel.x, y: wheel.y, dx, dy });
+            });
         }, { passive: false });
     }
 

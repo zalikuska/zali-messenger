@@ -335,6 +335,7 @@ fn start(request: MediaRequest, events: EventSink) {
                 cookies: ctx.options.get("cookies").and_then(Value::as_array).cloned().unwrap_or_default(),
                 width: opt("width", 1280) as u32,
                 height: opt("height", 720) as u32,
+                scale: ctx.options.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
                 // 0 — частота экрана запустившего (до 240).
                 fps: match opt("fps", 0) {
                     0 => shared_browser::display_refresh_rate(),

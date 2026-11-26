@@ -59,7 +59,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b83";
+const APP_DISPLAY_VERSION: &str = "0.2b84";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -375,6 +375,9 @@ struct NativeCapabilities {
     native_remote_control: bool,
     /// «Общий браузер» — скрытый WebView2 (native/media/shared_browser.rs).
     native_shared_browser: bool,
+    /// Звук его страниц участникам: process loopback по дереву процессов этого WebView2
+    /// тем же потоком (screen.rs, `audioPid`). Без флага страница не заводит приёмник звука.
+    native_shared_browser_audio: bool,
     /// Скрытые приложения в трансляции (native/media/privacy.rs), глобальные горячие
     /// клавиши звонка и плашки поверх окон вне захвата (native/media/desktop_ui.rs).
     native_screen_privacy: bool,
@@ -421,6 +424,7 @@ impl Default for NativeCapabilities {
             native_sfu_screen: media::NATIVE_MEDIA,
             native_remote_control: media::NATIVE_MEDIA,
             native_shared_browser: media::NATIVE_MEDIA,
+            native_shared_browser_audio: media::NATIVE_MEDIA,
             native_screen_privacy: media::NATIVE_MEDIA,
             native_hotkeys: media::NATIVE_MEDIA,
             native_overlay: media::NATIVE_MEDIA,
