@@ -325,6 +325,37 @@ ZaliMixin(ZaliInterface, class {
         return !this.hasNativeBridge();
     }
 
+    // Однократная чистка локальной истории, которой нет в текущем аккаунте на
+    // сервере: записи serverChats для серверов, где аккаунт уже не состоит, и
+    // старый общий ключ zali_message_cache_v1 из эпохи до разделения по аккаунтам.
+    // Вызывать ТОЛЬКО после успешной загрузки списка серверов: при сетевой ошибке
+    // список пуст, и чистка стёрла бы всю историю серверов.
+    purgeForeignServerHistory() {
+        const flagKey = `zali_foreign_history_purged_v1${this._userSuffix()}`;
+        try {
+            if (localStorage.getItem(flagKey)) return 0;
+        } catch (e) {
+            return 0;
+        }
+        const allowed = new Set((this.S.servers || []).map(server => String(server.id)));
+        let removed = 0;
+        for (const key of Object.keys(this.S.serverChats || {})) {
+            const serverId = key.split(':')[0];
+            if (!allowed.has(serverId)) {
+                delete this.S.serverChats[key];
+                removed += 1;
+            }
+        }
+        try {
+            localStorage.removeItem('zali_message_cache_v1');
+        } catch (e) { /* без хранилища нечего чистить */ }
+        if (removed) this.saveStoredMessageCache();
+        try {
+            localStorage.setItem(flagKey, '1');
+        } catch (e) { /* без флага чистка повторится — это безопасно */ }
+        return removed;
+    }
+
     saveStoredMessageCache() {
         const sanitizeMessages = (store) => Object.fromEntries(Object.entries(store || {}).map(([key, msgs]) => [
             key,

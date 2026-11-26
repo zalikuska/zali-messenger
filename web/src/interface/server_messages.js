@@ -154,6 +154,7 @@ ZaliMixin(ZaliInterface, class {
             }
             const data = await res.json();
             this.S.servers = this.normalizeServers(Array.isArray(data?.servers) ? data.servers : []);
+            this.purgeForeignServerHistory();
             this.ensureServerSelection();
             this.renderContacts();
             this.renderServerInterface();
