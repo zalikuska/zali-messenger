@@ -44,7 +44,7 @@ pub(crate) const MAX_BODY_BYTES: usize = MAX_IMAGES * MAX_IMAGE_BYTES * 4 / 3 + 
 /// диагностику» (diagnostics.rs: 256 КиБ), без переписки и ключей.
 pub(crate) const MAX_LOG_BYTES: usize = 256 * 1024;
 /// Сообщений в час с одного аккаунта. Больше — это уже не баги, а спам.
-const MAX_REPORTS_PER_HOUR: usize = 5;
+const MAX_REPORTS_PER_HOUR: usize = 100;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct BugImage {
