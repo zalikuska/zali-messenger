@@ -435,3 +435,42 @@ fn plaintext_archive_is_rejected_when_a_key_is_expected() {
     let session = ZaliSession::new(Some("k"), Some(b"ZALIMSSG"));
     assert!(session.extract_all_bytes(&crafted_header(0, 4)).is_err());
 }
+
+/// Заголовок зашифрованного архива: magic(8) + версия(1) + "ZALI"(1+4) +
+/// "messenger"(1+9) + флаги(1) + число файлов(4) = 29, дальше соль(16) и nonce(12).
+const SALT_AT: usize = 29;
+const NONCE_AT: usize = SALT_AT + 16;
+
+#[test]
+fn archives_under_one_key_share_salt_but_never_nonce() {
+    // kdf.rs: соль одна на ключ, чтобы PBKDF2 выводился один раз, а не на каждое
+    // сообщение. Повтор ключа AES допустим только при свежем nonce на каждый архив.
+    let sdk = ZaliSession::new(Some("salt-reuse-key"), Some(b"ZALIMSSG"));
+    let a = sdk
+        .create_archive_bytes(vec![("m.json".to_string(), b"one".to_vec())])
+        .unwrap();
+    let b = sdk
+        .create_archive_bytes(vec![("m.json".to_string(), b"two".to_vec())])
+        .unwrap();
+    assert_eq!(a[SALT_AT..NONCE_AT], b[SALT_AT..NONCE_AT], "salt must be reused per key");
+    assert_ne!(a[NONCE_AT..NONCE_AT + 12], b[NONCE_AT..NONCE_AT + 12], "nonce must be fresh per archive");
+    let other = ZaliSession::new(Some("another-key"), Some(b"ZALIMSSG"))
+        .create_archive_bytes(vec![("m.json".to_string(), b"x".to_vec())])
+        .unwrap();
+    assert_ne!(a[SALT_AT..NONCE_AT], other[SALT_AT..NONCE_AT]);
+    assert_eq!(sdk.extract_all_bytes(&b).unwrap()[0].1, b"two");
+}
+
+#[test]
+fn archive_key_is_derived_from_header_salt() {
+    // Архивы старых клиентов (случайная соль на каждый): кэш выводит ключ по соли из
+    // заголовка, а не по своей.
+    let sdk = ZaliSession::new(Some("legacy-salt-key"), Some(b"ZALIMSSG"));
+    let mut archive = sdk
+        .create_archive_bytes(vec![("m.json".to_string(), b"legacy".to_vec())])
+        .unwrap();
+    // Переупаковка «чужой» солью невозможна без пароля, поэтому проверяем обратное:
+    // подмена соли в заголовке ломает аутентификацию, т.е. ключ берётся из заголовка.
+    archive[SALT_AT] ^= 0xFF;
+    assert!(matches!(sdk.extract_all_bytes(&archive), Err(ZaliError::AuthFailed)));
+}

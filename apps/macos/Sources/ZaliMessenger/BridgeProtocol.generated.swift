@@ -29,6 +29,7 @@ enum BridgeProtocolMessageType: String, CaseIterable {
     case networkConfig = "NETWORK_CONFIG"
     case openExternalUrl = "OPEN_EXTERNAL_URL"
     case persistDeviceIdentity = "PERSIST_DEVICE_IDENTITY"
+    case pickDownloadFolderRequest = "PICK_DOWNLOAD_FOLDER_REQUEST"
     case refreshHistory = "REFRESH_HISTORY"
     case removeContactRequest = "REMOVE_CONTACT_REQUEST"
     case resolveTenor = "RESOLVE_TENOR"

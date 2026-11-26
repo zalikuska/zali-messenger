@@ -492,7 +492,7 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
-    async downloadAttachmentFromHref(href, filename) {
+    async downloadAttachmentFromHref(href, filename, { anchor = null } = {}) {
         const source = String(href || '').trim();
         const safeName = String(filename || 'attachment').trim() || 'attachment';
         if (!source) return false;
@@ -506,12 +506,8 @@ ZaliMixin(ZaliInterface, class {
             ? source
             : (this._attachmentBlobPayloads?.get(source) || '');
         if (this.nativeSupports('downloadAttachment') && nativePayload) {
-            this.postNativeMessage({
-                type: NativeMessageTypes.DOWNLOAD_ATTACHMENT,
-                dataUrl: nativePayload,
-                filename: safeName,
-            });
-            return true;
+            // Режим и папка из настроек, окно «Сохранить как…», анимация — downloads.js.
+            return await this.nativeDownloadAttachment(nativePayload, safeName, anchor);
         }
 
         let objectUrl = source;
@@ -553,6 +549,8 @@ ZaliMixin(ZaliInterface, class {
                 }, 1000);
             }
 
+            // Браузер сам решает, куда сохранить; анимация — подтверждение клика.
+            this.playDownloadFx?.(anchor);
             return true;
         } catch (error) {
             console.error('Failed to download attachment', error);

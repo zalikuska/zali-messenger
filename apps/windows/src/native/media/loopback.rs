@@ -15,7 +15,8 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
-    IAudioCaptureClient, IAudioClient, IMMDevice, AUDCLNT_SHAREMODE_SHARED,
+    IAudioCaptureClient, IAudioClient, IAudioClient2, IMMDevice, AudioCategory_Other, AudioClientProperties,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMOPTIONS_RAW,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
     PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
@@ -65,6 +66,8 @@ pub struct WasapiCapture {
     event: HANDLE,
     format: SampleFormat,
     pub channels: usize,
+    /// Микрофон открыт в режиме RAW (мимо обработки драйвера).
+    pub raw: bool,
 }
 
 // Объекты созданы в MTA и живут в одном потоке захвата; переносятся между потоками
@@ -76,10 +79,24 @@ impl WasapiCapture {
     pub fn open_endpoint(device: &IMMDevice, channels: u16, loopback: bool) -> Result<Self> {
         let extra = if loopback { STREAMFLAGS_LOOPBACK } else { 0 };
         let mut last = None;
+        // Микрофон — сначала в режиме RAW: мимо «улучшений» драйвера (Realtek и т. п.:
+        // своя AGC, ограничитель, шумодав, иногда своё эхоподавление). Живой звонок
+        // 2026-11-26 (Windows, Realtek): пик микрофона упирался в ровный потолок 0.994 в 15 %
+        // десятисекундных окон — ограничитель драйвера, а на пережатом и нелинейном сигнале
+        // наш AEC3 эхо не вычитает: собеседник слышал шортсы из динамиков. Устройство без
+        // RAW отказывает в SetClientProperties — тогда как раньше.
+        let raw_modes: &[bool] = if loopback { &[false] } else { &[true, false] };
+        for &raw in raw_modes {
         for format in [SampleFormat::F32, SampleFormat::I16] {
             let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
+            if raw && !Self::set_raw(&client) {
+                break;
+            }
             match Self::init(client, format, channels, extra) {
-                Ok(capture) => return Ok(capture),
+                Ok(mut capture) => {
+                    capture.raw = raw;
+                    return Ok(capture);
+                }
                 Err(error) => {
                     // Нет доступа или устройства — вторая попытка не поможет.
                     if matches!(super::format::error_code_for_hresult(error.code().0), "permission" | "not_found" | "busy") {
@@ -89,7 +106,20 @@ impl WasapiCapture {
                 }
             }
         }
+        }
         Err(last.unwrap_or_else(windows::core::Error::empty))
+    }
+
+    fn set_raw(client: &IAudioClient) -> bool {
+        let Ok(client2) = client.cast::<IAudioClient2>() else { return false };
+        // Категория Other: Communications включила бы приглушение остальных приложений.
+        let props = AudioClientProperties {
+            cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
+            bIsOffload: false.into(),
+            eCategory: AudioCategory_Other,
+            Options: AUDCLNT_STREAMOPTIONS_RAW,
+        };
+        unsafe { client2.SetClientProperties(&props).is_ok() }
     }
 
     /// Звук всей системы, кроме дерева процессов этого приложения (сам клиент и его
@@ -138,7 +168,7 @@ impl WasapiCapture {
                     return Err(error);
                 }
             };
-            Ok(Self { capture, client, event, format, channels: channels as usize })
+            Ok(Self { capture, client, event, format, channels: channels as usize, raw: false })
         }
     }
 

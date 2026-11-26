@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{fake_zali_bytes, register_user, spawn_app, RegisteredUser, TestApp};
+use common::{fake_zali_bytes, register_user, spawn_app, spawn_app_with_admin_token, RegisteredUser, TestApp};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -550,4 +550,47 @@ async fn history_inlines_small_archives_only_when_asked() {
             .unwrap();
         assert_eq!(bytes, downloaded.to_vec(), "inlined bytes are the archive itself");
     }
+}
+
+/// Публикация релиза доходит до подключённых клиентов по сокету сразу — верхняя
+/// строка показывает «Доступно обновление» без перезахода. Событие несёт только
+/// платформу/канал/версию: ссылку и подпись клиент берёт из /api/version.
+#[tokio::test]
+async fn published_release_is_pushed_to_connected_clients() {
+    let app = spawn_app_with_admin_token("release-token").await;
+    let alice = register_user(&app, "alice", "hunter22").await;
+    let mut ws = connect_ws(&app, &alice).await;
+
+    let res = app
+        .http
+        .post(app.url("/api/version"))
+        .header("Authorization", "Bearer release-token")
+        .json(&serde_json::json!({
+            "platform": "windows",
+            "version": "0.2b99",
+            "notes": "test",
+            "downloadUrl": "https://example.invalid/ZaliMessenger-0.2b99.exe",
+            "sha256": "0".repeat(64),
+        }))
+        .send()
+        .await
+        .expect("publish request");
+    assert_eq!(res.status(), 204);
+
+    let value = loop {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+            .await
+            .expect("timed out waiting for app_release")
+            .expect("stream ended")
+            .expect("ws error");
+        let WsMessage::Text(text) = frame else { continue };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if value["type"] == "app_release" {
+            break value;
+        }
+    };
+    assert_eq!(value["platform"], "windows");
+    assert_eq!(value["channel"], "b");
+    assert_eq!(value["version"], "0.2b99");
+    assert!(value.get("downloadUrl").is_none(), "ссылка не должна уходить в событии");
 }

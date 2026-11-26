@@ -69,7 +69,16 @@
     "DOWNLOAD_ATTACHMENT": {
       "fields": [
         "dataUrl",
-        "filename"
+        "filename",
+        "requestId",
+        "mode",
+        "folder"
+      ]
+    },
+    "PICK_DOWNLOAD_FOLDER_REQUEST": {
+      "fields": [
+        "requestId",
+        "current"
       ]
     },
     "OPEN_EXTERNAL_URL": {

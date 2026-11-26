@@ -206,8 +206,8 @@ object MessageNotifier {
         alertAgain: Boolean,
         avatar: android.graphics.Bitmap?,
     ) {
-        val titleSender = sender.ifEmpty { "Zali Messenger" }
-        val title = if (serverId == null && channelId == null) titleSender else "$titleSender в канале"
+        // Заголовок — только отправитель: пометка «в канале» была неясна пользователю.
+        val title = sender.ifEmpty { "Zali Messenger" }
         // Нажатие ведёт в переписку уведомления (MainActivity.consumeNotificationIntent).
         val intent = Intent(appContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP

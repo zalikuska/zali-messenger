@@ -64,6 +64,21 @@ class PushMessagingService : FirebaseMessagingService() {
         // Пока расшифровывали, сообщение могло прийти по сокету и уже быть показано.
         if (!alertAgain && MessageNotifier.isShowing(applicationContext, messageId)) return
 
+        // Текст сохраняем до показа: когда приложение откроют, веб получит сообщение сразу,
+        // а не после переподключения сокета (PendingPush.kt). Вложения и звонки — не сюда.
+        if (payload != null && payload.attachments.isEmpty() && messageId.isNotEmpty()) {
+            PendingPush.add(applicationContext, session.username, JSONObject().apply {
+                put("id", messageId)
+                put("sender", sender.ifEmpty { payload.sender })
+                put("receiver", recipient)
+                put("text", payload.text)
+                put("attachments", org.json.JSONArray())
+                payload.reply?.let { put("reply", it) }
+                serverId?.let { put("serverId", it) }
+                channelId?.let { put("channelId", it) }
+            })
+        }
+
         MessageNotifier.show(
             context = applicationContext,
             sender = payload?.sender?.ifEmpty { null } ?: sender,

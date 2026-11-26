@@ -12,9 +12,7 @@
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
-use sha2::Sha256;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +22,10 @@ const MAGIC: &[u8; 8] = b"ZALIARCH";
 const PROTOCOL_VERSION: u8 = 1;
 const CHUNK_SIZE: usize = 1024 * 1024;
 const PBKDF2_ITERS: u32 = 210_000;
+/// Назначение соли архива в kdf.rs: у текста внутри архива своя (тот же пароль).
+const ARCHIVE_SALT_DOMAIN: &str = "zali-archive-v1";
+
+pub mod kdf;
 
 /// Ошибки, которые может вернуть SDK.
 #[derive(Error, Debug)]
@@ -110,12 +112,13 @@ impl ZaliSession {
         let mut key = [0u8; 32];
         let mut base_nonce = [0u8; 12];
         if let Some(pwd) = &self.password {
-            let mut salt = [0u8; 16];
-            rand::thread_rng().fill_bytes(&mut salt);
+            // Соль одна на пароль до конца процесса — ключ выводится один раз
+            // (kdf.rs). Nonce по-прежнему случайный на каждый архив.
+            let salt = kdf::writer_salt(ARCHIVE_SALT_DOMAIN, pwd);
             out.write_all(&salt)?;
             rand::thread_rng().fill_bytes(&mut base_nonce);
             out.write_all(&base_nonce)?;
-            pbkdf2_hmac::<Sha256>(pwd.as_bytes(), &salt, PBKDF2_ITERS, &mut key);
+            key = kdf::derive_key(pwd, &salt, PBKDF2_ITERS);
         }
 
         let mut chunk_idx: u32 = 1;
@@ -199,7 +202,7 @@ impl ZaliSession {
             let mut salt = [0u8; 16];
             cur.read_exact(&mut salt)?;
             cur.read_exact(&mut base_nonce)?;
-            pbkdf2_hmac::<Sha256>(pwd.as_bytes(), &salt, PBKDF2_ITERS, &mut key);
+            key = kdf::derive_key(pwd, &salt, PBKDF2_ITERS);
         }
 
         let mut chunk_idx: u32 = 1;
@@ -353,12 +356,13 @@ impl ZaliSession {
         let mut key = [0u8; 32];
         let mut base_nonce = [0u8; 12];
         if let Some(pwd) = &self.password {
-            let mut salt = [0u8; 16];
-            rand::thread_rng().fill_bytes(&mut salt);
+            // Соль одна на пароль до конца процесса — ключ выводится один раз
+            // (kdf.rs). Nonce по-прежнему случайный на каждый архив.
+            let salt = kdf::writer_salt(ARCHIVE_SALT_DOMAIN, pwd);
             out.write_all(&salt)?;
             rand::thread_rng().fill_bytes(&mut base_nonce);
             out.write_all(&base_nonce)?;
-            pbkdf2_hmac::<Sha256>(pwd.as_bytes(), &salt, PBKDF2_ITERS, &mut key);
+            key = kdf::derive_key(pwd, &salt, PBKDF2_ITERS);
         }
 
         let mut chunk_idx: u32 = 1;
@@ -452,7 +456,7 @@ impl ZaliSession {
             let mut salt = [0u8; 16];
             in_file.read_exact(&mut salt)?;
             in_file.read_exact(&mut base_nonce)?;
-            pbkdf2_hmac::<Sha256>(pwd.as_bytes(), &salt, PBKDF2_ITERS, &mut key);
+            key = kdf::derive_key(pwd, &salt, PBKDF2_ITERS);
         }
 
         let out_base = PathBuf::from(output_dir);

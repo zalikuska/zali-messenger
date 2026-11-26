@@ -85,6 +85,13 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Сервер опубликовал новую сборку (server/src/updates.rs::publish_version):
+        // ярлык «Доступно обновление» в верхней строке появляется сразу.
+        if (type === 'app_release') {
+            this.handleAppReleaseRealtime(payload);
+            return true;
+        }
+
         // Модерация (server/src/moderation.rs): изменилось состояние аккаунта или
         // решение по вашей жалобе — раздел «Поддержка» и плашка над полем ввода.
         if (type === 'moderation_standing' || type === 'moderation_report_update') {
@@ -556,6 +563,9 @@ ZaliMixin(ZaliInterface, class {
             // waiting out each message's retry backoff (which grows up to 30s). This
             // was the cause of the long send delay after an account switch / blip.
             this.kickPendingOutboxNow('reconnect');
+            // Релиз мог выйти, пока сокет был оборван, — событие `app_release` второй раз
+            // не придёт (и после рестарта сервера тоже).
+            this.checkForAppUpdateOnReconnect?.();
             // У нового соединения сервер не знает, во что мы играем (game_activity.js).
             this.onGameActivityConnected?.();
             // Don't wait out the keepalive tick to get back into the voice room: if

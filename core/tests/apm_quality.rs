@@ -610,9 +610,13 @@ fn resonant_hits(len: usize, peak: f32, seed: u64, modes: &[(f32, f32)], typing:
 fn realistic_clicks_are_removed_in_pauses_and_over_speech() {
     // Жалоба живых звонков 2026-11 с RNNoise: «все клики слышно идеально». RNNoise снимал
     // такие удары на 1–9 дБ в паузах и на 0–4 дБ поверх речи. Весь конвейер шумодава с
-    // DFN3 и затвором (2026-11-25): в паузах клавиатура 51, мышь 76, стук 19.5 дБ; поверх
-    // речи — целиком (выход со щелчками не громче выхода без них); речь 0.91–0.95.
-    // Стук — слабое место: низкий удар (120–260 Гц) DFN3 принимает за голос (SNR 22–33).
+    // DFN3 и затвором, полная обработка каждого кадра (2026-11-26, `new_denoiser`): в паузах
+    // клавиатура 51.6, мышь 73, стук 28 дБ; поверх речи клавиатура 3.9, мышь — целиком,
+    // стук 8.7 дБ; речь между ударами 0.94–0.99, под ударами 0.97–0.98.
+    // До 2026-11-26 тут стояло «поверх речи — целиком» (127–136 дБ): артефакт. DFN3 тогда
+    // пропускал deep filter на кадрах с SNR 20–30 дБ и портил чистую речь сам, прогон без
+    // щелчков выходил тише прогона со щелчками, разность уходила в минус. Честно поверх
+    // речи клавиатура снимается примерно как у RNNoise.
     let fx = fixtures();
     let len = fx.len;
     let zeros = vec![0.0f32; len];
@@ -626,13 +630,14 @@ fn realistic_clicks_are_removed_in_pauses_and_over_speech() {
     let mut lp = 0.0f32;
     let floor: Vec<f32> = (0..len).map(|_| { lp = 0.98 * lp + 0.02 * r.next(); lp * 0.003 }).collect();
     let d = NS_DELAY_FRAMES * FRAME;
+    // (имя, удары, мин. ослабление в паузах, мин. ослабление поверх речи)
     let sources = [
-        ("клавиатура", resonant_hits(len, 0.15, 11, &[(450.0, 8.0), (900.0, 6.0), (2600.0, 4.0), (5200.0, 2.5)], true), 40.0),
-        ("мышь", resonant_hits(len, 0.15, 9, &[(2300.0, 4.0), (4100.0, 3.0), (6800.0, 2.0)], false), 50.0),
-        ("стук по столу", resonant_hits(len, 0.3, 13, &[(120.0, 25.0), (260.0, 15.0), (700.0, 8.0)], false), 15.0),
+        ("клавиатура", resonant_hits(len, 0.15, 11, &[(450.0, 8.0), (900.0, 6.0), (2600.0, 4.0), (5200.0, 2.5)], true), 40.0, 2.5),
+        ("мышь", resonant_hits(len, 0.15, 9, &[(2300.0, 4.0), (4100.0, 3.0), (6800.0, 2.0)], false), 50.0, 20.0),
+        ("стук по столу", resonant_hits(len, 0.3, 13, &[(120.0, 25.0), (260.0, 15.0), (700.0, 8.0)], false), 20.0, 5.0),
     ];
-    for (name, clicks, min_pause) in &sources {
-        let min_pause = *min_pause;
+    for (name, clicks, min_pause, min_over) in &sources {
+        let (min_pause, min_over) = (*min_pause, *min_over);
         // В паузах между фразами.
         let mic: Vec<f32> = (0..len).map(|i| phrases[i] + clicks[i] + floor[i]).collect();
         let out = run(NS, &zeros, &mic);
@@ -664,9 +669,9 @@ fn realistic_clicks_are_removed_in_pauses_and_over_speech() {
         let over = db(a_in - b_in, (a_out - b_out).max(1e-12));
         let (sim2, _) = similarity(&o2, &fx.near, 1.0, &|_| true);
         assert!(atten >= min_pause, "{name}: в паузах ослаблены всего на {atten:.1} дБ");
-        assert!(over >= 20.0, "{name}: поверх речи ослаблены всего на {over:.1} дБ");
-        assert!(sim >= 0.88 && level >= -1.5, "{name}: речь между ударами {sim:.3} ({level:+.1} дБ)");
-        assert!(sim2 >= 0.89, "{name}: речь под ударами {sim2:.3}");
+        assert!(over >= min_over, "{name}: поверх речи ослаблены всего на {over:.1} дБ");
+        assert!(sim >= 0.92 && level >= -1.5, "{name}: речь между ударами {sim:.3} ({level:+.1} дБ)");
+        assert!(sim2 >= 0.95, "{name}: речь под ударами {sim2:.3}");
     }
 }
 
@@ -792,4 +797,124 @@ fn stats_report_noise_suppression_levels() {
 
     apm.set_config(VoiceProcessingConfig { echo_cancellation: false, noise_suppression: false, auto_gain: false });
     assert!(apm.stats().ns_attenuation_db.is_none());
+}
+
+/// Речь −28 дБFS по звучащим кадрам (как `input_dbfs` живого внешнего микрофона, 2026-11-26).
+fn live_like_speech() -> Vec<f32> {
+    let fx = fixtures();
+    let active: Vec<&[f32]> = fx.near.chunks(FRAME).filter(|c| energy(c) / FRAME as f64 > 1e-5).collect();
+    let level = active.iter().map(|c| energy(c)).sum::<f64>() / (active.len() * FRAME) as f64;
+    let g = (10f64.powf(-2.8) / level).sqrt() as f32;
+    fx.near.iter().map(|v| v * g).collect()
+}
+
+#[test]
+fn speech_survives_moderate_room_noise() {
+    // Речь −28 дБFS (живой внешний микрофон, 2026-11-26) под ровным шумом комнаты: обычная
+    // комната — речь на 20–35 дБ громче шума, ровно там, где DFN3 по умолчанию пропускал
+    // deep filter или весь кадр (см. `new_denoiser`): сходство падало до 0.33, речь — на
+    // 8 дБ, голос звучал «компьютерно». Измерено после правки: 0.987 / 0.985 / 0.983 /
+    // 0.980 / 0.969, −0.3…−0.5 дБ. Нормализатор уровня на этой громкости почти не работает,
+    // так что это проверка самого шумодава.
+    let speech = live_like_speech();
+    let ce = frame_db(&speech);
+    let loud = |f: usize| ce.get(f).is_some_and(|&d| d > -35.0);
+    let zeros = vec![0.0f32; speech.len()];
+    for noise_db in [-65.0f64, -55.0, -50.0, -45.0, -40.0] {
+        let mut r = Rng(77);
+        let amp = (10f64.powf(noise_db / 20.0) * 3f64.sqrt()) as f32;
+        let mic: Vec<f32> = speech.iter().map(|s| s + r.next() * amp).collect();
+        let out = run(NS, &zeros, &mic);
+        let (sim_in, _) = similarity(&mic, &speech, 2.0, &|f| loud(f));
+        let (sim, level) = similarity(&out, &speech, 2.0, &|f| loud(f));
+        assert!(sim >= 0.95 && sim >= sim_in - 0.03, "шум {noise_db} дБFS: сходство {sim:.3} (вход {sim_in:.3})");
+        assert!(level >= -1.5, "шум {noise_db} дБFS: речь просела на {level:.1} дБ");
+    }
+}
+
+#[test]
+fn every_mic_lands_at_one_speech_level() {
+    // Любой микрофон, от тихого −45 до громкого −10 дБFS, выходит к собеседникам на одном
+    // уровне. До 2026-11-26 AGC2 только поднимал тихих: −18 и −10 выходили на −19 и −11,
+    // остальные — на −24 (см. `OutputLevel`). Плюс ни одного съеденного начала фразы.
+    let base = live_like_speech();
+    let fd = |x: &[f32]| -> Vec<f64> { x.chunks(FRAME).map(|c| 10.0 * (energy(c) / FRAME as f64).max(1e-12).log10()).collect() };
+    let cd = fd(&base);
+    // phrases: runs of frames > -45 (base at -28), gap >= 30 frames
+    let mut phrases = vec![]; let mut start = None; let mut last = 0;
+    for (i, &d) in cd.iter().enumerate() {
+        if d > -45.0 { if start.is_none() { start = Some(i); } last = i; }
+        else if let Some(s) = start { if i - last >= 30 { phrases.push((s, last)); start = None; } }
+    }
+    if let Some(s) = start { phrases.push((s, last)); }
+    for in_db in [-45.0f64, -35.0, -28.0, -18.0, -10.0] {
+        let g = 10f64.powf((in_db + 28.0) / 20.0) as f32;
+        let mut r = Rng(5);
+        let amp = (10f64.powf(-62.0 / 20.0) * 3f64.sqrt()) as f32;
+        let mic: Vec<f32> = base.iter().map(|s| s * g + r.next() * amp).collect();
+        let zeros = vec![0.0f32; mic.len()];
+        let out = run(AGC, &zeros, &mic);
+        let d = NS_DELAY_FRAMES;
+        let od = fd(&out);
+        let act: Vec<usize> = (300..cd.len()).filter(|&f| cd[f] > -40.0 && f + d < od.len()).collect();
+        let steady: Vec<usize> = act.iter().copied().filter(|&f| f > 900).collect();
+        let lvl_steady = 10.0 * (steady.iter().map(|&f| 10f64.powf(od[f + d] / 10.0)).sum::<f64>() / steady.len() as f64).log10();
+        let lvl = 10.0 * (act.iter().map(|&f| 10f64.powf(od[f + d] / 10.0)).sum::<f64>() / act.len() as f64).log10();
+        let mut onset = vec![]; let mut lost_head = 0; let mut lost_tail = 0; let mut tot = 0;
+        for &(s, e) in phrases.iter().filter(|p| p.0 > 100) {
+            let rel = |f: usize| od.get(f + d).copied().unwrap_or(-120.0) - (cd[f] + in_db + 28.0);
+            let ph: Vec<f64> = (s..=e).filter(|&f| cd[f] > -40.0).map(|f| od[f + d]).collect();
+            let head: Vec<f64> = (s..(s + 30).min(e)).filter(|&f| cd[f] > -40.0).map(|f| od[f + d]).collect();
+            let m = |v: &[f64]| 10.0 * (v.iter().map(|x| 10f64.powf(x / 10.0)).sum::<f64>() / v.len().max(1) as f64).log10();
+            onset.push(m(&head) - m(&ph));
+            // steady gain = median rel over phrase loud frames
+            let mut rs: Vec<f64> = (s..=e).filter(|&f| cd[f] > -40.0).map(rel).collect(); rs.sort_by(|a,b| a.total_cmp(b));
+            let med = rs[rs.len() / 2];
+            for f in s..(s + 8).min(e) { if cd[f] > -55.0 { tot += 1; if rel(f) < med - 10.0 { lost_head += 1; } } }
+            for f in e.saturating_sub(10)..=(e + 10).min(cd.len() - 1) { if cd[f] > -55.0 { tot += 1; if rel(f) < med - 10.0 { lost_tail += 1; } } }
+        }
+        let on_avg = onset.iter().sum::<f64>() / onset.len() as f64;
+        let on_max = onset.iter().cloned().fold(-99.0, f64::max);
+        eprintln!("in {in_db}: out speech {lvl:.1} dBFS (steady {lvl_steady:.1}), onset avg {on_avg:+.1} max {on_max:+.1}, lost head {lost_head} tail {lost_tail} of {tot}");
+        assert!((lvl_steady + 24.0).abs() <= 2.5, "in {in_db}: steady {lvl_steady:.1}");
+        assert!(on_max < 4.0, "in {in_db}: onset {on_max:+.1}");
+        assert!(lost_head + lost_tail <= 3, "in {in_db}: lost {lost_head}+{lost_tail}");
+    }
+}
+
+#[test]
+fn phrase_start_after_long_silence_is_not_eaten() {
+    // Начало голоса к концу кадра выглядело щелчком, и затвор съедал первые 10 мс каждой
+    // фразы (−30 дБ, начальные согласные). Первая фраза звонка не проверяется: статистика
+    // шума ещё не набрана.
+    let base = live_like_speech();
+    let ph = &base[257 * FRAME..600 * FRAME];
+    let fd = |x: &[f32]| -> Vec<f64> { x.chunks(FRAME).map(|c| 10.0 * (energy(c) / FRAME as f64).max(1e-12).log10()).collect() };
+    for noise in [-65.0f64, -50.0] {
+      for in_db in [-40.0f64, -28.0] {
+        let g = 10f64.powf((in_db + 28.0) / 20.0) as f32;
+        let mut clean = vec![];
+        let mut starts = vec![];
+        for _ in 0..3 { clean.extend(std::iter::repeat(0.0f32).take(8 * SR)); starts.push(clean.len() / FRAME); clean.extend(ph.iter().map(|v| v * g)); }
+        clean.extend(std::iter::repeat(0.0f32).take(SR));
+        let mut r = Rng(9);
+        let amp = (10f64.powf(noise / 20.0) * 3f64.sqrt()) as f32;
+        let mic: Vec<f32> = clean.iter().map(|s| s + r.next() * amp).collect();
+        let zeros = vec![0.0f32; mic.len()];
+        let out = run(AGC, &zeros, &mic);
+        let (cd, od) = (fd(&clean), fd(&out));
+        let d = NS_DELAY_FRAMES;
+        let mut line = String::new();
+        for &s in &starts {
+            let seg = |a: usize, b: usize| { let v: Vec<f64> = (a..b).filter(|&f| cd[f] > in_db - 12.0).map(|f| od[f + d] - cd[f]).collect(); v.iter().sum::<f64>() / v.len().max(1) as f64 };
+            let first: Vec<String> = (s..s + 12).map(|f| format!("{:.0}", if cd[f] > in_db - 25.0 { od[f + d] - cd[f] } else { f64::NAN })).collect();
+            line += &format!(" | g0-200ms {:+.1} g200-1000 {:+.1} g1-3s {:+.1} first[{}]", seg(s, s + 20), seg(s + 20, s + 100), seg(s + 100, s + 300), first.join(","));
+        }
+        eprintln!("noise {noise} in {in_db}:{line}");
+        for &s in &starts[1..] {
+            let first = od[s + d] - cd[s];
+            assert!(first > -10.0, "noise {noise} in {in_db}: first frame {first:.0}");
+        }
+      }
+    }
 }

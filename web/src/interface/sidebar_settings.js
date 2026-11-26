@@ -33,7 +33,7 @@ ZaliMixin(ZaliInterface, class {
               icon: ico('<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/><path d="M9 10.5h6"/>') },
             { id: 'account', label: 'Аккаунт', sections: ['email', 'session', 'settings-sync', 'crypto'],
               icon: ico('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>') },
-            { id: 'app', label: 'Приложение', sections: ['updates', 'autostart', 'cache'],
+            { id: 'app', label: 'Приложение', sections: ['updates', 'autostart', 'downloads', 'cache'],
               icon: ico('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6M12 9v6"/>') },
             { id: 'components', label: 'Компоненты', sections: ['remote-control'],
               icon: ico('<path d="M9 4h4v2.5a1.5 1.5 0 0 0 3 0V4h4v6h-2.5a1.5 1.5 0 0 0 0 3H20v7h-6v-2.5a1.5 1.5 0 0 0-3 0V20H4v-7h2.5a1.5 1.5 0 0 0 0-3H4V4z"/>') },

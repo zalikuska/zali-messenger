@@ -3,7 +3,6 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use hmac::{Hmac, Mac};
-use pbkdf2::pbkdf2_hmac_array;
 use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -26,8 +25,14 @@ fn derive_legacy_key_bytes(key: &str) -> [u8; 32] {
     bytes
 }
 
+/// Назначение соли текста в `zali_sdk::kdf` — отдельное от архива, в котором текст
+/// лежит: тот же пароль, но другой ключ AES.
+const TEXT_SALT_DOMAIN: &str = "zali-text-v3";
+
+/// PBKDF2 через общий кэш (`zali_sdk::kdf`): одна соль на ключ до конца процесса,
+/// вывод — один раз, а не на каждое сообщение, цитату и запись о звонке.
 fn derive_pbkdf2_key_bytes(key: &str, salt: &[u8]) -> [u8; 32] {
-    pbkdf2_hmac_array::<Sha256, 32>(key.as_bytes(), salt, PBKDF2_ITERS)
+    zali_sdk::kdf::derive_key(key, salt, PBKDF2_ITERS)
 }
 
 fn encrypt_aes_gcm_v3(plain_text: &str, key: &str) -> Result<String, String> {
@@ -35,8 +40,7 @@ fn encrypt_aes_gcm_v3(plain_text: &str, key: &str) -> Result<String, String> {
         return Err("Missing encryption key".to_string());
     }
 
-    let mut salt_bytes = [0u8; 16];
-    OsRng.fill_bytes(&mut salt_bytes);
+    let salt_bytes = zali_sdk::kdf::writer_salt(TEXT_SALT_DOMAIN, key);
     let key_bytes = derive_pbkdf2_key_bytes(key, &salt_bytes);
     let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| e.to_string())?;
     let mut nonce_bytes = [0u8; 12];
@@ -92,7 +96,7 @@ fn decrypt_aes_gcm_v3(payload: &str, key: &str) -> Result<String, String> {
     let cipher_bytes = BASE64_STANDARD
         .decode(cipher_b64)
         .map_err(|e| format!("Ciphertext decode error: {}", e))?;
-    let key_bytes = pbkdf2_hmac_array::<Sha256, 32>(key.as_bytes(), &salt_bytes, iterations);
+    let key_bytes = zali_sdk::kdf::derive_key(key, &salt_bytes, iterations);
     let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| e.to_string())?;
     let plain = cipher
         .decrypt(Nonce::from_slice(&nonce_bytes), cipher_bytes.as_ref())

@@ -23162,7 +23162,7 @@ body[data-design-mode="focus"] .settings-shell {
 }
 
 /* Надпись в заголовке окна как уведомление об обновлении (updates.js,
-   renderTitlebarUpdate): alpha — красная, beta — жёлтая, release — лаймовая.
+   renderTitlebarUpdate): заменяет «ZaliMessenger» акцентным текстом.
    Тот же цвет держится при загрузке («Загрузка… N%») и после неё. */
 .tb-brand.is-update {
     cursor: pointer;
@@ -23172,13 +23172,27 @@ body[data-design-mode="focus"] .settings-shell {
     margin: -2px -8px;
     transition: background .15s var(--ease-out), opacity .15s var(--ease-out);
 }
-.tb-brand.is-update[data-channel="a"] { color: var(--red); }
-.tb-brand.is-update[data-channel="b"] { color: #ffc531; }
-.tb-brand.is-update[data-channel="r"] { color: var(--accent-fg); }
+/* Цвет — акцентный независимо от канала сборки (alpha/beta/release); канал виден в подсказке. */
+body .tb-brand.is-update { color: var(--accent-fg); font-weight: 800; }
 .tb-brand.is-update:hover { background: rgba(var(--ink-rgb),.07); }
 .tb-brand.is-update:focus-visible:where([data-kbd-focus] *) { outline: 2px solid currentColor; outline-offset: 2px; }
 .tb-brand.is-update.is-downloading { cursor: progress; font-variant-numeric: tabular-nums; }
 .tb-brand.is-update.is-downloading:hover { background: none; }
+
+/* Обновление пришло по сокету, пока приложение открыто: ярлык на секунду «вспыхивает»
+   кольцом своего цвета и чуть подпрыгивает (updates.js, pulseTitlebarUpdate). */
+.tb-brand.is-update.is-arrived {
+    animation: tbUpdateArrive 1.6s var(--ease-out) 1;
+}
+@keyframes tbUpdateArrive {
+    0%   { transform: translateY(-6px) scale(.94); opacity: 0; box-shadow: 0 0 0 0 currentColor; }
+    25%  { transform: translateY(0) scale(1.06); opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+    45%  { transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent); }
+    100% { transform: scale(1); box-shadow: 0 0 0 14px color-mix(in srgb, currentColor 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .tb-brand.is-update.is-arrived { animation: none; }
+}
 
 /* ════════════════════════════════════════════════════════════════════════
    ТЕЛЕФОН, 2026-11: клавиатура, поле ввода в потоке, единая шкала скруглений,
@@ -30705,3 +30719,91 @@ body[data-design-mode="focus"] .raffle-modal {
     text-shadow: 0 1px 8px rgba(0,0,0,.6);
     pointer-events: none;
 }
+
+/* Анимация скачивания (download_fx.js): кольца → диск со значком → волна и искры. */
+.dl-fx {
+    position: fixed;
+    width: 0;
+    height: 0;
+    z-index: 10060;
+    pointer-events: none;
+}
+.dl-fx > span {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: block;
+    border-radius: 50%;
+    will-change: transform, opacity;
+}
+.dl-ring {
+    width: 124px;
+    height: 124px;
+    margin: -62px 0 0 -62px;
+    border: 2px solid rgba(var(--accent-rgb), .9);
+    opacity: 0;
+}
+.dl-glow {
+    width: 150px;
+    height: 150px;
+    margin: -75px 0 0 -75px;
+    background: radial-gradient(circle, rgba(var(--accent-rgb), .55) 0%, rgba(var(--accent-rgb), .18) 42%, transparent 70%);
+    opacity: 0;
+}
+.dl-wave {
+    width: 68px;
+    height: 68px;
+    margin: -34px 0 0 -34px;
+    border: 3px solid rgba(var(--accent-rgb), .85);
+    opacity: 0;
+}
+.dl-dot {
+    width: 7px;
+    height: 7px;
+    margin: -3.5px 0 0 -3.5px;
+    background: rgb(var(--accent-rgb));
+    opacity: 0;
+}
+.dl-disc {
+    width: 68px;
+    height: 68px;
+    margin: -34px 0 0 -34px;
+    display: grid !important;
+    place-items: center;
+    background: rgb(var(--accent-rgb));
+    color: var(--on-accent);
+    box-shadow: 0 10px 30px rgba(var(--accent-rgb), .45), 0 0 0 6px rgba(var(--accent-rgb), .16);
+    opacity: 0;
+}
+.dl-disc svg {
+    width: 34px;
+    height: 34px;
+    overflow: visible;
+}
+.dl-disc path {
+    stroke-dasharray: 1;
+    transform-box: fill-box;
+}
+
+/* «Скачивание файлов» в настройках. */
+.download-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.download-folder-path {
+    flex: 1 1 220px;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(var(--ink-rgb), .05);
+    border: 1px solid rgba(var(--ink-rgb), .08);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+}
+.download-folder-path bdi { direction: ltr; unicode-bidi: plaintext; }

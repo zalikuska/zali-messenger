@@ -1341,6 +1341,7 @@ ZaliMixin(ZaliInterface, class {
         this.renderNotificationVolumeSettings();
         this.renderUpdateSettings();
         void this.renderAutostartSettings();
+        this.renderDownloadSettings?.();
         void this.renderControlSettings();
         this.renderGameActivitySettings();
         this.renderGameFocusSettings();

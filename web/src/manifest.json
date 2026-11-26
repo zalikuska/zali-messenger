@@ -57,6 +57,8 @@
     "interface/raffles.js",
     "interface/treasury.js",
     "interface/prefs.js",
+    "interface/downloads.js",
+    "interface/download_fx.js",
     "interface/fps_meter.js",
     "interface/smooth_scroll.js",
     "interface/storage.js",

@@ -363,6 +363,9 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             appearance: true,
             saveMessageCache: false,
             downloadAttachment: true,
+            // Ответ о сохранении (NATIVE_RESPONSE) и режим «сразу» — в «Загрузки/ZaliMessenger».
+            // Выбора папки на телефоне нет: capability downloadFolder не заявляется.
+            downloadResult: true,
             // История канала расшифровывается ЗДЕСЬ, тем же нативным конвейером,
             // что и личная переписка. Пока стояло false, веб уходил в браузерную
             // ветку loadServerMessages(), а та требует WASM-сборки ядра, которой в
@@ -489,7 +492,12 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
             "DELETE_AVATAR_REQUEST" -> handleAvatarUploadRequest(dict, delete = true)
             "LOAD_AVATAR_REQUEST" -> handleLoadAvatarRequest(dict)
             "RESOLVE_TENOR" -> resolveTenor(dict.optString("url", ""), dict.optString("requestId", UUID.randomUUID().toString()))
-            "DOWNLOAD_ATTACHMENT" -> saveAttachment(dict.optString("dataUrl", ""), dict.optString("filename", "attachment"))
+            "DOWNLOAD_ATTACHMENT" -> saveAttachment(
+                dict.optString("dataUrl", ""),
+                dict.optString("filename", "attachment"),
+                dict.optString("mode", "").trim(),
+                dict.optString("requestId", "").trim(),
+            )
             "START_SCREEN_CAPTURE" -> handleStartScreenCapture(dict)
             "MEDIA_REQUEST" -> handleMediaRequest(dict)
             "DOWNLOAD_UPDATE_REQUEST" -> handleDownloadUpdate(dict)
@@ -659,7 +667,10 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         // Выход из аккаунта (web_push.js, unregisterNativePushDevice): с этого момента
         // фоновый приём FCM не расшифровывает и не показывает пуши ушедшего аккаунта,
         // даже если сервер ещё успеет что-то прислать.
-        if (path == "/api/push/device/unregister") PushSession.clear(context)
+        if (path == "/api/push/device/unregister") {
+            PushSession.clear(context)
+            PendingPush.clearAll(context)
+        }
         val url = apiBaseUrl + path
 
         // Two attempts, second on a brand-new client (own connection pool) — a
@@ -1159,22 +1170,60 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
     // targetSdk 24+); "Save to Downloads"/"Save to Drive" etc. are share-sheet
     // targets the OS already provides.
 
-    private fun saveAttachment(dataUrl: String, filename: String) {
-        val (bytes, _, fileExtension) = decodeDataUrl(dataUrl)
-        if (bytes.isEmpty()) return
+    private fun saveAttachment(dataUrl: String, filename: String, mode: String = "", requestId: String = "") {
+        val (bytes, mimeType, fileExtension) = decodeDataUrl(dataUrl)
+        if (bytes.isEmpty()) {
+            if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Пустое вложение")
+            return
+        }
         val safeName = safeFileName(filename, fileExtension)
+
+        // «Сразу»: файл ложится в «Загрузки/ZaliMessenger» через MediaStore, без окна выбора
+        // (Android 10+; на старых системах — общий лист «Поделиться», как и в режиме «Спрашивать»).
+        if (mode == "instant" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Thread {
+                try {
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeName)
+                        put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeType.ifEmpty { "application/octet-stream" })
+                        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/ZaliMessenger")
+                        put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: throw java.io.IOException("Не удалось создать файл в «Загрузках»")
+                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                        ?: throw java.io.IOException("Не удалось открыть файл на запись")
+                    values.clear()
+                    values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    if (requestId.isNotEmpty()) {
+                        sendNativeResponse(
+                            requestId,
+                            ok = true,
+                            data = JSONObject().put("name", safeName).put("folder", "Загрузки/ZaliMessenger").put("path", uri.toString()),
+                        )
+                    }
+                } catch (e: Exception) {
+                    if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = e.message ?: "Не удалось сохранить файл")
+                }
+            }.start()
+            return
+        }
 
         val attachmentsDir = File(context.cacheDir, "attachments").apply { mkdirs() }
         val file = File(attachmentsDir, "${UUID.randomUUID()}_$safeName")
         try {
             file.writeBytes(bytes)
         } catch (e: Exception) {
+            if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Не удалось записать файл")
             return
         }
 
         val uri = try {
             androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         } catch (e: Exception) {
+            if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Не удалось открыть файл")
             return
         }
 
@@ -1189,8 +1238,11 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         mainHandler.post {
             try {
                 context.startActivity(chooser)
+                // Лист «Поделиться» открыт, сохранено ли — решит человек: страница
+                // анимацию и тост «сохранён» не показывает (shared).
+                if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = true, data = JSONObject().put("shared", true).put("name", safeName))
             } catch (e: Exception) {
-                // No activity available to handle the share sheet — drop silently.
+                if (requestId.isNotEmpty()) sendNativeResponse(requestId, ok = false, error = "Нет приложения для сохранения файла")
             }
         }
     }
@@ -2731,6 +2783,29 @@ class NativeBridge(private val context: Context, private val webView: WebView) {
         val js = "window.__zaliNativeAppFocus = $visible; var ui = window.__ZALI_INTERFACE; " +
             "if (ui && ui.onNativeAppFocusChange) ui.onNativeAppFocusChange();"
         mainHandler.post { webView.evaluateJavascript(js, null) }
+        if (visible) deliverPendingPush()
+    }
+
+    /**
+     * Тексты, которые фоновый пуш расшифровал до открытия (PendingPush.kt), — в веб через
+     * тот же `receiveMessage`, что и живую доставку. Запись удаляем, только когда веб
+     * подтвердил приём (`true`); страница ещё не готова — ждём следующего вызова
+     * (onPageFinished и показ приложения). Дубли с сокетом отсекает `receiveMessage` по id.
+     */
+    fun deliverPendingPush() {
+        val context = this.context
+        val username = PushSession.load(context)?.username ?: return
+        for (item in PendingPush.all(context, username)) {
+            val id = item.optString("id")
+            if (id.isEmpty()) continue
+            val js = "(function(){ if (!window.receiveMessage) return false; " +
+                "window.receiveMessage($item); return true; })();"
+            mainHandler.post {
+                webView.evaluateJavascript(js) { result ->
+                    if (result == "true") PendingPush.remove(context, username, id)
+                }
+            }
+        }
     }
 
     /**

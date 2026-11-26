@@ -459,7 +459,7 @@ ZaliMixin(ZaliInterface, class {
                     e.stopPropagation();
                     const href = fileLink.getAttribute('href') || '';
                     const filename = fileLink.getAttribute('download') || fileLink.textContent || 'attachment';
-                    this.downloadAttachmentFromHref(href, filename);
+                    this.downloadAttachmentFromHref(href, filename, { anchor: fileLink });
                     return;
                 }
                 const quote = e.target.closest('.msg-quote[data-reply-target]');
@@ -1272,6 +1272,7 @@ ZaliMixin(ZaliInterface, class {
         this.bindGameFocusSettings();
         this.bindRemoteControlSettings?.();
         this.bindScreenPrivacySettings?.();
+        this.bindDownloadSettings?.();
         this.bindComposerFocusNote();
         const inputAutostart = document.getElementById('inputAutostart');
         if (inputAutostart) {

@@ -39,7 +39,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=20261125-buglog1">
+    <link rel="stylesheet" href="style.css?v=20261126-upd1">
     <title>ZaliMessenger</title>
 </head>
 <body data-design-mode="focus">
@@ -741,6 +741,28 @@
                                         </span>
                                     </label>
                                     <p class="settings-help" id="autostartStatusText"></p>
+                                </div>
+                            </section>
+
+                            <section class="settings-card" id="downloadSettingsCard" hidden data-settings-section="downloads">
+                                <div class="settings-card-head">
+                                    <div>
+                                        <span class="settings-kicker">Файлы</span>
+                                        <h3 class="settings-card-title">Скачивание файлов</h3>
+                                    </div>
+                                    <span class="settings-card-note">download</span>
+                                </div>
+                                <div class="settings-stack">
+                                    <div class="appearance-seg" role="radiogroup" aria-label="Режим скачивания">
+                                        <button type="button" data-download-mode="ask" role="radio" aria-checked="true">Спрашивать, куда сохранить</button>
+                                        <button type="button" data-download-mode="instant" role="radio" aria-checked="false">Сразу, без вопросов</button>
+                                    </div>
+                                    <div class="download-folder-row" id="downloadFolderRow" hidden>
+                                        <div class="download-folder-path" id="downloadFolderPath"></div>
+                                        <button type="button" class="btn-flat" id="downloadFolderPickBtn">Выбрать папку…</button>
+                                        <button type="button" class="btn-flat" id="downloadFolderResetBtn" hidden>Сбросить</button>
+                                    </div>
+                                    <p class="settings-help" id="downloadSettingsHelp"></p>
                                 </div>
                             </section>
 

@@ -9,7 +9,8 @@
 //   • голоса звонка и звук чужих демонстраций — НЕ попадают (свои <audio>/<video>
 //     собеседников сюда не заводятся);
 //   • звуки входа/выхода из звонка — тоже нет: зрители сами в звонке и слышат их;
-//   • уведомления и рингтоны — приглушённо (SHARE_DUCK_GAIN);
+//   • уведомления, рингтоны и прочие звуки интерфейса — тоже нет (раньше шли
+//     приглушённо, но звук мессенджера в чужом стриме мешал: 2026-11-26);
 //   • видео и аудио из переписки (вложения) — как есть.
 // Аддоны (sandbox iframe с непрозрачным origin) отсюда недостижимы — их звука в
 // демонстрации нет.
@@ -19,9 +20,9 @@
 // элемент — после этого его звук навсегда идёт через контекст, слышно его так же).
 ZaliMixin(ZaliInterface, class {
 
-    // Вчетверо тише (≈ −12 дБ) — так попросил пользователь 2026-11-24: уведомление в
-    // стриме слышно, но не перекрывает показываемое.
-    static get SHARE_DUCK_GAIN() { return 0.25; }
+    // Уровень уведомлений в стриме. 0 — их в демонстрации нет вовсе: 2026-11-24 они шли
+    // вчетверо тише (0.25), но пользователь потребовал убрать звук мессенджера из стрима.
+    static get SHARE_DUCK_GAIN() { return 0; }
 
     shareAudioState() {
         if (!this._shareAudio) {
@@ -91,7 +92,8 @@ ZaliMixin(ZaliInterface, class {
         const st = this.shareAudioNodes(ctx);
         try {
             st.dest = ctx.createMediaStreamDestination();
-            st.duck.connect(st.dest);
+            // Уведомления и рингтоны (duck) в демонстрацию не подключаем — только вложения.
+            if (ZaliInterface.SHARE_DUCK_GAIN > 0) st.duck.connect(st.dest);
             st.mediaBus.connect(st.dest);
             if (nativeTrack) {
                 st.nativeSource = ctx.createMediaStreamSource(new MediaStream([nativeTrack]));

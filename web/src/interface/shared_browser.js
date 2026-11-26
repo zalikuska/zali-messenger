@@ -973,9 +973,18 @@ ZaliMixin(ZaliInterface, class {
             ['reload', 'Обновить', false],
             ['copy', 'Копировать адрес', !info?.url],
         ];
-        menu.innerHTML = items.map(([id, label, off]) =>
-            `<button type="button" class="peer-context-menu-item" role="menuitem" data-sbctx="${id}"${off ? ' disabled' : ''}><span>${label}</span></button>`
-        ).join('');
+        for (const [id, label, off] of items) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'peer-context-menu-item';
+            btn.setAttribute('role', 'menuitem');
+            btn.dataset.sbctx = id;
+            btn.disabled = !!off;
+            const span = document.createElement('span');
+            span.textContent = label;
+            btn.appendChild(span);
+            menu.appendChild(btn);
+        }
         root.appendChild(menu);
         const box = root.getBoundingClientRect();
         const left = Math.max(8, Math.min(x - box.left, box.width - menu.offsetWidth - 8));

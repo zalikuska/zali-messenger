@@ -80,6 +80,7 @@ pub fn run(ctx: StartContext) {
         let opened = super::devices::capture_device(&ctx.device_id).and_then(|device| {
             let capture = WasapiCapture::open_endpoint(&device, 1, false)?;
             capture.start()?;
+            tracing::info!("[ZALI][WIN] media mic opened raw={}", capture.raw);
             Ok((capture, super::devices::friendly_name(&device), super::devices::device_id(&device)))
         });
         let (capture, label, device_id) = match opened {

@@ -836,12 +836,80 @@ struct WebView {
             }
         }
 
-        private func saveAttachment(dataUrl: String, filename: String) {
+        /// Режимы (настройки → «Скачивание файлов»): "ask" — окно «Сохранить как…»,
+        /// "instant" — сразу в `folder` (пусто — «Загрузки»), пусто — как у старых страниц
+        /// (окно). Ответ — NATIVE_RESPONSE по requestId: страница рисует анимацию и тост
+        /// только по успеху; закрытое окно — error "cancelled", пропавшая папка —
+        /// "folder_unavailable" (страница тогда спрашивает как в "ask").
+        private func saveAttachment(dataUrl: String, filename: String, mode: String = "", folder: String = "", requestId: String = "") {
+            func respond(_ payload: [String: Any]) {
+                guard !requestId.isEmpty else { return }
+                var body = payload
+                body["requestId"] = requestId
+                DispatchQueue.main.async { self.sendNativeResponse(body) }
+            }
             let decoded = decodedDataURL(dataUrl)
-            guard !decoded.data.isEmpty else { return }
+            guard !decoded.data.isEmpty else {
+                respond(["ok": false, "error": "Пустое вложение"])
+                return
+            }
+            let name = safeFileName(filename, fallbackExtension: decoded.fileExtension)
+
+            func write(_ destination: URL) {
+                do {
+                    try decoded.data.write(to: destination, options: [.atomic])
+                    // Файл от собеседника — помечаем как скачанный из сети, как
+                    // браузер: без карантина присланный .command/.app открылся бы
+                    // двойным щелчком мимо Gatekeeper (Windows ставит Zone.Identifier;
+                    // аудит 2026-11-19).
+                    let quarantine: [String: Any] = [
+                        kLSQuarantineAgentNameKey as String: "ZaliMessenger",
+                        kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String,
+                    ]
+                    try? (destination as NSURL).setResourceValue(quarantine, forKey: .quarantinePropertiesKey)
+                    respond(["ok": true, "data": [
+                        "path": destination.path,
+                        "name": destination.lastPathComponent,
+                        "folder": destination.deletingLastPathComponent().path,
+                    ]])
+                } catch {
+                    NSLog("Failed to save attachment: \(error.localizedDescription)")
+                    respond(["ok": false, "error": error.localizedDescription])
+                }
+            }
+
+            if mode == "instant" {
+                let fm = FileManager.default
+                var dir: URL
+                if folder.isEmpty {
+                    dir = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+                    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                } else {
+                    dir = URL(fileURLWithPath: folder, isDirectory: true)
+                    var isDir: ObjCBool = false
+                    guard folder.hasPrefix("/"), fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else {
+                        respond(["ok": false, "error": "folder_unavailable"])
+                        return
+                    }
+                }
+                // Имя не затирает чужой файл: «name (2).ext».
+                var destination = dir.appendingPathComponent(name)
+                if fm.fileExists(atPath: destination.path) {
+                    let stem = (name as NSString).deletingPathExtension
+                    let ext = (name as NSString).pathExtension
+                    var index = 2
+                    repeat {
+                        let next = ext.isEmpty ? "\(stem) (\(index))" : "\(stem) (\(index)).\(ext)"
+                        destination = dir.appendingPathComponent(next)
+                        index += 1
+                    } while fm.fileExists(atPath: destination.path) && index < 10_000
+                }
+                DispatchQueue.global(qos: .userInitiated).async { write(destination) }
+                return
+            }
 
             let panel = NSSavePanel()
-            panel.nameFieldStringValue = safeFileName(filename, fallbackExtension: decoded.fileExtension)
+            panel.nameFieldStringValue = name
             panel.canCreateDirectories = true
             panel.isExtensionHidden = false
             panel.title = "Сохранить вложение"
@@ -849,21 +917,30 @@ struct WebView {
 
             DispatchQueue.main.async {
                 panel.begin { response in
-                    guard response == .OK, let destination = panel.url else { return }
-                    do {
-                        try decoded.data.write(to: destination, options: [.atomic])
-                        // Файл от собеседника — помечаем как скачанный из сети, как
-                        // браузер: без карантина присланный .command/.app открылся бы
-                        // двойным щелчком мимо Gatekeeper (Windows ставит Zone.Identifier;
-                        // аудит 2026-11-19).
-                        let quarantine: [String: Any] = [
-                            kLSQuarantineAgentNameKey as String: "ZaliMessenger",
-                            kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String,
-                        ]
-                        try? (destination as NSURL).setResourceValue(quarantine, forKey: .quarantinePropertiesKey)
-                    } catch {
-                        NSLog("Failed to save attachment: \(error.localizedDescription)")
+                    guard response == .OK, let destination = panel.url else {
+                        respond(["ok": false, "error": "cancelled"])
+                        return
                     }
+                    write(destination)
+                }
+            }
+        }
+
+        /// Папка для режима «Сразу в папку»: путь уходит странице и хранится у неё.
+        private func pickDownloadFolder(requestId: String, current: String) {
+            DispatchQueue.main.async {
+                let panel = NSOpenPanel()
+                panel.canChooseDirectories = true
+                panel.canChooseFiles = false
+                panel.canCreateDirectories = true
+                panel.allowsMultipleSelection = false
+                panel.title = "Папка для скачанных файлов"
+                panel.prompt = "Выбрать"
+                if !current.isEmpty { panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true) }
+                panel.begin { response in
+                    let path = (response == .OK ? panel.url?.path : nil) ?? ""
+                    // Пустой путь — окно закрыли, ничего не менять.
+                    self.sendNativeResponse(["requestId": requestId, "ok": true, "data": ["path": path]])
                 }
             }
         }
@@ -1570,7 +1647,19 @@ struct WebView {
                 case .downloadAttachment: do {
                     let dataUrl = dict["dataUrl"] as? String ?? ""
                     let filename = dict["filename"] as? String ?? "attachment"
-                    self.saveAttachment(dataUrl: dataUrl, filename: filename)
+                    self.saveAttachment(
+                        dataUrl: dataUrl,
+                        filename: filename,
+                        mode: (dict["mode"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                        folder: (dict["folder"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                        requestId: (dict["requestId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                }
+
+                case .pickDownloadFolderRequest: do {
+                    let requestId = (dict["requestId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let current = (dict["current"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.pickDownloadFolder(requestId: requestId, current: current)
                 }
 
                 case .openExternalUrl: do {
@@ -2519,6 +2608,8 @@ struct WebView {
             "appearance": true,
             "saveMessageCache": true,
             "downloadAttachment": true,
+            // «Скачивание файлов» в настройках: выбор папки и ответ о сохранении.
+            "downloadFolder": true,
             "openExternalUrl": true,
             "serverHistory": true,
             "avatarFetch": true,

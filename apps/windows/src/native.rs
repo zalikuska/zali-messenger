@@ -20,6 +20,7 @@ mod autostart;
 pub(crate) use autostart::*;
 mod cache;
 pub(crate) use cache::*;
+mod file_dialog;
 mod frame_guard;
 pub(crate) use frame_guard::*;
 // Игровой статус: опрос процессов (web/src/interface/game_activity.js).
@@ -58,7 +59,7 @@ const BRIDGE_PROTOCOL_JSON: &str = include_str!("../../../web/bridge_protocol.js
 // `version`, which must stay strict SemVer for Cargo itself and no longer tracks
 // this value 1:1. Bump this — and the mirror in scripts/build_app.sh's
 // APP_VERSION — on every release published via POST /api/version.
-const APP_DISPLAY_VERSION: &str = "0.2b81";
+const APP_DISPLAY_VERSION: &str = "0.2b82";
 
 include!(concat!(env!("OUT_DIR"), "/bridge_protocol.rs"));
 
@@ -342,6 +343,8 @@ struct NativeCapabilities {
     /// Windows-only: «Запускать при входе в Windows» свёрнутым в трей (see
     /// native/autostart.rs). Elsewhere there is no tray to start into.
     autostart: bool,
+    /// «Скачивание файлов» в настройках: выбор папки и «Сохранить как…» (native/file_dialog.rs).
+    download_folder: bool,
     /// Windows-only: определение запущенной игры для статуса «Играет в …»
     /// (native/game_detector.rs). Экспериментальный macOS Rust-шелл процессы не
     /// опрашивает — основной macOS-клиент это Swift.
@@ -404,6 +407,7 @@ impl Default for NativeCapabilities {
             taskbar_badge: cfg!(target_os = "windows"),
             window_controls: cfg!(target_os = "windows"),
             autostart: cfg!(target_os = "windows"),
+            download_folder: cfg!(target_os = "windows"),
             game_activity: cfg!(target_os = "windows"),
             addon_frames: true,
             addon_store: true,
@@ -1241,36 +1245,99 @@ pub fn handle_ipc_message(
                 .get("dataUrl")
                 .or_else(|| payload.get("data_url"))
                 .and_then(Value::as_str)
-                .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
             let filename = payload
                 .get("filename")
                 .and_then(Value::as_str)
-                .unwrap_or("attachment");
+                .unwrap_or("attachment")
+                .to_string();
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let mode = payload.get("mode").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let folder = payload.get("folder").and_then(Value::as_str).unwrap_or("").to_string();
 
             if data_url.trim().is_empty() {
                 trace("DOWNLOAD_ATTACHMENT skipped: empty dataUrl");
+                if !request_id.is_empty() {
+                    dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, json!({ "requestId": request_id, "ok": false, "error": "Пустое вложение" }));
+                }
                 return;
             }
 
-            match save_data_url_attachment(data_url, filename) {
-                Ok(path) => trace(format!(
-                    "DOWNLOAD_ATTACHMENT saved filename={} path={}",
-                    filename,
-                    path.display()
-                )),
-                Err(error) => {
-                    trace(format!(
-                        "DOWNLOAD_ATTACHMENT failed filename={} err={}",
-                        filename, error
-                    ));
-                    let log = format!(
-                        "window.addLog({}, {});",
-                        json_string_literal("ERROR"),
-                        json_string_literal(&format!("Не удалось сохранить вложение: {}", error))
-                    );
-                    let _ = proxy.send_event(AppEvent::EvaluateScript(log));
+            // Диалог «Сохранить как…» модальный: не в потоке окна и не в потоке IPC.
+            let proxy = proxy.clone();
+            let spawned = std::thread::Builder::new().name("zali-download".into()).spawn(move || {
+                match save_attachment(&data_url, &filename, &mode, &folder) {
+                    Ok(saved) => {
+                        trace(format!(
+                            "DOWNLOAD_ATTACHMENT saved filename={} path={}",
+                            filename,
+                            saved.path.display()
+                        ));
+                        if !request_id.is_empty() {
+                            let response = json!({
+                                "requestId": request_id,
+                                "ok": true,
+                                "data": {
+                                    "path": saved.path.to_string_lossy(),
+                                    "name": saved.name,
+                                    "folder": saved.folder.to_string_lossy(),
+                                },
+                            });
+                            dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, response);
+                        }
+                    }
+                    Err(error) => {
+                        trace(format!("DOWNLOAD_ATTACHMENT failed filename={} err={}", filename, error));
+                        if !request_id.is_empty() {
+                            dispatch_ui_event(
+                                &proxy,
+                                UiBusEvent::NativeResponse,
+                                json!({ "requestId": request_id, "ok": false, "error": error }),
+                            );
+                        } else if error != "cancelled" {
+                            let log = format!(
+                                "window.addLog({}, {});",
+                                json_string_literal("ERROR"),
+                                json_string_literal(&format!("Не удалось сохранить вложение: {}", error))
+                            );
+                            let _ = proxy.send_event(AppEvent::EvaluateScript(log));
+                        }
+                    }
                 }
+            });
+            if spawned.is_err() {
+                trace("DOWNLOAD_ATTACHMENT: не удалось запустить поток сохранения");
             }
+        }
+        BridgeProtocolMessageType::PickDownloadFolderRequest => {
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let current = payload.get("current").and_then(Value::as_str).unwrap_or("").to_string();
+            let proxy = proxy.clone();
+            let _ = std::thread::Builder::new().name("zali-pick-folder".into()).spawn(move || {
+                let current_path = std::path::PathBuf::from(current.trim());
+                let start = (!current.trim().is_empty()).then_some(current_path.as_path());
+                let response = match file_dialog::pick_folder(start) {
+                    Ok(path) => json!({
+                        "requestId": request_id,
+                        "ok": true,
+                        // Пустой путь — человек закрыл диалог, ничего не менять.
+                        "data": { "path": path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default() },
+                    }),
+                    Err(error) => json!({ "requestId": request_id, "ok": false, "error": error }),
+                };
+                dispatch_ui_event(&proxy, UiBusEvent::NativeResponse, response);
+            });
         }
         BridgeProtocolMessageType::OpenExternalUrl => {
             let url = payload

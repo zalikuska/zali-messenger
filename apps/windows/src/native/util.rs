@@ -214,23 +214,73 @@ pub(crate) fn unique_download_path(dir: &Path, filename: &str) -> PathBuf {
     dir.join(filename)
 }
 
-pub(crate) fn save_data_url_attachment(data_url: &str, filename: &str) -> Result<PathBuf, String> {
+/// Куда и как легло скачанное вложение.
+pub(crate) struct SavedAttachment {
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) folder: PathBuf,
+}
+
+/// Скачивание вложения по режиму из настроек:
+/// - `"ask"` — системный диалог «Сохранить как…» (отмена → `Err("cancelled")`);
+/// - `"instant"` — сразу в `folder` (пустая — «Загрузки»); папка пропала или не
+///   каталог → `Err("folder_unavailable")`, страница тогда спрашивает как в `"ask"`;
+/// - пусто — прежнее поведение старых страниц: молча в «Загрузки».
+/// Имя всегда проходит `sanitize_download_name`, так что выйти из папки нельзя.
+pub(crate) fn save_attachment(data_url: &str, filename: &str, mode: &str, folder: &str) -> Result<SavedAttachment, String> {
     let (data, _mime_type, fallback_extension) =
         decode_data_url(data_url).ok_or_else(|| "Invalid attachment data URL".to_string())?;
     if data.is_empty() {
         return Err("Attachment payload is empty".to_string());
     }
-
-    let download_dir = user_downloads_dir();
-    fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
     let safe_name = sanitize_download_name(filename, &fallback_extension);
-    let destination = unique_download_path(&download_dir, &safe_name);
-    if !destination.starts_with(&download_dir) {
-        return Err("Path traversal detected".to_string());
-    }
+
+    let destination = match mode {
+        "ask" => {
+            let start = user_downloads_dir();
+            let _ = fs::create_dir_all(&start);
+            match super::file_dialog::pick_save_path(&safe_name, &start)? {
+                Some(path) => path,
+                None => return Err("cancelled".to_string()),
+            }
+        }
+        "instant" => {
+            let dir = if folder.trim().is_empty() {
+                let dir = user_downloads_dir();
+                fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                dir
+            } else {
+                let dir = PathBuf::from(folder.trim());
+                if !dir.is_absolute() || !dir.is_dir() {
+                    return Err("folder_unavailable".to_string());
+                }
+                dir
+            };
+            let destination = unique_download_path(&dir, &safe_name);
+            if !destination.starts_with(&dir) {
+                return Err("Path traversal detected".to_string());
+            }
+            destination
+        }
+        _ => {
+            let dir = user_downloads_dir();
+            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let destination = unique_download_path(&dir, &safe_name);
+            if !destination.starts_with(&dir) {
+                return Err("Path traversal detected".to_string());
+            }
+            destination
+        }
+    };
     fs::write(&destination, data).map_err(|e| e.to_string())?;
     mark_downloaded_from_internet(&destination);
-    Ok(destination)
+    let name = destination
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&safe_name)
+        .to_string();
+    let folder = destination.parent().map(Path::to_path_buf).unwrap_or_default();
+    Ok(SavedAttachment { path: destination, name, folder })
 }
 
 /// Mark-of-the-Web: вложение от собеседника — файл «из интернета». Без метки

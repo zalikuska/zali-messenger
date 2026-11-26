@@ -425,6 +425,16 @@ pub(crate) async fn publish_version(
                 "Опубликован релиз platform={} channel={} version={}",
                 platform, channel, version
             );
+            // Клиенты узнают о релизе сразу, а не при следующем входе: событие несёт
+            // только «что появилось», а ссылку, SHA-256 и подпись клиент по-прежнему
+            // берёт из /api/version и проверяет сам (updates.js, handleAppReleaseRealtime).
+            let event = serde_json::json!({
+                "type": "app_release",
+                "platform": platform,
+                "channel": channel,
+                "version": version,
+            });
+            crate::realtime::broadcast_json(&state, event.to_string()).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {

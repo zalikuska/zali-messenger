@@ -245,6 +245,7 @@ ZaliMixin(ZaliInterface, class {
         const platform = String(window.__ZALI_NATIVE_PLATFORM || '').trim();
         const currentVersion = String(window.__ZALI_NATIVE_APP_VERSION || '').trim();
         if (!platform || !currentVersion) return;
+        this._lastAppUpdateCheckAt = Date.now();
         try {
             // Сервер хранит последнюю сборку КАЖДОГО канала и отдаёт самую новую среди
             // запрошенных, так что выключенная alpha не мешает получить свежий release.
@@ -338,6 +339,56 @@ ZaliMixin(ZaliInterface, class {
         } catch (e) {
             this.trace(`checkForAppUpdate failed err=${e?.message || e}`);
         }
+    }
+
+    // Событие сервера `app_release`: вышла новая сборка какой-то платформы. Подпись и
+    // ссылку клиент берёт не из события, а из /api/version (checkForAppUpdate), так что
+    // подделанный кадр максимум вызовет лишнюю проверку. Сдвиг до нескольких секунд —
+    // чтобы тысяча клиентов не пришла за ответом в одну и ту же секунду.
+    handleAppReleaseRealtime(payload) {
+        if (!this.hasNativeBridge() || !this.nativeSupports('appUpdate')) return;
+        if (!this.S.session?.token) return;
+        const platform = String(window.__ZALI_NATIVE_PLATFORM || '').trim();
+        const eventPlatform = String(payload?.platform || '').trim().toLowerCase();
+        if (eventPlatform && platform && eventPlatform !== platform.toLowerCase()) return;
+        this.scheduleAppUpdateCheck(Math.random() * 4000, String(payload?.version || ''));
+    }
+
+    // Переподключение сокета: не чаще раза в 10 минут — обрыв Wi-Fi не должен
+    // превращаться в запрос на каждый реконнект.
+    checkForAppUpdateOnReconnect() {
+        if (!this.hasNativeBridge() || !this.nativeSupports('appUpdate')) return;
+        if (!this.S.session?.token) return;
+        const now = Date.now();
+        if (now - (this._lastAppUpdateCheckAt || 0) < 10 * 60 * 1000) return;
+        this.scheduleAppUpdateCheck(Math.random() * 2000);
+    }
+
+    scheduleAppUpdateCheck(delayMs, announcedVersion = '') {
+        if (this._appUpdateCheckTimer) clearTimeout(this._appUpdateCheckTimer);
+        this._appUpdateCheckTimer = setTimeout(() => {
+            this._appUpdateCheckTimer = null;
+            // Идущая загрузка не прерывается: checkForAppUpdate пересобрал бы статус заново.
+            const current = this.S.updateStatus;
+            if (current?.downloading) return;
+            // Уже скачанная сборка не сбрасывается проверкой, если нового, чем она, нет.
+            if (current?.readyToInstall && (!announcedVersion || this.compareVersions(announcedVersion, current.version) <= 0)) return;
+            const had = this.S.updateStatus?.available ? String(this.S.updateStatus.version || '') : '';
+            void this.checkForAppUpdate().then(() => {
+                const now = this.S.updateStatus;
+                if (now?.available && String(now.version || '') !== had) this.pulseTitlebarUpdate();
+            });
+        }, Math.max(0, delayMs || 0));
+    }
+
+    // Короткая вспышка ярлыка, когда обновление пришло, пока приложение открыто.
+    pulseTitlebarUpdate() {
+        const el = document.getElementById('tbBrand');
+        if (!el || !el.classList.contains('is-update')) return;
+        el.classList.remove('is-arrived');
+        void el.offsetWidth;
+        el.classList.add('is-arrived');
+        setTimeout(() => el.classList.remove('is-arrived'), 2200);
     }
 
     openUpdateModal() {

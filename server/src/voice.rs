@@ -113,6 +113,13 @@ pub(crate) struct VoiceRoom {
     /// Кто из участников умеет видео через SFU (`sfu: true` в `voice_join`). Заполняется,
     /// только если SFU на этом сервере включён, — пустое множество значит mesh.
     sfu_capable: HashSet<String>,
+    /// Кто прислал `voice_sfu_join` и, насколько известно серверу, состоит в SFU-комнате. После
+    /// рестарта процесса SFU пуст, а клиент о потере не знает: подписчика без дорожек разрыв ICE
+    /// не будит, и он молча оставался без чужих стримов (прод 2026-11-26: четвёртый в комнате).
+    sfu_joined: HashSet<String>,
+    /// Когда участника последний раз просили переподключиться к SFU: не чаще раза в 20 с
+    /// (клиент считает такие просьбы сбоями и после четырёх уводит комнату в mesh).
+    sfu_resync_at: HashMap<String, std::time::Instant>,
     /// Кто сообщил, что до SFU не достучался (`voice_sfu_failed`): пока он в комнате,
     /// видео всей комнаты идёт в mesh — иначе он не увидит никого.
     sfu_failed: HashSet<String>,
@@ -147,6 +154,8 @@ impl VoiceRoom {
             initiator_device: None,
             decline_token: None,
             sfu_capable: HashSet::new(),
+            sfu_joined: HashSet::new(),
+            sfu_resync_at: HashMap::new(),
             sfu_failed: HashSet::new(),
             video_codecs: HashMap::new(),
         }
@@ -587,6 +596,8 @@ pub(crate) async fn leave_voice_room(state: &Arc<AppState>, username: &str, reas
         room.states.remove(username);
         room.devices.remove(username);
         room.sfu_capable.remove(username);
+        room.sfu_joined.remove(username);
+        room.sfu_resync_at.remove(username);
         room.sfu_failed.remove(username);
         room.video_codecs.remove(username);
         remaining_participants = room.participants.iter().cloned().collect();
@@ -1058,6 +1069,9 @@ async fn handle_sfu_event(
         }
     }
     if event_type == "voice_sfu_leave" {
+        if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
+            room.sfu_joined.remove(sender);
+        }
         sfu.send(SfuCommand::Leave {
             room: room_id,
             user: sender.to_string(),
@@ -1180,6 +1194,9 @@ async fn handle_sfu_event(
             });
         }
         "voice_sfu_join" => {
+            if let Some(mut room) = state.voice_rooms.get_mut(&room_id) {
+                room.sfu_joined.insert(sender.to_string());
+            }
             sfu.send(SfuCommand::Join {
                 room: room_id,
                 user: sender.to_string(),
@@ -1628,6 +1645,46 @@ pub(crate) async fn handle_voice_event(
             if transport_changed {
                 broadcast_voice_room_state(state, &room_id).await;
             }
+            // Участник в SFU-комнате, а сервер его в SFU не помнит (рестарт процесса, потеря
+            // подписки): клиент сам не догадается — у него нет ни одной дорожки, чей разрыв
+            // его разбудил бы. Просим переподключиться тем же событием, что шлёт SFU при
+            // потере сессии: клиент отвечает `voice_sfu_join` с reset.
+            if keepalive && sfu_capable {
+                let needs_resync = state
+                    .voice_rooms
+                    .get_mut(&room_id)
+                    .map(|mut room| {
+                        let due = room.participants.contains(sender)
+                            && room.video_via_sfu()
+                            && !room.sfu_joined.contains(sender)
+                            && room
+                                .sfu_resync_at
+                                .get(sender)
+                                .map_or(true, |at| at.elapsed() >= std::time::Duration::from_secs(20));
+                        if due {
+                            room.sfu_resync_at.insert(sender.to_string(), std::time::Instant::now());
+                        }
+                        due
+                    })
+                    .unwrap_or(false);
+                if needs_resync {
+                    info!("[VOICE][SFU] resync sender={} roomId={}: в SFU не состоит", sender, room_id);
+                    send_json_to_user(
+                        state,
+                        sender,
+                        targeted(
+                            serde_json::json!({
+                                "type": "voice_sfu_closed",
+                                "roomId": room_id,
+                                "role": "subscribe",
+                                "slot": "page",
+                            }),
+                            &device,
+                        ),
+                    )
+                    .await;
+                }
+            }
         }
         "voice_sfu_publish" | "voice_sfu_unpublish" | "voice_sfu_join" | "voice_sfu_answer" | "voice_sfu_leave"
         | "voice_sfu_watch" | "voice_sfu_failed" => {
@@ -1782,6 +1839,7 @@ pub(crate) async fn handle_voice_event(
                 // Умение SFU каждой стороны приходит с её собственным событием: звонящего —
                 // с инвайтом, ответившего — с принятием.
                 room.sfu_capable.clear();
+                room.sfu_joined.clear();
                 room.sfu_failed.clear();
                 room.video_codecs.clear();
                 if state.sfu.is_some() && payload["sfu"].as_bool().unwrap_or(false) {
@@ -1956,6 +2014,7 @@ pub(crate) async fn handle_voice_event(
                 room.participants.insert(sender.to_string());
                 room.participants.insert(inviter.clone());
                 room.sfu_capable.retain(|user| *user == inviter);
+                room.sfu_joined.retain(|user| *user == inviter);
                 room.sfu_failed.clear();
                 room.video_codecs.retain(|user, _| *user == inviter);
                 if state.sfu.is_some() && payload["sfu"].as_bool().unwrap_or(false) {
