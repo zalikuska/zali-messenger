@@ -45,8 +45,11 @@ ZaliMixin(ZaliInterface, class {
     //
     // 2026-09-05: production migrated from `zms` to `ms` with no data carried over
     // (old host lost/inaccessible) — a second, unrelated reset boundary, same purge.
+    // 2026-11-25: production moved to `zm` (89.108.79.206) with an empty database —
+    // local histories from the previous hosts are dangling. The unsent outbox is kept
+    // (see applyLocalDataResetIfNeeded).
     localResetEpoch() {
-        return '2026-09-05T21:00:00Z';
+        return '2026-11-25T23:00:00Z';
     }
 
     localResetMarkerKey() {
@@ -83,7 +86,8 @@ ZaliMixin(ZaliInterface, class {
                 const doomed = [];
                 for (let i = 0; i < store.length; i += 1) {
                     const key = store.key(i);
-                    if (key && key.startsWith('zali_')) doomed.push(key);
+                    // Неотправленные сообщения не удаляем: они остаются как были.
+                    if (key && key.startsWith('zali_') && !key.startsWith('zali_pending_outbox_v1')) doomed.push(key);
                 }
                 doomed.forEach(key => { try { store.removeItem(key); } catch (e) {} });
             } catch (e) {}
@@ -102,7 +106,6 @@ ZaliMixin(ZaliInterface, class {
         try { window.__ZALI_SAVED_KEY = ''; } catch (e) {}
         try { window.__ZALI_MESSAGE_CACHE = { chats: {}, serverChats: {} }; } catch (e) {}
         try { window.__ZALI_CONVERSATION_KEYS = {}; } catch (e) {}
-        try { window.__ZALI_PENDING_OUTBOX = []; } catch (e) {}
         try { window.__ZALI_INJECTED_DEVICE_IDENTITY = null; } catch (e) {}
         try { window.__ZALI_SAVED_SESSION = null; } catch (e) {}
         try { window.__ZALI_ACTIVE_CONVERSATION_SCOPE = null; } catch (e) {}
