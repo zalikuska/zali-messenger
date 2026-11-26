@@ -420,6 +420,10 @@ ZaliMixin(ZaliInterface, class {
             track.enabled = !nextMuted;
         }
         this.voice.muted = nextMuted;
+        // Выбор человека переживает выход из канала: войдя в следующий, он должен
+        // остаться без микрофона, а не заговорить сам (resetVoiceState сбрасывает
+        // voice.muted, а запоминает выбор именно этот флаг).
+        this._voiceMutedPref = nextMuted;
         this.renderVoicePanel();
     }
 

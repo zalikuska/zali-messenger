@@ -229,7 +229,9 @@ ZaliMixin(ZaliInterface, class {
         this.voice.localStream = stream;
         await this.enforceMicProcessing(stream);
         this.voice.micError = '';
-        this.voice.muted = false;
+        // Мьют, выставленный в прошлом канале, сохраняется (toggleVoiceMute).
+        this.voice.muted = !!this._voiceMutedPref;
+        for (const track of stream.getAudioTracks()) track.enabled = !this.voice.muted;
         this.voiceDiag('local-stream-ready', {
             tracks: stream.getTracks().map(track => `${track.kind}:${track.readyState}:${track.enabled ? 'on' : 'off'}`),
         });
@@ -732,7 +734,8 @@ ZaliMixin(ZaliInterface, class {
             let sfuStream = 0;
             if (choice.browser) {
                 // «Общий браузер» (shared_browser.js): кадры — со скрытого встроенного
-                // браузера оболочки, а не с экрана; звука у него пока нет.
+                // браузера оболочки, а не с экрана; звук страниц Windows забирает сама оболочка
+                // (process loopback по дереву WebView2), на macOS звука пока нет.
                 stream = await this.openNativeMediaStream({
                     kind: 'browser',
                     options: choice.browser,
@@ -2222,8 +2225,9 @@ ZaliMixin(ZaliInterface, class {
         if (!name || !stream) return;
         let video = this.voice.remoteScreens.get(name);
         if (!video) {
-            // Новая демонстрация собеседника (не смена потока у уже идущей).
-            this.playVoiceEventSound?.('stream');
+            // Новая демонстрация собеседника (не смена потока у уже идущей). В SFU о показе
+            // уже сказала заглушка (screen_thumb.js) — второй раз не звучим.
+            if (!this.voiceVideoViaSfu?.()) this.playVoiceEventSound?.('stream');
             video = document.createElement('video');
             video.autoplay = true;
             video.playsInline = true;
@@ -2234,6 +2238,8 @@ ZaliMixin(ZaliInterface, class {
         if (video.srcObject !== stream) {
             video.srcObject = stream;
         }
+        // Поток пришёл по запросу «Смотреть» (SFU) — плитка сразу открыта.
+        if (this.voice.screenWatch?.has(name.toLowerCase())) video.dataset.watching = '1';
         this.applyScreenVolume(name);
         if (this.audioPrefs?.speakerDeviceId && typeof video.setSinkId === 'function') {
             video.setSinkId(this.audioPrefs.speakerDeviceId).catch(() => {});

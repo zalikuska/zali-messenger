@@ -188,7 +188,7 @@ ZaliMixin(ZaliInterface, class {
         const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8));
         menu.el.style.width = `${Math.round(width)}px`;
         menu.el.style.left = `${Math.round(left)}px`;
-        const below = window.innerHeight - rect.bottom;
+        const below = zaliUsableViewportHeight() - rect.bottom;
         const height = Math.min(menu.el.scrollHeight, 320);
         if (below < height + 12 && rect.top > below) {
             menu.el.style.top = '';

@@ -76,6 +76,7 @@ ZaliMixin(ZaliInterface, class {
             channels: Array.isArray(server.channels) && server.channels.length ? server.channels.map(channel => ({ ...channel })) : [],
             myRole: server.myRole || server.my_role || null,
             canInvite: !!(server.canInvite ?? server.can_invite),
+            canManage: !!(server.canManage ?? server.can_manage),
             memberCount: Number(server.memberCount || server.member_count || 0) || 0,
             joinLink: server.joinLink || server.join_link || '',
         })).map(server => this.ensureServerChannels(server)).filter(Boolean) : [];
@@ -86,6 +87,18 @@ ZaliMixin(ZaliInterface, class {
         if (value === 'owner') return 'owner';
         if (value === 'admin') return 'admin';
         return 'member';
+    }
+
+    // Роль участника для показа и выбора: owner/admin/member — как есть, собственная
+    // роль сервера (roleId) сохраняется. normalizeMemberRole сворачивает любую
+    // незнакомую строку в 'member', и участник с выданной ролью выглядел обычным
+    // «Участником» — отсюда «роли не выдаются».
+    memberRoleId(role) {
+        const raw = String(role || '').trim();
+        if (!raw) return 'member';
+        const builtin = raw.toLowerCase();
+        if (builtin === 'owner' || builtin === 'admin' || builtin === 'member') return builtin;
+        return raw;
     }
 
     roleLabel(role) {

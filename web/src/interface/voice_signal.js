@@ -424,6 +424,11 @@ ZaliMixin(ZaliInterface, class {
             return;
         }
 
+        // Крошечный снимок чужого экрана для размытой заглушки (interface/screen_thumb.js).
+        if (signalPayload.type === 'screen-thumb') {
+            this.onScreenThumb?.(from, signalPayload.d);
+            return;
+        }
         // Удалённое управление (interface/remote_control.js): запрос, разрешение, ввод.
         if (typeof signalPayload.type === 'string' && signalPayload.type.startsWith('rc-')) {
             this.handleRemoteControlSignal?.(from, signalPayload);

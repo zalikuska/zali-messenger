@@ -238,7 +238,7 @@
         // scrollHeight не включает рамку (border-box): без неё список в точности по
         // высоте содержимого получал полосу прокрутки из-за двух пикселей.
         const chrome = menu.offsetHeight - menu.clientHeight;
-        const placement = computePlacement(rect, window.innerHeight, menu.scrollHeight + chrome);
+        const placement = computePlacement(rect, zaliUsableViewportHeight(), menu.scrollHeight + chrome);
         menu.style.maxHeight = `${Math.floor(placement.height)}px`;
         menu.style.top = `${Math.round(placement.top)}px`;
         const width = menu.offsetWidth;

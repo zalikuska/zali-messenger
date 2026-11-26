@@ -631,7 +631,7 @@ ZaliMixin(ZaliInterface, class {
         const pad = 8;
         const width = menu.offsetWidth, height = menu.offsetHeight;
         menu.style.left = `${Math.max(pad, Math.min(x, window.innerWidth - width - pad))}px`;
-        menu.style.top = `${Math.max(pad, Math.min(y, window.innerHeight - height - pad))}px`;
+        menu.style.top = `${Math.max(pad, Math.min(y, zaliUsableViewportHeight() - height - pad))}px`;
         menu.querySelectorAll('[data-rc-peer]').forEach(item => item.addEventListener('click', () => {
             const name = item.getAttribute('data-rc-peer');
             this.closeContactContextMenu?.();

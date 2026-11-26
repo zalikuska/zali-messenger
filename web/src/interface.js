@@ -9,7 +9,16 @@ const API_REQUEST_TIMEOUT_MS = 8000;
 // «load failed», браузер — «failed to fetch». Раньше «Failed to connect» не узнавался
 // и в форме входа показывался как есть. Для повторных попыток не использовать: нативный
 // слой уже сам ретраит, второй ретрай удвоил бы ожидание.
-const NETWORK_FAILURE_TEXT_RE = /load failed|failed to fetch|network error|abort|failed to connect|unable to resolve|unreachable|connection (refused|reset|failed)|timed out|timeout|не удалось связаться/i;
+// Высота, которую реально видно: в Android-оболочке (edge-to-edge) `innerHeight`
+// включает полосу навигации, а `--m-safe-bottom` — её высоту. Меню и подсказки,
+// которые прижимаются к `innerHeight`, уходят под системную полосу и обрезаются.
+// Вне оболочки `--m-safe-bottom` = env() и даёт 0 — поведение прежнее.
+function zaliUsableViewportHeight() {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--m-safe-bottom');
+    const inset = parseFloat(raw) || 0;
+    return Math.max(0, window.innerHeight - inset);
+}
+const NETWORK_FAILURE_TEXT_RE =/load failed|failed to fetch|network error|abort|failed to connect|unable to resolve|unreachable|connection (refused|reset|failed)|timed out|timeout|не удалось связаться/i;
 // Bulk transfers — an upload of a multipart body, or a download of a `.zali`
 // archive / avatar / server asset — are the requests whose honest duration is
 // measured in megabytes rather than round trips. They get their own ceiling

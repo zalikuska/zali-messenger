@@ -463,6 +463,7 @@ pub(crate) async fn create_channel(
                 .await;
             }
 
+            crate::realtime::broadcast_server_structure(&state, &server.id).await;
             match load_channels_for_server(&state.db, &server.id).await {
                 Ok(channels) => Json(channels).into_response(),
                 Err(e) => {
@@ -564,6 +565,7 @@ pub(crate) async fn update_channel(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    crate::realtime::broadcast_server_structure(&state, &server_id).await;
     match load_channels_for_server(&state.db, &server_id).await {
         Ok(channels) => Json(channels).into_response(),
         Err(e) => {
@@ -698,6 +700,7 @@ pub(crate) async fn delete_channel(
     }
 
     crate::revalidate_server_voice(&state, &server_id).await;
+    crate::realtime::broadcast_server_structure(&state, &server_id).await;
     match load_channels_for_server(&state.db, &server_id).await {
         Ok(channels) => Json(channels).into_response(),
         Err(e) => {

@@ -792,10 +792,37 @@ enum AudioLoop {
 fn run_screen_audio(ctx: StartContext, stop: Arc<AtomicBool>) {
     let _com = ComGuard::new();
     let mut out = ScreenAudioOut::new();
+    // Общий браузер (shared_browser.rs): звук только его дерева процессов.
+    if let Some(pid) = ctx.options.get("audioPid").and_then(Value::as_u64).and_then(|pid| u32::try_from(pid).ok()) {
+        screen_audio_include_pid(&ctx, &stop, &mut out, pid);
+        return;
+    }
     while !stop.load(Ordering::Acquire) && !ctx.stopped() {
         let muted = privacy::snapshot().muted_ids();
         let result = if muted.is_empty() { screen_audio_exclude_self(&ctx, &stop, &mut out) } else { screen_audio_filtered(&ctx, &stop, &mut out, muted) };
         if matches!(result, AudioLoop::Done) {
+            return;
+        }
+    }
+}
+
+/// Звук одного дерева процессов (общий браузер). Нет process loopback (Windows 10 до 2004)
+/// — картинка идёт без звука, как раньше.
+fn screen_audio_include_pid(ctx: &StartContext, stop: &AtomicBool, out: &mut ScreenAudioOut, pid: u32) {
+    let capture = match WasapiCapture::open_process_loopback_including(pid, 2).and_then(|c| c.start().map(|_| c)) {
+        Ok(capture) => capture,
+        Err(error) => {
+            tracing::warn!("[ZALI][WIN] shared browser audio unavailable pid={pid}: {}", super::com::describe(&error).1);
+            return;
+        }
+    };
+    tracing::info!("[ZALI][WIN] shared browser audio: include tree pid={pid}");
+    while !stop.load(Ordering::Acquire) && !ctx.stopped() {
+        if capture.read(10, &mut out.buf).is_err() {
+            sleep_unless_stopped(stop, 200);
+            return;
+        }
+        if !out.flush(ctx) {
             return;
         }
     }

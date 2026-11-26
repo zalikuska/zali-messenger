@@ -935,6 +935,53 @@ ZaliMixin(ZaliInterface, class {
         }
     }
 
+    /** Слаг со страницы KLIPY (klipy.com/gifs/<слаг>) или '' — прямые файлы и чужие хосты не в счёт. */
+    klipyPageSlug(url) {
+        try {
+            const parsed = new URL(url);
+            if (parsed.protocol !== 'https:') return '';
+            const host = parsed.hostname.toLowerCase();
+            if (host !== 'klipy.com' && host !== 'www.klipy.com') return '';
+            const match = parsed.pathname.match(/^\/(?:[a-z]{2}\/)?gifs?\/([a-z0-9][a-z0-9_-]{1,160})\/?$/i);
+            return match ? match[1].toLowerCase() : '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    /**
+     * Ссылка на страницу GIF → прямой файл. Страница KLIPY сама GIF не отдаёт, а у API
+     * есть открытый CORS, поэтому слаг ищется через поиск (слова слага) и берётся запись
+     * с тем же слагом. Результат ('' — не нашли) кешируется; пока ищем, отдаётся ''
+     * и в ленте остаётся обычная ссылка, а после ответа лента перерисовывается.
+     */
+    resolveKlipyPage(url) {
+        const slug = this.klipyPageSlug(url);
+        if (!slug) return '';
+        this._klipyPages = this._klipyPages || new Map();
+        const cached = this._klipyPages.get(slug);
+        if (cached !== undefined) return typeof cached === 'string' ? cached : '';
+        this._klipyPages.set(slug, null);
+        void (async () => {
+            let found = '';
+            try {
+                const config = await this.loadGifConfig();
+                if (config?.enabled && config.appKey) {
+                    const query = slug.replace(/[-_]+/g, ' ').trim();
+                    const { data } = await this.gifFetchPage(config.appKey, query, 1);
+                    const items = Array.isArray(data?.data?.data) ? data.data.data : (Array.isArray(data?.data) ? data.data : []);
+                    const hit = items.find(item => String(item?.slug || '').toLowerCase() === slug);
+                    found = (hit ? this.gifEntryFromItem(hit)?.url : '') || '';
+                }
+            } catch (e) {
+                this.trace?.(`resolveKlipyPage failed slug=${slug} error=${e?.message || e}`);
+            }
+            this._klipyPages.set(slug, found);
+            if (found) this.scheduleRenderMessages?.();
+        })();
+        return '';
+    }
+
     isKlipyUrl(url) {
         try {
             const parsed = new URL(url);

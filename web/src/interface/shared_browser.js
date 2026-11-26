@@ -33,7 +33,12 @@ ZaliMixin(ZaliInterface, class {
     // 0 — частота экрана запустившего (60/120/144 Гц): её выбирает оболочка.
     static get SB_FPS() { return 0; }
     static get SB_CURSOR_BROADCAST_MS() { return 50; }
-    static get SB_CURSOR_TTL_MS() { return 6000; }
+    // Курсор неподвижного человека не должен пропадать через пару секунд: «idle»
+    // его лишь приглушает, а убирает только долгое молчание или `leave`.
+    static get SB_CURSOR_TTL_MS() { return 30000; }
+    // Раз в это время запустивший шлёт курсоры, даже если никто не двигался: иначе
+    // подключившийся позже (или переподключённый канал) не видел курсоров до первого движения.
+    static get SB_CURSOR_HEARTBEAT_MS() { return 1000; }
     static get SB_AUTOSAVE_MS() { return 60000; }
     static get SB_HOME_URL() { return 'https://www.google.com/'; }
     static get SB_PREF_KEY() { return 'zali_shared_browser_pref_v1'; }
@@ -521,6 +526,8 @@ ZaliMixin(ZaliInterface, class {
         const name = String(peer || '').trim();
         try { sb.channels.get(name)?.close(); } catch (e) {}
         sb.channels.set(name, channel);
+        // Новый участник получает курсоры сразу, а не после чьего-то движения.
+        if (sb.host) sb.host.cursorsDirty = true;
         channel.onmessage = (event) => {
             if (typeof event.data !== 'string' || event.data.length > 4096) return;
             let input = null;
@@ -570,8 +577,10 @@ ZaliMixin(ZaliInterface, class {
         for (const [name, c] of host.cursors) {
             if (now - c.at > ZaliInterface.SB_CURSOR_TTL_MS) { host.cursors.delete(name); host.cursorsDirty = true; }
         }
-        if (!host.cursorsDirty) return;
+        const heartbeat = host.cursors.size > 0 && now - (host.cursorsSentAt || 0) >= ZaliInterface.SB_CURSOR_HEARTBEAT_MS;
+        if (!host.cursorsDirty && !heartbeat) return;
         host.cursorsDirty = false;
+        host.cursorsSentAt = now;
         const all = Array.from(host.cursors.entries()).map(([name, c]) => [name, Math.round(c.x * 10000) / 10000, Math.round(c.y * 10000) / 10000, c.down ? 1 : 0]);
         for (const [peer, ch] of sb.channels) {
             if (ch.readyState !== 'open' || ch.bufferedAmount > 64 * 1024) continue;
@@ -930,7 +939,14 @@ ZaliMixin(ZaliInterface, class {
         media.addEventListener('pointercancel', () => this.releaseSharedBrowserInputs());
         media.addEventListener('click', (event) => { guard(event); });
         media.addEventListener('dblclick', (event) => { guard(event); });
-        media.addEventListener('contextmenu', (event) => { guard(event); });
+        media.addEventListener('contextmenu', (event) => {
+            if (!guard(event)) return;
+            const own = owner();
+            if (own === null || !mayControl(own)) return;
+            // Встроенные меню браузера в оболочке отключены (сохранить, открыть файл и
+            // т.п. — не для гостей), поэтому ПКМ дополнительно открывает наше короткое меню.
+            this.showSharedBrowserContextMenu(own, event.clientX, event.clientY, media);
+        });
         media.addEventListener('wheel', (event) => {
             if (!guard(event)) return;
             const own = owner();
@@ -940,6 +956,68 @@ ZaliMixin(ZaliInterface, class {
             const k = event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? 400 : 1);
             this.sendSharedBrowserInput(own, { t: 'wheel', x: p.cx, y: p.cy, dx: Math.round(event.deltaX * k), dy: Math.round(event.deltaY * k) });
         }, { passive: false });
+    }
+
+    /** Меню ПКМ над кадром общего браузера: назад, вперёд, обновить, копировать адрес. */
+    showSharedBrowserContextMenu(owner, x, y, media) {
+        this.closeSharedBrowserContextMenu();
+        const info = this.sharedBrowserInfo(owner);
+        const root = media.closest('#voiceFocus') || document.body;
+        const menu = document.createElement('div');
+        menu.id = 'sbContextMenu';
+        menu.className = 'peer-context-menu sb-context-menu';
+        menu.setAttribute('role', 'menu');
+        const items = [
+            ['back', 'Назад', !info?.canBack],
+            ['forward', 'Вперёд', !info?.canForward],
+            ['reload', 'Обновить', false],
+            ['copy', 'Копировать адрес', !info?.url],
+        ];
+        menu.innerHTML = items.map(([id, label, off]) =>
+            `<button type="button" class="peer-context-menu-item" role="menuitem" data-sbctx="${id}"${off ? ' disabled' : ''}><span>${label}</span></button>`
+        ).join('');
+        root.appendChild(menu);
+        const box = root.getBoundingClientRect();
+        const left = Math.max(8, Math.min(x - box.left, box.width - menu.offsetWidth - 8));
+        const top = Math.max(8, Math.min(y - box.top, box.height - menu.offsetHeight - 8));
+        menu.style.position = 'absolute';
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.style.zIndex = '60';
+        // Клик по меню не сворачивает оверлей и не уходит страницей браузера.
+        menu.addEventListener('pointerdown', (e) => e.stopPropagation());
+        menu.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
+        menu.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const btn = e.target.closest('[data-sbctx]');
+            if (!btn || btn.disabled) return;
+            const action = btn.dataset.sbctx;
+            this.closeSharedBrowserContextMenu();
+            if (action === 'copy') {
+                try { await navigator.clipboard.writeText(String(info?.url || '')); } catch (err) { /* буфер недоступен */ }
+                return;
+            }
+            this.sendSharedBrowserInput(owner, { t: 'nav', a: action });
+        });
+        this._sbCtxClose = (e) => {
+            if (e.type === 'keydown' && e.key !== 'Escape') return;
+            if (e.type !== 'keydown' && menu.contains(e.target)) return;
+            if (e.type === 'keydown') { e.preventDefault(); e.stopPropagation(); }
+            this.closeSharedBrowserContextMenu();
+        };
+        setTimeout(() => {
+            document.addEventListener('pointerdown', this._sbCtxClose, true);
+            document.addEventListener('keydown', this._sbCtxClose, true);
+        }, 0);
+    }
+
+    closeSharedBrowserContextMenu() {
+        document.getElementById('sbContextMenu')?.remove();
+        if (this._sbCtxClose) {
+            document.removeEventListener('pointerdown', this._sbCtxClose, true);
+            document.removeEventListener('keydown', this._sbCtxClose, true);
+            this._sbCtxClose = null;
+        }
     }
 
     releaseSharedBrowserInputs() {

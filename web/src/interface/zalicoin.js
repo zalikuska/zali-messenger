@@ -28,7 +28,19 @@ ZaliMixin(ZaliInterface, class {
     static get COIN_CHARGE_POP_MS() { return 620; }
     static get COIN_CHARGE_POP_STAGGER_MS() { return 90; }
 
+    // Переводы между людьми (POST /api/coins/transfer) никого не оповещают по WS,
+    // поэтому открытый экран показывал чужие балансы на момент открытия. Пока
+    // экран на виду — перечитываем раз в 20 с; закрытый или свёрнутый не опрашивается.
+    ensureZaliCoinAutoRefresh() {
+        if (this._zaliCoinAutoRefresh) return;
+        this._zaliCoinAutoRefresh = setInterval(() => {
+            if (document.visibilityState !== 'visible' || !this.isZaliCoinViewActive()) return;
+            void this.refreshZaliCoinView();
+        }, 20000);
+    }
+
     async refreshZaliCoinView() {
+        this.ensureZaliCoinAutoRefresh();
         await Promise.all([
             this.loadZaliCoinBalance(),
             this.loadZaliCoinDistribution(),

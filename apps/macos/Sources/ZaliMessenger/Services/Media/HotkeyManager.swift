@@ -88,7 +88,7 @@ final class HotkeyManager {
             default: return nil
             }
         }
-        if mods == 0 && !code.hasPrefix("F") { return nil }
+        if mods == 0 && !code.hasPrefix("F") && !code.hasPrefix("Numpad") { return nil }
         return (UInt32(key), mods)
     }
 
@@ -125,6 +125,8 @@ final class HotkeyManager {
             "Numpad0": kVK_ANSI_Keypad0, "Numpad1": kVK_ANSI_Keypad1, "Numpad2": kVK_ANSI_Keypad2, "Numpad3": kVK_ANSI_Keypad3,
             "Numpad4": kVK_ANSI_Keypad4, "Numpad5": kVK_ANSI_Keypad5, "Numpad6": kVK_ANSI_Keypad6, "Numpad7": kVK_ANSI_Keypad7,
             "Numpad8": kVK_ANSI_Keypad8, "Numpad9": kVK_ANSI_Keypad9,
+            "NumpadAdd": kVK_ANSI_KeypadPlus, "NumpadSubtract": kVK_ANSI_KeypadMinus, "NumpadMultiply": kVK_ANSI_KeypadMultiply,
+            "NumpadDivide": kVK_ANSI_KeypadDivide, "NumpadDecimal": kVK_ANSI_KeypadDecimal,
             "Space": kVK_Space, "ArrowUp": kVK_UpArrow, "ArrowDown": kVK_DownArrow, "ArrowLeft": kVK_LeftArrow,
             "ArrowRight": kVK_RightArrow, "Home": kVK_Home, "End": kVK_End, "PageUp": kVK_PageUp, "PageDown": kVK_PageDown,
             "Insert": kVK_Help, "Delete": kVK_ForwardDelete,

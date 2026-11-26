@@ -26,7 +26,7 @@
 //! mesh это было не так — компромисс SFU, записан в скилле `voice-calls`.
 
 use serde_json::json;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -107,6 +107,9 @@ pub(crate) enum SfuCommand {
         /// Сколько пикселей в секунду клиент готов декодировать (0 — без ограничения):
         /// телефону не нужен 4K60, которое он покажет слайд-шоу.
         max_pixel_rate: u64,
+        /// Клиент умеет «Смотреть» (`Watch`): экран ему шлётся только по запросу. Старый
+        /// клиент о запросе не знает — ему экран идёт сразу, как раньше.
+        watch_gating: bool,
     },
     /// Ответ клиента на оффер подписки.
     Answer {
@@ -117,6 +120,16 @@ pub(crate) enum SfuCommand {
     },
     /// Клиент вышел из SFU (звонок кончился, комната перешла на mesh).
     Leave { room: String, user: String },
+    /// Зритель включил/выключил просмотр чужой демонстрации. Экран (и его звук) уходит
+    /// зрителю только пока он смотрит: без этого каждый участник звонка получал каждый
+    /// стрим целиком, даже не открыв его.
+    Watch {
+        room: String,
+        user: String,
+        device: String,
+        target: String,
+        on: bool,
+    },
 }
 
 /// Сообщение клиенту, которое tokio-часть отправит по WS (`send_json_to_user`).
@@ -597,6 +610,11 @@ struct Member {
     subscriber: Option<SessionId>,
     wants_subscribe: bool,
     max_pixel_rate: u64,
+    /// Чьи демонстрации экрана этот зритель смотрит (см. `SfuCommand::Watch`). Камеры
+    /// не в счёт — они приходят всегда.
+    watching: HashSet<String>,
+    /// Зритель просит экран явно (см. `SfuCommand::Join::watch_gating`).
+    gating: bool,
 }
 
 #[derive(Default)]
@@ -1399,9 +1417,11 @@ impl Engine {
                 device,
                 reset,
                 max_pixel_rate,
-            } => self.on_join(room, user, device, reset, max_pixel_rate),
+                watch_gating,
+            } => self.on_join(room, user, device, reset, max_pixel_rate, watch_gating),
             SfuCommand::Answer { room, user, sdp, rev } => self.on_answer(room, user, sdp, rev),
             SfuCommand::Leave { room, user } => self.on_leave(&room, &user),
+            SfuCommand::Watch { room, user, device, target, on } => self.on_watch(room, user, device, target, on),
         }
     }
 
@@ -1513,10 +1533,15 @@ impl Engine {
         );
 
         // Пропавшие источники — снять у зрителей, новые — раздать.
+        let mut screen_removed = false;
         for (mid, kind) in &old_sources {
             if new_sources.get(mid) != Some(kind) {
                 self.stop_source_everywhere(session_id, *mid);
+                screen_removed |= Self::is_screen_kind(*kind);
             }
+        }
+        if screen_removed {
+            self.clear_watchers(&room, &user);
         }
         for (mid, kind) in &new_sources {
             if old_sources.get(mid) != Some(kind) {
@@ -1534,6 +1559,7 @@ impl Engine {
                 r.members
                     .iter()
                     .filter(|(u, m)| u.as_str() != src_user && m.wants_subscribe)
+                    .filter(|(_, m)| Self::viewer_gets(m, src_user, kind))
                     .map(|(u, m)| (u.clone(), m.device.clone()))
                     .collect()
             })
@@ -1544,7 +1570,115 @@ impl Engine {
         }
     }
 
+    fn is_screen_kind(kind: SourceKind) -> bool {
+        matches!(kind, SourceKind::Screen | SourceKind::ScreenAudio)
+    }
+
+    /// Должен ли зритель получать этот источник: камеру — всегда, экран и его звук —
+    /// только если он нажал «Смотреть» у этого человека.
+    fn viewer_gets(member: &Member, src_user: &str, kind: SourceKind) -> bool {
+        !member.gating || !Self::is_screen_kind(kind) || member.watching.contains(src_user)
+    }
+
+    fn user_has_screen(&self, room: &str, user: &str) -> bool {
+        self.sessions.iter().any(|s| {
+            s.role == Role::Publish
+                && s.room == room
+                && s.user == user
+                && s.rtc.is_alive()
+                && s.sources.values().any(|k| Self::is_screen_kind(*k))
+        })
+    }
+
+    /// Демонстрация человека кончилась — зрители забывают, что смотрели: новая будет
+    /// снова закрыта до нажатия «Смотреть».
+    fn clear_watchers(&mut self, room: &str, user: &str) {
+        if self.user_has_screen(room, user) {
+            return;
+        }
+        if let Some(r) = self.rooms.get_mut(room) {
+            for m in r.members.values_mut() {
+                m.watching.remove(user);
+            }
+        }
+    }
+
+    fn on_watch(&mut self, room: String, user: String, device: String, target: String, on: bool) {
+        if target.is_empty() || target == user {
+            return;
+        }
+        let joined = {
+            // Запись создаётся и до join: «Смотреть» может дойти раньше него, и выбор
+            // не должен пропасть (device совпадает, поэтому join не сочтёт запись чужой).
+            let member = self.rooms.entry(room.clone()).or_default().members.entry(user.clone()).or_default();
+            if member.device.is_empty() {
+                member.device = device.clone();
+            }
+            member.gating = true;
+            if on {
+                member.watching.insert(target.clone());
+            } else {
+                member.watching.remove(&target);
+            }
+            member.wants_subscribe
+        };
+        info!("[SFU] watch user={} room={} target={} on={} joined={}", user, room, target, on, joined);
+        if on {
+            if !joined {
+                return; // раздача — в on_join, когда подписка появится
+            }
+            let sources: Vec<(SessionId, Mid, SourceKind)> = self
+                .sessions
+                .iter()
+                .filter(|s| s.role == Role::Publish && s.room == room && s.user == target && s.rtc.is_alive())
+                .flat_map(|s| s.sources.iter().map(move |(m, k)| (s.id, *m, *k)))
+                .filter(|(_, _, k)| Self::is_screen_kind(*k))
+                .collect();
+            if sources.is_empty() {
+                return;
+            }
+            let idx = self.ensure_subscriber(&room, &user, &device);
+            for (src, mid, kind) in sources {
+                self.add_out_track(idx, src, &target, mid, kind);
+            }
+        } else {
+            let Some(idx) = self
+                .rooms
+                .get(&room)
+                .and_then(|r| r.members.get(&user))
+                .and_then(|m| m.subscriber)
+                .and_then(|id| self.session_index(id))
+            else {
+                return;
+            };
+            let s = &mut self.sessions[idx];
+            s.tracks.retain(|t| {
+                !(t.src_user == target && Self::is_screen_kind(t.source) && t.state == TrackState::ToOpen)
+            });
+            for t in &mut s.tracks {
+                if t.src_user == target && Self::is_screen_kind(t.source) {
+                    if let TrackState::Open(m) | TrackState::Negotiating(m) = t.state {
+                        t.state = TrackState::ToStop(m);
+                    }
+                }
+            }
+        }
+    }
+
     fn add_out_track(&mut self, idx: usize, src_session: SessionId, src_user: &str, mid: Mid, kind: SourceKind) {
+        // Страховка: экран без «Смотреть» не раздаётся ни одним путём.
+        if Self::is_screen_kind(kind) {
+            let (room, viewer) = (self.sessions[idx].room.clone(), self.sessions[idx].user.clone());
+            let watches = self
+                .rooms
+                .get(&room)
+                .and_then(|r| r.members.get(&viewer))
+                .map(|m| !m.gating || m.watching.contains(src_user))
+                .unwrap_or(true);
+            if !watches {
+                return;
+            }
+        }
         let s = &mut self.sessions[idx];
         if s.tracks.iter().any(|t| {
             t.src_session == src_session
@@ -1630,7 +1764,7 @@ impl Engine {
         self.sessions.len() - 1
     }
 
-    fn on_join(&mut self, room: String, user: String, device: String, reset: bool, max_pixel_rate: u64) {
+    fn on_join(&mut self, room: String, user: String, device: String, reset: bool, max_pixel_rate: u64, watch_gating: bool) {
         let stale = self
             .rooms
             .get(&room)
@@ -1652,18 +1786,26 @@ impl Engine {
             member.device = device.clone();
             member.wants_subscribe = true;
             member.max_pixel_rate = max_pixel_rate;
+            member.gating = member.gating || watch_gating;
         }
         if let Some(sub) = self.rooms.get(&room).and_then(|r| r.members.get(&user)).and_then(|m| m.subscriber) {
             if let Some(i) = self.session_index(sub) {
                 self.sessions[i].max_pixel_rate = max_pixel_rate;
             }
         }
-        // Всё, что уже публикуют остальные.
+        // Всё, что уже публикуют остальные (чужие экраны — только те, что этот зритель смотрит).
+        let (gating, watching) = self
+            .rooms
+            .get(&room)
+            .and_then(|r| r.members.get(&user))
+            .map(|m| (m.gating, m.watching.clone()))
+            .unwrap_or_default();
         let sources: Vec<(SessionId, String, Mid, SourceKind)> = self
             .sessions
             .iter()
             .filter(|s| s.role == Role::Publish && s.room == room && s.user != user && s.rtc.is_alive())
             .flat_map(|s| s.sources.iter().map(move |(m, k)| (s.id, s.user.clone(), *m, *k)))
+            .filter(|(_, src_user, _, k)| !gating || !Self::is_screen_kind(*k) || watching.contains(src_user))
             .collect();
         info!("[SFU] join user={} room={} reset={} sources={}", user, room, reset, sources.len());
         if sources.is_empty() {
@@ -1770,6 +1912,9 @@ impl Engine {
                     }
                 }
             }
+        }
+        if s.role == Role::Publish && s.sources.values().any(|k| Self::is_screen_kind(*k)) {
+            self.clear_watchers(&s.room, &s.user);
         }
         let mut native_slot = false;
         // Сессия, которую сервер сам заменил (reset, fresh-публикация), в слоте уже не
@@ -2377,5 +2522,34 @@ impl Engine {
             self.stalled_out_dropped = 0;
             self.stalled_out_held = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+
+    fn member(gating: bool, watching: &[&str]) -> Member {
+        Member {
+            gating,
+            watching: watching.iter().map(|s| s.to_string()).collect(),
+            ..Member::default()
+        }
+    }
+
+    #[test]
+    fn screen_goes_only_to_watchers_that_ask_for_it() {
+        // Клиент с «Смотреть»: экран и его звук — только после нажатия; камера — всегда.
+        let viewer = member(true, &[]);
+        assert!(Engine::viewer_gets(&viewer, "bob", SourceKind::Camera));
+        assert!(!Engine::viewer_gets(&viewer, "bob", SourceKind::Screen));
+        assert!(!Engine::viewer_gets(&viewer, "bob", SourceKind::ScreenAudio));
+        let watcher = member(true, &["bob"]);
+        assert!(Engine::viewer_gets(&watcher, "bob", SourceKind::Screen));
+        assert!(Engine::viewer_gets(&watcher, "bob", SourceKind::ScreenAudio));
+        assert!(!Engine::viewer_gets(&watcher, "carol", SourceKind::Screen), "смотрим одного — чужой экран не идёт");
+        // Старый клиент не знает про «Смотреть» — ему всё идёт сразу.
+        let legacy = member(false, &[]);
+        assert!(Engine::viewer_gets(&legacy, "bob", SourceKind::Screen));
     }
 }

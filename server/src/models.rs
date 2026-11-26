@@ -212,6 +212,11 @@ pub(crate) struct ServerResponse {
     /// Может ли зритель создавать приглашения (право «Приглашения»).
     #[serde(rename = "canInvite")]
     pub(crate) can_invite: bool,
+    /// Есть ли у зрителя право управлять сервером: владелец, админ или собственная роль
+    /// с «Управлением». По одному `myRole` клиент собственную роль не отличал от
+    /// обычного «Участника» и прятал настройки сервера.
+    #[serde(rename = "canManage")]
+    pub(crate) can_manage: bool,
     #[serde(rename = "memberCount")]
     pub(crate) member_count: i64,
     /// Сколько участников сейчас с живым соединением. Считается только для

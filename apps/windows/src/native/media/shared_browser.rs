@@ -516,6 +516,8 @@ mod imp {
         input: InputState,
         temp_dir: Option<PathBuf>,
         inputs: u64,
+        /// Главный процесс WebView2 этого браузера: по нему process loopback берёт звук страниц.
+        pid: Option<u32>,
     }
 
     /// Все общие браузеры этого окна (обычно один). Живёт в потоке окна.
@@ -592,10 +594,17 @@ mod imp {
                     let hwnd = browser.hwnd.0 as isize;
                     mark_browser_stream(stream);
                     self.open.insert(stream, browser);
-                    // Кадры — обычный захват окна (screen.rs), без звука и курсора.
+                    // Кадры — обычный захват окна (screen.rs) без курсора. Звук — process
+                    // loopback только по дереву процессов этого WebView2 (screen.rs, `audioPid`):
+                    // «весь звук системы минус мессенджер» сюда не годится — браузер
+                    // как раз часть мессенджера, и участники его не слышали. Без pid — без звука.
+                    let audio_pid = self.open.get(&stream).and_then(|b| b.pid);
                     let mut capture = ctx.clone();
                     capture.source_id = format!("window:{hwnd}");
-                    capture.options = json!({ "fps": fps, "maxHeight": height, "audio": false, "cursor": false });
+                    capture.options = match audio_pid {
+                        Some(pid) => json!({ "fps": fps, "maxHeight": height, "audio": true, "audioPid": pid, "cursor": false }),
+                        None => json!({ "fps": fps, "maxHeight": height, "audio": false, "cursor": false }),
+                    };
                     let spawned = std::thread::Builder::new()
                         .name("zali-media-browser".into())
                         .spawn(move || screen::run(capture));
@@ -783,6 +792,13 @@ mod imp {
                 navigate();
             });
         }
+        let pid = unsafe {
+            let mut pid = 0u32;
+            core.cast::<ICoreWebView2_2>()
+                .ok()
+                .and_then(|c| c.BrowserProcessId(&mut pid).ok().map(|_| pid))
+                .filter(|pid| *pid != 0)
+        };
         Ok(Browser {
             hwnd,
             webview,
@@ -793,6 +809,7 @@ mod imp {
             input: InputState::default(),
             temp_dir: community.then_some(dir),
             inputs: 0,
+            pid,
         })
     }
 

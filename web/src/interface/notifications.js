@@ -290,9 +290,9 @@ ZaliMixin(ZaliInterface, class {
         const height = menu.offsetHeight;
         const pad = 8;
         const flipX = x + width + pad > window.innerWidth && x - width > pad;
-        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const flipY = y + height + pad > zaliUsableViewportHeight() && y - height > pad;
         menu.style.left = `${Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad))}px`;
-        menu.style.top = `${Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad))}px`;
+        menu.style.top = `${Math.max(pad, Math.min(flipY ? y - height : y, zaliUsableViewportHeight() - height - pad))}px`;
         menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
 
         menu.querySelector('[data-action="mute"]')?.addEventListener('click', () => {
@@ -383,10 +383,12 @@ ZaliMixin(ZaliInterface, class {
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="recover-history">
                 ${this.uiIcon('history')}<span>${recovery?.status === 'pending' ? 'Восстановление: ждём собеседника' : 'Восстановить переписку'}</span>
             </button>`;
-        menu.innerHTML = `${profileItems}${pinItem}${recoveryItem}
+        // Заглушать уведомления от самого себя нечего — пункта у своей строки нет.
+        const muteItem = isSelf ? '' : `
             <button type="button" class="peer-context-menu-item" role="menuitem" data-action="mute">
                 ${this.uiIcon(muted ? 'bell' : 'bell-off')}<span>${muted ? 'Включить уведомления' : 'Заглушить уведомления'}</span>
-            </button>
+            </button>`;
+        menu.innerHTML = `${profileItems}${pinItem}${recoveryItem}${muteItem}
             ${(fromVoice && isSelf) ? '' : `<div class="peer-context-menu-volume">
                 <div class="peer-context-menu-volume-head"><span>Громкость</span><strong id="contactVolumeValue">${percent}%</strong></div>
                 <input type="range" min="0" max="200" step="5" value="${percent}" id="contactVolumeRange"
@@ -412,9 +414,9 @@ ZaliMixin(ZaliInterface, class {
         const height = menu.offsetHeight;
         const pad = 8;
         const flipX = x + width + pad > window.innerWidth && x - width > pad;
-        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const flipY = y + height + pad > zaliUsableViewportHeight() && y - height > pad;
         const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
-        const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
+        const top = Math.max(pad, Math.min(flipY ? y - height : y, zaliUsableViewportHeight() - height - pad));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
@@ -465,7 +467,9 @@ ZaliMixin(ZaliInterface, class {
         const paintRange = (value) => range?.style.setProperty('--fill', `${Math.max(0, Math.min(100, value / 2))}%`);
         paintRange(percent);
         range?.addEventListener('input', () => {
-            const value = Number(range.value) || 100;
+            // 0 — валидное значение (полная тишина): `|| 100` отправляло ползунок с нуля на 100 %.
+            const parsed = Number(range.value);
+            const value = Number.isFinite(parsed) ? parsed : 100;
             if (label) label.textContent = `${value}%`;
             paintRange(value);
             this.setPeerVolumePercent(name, value);

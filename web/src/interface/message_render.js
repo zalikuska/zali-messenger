@@ -366,6 +366,13 @@ ZaliMixin(ZaliInterface, class {
             </div>`;
         }
 
+        // Ссылка на страницу GIF в KLIPY (klipy.com/gifs/<слаг>) — разрешается в файл
+        // через API (gif_picker.js, resolveKlipyPage); пока не разрешилась — просто ссылка.
+        if (this.klipyPageSlug?.(url)) {
+            const file = this.resolveKlipyPage(url);
+            return file ? this.renderUrlPreview(file) : '';
+        }
+
         // GIF из выбора в поле ввода (gif_picker.js) — без рамки, как GIF из Tenor.
         if (this.isKlipyUrl?.(url) && this.isDirectMediaUrl(url)) {
             const video = path.endsWith('.mp4') || path.endsWith('.webm');
@@ -520,7 +527,7 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
         const urls = this.extractUrls(msg.text);
-        return urls.some(url => this.isTenorUrl(url) || this.isDirectMediaUrl(url));
+        return urls.some(url => this.isTenorUrl(url) || this.isDirectMediaUrl(url) || !!this.klipyPageSlug?.(url));
     }
 
     messageIsGifOnly(msg) {
@@ -546,6 +553,8 @@ ZaliMixin(ZaliInterface, class {
         if (urls.length !== 1 || text !== urls[0]) return false;
 
         const url = urls[0];
+        // Страница KLIPY — GIF-сообщение только после разрешения, до тех пор обычный пузырь.
+        if (this.klipyPageSlug?.(url)) return !!this._klipyPages?.get(this.klipyPageSlug(url));
         if (!this.isTenorUrl(url) && !this.isDirectMediaUrl(url)) return false;
         const path = (() => {
             try { return new URL(url).pathname.toLowerCase(); }
@@ -711,6 +720,8 @@ ZaliMixin(ZaliInterface, class {
         )).join('')}</div>`
             + `<div class="reaction-menu-actions">`
             + `<button class="reaction-menu-action" type="button" data-menu-reply>${this.uiIcon('reply')}<span>Ответить</span></button>`
+            + `<button class="reaction-menu-action" type="button" data-menu-copy hidden>${this.uiIcon('copy')}<span>Копировать</span></button>`
+            + `<button class="reaction-menu-action" type="button" data-menu-forward hidden>${this.uiIcon('forward')}<span>Переслать</span></button>`
             + `<button class="reaction-menu-action" type="button" data-menu-edit hidden>${this.uiIcon('pencil')}<span>Изменить</span></button>`
             + `<button class="reaction-menu-action is-danger" type="button" data-menu-delete hidden>${this.uiIcon('trash')}<span>Удалить</span></button>`
             + `<button class="reaction-menu-action" type="button" data-menu-report hidden>${this.uiIcon('flag')}<span>Пожаловаться</span></button>`
@@ -746,6 +757,20 @@ ZaliMixin(ZaliInterface, class {
                 const messageId = menu.getAttribute('data-message-id');
                 this.hideReactionMenu();
                 if (messageId) this.startReplyToMessage(messageId);
+                return;
+            }
+            const copyBtn = e.target.closest('[data-menu-copy]');
+            if (copyBtn) {
+                const messageId = menu.getAttribute('data-message-id');
+                this.hideReactionMenu();
+                if (messageId) void this.copyMessageText(messageId);
+                return;
+            }
+            const forwardBtn = e.target.closest('[data-menu-forward]');
+            if (forwardBtn) {
+                const messageId = menu.getAttribute('data-message-id');
+                this.hideReactionMenu();
+                if (messageId) this.openForwardDialog(messageId);
                 return;
             }
             const editBtn = e.target.closest('[data-menu-edit]');
@@ -807,6 +832,10 @@ ZaliMixin(ZaliInterface, class {
             // message still in the outbox has no id for the quote to point at.
             replyBtn.hidden = !found?.msg || found.msg.kind === 'call';
         }
+        const copyBtn = menu.querySelector('[data-menu-copy]');
+        if (copyBtn) copyBtn.hidden = !this.messageCopyableText(found?.msg);
+        const forwardBtn = menu.querySelector('[data-menu-forward]');
+        if (forwardBtn) forwardBtn.hidden = !this.canForwardMessage(found?.msg);
         const reportBtn = menu.querySelector('[data-menu-report]');
         if (reportBtn) {
             // Только чужое и уже записанное сервером: жалоба ссылается на id сообщения.
@@ -826,7 +855,7 @@ ZaliMixin(ZaliInterface, class {
         const pad = 12;
         const gap = 10;
         const maxLeft = window.innerWidth - menuRect.width - pad;
-        const maxTop = window.innerHeight - menuRect.height - pad;
+        const maxTop = zaliUsableViewportHeight() - menuRect.height - pad;
         const preferredLeft = anchorRect.left + (anchorRect.width - menuRect.width) / 2;
         const fallbackLeft = Number.isFinite(x) ? x - menuRect.width / 2 : preferredLeft;
         const left = Math.max(pad, Math.min(Number.isFinite(preferredLeft) ? preferredLeft : fallbackLeft, maxLeft));

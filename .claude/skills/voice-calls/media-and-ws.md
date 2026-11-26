@@ -100,6 +100,17 @@
   громкость 0–100 % в `audioPrefs.screenVolumePercents`, ПКМ по плитке
   (`openScreenContextMenu`), «Звук» (deafen) глушит и его. Android (canvas-захват)
   звука не имеет.
+- **Чужой экран в SFU идёт только по «Смотреть» (2026-11-26).** Зритель шлёт
+  `voice_sfu_watch {target,on}` → `SfuCommand::Watch` (sfu.rs): сервер добавляет/снимает
+  у его подписки дорожки `screen`/`screen_audio` этого человека (`Member.watching`;
+  камера — всегда). До нажатия по сети не идёт ни кадра; плитка — размытая заглушка
+  (`remoteScreenPeers()` берёт показывающих из `voice_state.screen`), фон —
+  крошечный снимок (`screen-thumb`, 96 px JPEG раз в 8 с, `screen_thumb.js`).
+  Выбор забывается, когда показ кончился (`clear_watchers`) и при выходе из звонка;
+  после входа в SFU клиент повторяет его (`replayVoiceScreenWatch`). Сервер без
+  `voice_sfu_watch` (старый) раздаёт экран всем — клиент тогда просто видит поток сразу;
+  а старому клиенту новый сервер экран раздаёт как раньше: `voice_sfu_join` без
+  `screenWatch:true` не включает отбор (`Member.gating`).
 - **Микрофон и другие приложения (macOS).** WebKit включает эхо-/шумоподавление через
   системный VoiceProcessingIO; пока он держит вход, другие приложения слышат с микрофона
   тишину. Поэтому `micAudioConstraints()` (prefs.js) на WebKit/macOS по умолчанию шлёт

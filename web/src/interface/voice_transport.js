@@ -599,6 +599,9 @@ ZaliMixin(ZaliInterface, class {
             try { video.pause?.(); video.srcObject = null; video.remove?.(); } catch (e) {}
         }
         this.voice.remoteScreens.clear();
+        this.voice.screenWatch?.clear();
+        this.voice.screenThumbs?.clear();
+        this._screenPlaceholders?.clear();
         this.resetRemoteControl?.('call-end');
         this.resetSharedBrowser?.('call-end');
         this.voice.screenNativeStream = 0;

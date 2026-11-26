@@ -6656,7 +6656,7 @@ dependencies = [
 
 [[package]]
 name = "zali_messenger_win"
-version = "0.2.78"
+version = "0.2.81"
 dependencies = [
  "base64 0.22.1",
  "block",

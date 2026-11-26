@@ -42,6 +42,8 @@ const ZALI_HOTKEY_CODE_LABELS = (() => {
         map[`Digit${d}`] = String(d);
         map[`Numpad${d}`] = `Num ${d}`;
     }
+    // Операторы цифровой клавиатуры — отдельные клавиши, не те же, что в основном ряду.
+    Object.assign(map, { NumpadAdd: 'Num +', NumpadSubtract: 'Num −', NumpadMultiply: 'Num *', NumpadDivide: 'Num /', NumpadDecimal: 'Num .' });
     for (let f = 1; f <= 20; f++) map[`F${f}`] = `F${f}`;
     return map;
 })();
@@ -137,8 +139,9 @@ ZaliMixin(ZaliInterface, class {
         if (!code || !ZALI_HOTKEY_CODE_LABELS[code]) return '';
         const mods = ['Ctrl', 'Alt', 'Shift', 'Meta'].filter(m => parts.includes(m));
         if (mods.length !== parts.length) return '';
-        // Буква без модификатора сломала бы набор текста во всей системе; F-клавиши — можно.
-        if (!mods.length && !/^F\d+$/.test(code)) return '';
+        // Буква без модификатора сломала бы набор текста во всей системе; F-клавиши и
+        // цифровая клавиатура (ею почти не печатают) — можно.
+        if (!mods.length && !/^(F\d+|Numpad[A-Za-z0-9]+)$/.test(code)) return '';
         return [...mods, code].join('+');
     }
 

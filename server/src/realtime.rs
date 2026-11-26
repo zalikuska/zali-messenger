@@ -132,6 +132,40 @@ pub(crate) async fn broadcast_avatar_event(
     }
 }
 
+/// Состав сервера изменился (каналы, их порядок и права): всем участникам, которые
+/// сейчас онлайн, уходит `server_structure_changed` — клиент перечитывает список
+/// серверов. Без события новый канал появлялся у остальных только после
+/// перезапуска приложения. Тело не содержит данных канала: права на просмотр
+/// различаются по ролям, а клиент всё равно получит свой срез обычным GET.
+pub(crate) async fn broadcast_server_structure(state: &Arc<AppState>, server_id: &str) {
+    let members: Vec<String> = match sqlx::query_scalar(
+        "SELECT username FROM server_members WHERE server_id = ?
+         UNION
+         SELECT owner FROM servers WHERE id = ?",
+    )
+    .bind(server_id)
+    .bind(server_id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(members) => members,
+        Err(e) => {
+            warn!("Не удалось прочитать участников сервера {} для события структуры: {}", server_id, e);
+            return;
+        }
+    };
+    let payload = serde_json::json!({
+        "type": "server_structure_changed",
+        "serverId": server_id,
+    })
+    .to_string();
+    for name in members {
+        if state.user_connections.contains_key(&name) {
+            send_payload_to_user(state, &name, payload.clone(), "server_structure").await;
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct PublishAnnouncementRequest {
     text: String,

@@ -938,7 +938,7 @@ fn main() -> wry::Result<()> {
                 toggle_maximize(&window);
             }
             Event::UserEvent(AppEvent::CloseWindowRequest) => {
-                handle_close_request(&window, control_flow);
+                handle_close_request(&window, &webview, control_flow);
             }
             Event::UserEvent(AppEvent::Quit) => {
                 info!("Quitting");
@@ -974,7 +974,7 @@ fn main() -> wry::Result<()> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                handle_close_request(&window, control_flow);
+                handle_close_request(&window, &webview, control_flow);
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(_),
@@ -1125,7 +1125,7 @@ fn spawn_windows_idle_reporter(state: Arc<Mutex<NativeState>>, voice_bridge: Arc
     });
 }
 
-fn handle_close_request(window: &tao::window::Window, control_flow: &mut ControlFlow) {
+fn handle_close_request(window: &tao::window::Window, webview: &wry::WebView, control_flow: &mut ControlFlow) {
     // Windows: hide to tray instead of exiting — the tray icon (and its "Выход"
     // item, which sends AppEvent::Quit) is the only way to actually quit, so local
     // notifications keep working while the window is closed. Other platforms have
@@ -1134,11 +1134,17 @@ fn handle_close_request(window: &tao::window::Window, control_flow: &mut Control
     #[cfg(target_os = "windows")]
     {
         info!("Hiding to tray");
+        // Звонок продолжается, а вот показ экрана, общий браузер и отдача управления
+        // без окна на экране нужны только в тягость (и опасны: человек считает, что
+        // закрыл приложение) — страница их гасит (events.js, __zaliWindowHidden).
+        if let Err(error) = webview.evaluate_script("window.__zaliWindowHidden && window.__zaliWindowHidden()") {
+            error!("Failed to notify page about hiding to tray: {}", error);
+        }
         window.set_visible(false);
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = window;
+        let _ = (window, webview);
         info!("Closing application");
         *control_flow = ControlFlow::Exit;
     }

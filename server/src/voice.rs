@@ -1186,6 +1186,16 @@ async fn handle_sfu_event(
                 device: device.to_string(),
                 reset: payload["reset"].as_bool().unwrap_or(false),
                 max_pixel_rate: payload["maxPixelRate"].as_u64().unwrap_or(0),
+                watch_gating: payload["screenWatch"].as_bool().unwrap_or(false),
+            });
+        }
+        "voice_sfu_watch" => {
+            sfu.send(SfuCommand::Watch {
+                room: room_id,
+                user: sender.to_string(),
+                device: device.to_string(),
+                target: payload["target"].as_str().unwrap_or_default().trim().to_string(),
+                on: payload["on"].as_bool().unwrap_or(false),
             });
         }
         "voice_sfu_answer" => {
@@ -1620,7 +1630,7 @@ pub(crate) async fn handle_voice_event(
             }
         }
         "voice_sfu_publish" | "voice_sfu_unpublish" | "voice_sfu_join" | "voice_sfu_answer" | "voice_sfu_leave"
-        | "voice_sfu_failed" => {
+        | "voice_sfu_watch" | "voice_sfu_failed" => {
             handle_sfu_event(state, sender, &device, event_type, payload).await;
         }
         "voice_leave" => {

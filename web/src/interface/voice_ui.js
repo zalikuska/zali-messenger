@@ -432,8 +432,24 @@ ZaliMixin(ZaliInterface, class {
         return rows.map(row => row.name);
     }
 
+    // Чужие демонстрации: имя → <video> или null. null — человек показывает экран (так
+    // говорит voice_state), но данных по нему нет: в SFU экран идёт зрителю только после
+    // «Смотреть» (voice_sfu_watch), до тех пор плитка — размытая заглушка.
+    remoteScreenPeers() {
+        const out = new Map(this.voice.remoteScreens);
+        if (!this.voiceVideoViaSfu?.()) return out;
+        const me = String(this.myName() || '').trim().toLowerCase();
+        const have = new Set(Array.from(out.keys(), name => String(name).trim().toLowerCase()));
+        for (const name of this.voice.participants || []) {
+            const key = String(name || '').trim().toLowerCase();
+            if (!key || key === me || have.has(key)) continue;
+            if (this.voice.memberStates?.[key]?.screen) out.set(String(name).trim(), null);
+        }
+        return out;
+    }
+
     voiceTileLimit() {
-        const staged = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
+        const staged = !!(this.voice.screenSharing || this.remoteScreenPeers().size);
         return staged ? ZaliInterface.MAX_VOICE_TILES_WITH_STAGE : ZaliInterface.MAX_VOICE_TILES;
     }
 
@@ -841,7 +857,7 @@ ZaliMixin(ZaliInterface, class {
         // An active screen share needs more than the normal half-screen cap
         // (see .voice-panel.has-stage in style.css) — the stage tiles alone can
         // run well past that at their 16:9 aspect ratio.
-        const hasStage = !!(this.voice.screenSharing || this.voice.remoteScreens?.size);
+        const hasStage = !!(this.voice.screenSharing || this.remoteScreenPeers().size);
         panel.classList.toggle('has-stage', hasStage);
         // Разметка не изменилась (переключение вкладки, повторный вызов из
         // вспомогательных обновлений): DOM уже верный, а пересборка innerHTML
@@ -1231,6 +1247,53 @@ ZaliMixin(ZaliInterface, class {
         video?.play?.().catch(() => {});
     }
 
+    // ── «Смотреть» чужую демонстрацию ──────────────────────────────────────
+    // В SFU экран уходит зрителю только по этому нажатию (voice_sfu_watch → sfu.rs,
+    // SfuCommand::Watch): без него по сети не идёт ни кадра, а плитка — размытая
+    // заглушка (screen_thumb.js). В mesh поток уже идёт, и «Смотреть» только
+    // разворачивает его.
+    screenWatchKey(peer) {
+        return String(peer || '').trim().toLowerCase();
+    }
+
+    watchRemoteScreen(peer) {
+        const name = String(peer || '').trim();
+        if (!name) return;
+        const set = this.voice.screenWatch || (this.voice.screenWatch = new Set());
+        set.add(this.screenWatchKey(name));
+        const video = this.voice.remoteScreens.get(name);
+        if (video) {
+            video.dataset.watching = '1';
+            this.applyScreenVolume(name);
+            video.play?.().catch(() => {});
+        }
+        if (this.voiceVideoViaSfu?.()) this.sendVoiceSfuEvent('voice_sfu_watch', { target: name, on: true });
+        this.mountVoiceVideoElements();
+    }
+
+    unwatchRemoteScreen(peer) {
+        const name = String(peer || '').trim();
+        if (!name) return;
+        this.voice.screenWatch?.delete(this.screenWatchKey(name));
+        const video = this.voice.remoteScreens.get(name);
+        if (video) {
+            delete video.dataset.watching;
+            this.applyScreenVolume(name);
+            video.pause?.();
+        }
+        if (this.voiceVideoViaSfu?.()) this.sendVoiceSfuEvent('voice_sfu_watch', { target: name, on: false });
+        this.mountVoiceVideoElements();
+    }
+
+    // После (пере)входа в SFU сервер забыл подписки: повторить выбор.
+    replayVoiceScreenWatch() {
+        if (!this.voiceVideoViaSfu?.()) return;
+        for (const key of this.voice.screenWatch || []) {
+            const name = (this.voice.participants || []).find(n => this.screenWatchKey(n) === key) || key;
+            this.sendVoiceSfuEvent('voice_sfu_watch', { target: name, on: true });
+        }
+    }
+
     voiceFocusVideo() {
         const focus = this._voiceFocus;
         if (!focus) return null;
@@ -1323,51 +1386,89 @@ ZaliMixin(ZaliInterface, class {
             // новый элемент — снова закрыта, а перерисовки панели его не сбрасывают.
             const wanted = [];
             if (this.voice.localScreenVideoEl && this.voice.screenSharing) {
-                wanted.push([this.voice.localScreenVideoEl, 'Ваш экран', false, '']);
+                wanted.push({ node: this.voice.localScreenVideoEl, text: 'Ваш экран', gated: false, loading: false, peer: '', video: this.voice.localScreenVideoEl });
             }
-            for (const [peer, video] of this.voice.remoteScreens.entries()) {
-                wanted.push([video, `Экран: ${peer}`, !video.dataset.watching, peer]);
+            // Выбор «смотреть» живёт, пока человек показывает экран: показ кончился —
+            // выбор забыт, новая демонстрация снова закрыта (сервер делает то же).
+            const watchSet = this.voice.screenWatch || (this.voice.screenWatch = new Set());
+            for (const key of Array.from(watchSet)) {
+                const st = this.voice.memberStates?.[key];
+                if (st && !st.screen) {
+                    watchSet.delete(key);
+                    const remote = Array.from(this.voice.remoteScreens.entries()).find(([n]) => String(n).trim().toLowerCase() === key);
+                    if (remote?.[1]) delete remote[1].dataset.watching;
+                }
+            }
+            for (const [peer, video] of this.remoteScreenPeers().entries()) {
+                const watching = watchSet.has(String(peer).trim().toLowerCase());
+                if (video) {
+                    wanted.push({ node: video, text: `Экран: ${peer}`, gated: !video.dataset.watching, loading: false, peer, video });
+                } else {
+                    // Заглушка: данных нет. Нажали «Смотреть» — ждём, пока сервер пришлёт поток.
+                    wanted.push({ node: this.screenPlaceholderNode(peer), text: `Экран: ${peer}`, gated: !watching, loading: watching, peer, video: null });
+                }
             }
             if (focusVideo) {
-                const at = wanted.findIndex(([video]) => video === focusVideo);
+                const at = wanted.findIndex(entry => entry.video === focusVideo);
                 if (at >= 0) wanted.splice(at, 1);
             }
             const tilesNow = Array.from(stage.children);
-            const same = tilesNow.length === wanted.length && wanted.every(([video, text, gated], i) => {
+            const same = tilesNow.length === wanted.length && wanted.every((entry, i) => {
                 const tile = tilesNow[i];
-                return tile.firstElementChild === video
-                    && tile.querySelector('.voice-video-label')?.textContent === text
-                    && tile.classList.contains('is-gated') === gated;
+                return tile.firstElementChild === entry.node
+                    && tile.querySelector('.voice-video-label')?.textContent === entry.text
+                    && tile.classList.contains('is-gated') === entry.gated
+                    && tile.classList.contains('is-loading') === entry.loading;
             });
             if (!same) {
                 stage.replaceChildren();
-                for (const [video, text, gated, peer] of wanted) {
+                for (const { node, text, gated, loading, peer, video } of wanted) {
                     const wrap = document.createElement('div');
-                    wrap.className = `voice-stage-tile${gated ? ' is-gated' : ''}`;
+                    wrap.className = `voice-stage-tile${gated || loading ? ' is-gated' : ''}${loading ? ' is-loading' : ''}${video ? '' : ' is-placeholder'}`;
                     // Для тапа «на весь экран» (bindVoicePanelEvents → openVoiceFocus).
                     wrap.dataset.kind = 'screen';
                     wrap.dataset.peer = peer;
-                    wrap.appendChild(video);
+                    wrap.appendChild(node);
                     const label = document.createElement('span');
                     label.className = 'voice-video-label';
                     label.textContent = text;
                     wrap.appendChild(label);
                     if (gated) {
+                        // Пока зритель не нажал «Смотреть», кадры не рисуются и (в SFU) не
+                        // приходят вовсе: у чужой демонстрации — только размытая картинка.
+                        video?.pause?.();
                         const watch = document.createElement('button');
                         watch.type = 'button';
                         watch.className = 'voice-screen-watch';
                         watch.setAttribute('aria-label', `Смотреть: ${text}`);
                         watch.innerHTML = `<span class="voice-screen-watch-pill">${this.voiceIcon('screen')}<span>Смотреть</span></span>`;
-                        watch.addEventListener('click', () => {
-                            video.dataset.watching = '1';
-                            wrap.classList.remove('is-gated');
-                            watch.remove();
-                            // Звук включается вместе с картинкой, не раньше; клик — это
-                            // и жест пользователя, без которого браузер не даст играть.
-                            this.applyScreenVolume(peer);
-                            video.play?.().catch(() => {});
+                        // Звук включается вместе с картинкой, не раньше; клик — это
+                        // и жест пользователя, без которого браузер не даст играть.
+                        watch.addEventListener('click', (event) => {
+                            event.stopPropagation();
+                            this.watchRemoteScreen(peer);
                         });
                         wrap.appendChild(watch);
+                    } else if (loading) {
+                        const note = document.createElement('div');
+                        note.className = 'voice-screen-loading';
+                        note.textContent = 'Подключаем…';
+                        wrap.appendChild(note);
+                    }
+                    if (peer && (video || loading)) {
+                        // Выйти из чужой демонстрации, не покидая канал: плитка снова
+                        // закрыта, кадры и звук останавливаются.
+                        const stop = document.createElement('button');
+                        stop.type = 'button';
+                        stop.className = 'voice-screen-stop';
+                        stop.setAttribute('aria-label', `Перестать смотреть: ${text}`);
+                        stop.title = 'Перестать смотреть';
+                        stop.innerHTML = this.voiceIcon('screen');
+                        stop.addEventListener('click', (event) => {
+                            event.stopPropagation();
+                            this.unwatchRemoteScreen(peer);
+                        });
+                        if (!gated) wrap.appendChild(stop);
                     }
                     // ПКМ по чужой демонстрации — громкость её звука.
                     if (peer) {

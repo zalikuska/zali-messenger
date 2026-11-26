@@ -2223,6 +2223,13 @@ ZaliMixin(ZaliInterface, class {
         this.setupMobileTouchGestures();
         // Системное «назад» Android: оболочка вызывает это и сворачивает
         // приложение, только если вернулось false (см. handleMobileBack).
+        // Windows: окно ушло в трей (закрытие крестиком) — звонок остаётся, а показ
+        // экрана, общий браузер и отдача управления прекращаются.
+        window.__zaliWindowHidden = () => {
+            try { if (this.voice?.screenSharing) this.stopScreenShare(); } catch (e) { this.trace?.(`windowHidden stopScreenShare error=${e}`); }
+            try { this.revokeRemoteControlHost?.('window-hidden'); } catch (e) { /* не отдавали */ }
+            try { this.stopRemoteControlView?.(); } catch (e) { /* не смотрели */ }
+        };
         window.__zaliHandleBack = () => {
             try { return !!this.handleMobileBack(); } catch (e) { return false; }
         };

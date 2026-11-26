@@ -246,13 +246,27 @@ ZaliMixin(ZaliInterface, class {
             sync();
         };
 
+        // maxLength молча обрезает набор и вставку — без подсказки текст свыше
+        // лимита просто пропадает, и человек отправляет не то, что написал.
+        const textLimitNote = (overflow) => {
+            if (overflow || textEl.value.length >= ZALI_BUG_MAX_TEXT) {
+                setStatus(`Лимит ${ZALI_BUG_MAX_TEXT} символов: всё, что длиннее, не поместится.`, true);
+            } else if (statusEl.textContent.startsWith('Лимит ')) {
+                setStatus('');
+            }
+        };
+        textEl.addEventListener('input', () => { textLimitNote(false); });
         textEl.addEventListener('input', sync);
         textEl.addEventListener('paste', (e) => {
             const files = Array.from(e.clipboardData?.files || []).filter(f => /^image\//i.test(f.type || ''));
             if (files.length) {
                 e.preventDefault();
                 void addFiles(files);
+                return;
             }
+            const pasted = e.clipboardData?.getData('text') || '';
+            const selected = Math.max(0, (textEl.selectionEnd || 0) - (textEl.selectionStart || 0));
+            if (textEl.value.length - selected + pasted.length > ZALI_BUG_MAX_TEXT) textLimitNote(true);
         });
         box.addEventListener('dragover', (e) => {
             if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault();

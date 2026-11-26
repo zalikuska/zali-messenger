@@ -265,6 +265,9 @@ ZaliMixin(ZaliInterface, class {
     }
 
     sendVoiceSfuEvent(type, extra = {}) {
+        // screenWatch: этот клиент умеет «Смотреть» — сервер раздаёт ему чужой экран только
+        // по voice_sfu_watch. Без флага (старый клиент) экран идёт сразу, как раньше.
+        if (type === 'voice_sfu_join') extra = { screenWatch: true, ...extra };
         return this.sendVoiceEvent({
             type,
             roomId: this.voice.roomId,
@@ -379,7 +382,10 @@ ZaliMixin(ZaliInterface, class {
             // её дорожки Open — нового оффера для нового RTCPeerConnection не было бы, и
             // видео собеседников не появлялось 10–20 с, до voice_sfu_closed.
             this.sendVoiceSfuEvent('voice_sfu_join', { reset: true, maxPixelRate: this.voiceSfuMaxPixelRate() });
+            // Чужие экраны идут только тем, кто нажал «Смотреть»: выбор повторяется после входа.
+            this.replayVoiceScreenWatch?.();
         }
+        this.ensureScreenThumbLoop?.();
         this.ensureVoiceSfuHealth();
         // Только первая публикация (камера/экран включены до перехода в SFU). Дальше
         // набор источников меняют их собственные пути (enableVoiceCamera, startScreenShare…):

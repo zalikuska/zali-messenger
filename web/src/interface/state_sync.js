@@ -143,6 +143,18 @@ ZaliMixin(ZaliInterface, class {
             return true;
         }
 
+        // Каналы сервера создали/удалили/переставили (server/src/realtime.rs,
+        // broadcast_server_structure): перечитать список. Серия правок подряд
+        // схлопывается в один запрос. Старый сервер события не шлёт — тогда
+        // всё работает как раньше (список обновится при следующей загрузке).
+        if (type === 'server_structure_changed') {
+            clearTimeout(this._serverStructureTimer);
+            this._serverStructureTimer = setTimeout(() => {
+                void this.loadServers({ silent: true }).catch(() => {});
+            }, 250);
+            return true;
+        }
+
         // Казна сервера (server/src/treasury.rs): новый остаток и выплата вам с сервера.
         if (type === 'server_treasury_updated') {
             this.handleTreasuryRealtime(payload);

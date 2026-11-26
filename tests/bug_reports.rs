@@ -142,7 +142,8 @@ async fn bug_report_is_rate_limited_per_hour() {
     let app = spawn_app().await;
     let user = register_user(&app, "bugger3", "correct horse battery staple").await;
     let mut last = 0;
-    for _ in 0..6 {
+    // Потолок — 100 сообщений в час (bug_reports.rs, MAX_REPORTS_PER_HOUR); сто первое — 429.
+    for _ in 0..101 {
         last = app
             .http
             .post(app.url("/api/bug-reports"))

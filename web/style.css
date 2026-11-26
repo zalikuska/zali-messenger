@@ -11516,7 +11516,7 @@ body[data-design-mode="focus"] .rules-dialog-actions .auth-link {
 
 @media (max-width: 720px) {
     .profile-overlay { padding: 0; }
-    .profile-modal { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
+    .profile-modal { width: 100%; max-height: calc(100vh - var(--m-safe-bottom, 0px)); height: calc(100% - var(--m-safe-bottom, 0px)); border-radius: 0; }
     .profile-body { padding: 20px 16px 32px; }
     .profile-head { grid-template-columns: 1fr; justify-items: center; text-align: center; padding-right: 0; }
     /* Single-column stack here, so the avatar's height:100% trick (matching
@@ -30626,3 +30626,82 @@ body[data-design-mode="focus"] .raffle-modal {
     color: var(--text);
 }
 .bug-report-status[hidden] { display: none; }
+
+/* Диалог «Переслать сообщение» (message_forward.js): список контактов с прокруткой. */
+.forward-dialog-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: min(46vh, 340px);
+    overflow-y: auto;
+    margin: 4px 0 12px;
+}
+.forward-dialog-item {
+    justify-content: flex-start;
+    text-align: left;
+    width: 100%;
+}
+
+/* «Перестать смотреть» на чужой демонстрации (voice_ui.js). */
+.voice-screen-stop {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(0,0,0,.55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity .15s var(--ease-out);
+}
+.voice-screen-stop svg { width: 18px; height: 18px; }
+.voice-stage-tile:hover .voice-screen-stop,
+.voice-screen-stop:focus-visible { opacity: 1; }
+@media (hover: none) { .voice-screen-stop { opacity: 1; } }
+
+/* Сетка звонка на десктопе: неполная нижняя строка по центру, а не прижата влево
+   (3 участника — 2 сверху и 1 под ними посередине). Ширину плитки и состав строк
+   по-прежнему считает fitVoiceTiles(); flex-wrap лишь центрует остаток. */
+@media (min-width: 761px) {
+    body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tiles {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-content: center;
+        align-items: center;
+    }
+    body .voice-panel:not(.has-stage) .voice-call-expanded-grid .voice-tiles > .voice-tile {
+        flex: 0 0 var(--vt-w, 260px);
+        width: var(--vt-w, 260px);
+    }
+}
+
+/* Заглушка чужой демонстрации: данных нет, только размытый снимок (screen_thumb.js). */
+.voice-screen-ph {
+    width: 100%;
+    height: 100%;
+    background: #15171a center / cover no-repeat;
+    filter: blur(18px) saturate(.85) brightness(.8);
+    transform: scale(1.08);
+    pointer-events: none;
+}
+.voice-stage-tile.is-placeholder { cursor: default; }
+.voice-screen-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 800;
+    text-shadow: 0 1px 8px rgba(0,0,0,.6);
+    pointer-events: none;
+}

@@ -20,7 +20,8 @@ ZaliMixin(ZaliInterface, class {
         if (this._mediaViewerReady) return;
         this._mediaViewerReady = true;
         document.addEventListener('click', (event) => {
-            if (!this.isMobileLayout()) return;
+            // Не только телефон: на десктопе фото из ленты тоже разворачивается
+            // (раньше клик по нему не делал ничего — репорты a9227ff3, 1a749380).
             const img = event.target?.closest?.('#msgs img.media-img');
             if (!img || img.classList.contains('compact') || !(img.currentSrc || img.src)) return;
             // В режиме жалобы тап по сообщению выбирает его.
@@ -54,7 +55,7 @@ ZaliMixin(ZaliInterface, class {
         img.src = src;
         img.alt = label;
         root.querySelector('.voice-focus-name').textContent = label;
-        // Тап в любом месте закрывает — тот же жест, что открыл.
+        // Клик/тап в любом месте закрывает — тот же жест, что открыл.
         root.addEventListener('click', () => this.closeMediaViewer());
         this._mediaViewerKeyHook = (event) => {
             if (event.key !== 'Escape') return;

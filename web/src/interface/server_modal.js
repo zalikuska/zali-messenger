@@ -6,6 +6,9 @@ ZaliMixin(ZaliInterface, class {
 
     canManageServer(server = null) {
         const current = server || this.currentServer();
+        // canManage — решение сервера (в том числе собственная роль с «Управлением»);
+        // старый сервер поля не шлёт — тогда по встроенной роли, как раньше.
+        if (current?.canManage === true) return true;
         const role = this.normalizeMemberRole(current?.myRole || current?.my_role || '');
         return role === 'owner' || role === 'admin';
     }
@@ -94,7 +97,7 @@ ZaliMixin(ZaliInterface, class {
         }
 
         list.innerHTML = members.map(member => {
-            const role = this.normalizeMemberRole(member.role);
+            const role = this.memberRoleId(member.role);
             const isOwner = role === 'owner';
             const joined = member.joinedAt ? this.fmtDate(member.joinedAt) || this.fmtTime(member.joinedAt) : '';
             const select = `
@@ -564,7 +567,7 @@ ZaliMixin(ZaliInterface, class {
         const members = Array.isArray(data) ? data : (Array.isArray(data?.members) ? data.members : []);
         return members.map(member => ({
             ...member,
-            role: this.normalizeMemberRole(member.role),
+            role: this.memberRoleId(member.role),
         }));
     }
 
@@ -1711,7 +1714,11 @@ ZaliMixin(ZaliInterface, class {
             this.setServerModalState({ error: e?.message || 'Не удалось создать канал' });
             this.renderServerModal();
         } finally {
+            // Перерисовка обязательна: успешная ветка рисовала форму при saving=true
+            // (поля и кнопка disabled), и без неё второй канал нельзя создать, пока
+            // вкладку не переключат и модалка не перерисуется сама.
             this.setServerModalState({ saving: false });
+            this.renderServerModal();
         }
     }
 
@@ -1750,7 +1757,11 @@ ZaliMixin(ZaliInterface, class {
             this.setServerModalState({ error: e?.message || 'Не удалось удалить канал' });
             this.renderServerModal();
         } finally {
+            // Перерисовка обязательна: успешная ветка рисовала форму при saving=true
+            // (поля и кнопка disabled), и без неё второй канал нельзя удалить, пока
+            // вкладку не переключат и модалка не перерисуется сама.
             this.setServerModalState({ saving: false });
+            this.renderServerModal();
         }
     }
 

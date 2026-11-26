@@ -214,9 +214,9 @@ ZaliMixin(ZaliInterface, class {
         const height = menu.offsetHeight;
         const pad = 8;
         const flipX = x + width + pad > window.innerWidth && x - width > pad;
-        const flipY = y + height + pad > window.innerHeight && y - height > pad;
+        const flipY = y + height + pad > zaliUsableViewportHeight() && y - height > pad;
         const left = Math.max(pad, Math.min(flipX ? x - width : x, window.innerWidth - width - pad));
-        const top = Math.max(pad, Math.min(flipY ? y - height : y, window.innerHeight - height - pad));
+        const top = Math.max(pad, Math.min(flipY ? y - height : y, zaliUsableViewportHeight() - height - pad));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         menu.style.setProperty('--menu-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);

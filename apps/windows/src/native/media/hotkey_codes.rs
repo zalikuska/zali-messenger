@@ -17,14 +17,21 @@ fn virtual_key(code: &str) -> Option<u32> {
         return (n <= 9).then_some(0x30 + n);
     }
     if let Some(d) = code.strip_prefix("Numpad") {
-        let n: u32 = d.parse().ok()?;
-        return (n <= 9).then_some(0x60 + n);
+        // Цифры — здесь; NumpadAdd/Subtract/… — в таблице ниже.
+        if let Ok(n) = d.parse::<u32>() {
+            return (n <= 9).then_some(0x60 + n);
+        }
     }
     if let Some(f) = code.strip_prefix('F') {
         let n: u32 = f.parse().ok()?;
         return (1..=20).contains(&n).then_some(0x70 + n - 1);
     }
     Some(match code {
+        "NumpadMultiply" => 0x6A,
+        "NumpadAdd" => 0x6B,
+        "NumpadSubtract" => 0x6D,
+        "NumpadDecimal" => 0x6E,
+        "NumpadDivide" => 0x6F,
         "Space" => 0x20,
         "PageUp" => 0x21,
         "PageDown" => 0x22,
@@ -66,7 +73,8 @@ pub fn parse(accel: &str) -> Option<(u32, u32)> {
             _ => return None,
         };
     }
-    if mods == 0 && !(0x70..=0x83).contains(&vk) {
+    // Без модификатора — F-клавиши и цифровая клавиатура (0x60..=0x6F).
+    if mods == 0 && !(0x70..=0x83).contains(&vk) && !(0x60..=0x6F).contains(&vk) {
         return None;
     }
     Some((mods, vk))
@@ -84,6 +92,8 @@ mod tests {
         assert_eq!(parse("F13"), Some((0, 0x7C)));
         assert_eq!(parse("Ctrl+Numpad0"), Some((MOD_CONTROL, 0x60)));
         assert_eq!(parse("Ctrl+BracketLeft"), Some((MOD_CONTROL, 0xDB)));
+        assert_eq!(parse("Numpad5"), Some((0, 0x65)), "цифровая клавиатура без модификатора");
+        assert_eq!(parse("NumpadAdd"), Some((0, 0x6B)));
         assert_eq!(parse("KeyM"), None, "буква без модификатора");
         assert_eq!(parse("Ctrl+Hyper+KeyM"), None);
         assert_eq!(parse("Ctrl+IntlRo"), None);

@@ -91,10 +91,10 @@ pub(crate) async fn build_server_response(
     server: ServerRecord,
     viewer: &str,
 ) -> Result<ServerResponse, sqlx::Error> {
-    let channels = if can_manage_server(pool, &server.id, viewer)
+    let can_manage = can_manage_server(pool, &server.id, viewer)
         .await
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    let channels = if can_manage {
         load_channels_for_server(pool, &server.id).await?
     } else {
         load_visible_channels_for_server(pool, &server.id, viewer).await?
@@ -116,6 +116,7 @@ pub(crate) async fn build_server_response(
         is_public: server.is_public != 0,
         my_role,
         can_invite,
+        can_manage,
         member_count,
         online_count: None,
         channels,
@@ -333,6 +334,7 @@ pub(crate) async fn build_server_responses_batch(
             is_public: server.is_public != 0,
             my_role,
             can_invite,
+            can_manage,
             member_count: member_counts.get(&server_id).copied().unwrap_or(0),
             online_count: None,
             channels,
