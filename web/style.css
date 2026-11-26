@@ -30720,15 +30720,28 @@ body[data-design-mode="focus"] .raffle-modal {
     pointer-events: none;
 }
 
-/* Анимация скачивания (download_fx.js): кольца → диск со значком → волна и искры. */
+/* Анимация скачивания (download_fx.js): круг со значком сходится к центру экрана,
+   садится, стрелка сменяется галочкой, и всё расходится волнами. */
 .dl-fx {
     position: fixed;
-    width: 0;
-    height: 0;
+    inset: 0;
     z-index: 10060;
     pointer-events: none;
 }
-.dl-fx > span {
+.dl-scrim {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at var(--dl-x) var(--dl-y), rgba(var(--ink-rgb), .16) 0%, rgba(var(--ink-rgb), .07) 22%, transparent 52%);
+    opacity: 0;
+}
+.dl-stage {
+    position: absolute;
+    left: var(--dl-x);
+    top: var(--dl-y);
+    width: 0;
+    height: 0;
+}
+.dl-stage > span {
     position: absolute;
     left: 0;
     top: 0;
@@ -30737,52 +30750,34 @@ body[data-design-mode="focus"] .raffle-modal {
     will-change: transform, opacity;
 }
 .dl-ring {
-    width: 124px;
-    height: 124px;
-    margin: -62px 0 0 -62px;
-    border: 2px solid rgba(var(--accent-rgb), .9);
+    width: 76px;
+    height: 76px;
+    margin: -38px 0 0 -38px;
+    border: 1.5px solid rgba(var(--accent-fg-rgb), .9);
     opacity: 0;
 }
-.dl-glow {
-    width: 150px;
-    height: 150px;
-    margin: -75px 0 0 -75px;
-    background: radial-gradient(circle, rgba(var(--accent-rgb), .55) 0%, rgba(var(--accent-rgb), .18) 42%, transparent 70%);
-    opacity: 0;
-}
-.dl-wave {
-    width: 68px;
-    height: 68px;
-    margin: -34px 0 0 -34px;
-    border: 3px solid rgba(var(--accent-rgb), .85);
-    opacity: 0;
-}
-.dl-dot {
-    width: 7px;
-    height: 7px;
-    margin: -3.5px 0 0 -3.5px;
-    background: rgb(var(--accent-rgb));
-    opacity: 0;
-}
-.dl-disc {
-    width: 68px;
-    height: 68px;
-    margin: -34px 0 0 -34px;
+.dl-badge {
+    width: 76px;
+    height: 76px;
+    margin: -38px 0 0 -38px;
     display: grid !important;
     place-items: center;
     background: rgb(var(--accent-rgb));
     color: var(--on-accent);
-    box-shadow: 0 10px 30px rgba(var(--accent-rgb), .45), 0 0 0 6px rgba(var(--accent-rgb), .16);
+    box-shadow: 0 16px 44px rgba(var(--accent-rgb), .38), 0 2px 8px rgba(var(--ink-rgb), .18);
     opacity: 0;
 }
-.dl-disc svg {
-    width: 34px;
-    height: 34px;
+.dl-badge svg {
+    width: 38px;
+    height: 38px;
     overflow: visible;
 }
-.dl-disc path {
+.dl-badge path {
     stroke-dasharray: 1;
     transform-box: fill-box;
+}
+.dl-badge .dl-check {
+    stroke-dashoffset: 1;
 }
 
 /* «Скачивание файлов» в настройках. */

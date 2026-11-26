@@ -52,6 +52,7 @@ ZaliMixin(ZaliInterface, class {
         // and deleting the entry there would let the next signal from this peer
         // start a second, concurrent chain. handleVoiceSignal already removes the
         // entry once it is the last queued signal, and resetVoiceState clears all.
+        this.releaseRemoteBoost?.(name);
         const audio = this.voice.remoteAudios.get(name);
         if (audio) {
             try {

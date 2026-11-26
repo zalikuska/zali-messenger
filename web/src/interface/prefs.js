@@ -347,14 +347,102 @@ ZaliMixin(ZaliInterface, class {
         if (bus?.directTee) bus.directTee.gain.value = 0.5 * this.notificationVolumeFactor();
     }
 
-    // Both sliders end up as one element volume. HTMLMediaElement.volume saturates
-    // at 1.0, so the >100 % half can no longer boost — only the WebAudio graph could
-    // do that, and that graph was the single unfallback-able playback path. Being
-    // audible beats a boost that depended on it.
-    effectiveRemoteVolume(peer) {
+    // Общий множитель громкости собеседника: ползунок человека × общий, 0…4 (по 200 % у
+    // обоих). У HTMLMediaElement.volume потолок 1.0, поэтому всё, что выше, — усиление
+    // через WebAudio (applyRemoteBoost); ниже или равно 1 играет сам <audio>, как и раньше.
+    remoteVolumeFactor(peer) {
         const peerPercent = this.getPeerVolumePercent(peer);
-        const masterPercent = this.audioPrefs.masterVolumePercent || 100;
-        return Math.max(0, Math.min(1, (peerPercent / 100) * (masterPercent / 100)));
+        const masterPercent = Number.isFinite(this.audioPrefs.masterVolumePercent) ? this.audioPrefs.masterVolumePercent : 100;
+        // × автовыравнивание голоса (voice_media.js, updateRemoteAutoLevel): тихий собеседник
+        // поднимается до общего уровня, громкий опускается. Потолок с ним — 10 (×4 ползунков
+        // хватает только на ручное усиление, тихий микрофон просит до +20 дБ).
+        const auto = this.remoteAutoGain?.(peer) ?? 1;
+        return Math.max(0, Math.min(10, (peerPercent / 100) * (masterPercent / 100) * auto));
+    }
+
+    effectiveRemoteVolume(peer) {
+        return Math.min(1, this.remoteVolumeFactor(peer));
+    }
+
+    // Усиление выше 100 %. Голос собеседника по-прежнему играет из своего <audio> — это
+    // основной путь, и он не зависит от графа: нет контекста, он не «running» или граф
+    // упал — человек слышит собеседника на 100 %, а не тишину. Только когда усиление
+    // реально собрано, элемент замолкает (volume 0), а тот же поток через
+    // MediaStreamSource → усиление → компрессор-ограничитель → выход играет громче.
+    // Ограничитель нужен, чтобы 200 % не превращались в хрип на пиках.
+    applyRemoteBoost(peer) {
+        const name = String(peer || '').trim();
+        const audio = this.voice.remoteAudios.get(name);
+        if (!audio) { this.releaseRemoteBoost(name); return; }
+        const factor = this.remoteVolumeFactor(name);
+        const ctx = this.voice.audioContext;
+        const meter = this.voice.meterRemote?.get(name);
+        const wanted = factor > 1 && !!ctx && !!meter?.source;
+        if (wanted && ctx.state === 'suspended') ctx.resume?.().catch(() => {});
+        if (!wanted || ctx.state !== 'running') {
+            this.releaseRemoteBoost(name);
+            audio.volume = Math.min(1, factor);
+            this.watchBoostContext(ctx);
+            return;
+        }
+        const boosts = this.voice.remoteBoost || (this.voice.remoteBoost = new Map());
+        let node = boosts.get(name);
+        let makeup = node?.makeup || 1;
+        if (!node || node.source !== meter.source || node.ctx !== ctx) {
+            this.releaseRemoteBoost(name);
+            try {
+                const gain = ctx.createGain();
+                const limiter = ctx.createDynamicsCompressor();
+                limiter.threshold.value = -3;
+                limiter.knee.value = 0;
+                limiter.ratio.value = 20;
+                // DynamicsCompressor сам добавляет «компенсацию» (на 0 дБFS выход −2,85 дБ →
+                // ×1,22): без поправки уровень скачком вырос бы на 22 % при первом проценте
+                // выше 100. Формула из спецификации: (1 / усиление на полной шкале) ^ 0,6.
+                const fullRange = 10 ** ((-3 + (0 - -3) / 20) / 20);
+                makeup = (1 / fullRange) ** 0.6;
+                limiter.attack.value = 0.002;
+                limiter.release.value = 0.12;
+                meter.source.connect(gain);
+                gain.connect(limiter);
+                limiter.connect(ctx.destination);
+                node = { ctx, source: meter.source, gain, limiter, makeup: makeup };
+                boosts.set(name, node);
+                this.voiceTrace?.('remote-boost-on', { peer: name, factor: Math.round(factor * 100) / 100 }, 'INFO');
+            } catch (error) {
+                this.voiceTrace?.('remote-boost-failed', { peer: name, error: error?.message || String(error) }, 'WARN');
+                audio.volume = 1;
+                return;
+            }
+        }
+        // «Звук» (deafen) глушит и усиленный путь: элемент молчит сам, граф — нулём.
+        node.gain.gain.value = this.voice.deafened ? 0 : factor / node.makeup;
+        audio.volume = 0;
+        this.watchBoostContext(ctx);
+    }
+
+    // Контекст остановили/запустили (сон, смена устройства, жест) — усиление пересобирается
+    // или честно откатывается на элемент. Один слушатель на контекст.
+    watchBoostContext(ctx) {
+        if (!ctx || ctx.__zaliBoostWatched) return;
+        ctx.__zaliBoostWatched = true;
+        ctx.addEventListener?.('statechange', () => {
+            for (const peer of this.voice.remoteAudios.keys()) this.applyRemoteBoost(peer);
+        });
+    }
+
+    releaseRemoteBoost(peer) {
+        const name = String(peer || '').trim();
+        const node = this.voice.remoteBoost?.get(name);
+        if (!node) return;
+        try { node.source.disconnect(node.gain); } catch (e) {}
+        try { node.gain.disconnect(); } catch (e) {}
+        try { node.limiter.disconnect(); } catch (e) {}
+        this.voice.remoteBoost.delete(name);
+    }
+
+    releaseAllRemoteBoost() {
+        for (const peer of Array.from(this.voice.remoteBoost?.keys() || [])) this.releaseRemoteBoost(peer);
     }
 
     applyMasterVolume() {
@@ -403,7 +491,7 @@ ZaliMixin(ZaliInterface, class {
     applyPeerVolume(peer) {
         const name = String(peer || '').trim();
         const audio = this.voice.remoteAudios.get(name);
-        if (audio) audio.volume = this.effectiveRemoteVolume(name);
+        if (audio) this.applyRemoteBoost(name);
     }
 
     async refreshAudioDeviceOptions() {

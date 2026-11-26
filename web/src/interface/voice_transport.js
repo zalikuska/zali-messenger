@@ -580,6 +580,7 @@ ZaliMixin(ZaliInterface, class {
         // Сессии SFU сервер снимает сам по voice_leave/обрыву; здесь — только свои соединения.
         this.teardownVoiceSfu?.({ announce: false });
         this.voice.videoTransport = 'mesh';
+        this.releaseAllRemoteBoost?.();
         for (const audio of this.voice.remoteAudios.values()) {
             try {
                 audio.pause?.();

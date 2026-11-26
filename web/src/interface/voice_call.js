@@ -445,6 +445,8 @@ ZaliMixin(ZaliInterface, class {
         for (const audio of this.voice.remoteAudios.values()) {
             try { audio.muted = deafened; } catch (e) {}
         }
+        // Усиленный путь (prefs.js, applyRemoteBoost) идёт мимо элемента — глушим и его.
+        for (const peer of this.voice.remoteAudios.keys()) this.applyRemoteBoost(peer);
         // Звук чужих демонстраций играет из их <video>: «Звук» глушит и его.
         for (const peer of this.voice.remoteScreens.keys()) this.applyScreenVolume(peer);
     }

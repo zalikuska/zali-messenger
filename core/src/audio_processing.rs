@@ -951,14 +951,14 @@ impl SpeechGate {
     }
 }
 
-/// Выравнивание громкости вниз — после AGC2 и затвора.
+/// Выравнивание громкости речи — после AGC2 и затвора.
 ///
 /// AGC2 (adaptive digital) только поднимает тихий голос, а громкий оставляет как есть:
 /// на стенде речь −45…−28 дБFS выходила на −24, а −18 и −10 — на −19 и −11, то есть
 /// громкий микрофон звучал у собеседников на 8–13 дБ громче остальных. В начале звонка
 /// AGC2 ещё и стартует с большим усилением: первая фраза шла на +9 дБ громче следующих.
 /// Здесь уровень речи (только кадры, где затвор слышит голос) сводится к `TARGET_DB`,
-/// если он громче на `DEADBAND_DB`; тише цели — не трогаем, это работа AGC2.
+/// если он отличается больше чем на `DEADBAND_DB` (вниз до −24 дБ, вверх до +18).
 struct OutputLevel {
     level_db: f32,
     gain_db: f32,
@@ -969,6 +969,10 @@ impl OutputLevel {
     const TARGET_DB: f32 = -24.0;
     const DEADBAND_DB: f32 = 2.0;
     const MIN_GAIN_DB: f32 = -24.0;
+    /// Вверх — добор там, где AGC2 не дотягивает: очень тихий микрофон (−65 дБFS) он
+    /// выводил на −32, на 8 дБ тише остальных — «его вообще не слышно» (стенд 2026-11-26).
+    /// Паузы при этом не поднимаются: затвор стоит раньше и глушит их до −40 дБ.
+    const MAX_GAIN_DB: f32 = 18.0;
     /// Вниз 20 дБ/с (громкий старт звонка убирается за полфразы), вверх 3 дБ/с.
     const DOWN_DB_PER_FRAME: f32 = 0.2;
     const UP_DB_PER_FRAME: f32 = 0.03;
@@ -991,7 +995,7 @@ impl OutputLevel {
             }
         }
         let over = self.level_db - Self::TARGET_DB;
-        let target = if over > Self::DEADBAND_DB { (-over).max(Self::MIN_GAIN_DB) } else { 0.0 };
+        let target = if over.abs() > Self::DEADBAND_DB { (-over).clamp(Self::MIN_GAIN_DB, Self::MAX_GAIN_DB) } else { 0.0 };
         let from = self.gain_db;
         self.gain_db = if target < from { (from - Self::DOWN_DB_PER_FRAME).max(target) } else { (from + Self::UP_DB_PER_FRAME).min(target) };
         apply_ramp(frame, (SpeechGate::db_to_lin(from), SpeechGate::db_to_lin(self.gain_db)), false);

@@ -1667,7 +1667,7 @@ ZaliMixin(ZaliInterface, class {
             }
             audio.muted = !!this.voice.deafened;
             audio.defaultMuted = false;
-            audio.volume = this.effectiveRemoteVolume(peer);
+            this.applyRemoteBoost(peer);
             if (audio.paused) {
                 audio.play?.().catch(error => this.voiceDiag('remote-audio-play-failed', {
                     peer, error: error?.message || String(error),
@@ -1711,6 +1711,50 @@ ZaliMixin(ZaliInterface, class {
     // short-lived typed arrays whose only visible effect was GC pauses during calls.
     // The for-of over a typed array also allocated an iterator per call; an index
     // loop reads the same samples with no allocation at all.
+    // ── Выравнивание громкости собеседников (2026-11-26) ───────────────────────
+    // Голос каждого по умолчанию сводится к одному уровню речи (−24 дБFS, как у выхода
+    // нативного APM на Mac/Windows): у кого-то тихий микрофон, браузер без AGC или
+    // старая версия клиента — и его «вообще не слышно». Множитель входит в
+    // remoteVolumeFactor (prefs.js) — поверх ползунков человека и общего; громче 100 %
+    // играет усиленный путь applyRemoteBoost, тише — сам <audio>.
+    // Уровень — по кадрам с голосом (над шумом собеседника), по мощности. 8-битные
+    // данные анализатора не годятся: шаг 1/128 = −42 дБFS, тихая речь там — нули.
+    updateRemoteAutoLevel(peer, meter) {
+        const analyser = meter?.analyser;
+        if (!analyser || typeof analyser.getFloatTimeDomainData !== 'function') return;
+        if (!meter.floatData || meter.floatData.length !== analyser.fftSize) meter.floatData = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(meter.floatData);
+        let sum = 0;
+        for (let i = 0; i < meter.floatData.length; i++) sum += meter.floatData[i] * meter.floatData[i];
+        const db = 10 * Math.log10(Math.max(sum / meter.floatData.length, 1e-12));
+        const st = meter.autoLevel || (meter.autoLevel = { floorDb: -70, levelPow: 0, speech: 0, gainDb: 0, appliedDb: 0 });
+        // Шум собеседника — медленный минимум: вниз сразу, вверх 1 дБ/с (тик 80 мс).
+        st.floorDb = db < st.floorDb ? db : st.floorDb + 0.08;
+        if (db > -75 && db > st.floorDb + 9) {
+            st.speech += 1;
+            const alpha = st.speech < 25 ? 0.15 : 0.03;
+            st.levelPow += alpha * (10 ** (db / 10) - st.levelPow);
+        }
+        let target = 0;
+        // Решаем после ~2 с голоса: иначе первое «алло» дёргало бы громкость.
+        if (st.speech >= 25 && st.levelPow > 0) {
+            const over = 10 * Math.log10(st.levelPow) + 24;
+            if (Math.abs(over) > 3) target = Math.max(-12, Math.min(20, -over));
+        }
+        // Вверх 3 дБ/с, вниз 12 дБ/с.
+        st.gainDb = target > st.gainDb ? Math.min(target, st.gainDb + 0.25) : Math.max(target, st.gainDb - 1);
+        if (Math.abs(st.gainDb - st.appliedDb) >= 0.5 || (st.gainDb === 0 && st.appliedDb !== 0)) {
+            st.appliedDb = st.gainDb;
+            this.applyRemoteBoost?.(peer);
+        }
+    }
+
+    remoteAutoGain(peer) {
+        if (this.audioPrefs?.autoLevelRemote === false) return 1;
+        const st = this.voice?.meterRemote?.get(String(peer || '').trim())?.autoLevel;
+        return st ? 10 ** (st.appliedDb / 20) : 1;
+    }
+
     computeAnalyserLevel(analyser, buffer = null) {
         if (!analyser) return 0;
         const bufferLength = analyser.fftSize;
@@ -1817,6 +1861,7 @@ ZaliMixin(ZaliInterface, class {
         // feeds the single "с сервера" meter below them.
         const tileLevels = {};
         for (const item of remoteMeters) {
+            this.updateRemoteAutoLevel(item.peer, item.meter);
             const level = this.computeAnalyserLevel(item.meter.analyser, item.meter.data);
             remoteLevel = Math.max(remoteLevel, level);
             tileLevels[String(item.peer || '').trim().toLowerCase()] = Math.round(level * 100);
@@ -2097,6 +2142,7 @@ ZaliMixin(ZaliInterface, class {
         }
         audio.srcObject = stream;
         this.ensureMeterEntry(name, stream);
+        this.applyRemoteBoost(name);
         if (this.audioPrefs?.speakerDeviceId && typeof audio.setSinkId === 'function') {
             audio.setSinkId(this.audioPrefs.speakerDeviceId).catch(error => {
                 this.voiceTrace?.('speaker-sink-failed', { peer: name, error: error?.message || String(error) }, 'WARN');

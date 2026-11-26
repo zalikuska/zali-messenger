@@ -312,3 +312,4 @@
   `CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG=true` (уже в конфиге). Два headless-Chrome
   с фейковой камерой — сценарии в памяти `project-sfu`. Стенд не тянет 4K60 canvas без
   GPU: рендерер упирается в 100 % ядра, оценка канала шумит — 4K проверять на железе.
+- **Автовыравнивание громкости собеседников у слушателя** (`updateRemoteAutoLevel` в `voice_media.js`, 2026-11-26). Уровень речи каждого — по float-данным анализатора (8-битные дают нули ниже −42 дБFS), к −24 дБFS, −12…+20 дБ, после ~2 с голоса. Множитель входит в `remoteVolumeFactor` (prefs.js), громче 100 % играет `applyRemoteBoost`. Выключатель — `audioPrefs.autoLevelRemote === false` (UI нет).
